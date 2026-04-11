@@ -265,10 +265,28 @@ export class GhciSession extends EventEmitter {
   }
 
   /**
-   * Load a module.
+   * Load a single module.
    */
   async loadModule(modulePath: string): Promise<GhciResult> {
     return this.execute(`:l ${modulePath}`);
+  }
+
+  /**
+   * Load multiple modules at once and bring them all into scope.
+   * moduleNames are in Haskell dotted form (e.g. "HM.Syntax").
+   */
+  async loadModules(
+    modulePaths: string[],
+    moduleNames: string[]
+  ): Promise<GhciResult> {
+    const loadResult = await this.execute(`:l ${modulePaths.join(" ")}`);
+    if (!loadResult.success) {
+      return loadResult;
+    }
+    // Bring all modules into scope with full access (using * prefix)
+    const starNames = moduleNames.map((n) => `*${n}`).join(" ");
+    await this.execute(`:m + ${starNames}`);
+    return loadResult;
   }
 
   /**

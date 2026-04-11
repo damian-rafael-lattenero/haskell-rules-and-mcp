@@ -8,6 +8,8 @@ import { handleTypeInfo } from "./tools/type-info.js";
 import { handleLoadModule } from "./tools/load-module.js";
 import { handleBuild } from "./tools/build.js";
 import { handleHoogleSearch } from "./tools/hoogle.js";
+import { handleScaffold } from "./tools/scaffold.js";
+import { handleCheckModule } from "./tools/check-module.js";
 
 // Project directory is the parent of mcp-server/
 const PROJECT_DIR =
@@ -72,7 +74,10 @@ server.tool(
 // --- Tool: ghci_load ---
 server.tool(
   "ghci_load",
-  "Load or reload a Haskell module in GHCi. Returns parsed compilation errors and warnings. Without module_path, reloads all.",
+  "Load or reload Haskell modules in GHCi. Returns parsed compilation errors and warnings. " +
+    "Without module_path: reloads current modules (:r). " +
+    "With module_path: loads that specific module. " +
+    "With load_all=true: reads .cabal and loads ALL library modules at once (lighter than cabal_build).",
   {
     module_path: z
       .string()
@@ -80,10 +85,16 @@ server.tool(
       .describe(
         'Path to a module to load. If omitted, reloads current modules. Examples: "src/Lib.hs"'
       ),
+    load_all: z
+      .boolean()
+      .optional()
+      .describe(
+        "If true, reads the .cabal file and loads ALL library modules into GHCi at once."
+      ),
   },
-  async ({ module_path }) => {
+  async ({ module_path, load_all }) => {
     const session = await getSession();
-    const result = await handleLoadModule(session, { module_path });
+    const result = await handleLoadModule(session, { module_path, load_all }, PROJECT_DIR);
     return { content: [{ type: "text", text: result }] };
   }
 );
@@ -179,6 +190,48 @@ server.tool(
   },
   async ({ query, count }) => {
     const result = await handleHoogleSearch({ query, count });
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+// --- Tool: ghci_check_module ---
+server.tool(
+  "ghci_check_module",
+  "Load a module and return a structured summary of all its exported definitions with types. " +
+    "Shows: total definitions, functions with signatures, type aliases, data types, classes, " +
+    "and any compilation errors or warnings. Use for a quick overview of a module's API.",
+  {
+    module_path: z
+      .string()
+      .describe(
+        'Path to the module to check. Examples: "src/HM/Infer.hs", "src/Lib.hs"'
+      ),
+    module_name: z
+      .string()
+      .optional()
+      .describe(
+        'Haskell module name (optional, inferred from path). Examples: "HM.Infer", "Lib"'
+      ),
+  },
+  async ({ module_path, module_name }) => {
+    const session = await getSession();
+    const result = await handleCheckModule(session, {
+      module_path,
+      module_name,
+    });
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+// --- Tool: ghci_scaffold ---
+server.tool(
+  "ghci_scaffold",
+  "Read the .cabal file, find library modules that don't have source files yet, and create minimal stubs. " +
+    "Use after adding new modules to the .cabal file, before restarting GHCi. " +
+    "This prevents the 'can't find source for Module' error on GHCi startup.",
+  {},
+  async () => {
+    const result = await handleScaffold(PROJECT_DIR);
     return { content: [{ type: "text", text: result }] };
   }
 );
