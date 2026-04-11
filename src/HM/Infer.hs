@@ -2,6 +2,7 @@ module HM.Infer
   ( TypeEnv
   , inferExpr
   , runInfer
+  , defaultEnv
   ) where
 
 import Data.Map.Strict qualified as Map
@@ -20,9 +21,30 @@ type TypeEnv = Map.Map Name Scheme
 -- | Inference monad: state for fresh vars + errors
 type Infer a = ExceptT TypeError (State Int) a
 
+-- | Built-in operator types
+defaultEnv :: TypeEnv
+defaultEnv = Map.fromList
+  [ ("+",  Forall [] (TArr (TCon "Int") (TArr (TCon "Int") (TCon "Int"))))
+  , ("-",  Forall [] (TArr (TCon "Int") (TArr (TCon "Int") (TCon "Int"))))
+  , ("*",  Forall [] (TArr (TCon "Int") (TArr (TCon "Int") (TCon "Int"))))
+  , ("negate", Forall [] (TArr (TCon "Int") (TCon "Int")))
+  , ("==", Forall ["a"] (TArr (TVar "a") (TArr (TVar "a") (TCon "Bool"))))
+  , ("/=", Forall ["a"] (TArr (TVar "a") (TArr (TVar "a") (TCon "Bool"))))
+  , ("<",  Forall ["a"] (TArr (TVar "a") (TArr (TVar "a") (TCon "Bool"))))
+  , (">",  Forall ["a"] (TArr (TVar "a") (TArr (TVar "a") (TCon "Bool"))))
+  , ("<=", Forall ["a"] (TArr (TVar "a") (TArr (TVar "a") (TCon "Bool"))))
+  , (">=", Forall ["a"] (TArr (TVar "a") (TArr (TVar "a") (TCon "Bool"))))
+  , ("&&", Forall [] (TArr (TCon "Bool") (TArr (TCon "Bool") (TCon "Bool"))))
+  , ("||", Forall [] (TArr (TCon "Bool") (TArr (TCon "Bool") (TCon "Bool"))))
+  , (".",  Forall ["a", "b", "c"]
+      (TArr (TArr (TVar "b") (TVar "c"))
+        (TArr (TArr (TVar "a") (TVar "b"))
+          (TArr (TVar "a") (TVar "c")))))
+  ]
+
 -- | Run inference on an expression, returning its type or an error
 runInfer :: Expr -> Either TypeError Scheme
-runInfer expr = inferExpr Map.empty expr
+runInfer expr = inferExpr defaultEnv expr
 
 -- | Generate a fresh type variable
 fresh :: Infer Type

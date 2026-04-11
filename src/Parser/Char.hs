@@ -15,6 +15,8 @@ module Parser.Char
   , reserved
   , parens
   , comma
+  , semicolon
+  , operator
   ) where
 
 import Data.Char (isAlpha, isDigit, isAlphaNum, isUpper, isLower, isSpace)
@@ -99,3 +101,19 @@ parens = between (symbol "(") (symbol ")")
 -- | Parse a comma token
 comma :: Parser ()
 comma = () <$ symbol ","
+
+-- | Parse a semicolon token
+semicolon :: Parser ()
+semicolon = () <$ symbol ";"
+
+-- | Parse an operator symbol (exact match, not prefix of longer operator)
+-- For multi-char ops like "<=", ">=", "/=", "==", "&&", "||", "->"
+operator :: String -> Parser String
+operator op = lexeme $ do
+  _ <- string op
+  notFollowedBy (satisfy "operator char" isOpChar)
+  pure op
+
+-- | Characters that can appear in operators
+isOpChar :: Char -> Bool
+isOpChar c = c `elem` ("+-*/.=<>!&|" :: [Char])
