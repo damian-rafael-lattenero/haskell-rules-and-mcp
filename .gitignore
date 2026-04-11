@@ -4,3 +4,7 @@ dist-newstyle/
 *.o
 *.dyn_hi
 *.dyn_o
+
+# MCP server build artifacts
+mcp-server/node_modules/
+mcp-server/dist/

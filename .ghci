@@ -1,0 +1,5 @@
+:set -fdefer-type-errors
+:set -ferror-spans
+:set -fprint-explicit-foralls
+:set prompt "ghci> "
+:set prompt-cont "ghci| "
