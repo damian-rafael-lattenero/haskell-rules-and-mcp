@@ -27,8 +27,11 @@ export function parseGhcErrors(output: string): GhcError[] {
 
   // Match error/warning blocks. GHC format:
   // file:line:col[-endCol]: severity: [GHC-CODE]
+  // GHC 9.12 format: file:line:col[-endCol]: severity: [GHC-CODE] [-Wflag]
+  // The [-Wflag] part (e.g. [-Wtyped-holes]) appears after [GHC-CODE] on the same line.
+  // We use [^\n]* after the optional GHC code to consume anything else on that header line.
   const errorBlockRegex =
-    /^(.+?):(\d+):(\d+)(?:-(\d+))?: (error|warning):(?:\s*\[GHC-(\d+)\])?\s*\n([\s\S]*?)(?=\n\S+:\d+:\d+|$)/gm;
+    /^(.+?):(\d+):(\d+)(?:-(\d+))?: (error|warning):(?:\s*\[GHC-(\d+)\])?[^\n]*\n([\s\S]*?)(?=\n\S+:\d+:\d+|$)/gm;
 
   let match;
   while ((match = errorBlockRegex.exec(output)) !== null) {

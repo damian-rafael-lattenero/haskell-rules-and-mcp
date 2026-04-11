@@ -10,6 +10,8 @@ import { handleBuild } from "./tools/build.js";
 import { handleHoogleSearch } from "./tools/hoogle.js";
 import { handleScaffold } from "./tools/scaffold.js";
 import { handleCheckModule } from "./tools/check-module.js";
+import { handleHoleFits } from "./tools/hole-fits.js";
+import { handleDiagnostics } from "./tools/diagnostics.js";
 
 // Project directory is the parent of mcp-server/
 const PROJECT_DIR =
@@ -224,6 +226,53 @@ server.tool(
       module_path,
       module_name,
     });
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+// --- Tool: ghci_diagnostics ---
+server.tool(
+  "ghci_diagnostics",
+  "Full diagnostic check for a Haskell module. Runs a strict compilation pass to find real type errors, " +
+    "then a deferred pass to collect typed-hole information. Returns a unified report with: " +
+    "errors, warnings, typed holes (with relevant bindings and suggested fits). " +
+    "Use as a single-call alternative to running ghci_load + ghci_check_module + ghci_hole_fits separately.",
+  {
+    module_path: z
+      .string()
+      .describe(
+        'Path to the module to diagnose. Examples: "src/HM/Infer.hs", "src/Lib.hs"'
+      ),
+  },
+  async ({ module_path }) => {
+    const session = await getSession();
+    const result = await handleDiagnostics(session, { module_path });
+    return { content: [{ type: "text", text: result }] };
+  }
+);
+
+// --- Tool: ghci_hole_fits ---
+server.tool(
+  "ghci_hole_fits",
+  "Load a module containing typed holes (_) and return structured analysis of each hole: " +
+    "expected type, relevant bindings in scope, and valid hole fits that GHC suggests. " +
+    "Use when exploring what expressions could fill a gap in your code.",
+  {
+    module_path: z
+      .string()
+      .describe(
+        'Path to a module containing typed holes. Examples: "src/HM/Infer.hs"'
+      ),
+    max_fits: z
+      .number()
+      .optional()
+      .describe(
+        "Maximum number of valid hole fits to show per hole (default 10, GHC default is 6)"
+      ),
+  },
+  async ({ module_path, max_fits }) => {
+    const session = await getSession();
+    const result = await handleHoleFits(session, { module_path, max_fits });
     return { content: [{ type: "text", text: result }] };
   }
 );
