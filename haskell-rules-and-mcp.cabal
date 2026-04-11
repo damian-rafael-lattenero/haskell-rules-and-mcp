@@ -1,0 +1,29 @@
+cabal-version:      3.12
+name:               haskell-rules-and-mcp
+version:            0.1.0.0
+synopsis:           Haskell rules and MCP experiments
+license:            MIT
+author:             Damian Rafael Lattenero
+build-type:         Simple
+
+library
+  exposed-modules:
+    Lib
+  build-depends:
+    base >= 4.21 && < 5,
+    containers >= 0.7,
+    array
+  hs-source-dirs:   src
+  default-language:  GHC2024
+  ghc-options:       -Wall
+
+executable haskell-rules-and-mcp
+  main-is:          Main.hs
+  build-depends:
+    base >= 4.21 && < 5,
+    containers >= 0.7,
+    array,
+    haskell-rules-and-mcp
+  hs-source-dirs:   app
+  default-language:  GHC2024
+  ghc-options:       -Wall
