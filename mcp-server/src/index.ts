@@ -284,6 +284,52 @@ server.tool(
   }
 );
 
+// --- Tool: ghci_batch ---
+server.tool(
+  "ghci_batch",
+  "Execute multiple GHCi commands in a single call. Returns all results as a JSON array. " +
+    "Useful for running several :t, :i, or eval commands without multiple roundtrips. " +
+    "Optionally reloads modules first and stops on first error.",
+  {
+    commands: z
+      .array(z.string())
+      .describe(
+        'List of GHCi commands to execute. Examples: [":t map", ":t foldr", "1 + 2"]'
+      ),
+    reload: z
+      .boolean()
+      .optional()
+      .describe("If true, reload modules (:r) before executing commands"),
+    stop_on_error: z
+      .boolean()
+      .optional()
+      .describe("If true, stop executing after the first failed command"),
+  },
+  async ({ commands, reload, stop_on_error }) => {
+    const session = await getSession();
+    const { results, allSuccess } = await session.executeBatch(commands, {
+      reload: reload ?? false,
+      stopOnError: stop_on_error ?? false,
+    });
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            allSuccess,
+            count: results.length,
+            results: results.map((r, i) => ({
+              command: commands[i],
+              success: r.success,
+              output: r.output,
+            })),
+          }),
+        },
+      ],
+    };
+  }
+);
+
 // --- Start the server ---
 async function main() {
   const transport = new StdioServerTransport();

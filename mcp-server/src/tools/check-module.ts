@@ -15,6 +15,9 @@ export async function handleCheckModule(
   session: GhciSession,
   args: { module_path: string; module_name?: string }
 ): Promise<string> {
+  // Step 0: Disable -fdefer-type-errors so real type errors show up
+  await session.execute(":set -fno-defer-type-errors");
+
   // Step 1: Load the module
   const loadResult = await session.loadModule(args.module_path);
   const errors = parseGhcErrors(loadResult.output);
@@ -22,6 +25,8 @@ export async function handleCheckModule(
   const warnings = errors.filter((e) => e.severity === "warning");
 
   if (compileErrors.length > 0) {
+    // Restore deferred type errors before returning
+    await session.execute(":set -fdefer-type-errors");
     return JSON.stringify({
       success: false,
       compiled: false,
@@ -46,6 +51,9 @@ export async function handleCheckModule(
     (d) => d.kind === "type" || d.kind === "data"
   );
   const classes = definitions.filter((d) => d.kind === "class");
+
+  // Restore deferred type errors for normal interactive use
+  await session.execute(":set -fdefer-type-errors");
 
   return JSON.stringify({
     success: true,

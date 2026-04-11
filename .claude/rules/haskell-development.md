@@ -18,21 +18,42 @@ export PATH="$HOME/.ghcup/bin:$HOME/.cabal/bin:$PATH" &&
 
 ## Incremental Compilation Protocol
 
-**CRITICAL: NEVER write more than ONE top-level function without compiling.**
+**NEVER accumulate more than 5 unverified top-level functions.**
 
-The workflow for every function must be:
+Use the appropriate level of verification based on complexity:
+
+### Level 1: Full Protocol (complex functions)
+Use when: 2+ type variables, typeclass constraints, monadic code, GADTs, type families.
 1. Write the type signature
 2. Write `= undefined` as the body
-3. Compile: `export PATH="$HOME/.ghcup/bin:$PATH" && cabal build 2>&1`
+3. Compile (ghci_load or cabal_build)
 4. If the signature compiles, implement the body
 5. Compile again
 6. Fix any errors BEFORE moving to the next function
-7. Repeat for the next function
+
+### Level 2: Batch Protocol (medium functions)
+Use when: simple types but non-trivial logic, or a group of structurally similar functions.
+1. Write 3-5 type signatures with `= undefined`
+2. Compile all at once to verify signatures are consistent
+3. Implement bodies one at a time, compile after each
+4. Use ghci_batch when available to verify multiple expressions at once
+
+### Level 3: Write-and-Verify (trivial functions)
+Use when: direct pattern matching, simple wrappers, string formatting, functions with no type variables.
+1. Write the full implementation directly (signature + body)
+2. Compile after finishing the batch (up to 5 functions)
+3. Fix any errors
+
+### Choosing the level
+- If the function has `forall`, constraints (`=>`), or higher-kinded types → Level 1
+- If the function is one of several with the same structure (e.g., multiple pattern match cases for a printer) → Level 2
+- If the function is `ppExpr (EFoo e) = "foo " ++ ppExpr e` or similar → Level 3
+- When in doubt → Level 2
 
 For complex modules with many interdependent functions:
 1. Write ALL type signatures first, all with `= undefined` bodies
 2. Compile to verify all signatures are consistent
-3. Implement bodies ONE AT A TIME, compiling after each one
+3. Implement bodies following the appropriate level per function
 
 ## Typed Holes for Discovery
 

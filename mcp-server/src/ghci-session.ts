@@ -311,6 +311,35 @@ export class GhciSession extends EventEmitter {
   }
 
   /**
+   * Execute multiple commands sequentially and return all results.
+   * Stops early if stopOnError is true and a command fails.
+   */
+  async executeBatch(
+    commands: string[],
+    options?: { stopOnError?: boolean; reload?: boolean }
+  ): Promise<{ results: GhciResult[]; allSuccess: boolean }> {
+    const results: GhciResult[] = [];
+    const stopOnError = options?.stopOnError ?? false;
+
+    if (options?.reload) {
+      await this.execute(":r");
+    }
+
+    for (const cmd of commands) {
+      const result = await this.execute(cmd);
+      results.push(result);
+      if (stopOnError && !result.success) {
+        break;
+      }
+    }
+
+    return {
+      results,
+      allSuccess: results.every((r) => r.success),
+    };
+  }
+
+  /**
    * Check if the session is alive.
    */
   isAlive(): boolean {

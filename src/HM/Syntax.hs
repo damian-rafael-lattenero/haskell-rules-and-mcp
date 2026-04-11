@@ -24,7 +24,12 @@ data Expr
   | EApp Expr Expr         -- ^ Function application
   | ELam Name Expr         -- ^ Lambda abstraction
   | ELet Name Expr Expr    -- ^ Let binding: let x = e1 in e2
+  | ELetRec Name Expr Expr -- ^ Recursive let: let rec f = e1 in e2
   | EIf Expr Expr Expr     -- ^ If-then-else
+  | EPair Expr Expr        -- ^ Pair construction: (e1, e2)
+  | EFst Expr              -- ^ First projection: fst e
+  | ESnd Expr              -- ^ Second projection: snd e
+  | EAnn Expr Type         -- ^ Type annotation: (expr : Type)
   deriving (Show, Eq)
 
 -- | Monotypes
@@ -32,6 +37,7 @@ data Type
   = TVar TVar              -- ^ Type variable: a, b, ...
   | TCon String            -- ^ Type constructor: Int, Bool
   | TArr Type Type         -- ^ Function type: a -> b
+  | TProd Type Type        -- ^ Product type: (a, b)
   deriving (Show, Eq, Ord)
 
 -- | Polytypes (type schemes): forall a b. Type

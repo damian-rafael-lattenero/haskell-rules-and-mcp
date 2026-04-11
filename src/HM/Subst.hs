@@ -29,11 +29,13 @@ class Substitutable a where
 instance Substitutable Type where
   apply _ (TCon c)     = TCon c
   apply s t@(TVar v)   = Map.findWithDefault t v s
-  apply s (TArr t1 t2) = TArr (apply s t1) (apply s t2)
+  apply s (TArr t1 t2)  = TArr (apply s t1) (apply s t2)
+  apply s (TProd t1 t2) = TProd (apply s t1) (apply s t2)
 
-  ftv (TCon _)     = Set.empty
-  ftv (TVar v)     = Set.singleton v
-  ftv (TArr t1 t2) = ftv t1 `Set.union` ftv t2
+  ftv (TCon _)      = Set.empty
+  ftv (TVar v)      = Set.singleton v
+  ftv (TArr t1 t2)  = ftv t1 `Set.union` ftv t2
+  ftv (TProd t1 t2) = ftv t1 `Set.union` ftv t2
 
 instance Substitutable Scheme where
   apply s (Forall vs t) = Forall vs (apply s' t)

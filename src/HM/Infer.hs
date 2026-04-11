@@ -95,3 +95,38 @@ infer env (EIf cond thn els) = do
   s5 <- liftEither (unify (apply s4 t2) (apply s4 t3))
   let s = foldr1 composeSubst [s5, s4, s3, s2, s1]
   pure (s, apply s5 t2)
+
+infer env (ELetRec x e1 e2) = do
+  tv <- fresh
+  let env' = extend env (x, Forall [] tv)
+  (s1, t1) <- infer env' e1
+  s2 <- liftEither (unify (apply s1 tv) t1)
+  let s = composeSubst s2 s1
+      env'' = apply s <$> env
+      sc = generalize env'' (apply s tv)
+  (s3, t2) <- infer (extend env'' (x, sc)) e2
+  pure (composeSubst s3 s, t2)
+
+infer env (EPair e1 e2) = do
+  (s1, t1) <- infer env e1
+  (s2, t2) <- infer (apply s1 <$> env) e2
+  pure (composeSubst s2 s1, TProd (apply s2 t1) t2)
+
+infer env (EFst e) = do
+  tv1 <- fresh
+  tv2 <- fresh
+  (s1, t1) <- infer env e
+  s2 <- liftEither (unify t1 (TProd tv1 tv2))
+  pure (composeSubst s2 s1, apply s2 tv1)
+
+infer env (ESnd e) = do
+  tv1 <- fresh
+  tv2 <- fresh
+  (s1, t1) <- infer env e
+  s2 <- liftEither (unify t1 (TProd tv1 tv2))
+  pure (composeSubst s2 s1, apply s2 tv2)
+
+infer env (EAnn e annTy) = do
+  (s1, t1) <- infer env e
+  s2 <- liftEither (unify t1 annTy)
+  pure (composeSubst s2 s1, apply s2 annTy)
