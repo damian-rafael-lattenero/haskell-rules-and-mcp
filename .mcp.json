@@ -5,7 +5,7 @@
       "args": ["mcp-server/dist/index.js"],
       "cwd": "/Users/dlattenero/Personal-Projects/haskell-rules-and-mcp",
       "env": {
-        "PATH": "/Users/dlattenero/.ghcup/bin:/Users/dlattenero/.cabal/bin:/usr/local/bin:/usr/bin:/bin"
+        "PATH": "/opt/homebrew/bin:/Users/dlattenero/.ghcup/bin:/Users/dlattenero/.cabal/bin:/usr/local/bin:/usr/bin:/bin"
       }
     }
   }

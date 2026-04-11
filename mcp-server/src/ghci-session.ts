@@ -154,7 +154,9 @@ export class GhciSession extends EventEmitter {
     // Set up the sentinel-based prompt so we can detect command completion
     await this.rawSend(`:set prompt "\\n${SENTINEL}\\n"`);
     await this.rawSend(`:set prompt-cont ""`);
-    // Wait for initial sentinel
+    // Each :set command triggers GHCi to display the new prompt (sentinel),
+    // so we must consume both sentinels to avoid an off-by-one in execute().
+    await this.waitForSentinel();
     await this.waitForSentinel();
   }
 
