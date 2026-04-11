@@ -49,6 +49,7 @@ export class GhciSession extends EventEmitter {
 
       let startupBuffer = "";
       let startupStderr = "";
+      let settled = false;
 
       const onStartupData = (data: Buffer) => {
         startupBuffer += data.toString();
@@ -56,11 +57,17 @@ export class GhciSession extends EventEmitter {
         if (startupBuffer.includes("Ok,") || startupBuffer.includes("Ok.") || startupBuffer.includes("Loaded GHCi")) {
           this.process!.stdout!.removeListener("data", onStartupData);
           this.process!.stderr!.removeListener("data", onStartupStderr);
+          // Remove the startup-only exit handler before installing the permanent one
+          this.process!.removeListener("exit", onStartupExit);
           this.setupHandlers();
           this.initSession().then(() => {
             this.ready = true;
+            settled = true;
             resolve();
-          }).catch(reject);
+          }).catch((err) => {
+            settled = true;
+            reject(err);
+          });
         }
       };
 
@@ -68,18 +75,11 @@ export class GhciSession extends EventEmitter {
         startupStderr += data.toString();
       };
 
-      this.process.stdout!.on("data", onStartupData);
-      this.process.stderr!.on("data", onStartupStderr);
-
-      this.process.on("error", (err) => {
-        this.ready = false;
-        reject(new Error(`Failed to start GHCi: ${err.message}`));
-      });
-
-      this.process.on("exit", (code) => {
+      const onStartupExit = (code: number | null) => {
         this.ready = false;
         this.process = null;
-        if (!this.ready) {
+        if (!settled) {
+          settled = true;
           reject(
             new Error(
               `GHCi exited during startup with code ${code}. stderr: ${startupStderr}`
@@ -87,11 +87,25 @@ export class GhciSession extends EventEmitter {
           );
         }
         this.emit("exit", code);
+      };
+
+      this.process.stdout!.on("data", onStartupData);
+      this.process.stderr!.on("data", onStartupStderr);
+
+      this.process.on("error", (err) => {
+        this.ready = false;
+        if (!settled) {
+          settled = true;
+          reject(new Error(`Failed to start GHCi: ${err.message}`));
+        }
       });
+
+      this.process.on("exit", onStartupExit);
 
       // Timeout for startup
       setTimeout(() => {
-        if (!this.ready) {
+        if (!settled) {
+          settled = true;
           this.kill();
           reject(
             new Error(
@@ -304,22 +318,32 @@ export class GhciSession extends EventEmitter {
   }
 
   /**
-   * Kill the GHCi process.
+   * Kill the GHCi process and wait for it to fully exit.
    */
-  kill(): void {
-    if (this.process) {
-      this.ready = false;
-      this.process.kill("SIGTERM");
-      this.process = null;
-      this.clearPending();
-    }
+  async kill(): Promise<void> {
+    if (!this.process) return;
+
+    this.ready = false;
+    const proc = this.process;
+    this.process = null;
+    this.clearPending();
+
+    return new Promise<void>((resolve) => {
+      // If the process is already dead, resolve immediately
+      if (proc.exitCode !== null || proc.killed) {
+        resolve();
+        return;
+      }
+      proc.once("exit", () => resolve());
+      proc.kill("SIGTERM");
+    });
   }
 
   /**
    * Restart the session (kill + start).
    */
   async restart(): Promise<void> {
-    this.kill();
+    await this.kill();
     await this.start();
   }
 }

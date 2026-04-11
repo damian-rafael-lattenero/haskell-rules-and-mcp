@@ -27,12 +27,17 @@ async function getSession(): Promise<GhciSession> {
   if (ghciSession?.isAlive()) {
     return ghciSession;
   }
-  ghciSession = new GhciSession(PROJECT_DIR);
-  await ghciSession.start();
-  ghciSession.on("exit", () => {
-    ghciSession = null;
+  const session = new GhciSession(PROJECT_DIR);
+  ghciSession = session;
+  await session.start();
+  session.on("exit", () => {
+    // Only nullify if this is still the active session —
+    // a restart may have already replaced ghciSession with a new instance.
+    if (ghciSession === session) {
+      ghciSession = null;
+    }
   });
-  return ghciSession;
+  return session;
 }
 
 // --- Tool: ghci_type ---
@@ -258,11 +263,11 @@ server.tool(
       };
     }
 
-    // restart
+    // restart — kill waits for the old process to fully exit
     if (ghciSession) {
-      ghciSession.kill();
+      await ghciSession.kill();
+      ghciSession = null;
     }
-    ghciSession = null;
     const session = await getSession();
     return {
       content: [
