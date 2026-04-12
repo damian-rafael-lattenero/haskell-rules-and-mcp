@@ -8,3 +8,9 @@
 # MCP server build artifacts
 mcp-server/node_modules/
 mcp-server/dist/
+
+# Smoke test results (local, regenerated per run)
+mcp-server/test-results/*.md
+
+# Disposable playground projects
+playground/smoke-test/
