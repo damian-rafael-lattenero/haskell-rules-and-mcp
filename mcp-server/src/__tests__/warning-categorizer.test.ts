@@ -201,6 +201,48 @@ describe("categorizeWarning", () => {
     expect(action!.category).toBe("type-defaults");
   });
 
+  it("categorizes -Wdeferred-type-errors with expected/actual", () => {
+    const w = makeWarning({
+      warningFlag: "-Wdeferred-type-errors",
+      line: 12,
+      message:
+        "Couldn\u2019t match expected type \u2018[Int] -> Int\u2019\n" +
+        "                with actual type \u2018Bool\u2019",
+      expected: "[Int] -> Int",
+      actual: "Bool",
+    } as Partial<GhcError> & { message: string; warningFlag: string });
+    const action = categorizeWarning(w);
+    expect(action).not.toBeNull();
+    expect(action!.category).toBe("deferred-type-error");
+    expect(action!.suggestedAction).toContain("expected [Int] -> Int");
+    expect(action!.suggestedAction).toContain("actual Bool");
+    expect(action!.confidence).toBe("high");
+  });
+
+  it("categorizes -Wdeferred-type-errors without expected/actual", () => {
+    const w = makeWarning({
+      warningFlag: "-Wdeferred-type-errors",
+      line: 5,
+      message: "Some deferred type error",
+    });
+    const action = categorizeWarning(w);
+    expect(action).not.toBeNull();
+    expect(action!.category).toBe("deferred-type-error");
+    expect(action!.suggestedAction).toContain("line 5");
+    expect(action!.suggestedAction).not.toContain("expected");
+  });
+
+  it("categorizes -Wdeferred-out-of-scope-variables", () => {
+    const w = makeWarning({
+      warningFlag: "-Wdeferred-out-of-scope-variables",
+      line: 17,
+      message: "Variable not in scope: mySum :: [Int] -> Int",
+    });
+    const action = categorizeWarning(w);
+    expect(action).not.toBeNull();
+    expect(action!.category).toBe("deferred-type-error");
+  });
+
   it("returns null for unknown warning flags", () => {
     const w = makeWarning({
       warningFlag: "-Wsome-unknown-flag",

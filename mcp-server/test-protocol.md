@@ -1,7 +1,7 @@
-# MCP Smoke Test Protocol
+# MCP Comprehensive Smoke Test Protocol
 
-Lee este archivo completo y ejecuta cada paso en orden. Este protocolo ejerce todas
-las capacidades del MCP server y genera un reporte de feedback estructurado.
+Lee este archivo completo y ejecuta cada paso en orden. Este protocolo ejerce TODAS
+las capacidades del MCP server (16 tools + 3 resources) y genera un reporte de feedback estructurado.
 
 ## Pre-requisitos
 
@@ -29,6 +29,7 @@ library
   exposed-modules:
     SmokeMath
     SmokeList
+    SmokeKind
   build-depends:
     base >= 4.21 && < 5,
     QuickCheck >= 2.14
@@ -83,38 +84,74 @@ mySum :: [Int] -> Int
 mySum = True
 ```
 
+**playground/smoke-test/src/SmokeKind.hs:**
+```haskell
+module SmokeKind where
+
+-- Higher-kinded type para testear ghci_kind
+newtype Wrap f a = Wrap { unWrap :: f a }
+
+-- Typeclass con constraint para testear ghci_info en detalle
+class Container f where
+  empty :: f a
+  insert :: a -> f a -> f a
+```
+
 Marcar como proyecto descartable:
 ```
 touch playground/smoke-test/.disposable
 ```
 
-## Paso 2: Switch al proyecto smoke-test
+---
+
+## SECCION A: Project Management (ghci_switch_project, ghci_session)
+
+### Paso 2: Project listing
+
+1. Llamar `ghci_switch_project()` (sin argumento) → lista de proyectos
+2. **Verificar**:
+   - Respuesta tiene `projects` array y `activeProject`
+   - Lista incluye "hindley-milner" y su `dirName`
+   - Cada proyecto tiene `name`, `dirName`, `path`, `active`
+3. **Anotar**: Los nombres de proyecto son correctos? `dirName` aparece?
+
+### Paso 3: Switch al proyecto smoke-test
 
 1. Llamar `ghci_switch_project(project="smoke-test")`
-2. **Verificar**: respuesta con `success: true`, projectDir apunta a smoke-test
-3. **Anotar**: Funciono el switch? Hubo delay? Errores?
+2. **Verificar**: `success: true`, `projectDir` apunta a smoke-test, `alive: true`
+3. **Anotar**: Funciono? Delay?
 
-## Paso 3: Primer ghci_load — errores y warnings mezclados
+### Paso 4: Session status
+
+1. Llamar `ghci_session(action="status")`
+2. **Verificar**: `alive: true`, `projectDir` contiene "smoke-test"
+3. **Anotar**: Status correcto?
+
+---
+
+## SECCION B: Compilation & Diagnostics (ghci_load — 4 modos)
+
+### Paso 5: Load all con diagnostics — errores y warnings mezclados
 
 1. Llamar `ghci_load(load_all=true, diagnostics=true)`
-2. **Esperado**: Al menos 1 error (mySum = True) y varios warnings
+2. **Esperado**: Al menos 1 error real (mySum = True) en `errors[]` y warnings en `warnings[]`
 3. **Verificar**:
-   - El error tiene `code: "GHC-83865"`, `expected: "Int"` o `"[Int] -> Int"`, `actual: "Bool"`
+   - El error tiene `code: "GHC-83865"`, `expected` y `actual` correctos
    - Los warnings tienen `warningFlag` populated
    - `warningActions` tiene entries para: unused-import, missing-signature, unused-matches, incomplete-patterns
    - Cada warningAction tiene `suggestedAction` con instrucciones concretas
-4. **Anotar**: Cuantos warningActions? Se categorizaron bien? Falto alguno?
+   - El type error de mySum aparece en `errors[]` (NO como warning deferred)
+   - `holes[]` esta vacio (no hay typed holes todavia)
+4. **Anotar**: Cuantos errors? Cuantos warningActions? El dual-pass funciono (errores reales en errors[])?
 
-## Paso 4: Fix del error primero
+### Paso 6: Fix del error primero
 
-Siguiendo el Error Resolution Table:
-1. Leer el error de `mySum` — deberia ser type mismatch
-2. Arreglar: `mySum [] = 0; mySum (x:xs) = x + mySum xs`
-3. Llamar `ghci_load(load_all=true)` de nuevo
-4. **Verificar**: 0 errores, solo warnings
-5. **Anotar**: El error JSON tenia expected/actual correctos?
+1. Arreglar mySum: `mySum [] = 0; mySum (x:xs) = x + mySum xs`
+2. Llamar `ghci_load(load_all=true, diagnostics=true)` de nuevo
+3. **Verificar**: 0 errores, solo warnings, `warningActions` tiene 4 entries
+4. **Anotar**: El error JSON tenia expected/actual correctos?
 
-## Paso 5: Fix automatico de warnings (el automation loop)
+### Paso 7: Fix automatico de warnings (el automation loop)
 
 Siguiendo la Warning Action Table, arreglar CADA warningAction automaticamente:
 1. Leer cada `warningAction` del JSON
@@ -123,111 +160,384 @@ Siguiendo la Warning Action Table, arreglar CADA warningAction automaticamente:
    - missing-signature → agregar la signature sugerida
    - unused-matches → reemplazar argumento con `_`
    - incomplete-patterns → agregar el pattern faltante
-3. Llamar `ghci_load(load_all=true)` despues de cada fix (o al final de todos)
+3. Llamar `ghci_load(load_all=true)` despues de todos los fixes
 4. **Verificar**: 0 warnings, 0 errors
-5. **Anotar**: Cuantos warnings habia? Cuantos se arreglaron automaticamente? Algun suggestedAction fue incorrecto?
+5. **Anotar**: Cuantos warnings habia? Algun suggestedAction fue incorrecto?
 
-## Paso 6: Verificar herramientas de exploracion
+### Paso 8: Load single module con diagnostics
 
-1. `ghci_type(expression="myLength")` → deberia dar `[a] -> Int`
-2. `ghci_type(expression="safeHead")` → deberia dar `[a] -> Maybe a`
-3. `ghci_info(name="Maybe")` → deberia mostrar data type con constructores
-4. `ghci_eval(expression="myLength [1,2,3,4,5]")` → deberia dar `5`
-5. `ghci_eval(expression="mySum [1,2,3]")` → deberia dar `6`
-6. `ghci_eval(expression="safeHead []")` → deberia dar `Nothing`
-7. `ghci_batch(commands=[":t double", ":t triple", "double 21"])` → 3 resultados
-8. `hoogle_search(query="[a] -> Int")` → deberia encontrar `length`
-9. **Anotar**: Todas funcionaron? Alguna dio output inesperado?
+1. Llamar `ghci_load(module_path="src/SmokeMath.hs", diagnostics=true)`
+2. **Verificar**: `success: true`, 0 errors, 0 warnings (ya arreglamos todo)
+3. **Anotar**: La carga individual funciona?
 
-## Paso 7: QuickCheck inline
+### Paso 9: Plain reload (sin module_path ni load_all)
 
-1. `ghci_quickcheck(property="\xs -> myLength xs == length (xs :: [Int])")` → PASS
-2. `ghci_quickcheck(property="\xs -> mySum xs == sum (xs :: [Int])")` → PASS
-3. `ghci_quickcheck(property="\x -> double x == x + (x :: Int)")` → PASS
-4. `ghci_quickcheck(property="\x -> triple x == 3 * (x :: Int)")` → FAIL (triple tiene bug!)
-5. **Anotar**: QuickCheck detecto el bug en triple? El counterexample fue util? Cuanto tardo?
+1. Llamar `ghci_load()` (sin argumentos)
+2. **Verificar**: Reload exitoso, modulos cargados
+3. **Anotar**: El reload simple funciona?
 
-## Paso 8: Arreglar bug descubierto por QuickCheck
+### Paso 10: Plain reload con diagnostics
 
-1. Leer el counterexample de triple
-2. Arreglar triple: `triple x = 3 * x`
-3. `ghci_load(module_path="src/SmokeMath.hs")`
-4. `ghci_quickcheck(property="\x -> triple x == 3 * (x :: Int)")` → ahora PASS
-5. **Anotar**: El loop QuickCheck → fix → recheck funciono fluido?
+1. Llamar `ghci_load(diagnostics=true)`
+2. **Verificar**: Dual-pass se ejecuta, 0 errors, 0 warnings
+3. **Anotar**: El reload con diagnostics usa dual-pass?
 
-## Paso 9: Typed holes
+---
 
-1. Agregar una funcion con hole en SmokeMath.hs:
+## SECCION C: Type Exploration (ghci_type, ghci_info, ghci_kind)
+
+### Paso 11: Type checking
+
+1. `ghci_type(expression="myLength")` → `[a] -> Int`
+2. `ghci_type(expression="safeHead")` → `[a] -> Maybe a`
+3. `ghci_type(expression="double")` → `Num a => a -> a`
+4. `ghci_type(expression="map (+1)")` → deberia incluir `Num` constraint
+5. **Anotar**: Todos los tipos son correctos?
+
+### Paso 12: Info lookup
+
+1. `ghci_info(name="Maybe")` → data type con constructores Nothing, Just
+2. `ghci_info(name="Container")` → typeclass con metodos empty, insert
+3. `ghci_info(name="Wrap")` → newtype con su kind
+4. **Anotar**: Info completa? Instances listadas?
+
+### Paso 13: Kind checking
+
+1. `ghci_kind(type_expression="Maybe")` → `* -> *`
+2. `ghci_kind(type_expression="Either")` → `* -> * -> *`
+3. `ghci_kind(type_expression="Wrap")` → `(* -> *) -> * -> *`
+4. `ghci_kind(type_expression="Int")` → `*`
+5. **Anotar**: Kinds correctos? Funciona con higher-kinded types?
+
+---
+
+## SECCION D: Evaluation (ghci_eval, ghci_batch)
+
+### Paso 14: Expression evaluation
+
+1. `ghci_eval(expression="myLength [1,2,3,4,5]")` → `output: "5"` (limpio, sin warnings)
+2. `ghci_eval(expression="mySum [1,2,3]")` → `output: "6"`
+3. `ghci_eval(expression="safeHead []")` → `output: "Nothing"`
+4. `ghci_eval(expression="safeHead [42]")` → `output: "Just 42"`
+5. `ghci_eval(expression="double 21")` → `output: "42"`
+6. **Verificar**:
+   - `output` contiene SOLO el resultado limpio (sin warnings de type-defaults)
+   - Si hay warnings, aparecen en campo `warnings[]` separado
+   - Si no hay warnings, no hay campo `warnings` ni `raw`
+7. **Anotar**: El output esta limpio? Los warnings estan separados?
+
+### Paso 15: Eval con error
+
+1. `ghci_eval(expression="head []")` → deberia dar excepcion
+2. **Verificar**: `success: false` o el error aparece en `output`
+3. **Anotar**: Como maneja errores de runtime?
+
+### Paso 16: Batch commands
+
+1. `ghci_batch(commands=[":t double", ":t triple", "double 21", "myLength [1,2,3]"])`
+2. **Verificar**:
+   - `allSuccess: true`, `count: 4`
+   - Cada result tiene `command`, `success`, `output` limpio
+   - `output` de "double 21" es "42" (sin warnings mezclados)
+3. **Anotar**: Batch funciona? Output limpio en cada resultado?
+
+### Paso 17: Batch con reload
+
+1. `ghci_batch(commands=[":t myLength"], reload=true)`
+2. **Verificar**: `allSuccess: true`, reload previo no causo errores
+3. **Anotar**: El reload previo funciono?
+
+### Paso 18: Batch con stop_on_error
+
+1. `ghci_batch(commands=["1 + 1", ":t nonExistentFunction", "2 + 2"], stop_on_error=true)`
+2. **Verificar**:
+   - `allSuccess: false`
+   - Solo 2 resultados (se detuvo en el error)
+   - El primer resultado fue exitoso
+3. **Anotar**: stop_on_error funciona correctamente?
+
+---
+
+## SECCION E: QuickCheck (ghci_quickcheck)
+
+### Paso 19: Properties que pasan
+
+1. `ghci_quickcheck(property="\\xs -> myLength xs == length (xs :: [Int])")` → PASS
+2. `ghci_quickcheck(property="\\xs -> mySum xs == sum (xs :: [Int])")` → PASS
+3. `ghci_quickcheck(property="\\x -> double x == x + (x :: Int)")` → PASS
+4. **Verificar**: `success: true`, `passed: 100` para cada una
+5. **Anotar**: Todas pasaron?
+
+### Paso 20: Property que falla (bug en triple)
+
+1. `ghci_quickcheck(property="\\x -> triple x == 3 * (x :: Int)")` → FAIL
+2. **Verificar**:
+   - `success: false`
+   - `counterexample` presente y util
+   - `shrinks` >= 0
+3. **Anotar**: QuickCheck detecto el bug? Counterexample util?
+
+### Paso 21: QuickCheck con test count custom
+
+1. `ghci_quickcheck(property="\\x -> double x == x + (x :: Int)", tests=500)`
+2. **Verificar**: `passed: 500`
+3. **Anotar**: El count custom funciona?
+
+### Paso 22: Arreglar bug y recheck
+
+1. Arreglar triple: `triple x = 3 * x`
+2. `ghci_load(module_path="src/SmokeMath.hs")`
+3. `ghci_quickcheck(property="\\x -> triple x == 3 * (x :: Int)")` → ahora PASS
+4. **Anotar**: El loop fix → recheck funciono?
+
+---
+
+## SECCION F: Typed Holes (ghci_load + ghci_hole_fits)
+
+### Paso 23: Agregar typed hole
+
+1. Agregar en SmokeMath.hs:
    ```haskell
    mystery :: [Int] -> Int
    mystery xs = _
    ```
 2. `ghci_load(module_path="src/SmokeMath.hs", diagnostics=true)`
-3. **Verificar**: `holes` array tiene un entry con expectedType `Int`, relevantBindings incluye `xs :: [Int]`, fits incluye funciones relevantes
-4. `ghci_hole_fits(module_path="src/SmokeMath.hs")` → deberia dar fits detallados
-5. Implementar usando un fit sugerido (e.g., `mystery xs = mySum xs` o `mystery = myLength`)
-6. `ghci_load` → verificar 0 issues
-7. **Anotar**: Los hole fits fueron utiles? Sugirieron algo relevante?
+3. **Verificar**:
+   - `holes[]` tiene un entry
+   - `expectedType` es `Int`
+   - `relevantBindings` incluye `xs :: [Int]`
+   - `topFits` tiene sugerencias
+4. **Anotar**: Los holes se detectaron? Relevant bindings correctos?
 
-## Paso 10: MCP Resources (rules)
+### Paso 24: Hole fits detallados
 
-1. Leer el resource `rules://haskell/automation` (usar `ReadMcpResourceTool` si disponible, o verificar via E2E que existe)
-2. **Verificar**: Devuelve contenido markdown con la warning action table
-3. Leer `rules://haskell/development`
-4. Leer `rules://haskell/project-conventions`
-5. **Anotar**: Los 3 resources estan disponibles? El contenido es correcto?
+1. `ghci_hole_fits(module_path="src/SmokeMath.hs")`
+2. **Verificar**:
+   - Respuesta tiene holes con fits estructurados
+   - Cada fit tiene `name`, `type`, `specialization`
+3. **Anotar**: Los fits detallados incluyen funciones utiles? Hay refinement fits?
 
-## Paso 11: Project switching
+### Paso 25: Implementar usando hole fit
 
-1. `ghci_switch_project()` (sin argumento) → lista de proyectos
-2. **Verificar**: Lista incluye "hindley-milner" y "smoke-test"
-3. `ghci_switch_project(project="hindley-milner")` → switch
-4. `ghci_type(expression="map (+1)")` → deberia funcionar con el proyecto HM
-5. `ghci_switch_project(project="smoke-test")` → volver
-6. `ghci_type(expression="double")` → deberia funcionar con smoke-test
-7. **Anotar**: El switch fue limpio? Hubo errores? Cuanto tardo?
+1. Implementar mystery usando un fit sugerido o relevantBindings (e.g., `mystery = length`)
+2. `ghci_load(module_path="src/SmokeMath.hs")` → 0 issues
+3. **Anotar**: El workflow hole → implement funciono?
 
-## Paso 12: mcp_restart
+---
 
-1. Llamar `mcp_restart()`
-2. En la siguiente tool call, verificar que el server reinicio
-3. `ghci_session(action="status")` → alive
-4. **Anotar**: El restart fue limpio? Claude Code reconecto automaticamente?
+## SECCION G: Module Inspection (ghci_check_module)
 
-## Paso 13: Escribir reporte
+### Paso 26: Browse module exports
+
+1. `ghci_check_module(module_path="src/SmokeMath.hs")`
+2. **Verificar**:
+   - Respuesta tiene `definitions[]` con tipo y kind para cada export
+   - Incluye: double, triple, safeHead, mystery
+   - Cada definicion tiene `name`, `type`, `kind` ("function", "type", "data", etc.)
+   - `totalDefinitions` es correcto
+3. **Anotar**: Todas las definiciones aparecen? Tipos correctos?
+
+### Paso 27: Browse module con tipos complejos
+
+1. `ghci_check_module(module_path="src/SmokeKind.hs")`
+2. **Verificar**:
+   - Incluye Wrap (kind: "data" o "type"), Container (kind: "class")
+   - Los metodos del typeclass aparecen
+3. **Anotar**: Tipos complejos se parsean bien?
+
+---
+
+## SECCION H: Search & Build (hoogle_search, cabal_build)
+
+### Paso 28: Hoogle — busqueda por tipo
+
+1. `hoogle_search(query="[a] -> Int")` → primer resultado deberia ser `length`
+2. **Verificar**:
+   - `success: true`, `count` > 0
+   - Cada resultado tiene `name`, `module`, `package`, `docs`
+3. **Anotar**: Resultados relevantes?
+
+### Paso 29: Hoogle — busqueda por nombre
+
+1. `hoogle_search(query="mapM", count=5)` → deberia encontrar mapM
+2. **Verificar**: `count` <= 5, resultados incluyen mapM
+3. **Anotar**: El parametro count funciona?
+
+### Paso 30: Hoogle — busqueda por firma compleja
+
+1. `hoogle_search(query="(a -> b) -> [a] -> [b]")` → deberia encontrar `map`
+2. **Anotar**: Busqueda por firma de tipo funciona?
+
+### Paso 31: Cabal build
+
+1. `cabal_build()` (sin componente)
+2. **Verificar**: Build exitoso o errores parseados
+3. **Anotar**: Build funciona? Errores parseados correctamente?
+
+### Paso 32: Cabal build con componente
+
+1. `cabal_build(component="lib:smoke-test")`
+2. **Verificar**: Build exitoso del componente especifico
+3. **Anotar**: Componente especifico funciona?
+
+---
+
+## SECCION I: Scaffolding (ghci_scaffold)
+
+### Paso 33: Scaffold con modulo faltante
+
+1. Agregar un modulo nuevo al .cabal que NO tiene archivo fuente:
+   ```
+   Editar smoke-test.cabal: agregar "SmokeNew" a exposed-modules
+   ```
+2. `ghci_scaffold()`
+3. **Verificar**:
+   - `created` incluye el path del stub creado para SmokeNew
+   - `alreadyExist` incluye SmokeMath, SmokeList, SmokeKind
+   - El archivo stub existe con `module SmokeNew where`
+4. Llamar `ghci_load(load_all=true)` → deberia cargar sin errores
+5. **Anotar**: Scaffold creo el stub? Load funciono despues?
+
+---
+
+## SECCION J: MCP Resources (rules)
+
+### Paso 34: Leer resources
+
+1. Leer `rules://haskell/automation` → debe contener Warning Action Table
+2. Leer `rules://haskell/development` → debe contener Compilation Discipline
+3. Leer `rules://haskell/project-conventions` → debe contener Import Style
+4. **Verificar**: Los 3 resources devuelven markdown valido con contenido relevante
+5. **Anotar**: Algun resource fallo?
+
+---
+
+## SECCION K: Session Management (ghci_session, mcp_restart)
+
+### Paso 35: Session restart
+
+1. `ghci_session(action="restart")`
+2. **Verificar**: `success: true`, `alive: true`
+3. `ghci_type(expression="double")` → funciona despues del restart
+4. **Anotar**: Restart limpio? Funciones accesibles despues?
+
+### Paso 36: mcp_restart (GHCi-only, default)
+
+1. `mcp_restart()` (sin argumentos)
+2. **Verificar**:
+   - `success: true`
+   - Mensaje indica "GHCi session restarted. MCP server still running."
+   - `alive: true`
+3. En la SIGUIENTE tool call, verificar que el server sigue vivo:
+   - `ghci_session(action="status")` → `alive: true`
+4. `ghci_type(expression="double")` → funciona
+5. **Anotar**: El server NO se desconecto? GHCi reinicio correctamente?
+
+### Paso 37: Project switching round-trip
+
+1. `ghci_switch_project(project="hindley-milner")` → switch
+2. `ghci_type(expression="map (+1)")` → funciona con hindley-milner
+3. `ghci_switch_project(project="smoke-test")` → volver
+4. `ghci_type(expression="double")` → funciona con smoke-test
+5. **Anotar**: Round-trip limpio? Cada proyecto mantiene su contexto?
+
+---
+
+## SECCION L: Edge Cases
+
+### Paso 38: ghci_type con expresion invalida
+
+1. `ghci_type(expression="nonExistentFunction")`
+2. **Verificar**: `success: false`, mensaje de error informativo
+3. **Anotar**: Error manejado correctamente?
+
+### Paso 39: ghci_eval con division por cero
+
+1. `ghci_eval(expression="div 1 0")`
+2. **Verificar**: Error de runtime capturado
+3. **Anotar**: Excepciones de runtime se manejan?
+
+### Paso 40: ghci_switch_project a proyecto inexistente
+
+1. `ghci_switch_project(project="no-existe")`
+2. **Verificar**: `success: false`, error con lista de proyectos disponibles
+3. **Anotar**: Error informativo?
+
+### Paso 41: ghci_quickcheck con property invalida
+
+1. `ghci_quickcheck(property="not a valid property")`
+2. **Verificar**: `success: false`, error descriptivo
+3. **Anotar**: Error manejado?
+
+### Paso 42: ghci_load de modulo inexistente
+
+1. `ghci_load(module_path="src/NoExiste.hs")`
+2. **Verificar**: Error en la respuesta
+3. **Anotar**: Error informativo?
+
+---
+
+## Paso 43: Escribir reporte
 
 Crear el archivo `mcp-server/test-results/{YYYY-MM-DD}.md` con este formato:
 
 ```markdown
-# MCP Smoke Test Report — {fecha}
+# MCP Comprehensive Smoke Test Report — {fecha}
 
 ## Summary
 - Total tools tested: X/16
 - Tools that worked correctly: X
 - Tools with issues: X
-- Warnings categorized: X/X
+- Warning categories tested: X/X
 - QuickCheck properties: X passed, X failed (expected)
-- Bugs found by QuickCheck: X
+- Edge cases tested: X
+- MCP Resources: X/3
 
 ## Tool Results
 
+### Core Tools
 | Tool | Status | Notes |
 |------|--------|-------|
-| ghci_switch_project | OK/FAIL | ... |
-| ghci_load (diagnostics) | OK/FAIL | ... |
+| ghci_switch_project (list) | OK/FAIL | ... |
+| ghci_switch_project (switch) | OK/FAIL | ... |
+| ghci_session (status) | OK/FAIL | ... |
+| ghci_session (restart) | OK/FAIL | ... |
+| ghci_load (load_all + diagnostics) | OK/FAIL | ... |
+| ghci_load (single module) | OK/FAIL | ... |
+| ghci_load (plain reload) | OK/FAIL | ... |
+| ghci_load (reload + diagnostics) | OK/FAIL | ... |
 | ghci_type | OK/FAIL | ... |
-| ghci_eval | OK/FAIL | ... |
 | ghci_info | OK/FAIL | ... |
+| ghci_kind | OK/FAIL | ... |
+| ghci_eval | OK/FAIL | ... |
 | ghci_batch | OK/FAIL | ... |
+| ghci_batch (reload) | OK/FAIL | ... |
+| ghci_batch (stop_on_error) | OK/FAIL | ... |
 | ghci_quickcheck | OK/FAIL | ... |
+| ghci_quickcheck (custom count) | OK/FAIL | ... |
 | ghci_hole_fits | OK/FAIL | ... |
-| ghci_load (warnings) | OK/FAIL | ... |
-| hoogle_search | OK/FAIL | ... |
-| mcp_restart | OK/FAIL | ... |
+| ghci_check_module | OK/FAIL | ... |
+| hoogle_search (type) | OK/FAIL | ... |
+| hoogle_search (name + count) | OK/FAIL | ... |
+| cabal_build | OK/FAIL | ... |
+| cabal_build (component) | OK/FAIL | ... |
+| ghci_scaffold | OK/FAIL | ... |
+| mcp_restart (GHCi-only) | OK/FAIL | ... |
 | MCP Resources | OK/FAIL | ... |
 
-## Warning Categorization
+### Diagnostic Pipeline
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Dual-pass compilation (load_all) | OK/FAIL | Type errors in errors[], not warnings |
+| Dual-pass compilation (single) | OK/FAIL | ... |
+| Dual-pass compilation (reload) | OK/FAIL | ... |
+| Error parsing (GHC-83865) | OK/FAIL | expected/actual extracted? |
+| Warning categorization | OK/FAIL | X/4 categories correct |
+| Typed hole detection | OK/FAIL | expectedType, relevantBindings, fits? |
+| Eval output cleaning | OK/FAIL | Warnings separated from result? |
+| Batch output cleaning | OK/FAIL | Warnings separated per command? |
 
+### Warning Categorization
 | Warning | Detected? | suggestedAction correct? | Auto-fixed? |
 |---------|-----------|--------------------------|-------------|
 | unused-import | YES/NO | YES/NO | YES/NO |
@@ -235,20 +545,36 @@ Crear el archivo `mcp-server/test-results/{YYYY-MM-DD}.md` con este formato:
 | unused-matches | YES/NO | YES/NO | YES/NO |
 | incomplete-patterns | YES/NO | YES/NO | YES/NO |
 
-## Error Resolution
-
-| Error | Detected? | expected/actual correct? | Fixed following table? |
-|-------|-----------|--------------------------|----------------------|
+### Error Resolution
+| Error | Detected? | expected/actual correct? | In errors[] (not warnings)? |
+|-------|-----------|--------------------------|----------------------------|
 | Type mismatch (GHC-83865) | YES/NO | YES/NO | YES/NO |
 
-## QuickCheck
-
+### QuickCheck
 | Property | Result | Notes |
 |----------|--------|-------|
 | myLength == length | PASS/FAIL | ... |
 | mySum == sum | PASS/FAIL | ... |
 | double x == x+x | PASS/FAIL | ... |
-| triple x == 3*x | FAIL→fix→PASS | Bug detected by QC |
+| triple x == 3*x (before fix) | FAIL expected | Counterexample? |
+| triple x == 3*x (after fix) | PASS/FAIL | ... |
+| double (custom 500 tests) | PASS/FAIL | Correct count? |
+
+### Edge Cases
+| Case | Handled? | Notes |
+|------|----------|-------|
+| ghci_type invalid expr | YES/NO | ... |
+| ghci_eval runtime error | YES/NO | ... |
+| switch to nonexistent project | YES/NO | ... |
+| quickcheck invalid property | YES/NO | ... |
+| load nonexistent module | YES/NO | ... |
+
+## Project Management
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Project listing | OK/FAIL | dirName field present? |
+| Project naming | OK/FAIL | hindley-milner shows correct name? |
+| Project switch round-trip | OK/FAIL | Context preserved per project? |
 
 ## Friction Points
 - (listar problemas encontrados)
@@ -265,6 +591,7 @@ Crear el archivo `mcp-server/test-results/{YYYY-MM-DD}.md` con este formato:
 - Warnings auto-fixed: X
 - Errors resolved: X
 - QuickCheck tests run: X
+- Edge cases tested: X
 ```
 
 ## Notas para Claude
@@ -274,3 +601,4 @@ Crear el archivo `mcp-server/test-results/{YYYY-MM-DD}.md` con este formato:
 - Se honesto en el reporte — si algo no funciona, decilo
 - El reporte va en `mcp-server/test-results/` con la fecha como nombre
 - Cada vez que corras este protocolo, borra smoke-test al PRINCIPIO (Paso 0), no al final
+- Contar TODOS los tool calls que hagas para el reporte final

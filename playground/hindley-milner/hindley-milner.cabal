@@ -1,5 +1,5 @@
 cabal-version:      3.12
-name:               haskell-rules-and-mcp
+name:               hindley-milner
 version:            0.1.0.0
 synopsis:           Haskell rules and MCP experiments
 license:            MIT
@@ -36,18 +36,18 @@ test-suite properties
     base >= 4.21 && < 5,
     containers >= 0.7,
     QuickCheck >= 2.14,
-    haskell-rules-and-mcp
+    hindley-milner
   hs-source-dirs:   test
   default-language:  GHC2024
   ghc-options:       -Wall
 
-executable haskell-rules-and-mcp
+executable hindley-milner
   main-is:          Main.hs
   build-depends:
     base >= 4.21 && < 5,
     containers >= 0.7,
     array,
-    haskell-rules-and-mcp
+    hindley-milner
   hs-source-dirs:   app
   default-language:  GHC2024
   ghc-options:       -Wall

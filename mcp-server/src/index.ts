@@ -15,6 +15,7 @@ import { handleDiagnostics } from "./tools/diagnostics.js";
 import { handleQuickCheck, resetQuickCheckState } from "./tools/quickcheck.js";
 import { discoverProjects, getPlaygroundDir } from "./project-manager.js";
 import { RULES_REGISTRY, loadRule } from "./resources/rules.js";
+import { parseEvalOutput } from "./parsers/eval-output-parser.js";
 
 // Base directory: the project root (parent of mcp-server/)
 const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
@@ -162,13 +163,18 @@ server.tool(
   async ({ expression }) => {
     const session = await getSession();
     const result = await session.execute(expression);
+    const parsed = parseEvalOutput(result.output);
     return {
       content: [
         {
           type: "text",
           text: JSON.stringify({
             success: result.success,
-            output: result.output,
+            output: parsed.result,
+            ...(parsed.warnings.length > 0
+              ? { warnings: parsed.warnings }
+              : {}),
+            ...(parsed.result !== parsed.raw ? { raw: parsed.raw } : {}),
           }),
         },
       ],
@@ -185,7 +191,7 @@ server.tool(
       .string()
       .optional()
       .describe(
-        'Component to build. Examples: "lib:haskell-rules-and-mcp", "exe:haskell-rules-and-mcp". Defaults to all.'
+        'Component to build. Examples: "lib:my-package", "exe:my-package". Defaults to all.'
       ),
   },
   async ({ component }) => {
@@ -351,24 +357,52 @@ server.tool(
 // --- Tool: mcp_restart ---
 server.tool(
   "mcp_restart",
-  "Restart the MCP server process to pick up recompiled TypeScript. " +
-    "Use after running 'cd mcp-server && npx tsc'. The server exits cleanly and " +
-    "Claude Code auto-restarts it on the next tool call. This also restarts the GHCi session.",
-  {},
-  async () => {
+  "Restart the GHCi session (default) or the entire MCP server process. " +
+    "Default behavior restarts only GHCi — use after .cabal changes, new modules, or dependency updates. " +
+    "Set full_restart=true to also exit the MCP server process — use only after recompiling TypeScript " +
+    "with 'cd mcp-server && npx tsc'. WARNING: full_restart=true will disconnect the MCP client temporarily.",
+  {
+    full_restart: z
+      .boolean()
+      .optional()
+      .describe(
+        "If true, exit the MCP server process (for TypeScript code reload). " +
+          "Default: false (GHCi restart only)."
+      ),
+  },
+  async ({ full_restart }) => {
+    resetQuickCheckState();
     if (ghciSession) {
       await ghciSession.kill();
       ghciSession = null;
     }
-    setTimeout(() => process.exit(0), 100);
+
+    if (full_restart) {
+      setTimeout(() => process.exit(0), 100);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message:
+                "MCP server exiting for full restart. Next tool call will reconnect.",
+            }),
+          },
+        ],
+      };
+    }
+
+    // Default: GHCi-only restart, MCP server stays alive
+    const session = await getSession();
     return {
       content: [
         {
           type: "text",
           text: JSON.stringify({
             success: true,
-            message:
-              "MCP server restarting. Next tool call will use updated code.",
+            message: "GHCi session restarted. MCP server still running.",
+            alive: session.isAlive(),
           }),
         },
       ],
@@ -404,6 +438,7 @@ server.tool(
             text: JSON.stringify({
               projects: projects.map((p) => ({
                 name: p.name,
+                dirName: p.dirName,
                 path: p.path,
                 active: p.path === current,
               })),
@@ -491,11 +526,17 @@ server.tool(
           text: JSON.stringify({
             allSuccess,
             count: results.length,
-            results: results.map((r, i) => ({
-              command: commands[i],
-              success: r.success,
-              output: r.output,
-            })),
+            results: results.map((r, i) => {
+              const parsed = parseEvalOutput(r.output);
+              return {
+                command: commands[i],
+                success: r.success,
+                output: parsed.result,
+                ...(parsed.warnings.length > 0
+                  ? { warnings: parsed.warnings }
+                  : {}),
+              };
+            }),
           }),
         },
       ],

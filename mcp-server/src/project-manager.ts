@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 
 export interface ProjectInfo {
   name: string;
+  dirName: string;
   path: string;
   cabalFile: string;
 }
@@ -31,7 +32,7 @@ export async function discoverProjects(
       const cabalFile = await findCabalFile(fullPath);
       const content = await readFile(cabalFile, "utf-8");
       const name = extractPackageName(content) ?? entry;
-      projects.push({ name, path: fullPath, cabalFile: path.basename(cabalFile) });
+      projects.push({ name, dirName: entry, path: fullPath, cabalFile: path.basename(cabalFile) });
     } catch {
       // Not a project directory — skip
     }

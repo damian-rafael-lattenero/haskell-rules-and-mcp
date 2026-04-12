@@ -1,4 +1,4 @@
-import { GhciSession } from "../ghci-session.js";
+import { GhciSession, GhciResult } from "../ghci-session.js";
 import { parseGhcErrors, GhcError } from "../parsers/error-parser.js";
 import { categorizeWarnings, WarningAction } from "../parsers/warning-categorizer.js";
 import {
@@ -70,77 +70,128 @@ export async function handleLoadModule(
   return handleReload(session, runDiagnostics);
 }
 
-async function handleReload(
-  session: GhciSession,
-  runDiagnostics: boolean
-): Promise<string> {
-  const result = await session.reload();
-  const allDiags = parseGhcErrors(result.output);
-  const errors = allDiags.filter((e) => e.severity === "error");
-  const warnings = allDiags.filter((e) => e.severity === "warning");
-  const { actions, uncategorized } = categorizeWarnings(warnings);
+// --- Shared dual-pass compilation helper ---
 
-  if (runDiagnostics && errors.length === 0) {
-    const holes = await collectHoles(session, result.output);
-    return buildResponse(true, errors, warnings, actions, uncategorized, holes, result.output);
-  }
-
-  return buildResponse(
-    errors.length === 0, errors, warnings, actions, uncategorized, [], result.output
-  );
+interface DualPassResult {
+  errors: GhcError[];
+  warnings: GhcError[];
+  actions: WarningAction[];
+  uncategorized: GhcError[];
+  holes: HoleSummary[];
+  rawOutput: string;
 }
 
-async function handleLoadSingle(
+async function dualPassCompile(
   session: GhciSession,
-  modulePath: string,
-  runDiagnostics: boolean
-): Promise<string> {
-  if (!runDiagnostics) {
-    const result = await session.loadModule(modulePath);
-    const allDiags = parseGhcErrors(result.output);
-    const errors = allDiags.filter((e) => e.severity === "error");
-    const warnings = allDiags.filter((e) => e.severity === "warning");
-    const { actions, uncategorized } = categorizeWarnings(warnings);
-    return buildResponse(
-      errors.length === 0, errors, warnings, actions, uncategorized, [], result.output
-    );
-  }
-
-  // Dual-pass: strict first
+  loadFn: () => Promise<GhciResult>
+): Promise<DualPassResult> {
+  // Pass 1: strict — catch real type errors
   await session.execute(":set -fno-defer-type-errors");
-  const strictResult = await session.loadModule(modulePath);
+  const strictResult = await loadFn();
   await session.execute(":set -fdefer-type-errors");
 
   const allDiags = parseGhcErrors(strictResult.output);
-  const strictErrors = allDiags.filter((e) => e.severity === "error");
+  const strictErrors = allDiags.filter(
+    (e) => e.severity === "error" && e.code !== "GHC-88464"
+  );
   const warnings = allDiags.filter(
     (e) => e.severity === "warning" && e.code !== "GHC-88464"
   );
-
-  // Separate real errors from hole errors
-  const realErrors = strictErrors.filter((e) => e.code !== "GHC-88464");
   const { actions, uncategorized } = categorizeWarnings(warnings);
 
-  if (realErrors.length > 0) {
-    return buildResponse(false, realErrors, warnings, actions, uncategorized, [], strictResult.output);
+  if (strictErrors.length > 0) {
+    return {
+      errors: strictErrors,
+      warnings,
+      actions,
+      uncategorized,
+      holes: [],
+      rawOutput: strictResult.output,
+    };
   }
 
-  // Pass 2: deferred — collect holes
-  await session.execute(":set -fmax-valid-hole-fits=6");
-  const deferredResult = await session.loadModule(modulePath);
+  // Pass 2: deferred — collect typed holes
+  await session.execute(":set -fmax-valid-hole-fits=10");
+  await session.execute(":set -frefinement-level-hole-fits=1");
+  const deferredResult = await loadFn();
+  await session.execute(":set -frefinement-level-hole-fits=0");
   const holes = parseHolesFromOutput(deferredResult.output);
 
-  // Re-collect warnings from deferred pass (may have more detail)
   const deferredDiags = parseGhcErrors(deferredResult.output);
   const deferredWarnings = deferredDiags.filter(
     (e) => e.severity === "warning" && e.code !== "GHC-88464"
   );
   const deferredCat = categorizeWarnings(deferredWarnings);
 
+  return {
+    errors: [],
+    warnings: deferredWarnings,
+    actions: deferredCat.actions,
+    uncategorized: deferredCat.uncategorized,
+    holes,
+    rawOutput: deferredResult.output,
+  };
+}
+
+// --- Single-pass helper (no dual-pass, used when diagnostics=false) ---
+
+function singlePassDiagnostics(output: string): {
+  errors: GhcError[];
+  warnings: GhcError[];
+  actions: WarningAction[];
+  uncategorized: GhcError[];
+} {
+  const allDiags = parseGhcErrors(output);
+  const errors = allDiags.filter((e) => e.severity === "error");
+  const warnings = allDiags.filter((e) => e.severity === "warning");
+  const { actions, uncategorized } = categorizeWarnings(warnings);
+  return { errors, warnings, actions, uncategorized };
+}
+
+// --- Handler: reload ---
+
+async function handleReload(
+  session: GhciSession,
+  runDiagnostics: boolean
+): Promise<string> {
+  if (runDiagnostics) {
+    const dp = await dualPassCompile(session, () => session.reload());
+    return buildResponse(
+      dp.errors.length === 0, dp.errors, dp.warnings,
+      dp.actions, dp.uncategorized, dp.holes, dp.rawOutput
+    );
+  }
+
+  const result = await session.reload();
+  const { errors, warnings, actions, uncategorized } = singlePassDiagnostics(result.output);
   return buildResponse(
-    true, [], deferredWarnings, deferredCat.actions, deferredCat.uncategorized, holes, deferredResult.output
+    errors.length === 0, errors, warnings, actions, uncategorized, [], result.output
   );
 }
+
+// --- Handler: load single module ---
+
+async function handleLoadSingle(
+  session: GhciSession,
+  modulePath: string,
+  runDiagnostics: boolean
+): Promise<string> {
+  if (runDiagnostics) {
+    const dp = await dualPassCompile(session, () => session.loadModule(modulePath));
+    return buildResponse(
+      dp.errors.length === 0, dp.errors, dp.warnings,
+      dp.actions, dp.uncategorized, dp.holes, dp.rawOutput
+    );
+  }
+
+  const result = await session.loadModule(modulePath);
+  const { errors, warnings, actions, uncategorized } = singlePassDiagnostics(result.output);
+  return buildResponse(
+    errors.length === 0, errors, warnings, actions, uncategorized, [], result.output
+  );
+}
+
+// --- Handler: load all modules ---
 
 async function handleLoadAll(
   session: GhciSession,
@@ -166,24 +217,24 @@ async function handleLoadAll(
     });
   }
 
-  const result = await session.loadModules(paths, cabalModules.library);
-  const allDiags = parseGhcErrors(result.output);
-  const errors = allDiags.filter((e) => e.severity === "error");
-  const warnings = allDiags.filter((e) => e.severity === "warning");
-  const { actions, uncategorized } = categorizeWarnings(warnings);
-
-  if (runDiagnostics && errors.length === 0) {
-    // For load_all, holes come from the deferred output (already deferred by default)
-    const holes = parseHolesFromOutput(result.output);
+  if (runDiagnostics) {
+    const dp = await dualPassCompile(session, () =>
+      session.loadModules(paths, cabalModules.library)
+    );
     return buildResponse(
-      true, errors, warnings, actions, uncategorized, holes, result.output, paths
+      dp.errors.length === 0, dp.errors, dp.warnings,
+      dp.actions, dp.uncategorized, dp.holes, dp.rawOutput, paths
     );
   }
 
+  const result = await session.loadModules(paths, cabalModules.library);
+  const { errors, warnings, actions, uncategorized } = singlePassDiagnostics(result.output);
   return buildResponse(
     errors.length === 0, errors, warnings, actions, uncategorized, [], result.output, paths
   );
 }
+
+// --- Response builder ---
 
 function buildResponse(
   success: boolean,
@@ -227,14 +278,7 @@ function buildResponse(
   });
 }
 
-// --- Hole parsing (moved from diagnostics.ts) ---
-
-async function collectHoles(
-  _session: GhciSession,
-  deferredOutput: string
-): Promise<HoleSummary[]> {
-  return parseHolesFromOutput(deferredOutput);
-}
+// --- Hole parsing ---
 
 function parseHolesFromOutput(output: string): HoleSummary[] {
   const holes: HoleSummary[] = [];

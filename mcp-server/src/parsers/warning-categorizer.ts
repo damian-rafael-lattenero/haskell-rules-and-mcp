@@ -141,6 +141,20 @@ export function categorizeWarning(w: GhcError): WarningAction | null {
       };
     }
 
+    case "-Wdeferred-type-errors":
+    case "-Wdeferred-out-of-scope-variables": {
+      return {
+        warning: w,
+        category: "deferred-type-error",
+        suggestedAction: `Deferred type error at line ${w.line} — fix the type mismatch${
+          w.expected && w.actual
+            ? `: expected ${w.expected}, actual ${w.actual}`
+            : ""
+        }`,
+        confidence: "high",
+      };
+    }
+
     default:
       return null;
   }
