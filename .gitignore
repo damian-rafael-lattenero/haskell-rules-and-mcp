@@ -1,4 +1,4 @@
-playground/*/dist-newstyle/
+**/dist-newstyle/
 .idea/
 *.hi
 *.o
