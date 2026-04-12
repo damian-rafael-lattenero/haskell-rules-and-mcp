@@ -23,7 +23,7 @@ export async function parseCabalModules(
 /**
  * Find the .cabal file in a project directory.
  */
-async function findCabalFile(projectDir: string): Promise<string> {
+export async function findCabalFile(projectDir: string): Promise<string> {
   const { readdir } = await import("node:fs/promises");
   const files = await readdir(projectDir);
   const cabalFile = files.find((f) => f.endsWith(".cabal"));
@@ -31,6 +31,29 @@ async function findCabalFile(projectDir: string): Promise<string> {
     throw new Error(`No .cabal file found in ${projectDir}`);
   }
   return path.join(projectDir, cabalFile);
+}
+
+/**
+ * Extract the package name from .cabal content.
+ */
+export function extractPackageName(content: string): string | null {
+  const match = content.match(/^name:\s*(.+)/im);
+  return match ? match[1]!.trim() : null;
+}
+
+/**
+ * Read the package name from the .cabal file in a project directory.
+ */
+export async function parseCabalPackageName(
+  projectDir: string
+): Promise<string> {
+  const cabalFile = await findCabalFile(projectDir);
+  const content = await readFile(cabalFile, "utf-8");
+  const name = extractPackageName(content);
+  if (!name) {
+    throw new Error(`No 'name:' field found in ${cabalFile}`);
+  }
+  return name;
 }
 
 /**
@@ -42,7 +65,7 @@ async function findCabalFile(projectDir: string): Promise<string> {
  *     HM.Syntax
  *     HM.Subst
  */
-function extractModules(content: string): CabalModules {
+export function extractModules(content: string): CabalModules {
   const result: CabalModules = {
     library: [],
     executables: new Map(),

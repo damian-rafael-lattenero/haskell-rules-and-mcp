@@ -14,7 +14,7 @@ export const buildTool = {
       component: {
         type: "string",
         description:
-          'Optional component to build. Examples: "lib:haskell-rules-and-mcp", "exe:haskell-rules-and-mcp", "all". Defaults to building everything.',
+          'Optional component to build. Examples: "lib:my-project", "exe:my-project", "all". Defaults to building everything.',
       },
     },
     required: [],

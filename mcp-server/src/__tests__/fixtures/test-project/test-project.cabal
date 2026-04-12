@@ -1,0 +1,12 @@
+cabal-version:      3.12
+name:               test-project
+version:            0.1.0.0
+
+library
+  exposed-modules:  TestLib
+  build-depends:
+    base >= 4.21 && < 5,
+    QuickCheck >= 2.14
+  hs-source-dirs:   src
+  default-language:  GHC2024
+  ghc-options:       -Wall

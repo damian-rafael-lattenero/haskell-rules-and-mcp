@@ -5,6 +5,7 @@
       "args": ["mcp-server/dist/index.js"],
       "cwd": "/Users/dlattenero/Personal-Projects/haskell-rules-and-mcp",
       "env": {
+        "HASKELL_PROJECT_DIR": "/Users/dlattenero/Personal-Projects/haskell-rules-and-mcp/playground/hindley-milner",
         "PATH": "/opt/homebrew/bin:/Users/dlattenero/.ghcup/bin:/Users/dlattenero/.cabal/bin:/usr/local/bin:/usr/bin:/bin"
       }
     }

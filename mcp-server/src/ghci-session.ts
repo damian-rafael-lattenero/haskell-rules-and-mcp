@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import path from "node:path";
+import { parseCabalPackageName } from "./parsers/cabal-parser.js";
 
 const SENTINEL = "<<<GHCi-DONE-7f3a2b>>>";
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -18,11 +19,13 @@ export class GhciSession extends EventEmitter {
   private pendingTimer: NodeJS.Timeout | null = null;
   private ready: boolean = false;
   private projectDir: string;
+  private libraryTarget: string | undefined;
   private ghcupBin: string;
 
-  constructor(projectDir: string) {
+  constructor(projectDir: string, libraryTarget?: string) {
     super();
     this.projectDir = projectDir;
+    this.libraryTarget = libraryTarget;
     this.ghcupBin = path.join(
       process.env.HOME ?? "/Users",
       ".ghcup",
@@ -40,8 +43,11 @@ export class GhciSession extends EventEmitter {
       PATH: `${this.ghcupBin}:${process.env.HOME}/.cabal/bin:${process.env.PATH}`,
     };
 
+    // Auto-detect library target from .cabal if not provided
+    const target = this.libraryTarget ?? `lib:${await parseCabalPackageName(this.projectDir)}`;
+
     return new Promise<void>((resolve, reject) => {
-      this.process = spawn("cabal", ["repl", "lib:haskell-rules-and-mcp"], {
+      this.process = spawn("cabal", ["repl", target], {
         cwd: this.projectDir,
         env,
         stdio: ["pipe", "pipe", "pipe"],

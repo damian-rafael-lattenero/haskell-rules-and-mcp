@@ -13,15 +13,20 @@ import { handleCheckModule } from "./tools/check-module.js";
 import { handleHoleFits } from "./tools/hole-fits.js";
 import { handleDiagnostics } from "./tools/diagnostics.js";
 import { handleQuickCheck, resetQuickCheckState } from "./tools/quickcheck.js";
+import { discoverProjects, getPlaygroundDir } from "./project-manager.js";
+import { RULES_REGISTRY, loadRule } from "./resources/rules.js";
 
-// Project directory is the parent of mcp-server/
-const PROJECT_DIR =
+// Base directory: the project root (parent of mcp-server/)
+const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
+
+// Active project directory — mutable, can be switched at runtime
+let projectDir =
   process.env.HASKELL_PROJECT_DIR ??
-  path.resolve(import.meta.dirname, "..", "..");
+  path.join(BASE_DIR, "playground", "hindley-milner");
 
 const server = new McpServer({
   name: "haskell-ghci",
-  version: "0.1.0",
+  version: "0.2.0",
 });
 
 let ghciSession: GhciSession | null = null;
@@ -30,12 +35,13 @@ async function getSession(): Promise<GhciSession> {
   if (ghciSession?.isAlive()) {
     return ghciSession;
   }
-  const session = new GhciSession(PROJECT_DIR);
+  const session = new GhciSession(
+    projectDir,
+    process.env.HASKELL_LIBRARY_TARGET
+  );
   ghciSession = session;
   await session.start();
   session.on("exit", () => {
-    // Only nullify if this is still the active session —
-    // a restart may have already replaced ghciSession with a new instance.
     if (ghciSession === session) {
       ghciSession = null;
     }
@@ -109,7 +115,7 @@ server.tool(
   },
   async ({ module_path, load_all, diagnostics }) => {
     const session = await getSession();
-    const result = await handleLoadModule(session, { module_path, load_all, diagnostics }, PROJECT_DIR);
+    const result = await handleLoadModule(session, { module_path, load_all, diagnostics }, projectDir);
     return { content: [{ type: "text", text: result }] };
   }
 );
@@ -183,7 +189,7 @@ server.tool(
       ),
   },
   async ({ component }) => {
-    const result = await handleBuild(PROJECT_DIR, { component });
+    const result = await handleBuild(projectDir, { component });
     return { content: [{ type: "text", text: result }] };
   }
 );
@@ -254,7 +260,7 @@ server.tool(
   },
   async ({ module_path }) => {
     const session = await getSession();
-    const result = await handleDiagnostics(session, { module_path }, PROJECT_DIR);
+    const result = await handleDiagnostics(session, { module_path }, projectDir);
     return { content: [{ type: "text", text: result }] };
   }
 );
@@ -293,7 +299,7 @@ server.tool(
     "This prevents the 'can't find source for Module' error on GHCi startup.",
   {},
   async () => {
-    const result = await handleScaffold(PROJECT_DIR);
+    const result = await handleScaffold(projectDir);
     return { content: [{ type: "text", text: result }] };
   }
 );
@@ -314,7 +320,7 @@ server.tool(
         content: [
           {
             type: "text",
-            text: JSON.stringify({ alive, projectDir: PROJECT_DIR }),
+            text: JSON.stringify({ alive, projectDir: projectDir }),
           },
         ],
       };
@@ -363,6 +369,87 @@ server.tool(
             success: true,
             message:
               "MCP server restarting. Next tool call will use updated code.",
+          }),
+        },
+      ],
+    };
+  }
+);
+
+// --- Tool: ghci_switch_project ---
+server.tool(
+  "ghci_switch_project",
+  "List available Haskell projects or switch to a different one. " +
+    "Projects are discovered from the playground/ directory. " +
+    "Omit the project parameter to list available projects.",
+  {
+    project: z
+      .string()
+      .optional()
+      .describe(
+        "Project name to switch to. Omit to list available projects."
+      ),
+  },
+  async ({ project }) => {
+    const playgroundDir = getPlaygroundDir(BASE_DIR);
+    const projects = await discoverProjects(playgroundDir);
+
+    if (!project) {
+      // List mode
+      const current = projectDir;
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              projects: projects.map((p) => ({
+                name: p.name,
+                path: p.path,
+                active: p.path === current,
+              })),
+              activeProject: projects.find((p) => p.path === current)?.name ?? "unknown",
+            }),
+          },
+        ],
+      };
+    }
+
+    // Switch mode
+    const target = projects.find(
+      (p) => p.name === project || p.path.endsWith(project)
+    );
+    if (!target) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: `Project '${project}' not found. Available: ${projects.map((p) => p.name).join(", ")}`,
+            }),
+          },
+        ],
+      };
+    }
+
+    // Kill current session and switch
+    resetQuickCheckState();
+    if (ghciSession) {
+      await ghciSession.kill();
+      ghciSession = null;
+    }
+    projectDir = target.path;
+    const session = await getSession();
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            message: `Switched to project '${target.name}'`,
+            projectDir: target.path,
+            alive: session.isAlive(),
           }),
         },
       ],
@@ -445,11 +532,27 @@ server.tool(
   }
 );
 
+// --- MCP Resources: Haskell Rules ---
+for (const rule of RULES_REGISTRY) {
+  server.registerResource(rule.name, rule.uri, {
+    description: rule.description,
+    mimeType: "text/markdown",
+  }, async (uri) => ({
+    contents: [
+      {
+        uri: uri.toString(),
+        text: await loadRule(rule),
+        mimeType: "text/markdown",
+      },
+    ],
+  }));
+}
+
 // --- Start the server ---
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`haskell-ghci MCP server running (project: ${PROJECT_DIR})`);
+  console.error(`haskell-ghci MCP server running (project: ${projectDir})`);
 }
 
 main().catch((err) => {
