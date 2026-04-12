@@ -2,8 +2,8 @@ export interface GhcError {
   file: string;
   line: number;
   column: number;
-  endLine?: number;
-  endColumn?: number;
+  endLine?: number;   // Present for multi-line spans (line:col-endLine:endCol)
+  endColumn?: number; // Present for single-line spans (line:col-endCol) or multi-line spans
   severity: "error" | "warning";
   code?: string;
   warningFlag?: string;
@@ -27,9 +27,12 @@ export function parseGhcErrors(output: string): GhcError[] {
   const errors: GhcError[] = [];
 
   // Phase 1: Find all error/warning header positions.
-  // GHC 9.12 format: file:line:col[-endCol]: severity: [GHC-CODE] [-Wflag]
+  // GHC 9.12 formats:
+  //   file:line:col: severity:                 (point location)
+  //   file:line:col-endCol: severity:          (single-line span)
+  //   file:line:col-endLine:endCol: severity:  (multi-line span)
   const headerRegex =
-    /^(.+?):(\d+):(\d+)(?:-(\d+))?: (error|warning):(?:\s*\[GHC-(\d+)\])?(?:\s*\[(-W[^\]]+)\])?[^\n]*/gm;
+    /^(.+?):(\d+):(\d+)(?:-(\d+)(?::(\d+))?)?: (error|warning):(?:\s*\[GHC-(\d+)\])?(?:\s*\[(-W[^\]]+)\])?[^\n]*/gm;
 
   interface HeaderInfo {
     match: RegExpExecArray;
@@ -42,10 +45,25 @@ export function parseGhcErrors(output: string): GhcError[] {
     headers.push({ match: m, start: m.index, headerEnd: m.index + m[0].length });
   }
 
+  // Phase 1b: Match errors/warnings with <no location info> (e.g. "Can't find" errors)
+  const noLocRegex =
+    /^<no location info>: (error|warning):(?:\s*\[GHC-(\d+)\])?\s*(.+)/gm;
+  let noLocMatch;
+  while ((noLocMatch = noLocRegex.exec(output)) !== null) {
+    errors.push({
+      file: "<no location>",
+      line: 0,
+      column: 0,
+      severity: noLocMatch[1] as "error" | "warning",
+      code: noLocMatch[2] ? `GHC-${noLocMatch[2]}` : undefined,
+      message: noLocMatch[3]!.trim(),
+    });
+  }
+
   // Phase 2: Extract body between consecutive headers (or end of string).
   for (let i = 0; i < headers.length; i++) {
     const { match, headerEnd } = headers[i]!;
-    const [, file, line, col, endCol, severity, ghcCode, warnFlag] = match;
+    const [, file, line, col, endColOrEndLine, endColMulti, severity, ghcCode, warnFlag] = match;
 
     const bodyEnd = i + 1 < headers.length ? headers[i + 1]!.start : output.length;
     const body = output.slice(headerEnd, bodyEnd).replace(/^\n/, "");
@@ -58,8 +76,13 @@ export function parseGhcErrors(output: string): GhcError[] {
       message: body.trim(),
     };
 
-    if (endCol) {
-      error.endColumn = parseInt(endCol, 10);
+    if (endColMulti) {
+      // Multi-line span: line:col-endLine:endCol
+      error.endLine = parseInt(endColOrEndLine!, 10);
+      error.endColumn = parseInt(endColMulti, 10);
+    } else if (endColOrEndLine) {
+      // Single-line span: line:col-endCol
+      error.endColumn = parseInt(endColOrEndLine, 10);
     }
 
     if (ghcCode) {

@@ -87,4 +87,59 @@ describe.runIf(GHC_AVAILABLE)("GHCi Session Integration", () => {
     const result = await session.typeOf("add");
     expect(result.success).toBe(true);
   });
+
+  // --- kindOf ---
+  it("gets kind of a type constructor", async () => {
+    const result = await session.kindOf("Maybe");
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("* -> *");
+  });
+
+  it("gets kind of base type", async () => {
+    const result = await session.kindOf("Int");
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("*");
+  });
+
+  // --- executeBatch ---
+  it("executes batch commands", async () => {
+    const { results, allSuccess } = await session.executeBatch([":t add", "add 1 2", ":t greet"]);
+    expect(allSuccess).toBe(true);
+    expect(results).toHaveLength(3);
+    expect(results[0].output).toContain("Int");
+    expect(results[1].output).toContain("3");
+    expect(results[2].output).toContain("String");
+  });
+
+  it("batch with reload", async () => {
+    const { results, allSuccess } = await session.executeBatch([":t add"], { reload: true });
+    expect(allSuccess).toBe(true);
+    expect(results[0].output).toContain("Int");
+  });
+
+  it("batch stop on error", async () => {
+    // Use :l with nonexistent file — this produces "error:" in output
+    // (unlike runtime exceptions which use "*** Exception:" format)
+    const { results, allSuccess } = await session.executeBatch(
+      ["1 + 1", ":l nonexistent_file_xyz.hs", "2 + 2"],
+      { stopOnError: true }
+    );
+    expect(allSuccess).toBe(false);
+    expect(results.length).toBeLessThanOrEqual(2);
+  });
+
+  // --- loadModules ---
+  it("loads multiple modules", async () => {
+    const result = await session.loadModules(["src/TestLib.hs"], ["TestLib"]);
+    expect(result.success).toBe(true);
+  });
+
+  // --- isAlive after kill ---
+  it("reports not alive after kill", async () => {
+    const tempSession = new GhciSession(FIXTURE_DIR, "lib:test-project");
+    await tempSession.start();
+    expect(tempSession.isAlive()).toBe(true);
+    await tempSession.kill();
+    expect(tempSession.isAlive()).toBe(false);
+  }, 60_000);
 });

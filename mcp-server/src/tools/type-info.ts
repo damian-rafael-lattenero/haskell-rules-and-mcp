@@ -32,6 +32,14 @@ export async function handleTypeInfo(
     });
   }
 
+  // Detect deferred out-of-scope variables (same as ghci_type fix)
+  if (/deferred-out-of-scope-variables|Variable not in scope|Not in scope/.test(result.output)) {
+    return JSON.stringify({
+      success: false,
+      error: result.output,
+    });
+  }
+
   const parsed = parseInfoOutput(result.output);
   return JSON.stringify({
     success: true,

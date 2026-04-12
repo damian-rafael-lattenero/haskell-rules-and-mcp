@@ -32,6 +32,15 @@ export async function handleTypeCheck(
     });
   }
 
+  // Detect deferred out-of-scope variables (when -fdefer-type-errors is active,
+  // GHCi assigns type "p" instead of reporting an error)
+  if (/deferred-out-of-scope-variables|Variable not in scope/.test(result.output)) {
+    return JSON.stringify({
+      success: false,
+      error: result.output,
+    });
+  }
+
   const parsed = parseTypeOutput(result.output);
   if (parsed) {
     return JSON.stringify({

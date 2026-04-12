@@ -165,6 +165,25 @@ function parseBrowseOutput(output: string): ModuleDefinition[] {
           type: line,
           kind: "class",
         });
+        // Consume indented class body and extract method signatures
+        while (
+          i + 1 < lines.length &&
+          lines[i + 1]!.match(/^\s/) &&
+          lines[i + 1]!.trim() !== ""
+        ) {
+          i++;
+          const bodyLine = lines[i]!.trim();
+          // Skip pragmas like {-# MINIMAL ... #-}
+          if (bodyLine.startsWith("{-#")) continue;
+          const methodMatch = bodyLine.match(/^(\S+)\s+::\s+(.+)/);
+          if (methodMatch) {
+            definitions.push({
+              name: methodMatch[1]!,
+              type: methodMatch[2]!,
+              kind: "function",
+            });
+          }
+        }
         i++;
         continue;
       }
@@ -180,7 +199,9 @@ function parseBrowseOutput(output: string): ModuleDefinition[] {
         lines[i + 1]!.match(/^\s+/) &&
         !lines[i + 1]!.trim().startsWith("type ") &&
         !lines[i + 1]!.trim().startsWith("data ") &&
-        !lines[i + 1]!.trim().startsWith("class ")
+        !lines[i + 1]!.trim().startsWith("class ") &&
+        !lines[i + 1]!.trim().startsWith("{-#") &&
+        !/^\S+\s+::/.test(lines[i + 1]!.trim())
       ) {
         i++;
         fullType += " " + lines[i]!.trim();

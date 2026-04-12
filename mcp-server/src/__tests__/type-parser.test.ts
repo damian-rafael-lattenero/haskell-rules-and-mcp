@@ -42,6 +42,25 @@ describe("parseTypeOutput", () => {
     expect(result!.expression).toBe("map (+1)");
     expect(result!.type).toBe("[Int] -> [Int]");
   });
+
+  it("handles constrained type with forall", () => {
+    const result = parseTypeOutput("show :: forall a. Show a => a -> String");
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe("forall a. Show a => a -> String");
+  });
+
+  it("handles tuple result type", () => {
+    const result = parseTypeOutput("swap :: (a, b) -> (b, a)");
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe("(a, b) -> (b, a)");
+  });
+
+  it("handles type with line number prefix from GHCi", () => {
+    const result = parseTypeOutput("  id :: a -> a");
+    expect(result).not.toBeNull();
+    expect(result!.expression).toBe("id");
+    expect(result!.type).toBe("a -> a");
+  });
 });
 
 describe("parseInfoOutput", () => {
@@ -93,5 +112,54 @@ instance Functor []`;
   it("returns unknown for unrecognized input", () => {
     const result = parseInfoOutput("something weird");
     expect(result.kind).toBe("unknown");
+  });
+
+  // --- NEW: Kind classification from annotations (Bug Fix 4) ---
+  it("classifies data type from kind annotation", () => {
+    const output = `type Maybe :: * -> *\ndata Maybe a = Nothing | Just a\n  \t-- Defined in 'GHC.Maybe'\ninstance Eq a => Eq (Maybe a)`;
+    const result = parseInfoOutput(output);
+    expect(result.kind).toBe("data");
+    expect(result.name).toBe("Maybe");
+  });
+
+  it("classifies class from kind annotation", () => {
+    const output = `type Container :: (* -> *) -> Constraint\nclass Container f where\n  empty :: f a\n  insert :: a -> f a -> f a`;
+    const result = parseInfoOutput(output);
+    expect(result.kind).toBe("class");
+    expect(result.name).toBe("Container");
+  });
+
+  it("classifies newtype from role annotation", () => {
+    const output = `type role Wrap representational nominal\ntype Wrap :: forall {k}. (k -> *) -> k -> *\nnewtype Wrap f a = Wrap {unWrap :: f a}`;
+    const result = parseInfoOutput(output);
+    expect(result.kind).toBe("newtype");
+    expect(result.name).toBe("Wrap");
+  });
+
+  it("keeps type-synonym for actual type synonyms", () => {
+    const output = `type String = [Char]\n  \t-- Defined in 'GHC.Internal.Base'`;
+    const result = parseInfoOutput(output);
+    expect(result.kind).toBe("type-synonym");
+  });
+
+  it("classifies data with no instances", () => {
+    const output = `type Either :: * -> * -> *\ndata Either a b = Left a | Right b`;
+    const result = parseInfoOutput(output);
+    expect(result.kind).toBe("data");
+    expect(result.name).toBe("Either");
+    expect(result.instances).toBeUndefined();
+  });
+
+  it("handles class with superclass constraint", () => {
+    const output = `class (Eq a) => Ord a where\n  compare :: a -> a -> Ordering\ninstance Ord Int`;
+    const result = parseInfoOutput(output);
+    expect(result.kind).toBe("class");
+    expect(result.name).toBe("Ord");
+  });
+
+  it("handles empty input", () => {
+    const result = parseInfoOutput("");
+    expect(result.kind).toBe("unknown");
+    expect(result.name).toBe("");
   });
 });

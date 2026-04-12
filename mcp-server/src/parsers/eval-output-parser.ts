@@ -19,28 +19,42 @@ export function parseEvalOutput(raw: string): ParsedEvalOutput {
   const warningBlocks: string[][] = [];
   const resultLines: string[] = [];
   let currentWarning: string[] | null = null;
+  let sawBlankInWarning = false;
 
   for (const line of lines) {
     // New GHC warning/error header: <loc>:<line>:<col>: warning: ...
     if (/^\S+:\d+:\d+.*\bwarning\b:/.test(line)) {
       if (currentWarning) warningBlocks.push(currentWarning);
       currentWarning = [line];
+      sawBlankInWarning = false;
       continue;
     }
 
     // Warning continuation: indented lines, source pointer lines, or blank lines
-    if (
-      currentWarning &&
-      (line.startsWith("  ") || line.startsWith(" |") || line.trim() === "")
-    ) {
-      currentWarning.push(line);
-      continue;
+    if (currentWarning) {
+      if (line.trim() === "") {
+        sawBlankInWarning = true;
+        currentWarning.push(line);
+        continue;
+      }
+      // After a blank line in a warning, only deeply-indented lines (4+ spaces)
+      // or source pointers are continuations. Shallowly-indented lines are likely
+      // eval results (e.g. pretty-printed data structures).
+      const isContinuation = sawBlankInWarning
+        ? line.startsWith("    ") || line.startsWith(" |")
+        : line.startsWith("  ") || line.startsWith(" |");
+
+      if (isContinuation) {
+        currentWarning.push(line);
+        continue;
+      }
     }
 
     // Not part of a warning block
     if (currentWarning) {
       warningBlocks.push(currentWarning);
       currentWarning = null;
+      sawBlankInWarning = false;
     }
     resultLines.push(line);
   }

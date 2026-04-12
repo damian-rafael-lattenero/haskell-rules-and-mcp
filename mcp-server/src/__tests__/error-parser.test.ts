@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseGhcErrors } from "../parsers/error-parser.js";
+import { parseGhcErrors, formatErrors } from "../parsers/error-parser.js";
 
 // Real GHC 9.12.2 output captured during session 7 testing.
 
@@ -144,5 +144,89 @@ Ok, 10 modules loaded.`;
     // The "2 | import Data.List" line contains digits but should NOT be parsed as a header
     const parsed = parseGhcErrors(UNUSED_IMPORT_WARNING);
     expect(parsed).toHaveLength(1);
+  });
+
+  // --- NEW: <no location info> errors (Bug Fix 3) ---
+  it("parses <no location info> error", () => {
+    const output = `<no location info>: error: [GHC-49196] Can't find src/NoExiste.hs\n\nFailed, unloaded all modules.`;
+    const errors = parseGhcErrors(output);
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+    const noLocError = errors.find(e => e.file === "<no location>");
+    expect(noLocError).toBeDefined();
+    expect(noLocError!.severity).toBe("error");
+    expect(noLocError!.code).toBe("GHC-49196");
+    expect(noLocError!.message).toContain("Can't find");
+  });
+
+  it("parses <no location info> warning", () => {
+    const output = `<no location info>: warning: [GHC-12345] Some global warning`;
+    const errors = parseGhcErrors(output);
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+    const w = errors.find(e => e.severity === "warning" && e.file === "<no location>");
+    expect(w).toBeDefined();
+  });
+
+  it("parses <no location info> error without GHC code", () => {
+    const output = `<no location info>: error: Module not found`;
+    const errors = parseGhcErrors(output);
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+    const e = errors.find(e => e.file === "<no location>");
+    expect(e).toBeDefined();
+    expect(e!.code).toBeUndefined();
+  });
+
+  it("handles mixed located and non-located errors", () => {
+    const output = `<no location info>: error: [GHC-49196] Can't find src/Missing.hs\n\nsrc/Foo.hs:3:1: error: [GHC-83865]\n    Type mismatch`;
+    const errors = parseGhcErrors(output);
+    expect(errors.length).toBe(2);
+    expect(errors.some(e => e.file === "<no location>")).toBe(true);
+    expect(errors.some(e => e.file === "src/Foo.hs")).toBe(true);
+  });
+
+  // --- More edge cases ---
+  it("handles Expected/Actual with verbose format", () => {
+    const output = `src/T.hs:1:1: error: [GHC-83865]\n    Expected type: IO ()\n      Actual type: String`;
+    const [e] = parseGhcErrors(output);
+    expect(e!.expected).toBe("IO ()");
+    expect(e!.actual).toBe("String");
+  });
+
+  it("handles error with no GHC code", () => {
+    const output = `src/T.hs:5:3: error:\n    Parse error on input 'where'`;
+    const [e] = parseGhcErrors(output);
+    expect(e!.severity).toBe("error");
+    expect(e!.code).toBeUndefined();
+    expect(e!.message).toContain("Parse error");
+  });
+
+  it("handles warning with endLine range (col-col format)", () => {
+    const output = `src/T.hs:10:5-20: warning: [GHC-40910] [-Wunused-matches]\n    Defined but not used: 'x'`;
+    const [w] = parseGhcErrors(output);
+    expect(w!.line).toBe(10);
+    expect(w!.column).toBe(5);
+    expect(w!.endColumn).toBe(20);
+  });
+
+  it("handles multiple errors in same file", () => {
+    const output = `src/T.hs:1:1: error: [GHC-83865]\n    Error 1\nsrc/T.hs:5:1: error: [GHC-83865]\n    Error 2\nsrc/T.hs:10:1: warning: [GHC-38417] [-Wmissing-signatures]\n    Warning 1`;
+    const errors = parseGhcErrors(output);
+    expect(errors).toHaveLength(3);
+    expect(errors.filter(e => e.severity === "error")).toHaveLength(2);
+    expect(errors.filter(e => e.severity === "warning")).toHaveLength(1);
+  });
+});
+
+describe("formatErrors", () => {
+  it("returns 'No errors found.' for empty array", () => {
+    expect(formatErrors([])).toBe("No errors found.");
+  });
+
+  it("formats a single error", () => {
+    const errors = parseGhcErrors(`src/T.hs:3:7-10: error: [GHC-83865]\n    Couldn\u2019t match expected type \u2018Int\u2019 with actual type \u2018Bool\u2019\n    In the expression: True`);
+    const formatted = formatErrors(errors);
+    expect(formatted).toContain("ERROR [GHC-83865]");
+    expect(formatted).toContain("src/T.hs:3:7");
+    expect(formatted).toContain("Expected: Int");
+    expect(formatted).toContain("Actual:   Bool");
   });
 });

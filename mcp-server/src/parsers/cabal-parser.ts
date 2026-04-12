@@ -95,6 +95,13 @@ export function extractModules(content: string): CabalModules {
       inModuleList = false;
       continue;
     }
+    // Other stanza headers (test-suite, benchmark, etc.) — reset to prevent
+    // their modules from leaking into library or executable module lists
+    if (/^(test-suite|benchmark|common|flag|source-repository)\b/i.test(line)) {
+      currentStanza = null;
+      inModuleList = false;
+      continue;
+    }
 
     // Detect module list fields
     const moduleFieldMatch = trimmed.match(

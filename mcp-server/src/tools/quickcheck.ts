@@ -136,6 +136,19 @@ export function parseQuickCheckOutput(
     };
   }
 
+  // Parse "gave up" — QuickCheck discarded too many tests (common with ==> preconditions)
+  const gaveUpMatch = output.match(
+    /\*\*\* Gave up! Passed only (\d+) tests?;\s*(\d+) discarded/
+  );
+  if (gaveUpMatch) {
+    return {
+      success: false,
+      passed: parseInt(gaveUpMatch[1]!, 10),
+      property,
+      error: `Gave up after ${gaveUpMatch[1]} tests (${gaveUpMatch[2]} discarded). Too many inputs rejected by precondition (==>). Consider relaxing the precondition or using a custom generator.`,
+    };
+  }
+
   // Fallback: couldn't parse output
   return {
     success: false,

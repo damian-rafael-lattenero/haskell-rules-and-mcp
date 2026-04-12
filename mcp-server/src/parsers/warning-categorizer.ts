@@ -41,15 +41,21 @@ export function categorizeWarning(w: GhcError): WarningAction | null {
     }
 
     case "-Wmissing-signatures": {
-      // "Top-level binding with no type signature:\n      foo :: forall {a}. Num a => a -> a"
+      // GHC format — type may span multiple lines:
+      //   Top-level binding with no type signature:
+      //       foo :: forall a. Num a =>
+      //            a -> a
+      //   |
+      //   3 | foo x = x + 1
       const sigMatch = msg.match(
-        /Top-level binding with no type signature:\s*\n?\s*(.+?)\s*$/m
+        /Top-level binding with no type signature:\s*\n([\s\S]+?)(?:\s*\n\s*\||\s*$)/
       );
       if (sigMatch) {
+        const sig = sigMatch[1]!.replace(/\s+/g, " ").trim();
         return {
           warning: w,
           category: "missing-signature",
-          suggestedAction: `Add type signature: ${sigMatch[1]!.trim()}`,
+          suggestedAction: `Add type signature: ${sig}`,
           confidence: "high",
         };
       }

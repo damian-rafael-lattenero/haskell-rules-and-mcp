@@ -41,19 +41,34 @@ export function parseInfoOutput(output: string): {
   if (firstLine.startsWith("class ")) kind = "class";
   else if (firstLine.startsWith("data ")) kind = "data";
   else if (firstLine.startsWith("newtype ")) kind = "newtype";
+  else if (firstLine.startsWith("type role ")) kind = "unknown";
   else if (firstLine.startsWith("type ")) kind = "type-synonym";
   else if (firstLine.includes(" :: ")) kind = "function";
+
+  // When the first line is a kind annotation ("type X :: Kind") or a role annotation
+  // ("type role X ..."), check subsequent lines to determine the actual definition kind
+  if ((kind === "type-synonym" && firstLine.includes(" :: ")) || kind === "unknown") {
+    for (let i = 1; i < lines.length; i++) {
+      const l = lines[i]!.trimStart();
+      if (l.startsWith("data ")) { kind = "data"; break; }
+      if (l.startsWith("newtype ")) { kind = "newtype"; break; }
+      if (l.startsWith("class ")) { kind = "class"; break; }
+      if (l.startsWith("type ") && l.includes(" = ")) break; // actual type synonym
+      if (l.startsWith("instance ") || l.startsWith("-- ")) break;
+    }
+  }
 
   // Extract instances if present
   const instanceLines = lines.filter((l) => l.trimStart().startsWith("instance "));
   const instances = instanceLines.length > 0 ? instanceLines.map((l) => l.trim()) : undefined;
 
-  // Extract name
+  // Extract name (handle "type role X ..." specially)
+  const roleMatch = firstLine.match(/^type role\s+(\S+)/);
   const nameMatch = firstLine.match(
     /^(?:class|data|newtype|type)\s+(?:\([^)]+\)\s+=>\s+)?(\S+)/
   );
   const funcNameMatch = firstLine.match(/^(\S+)\s+::/);
-  const name = nameMatch?.[1] ?? funcNameMatch?.[1] ?? firstLine.split(/\s/)[0] ?? "";
+  const name = roleMatch?.[1] ?? nameMatch?.[1] ?? funcNameMatch?.[1] ?? firstLine.split(/\s/)[0] ?? "";
 
   return {
     kind,

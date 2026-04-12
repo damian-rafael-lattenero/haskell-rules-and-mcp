@@ -164,12 +164,13 @@ server.tool(
     const session = await getSession();
     const result = await session.execute(expression);
     const parsed = parseEvalOutput(result.output);
+    const isException = parsed.result.startsWith("*** Exception:");
     return {
       content: [
         {
           type: "text",
           text: JSON.stringify({
-            success: result.success,
+            success: result.success && !isException,
             output: parsed.result,
             ...(parsed.warnings.length > 0
               ? { warnings: parsed.warnings }

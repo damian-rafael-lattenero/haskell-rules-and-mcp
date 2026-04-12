@@ -131,4 +131,117 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     // May be empty array since test-project is set via env, not in playground/
     expect(parsed).toHaveProperty("activeProject");
   });
+
+  // --- ghci_info ---
+  it("calls ghci_info on a data type", async () => {
+    const result = await client.callTool({
+      name: "ghci_info",
+      arguments: { name: "Maybe" },
+    });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(parsed.definition).toContain("Nothing");
+  });
+
+  // --- ghci_kind ---
+  it("calls ghci_kind on a type", async () => {
+    const result = await client.callTool({
+      name: "ghci_kind",
+      arguments: { type_expression: "Maybe" },
+    });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(parsed.output).toContain("* -> *");
+  });
+
+  // --- ghci_batch ---
+  it("calls ghci_batch with multiple commands", async () => {
+    const result = await client.callTool({
+      name: "ghci_batch",
+      arguments: { commands: [":t add", "add 1 2"] },
+    });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.allSuccess).toBe(true);
+    expect(parsed.count).toBe(2);
+    expect(parsed.results[0].output).toContain("Int");
+    expect(parsed.results[1].output).toContain("3");
+  });
+
+  // --- ghci_eval with exception (Bug Fix 2) ---
+  it("marks runtime exception as failure", async () => {
+    const result = await client.callTool({
+      name: "ghci_eval",
+      arguments: { expression: "head ([] :: [Int])" },
+    });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(false);
+    expect(parsed.output).toContain("Exception");
+  });
+
+  // --- ghci_check_module ---
+  it("calls ghci_check_module", async () => {
+    const result = await client.callTool({
+      name: "ghci_check_module",
+      arguments: { module_path: "src/TestLib.hs" },
+    });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(parsed.definitions.length).toBeGreaterThan(0);
+  });
+
+  // --- ghci_quickcheck ---
+  it("calls ghci_quickcheck with a passing property", async () => {
+    const result = await client.callTool({
+      name: "ghci_quickcheck",
+      arguments: { property: "\\x y -> add x y == x + (y :: Int)" },
+    });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(parsed.passed).toBe(100);
+  });
+
+  // --- ghci_load with diagnostics ---
+  it("calls ghci_load with diagnostics", async () => {
+    const result = await client.callTool({
+      name: "ghci_load",
+      arguments: { module_path: "src/TestLib.hs", diagnostics: true },
+    });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(parsed).toHaveProperty("warningActions");
+    expect(parsed).toHaveProperty("holes");
+  });
+
+  // --- ghci_session restart ---
+  it("can restart session and continue working", async () => {
+    const restartResult = await client.callTool({
+      name: "ghci_session",
+      arguments: { action: "restart" },
+    });
+    const restartParsed = JSON.parse((restartResult.content as any)[0].text);
+    expect(restartParsed.success).toBe(true);
+
+    // After restart, tools should still work
+    const typeResult = await client.callTool({
+      name: "ghci_type",
+      arguments: { expression: "add" },
+    });
+    const typeParsed = JSON.parse((typeResult.content as any)[0].text);
+    expect(typeParsed.success).toBe(true);
+  });
+
+  // --- Resources ---
+  it("lists resources including rules", async () => {
+    const result = await client.listResources();
+    const uris = result.resources.map(r => r.uri);
+    expect(uris).toContain("rules://haskell/automation");
+    expect(uris).toContain("rules://haskell/development");
+    expect(uris).toContain("rules://haskell/project-conventions");
+  });
+
+  it("reads automation rule resource", async () => {
+    const result = await client.readResource({ uri: "rules://haskell/automation" });
+    const text = (result.contents[0] as any).text;
+    expect(text).toContain("Warning Action Table");
+  });
 });
