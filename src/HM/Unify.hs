@@ -26,6 +26,7 @@ unify (TProd l1 r1) (TProd l2 r2) = do
   s1 <- unify l1 l2
   s2 <- unify (apply s1 r1) (apply s1 r2)
   pure (composeSubst s2 s1)
+unify (TList t1) (TList t2) = unify t1 t2
 unify (TVar v) t = bind v t
 unify t (TVar v) = bind v t
 unify (TCon a) (TCon b)

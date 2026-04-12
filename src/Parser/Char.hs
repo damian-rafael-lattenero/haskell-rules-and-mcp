@@ -116,4 +116,4 @@ operator op = lexeme $ do
 
 -- | Characters that can appear in operators
 isOpChar :: Char -> Bool
-isOpChar c = c `elem` ("+-*/.=<>!&|" :: [Char])
+isOpChar c = c `elem` ("+-*/.=<>!&|:" :: [Char])

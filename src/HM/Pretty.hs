@@ -4,13 +4,14 @@ module HM.Pretty
   , ppExpr
   ) where
 
+import Data.List (intercalate)
 import Data.Set qualified as Set
 
 import HM.Syntax
 
 -- | Known operator names for infix pretty-printing
 operatorSet :: Set.Set String
-operatorSet = Set.fromList ["+", "-", "*", ".", "==", "/=", "<", ">", "<=", ">=", "&&", "||"]
+operatorSet = Set.fromList ["+", "-", "*", ".", "==", "/=", "<", ">", "<=", ">=", "&&", "||", ":"]
 
 -- | Check if a variable name is a known operator
 isOperator :: String -> Bool
@@ -25,6 +26,7 @@ ppType (TArr a b)   = parensArr a ++ " -> " ++ ppType b
     parensArr (TArr _ _) = "(" ++ ppType a ++ ")"
     parensArr t          = ppType t
 ppType (TProd a b)  = "(" ++ ppType a ++ ", " ++ ppType b ++ ")"
+ppType (TList t)    = "[" ++ ppType t ++ "]"
 
 -- | Pretty-print a type scheme
 ppScheme :: Scheme -> String
@@ -60,6 +62,7 @@ ppExpr (EPair e1 e2)     = "(" ++ ppExpr e1 ++ ", " ++ ppExpr e2 ++ ")"
 ppExpr (EFst e)          = "fst " ++ parensAtom e
 ppExpr (ESnd e)          = "snd " ++ parensAtom e
 ppExpr (EAnn e t)        = "(" ++ ppExpr e ++ " : " ++ ppType t ++ ")"
+ppExpr (EList es)        = "[" ++ intercalate ", " (map ppExpr es) ++ "]"
 
 parensAtom :: Expr -> String
 parensAtom e@(EApp _ _) = "(" ++ ppExpr e ++ ")"

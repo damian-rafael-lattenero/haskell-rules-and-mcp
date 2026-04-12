@@ -30,6 +30,7 @@ data Expr
   | EFst Expr              -- ^ First projection: fst e
   | ESnd Expr              -- ^ Second projection: snd e
   | EAnn Expr Type         -- ^ Type annotation: (expr : Type)
+  | EList [Expr]           -- ^ List literal: [e1, e2, ...]
   deriving (Show, Eq)
 
 -- | Monotypes
@@ -38,6 +39,7 @@ data Type
   | TCon String            -- ^ Type constructor: Int, Bool
   | TArr Type Type         -- ^ Function type: a -> b
   | TProd Type Type        -- ^ Product type: (a, b)
+  | TList Type             -- ^ List type: [a]
   deriving (Show, Eq, Ord)
 
 -- | Polytypes (type schemes): forall a b. Type

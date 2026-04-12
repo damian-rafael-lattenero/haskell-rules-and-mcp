@@ -342,6 +342,34 @@ server.tool(
   }
 );
 
+// --- Tool: mcp_restart ---
+server.tool(
+  "mcp_restart",
+  "Restart the MCP server process to pick up recompiled TypeScript. " +
+    "Use after running 'cd mcp-server && npx tsc'. The server exits cleanly and " +
+    "Claude Code auto-restarts it on the next tool call. This also restarts the GHCi session.",
+  {},
+  async () => {
+    if (ghciSession) {
+      await ghciSession.kill();
+      ghciSession = null;
+    }
+    setTimeout(() => process.exit(0), 100);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            message:
+              "MCP server restarting. Next tool call will use updated code.",
+          }),
+        },
+      ],
+    };
+  }
+);
+
 // --- Tool: ghci_batch ---
 server.tool(
   "ghci_batch",
@@ -398,8 +426,8 @@ server.tool(
     property: z
       .string()
       .describe(
-        'QuickCheck property expression. Examples: "\\\\xs -> reverse (reverse xs) == (xs :: [Int])", ' +
-          '"\\\\x -> x + 0 == (x :: Int)"'
+        'QuickCheck property expression. Examples: "\\xs -> reverse (reverse xs) == (xs :: [Int])", ' +
+          '"\\x -> x + 0 == (x :: Int)"'
       ),
     tests: z
       .number()

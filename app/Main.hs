@@ -96,6 +96,26 @@ examples =
 
   , ("ERROR: annotation mismatch (42 : Bool)",
      EAnn (ELit (LInt 42)) (TCon "Bool"))
+
+  -- Lists
+  , ("Empty list",
+     EList [])
+
+  , ("Int list [1, 2, 3]",
+     EList [ELit (LInt 1), ELit (LInt 2), ELit (LInt 3)])
+
+  , ("Cons: 1 : [2, 3]",
+     EApp (EApp (EVar ":") (ELit (LInt 1)))
+       (EList [ELit (LInt 2), ELit (LInt 3)]))
+
+  , ("Head of list",
+     EApp (EVar "head") (EList [ELit (LInt 1), ELit (LInt 2)]))
+
+  , ("Null check",
+     EApp (EVar "null") (EList []))
+
+  , ("ERROR: heterogeneous list [1, true]",
+     EList [ELit (LInt 1), ELit (LBool True)])
   ]
 
 runParsedExample :: (String, String) -> IO ()
@@ -146,4 +166,20 @@ parsedExamples =
   -- Multi-binding let (new in session 6)
   , ("Let multi-binding", "let x = 1; y = 2 in x + y")
   , ("Let 3 bindings", "let x = 1; y = x + 1; z = y * 2 in z")
+  -- Lists (new in session 7)
+  , ("Empty list", "[]")
+  , ("Int list literal", "[1, 2, 3]")
+  , ("Singleton list", "[42]")
+  , ("Cons operator", "1 : [2, 3]")
+  , ("Nested cons", "1 : 2 : 3 : []")
+  , ("Head of list", "head [1, 2, 3]")
+  , ("Tail of list", "tail [1, 2, 3]")
+  , ("Null empty", "null []")
+  , ("Null nonempty", "null [1]")
+  , ("List in let", "let xs = [1, 2, 3] in head xs")
+  , ("Cons function", "cons 1 [2, 3]")
+  , ("List annotation", "([1, 2] : [Int])")
+  , ("List type in lambda", "(\\xs -> head xs : [Int] -> Int)")
+  , ("ERROR: heterogeneous list", "[1, true]")
+  , ("ERROR: cons type mismatch", "true : [1, 2]")
   ]

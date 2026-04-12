@@ -64,21 +64,62 @@ export async function handleQuickCheck(
     } satisfies QuickCheckResult);
   }
 
+  // Basic input validation
+  const trimmed = args.property.trim();
+  if (trimmed.startsWith(":")) {
+    return JSON.stringify({
+      success: false,
+      passed: 0,
+      property: args.property,
+      error: "Property cannot start with ':' (looks like a GHCi command)",
+    } satisfies QuickCheckResult);
+  }
+  if (trimmed.length > 2000) {
+    return JSON.stringify({
+      success: false,
+      passed: 0,
+      property: args.property,
+      error: "Property too long (max 2000 characters)",
+    } satisfies QuickCheckResult);
+  }
+
   const maxTests = args.tests ?? 100;
   const checkFn = args.verbose ? "verboseCheckWith" : "quickCheckWith";
   const command = `${checkFn} (stdArgs { maxSuccess = ${maxTests} }) (${args.property})`;
 
   const result = await session.execute(command);
-  const output = result.output;
+  return JSON.stringify(parseQuickCheckOutput(result.output, args.property));
+}
 
+/**
+ * Parse QuickCheck output into structured result.
+ * Exported for unit testing.
+ */
+export function parseQuickCheckOutput(
+  output: string,
+  property: string
+): QuickCheckResult {
   // Parse success: "+++ OK, passed 100 tests."
   const passMatch = output.match(/\+\+\+ OK, passed (\d+) tests?/);
   if (passMatch) {
-    return JSON.stringify({
+    return {
       success: true,
       passed: parseInt(passMatch[1]!, 10),
-      property: args.property,
-    } satisfies QuickCheckResult);
+      property,
+    };
+  }
+
+  // Parse exception (check BEFORE general failure — exception is more specific)
+  const exnMatch = output.match(
+    /\*\*\* Failed! Exception:\s*['\u2018]?(.+?)['\u2019]?\s*\(after/
+  );
+  if (exnMatch) {
+    return {
+      success: false,
+      passed: 0,
+      property,
+      error: `Exception: ${exnMatch[1]!.trim()}`,
+    };
   }
 
   // Parse failure: "*** Failed! Falsifiable (after N tests and M shrinks):"
@@ -86,31 +127,20 @@ export async function handleQuickCheck(
     /\*\*\* Failed!.*?\(after (\d+) tests?(?: and (\d+) shrinks?)?\):\s*\n([\s\S]*?)(?:\n\n|$)/
   );
   if (failMatch) {
-    return JSON.stringify({
+    return {
       success: false,
       passed: parseInt(failMatch[1]!, 10) - 1,
-      property: args.property,
+      property,
       shrinks: failMatch[2] ? parseInt(failMatch[2], 10) : 0,
       counterexample: failMatch[3]?.trim() ?? "unknown",
-    } satisfies QuickCheckResult);
-  }
-
-  // Parse exception
-  const exnMatch = output.match(/\*\*\* Failed! Exception:\s*['\u2018]?(.+?)['\u2019]?\s*\(after/);
-  if (exnMatch) {
-    return JSON.stringify({
-      success: false,
-      passed: 0,
-      property: args.property,
-      error: `Exception: ${exnMatch[1]!.trim()}`,
-    } satisfies QuickCheckResult);
+    };
   }
 
   // Fallback: couldn't parse output
-  return JSON.stringify({
+  return {
     success: false,
     passed: 0,
-    property: args.property,
+    property,
     error: `Couldn't parse QuickCheck output: ${output.slice(0, 300)}`,
-  } satisfies QuickCheckResult);
+  };
 }

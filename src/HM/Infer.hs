@@ -8,6 +8,7 @@ module HM.Infer
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
+import Control.Monad (foldM)
 import Control.Monad.Except
 import Control.Monad.State
 
@@ -40,6 +41,12 @@ defaultEnv = Map.fromList
       (TArr (TArr (TVar "b") (TVar "c"))
         (TArr (TArr (TVar "a") (TVar "b"))
           (TArr (TVar "a") (TVar "c")))))
+  -- List operations
+  , (":",    Forall ["a"] (TArr (TVar "a") (TArr (TList (TVar "a")) (TList (TVar "a")))))
+  , ("cons", Forall ["a"] (TArr (TVar "a") (TArr (TList (TVar "a")) (TList (TVar "a")))))
+  , ("head", Forall ["a"] (TArr (TList (TVar "a")) (TVar "a")))
+  , ("tail", Forall ["a"] (TArr (TList (TVar "a")) (TList (TVar "a"))))
+  , ("null", Forall ["a"] (TArr (TList (TVar "a")) (TCon "Bool")))
   ]
 
 -- | Run inference on an expression, returning its type or an error
@@ -152,3 +159,13 @@ infer env (EAnn e annTy) = do
   (s1, t1) <- infer env e
   s2 <- liftEither (unify t1 annTy)
   pure (composeSubst s2 s1, apply s2 annTy)
+
+infer env (EList es) = do
+  tv <- fresh
+  s <- foldM (\sAcc ei -> do
+    let env' = apply sAcc <$> env
+    (si, ti) <- infer env' ei
+    su <- liftEither (unify (apply si (apply sAcc tv)) ti)
+    pure (composeSubst su (composeSubst si sAcc))
+    ) nullSubst es
+  pure (s, TList (apply s tv))

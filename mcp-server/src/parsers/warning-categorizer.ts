@@ -19,8 +19,9 @@ export function categorizeWarning(w: GhcError): WarningAction | null {
     case "-Wunused-imports": {
       // "The import of 'Data.List' is redundant"
       // "The import of 'sort' from module 'Data.List' is redundant"
+      // GHC 9.12 uses Unicode quotes (\u2018/\u2019)
       const modMatch = msg.match(
-        /The import of '(.+?)' (?:from module '(.+?)' )?is redundant/
+        /The import of ['\u2018](.+?)['\u2019] (?:from module ['\u2018](.+?)['\u2019] )?is redundant/
       );
       if (modMatch) {
         const name = modMatch[1]!;
@@ -71,9 +72,10 @@ export function categorizeWarning(w: GhcError): WarningAction | null {
     }
 
     case "-Wincomplete-patterns": {
-      // "Patterns of type 'Maybe Int' not matched: Nothing"
+      // "Patterns of type \u2018Maybe Int\u2019 not matched: Nothing"
+      // GHC 9.12 uses Unicode quotes (\u2018/\u2019)
       const patMatch = msg.match(
-        /Patterns? (?:of type '.+?' )?not matched:\s*([\s\S]+?)(?:\s*\||\s*$)/
+        /Patterns? (?:of type ['\u2018].+?['\u2019] )?not matched:\s*([\s\S]+?)(?:\s*\||\s*$)/
       );
       if (patMatch) {
         const missing = patMatch[1]!.trim().split(/\n/).map(l => l.trim()).join(", ");

@@ -63,9 +63,17 @@ typeExpr = do
   t <- typeAtom
   (do _ <- symbol "->"; t2 <- typeExpr; pure (TArr t t2)) <|> pure t
 
--- | Atomic type: Int, Bool, type variable, or parenthesized
+-- | Atomic type: Int, Bool, [a], type variable, or parenthesized
 typeAtom :: Parser Type
-typeAtom = typeCon <|> typeParen <|> typeVar
+typeAtom = typeCon <|> typeList <|> typeParen <|> typeVar
+
+-- | List type: [a]
+typeList :: Parser Type
+typeList = do
+  _ <- symbol "["
+  t <- typeExpr
+  _ <- symbol "]"
+  pure (TList t)
 
 -- | Type constructor: Int, Bool, etc.
 typeCon :: Parser Type
@@ -143,7 +151,7 @@ andExpr = chainr1 cmpExpr (binOp "&&" <$ operator "&&")
 
 -- | Precedence 4: ==, /=, <, >, <=, >=  (left-associative, single comparison)
 cmpExpr :: Parser Expr
-cmpExpr = chainl1 addExpr cmpOp
+cmpExpr = chainl1 consExpr cmpOp
   where
     cmpOp = (binOp "==" <$ operator "==")
         <|> (binOp "/=" <$ operator "/=")
@@ -151,6 +159,10 @@ cmpExpr = chainl1 addExpr cmpOp
         <|> (binOp ">=" <$ operator ">=")
         <|> (binOp "<"  <$ operator "<")
         <|> (binOp ">"  <$ operator ">")
+
+-- | Precedence 5: :  (right-associative, cons)
+consExpr :: Parser Expr
+consExpr = chainr1 addExpr (binOp ":" <$ operator ":")
 
 -- | Precedence 6: +, -  (left-associative)
 addExpr :: Parser Expr
@@ -213,7 +225,15 @@ appExpr = do
 
 -- | Atomic expression
 atom :: Parser Expr
-atom = litBool <|> litInt <|> fstExpr <|> sndExpr <|> var <|> parenExpr
+atom = litBool <|> litInt <|> listExpr <|> fstExpr <|> sndExpr <|> var <|> parenExpr
+
+-- | List literal: [] or [e1, e2, ...]
+listExpr :: Parser Expr
+listExpr = do
+  _ <- symbol "["
+  es <- sepBy expr comma
+  _ <- symbol "]"
+  pure (EList es)
 
 -- | Boolean literal
 litBool :: Parser Expr

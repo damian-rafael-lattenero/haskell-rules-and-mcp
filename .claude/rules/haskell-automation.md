@@ -33,35 +33,21 @@ After fixing all warnings, compile again to verify 0 warnings remain.
 
 ---
 
-## Error Resolution Protocol
+## Error Resolution Table
 
-When `ghci_load` returns errors, use the structured fields:
+When `ghci_load` returns errors, match on `code` and apply:
 
-### Type mismatch (GHC-83865)
-- Read `expected` and `actual` from the error JSON
-- If expected=`X -> Y`, actual=`X` → missing function argument
-- If expected=`X`, actual=`X -> Y` → extra argument or missing parens
-- If expected=`IO X`, actual=`X` → wrap in `pure`
-- If expected=`X`, actual=`IO X` → change `let` to `<-` in do-block
-- Use `ghci_type` on the subexpression from `context` to verify before fixing
+| Code | Name | Action | Verify with |
+|---|---|---|---|
+| GHC-83865 | Type mismatch | Read `expected`/`actual`. expected=`X->Y`, actual=`X` → missing arg. expected=`IO X`, actual=`X` → wrap in `pure`. expected=`X`, actual=`IO X` → use `<-` not `let`. | `ghci_type` on `context` subexpr |
+| GHC-39999 | Not in scope | (1) Module in .cabal exposed-modules? (2) Missing import? → `hoogle_search`. (3) Typo? → similar names. | `ghci_info` after adding import |
+| GHC-39660 | No instance | Own type → add `deriving`. Constraint missing → add to sig. Orphan → add import. | `ghci_info` on the type |
+| GHC-46956 | Ambiguous type | Add explicit type annotation to the ambiguous expression. | `ghci_type` on subexpressions |
 
-### Not in scope (GHC-39999)
-- Is the module in exposed-modules in .cabal?
-- Is there a missing import? Use `hoogle_search` to find the right module
-- Is it a typo? Look for similar names in the module
-
-### No instance (GHC-39660)
-- If we own the type: add `deriving` clause
-- If the constraint is missing from signature: add it
-- If it's an orphan instance: add the right import
-
-### Ambiguous type (GHC-46956)
-- Add explicit type annotation to the ambiguous expression
-
-### After 2 failed fix attempts on the same error:
-1. Replace the expression with `undefined`
-2. Run `ghci_type` on the context to see expected type
-3. Build the expression bottom-up from verified sub-expressions
+### After 2 failed attempts on same error
+1. Replace expression with `undefined`
+2. `ghci_type` on context → see expected type
+3. Build bottom-up from verified sub-expressions
 4. NEVER rewrite large code sections speculatively
 
 ---

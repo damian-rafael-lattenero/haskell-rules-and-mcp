@@ -26,23 +26,36 @@ export interface GhcError {
 export function parseGhcErrors(output: string): GhcError[] {
   const errors: GhcError[] = [];
 
-  // Match error/warning blocks. GHC format:
-  // file:line:col[-endCol]: severity: [GHC-CODE]
+  // Phase 1: Find all error/warning header positions.
   // GHC 9.12 format: file:line:col[-endCol]: severity: [GHC-CODE] [-Wflag]
-  // The [-Wflag] part (e.g. [-Wtyped-holes]) appears after [GHC-CODE] on the same line.
-  // We use [^\n]* after the optional GHC code to consume anything else on that header line.
-  const errorBlockRegex =
-    /^(.+?):(\d+):(\d+)(?:-(\d+))?: (error|warning):(?:\s*\[GHC-(\d+)\])?(?:\s*\[(-W[^\]]+)\])?\s*[^\n]*\n([\s\S]*?)(?=\n\S+:\d+:\d+|$)/gm;
+  const headerRegex =
+    /^(.+?):(\d+):(\d+)(?:-(\d+))?: (error|warning):(?:\s*\[GHC-(\d+)\])?(?:\s*\[(-W[^\]]+)\])?[^\n]*/gm;
 
-  let match;
-  while ((match = errorBlockRegex.exec(output)) !== null) {
-    const [, file, line, col, endCol, severity, ghcCode, warnFlag, body] = match;
+  interface HeaderInfo {
+    match: RegExpExecArray;
+    start: number;
+    headerEnd: number;
+  }
+  const headers: HeaderInfo[] = [];
+  let m;
+  while ((m = headerRegex.exec(output)) !== null) {
+    headers.push({ match: m, start: m.index, headerEnd: m.index + m[0].length });
+  }
+
+  // Phase 2: Extract body between consecutive headers (or end of string).
+  for (let i = 0; i < headers.length; i++) {
+    const { match, headerEnd } = headers[i]!;
+    const [, file, line, col, endCol, severity, ghcCode, warnFlag] = match;
+
+    const bodyEnd = i + 1 < headers.length ? headers[i + 1]!.start : output.length;
+    const body = output.slice(headerEnd, bodyEnd).replace(/^\n/, "");
+
     const error: GhcError = {
       file: file!,
       line: parseInt(line!, 10),
       column: parseInt(col!, 10),
       severity: severity as "error" | "warning",
-      message: body?.trim() ?? "",
+      message: body.trim(),
     };
 
     if (endCol) {
@@ -58,19 +71,20 @@ export function parseGhcErrors(output: string): GhcError[] {
     }
 
     // Extract Expected/Actual types
-    const expectedMatch = body?.match(
+    const expectedMatch = body.match(
       /Expected(?:\s+type)?:\s+(.+)/i
     );
-    const actualMatch = body?.match(
+    const actualMatch = body.match(
       /Actual(?:\s+type)?:\s+(.+)/i
     );
     if (expectedMatch) error.expected = expectedMatch[1]!.trim();
     if (actualMatch) error.actual = actualMatch[1]!.trim();
 
-    // Fallback: "Couldn't match type 'X' with 'Y'" format
+    // Fallback: "Couldn\u2019t match expected type \u2018X\u2019 with actual type \u2018Y\u2019" format
+    // GHC 9.12 uses Unicode quotes (\u2018/\u2019) and Unicode apostrophe (\u2019)
     if (!error.expected || !error.actual) {
-      const couldntMatch = body?.match(
-        /Couldn't match (?:expected )?type\s+['\u2018](.+?)['\u2019]\s+with\s+(?:actual )?type\s+['\u2018](.+?)['\u2019]/
+      const couldntMatch = body.match(
+        /Couldn['\u2019]t match (?:expected )?type\s+['\u2018](.+?)['\u2019]\s+with\s+(?:actual )?type\s+['\u2018](.+?)['\u2019]/
       );
       if (couldntMatch) {
         if (!error.expected) error.expected = couldntMatch[1]!.trim();
@@ -79,7 +93,7 @@ export function parseGhcErrors(output: string): GhcError[] {
     }
 
     // Extract "In the expression:" context
-    const contextMatch = body?.match(
+    const contextMatch = body.match(
       /In the expression:\s+(.+)/i
     );
     if (contextMatch) error.context = contextMatch[1]!.trim();

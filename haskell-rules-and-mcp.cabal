@@ -28,6 +28,19 @@ library
   default-language:  GHC2024
   ghc-options:       -Wall
 
+test-suite properties
+  type:             exitcode-stdio-1.0
+  main-is:          Main.hs
+  other-modules:    Properties
+  build-depends:
+    base >= 4.21 && < 5,
+    containers >= 0.7,
+    QuickCheck >= 2.14,
+    haskell-rules-and-mcp
+  hs-source-dirs:   test
+  default-language:  GHC2024
+  ghc-options:       -Wall
+
 executable haskell-rules-and-mcp
   main-is:          Main.hs
   build-depends:
