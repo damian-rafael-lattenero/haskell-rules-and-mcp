@@ -6,6 +6,7 @@ export interface GhcError {
   endColumn?: number;
   severity: "error" | "warning";
   code?: string;
+  warningFlag?: string;
   message: string;
   expected?: string;
   actual?: string;
@@ -31,11 +32,11 @@ export function parseGhcErrors(output: string): GhcError[] {
   // The [-Wflag] part (e.g. [-Wtyped-holes]) appears after [GHC-CODE] on the same line.
   // We use [^\n]* after the optional GHC code to consume anything else on that header line.
   const errorBlockRegex =
-    /^(.+?):(\d+):(\d+)(?:-(\d+))?: (error|warning):(?:\s*\[GHC-(\d+)\])?[^\n]*\n([\s\S]*?)(?=\n\S+:\d+:\d+|$)/gm;
+    /^(.+?):(\d+):(\d+)(?:-(\d+))?: (error|warning):(?:\s*\[GHC-(\d+)\])?(?:\s*\[(-W[^\]]+)\])?\s*[^\n]*\n([\s\S]*?)(?=\n\S+:\d+:\d+|$)/gm;
 
   let match;
   while ((match = errorBlockRegex.exec(output)) !== null) {
-    const [, file, line, col, endCol, severity, ghcCode, body] = match;
+    const [, file, line, col, endCol, severity, ghcCode, warnFlag, body] = match;
     const error: GhcError = {
       file: file!,
       line: parseInt(line!, 10),
@@ -52,6 +53,10 @@ export function parseGhcErrors(output: string): GhcError[] {
       error.code = `GHC-${ghcCode}`;
     }
 
+    if (warnFlag) {
+      error.warningFlag = warnFlag;
+    }
+
     // Extract Expected/Actual types
     const expectedMatch = body?.match(
       /Expected(?:\s+type)?:\s+(.+)/i
@@ -61,6 +66,17 @@ export function parseGhcErrors(output: string): GhcError[] {
     );
     if (expectedMatch) error.expected = expectedMatch[1]!.trim();
     if (actualMatch) error.actual = actualMatch[1]!.trim();
+
+    // Fallback: "Couldn't match type 'X' with 'Y'" format
+    if (!error.expected || !error.actual) {
+      const couldntMatch = body?.match(
+        /Couldn't match (?:expected )?type\s+['\u2018](.+?)['\u2019]\s+with\s+(?:actual )?type\s+['\u2018](.+?)['\u2019]/
+      );
+      if (couldntMatch) {
+        if (!error.expected) error.expected = couldntMatch[1]!.trim();
+        if (!error.actual) error.actual = couldntMatch[2]!.trim();
+      }
+    }
 
     // Extract "In the expression:" context
     const contextMatch = body?.match(

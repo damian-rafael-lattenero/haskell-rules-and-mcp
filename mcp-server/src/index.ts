@@ -12,6 +12,7 @@ import { handleScaffold } from "./tools/scaffold.js";
 import { handleCheckModule } from "./tools/check-module.js";
 import { handleHoleFits } from "./tools/hole-fits.js";
 import { handleDiagnostics } from "./tools/diagnostics.js";
+import { handleQuickCheck, resetQuickCheckState } from "./tools/quickcheck.js";
 
 // Project directory is the parent of mcp-server/
 const PROJECT_DIR =
@@ -98,10 +99,17 @@ server.tool(
       .describe(
         "If true, reads the .cabal file and loads ALL library modules into GHCi at once."
       ),
+    diagnostics: z
+      .boolean()
+      .optional()
+      .describe(
+        "If true, runs dual-pass compilation (strict errors + typed holes) and categorizes warnings with suggested fix actions. " +
+          "Defaults to true for module_path/load_all, false for plain reload."
+      ),
   },
-  async ({ module_path, load_all }) => {
+  async ({ module_path, load_all, diagnostics }) => {
     const session = await getSession();
-    const result = await handleLoadModule(session, { module_path, load_all }, PROJECT_DIR);
+    const result = await handleLoadModule(session, { module_path, load_all, diagnostics }, PROJECT_DIR);
     return { content: [{ type: "text", text: result }] };
   }
 );
@@ -246,7 +254,7 @@ server.tool(
   },
   async ({ module_path }) => {
     const session = await getSession();
-    const result = await handleDiagnostics(session, { module_path });
+    const result = await handleDiagnostics(session, { module_path }, PROJECT_DIR);
     return { content: [{ type: "text", text: result }] };
   }
 );
@@ -313,6 +321,7 @@ server.tool(
     }
 
     // restart — kill waits for the old process to fully exit
+    resetQuickCheckState();
     if (ghciSession) {
       await ghciSession.kill();
       ghciSession = null;
@@ -376,6 +385,35 @@ server.tool(
         },
       ],
     };
+  }
+);
+
+// --- Tool: ghci_quickcheck ---
+server.tool(
+  "ghci_quickcheck",
+  "Run a QuickCheck property in GHCi. The property should be a Haskell expression of type `Testable prop => prop`. " +
+    "Returns structured results: pass/fail, test count, counterexample if any. " +
+    "Requires QuickCheck to be available as a project dependency.",
+  {
+    property: z
+      .string()
+      .describe(
+        'QuickCheck property expression. Examples: "\\\\xs -> reverse (reverse xs) == (xs :: [Int])", ' +
+          '"\\\\x -> x + 0 == (x :: Int)"'
+      ),
+    tests: z
+      .number()
+      .optional()
+      .describe("Number of tests to run (default 100)"),
+    verbose: z
+      .boolean()
+      .optional()
+      .describe("If true, print each test case (default false)"),
+  },
+  async ({ property, tests, verbose }) => {
+    const session = await getSession();
+    const result = await handleQuickCheck(session, { property, tests, verbose });
+    return { content: [{ type: "text", text: result }] };
   }
 );
 

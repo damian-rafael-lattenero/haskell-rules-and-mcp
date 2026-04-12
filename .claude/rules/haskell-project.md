@@ -9,62 +9,25 @@ paths:
 # Project: haskell-rules-and-mcp
 
 ## Toolchain
-- **GHC**: 9.12 (pinned in `cabal.project` via `with-compiler: ghc-9.12`)
-- **Language**: GHC2024
-- **Build system**: Cabal 3.12
-- **Platform**: macOS aarch64
+- GHC 9.12.2, GHC2024, Cabal 3.12, macOS aarch64
+- `-Wall` enabled for both library and executable
+- `.ghci` has `-fdefer-type-errors -ferror-spans -fprint-explicit-foralls`
+- Dependencies: base, containers, array, mtl, QuickCheck
 
-## GHC2024 Extensions Enabled by Default
-These are ON without needing explicit pragmas:
-- `DataKinds`, `DerivingStrategies`, `DisambiguateRecordFields`
-- `ExplicitNamespaces`, `GADTs`, `MonoLocalBinds`
-- `LambdaCase`, `RoleAnnotations`
-- `TypeData`, `TypeFamilies`
+## Module Architecture
+- `HM.Syntax` — AST types: Expr (11 constructors), Type (TVar/TCon/TArr/TProd), Scheme, Lit
+- `HM.Subst` — Substitutable typeclass, apply/ftv for Type, Scheme, lists
+- `HM.Unify` — Robinson unification + occurs check, TypeError ADT
+- `HM.Infer` — Algorithm W inference, ExceptT TypeError (State Int) monad, defaultEnv with operator types
+- `HM.Pretty` — Pretty-printing with infix operator detection, lambda collapsing
+- `Parser.Core` — Parser monad with furthest-failure tracking, ParseError type
+- `Parser.Combinators` — sepBy, between, chainl1/chainr1, option, notFollowedBy
+- `Parser.Char` — Lexing: identifier, reserved, operator, natural, symbol
+- `Parser.HM` — Full expression parser with operator precedence, multi-arg lambda, multi-binding let, typo hints
 
-NOT enabled by default (must add pragma if needed):
-- `OverloadedStrings`, `OverloadedRecordDot`
-- `DuplicateRecordFields`
-- `TemplateHaskell`
-- `ScopedTypeVariables` (use explicit `forall` instead in GHC2024)
-
-## Project Layout
-```
-src/          -- Library modules (hs-source-dirs for library)
-app/          -- Executable modules (hs-source-dirs for executable)
-```
-
-- Library modules go in `src/` and must be listed in `exposed-modules` in the `.cabal` file
-- Executable source goes in `app/`
-- The executable depends on the library (`haskell-rules-and-mcp` in build-depends)
-
-## Dependencies
-Current: `base >= 4.21`, `containers >= 0.7`, `array`
-To add a new dependency: edit `haskell-rules-and-mcp.cabal`, add to BOTH library and executable `build-depends` if needed, then `cabal build` to resolve.
-
-## Build Commands
-```bash
-# Build everything
-export PATH="$HOME/.ghcup/bin:$PATH" && cabal build 2>&1
-
-# Start REPL for the library
-export PATH="$HOME/.ghcup/bin:$PATH" && cabal repl lib:haskell-rules-and-mcp 2>&1
-
-# Run the executable
-export PATH="$HOME/.ghcup/bin:$PATH" && cabal run haskell-rules-and-mcp 2>&1
-
-# Clean build artifacts
-export PATH="$HOME/.ghcup/bin:$PATH" && cabal clean
-
-# Quick type-check an expression
-export PATH="$HOME/.ghcup/bin:$PATH" && echo ':t EXPRESSION' | cabal repl lib:haskell-rules-and-mcp 2>&1
-```
-
-## Compiler Flags
-- `-Wall` is enabled for both library and executable
-- The `.ghci` file enables: `-fdefer-type-errors`, `-ferror-spans`, `-fprint-explicit-foralls`
-
-## Adding a New Module
-1. Create the file in `src/NewModule.hs`
-2. Add `NewModule` to `exposed-modules` in the `.cabal` file
-3. Run `cabal build` to verify it compiles
-4. Import it where needed
+## Conventions
+- All Map/Set imports are `qualified` (Map.Map, Set.Set)
+- Operators desugar to `EApp (EApp (EVar op) e1) e2` — new operators need defaultEnv entry in HM.Infer
+- New Expr constructors require changes in: HM.Syntax + HM.Infer + HM.Pretty + Parser.HM
+- Testing: examples in app/Main.hs (54+ parsed + manual). No Hspec/Tasty framework.
+- ELetRec is separate from ELet (no mutual recursion)
