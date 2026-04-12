@@ -1,4 +1,4 @@
-# Prompt de Continuacion — Haskell Incremental Type-Checking System
+# Prompt de Continuacion — Haskell Development Assistant (Sesion 7+)
 
 Copia y pega esto en una nueva sesion de Claude Code abierta en este proyecto:
 
@@ -7,298 +7,238 @@ Copia y pega esto en una nueva sesion de Claude Code abierta en este proyecto:
 ## El Prompt
 
 ```
-Estoy trabajando en un sistema para mejorar como se escribe codigo Haskell con Claude Code.
-Vengo de varias sesiones de trabajo. Abajo esta el historial completo de lo hecho y lo
-que queda pendiente.
+Vengo de 6 sesiones de trabajo construyendo un sistema para mejorar como se escribe
+codigo Haskell con Claude Code. El sistema tiene 3 partes: Claude Rules, MCP Server,
+y un proyecto Haskell de ejemplo (Hindley-Milner type inference + parser combinators).
 
-### Lo que ya existe y funciona
+En la sesion 6 hice un overhaul grande: elimine 536 lineas de reglas tutorial y las
+reemplace con reglas de automatizacion orientadas a accion. Tambien agregue nuevos
+tools al MCP y mejore los existentes. Los cambios de TypeScript estan compilados pero
+el MCP server necesita haberse reiniciado (que pasa al abrir esta sesion nueva).
 
-#### Parte 1: Claude Rules (.claude/rules/)
-4 archivos de reglas que cambian tu comportamiento al escribir Haskell:
-- `haskell-development.md` — Protocolo de tipado incremental con 3 niveles (Full/Batch/Write-and-Verify segun complejidad), type signatures primero, typed holes, :t para verificar subexpresiones
-- `haskell-errors.md` — Base de conocimiento de ~25 errores comunes de GHC con codigos, explicaciones y fixes
-- `haskell-project.md` — Config del proyecto: GHC 9.12, GHC2024, Cabal, build commands
-- `haskell-monadic.md` — Patrones monadicos: do-notation, transformers, MTL, anti-patterns, debugging (NUEVO sesion 5)
+### PENDIENTE INMEDIATO: Verificar que los cambios de sesion 6 funcionan
 
-#### Parte 2: MCP Server "haskell-ghci" (mcp-server/)
-Un MCP server en TypeScript que mantiene una sesion GHCi PERSISTENTE con auto-reload.
+Los siguientes cambios fueron compilados (npx tsc OK) pero NO testeados con el MCP
+server corriendo el codigo nuevo. Esta sesion deberia tener el server fresco.
 
-14 tools (las ultimas 2 son nuevas de sesion 5, necesitan test post-restart):
-- `ghci_type` — :t con auto-reload
-- `ghci_info` — :i con auto-reload
-- `ghci_kind` — :k con auto-reload
-- `ghci_eval` — evaluar expresiones puras
-- `ghci_load` — cargar/recargar modulos con errores parseados
-- `ghci_load(load_all=true)` — lee el .cabal y carga TODOS los modulos en GHCi con scope completo
-- `cabal_build` — compilacion completa con errores parseados
-- `hoogle_search` — buscar funciones en Hoogle por tipo o nombre
-- `ghci_session` — status/restart de la sesion GHCi (kill async, sin race conditions)
-- `ghci_scaffold` — lee el .cabal, detecta modulos sin archivo fuente, crea stubs
-- `ghci_check_module` — carga un modulo con -fno-defer-type-errors y devuelve resumen estructurado de exports con tipos
-- `ghci_batch` — ejecuta multiples comandos GHCi en un solo roundtrip (TESTEADO sesion 5)
-- `ghci_hole_fits` — analiza typed holes (_) y devuelve fits estructurados (NUEVO, NECESITA TEST)
-- `ghci_diagnostics` — dual-pass check: errores reales + typed holes en un solo call (NUEVO, NECESITA TEST)
+#### Test 1: ghci_load con diagnostics y warningActions
 
-Componentes internos:
-- `parsers/cabal-parser.ts` — Parser de .cabal que extrae exposed-modules y hs-source-dirs
-- `parsers/error-parser.ts` — Parser de errores GHC, regex corregida para [-Wflag] suffixes
-- `parsers/type-parser.ts` — Parser de output de :t y :i
-- `ghci-session.ts` — Session manager con kill() async, executeBatch(), settled flag
+Crear un modulo temporal con warnings intencionales:
+```haskell
+module HM.TestWarn where
+import Data.List (sort)  -- unused import
+foo x = x + 1            -- missing signature
+bar :: Int -> Int
+bar x = 42               -- unused match
+baz :: Maybe Int -> Int
+baz (Just n) = n          -- incomplete patterns
+quux :: Int -> String
+quux x = _                -- typed hole
+```
 
-#### Parte 3: Hindley-Milner Type Inference (EXPANDIDO)
-9 modulos Haskell implementados usando el sistema completo (reglas + MCP).
+1. Llamar `ghci_load(module_path="src/HM/TestWarn.hs")` (diagnostics=true por default)
+2. Verificar que el output tiene:
+   - `warningActions` array con entries categorizadas:
+     - category "unused-import", suggestedAction "Remove unused import: Data.List"
+     - category "missing-signature", suggestedAction con el tipo inferido
+     - category "unused-binding", suggestedAction "Prefix with underscore: _x"
+     - category "incomplete-patterns", suggestedAction "Add missing pattern(s): Nothing"
+     - category "typed-hole", suggestedAction con info del hole
+   - `holes` array con el hole de quux (expectedType "String", fits)
+   - `warningFlag` en cada warning (e.g., "-Wunused-imports", "-Wmissing-signatures")
+3. Si warningActions NO aparece: el MCP server no levanto el codigo nuevo.
+   Fix: `cd mcp-server && npx tsc` y luego `ghci_session(action="restart")`
+4. Limpiar el modulo temporal.
 
-src/HM/ — 5 modulos del engine de inferencia:
-- `HM.Syntax` — AST expandido:
-  - Expr: EVar, ELit, EApp, ELam, ELet, ELetRec, EIf, EPair, EFst, ESnd, EAnn
-  - Type: TVar, TCon, TArr, TProd
-  - Lit: LInt, LBool
-  - Scheme: Forall [TVar] Type
-- `HM.Subst` — Substituciones para todos los tipos incluyendo TProd
-- `HM.Unify` — Unificacion de Robinson con occurs check, soporta TArr y TProd
-- `HM.Infer` — Algorithm W completo con:
-  - Let-polimorfismo
-  - Letrec (recursive let bindings)
-  - Pares (EPair/EFst/ESnd con TProd)
-  - Type annotations (EAnn — infer + unify con anotacion)
-- `HM.Pretty` — Pretty printing de tipos y expresiones, incluyendo todos los constructores nuevos
+#### Test 2: ghci_quickcheck
 
-src/Parser/ — 4 modulos de parser combinators desde cero:
-- `Parser.Core` — Parser type con Functor/Applicative/Monad/Alternative, furthest-failure tracking en <|>, satisfy/char/string/eof, ppParseError
-- `Parser.Combinators` — sepBy, between, chainl1/chainr1, option, notFollowedBy
-- `Parser.Char` — letter/digit/spaces/lexeme/symbol/natural/integer/identifier/upperIdentifier/reserved/parens
-- `Parser.HM` — Parser completo del lenguaje HM:
-  - Literales: 42, true, false
-  - Variables: identificadores lowercase (excluye keywords)
-  - Lambda: \x -> body
-  - Aplicacion: juxtaposicion left-associative (f x y = (f x) y)
-  - Let: let x = e1 in e2
-  - Letrec: let rec f = e1 in e2
-  - If: if cond then e1 else e2
-  - Pares: (e1, e2), fst e, snd e
-  - Annotations: (expr : Type)
-  - Tipos: Int, Bool, type vars, a -> b, (a, b)
+1. Llamar `ghci_quickcheck(property="\xs -> reverse (reverse xs) == (xs :: [Int])")`
+   - Esperado: success=true, passed=100
+2. Llamar `ghci_quickcheck(property="\x -> x + 1 == (x :: Int)")`
+   - Esperado: success=false, counterexample con algun Int
+3. Llamar `ghci_quickcheck(property="\x y -> x + y == y + (x :: Int)", tests=500)`
+   - Esperado: success=true, passed=500
 
-app/Main.hs — 38 ejemplos (20 manuales + 18 parseados):
-- Pipeline completo: texto -> parse -> AST -> infer -> tipo -> pretty print
-- Incluye errores de tipo y errores de parseo
+#### Test 3: error parser mejorado (warningFlag + expected/actual)
 
-Se puede correr con: export PATH="$HOME/.ghcup/bin:$PATH" && cabal run haskell-rules-and-mcp
+Crear modulo con type error:
+```haskell
+module HM.TestErr where
+foo :: Int
+foo = True
+```
+1. Llamar `ghci_load(module_path="src/HM/TestErr.hs")`
+2. Verificar que el error tiene:
+   - code: "GHC-83865"
+   - expected: "Int"
+   - actual: "Bool"
+3. Limpiar.
 
-### Lo que queda pendiente AHORA MISMO
+#### Test 4: ghci_load(load_all=true) con diagnostics
 
-#### PENDIENTE 1: Reiniciar MCP y testear los 2 tools nuevos (PRIORITARIO)
+1. Llamar `ghci_load(load_all=true)` sobre el proyecto completo
+2. Verificar: success=true, 10 modulos cargados, 0 errores
+3. Si hay warnings, verificar que warningActions tiene sugerencias
 
-El MCP server tiene 2 tools nuevos compilados (`npx tsc` OK) que necesitan restart para
-activarse. Al abrir esta sesion nueva ya deberian estar disponibles.
+#### Test 5: backward compatibility
 
-1. **ghci_hole_fits** — Tool que analiza typed holes y devuelve fits estructurados.
-   Para testear:
-   - Crear un modulo temporal con typed holes:
-     ```haskell
-     module HM.TestHole where
-     foo :: Int -> String
-     foo x = _
-     bar :: [Int] -> Int
-     bar xs = _ xs
-     baz :: (a -> b) -> [a] -> [b]
-     baz f xs = _ f xs
-     ```
-   - Llamar ghci_hole_fits con module_path: "src/HM/TestHole.hs"
-   - Verificar que devuelve JSON estructurado con:
-     - 3 holes, cada uno con expectedType, relevantBindings, validFits
-     - foo: expectedType "String", fits incluyen [] y mempty
-     - bar: expectedType "[Int] -> Int", fits incluyen head, last, length
-     - baz: expectedType "(a -> b) -> [a] -> [b]", fits incluyen map, fmap
-   - Testear con max_fits: 20 para ver mas fits
-   - Limpiar el modulo temporal
+1. `cabal run haskell-rules-and-mcp` — los 54+ ejemplos (manuales + parseados) deben pasar
+2. `ghci_type(expression="map (+1)")` — debe funcionar normal
+3. `ghci_batch(commands=[":t foldr", ":t map", "1 + 2"])` — debe dar 3 resultados OK
+4. `ghci_hole_fits(module_path=...)` — sigue funcionando independiente
+5. `ghci_diagnostics(module_path=...)` — ahora delega a ghci_load (deprecado pero funcional)
 
-2. **ghci_diagnostics** — Dual-pass: strict (errores reales) + deferred (typed holes).
-   Para testear:
+### DESPUES DE VERIFICAR: Implementar algo en Haskell para validar el sistema
 
-   Test A — Modulo con type error real:
-   - Crear modulo con `foo :: Int; foo = True`
-   - Llamar ghci_diagnostics
-   - Verificar: compiled=false, errors tiene el GHC-83865, holes vacio
-   - Limpiar
+La idea es hacer un mini proyecto Haskell que realmente ejercite el loop automatizado:
+rules de automatizacion + MCP tools + QuickCheck. Quiero que se vea la diferencia.
 
-   Test B — Modulo con typed holes (sin errores):
-   - Crear modulo con `foo :: Int -> String; foo x = _`
-   - Llamar ghci_diagnostics
-   - Verificar: compiled=true, errors vacio, holes tiene 1 entry con fits
-   - Limpiar
+**Opcion sugerida: Agregar listas al Hindley-Milner**
+- Agregar EList (list literal) y TList (list type) al AST
+- Agregar `:` (cons), `head`, `tail`, `null` como built-ins
+- Agregar syntactic sugar `[1, 2, 3]` al parser
+- Agregar pattern matching basico (ECase)
+- Escribir propiedades QuickCheck para el parser/inferencia
 
-   Test C — Modulo limpio:
-   - Llamar ghci_diagnostics sobre src/HM/Syntax.hs
-   - Verificar: compiled=true, errors vacio, holes vacio, summary "No issues"
+Esto ejercita:
+- El loop ghci_load → fix warnings automaticamente → recompilar
+- ghci_quickcheck para verificar propiedades del parser
+- ghci_type y ghci_info para explorar tipos
+- La regla de "new Expr constructors require changes in: Syntax + Infer + Pretty + Parser.HM"
+- Warning cleanup automatico (incomplete patterns al agregar constructores)
 
-   Test D — Verificar que la sesion GHCi queda sana despues:
-   - Despues de todos los tests, llamar ghci_type con alguna expresion
-   - Verificar que -fdefer-type-errors sigue activo
+Alternativas si preferis algo mas rapido:
+- Agregar solo listas (sin pattern matching) — mas chico
+- Implementar un evaluador (interpretar las expresiones ademas de tipificarlas)
+- Escribir un QuickCheck test suite para el parser existente
 
-#### PENDIENTE 2: Elegir la siguiente tarea
+### DESPUES DE IMPLEMENTAR: Evaluacion del sistema
 
-Una vez verificados los tools, elegir que hacer:
+Quiero que al final de la sesion hagas un reporte honesto:
 
-OPCION A — MEJORAR EL PARSER:
-1. Agregar multi-arg lambda: \x y z -> body (ahora requiere \x -> \y -> \z -> body)
-2. Agregar operadores infijos: 1 + 2, f . g (con precedencia configurable via chainl1)
-3. Agregar let con multiples bindings: let x = 1; y = 2 in x + y
-4. Mejorar mensajes de error con "did you mean?" para keywords mal escritas
-5. Agregar un modo REPL interactivo que lea stdin linea por linea
+1. **Pros reales**: Que funciono bien del loop automatizado? Los warningActions
+   ayudaron? El QuickCheck inline aporto? Se siente la diferencia vs claude code pelado?
 
-OPCION B — EXPANDIR EL HINDLEY-MILNER MAS:
-1. Agregar constructores de datos y pattern matching (ECase)
-2. Agregar listas con syntactic sugar [1, 2, 3]
-3. Agregar type classes basicas (Eq, Ord, Show) con instance resolution
-4. Agregar mutual recursion (let rec f = ... and g = ... in ...)
+2. **Cons reales**: Que friction hubo? Los warnings se categorizaron bien? Hubo
+   errores en los regex? Algun tool fallo o devolvio data incorrecta? Las rules
+   nuevas guiaron bien el comportamiento o se ignoraron?
 
-OPCION C — NUEVO MINI PROYECTO HASKELL:
-Implementa algo nuevo usando el sistema completo para seguir validandolo:
-- Un constraint solver (SAT basico)
-- Un interprete de lambda calculus con De Bruijn indices
-- Un evaluador de un lenguaje con efectos (Free monad)
-- Un typechecker bidireccional (mas moderno que Algorithm W)
+3. **Metricas**: Cuantas compilaciones? Cuantos errores? Cuantos warnings arreglados
+   automaticamente? Cuantas propiedades QuickCheck corridas? Tiempo estimado vs
+   sin el sistema?
 
-OPCION E — MEJORAR EL MCP (lo que quedo de D):
-1. Crear un test suite automatizado para el MCP server (vitest) — no se pudo en sesion 5 por problemas con npm
-2. Agregar un tool `ghci_refactor` que sugiera refactors basados en -Wall warnings
-3. Mejorar ghci_hole_fits para que tambien sugiera imports que traerian fits adicionales
-
-Decime cual opcion queres hacer (o una combinacion).
+4. **Recomendaciones**: Que cambiar, agregar, o quitar para la proxima iteracion?
+   Ser brutal — si algo no aporta, decirlo.
 ```
 
 ---
 
-## Historial completo de lo que se hizo
+## Estado actual del sistema (post sesion 6)
+
+### Claude Rules (.claude/rules/) — 3 archivos, ~290 lineas
+
+| Archivo | Lineas | Contenido |
+|---------|--------|-----------|
+| `haskell-project.md` | ~25 | Toolchain, module architecture, conventions del proyecto |
+| `haskell-development.md` | ~35 | Compilation discipline, type-first development, typed holes, error recovery |
+| `haskell-automation.md` | ~120 | **NUEVO**: Warning action table, error resolution protocol, QuickCheck integration, the loop |
+
+**Eliminados en sesion 6:**
+- `haskell-errors.md` (224 lineas) — tutorial de errores GHC, reemplazado por error resolution protocol en automation.md
+- `haskell-monadic.md` (312 lineas) — tutorial de monads, eliminado sin reemplazo (Claude ya lo sabe)
+
+### MCP Server "haskell-ghci" — 15 tools
+
+| Tool | Estado | Descripcion |
+|------|--------|-------------|
+| `ghci_type` | OK | :t con auto-reload |
+| `ghci_info` | OK | :i con auto-reload |
+| `ghci_kind` | OK | :k con auto-reload |
+| `ghci_eval` | OK | Evaluar expresiones |
+| `ghci_load` | **MEJORADO** | Ahora con diagnostics param: dual-pass, warningActions, holes |
+| `ghci_load(load_all=true)` | **MEJORADO** | Idem, para todos los modulos |
+| `cabal_build` | OK | Compilacion completa |
+| `hoogle_search` | OK | Buscar en Hoogle |
+| `ghci_session` | OK | Status/restart |
+| `ghci_scaffold` | OK | Crear stubs para modulos |
+| `ghci_check_module` | OK | Browse + exports |
+| `ghci_batch` | OK | Multiples comandos en 1 call |
+| `ghci_hole_fits` | OK | Typed holes estructurados |
+| `ghci_diagnostics` | **DEPRECADO** | Delega a ghci_load(diagnostics=true) |
+| `ghci_quickcheck` | **NUEVO** | Correr propiedades QuickCheck inline |
+
+**Componentes internos modificados en sesion 6:**
+- `parsers/error-parser.ts` — Nuevo campo `warningFlag` (-Wunused-imports etc.), mejor extraccion expected/actual con fallback regex
+- `parsers/warning-categorizer.ts` — **NUEVO**: Categoriza warnings y sugiere acciones concretas (unused-import, missing-signature, incomplete-patterns, unused-binding, typed-hole, etc.)
+- `tools/load-module.ts` — Reescrito: integra diagnostics dual-pass, warning categorization, hole parsing
+- `tools/diagnostics.ts` — Reducido a wrapper que delega a load-module
+- `tools/quickcheck.ts` — **NUEVO**: Importa Test.QuickCheck en GHCi, corre propiedades, parsea output
+
+### Hindley-Milner + Parser (10 modulos Haskell)
+
+**HM Engine** (5 modulos, ~400 lineas):
+- AST con 11 constructores de Expr, 4 de Type, 2 de Lit
+- Algorithm W con let-polimorfismo, letrec, pares, annotations
+- defaultEnv con 13 operadores built-in (+, -, *, ==, /=, <, >, <=, >=, &&, ||, ., negate)
+
+**Parser** (4 modulos, ~480 lineas):
+- Operadores infijos con precedencia correcta (|| < && < == < + < * < .)
+- Multi-arg lambda: `\x y z -> body`
+- Multi-binding let: `let x = 1; y = 2 in x + y`
+- "Did you mean?" hints para keywords mal escritas (Levenshtein distance)
+
+**Main.hs**: 54+ ejemplos (26 AST manuales + 28+ parseados)
+- Incluye operators, multi-arg lambda, multi-binding let, error cases
+
+**Dependencies**: base, containers, array, mtl, QuickCheck
+
+---
+
+## Historial completo de sesiones
 
 ### Sesion 1: Setup inicial (commit d09f276)
-- Creacion de las 3 claude rules (haskell-development, haskell-errors, haskell-project)
-- Implementacion del MCP server con 8 tools originales
-- Configuracion de .mcp.json
+- 3 claude rules + MCP server con 8 tools + .mcp.json
 
-### Sesion 2: Fix + Hindley-Milner + Tools nuevos
+### Sesion 2: HM Engine + Fix MCP (commits 7ccc86d, 9ee2d39, ecbb127)
+- Fix sentinel off-by-one + PATH macOS ARM
+- Hindley-Milner 5 modulos, 0 compilaciones fallidas
+- 3 tools nuevos: ghci_scaffold, load_all, ghci_check_module
 
-**Fix del MCP** (commit 7ccc86d):
-- Bug de off-by-one en sentinel sync del GHCi session
-- PATH actualizado para macOS ARM (/opt/homebrew/bin)
+### Sesion 3: Testing + Fix race condition (commit 536a7b2)
+- 3/3 tools nuevos testeados PASS
+- Fix race condition en ghci_session restart (kill async, settled flag)
 
-**Hindley-Milner** (commit 9ee2d39):
-- 5 modulos, ~316 lineas de Haskell
-- 0 compilaciones fallidas gracias al uso activo del MCP
-- Flujo: signatures first con undefined -> ghci_load -> implementar -> ghci_load -> ghci_eval para testear -> siguiente funcion
-- MCP tools usados: ghci_type (~8 veces), ghci_eval (~15 veces), ghci_load (~10 veces), ghci_info, hoogle_search, cabal_build
+### Sesion 4: Expand HM + Parser Combinators (commit 1bb2909)
+- ELetRec, Pares, Annotations en el HM engine
+- Parser combinator library desde cero (4 modulos)
+- 38/38 ejemplos end-to-end
+- ghci_batch tool, check_module strict
 
-**3 Tools nuevos del MCP** (commit ecbb127):
-- ghci_scaffold: parser de .cabal + generador de stubs
-- ghci_load load_all: carga todos los modulos con scope
-- ghci_check_module: resumen estructurado de modulo via :browse
+### Sesion 5: Mejorar MCP (commit 28b9ab8)
+- ghci_hole_fits y ghci_diagnostics (nuevos)
+- haskell-monadic.md (nueva regla)
+- Fix regex error-parser para [-Wflag]
 
-### Sesion 3: Testing end-to-end + Fix race condition
+### Sesion 6: Parser improvements + System overhaul (commits 182428f, 7646104)
 
-**Testing end-to-end de los 3 tools nuevos — todos PASS:**
+**Parser improvements (182428f):**
+- Multi-arg lambda: `\x y z -> body`
+- Operadores infijos con precedencia: `||, &&, ==, /=, <, >, <=, >=, +, -, *, .`
+- Multi-binding let: `let x = 1; y = 2 in body`
+- "Did you mean?" para keywords mal escritas
+- Pretty printer: collapse nested lambdas, infix notation para operadores
+- 13 nuevos parsed examples (total 54+)
+- Verificacion: ghci_hole_fits PASS (3/3 holes), ghci_diagnostics PASS (4/4 tests)
 
-| Tool | Resultado | Detalle |
-|------|-----------|---------|
-| `ghci_scaffold` | PASS | Agrego HM.NewModule al .cabal, scaffold creo stub correcto, GHCi lo cargo sin error. |
-| `ghci_load(load_all=true)` | PASS | Cargo los 6 modulos. Verificado scope con ghci_eval y ghci_type. |
-| `ghci_check_module` | PASS | HM.Syntax devolvio 6 defs. HM.Infer devolvio tipos. Error intencional dio error estructurado. |
-
-**Bug encontrado y arreglado: race condition en ghci_session restart**
-Causa raiz: kill() sincronico, exit handler de startup no removido, identity check faltante.
-Fix: kill() async, settled flag, cleanup de handlers, identity check en getSession().
-
-### Sesion 4: Expandir HM + Parser Combinators + Mejoras al sistema (commit 1bb2909)
-
-**Expandir Hindley-Milner (3 features):**
-
-| Feature | Archivos tocados | Tests |
-|---------|-----------------|-------|
-| ELetRec (recursion) | Syntax, Infer, Pretty | `let rec f = \x -> if true then x else f x in f :: forall t3. t3 -> t3` |
-| Pares (EPair/EFst/ESnd/TProd) | Syntax, Subst, Unify, Infer, Pretty | Construccion, proyeccion, swap polimorfico `(t3,t4) -> (t4,t3)` |
-| Annotations (EAnn) | Syntax, Infer, Pretty | Conformidad OK + error UnificationFail en mismatch |
-
-**Parser Combinator Library desde cero (4 modulos):**
-
-| Modulo | Lineas | Contenido |
-|--------|--------|-----------|
-| Parser.Core | ~100 | Parser type, Functor/Applicative/Monad/Alternative con furthest-failure, primitivas |
-| Parser.Combinators | ~47 | sepBy, between, chainl1/r1, option, notFollowedBy |
-| Parser.Char | ~95 | Lexing: letter/digit/spaces/lexeme/symbol/natural/identifier/reserved |
-| Parser.HM | ~140 | Parser completo del lenguaje HM: literals, vars, lambda, app, let, letrec, if, pairs, annotations, types |
-
-Pipeline end-to-end: 38/38 ejemplos pasaron (20 manuales + 18 parseados).
-
-**Mejoras al sistema en sesion 4:**
-- Furthest failure en Parser.Core — `<|>` trackea error con mayor posicion
-- Smart protocol en rules — 3 niveles: Full/Batch/Write-and-Verify
-- ghci_batch tool — ejecuta N comandos en 1 call
-- check_module strict — desactiva -fdefer-type-errors durante check
-- ppParseError — errores legibles con posicion
-
-### Sesion 5: Opcion D — Mejorar el MCP (commit 28b9ab8)
-
-**Verificacion de tools pendientes de sesion 4 — todos PASS:**
-
-| Tool | Tests | Resultado |
-|------|-------|-----------|
-| `ghci_batch` basico | 3 comandos [:t map, :t foldr, 1+2] | 3/3 OK |
-| `ghci_batch` + reload | mismos comandos con reload:true | 3/3 OK |
-| `ghci_batch` + stop_on_error (warning) | [:t map, :t nonExistent, :t foldr] | 3/3 — correcto: warning diferido no es error |
-| `ghci_batch` + stop_on_error (real error) | [:t map, "let x = in", :t foldr] | 2/3, se detuvo en parse error |
-| `ghci_check_module` strict | modulo con `foo :: Int; foo = True` | Error GHC-83865 detectado como error |
-| `ghci_check_module` post-check | :t nonExistent despues de check | Warning (defer restaurado OK) |
-
-**D1: ghci_hole_fits (NUEVO tool, COMPILADO, NECESITA TEST post-restart):**
-- `mcp-server/src/tools/hole-fits.ts` — ~230 lineas
-- Parsea warnings [GHC-88464] del output de GHCi
-- Devuelve JSON con: hole name, expectedType, location, relevantBindings, validFits
-- Cada fit tiene: name, type, specialization ("with map @a @b"), source
-- Configurable max_fits (default 10)
-
-**D2: Test suite — SALTEADO** (npm install se colgo, problemas de red/registry)
-
-**D3: haskell-monadic.md (NUEVA regla):**
-- `.claude/rules/haskell-monadic.md` — ~200 lineas
-- Do-notation: <- vs let, last expression, >> vs >>=, void
-- Monad transformers: lift vs liftIO, ReaderT/ExceptT/StateT patterns, running stacks
-- MTL-style constraints vs concrete stacks, tabla de MonadReader/State/Error/IO/Writer
-- Anti-patterns: nesting, return semantica, mixing monads, mapM vs traverse, when/unless
-- Debugging monadic type errors: annotate, check :t, ambiguous monad vars
-
-**D4: ghci_diagnostics (NUEVO tool, COMPILADO, NECESITA TEST post-restart):**
-- `mcp-server/src/tools/diagnostics.ts` — ~170 lineas
-- Dual-pass: strict (-fno-defer-type-errors) para errores reales, luego deferred para typed holes
-- Reporte unificado: errors, warnings, holes (con bindings y fits), summary
-- Separa hole errors (GHC-88464) de errores reales
-- Restaura -fdefer-type-errors al final
-
-**Fix en error-parser.ts:**
-- Regex corregida: `[^\n]*` despues de `[GHC-CODE]` para consumir `[-Wflag]` suffixes
-- Antes: la regex no matcheaba warnings con `-Wtyped-holes`, `-Wunused-matches`, etc.
-
-**LSP getDiagnostics:** Investigado, no viable sin HLS corriendo. Timeout sin IDE abierto.
-
-## Estadisticas de la sesion 5
-
-- 2 tools nuevos (~400 lineas TypeScript)
-- 1 regla nueva (~200 lineas markdown)
-- 1 fix en error-parser (regex)
-- 6/6 tests de tools pendientes pasaron
-- Commit: 28b9ab8
-
-## Notas tecnicas
-
-- Las reglas de `.claude/rules/` se cargan automaticamente en el contexto
-- El MCP necesita estar conectado (verificar con ghci_session action=status)
-- Si el MCP no esta disponible, rebuild: `cd mcp-server && npx tsc`
-- El `.ghci` configura GHCi con `-fdefer-type-errors` y `-fprint-explicit-foralls`
-- El auto-reload en ghci_type/ghci_info/ghci_kind hace `:r` antes de cada query
-- GHC 9.12.2, GHC2024, Cabal 3.12. Deps: base, containers, array, mtl
-- PATH de GHC: export PATH="$HOME/.ghcup/bin:$PATH"
-- El parser usa backtracking simple con furthest-failure — sin `try` explicito
-- Los 2 tools nuevos (ghci_hole_fits, ghci_diagnostics) necesitan restart del MCP server para activarse
-- mcp__ide__getDiagnostics requiere un IDE con LSP activo (HLS). Sin eso, timeout.
+**System overhaul (7646104):**
+- Rules: -536 lineas tutorial, +120 lineas automation (726 → 290 lineas, -60%)
+  - Eliminados: haskell-errors.md, haskell-monadic.md
+  - Creado: haskell-automation.md (warning action table, error resolution, QuickCheck integration, the loop)
+  - Reescritos: haskell-project.md (invariantes), haskell-development.md (esenciales)
+- MCP: error-parser con warningFlag, warning-categorizer (nuevo), ghci_load mejorado con diagnostics+categorization+holes, ghci_diagnostics deprecado, ghci_quickcheck (nuevo)
+- Haskell: QuickCheck agregado como dependencia
+- Verificacion: TypeScript compila, cabal build OK, 54+ ejemplos pasan, QuickCheck funciona en GHCi (`quickCheck (\xs -> reverse (reverse xs) == (xs :: [Int]))` → +++ OK, passed 100 tests)
+- **NOTA**: Los cambios MCP necesitan restart del server para activarse (primera vez en sesion 7)
 
 ## Commits
 
@@ -311,3 +251,17 @@ Pipeline end-to-end: 38/38 ejemplos pasaron (20 manuales + 18 parseados).
 | 5 | 536a7b2 | Fix race condition en GHCi session restart |
 | 6 | 1bb2909 | Expand HM + parser combinators + mejoras sistema |
 | 7 | 28b9ab8 | Add hole_fits, diagnostics tools + monadic rules + error parser fix |
+| 8 | 5652ebe | Update continuation prompt, add vitest devDep |
+| 9 | 182428f | Enhance parser: multi-arg lambda, infix operators, multi-binding let, typo hints |
+| 10 | 7646104 | Overhaul system: action-oriented rules, warning categorizer, QuickCheck tool |
+
+## Notas tecnicas
+
+- GHC 9.12.2, GHC2024, Cabal 3.12. Deps: base, containers, array, mtl, QuickCheck
+- El MCP server es TypeScript/Node.js, rebuild con: `cd mcp-server && npx tsc`
+- GHCi session es persistente con sentinel-based protocol, auto-reload en type/info/kind
+- El `.ghci` configura: `-fdefer-type-errors`, `-ferror-spans`, `-fprint-explicit-foralls`
+- El parser usa backtracking simple con furthest-failure — sin `try` explicito
+- Las rules se cargan automaticamente en el contexto de cada conversacion
+- `haskell-automation.md` es el archivo central: contiene el loop automatizado y la warning action table
+- Los operadores desugaran a `EApp (EApp (EVar op) e1) e2)` — new ops necesitan entry en defaultEnv
