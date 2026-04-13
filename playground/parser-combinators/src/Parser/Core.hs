@@ -1,91 +1,74 @@
 module Parser.Core
   ( Parser(..)
-  , ParseState(..)
-  , ParseResult(..)
-  , mkState
+  , runParser
   , satisfy
   , eof
-  , failWith
   , label
+  , try
   ) where
 
 import Control.Applicative (Alternative(..))
 import Parser.Error
 
--- | The parser state: remaining input + current position
-data ParseState = ParseState
-  { stateInput :: !String
-  , statePos   :: !Pos
-  } deriving (Show, Eq)
-
--- | Result of a parse attempt
-data ParseResult a
-  = Success a ParseState
-  | Failure ParseError
-  deriving (Show)
-
--- | A parser: takes state, returns result
-newtype Parser a = Parser { runParser :: ParseState -> ParseResult a }
-
--- | Create initial parse state from input string
-mkState :: String -> ParseState
-mkState input = ParseState input initialPos
-
--- Functor
+newtype Parser a = Parser
+  { unParser :: String -> Pos -> Either ParseError (a, String, Pos) }
 
 instance Functor Parser where
-  fmap f (Parser p) = Parser $ \s -> case p s of
-    Success a s' -> Success (f a) s'
-    Failure e    -> Failure e
-
--- Applicative
+  fmap f (Parser p) = Parser $ \s pos ->
+    case p s pos of
+      Left err           -> Left err
+      Right (a, rest, pos') -> Right (f a, rest, pos')
 
 instance Applicative Parser where
-  pure a = Parser $ \s -> Success a s
-  (Parser pf) <*> (Parser pa) = Parser $ \s -> case pf s of
-    Failure e    -> Failure e
-    Success f s' -> case pa s' of
-      Failure e     -> Failure e
-      Success a s'' -> Success (f a) s''
-
--- Monad
+  pure a = Parser $ \s pos -> Right (a, s, pos)
+  Parser pf <*> Parser pa = Parser $ \s pos ->
+    case pf s pos of
+      Left err            -> Left err
+      Right (f, s', pos') -> case pa s' pos' of
+        Left err             -> Left err
+        Right (a, s'', pos'') -> Right (f a, s'', pos'')
 
 instance Monad Parser where
-  (Parser pa) >>= f = Parser $ \s -> case pa s of
-    Failure e    -> Failure e
-    Success a s' -> runParser (f a) s'
-
--- Alternative (backtracking choice + many/some)
+  Parser pa >>= f = Parser $ \s pos ->
+    case pa s pos of
+      Left err           -> Left err
+      Right (a, s', pos') -> unParser (f a) s' pos'
 
 instance Alternative Parser where
-  empty = Parser $ \s -> Failure (ParseError (statePos s) [] Nothing)
-  (Parser p1) <|> (Parser p2) = Parser $ \s -> case p1 s of
-    Success a s' -> Success a s'
-    Failure e1   -> case p2 s of
-      Success a s' -> Success a s'
-      Failure e2   -> Failure (mergeError e1 e2)
+  empty = Parser $ \_ pos -> Left (ParseError pos [] "")
+  Parser p1 <|> Parser p2 = Parser $ \s pos ->
+    case p1 s pos of
+      Right result -> Right result
+      Left err1    -> case p2 s pos of
+        Right result -> Right result
+        Left err2    -> Left (mergeErrors err1 err2)
 
--- | The fundamental parser: consume one char if predicate holds
+runParser :: Parser a -> String -> Either ParseError (a, String, Pos)
+runParser (Parser p) s = p s initialPos
+
 satisfy :: String -> (Char -> Bool) -> Parser Char
-satisfy desc predicate = Parser $ \(ParseState input pos) -> case input of
-  (c:cs) | predicate c ->
-    Success c (ParseState cs (advancePos pos c))
-  _ -> Failure (ParseError pos [ExpectedSatisfy desc] Nothing)
+satisfy desc predicate = Parser $ \s pos ->
+  case s of
+    []                 -> Left (expectedErr pos desc)
+    (c:cs) | predicate c -> Right (c, cs, advancePos pos c)
+           | otherwise   -> Left (ParseError pos [desc] [c])
 
--- | Succeed only at end of input
 eof :: Parser ()
-eof = Parser $ \(ParseState input pos) -> case input of
-  [] -> Success () (ParseState [] pos)
-  _  -> Failure (ParseError pos [ExpectedEOF] Nothing)
+eof = Parser $ \s pos ->
+  case s of
+    [] -> Right ((), s, pos)
+    (c:_) -> Left (ParseError pos ["end of input"] [c])
 
--- | Fail with a custom message
-failWith :: String -> Parser a
-failWith msg = Parser $ \s ->
-  Failure (ParseError (statePos s) [] (Just msg))
-
--- | Attach a label to a parser (replaces expected on failure)
 label :: String -> Parser a -> Parser a
-label desc (Parser p) = Parser $ \s -> case p s of
-  Success a s' -> Success a s'
-  Failure (ParseError pos _ msg) ->
-    Failure (ParseError pos [ExpectedSatisfy desc] msg)
+label desc (Parser p) = Parser $ \s pos ->
+  case p s pos of
+    Left (ParseError pos' _ found) | pos' == pos ->
+      Left (ParseError pos' [desc] found)
+    result -> result
+
+try :: Parser a -> Parser a
+try (Parser p) = Parser $ \s pos ->
+  case p s pos of
+    Left (ParseError _ expected found) ->
+      Left (ParseError pos expected found)
+    right -> right

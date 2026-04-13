@@ -1,71 +1,66 @@
 module Parser.Error
   ( Pos(..)
   , ParseError(..)
-  , Expected(..)
   , initialPos
   , advancePos
-  , mergeError
+  , formatError
+  , unexpectedErr
+  , expectedErr
+  , mergeErrors
   ) where
 
-import Test.QuickCheck (Arbitrary(..), oneof, elements, listOf, suchThat)
+import Data.List (intercalate, nub)
+import Test.QuickCheck (Arbitrary(..))
 
--- | Source position: line and column (1-based)
 data Pos = Pos
-  { posLine   :: !Int
-  , posColumn :: !Int
+  { posLine :: !Int
+  , posCol  :: !Int
   } deriving (Show, Eq, Ord)
 
--- | What the parser expected at the error location
-data Expected
-  = ExpectedChar Char
-  | ExpectedString String
-  | ExpectedSatisfy String   -- description of predicate
-  | ExpectedEOF
-  | ExpectedOneOf [Expected]
-  deriving (Show, Eq)
-
--- | A parse error with position and expectations
-data ParseError = ParseError
-  { errorPos      :: !Pos
-  , errorExpected :: [Expected]
-  , errorMessage  :: Maybe String
-  } deriving (Show, Eq)
-
--- | Starting position (line 1, column 1)
-initialPos :: Pos
-initialPos = Pos 1 1
-
--- | Advance position by one character
-advancePos :: Pos -> Char -> Pos
-advancePos (Pos line _col) '\n' = Pos (line + 1) 1
-advancePos (Pos line col)  '\t' = Pos line (col + 8 - ((col - 1) `mod` 8))
-advancePos (Pos line col)  _    = Pos line (col + 1)
-
--- | Merge two errors: keep the one at the furthest position,
---   or merge expectations if at the same position
-mergeError :: ParseError -> ParseError -> ParseError
-mergeError e1 e2
-  | errorPos e1 > errorPos e2 = e1
-  | errorPos e1 < errorPos e2 = e2
-  | otherwise = ParseError
-      { errorPos      = errorPos e1
-      , errorExpected = errorExpected e1 ++ errorExpected e2
-      , errorMessage  = errorMessage e1 <> errorMessage e2
-      }
-
--- Arbitrary instances for QuickCheck
-
 instance Arbitrary Pos where
-  arbitrary = Pos <$> pos <*> pos
-    where pos = arbitrary `suchThat` (> 0)
+  arbitrary = Pos <$> arbitrary <*> arbitrary
 
-instance Arbitrary Expected where
-  arbitrary = oneof
-    [ ExpectedChar <$> arbitrary
-    , ExpectedString <$> listOf arbitrary
-    , ExpectedSatisfy <$> listOf (elements ['a'..'z'])
-    , pure ExpectedEOF
-    ]
+data ParseError = ParseError
+  { errPos      :: Pos
+  , errExpected :: [String]
+  , errFound    :: String
+  } deriving (Show, Eq)
 
 instance Arbitrary ParseError where
   arbitrary = ParseError <$> arbitrary <*> arbitrary <*> arbitrary
+
+initialPos :: Pos
+initialPos = Pos 1 1
+
+advancePos :: Pos -> Char -> Pos
+advancePos (Pos line _) '\n' = Pos (line + 1) 1
+advancePos (Pos line col) '\t' = Pos line (col + 8 - ((col - 1) `mod` 8))
+advancePos (Pos line col) _    = Pos line (col + 1)
+
+formatError :: ParseError -> String
+formatError (ParseError pos expected found) =
+  "(line " ++ show (posLine pos) ++ ", column " ++ show (posCol pos) ++ "):\n"
+  ++ "unexpected " ++ found ++ "\n"
+  ++ if null expected
+     then ""
+     else "expecting " ++ formatExpected (nub expected)
+
+formatExpected :: [String] -> String
+formatExpected []     = ""
+formatExpected [x]    = x
+formatExpected [x, y] = x ++ " or " ++ y
+formatExpected xs     = intercalate ", " (init xs) ++ ", or " ++ last xs
+
+unexpectedErr :: Pos -> String -> ParseError
+unexpectedErr pos found = ParseError pos [] found
+
+expectedErr :: Pos -> String -> ParseError
+expectedErr pos expected = ParseError pos [expected] ""
+
+mergeErrors :: ParseError -> ParseError -> ParseError
+mergeErrors e1 e2
+  | errPos e1 > errPos e2 = e1
+  | errPos e1 < errPos e2 = e2
+  | otherwise = ParseError (errPos e1)
+      (nub (errExpected e1 ++ errExpected e2))
+      (if null (errFound e1) then errFound e2 else errFound e1)
