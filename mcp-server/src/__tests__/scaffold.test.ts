@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { handleScaffold, isDeclaration } from "../tools/scaffold.js";
+import { handleScaffold, isDeclaration, buildTypeOwnerMap, computeImports } from "../tools/scaffold.js";
 import { mkdtemp, rm, mkdir, writeFile, readFile, access } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -285,5 +285,124 @@ describe("isDeclaration", () => {
   it("returns false for function signatures", () => {
     expect(isDeclaration("foo :: Int -> Int")).toBe(false);
     expect(isDeclaration("satisfy :: String -> (Char -> Bool) -> Parser Char")).toBe(false);
+  });
+});
+
+describe("buildTypeOwnerMap", () => {
+  it("maps data types to their defining module", () => {
+    const map = buildTypeOwnerMap({
+      "Parser.Error": ["data Pos = Pos { posLine :: Int, posCol :: Int }", "data ParseError = ParseError Pos [String] String"],
+      "Parser.Core": ["newtype Parser a = Parser (String -> Pos -> Either ParseError (a, String, Pos))"],
+    });
+    expect(map.get("Pos")).toBe("Parser.Error");
+    expect(map.get("ParseError")).toBe("Parser.Error");
+    expect(map.get("Parser")).toBe("Parser.Core");
+  });
+
+  it("handles type aliases", () => {
+    const map = buildTypeOwnerMap({
+      "Types": ["type Name = String"],
+    });
+    expect(map.get("Name")).toBe("Types");
+  });
+});
+
+describe("computeImports", () => {
+  it("generates imports for cross-module types", () => {
+    const typeOwner = new Map([
+      ["Pos", "Parser.Error"],
+      ["ParseError", "Parser.Error"],
+      ["Parser", "Parser.Core"],
+    ]);
+    const imports = computeImports(
+      "Parser.Char",
+      ["char :: Char -> Parser Char", "satisfy :: String -> (Char -> Bool) -> Parser Char"],
+      typeOwner
+    );
+    expect(imports).toHaveLength(1);
+    expect(imports[0]).toBe("import Parser.Core (Parser)");
+  });
+
+  it("does not import from self", () => {
+    const typeOwner = new Map([["Pos", "Parser.Error"], ["ParseError", "Parser.Error"]]);
+    const imports = computeImports(
+      "Parser.Error",
+      ["data Pos = Pos Int Int", "data ParseError = ParseError Pos [String] String"],
+      typeOwner
+    );
+    expect(imports).toHaveLength(0);
+  });
+
+  it("groups multiple types from the same module", () => {
+    const typeOwner = new Map([
+      ["Pos", "Parser.Error"],
+      ["ParseError", "Parser.Error"],
+      ["Parser", "Parser.Core"],
+    ]);
+    const imports = computeImports(
+      "Parser.Run",
+      ["parse :: Parser a -> String -> Either ParseError a"],
+      typeOwner
+    );
+    expect(imports).toHaveLength(2);
+    expect(imports[0]).toBe("import Parser.Core (Parser)");
+    expect(imports[1]).toBe("import Parser.Error (ParseError)");
+  });
+
+  it("skips builtin types", () => {
+    const typeOwner = new Map<string, string>();
+    const imports = computeImports(
+      "Foo",
+      ["bar :: Int -> String -> Maybe Bool -> IO ()"],
+      typeOwner
+    );
+    expect(imports).toHaveLength(0);
+  });
+});
+
+describe("handleScaffold with cross-module imports", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "scaffold-import-test-"));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("generates import statements in stubs for cross-module types", async () => {
+    await writeFile(
+      path.join(tmpDir, "test.cabal"),
+      `cabal-version: 3.12\nname: test\n\nlibrary\n  exposed-modules:\n    Parser.Error\n    Parser.Core\n    Parser.Char\n  hs-source-dirs: src\n`
+    );
+    await mkdir(path.join(tmpDir, "src", "Parser"), { recursive: true });
+
+    await handleScaffold(tmpDir, {
+      "Parser.Error": [
+        "data Pos = Pos { posLine :: Int, posCol :: Int }",
+        "data ParseError = ParseError Pos [String] String",
+      ],
+      "Parser.Core": [
+        "newtype Parser a = Parser (String -> Pos -> Either ParseError (a, String, Pos))",
+        "satisfy :: String -> (Char -> Bool) -> Parser Char",
+      ],
+      "Parser.Char": [
+        "char :: Char -> Parser Char",
+        "digit :: Parser Char",
+      ],
+    });
+
+    // Parser.Error should have no cross-module imports (defines its own types)
+    const errorContent = await readFile(path.join(tmpDir, "src/Parser/Error.hs"), "utf-8");
+    expect(errorContent).not.toContain("import ");
+
+    // Parser.Core should import Pos and ParseError from Parser.Error
+    const coreContent = await readFile(path.join(tmpDir, "src/Parser/Core.hs"), "utf-8");
+    expect(coreContent).toContain("import Parser.Error (ParseError, Pos)");
+
+    // Parser.Char should import Parser from Parser.Core
+    const charContent = await readFile(path.join(tmpDir, "src/Parser/Char.hs"), "utf-8");
+    expect(charContent).toContain("import Parser.Core (Parser)");
   });
 });

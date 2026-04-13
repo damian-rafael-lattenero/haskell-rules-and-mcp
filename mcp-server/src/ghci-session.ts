@@ -5,6 +5,7 @@ import { parseCabalPackageName } from "./parsers/cabal-parser.js";
 
 const SENTINEL = "<<<GHCi-DONE-7f3a2b>>>";
 const DEFAULT_TIMEOUT_MS = 30_000;
+const STARTUP_TIMEOUT_MS = 90_000;
 
 export interface GhciResult {
   output: string;
@@ -111,18 +112,18 @@ export class GhciSession extends EventEmitter {
 
       this.process.on("exit", onStartupExit);
 
-      // Timeout for startup
+      // Timeout for startup — 90s to allow first-time cabal dependency resolution
       setTimeout(() => {
         if (!settled) {
           settled = true;
           this.kill();
           reject(
             new Error(
-              `GHCi startup timed out after 30s. stdout: ${startupBuffer}, stderr: ${startupStderr}`
+              `GHCi startup timed out after ${STARTUP_TIMEOUT_MS / 1000}s. stdout: ${startupBuffer}, stderr: ${startupStderr}`
             )
           );
         }
-      }, 30_000);
+      }, STARTUP_TIMEOUT_MS);
     });
   }
 

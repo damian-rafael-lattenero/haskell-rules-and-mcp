@@ -36,12 +36,18 @@ export async function handleScaffold(
   const created: string[] = [];
   const alreadyExist: string[] = [];
 
+  // Build type-owner map for cross-module import generation
+  const typeOwner = signatures ? buildTypeOwnerMap(signatures) : new Map<string, string>();
+
   for (const mod of modules) {
     const relPath = moduleToFilePath(mod, srcDir);
     const absPath = path.join(projectDir, relPath);
 
     const exists = await fileExists(absPath);
     const modSigs = signatures?.[mod];
+
+    // Compute cross-module imports for this module
+    const importLines = modSigs ? computeImports(mod, modSigs, typeOwner) : [];
 
     // Allow overwriting minimal stubs (just "module X where\n") when signatures
     // are provided. This supports the flow: auto-scaffold creates minimal stubs
@@ -50,7 +56,7 @@ export async function handleScaffold(
       const content = await readFile(absPath, "utf-8");
       const isMinimalStub = content.trim() === `module ${mod} where`;
       if (isMinimalStub) {
-        const stub = generateStub(mod, modSigs);
+        const stub = generateStub(mod, modSigs, importLines);
         await writeFile(absPath, stub, "utf-8");
         created.push(relPath);
         continue;
@@ -65,7 +71,7 @@ export async function handleScaffold(
       await mkdir(dir, { recursive: true });
 
       // Write stub — with signatures if provided for this module
-      const stub = generateStub(mod, modSigs);
+      const stub = generateStub(mod, modSigs, importLines);
       await writeFile(absPath, stub, "utf-8");
       created.push(relPath);
     }
@@ -106,15 +112,96 @@ export function isDeclaration(sig: string): boolean {
 }
 
 /**
+ * Build a map of type names to the module that defines them,
+ * based on data/newtype/type declarations in the signatures.
+ */
+export function buildTypeOwnerMap(
+  allSignatures: Record<string, string[]>
+): Map<string, string> {
+  const typeOwner = new Map<string, string>();
+  for (const [mod, sigs] of Object.entries(allSignatures)) {
+    for (const sig of sigs) {
+      // Match: data TypeName, newtype TypeName, type TypeName
+      const match = /^(data|newtype|type)\s+([A-Z][\w']*)/.exec(sig.trim());
+      if (match) {
+        typeOwner.set(match[2]!, mod);
+      }
+    }
+  }
+  return typeOwner;
+}
+
+/**
+ * Extract capitalized type names used in a list of signatures.
+ * These are potential cross-module references.
+ */
+function extractUsedTypes(signatures: string[]): Set<string> {
+  const types = new Set<string>();
+  // Base types that are always in scope — never need imports
+  const builtins = new Set([
+    "Int", "Integer", "Float", "Double", "Char", "Bool", "String",
+    "IO", "Maybe", "Either", "Ordering",
+    "Show", "Eq", "Ord", "Read", "Enum", "Bounded", "Num", "Integral",
+    "Functor", "Applicative", "Monad", "Monoid", "Semigroup",
+    "Foldable", "Traversable",
+  ]);
+  for (const sig of signatures) {
+    // Find all capitalized identifiers (type constructors / type classes)
+    const matches = sig.matchAll(/\b([A-Z][\w']*)\b/g);
+    for (const m of matches) {
+      const name = m[1]!;
+      if (!builtins.has(name)) {
+        types.add(name);
+      }
+    }
+  }
+  return types;
+}
+
+/**
+ * Compute import lines needed for a module based on cross-module type references.
+ */
+export function computeImports(
+  moduleName: string,
+  signatures: string[],
+  typeOwner: Map<string, string>
+): string[] {
+  const usedTypes = extractUsedTypes(signatures);
+  // Group types by source module
+  const importsByModule = new Map<string, string[]>();
+  for (const typeName of usedTypes) {
+    const owner = typeOwner.get(typeName);
+    if (owner && owner !== moduleName) {
+      if (!importsByModule.has(owner)) importsByModule.set(owner, []);
+      importsByModule.get(owner)!.push(typeName);
+    }
+  }
+  // Generate import lines sorted by module name
+  const imports: string[] = [];
+  for (const [mod, typeNames] of [...importsByModule.entries()].sort()) {
+    imports.push(`import ${mod} (${typeNames.sort().join(", ")})`);
+  }
+  return imports;
+}
+
+/**
  * Generate a Haskell module stub.
  * With signatures: includes typed stubs with = undefined for ghci_suggest.
  * Declarations (data, newtype, type, class, instance, deriving) are emitted verbatim.
+ * Cross-module imports are generated automatically when allSignatures is provided.
  * Without: minimal module header only.
  */
-function generateStub(moduleName: string, signatures?: string[]): string {
+function generateStub(
+  moduleName: string,
+  signatures?: string[],
+  importLines?: string[]
+): string {
   if (!signatures || signatures.length === 0) {
     return `module ${moduleName} where\n`;
   }
+  const imports = importLines && importLines.length > 0
+    ? "\n" + importLines.join("\n") + "\n"
+    : "";
   const stubs = signatures
     .map((sig) => {
       if (isDeclaration(sig)) {
@@ -125,7 +212,7 @@ function generateStub(moduleName: string, signatures?: string[]): string {
       return `${sig}\n${name} = undefined`;
     })
     .join("\n\n");
-  return `module ${moduleName} where\n\n${stubs}\n`;
+  return `module ${moduleName} where\n${imports}\n${stubs}\n`;
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
