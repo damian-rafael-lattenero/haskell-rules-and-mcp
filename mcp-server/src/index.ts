@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { GhciSession } from "./ghci-session.js";
 import { resetQuickCheckState } from "./tools/quickcheck.js";
 import { discoverProjects, getPlaygroundDir } from "./project-manager.js";
@@ -40,10 +41,19 @@ let projectDir =
   process.env.HASKELL_PROJECT_DIR ??
   path.join(BASE_DIR, "playground", "hindley-milner");
 
-const server = new McpServer({
-  name: "haskell-ghci",
-  version: "0.3.0",
-});
+// Load workflow instructions (single source of truth for Claude)
+const WORKFLOW_PATH = path.resolve(import.meta.dirname, "..", "rules", "haskell-mcp-workflow.md");
+let workflowInstructions: string;
+try {
+  workflowInstructions = await readFile(WORKFLOW_PATH, "utf-8");
+} catch {
+  workflowInstructions = "Use haskell-ghci MCP tools for all Haskell operations. Never use Bash for cabal/ghc/ghci.";
+}
+
+const server = new McpServer(
+  { name: "haskell-ghci", version: "0.4.0" },
+  { instructions: workflowInstructions },
+);
 
 let ghciSession: GhciSession | null = null;
 

@@ -39,11 +39,9 @@ export async function handleSetup(
   const updated: string[] = [];
   const skipped: string[] = [];
 
-  // Map of rule filenames to install
+  // Map of rule filenames to install (single consolidated workflow file)
   const ruleFiles: Record<string, string> = {
-    "haskell-mcp-first.md": "haskell-mcp-first",
-    "haskell-automation.md": "haskell-automation",
-    "haskell-development.md": "haskell-development",
+    "haskell-mcp-workflow.md": "haskell-mcp-workflow",
   };
 
   for (const [fileName, ruleName] of Object.entries(ruleFiles)) {

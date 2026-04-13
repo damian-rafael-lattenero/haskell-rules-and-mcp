@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import { RULES_REGISTRY, loadRule } from "../resources/rules.js";
 
 describe("RULES_REGISTRY", () => {
-  it("has 3 rules", () => {
-    expect(RULES_REGISTRY).toHaveLength(3);
+  it("has 2 rules (workflow + conventions)", () => {
+    expect(RULES_REGISTRY).toHaveLength(2);
   });
 
   it("each rule has required fields", () => {
@@ -17,14 +17,11 @@ describe("RULES_REGISTRY", () => {
     }
   });
 
-  it("automation rule contains warning action table", () => {
-    const rule = RULES_REGISTRY.find(r => r.name === "haskell-automation")!;
-    expect(rule.embeddedContent).toContain("Warning Action Table");
-  });
-
-  it("development rule contains typed holes info", () => {
-    const rule = RULES_REGISTRY.find(r => r.name === "haskell-development")!;
-    expect(rule.embeddedContent).toContain("Typed Holes");
+  it("workflow rule contains tool tiers and core loop", () => {
+    const rule = RULES_REGISTRY.find(r => r.name === "haskell-mcp-workflow")!;
+    expect(rule).toBeDefined();
+    expect(rule.embeddedContent).toContain("TOOL TIERS");
+    expect(rule.embeddedContent).toContain("PRIME DIRECTIVE");
   });
 
   it("conventions rule contains import style", () => {
@@ -47,12 +44,14 @@ describe("loadRule", () => {
     expect(content).toBe("fallback content here");
   });
 
-  it("loads real rule files when they exist", async () => {
-    const automationRule = RULES_REGISTRY.find(r => r.name === "haskell-automation")!;
-    const content = await loadRule(automationRule);
+  it("loads real workflow file when it exists", async () => {
+    const workflowRule = RULES_REGISTRY.find(r => r.name === "haskell-mcp-workflow")!;
+    const content = await loadRule(workflowRule);
     expect(content).toBeTruthy();
     expect(content.length).toBeGreaterThan(100);
-    // Should contain the full version from disk, which has more content than embedded
-    expect(content).toContain("Warning Action Table");
+    // Full version from disk has flows, tiers, etc.
+    expect(content).toContain("PRIME DIRECTIVE");
+    expect(content).toContain("FLOW 4");
+    expect(content).toContain("Tier 1");
   });
 });

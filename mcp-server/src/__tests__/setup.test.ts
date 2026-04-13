@@ -24,21 +24,18 @@ describe("handleSetup", () => {
   // Use the actual MCP server base dir (2 levels up from src/)
   const BASE_DIR = path.resolve(import.meta.dirname, "..", "..", "..");
 
-  it("installs rules to a new directory", async () => {
+  it("installs consolidated workflow to a new directory", async () => {
     const tmpDir = await makeTmpDir();
     const result = JSON.parse(await handleSetup(BASE_DIR, { target_dir: tmpDir }));
 
     expect(result.success).toBe(true);
-    expect(result.installed.length).toBeGreaterThan(0);
-    expect(result.installed).toContain("haskell-automation.md");
-    expect(result.installed).toContain("haskell-development.md");
+    expect(result.installed).toContain("haskell-mcp-workflow.md");
 
-    // Verify files exist
-    const automation = await readFile(path.join(tmpDir, ".claude", "rules", "haskell-automation.md"), "utf-8");
-    expect(automation).toContain("Warning Action Table");
-
-    const development = await readFile(path.join(tmpDir, ".claude", "rules", "haskell-development.md"), "utf-8");
-    expect(development).toContain("Navigation & Discovery");
+    // Verify file exists and has workflow content
+    const workflow = await readFile(path.join(tmpDir, ".claude", "rules", "haskell-mcp-workflow.md"), "utf-8");
+    expect(workflow).toContain("PRIME DIRECTIVE");
+    expect(workflow).toContain("FLOW 4");
+    expect(workflow).toContain("Tier 1");
   });
 
   it("skips unchanged rules on second run", async () => {
@@ -72,15 +69,15 @@ describe("handleSetup", () => {
 
     // Write an old version
     await import("node:fs/promises").then((fs) =>
-      fs.writeFile(path.join(rulesDir, "haskell-automation.md"), "# Old content\n", "utf-8")
+      fs.writeFile(path.join(rulesDir, "haskell-mcp-workflow.md"), "# Old content\n", "utf-8")
     );
 
     const result = JSON.parse(await handleSetup(BASE_DIR, { target_dir: tmpDir }));
     expect(result.success).toBe(true);
-    expect(result.updated).toContain("haskell-automation.md");
+    expect(result.updated).toContain("haskell-mcp-workflow.md");
 
     // Verify it was updated
-    const content = await readFile(path.join(rulesDir, "haskell-automation.md"), "utf-8");
-    expect(content).toContain("Warning Action Table");
+    const content = await readFile(path.join(rulesDir, "haskell-mcp-workflow.md"), "utf-8");
+    expect(content).toContain("PRIME DIRECTIVE");
   });
 });
