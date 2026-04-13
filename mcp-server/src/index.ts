@@ -280,6 +280,20 @@ server.tool(
     if (ghciSession) { await ghciSession.kill(); ghciSession = null; }
     projectDir = target.path;
     rulesChecker.reset(); // Re-check rules in new project
+
+    // Auto-scaffold: if .cabal lists modules without source files, create stubs
+    // so GHCi can start. Without this, cabal repl crashes on missing sources.
+    let scaffoldedModules: string[] = [];
+    try {
+      const { handleScaffold } = await import("./tools/scaffold.js");
+      const scaffoldResult = JSON.parse(await handleScaffold(target.path));
+      if (scaffoldResult.created?.length > 0) {
+        scaffoldedModules = scaffoldResult.created;
+      }
+    } catch {
+      // Non-fatal: scaffold may fail if no .cabal or other issue
+    }
+
     const session = await getSession();
 
     // Auto-load all library modules so names are in scope immediately
@@ -302,6 +316,7 @@ server.tool(
         message: `Switched to project '${target.name}'`,
         projectDir: target.path,
         alive: session.isAlive(),
+        ...(scaffoldedModules.length > 0 ? { scaffolded: scaffoldedModules } : {}),
         ...(modulesLoaded.length > 0 ? { modulesLoaded: modulesLoaded.length } : {}),
       }) }],
     };
