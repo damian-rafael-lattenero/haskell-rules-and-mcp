@@ -63,14 +63,17 @@ describe("suggestConstructorProperties", () => {
   });
 
   describe("homomorphism properties", () => {
-    it("suggests homomorphism for Add (binary recursive)", () => {
+    it("suggests homomorphism for Add (binary recursive) with + and *", () => {
       const laws = suggestConstructorProperties(
         "eval", "Either Error Int", ["Env"], exprConstructors, "Expr", 1
       );
       const addHomo = laws.filter(l => l.law.includes("homomorphism") && l.law.includes("Add"));
-      expect(addHomo.length).toBeGreaterThan(0);
-      expect(addHomo.some(l => l.property.includes("liftA2"))).toBe(true);
-      expect(addHomo[0]!.confidence).toBe("low");
+      // Suggests both + and * (type system filters wrong ones via :t)
+      expect(addHomo.length).toBe(2);
+      expect(addHomo.some(l => l.property.includes("liftA2 (+)"))).toBe(true);
+      expect(addHomo.some(l => l.property.includes("liftA2 (*)"))).toBe(true);
+      // All low confidence — no domain-specific guessing
+      expect(addHomo.every(l => l.confidence === "low")).toBe(true);
     });
 
     it("suggests negate homomorphism for Neg (unary recursive)", () => {

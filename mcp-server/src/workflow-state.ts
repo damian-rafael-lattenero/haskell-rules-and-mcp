@@ -260,9 +260,11 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
     guidance.push(`${mod.functionsTotal} undefined stub(s) — run ghci_suggest to see hole fits`);
   }
 
-  // Has functions but no Arbitrary instances
-  if (!mod.arbitraryInstancesDefined && mod.functionsImplemented > 0) {
-    guidance.push("No Arbitrary instances — run ghci_arbitrary for data types before QuickCheck");
+  // Has functions but no Arbitrary instances in ANY loaded module
+  // (Arbitrary may be defined in a different module, e.g. Syntax.hs)
+  const anyArbitraryDefined = [...state.modules.values()].some(m => m.arbitraryInstancesDefined);
+  if (!anyArbitraryDefined && mod.functionsImplemented > 0) {
+    guidance.push("No Arbitrary instances in any module — run ghci_arbitrary for data types before QuickCheck");
   }
 
   // Functions implemented but no QC properties — suggest analyze mode for discovery

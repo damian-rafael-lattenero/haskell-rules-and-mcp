@@ -45,12 +45,18 @@ export async function saveProperty(
   record: { property: string; module: string; functionName?: string; law?: string }
 ): Promise<void> {
   const store = await loadStore(projectDir);
+  // Deduplicate by property string — a property is unique regardless of which
+  // module it was run from. Prevents duplicates from batch vs individual runs.
   const existing = store.properties.find(
-    (p) => p.property === record.property && p.module === record.module
+    (p) => p.property === record.property
   );
   if (existing) {
     existing.lastPassed = new Date().toISOString();
     existing.passCount++;
+    // Update module to the most specific one (prefer non-"unknown")
+    if (record.module !== "unknown" && existing.module === "unknown") {
+      existing.module = record.module;
+    }
   } else {
     store.properties.push({
       ...record,

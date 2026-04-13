@@ -90,9 +90,16 @@ export class GhciSession extends EventEmitter {
         this.process = null;
         if (!settled) {
           settled = true;
+          // Detect common failure patterns and provide helpful hints
+          let hint = "";
+          if (startupStderr.includes("multiple") && startupStderr.includes(".cabal")) {
+            hint = " Hint: Multiple .cabal files found. Did ghci_init create inside an existing project?";
+          } else if (startupStderr.includes("can't find source")) {
+            hint = " Hint: Source files missing. Run ghci_scaffold to create stubs.";
+          }
           reject(
             new Error(
-              `GHCi exited during startup with code ${code}. stderr: ${startupStderr}`
+              `GHCi exited during startup with code ${code}.${hint} stderr: ${startupStderr}`
             )
           );
         }

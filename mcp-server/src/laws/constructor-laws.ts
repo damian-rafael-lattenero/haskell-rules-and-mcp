@@ -116,21 +116,23 @@ export function suggestConstructorProperties(
       const recCall0 = `${funcName} ${recArgs0.join(" ")}`;
       const recCall1 = `${funcName} ${recArgs1.join(" ")}`;
 
-      // Suggest ONE homomorphism with a common operator.
-      // The :t validation in quickcheck.ts will filter it if it doesn't type-check.
-      // No hardcoded name→operator mapping — the type system decides.
-      if (isEitherReturn || isMaybeReturn) {
-        laws.push({
-          law: `homomorphism: ${ctor.name}`,
-          property: `\\${annotations} -> ${funcCall} == liftA2 (+) (${recCall0}) (${recCall1})`,
-          confidence: "low",
-        });
-      } else {
-        laws.push({
-          law: `homomorphism: ${ctor.name}`,
-          property: `\\${annotations} -> ${funcCall} == (${recCall0}) + (${recCall1})`,
-          confidence: "low",
-        });
+      // Suggest homomorphisms with common Num operators. Both are validated by :t.
+      // The type system filters wrong guesses — only properties that compile are shown.
+      // No domain-specific mapping: we don't know what a constructor "means".
+      for (const op of ["+", "*"]) {
+        if (isEitherReturn || isMaybeReturn) {
+          laws.push({
+            law: `homomorphism: ${ctor.name} (${op})`,
+            property: `\\${annotations} -> ${funcCall} == liftA2 (${op}) (${recCall0}) (${recCall1})`,
+            confidence: "low",
+          });
+        } else {
+          laws.push({
+            law: `homomorphism: ${ctor.name} (${op})`,
+            property: `\\${annotations} -> ${funcCall} == (${recCall0}) ${op} (${recCall1})`,
+            confidence: "low",
+          });
+        }
       }
     }
 
@@ -154,4 +156,5 @@ export function suggestConstructorProperties(
 
   return laws;
 }
+
 

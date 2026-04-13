@@ -51,11 +51,14 @@ describe("property-store", () => {
     expect(store.properties).toHaveLength(2);
   });
 
-  it("stores same property in different modules separately", async () => {
+  it("deduplicates same property across different modules", async () => {
     await saveProperty(tmpDir, { property: "prop1", module: "src/A.hs" });
     await saveProperty(tmpDir, { property: "prop1", module: "src/B.hs" });
     const store = await loadStore(tmpDir);
-    expect(store.properties).toHaveLength(2);
+    // Same property string → deduplicated, keeps first module
+    expect(store.properties).toHaveLength(1);
+    expect(store.properties[0]!.passCount).toBe(2);
+    expect(store.properties[0]!.module).toBe("src/A.hs");
   });
 
   it("getModuleProperties filters by module", async () => {

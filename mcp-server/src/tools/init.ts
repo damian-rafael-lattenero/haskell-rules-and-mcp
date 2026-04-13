@@ -1,16 +1,17 @@
 /**
  * ghci_init — Create a Haskell project from scratch.
- * Generates .cabal file, cabal.project, and src/ directory structure.
- * Eliminates the only manual step in the MCP workflow.
+ * Creates .cabal, cabal.project, and src/ directory structure in the specified
+ * or current directory. Generic — works for any Haskell project, not tied to
+ * any specific directory layout.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { mkdir, writeFile, access } from "node:fs/promises";
+import { mkdir, writeFile, access, readdir } from "node:fs/promises";
 import path from "node:path";
 import type { ToolContext } from "./registry.js";
 
 export async function handleInit(
-  projectDir: string,
+  targetDir: string,
   args: {
     name: string;
     modules: string[];
@@ -19,32 +20,34 @@ export async function handleInit(
   }
 ): Promise<string> {
   const { name, modules, deps, language } = args;
-  const allDeps = ["base >= 4.14 && < 5"];
+
+  // Check if a .cabal already exists in the target directory
+  try {
+    const files = await readdir(targetDir);
+    const existingCabal = files.find(f => f.endsWith(".cabal"));
+    if (existingCabal) {
+      return JSON.stringify({
+        success: false,
+        error: `A .cabal file already exists in ${targetDir} (${existingCabal}). Use ghci_scaffold to add modules.`,
+      });
+    }
+  } catch {
+    // Directory doesn't exist yet — create it
+    await mkdir(targetDir, { recursive: true });
+  }
+
+  const allDeps = ["base >= 4.20 && < 5"];
   if (deps) {
     for (const d of deps) {
       if (!d.startsWith("base")) allDeps.push(d);
     }
   }
-  // Always include QuickCheck if not explicitly listed
   if (!allDeps.some(d => d.includes("QuickCheck"))) {
     allDeps.push("QuickCheck >= 2.14");
   }
 
-  const lang = language ?? "Haskell2010";
+  const lang = language ?? "GHC2024";
 
-  // Check if .cabal already exists
-  const cabalPath = path.join(projectDir, `${name}.cabal`);
-  try {
-    await access(cabalPath);
-    return JSON.stringify({
-      success: false,
-      error: `${name}.cabal already exists in ${projectDir}. Use ghci_scaffold to add modules.`,
-    });
-  } catch {
-    // Good — doesn't exist yet
-  }
-
-  // Generate .cabal content
   const modulesSection = modules.length > 0
     ? modules.map(m => `    ${m}`).join("\n")
     : "    Lib";
@@ -66,15 +69,12 @@ ${depsSection}
   ghc-options:       -Wall
 `;
 
-  // Write files
-  await writeFile(cabalPath, cabalContent, "utf-8");
-  await writeFile(path.join(projectDir, "cabal.project"), "packages: .\n", "utf-8");
+  await writeFile(path.join(targetDir, `${name}.cabal`), cabalContent, "utf-8");
+  await writeFile(path.join(targetDir, "cabal.project"), "packages: .\n", "utf-8");
 
-  // Create src directory
-  const srcDir = path.join(projectDir, "src");
+  const srcDir = path.join(targetDir, "src");
   await mkdir(srcDir, { recursive: true });
 
-  // Create nested directories for dotted modules
   for (const mod of modules) {
     const parts = mod.split(".");
     if (parts.length > 1) {
@@ -85,6 +85,7 @@ ${depsSection}
 
   return JSON.stringify({
     success: true,
+    projectDir: targetDir,
     cabalFile: `${name}.cabal`,
     modules: modules.length > 0 ? modules : ["Lib"],
     dependencies: allDeps,
@@ -97,7 +98,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     "ghci_init",
     "Create a new Haskell project from scratch. Generates .cabal file, cabal.project, " +
-      "and src/ directory structure. Use this instead of manually writing .cabal files. " +
+      "and src/ directory structure in the current project directory. " +
       "After init, run ghci_scaffold(signatures=...) to add typed stubs.",
     {
       name: z.string().describe(
@@ -110,7 +111,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         'Additional dependencies beyond base and QuickCheck. Examples: ["containers", "mtl >= 2.2"]'
       ),
       language: z.string().optional().describe(
-        'Default language. Default: "Haskell2010". Other: "GHC2024"'
+        'Default language. Default: "GHC2024". Other: "Haskell2010"'
       ),
     },
     async ({ name, modules, deps, language }) => {
