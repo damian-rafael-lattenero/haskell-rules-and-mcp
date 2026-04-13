@@ -150,18 +150,37 @@ describe("handleScaffold", () => {
     expect(result._nextStep).toContain("= undefined");
   });
 
-  it("does not overwrite existing files even with signatures", async () => {
+  it("overwrites minimal stubs when signatures provided", async () => {
     await setupProject(
       `cabal-version: 3.12\nname: test\n\nlibrary\n  exposed-modules: Foo\n  hs-source-dirs: src\n`,
       ["Foo"]
     );
+    // Minimal stub "module Foo where\n" gets overwritten with typed signatures
     const result = JSON.parse(
       await handleScaffold(tmpDir, { Foo: ["bar :: Int -> Int"] })
     );
+    expect(result.created).toContain("src/Foo.hs");
+    const content = await readFile(path.join(tmpDir, "src/Foo.hs"), "utf-8");
+    expect(content).toContain("bar :: Int -> Int");
+    expect(content).toContain("bar = undefined");
+  });
+
+  it("does not overwrite files with real content even with signatures", async () => {
+    await setupProject(
+      `cabal-version: 3.12\nname: test\n\nlibrary\n  exposed-modules: Foo\n  hs-source-dirs: src\n`
+    );
+    // Write a file with actual implementation
+    const filePath = path.join(tmpDir, "src/Foo.hs");
+    await writeFile(filePath, "module Foo where\n\nbar :: Int -> Int\nbar x = x + 1\n");
+    const result = JSON.parse(
+      await handleScaffold(tmpDir, { Foo: ["baz :: String -> Bool"] })
+    );
     expect(result.created).toEqual([]);
     expect(result.alreadyExist).toContain("src/Foo.hs");
-    const content = await readFile(path.join(tmpDir, "src/Foo.hs"), "utf-8");
-    expect(content).toBe("module Foo where\n");
+    // Original content preserved
+    const content = await readFile(filePath, "utf-8");
+    expect(content).toContain("bar x = x + 1");
+    expect(content).not.toContain("baz");
   });
 
   it("emits data declarations verbatim without = undefined", async () => {

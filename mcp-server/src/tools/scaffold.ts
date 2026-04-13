@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   parseCabalModules,
@@ -41,6 +41,22 @@ export async function handleScaffold(
     const absPath = path.join(projectDir, relPath);
 
     const exists = await fileExists(absPath);
+    const modSigs = signatures?.[mod];
+
+    // Allow overwriting minimal stubs (just "module X where\n") when signatures
+    // are provided. This supports the flow: auto-scaffold creates minimal stubs
+    // so GHCi can start, then explicit scaffold adds typed signatures.
+    if (exists && modSigs && modSigs.length > 0) {
+      const content = await readFile(absPath, "utf-8");
+      const isMinimalStub = content.trim() === `module ${mod} where`;
+      if (isMinimalStub) {
+        const stub = generateStub(mod, modSigs);
+        await writeFile(absPath, stub, "utf-8");
+        created.push(relPath);
+        continue;
+      }
+    }
+
     if (exists) {
       alreadyExist.push(relPath);
     } else {
@@ -49,7 +65,6 @@ export async function handleScaffold(
       await mkdir(dir, { recursive: true });
 
       // Write stub — with signatures if provided for this module
-      const modSigs = signatures?.[mod];
       const stub = generateStub(mod, modSigs);
       await writeFile(absPath, stub, "utf-8");
       created.push(relPath);
