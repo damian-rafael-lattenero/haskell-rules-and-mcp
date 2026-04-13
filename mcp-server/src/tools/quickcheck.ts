@@ -1,9 +1,15 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { GhciSession } from "../ghci-session.js";
-import { parseQuickCheckOutput } from "../parsers/quickcheck-parser.js";
+import { GhciSession, type GhciResult } from "../ghci-session.js";
+import { parseQuickCheckOutput, parseScopeError } from "../parsers/quickcheck-parser.js";
 import { parseEvalOutput } from "../parsers/eval-output-parser.js";
+import {
+  parseCabalModules,
+  moduleToFilePath,
+  getLibrarySrcDir,
+} from "../parsers/cabal-parser.js";
 import type { ToolContext } from "./registry.js";
+import { suggestFunctionProperties } from "../laws/function-laws.js";
 
 // Re-export for consumers
 export type { QuickCheckResult } from "../parsers/quickcheck-parser.js";
@@ -41,6 +47,96 @@ async function ensureQuickCheck(session: GhciSession): Promise<boolean> {
  */
 export function resetQuickCheckState(): void {
   quickCheckAvailable = null;
+  hiddenNames.clear();
+}
+
+/** Names hidden from QuickCheck import to resolve ambiguous occurrences. */
+const hiddenNames: Set<string> = new Set();
+
+/**
+ * Re-import Test.QuickCheck with hiding clause for ambiguous names.
+ */
+async function reimportWithHiding(session: GhciSession): Promise<void> {
+  if (hiddenNames.size === 0) {
+    await session.execute("import Test.QuickCheck");
+  } else {
+    const hiding = [...hiddenNames].join(", ");
+    await session.execute(`import Test.QuickCheck hiding (${hiding})`);
+  }
+}
+
+/**
+ * Function that loads all project modules into GHCi.
+ * Injected as a dependency so it can be mocked in tests.
+ */
+export type LoadAllFn = (session: GhciSession) => Promise<boolean>;
+
+/**
+ * Create a loadAll function from a project directory.
+ */
+export function createLoadAllFromProjectDir(projectDir: string): LoadAllFn {
+  return async (session: GhciSession) => {
+    const cabalModules = await parseCabalModules(projectDir);
+    const srcDir = await getLibrarySrcDir(projectDir);
+    const paths = cabalModules.library.map((mod) =>
+      moduleToFilePath(mod, srcDir)
+    );
+    if (paths.length > 0) {
+      await session.loadModules(paths, cabalModules.library);
+      return true;
+    }
+    return false;
+  };
+}
+
+/**
+ * Run a QuickCheck command with automatic scope resolution.
+ * On "not in scope": loads all project modules and retries.
+ * On "Ambiguous occurrence": hides conflicting names from QuickCheck import and retries.
+ * Max 2 retries to avoid infinite loops.
+ */
+export async function runPropertyWithAutoResolve(
+  session: GhciSession,
+  command: string,
+  loadAll?: LoadAllFn
+): Promise<{ result: GhciResult; autoResolved: boolean }> {
+  const MAX_RETRIES = 2;
+  let lastResult = await session.execute(command);
+  let autoResolved = false;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const scopeErr = parseScopeError(lastResult.output);
+    if (!scopeErr) break; // No scope error — done
+
+    if (scopeErr.type === "not-in-scope" && loadAll) {
+      // Load all project modules to bring everything into scope
+      try {
+        const loaded = await loadAll(session);
+        if (loaded) {
+          // Re-import QuickCheck (loadModules clears imports)
+          await reimportWithHiding(session);
+          lastResult = await session.execute(command);
+          autoResolved = true;
+        } else {
+          break;
+        }
+      } catch {
+        break; // Can't load modules — return original error
+      }
+    } else if (scopeErr.type === "ambiguous") {
+      // Hide conflicting names and re-import
+      for (const name of scopeErr.names) {
+        hiddenNames.add(name);
+      }
+      await reimportWithHiding(session);
+      lastResult = await session.execute(command);
+      autoResolved = true;
+    } else {
+      break; // not-in-scope but no loadAll — can't auto-resolve
+    }
+  }
+
+  return { result: lastResult, autoResolved };
 }
 
 /**
@@ -55,7 +151,8 @@ export async function handleQuickCheck(
     incremental?: boolean;
     function_name?: string;
   },
-  ctx?: { getWorkflowState?: () => { activeModule: string | null; modules: Map<string, unknown> }; updateModuleProgress?: (path: string, updates: Record<string, unknown>) => void; getModuleProgress?: (path: string) => { propertiesPassed: string[]; propertiesFailed: string[]; functionsImplemented: number; functionsTotal: number } | undefined }
+  ctx?: { getWorkflowState?: () => { activeModule: string | null; modules: Map<string, unknown> }; updateModuleProgress?: (path: string, updates: Record<string, unknown>) => void; getModuleProgress?: (path: string) => { propertiesPassed: string[]; propertiesFailed: string[]; functionsImplemented: number; functionsTotal: number } | undefined },
+  projectDir?: string
 ): Promise<string> {
   const available = await ensureQuickCheck(session);
   if (!available) {
@@ -127,7 +224,9 @@ export async function handleQuickCheck(
   }
   const command = `${checkFn} (stdArgs { maxSuccess = ${maxTests} }) ${normalizedProp}`;
 
-  const result = await session.execute(command);
+  // Run with automatic scope resolution (load_all on "not in scope", hiding on "Ambiguous")
+  const loadAll = projectDir ? createLoadAllFromProjectDir(projectDir) : undefined;
+  const { result, autoResolved } = await runPropertyWithAutoResolve(session, command, loadAll);
   const evalParsed = parseEvalOutput(result.output);
   let parsed = parseQuickCheckOutput(evalParsed.result, args.property);
 
@@ -192,6 +291,7 @@ export async function handleQuickCheck(
     return JSON.stringify({
       ...parsed,
       ...(isCompilationError ? { compilationError: true } : {}),
+      ...(autoResolved ? { _autoResolved: true } : {}),
       incremental: true,
       hint: parsed.success
         ? "Incremental property passed. Continue implementing next function."
@@ -199,7 +299,10 @@ export async function handleQuickCheck(
     });
   }
 
-  return JSON.stringify(parsed);
+  return JSON.stringify({
+    ...parsed,
+    ...(autoResolved ? { _autoResolved: true } : {}),
+  });
 }
 
 /** Suggest QuickCheck properties based on a function's type signature. */
@@ -209,23 +312,19 @@ function suggestPropertiesFromType(
 ): Array<{ law: string; property: string }> {
   const suggestions: Array<{ law: string; property: string }> = [];
 
-  // Identity law: f emptyX x == x
+  // Domain-specific suggestions (kept for backward compatibility with HM project)
   if (/Subst\s*->\s*\w+\s*->\s*\w+/.test(typeStr) && funcName === "apply") {
     suggestions.push({
       law: "identity",
       property: `\\t -> ${funcName} emptySubst t == t`,
     });
   }
-
-  // Composition law
   if (funcName === "composeSubst" || funcName === "compose") {
     suggestions.push({
       law: "composition distributes over apply",
       property: `\\s1 s2 t -> apply (${funcName} s1 s2) t == apply s1 (apply s2 t)`,
     });
   }
-
-  // Unification correctness
   if (funcName === "unify" && typeStr.includes("Either")) {
     suggestions.push({
       law: "correctness",
@@ -237,13 +336,13 @@ function suggestPropertiesFromType(
     });
   }
 
-  // Generic: if it returns the same type as input, check identity-like properties
-  const match = typeStr.match(/(\w+)\s*->\s*(\w+)$/);
-  if (match && match[1] === match[2] && funcName !== "apply") {
-    suggestions.push({
-      law: "involution (if applicable)",
-      property: `\\x -> ${funcName} (${funcName} x) == ${funcName} x`,
-    });
+  // Generic heuristic-based suggestions from function-laws engine
+  const genericSuggestions = suggestFunctionProperties(funcName, typeStr);
+  for (const gs of genericSuggestions) {
+    // Avoid duplicating suggestions that already exist
+    if (!suggestions.some((s) => s.law === gs.law)) {
+      suggestions.push({ law: gs.law, property: gs.property });
+    }
   }
 
   return suggestions;
@@ -276,7 +375,99 @@ export function register(server: McpServer, ctx: ToolContext): void {
       const result = await handleQuickCheck(
         session,
         { property, tests, verbose, incremental, function_name },
-        ctx
+        ctx,
+        ctx.getProjectDir()
+      );
+      return { content: [{ type: "text" as const, text: result }] };
+    }
+  );
+}
+
+/**
+ * Run multiple QuickCheck properties in a single tool call.
+ * Loads all modules first, then runs each property sequentially.
+ */
+export async function handleQuickCheckBatch(
+  session: GhciSession,
+  args: { properties: string[]; tests?: number; incremental?: boolean },
+  ctx?: { getWorkflowState?: () => { activeModule: string | null; modules: Map<string, unknown> }; updateModuleProgress?: (path: string, updates: Record<string, unknown>) => void; getModuleProgress?: (path: string) => { propertiesPassed: string[]; propertiesFailed: string[]; functionsImplemented: number; functionsTotal: number } | undefined },
+  projectDir?: string
+): Promise<string> {
+  if (args.properties.length === 0) {
+    return JSON.stringify({ success: true, count: 0, results: [] });
+  }
+
+  // Load all modules first to ensure everything is in scope
+  if (projectDir) {
+    try {
+      const loadAll = createLoadAllFromProjectDir(projectDir);
+      await loadAll(session);
+    } catch {
+      // Non-fatal — individual properties will report scope errors
+    }
+  }
+
+  // Ensure QuickCheck is available
+  const available = await ensureQuickCheck(session);
+  if (!available) {
+    return JSON.stringify({
+      success: false,
+      count: 0,
+      results: [],
+      error: "QuickCheck not available. Add 'QuickCheck >= 2.14' to build-depends.",
+    });
+  }
+
+  const results: Array<{ property: string; success: boolean; passed: number; error?: string; counterexample?: string }> = [];
+  let allPassed = true;
+
+  for (const property of args.properties) {
+    const singleResult = await handleQuickCheck(
+      session,
+      { property, tests: args.tests, incremental: args.incremental },
+      ctx,
+      projectDir
+    );
+    const parsed = JSON.parse(singleResult);
+    results.push({
+      property,
+      success: parsed.success,
+      passed: parsed.passed ?? 0,
+      ...(parsed.error ? { error: parsed.error } : {}),
+      ...(parsed.counterexample ? { counterexample: parsed.counterexample } : {}),
+    });
+    if (!parsed.success) allPassed = false;
+  }
+
+  return JSON.stringify({
+    success: allPassed,
+    count: results.length,
+    results,
+  });
+}
+
+export function registerBatch(server: McpServer, ctx: ToolContext): void {
+  server.tool(
+    "ghci_quickcheck_batch",
+    "Run multiple QuickCheck properties in a single call. Loads all project modules first, " +
+      "then runs each property sequentially. Returns an array of results. " +
+      "Use this to reduce round-trips when testing multiple properties.",
+    {
+      properties: z.array(z.string()).describe(
+        "Array of QuickCheck property expressions to test."
+      ),
+      tests: z.number().optional().describe("Number of tests per property (default 100)"),
+      incremental: z.boolean().optional().describe(
+        "If true, track results in workflow state per-module."
+      ),
+    },
+    async ({ properties, tests, incremental }) => {
+      const session = await ctx.getSession();
+      const result = await handleQuickCheckBatch(
+        session,
+        { properties, tests, incremental },
+        ctx,
+        ctx.getProjectDir()
       );
       return { content: [{ type: "text" as const, text: result }] };
     }

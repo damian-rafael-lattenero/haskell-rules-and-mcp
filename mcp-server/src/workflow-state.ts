@@ -241,6 +241,13 @@ export function moduleChecklist(state: WorkflowState): string[] {
   return items;
 }
 
+/** Derive the module phase from function counts instead of relying solely on suggest tool. */
+export function derivePhase(p: ModuleProgress): ModuleProgress["phase"] {
+  if (p.functionsTotal === 0) return "stub";
+  if (p.functionsImplemented < p.functionsTotal) return "implementing";
+  return "complete";
+}
+
 /** Serialize state for MCP resource / JSON response. */
 export function serializeState(state: WorkflowState): Record<string, unknown> {
   const modules: Record<string, ModuleProgress> = {};

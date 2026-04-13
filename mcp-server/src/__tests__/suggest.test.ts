@@ -26,7 +26,7 @@ describe("handleSuggest", () => {
     tmpDirs.length = 0;
   });
 
-  it("returns empty suggestions for module without undefined", async () => {
+  it("switches to analyze mode for module without undefined stubs", async () => {
     const dir = await makeTmpDir();
     const srcDir = path.join(dir, "src");
     await mkdir(srcDir, { recursive: true });
@@ -37,7 +37,15 @@ describe("handleSuggest", () => {
     );
 
     const session = createMockSession({
-      execute: async (): Promise<GhciResult> => ({ output: "", success: true }),
+      execute: async (cmd: string): Promise<GhciResult> => {
+        if (typeof cmd === "string" && cmd.startsWith(":browse")) {
+          return {
+            output: "foo :: Int",
+            success: true,
+          };
+        }
+        return { output: "", success: true };
+      },
       loadModule: { output: "Ok, one module loaded.", success: true },
     });
 
@@ -45,8 +53,10 @@ describe("handleSuggest", () => {
       await handleSuggest(session, { module_path: "src/Clean.hs" }, dir)
     );
     expect(result.success).toBe(true);
-    expect(result.suggestions).toEqual([]);
-    expect(result.summary).toBe("No undefined functions found");
+    expect(result.mode).toBe("analyze");
+    expect(result.functions).toBeDefined();
+    expect(result.functions.length).toBeGreaterThan(0);
+    expect(result.functions[0].name).toBe("foo");
   });
 
   it("finds undefined functions", async () => {

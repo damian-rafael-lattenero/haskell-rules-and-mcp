@@ -46,10 +46,17 @@ export function createRulesChecker(
   reset: () => void;
 } {
   let cached: string | null | undefined = undefined;
+  let noticeShown = false;
 
   return {
     check: async () => {
-      if (cached !== undefined) return cached;
+      // Only show the notice once per session — repeating it 15+ times wastes LLM context
+      if (noticeShown) return null;
+
+      if (cached !== undefined) {
+        if (cached !== null) noticeShown = true;
+        return cached;
+      }
 
       // Check project dir first, then walk up to repo root (base dir)
       const dirsToCheck = [getProjectDir()];
@@ -74,10 +81,12 @@ export function createRulesChecker(
       cached =
         "Haskell development rules not installed. Run ghci_setup() to enable the automation loop, " +
         "warning action table, and development workflow.";
+      noticeShown = true;
       return cached;
     },
     reset: () => {
       cached = undefined;
+      noticeShown = false;
     },
   };
 }

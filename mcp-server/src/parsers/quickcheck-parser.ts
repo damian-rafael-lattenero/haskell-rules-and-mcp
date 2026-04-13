@@ -78,3 +78,37 @@ export function parseQuickCheckOutput(
     error: `Couldn't parse QuickCheck output: ${output.slice(0, 300)}`,
   };
 }
+
+/**
+ * Detect scope-related errors in GHCi output.
+ * Returns structured info to enable auto-resolution (load_all or hiding).
+ */
+export interface ScopeError {
+  type: "not-in-scope" | "ambiguous";
+  names: string[];
+}
+
+export function parseScopeError(output: string): ScopeError | null {
+  const lower = output.toLowerCase();
+
+  // Check for "Ambiguous occurrence" first (more specific)
+  const ambiguousMatches = output.matchAll(/[Aa]mbiguous occurrence\s+['\u2018](\S+?)['\u2019]/g);
+  const ambiguousNames = [...ambiguousMatches].map((m) => m[1]!);
+  if (ambiguousNames.length > 0) {
+    return { type: "ambiguous", names: [...new Set(ambiguousNames)] };
+  }
+
+  // Check for "not in scope" / "Variable not in scope"
+  if (lower.includes("not in scope")) {
+    // GHC formats: "Variable not in scope: 'name'" or "Variable not in scope: name :: Type"
+    const scopeMatches = output.matchAll(
+      /not in scope:?\s*(?:['\u2018](\S+?)['\u2019]|(\w+)\s*::)/gi
+    );
+    const scopeNames = [...scopeMatches]
+      .map((m) => m[1] ?? m[2])
+      .filter((n): n is string => !!n);
+    return { type: "not-in-scope", names: [...new Set(scopeNames)] };
+  }
+
+  return null;
+}

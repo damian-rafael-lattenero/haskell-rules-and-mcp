@@ -5,6 +5,8 @@ import path from "node:path";
 import { GhciSession } from "../ghci-session.js";
 import { parseTypedHoles } from "../parsers/hole-parser.js";
 import { parseGhcErrors } from "../parsers/error-parser.js";
+import { parseBrowseOutput, inferModuleName } from "../parsers/browse-parser.js";
+import { suggestFunctionProperties, type Sibling } from "../laws/function-laws.js";
 import type { ToolContext } from "./registry.js";
 
 interface UndefinedFunction {
@@ -62,11 +64,8 @@ export async function handleSuggest(
   }
 
   if (undefinedFns.length === 0) {
-    return JSON.stringify({
-      success: true,
-      suggestions: [],
-      summary: "No undefined functions found",
-    });
+    // No undefined stubs — switch to analyze mode automatically
+    return handleAnalyze(session, args.module_path);
   }
 
   // Pre-check: load module first to verify it compiles
@@ -147,22 +146,100 @@ export async function handleSuggest(
   }
 }
 
+/**
+ * Analyze an already-implemented module: list functions with types and suggest properties.
+ * This is the alternative to hole-fit analysis for modules that don't use = undefined.
+ */
+async function handleAnalyze(
+  session: GhciSession,
+  modulePath: string
+): Promise<string> {
+  const modName = inferModuleName(modulePath);
+  const browseResult = await session.execute(`:browse *${modName}`);
+  if (!browseResult.success) {
+    return JSON.stringify({
+      success: false,
+      mode: "analyze",
+      error: `Could not browse module ${modName}`,
+    });
+  }
+
+  const defs = parseBrowseOutput(browseResult.output);
+  const functions = defs.filter((d) => d.kind === "function");
+
+  if (functions.length === 0) {
+    return JSON.stringify({
+      success: true,
+      mode: "analyze",
+      functions: [],
+      summary: "No functions found in module",
+    });
+  }
+
+  // Build sibling list for roundtrip detection
+  const siblings: Sibling[] = functions.map((f) => ({
+    name: f.name,
+    type: `${f.name} :: ${f.type}`,
+  }));
+
+  // Get type and suggest properties for each function
+  const analyzed = functions.map((fn) => {
+    const typeStr = `${fn.name} :: ${fn.type}`;
+    const properties = suggestFunctionProperties(fn.name, typeStr, siblings);
+    return {
+      name: fn.name,
+      type: fn.type,
+      suggestedProperties: properties.map((p) => ({
+        law: p.law,
+        property: p.property,
+        confidence: p.confidence,
+      })),
+    };
+  });
+
+  const withProps = analyzed.filter((a) => a.suggestedProperties.length > 0);
+
+  return JSON.stringify({
+    success: true,
+    mode: "analyze",
+    functions: analyzed,
+    summary: `Analyzed ${analyzed.length} function(s), ${withProps.length} have suggested properties`,
+  });
+}
+
 export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     "ghci_suggest",
     "Find `= undefined` functions in a Haskell module and suggest implementations. " +
       "Temporarily replaces each `= undefined` with a typed hole `= _`, loads the module " +
       "in GHCi to get hole fits, and returns suggestions for each function. " +
-      "The original file is always restored after analysis.",
+      "The original file is always restored after analysis. " +
+      "If no `= undefined` stubs are found (or mode='analyze'), analyzes implemented functions " +
+      "and suggests QuickCheck properties based on their types.",
     {
       module_path: z
         .string()
         .describe(
-          'Path to a module containing `= undefined` stubs. Examples: "src/Lib.hs"'
+          'Path to a module to analyze. Examples: "src/Lib.hs"'
+        ),
+      mode: z
+        .enum(["suggest", "analyze"])
+        .optional()
+        .describe(
+          'suggest (default): find = undefined stubs and show hole fits. ' +
+          'analyze: analyze implemented functions and suggest QuickCheck properties.'
         ),
     },
-    async ({ module_path }) => {
+    async ({ module_path, mode }) => {
       const session = await ctx.getSession();
+
+      // If mode is explicitly "analyze", skip the undefined-stub scan entirely
+      if (mode === "analyze") {
+        const result = await handleAnalyze(session, module_path);
+        ctx.logToolExecution("ghci_suggest", true);
+        return { content: [{ type: "text" as const, text: result }] };
+      }
+
       const result = await handleSuggest(
         session,
         { module_path },

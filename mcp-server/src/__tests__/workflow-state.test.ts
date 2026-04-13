@@ -10,6 +10,7 @@ import {
   suggestNextStep,
   moduleChecklist,
   serializeState,
+  derivePhase,
   MODE_SELECTION_PROMPT,
 } from "../workflow-state.js";
 
@@ -367,5 +368,39 @@ describe("Mode system", () => {
     const hint = workflowHint(state);
     // hint is null when completely empty
     expect(hint).toBeNull();
+  });
+});
+
+describe("derivePhase", () => {
+  it("returns 'stub' when functionsTotal is 0", () => {
+    const progress = createEmptyProgress("src/Foo.hs");
+    expect(derivePhase(progress)).toBe("stub");
+  });
+
+  it("returns 'implementing' when some functions remain", () => {
+    const progress = {
+      ...createEmptyProgress("src/Foo.hs"),
+      functionsTotal: 5,
+      functionsImplemented: 3,
+    };
+    expect(derivePhase(progress)).toBe("implementing");
+  });
+
+  it("returns 'complete' when all functions are implemented", () => {
+    const progress = {
+      ...createEmptyProgress("src/Foo.hs"),
+      functionsTotal: 5,
+      functionsImplemented: 5,
+    };
+    expect(derivePhase(progress)).toBe("complete");
+  });
+
+  it("returns 'complete' for a module with 1 function", () => {
+    const progress = {
+      ...createEmptyProgress("src/Foo.hs"),
+      functionsTotal: 1,
+      functionsImplemented: 1,
+    };
+    expect(derivePhase(progress)).toBe("complete");
   });
 });

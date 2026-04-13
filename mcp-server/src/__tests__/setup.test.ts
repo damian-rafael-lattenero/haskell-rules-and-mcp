@@ -34,8 +34,8 @@ describe("handleSetup", () => {
     // Verify file exists and has workflow content
     const workflow = await readFile(path.join(tmpDir, ".claude", "rules", "haskell-mcp-workflow.md"), "utf-8");
     expect(workflow).toContain("PRIME DIRECTIVE");
-    expect(workflow).toContain("FLOW 4");
-    expect(workflow).toContain("Tier 1");
+    expect(workflow).toContain("FORBIDDEN");
+    expect(workflow).toContain("ALWAYS MANDATORY");
   });
 
   it("skips unchanged rules on second run", async () => {

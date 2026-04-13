@@ -440,6 +440,13 @@ export class GhciSession extends EventEmitter {
   }
 
   /**
+   * Show modules currently loaded in GHCi.
+   */
+  async showModules(): Promise<GhciResult> {
+    return this.execute(":show modules");
+  }
+
+  /**
    * Load a single module and re-apply persistent imports.
    */
   async loadModule(modulePath: string): Promise<GhciResult> {

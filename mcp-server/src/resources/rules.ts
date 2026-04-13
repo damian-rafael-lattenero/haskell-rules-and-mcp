@@ -18,44 +18,29 @@ const RULES_DIR = path.resolve(import.meta.dirname, "../../rules");
 const WORKFLOW_FALLBACK = `# Haskell MCP Workflow
 
 ## PRIME DIRECTIVE
-The goal is MCP-driven development. Every decision goes through an MCP tool.
-Even if you already know the implementation — USE THE TOOLS FIRST.
+MCP-driven development. Every decision goes through an MCP tool.
+The compiler's structured output drives development, not pre-existing knowledge.
 
-## TOOL TIERS
+## ALWAYS MANDATORY (all modes)
+- ghci_load after every .hs edit — no exceptions
+- ghci_quickcheck incrementally when laws become testable AND at module-complete
+- Zero tolerance for warnings
+- ghci_arbitrary for new data types
 
-### Tier 1 — Every function
-\`ghci_load\` (after every edit) · \`ghci_type\` (verify types) · \`ghci_hole_fits\` (read holes)
-
-### Tier 2 — Frequently
-\`ghci_info\` · \`hoogle_search\` · \`ghci_eval\` · \`ghci_add_import\` · \`ghci_complete\`
-
-### Tier 3 — Module complete gate (MANDATORY before next module)
-\`ghci_quickcheck\` (MANDATORY — complete contract) · \`ghci_check_module\` · \`ghci_lint\` · \`ghci_format\`
-
-## FLOW 4: Implement One Function (THE CORE LOOP)
-1. HOLE: Replace = undefined with = _
-2. COMPILE: ghci_load(diagnostics=true) → read hole type + fits
-3. EXPLORE: ghci_type / ghci_info / hoogle_search
-4. IMPLEMENT: Write the body (max ~20 lines)
-5. COMPILE: ghci_load(diagnostics=true)
-6. FIX: errors → fix → recompile | warnings → fix ALL → recompile
-7. VERIFY: ghci_type("functionName")
-8. TEST: ghci_eval("functionName sampleArg")
-
-Steps 1-2 and 7 are MANDATORY. Never skip them.
-
-## FLOW 6: Module Complete (MANDATORY before next module)
-1. ghci_quickcheck — test the COMPLETE algebraic contract. CANNOT skip this.
-2. ghci_check_module → review API
-3. ghci_lint / ghci_format
+## WHEN → TOOL → WHY
+| When | Tool | Why |
+|------|------|-----|
+| Wrote/edited a function | ghci_load(diagnostics=true) | Compile, see errors |
+| After compilation | ghci_eval("funcName arg") | Test behavior |
+| A law becomes testable | ghci_quickcheck(incremental=true) | Test immediately |
+| All functions done | ghci_quickcheck / ghci_quickcheck_batch | Complete contract |
+| Before next module | ghci_check_module, ghci_lint, ghci_format | Quality gate |
 
 ## FORBIDDEN
-- Implementation without hole phase (steps 1-2)
-- Skipping ghci_type after implementation (step 7)
-- Moving to next module without running ghci_quickcheck
 - Multiple .hs edits between ghci_load calls
-- Using Bash for any Haskell toolchain operation
-- MCP tool fails → falling back to Bash
+- Using Bash for Haskell toolchain operations
+- Moving to next module without ghci_quickcheck
+- Writing Arbitrary instances by hand
 `;
 
 const CONVENTIONS_FALLBACK = `# Haskell Project Conventions
@@ -80,9 +65,8 @@ export const RULES_REGISTRY: RuleDefinition[] = [
     uri: "rules://haskell/mcp-workflow",
     title: "Haskell MCP Workflow — Flows, Tool Tiers, and Development Protocol",
     description:
-      "The complete MCP-driven Haskell development workflow: tool tiers (1-4), " +
-      "8 development flows, error resolution, warning auto-fix, and forbidden patterns. " +
-      "This is the single source of truth — injected via MCP server instructions.",
+      "MCP-driven Haskell development workflow: mode selection, mandatory tools, " +
+      "when/tool/why tables, error resolution, warning auto-fix, and forbidden patterns.",
     fileName: "haskell-mcp-workflow.md",
     embeddedContent: WORKFLOW_FALLBACK,
   },

@@ -1,56 +1,71 @@
 module Parser.Error
-  ( SourcePos(..)
+  ( Pos(..)
   , ParseError(..)
+  , Expected(..)
   , initialPos
-  , updatePos
-  , showError
-  , mergeErrors
+  , advancePos
+  , mergeError
   ) where
 
-import Test.QuickCheck (Arbitrary(..))
+import Test.QuickCheck (Arbitrary(..), oneof, elements, listOf, suchThat)
 
--- | Source position tracking
-data SourcePos = SourcePos
+-- | Source position: line and column (1-based)
+data Pos = Pos
   { posLine   :: !Int
   , posColumn :: !Int
   } deriving (Show, Eq, Ord)
 
-instance Arbitrary SourcePos where
-  arbitrary = SourcePos <$> arbitrary <*> arbitrary
+-- | What the parser expected at the error location
+data Expected
+  = ExpectedChar Char
+  | ExpectedString String
+  | ExpectedSatisfy String   -- description of predicate
+  | ExpectedEOF
+  | ExpectedOneOf [Expected]
+  deriving (Show, Eq)
 
--- | Parse error with position and context
+-- | A parse error with position and expectations
 data ParseError = ParseError
-  { errorPos      :: SourcePos
-  , errorExpected :: [String]
-  , errorFound    :: Maybe Char
+  { errorPos      :: !Pos
+  , errorExpected :: [Expected]
+  , errorMessage  :: Maybe String
   } deriving (Show, Eq)
+
+-- | Starting position (line 1, column 1)
+initialPos :: Pos
+initialPos = Pos 1 1
+
+-- | Advance position by one character
+advancePos :: Pos -> Char -> Pos
+advancePos (Pos line _col) '\n' = Pos (line + 1) 1
+advancePos (Pos line col)  '\t' = Pos line (col + 8 - ((col - 1) `mod` 8))
+advancePos (Pos line col)  _    = Pos line (col + 1)
+
+-- | Merge two errors: keep the one at the furthest position,
+--   or merge expectations if at the same position
+mergeError :: ParseError -> ParseError -> ParseError
+mergeError e1 e2
+  | errorPos e1 > errorPos e2 = e1
+  | errorPos e1 < errorPos e2 = e2
+  | otherwise = ParseError
+      { errorPos      = errorPos e1
+      , errorExpected = errorExpected e1 ++ errorExpected e2
+      , errorMessage  = errorMessage e1 <> errorMessage e2
+      }
+
+-- Arbitrary instances for QuickCheck
+
+instance Arbitrary Pos where
+  arbitrary = Pos <$> pos <*> pos
+    where pos = arbitrary `suchThat` (> 0)
+
+instance Arbitrary Expected where
+  arbitrary = oneof
+    [ ExpectedChar <$> arbitrary
+    , ExpectedString <$> listOf arbitrary
+    , ExpectedSatisfy <$> listOf (elements ['a'..'z'])
+    , pure ExpectedEOF
+    ]
 
 instance Arbitrary ParseError where
   arbitrary = ParseError <$> arbitrary <*> arbitrary <*> arbitrary
-
-initialPos :: SourcePos
-initialPos = SourcePos 1 1
-
-updatePos :: Char -> SourcePos -> SourcePos
-updatePos '\n' (SourcePos l _) = SourcePos (l + 1) 1
-updatePos _    (SourcePos l c) = SourcePos l (c + 1)
-
-showError :: ParseError -> String
-showError (ParseError pos expected found) =
-  "Parse error at line " ++ show (posLine pos)
-    ++ ", column " ++ show (posColumn pos) ++ ":\n"
-    ++ foundMsg found
-    ++ expectedMsg expected
-  where
-    foundMsg Nothing  = "  unexpected end of input\n"
-    foundMsg (Just c) = "  unexpected " ++ show c ++ "\n"
-    expectedMsg [] = ""
-    expectedMsg [x] = "  expected " ++ x ++ "\n"
-    expectedMsg xs = "  expected one of: " ++ unwords xs ++ "\n"
-
-mergeErrors :: ParseError -> ParseError -> ParseError
-mergeErrors e1 e2 = ParseError
-  { errorPos      = errorPos e1
-  , errorExpected = errorExpected e1 ++ errorExpected e2
-  , errorFound    = errorFound e1
-  }

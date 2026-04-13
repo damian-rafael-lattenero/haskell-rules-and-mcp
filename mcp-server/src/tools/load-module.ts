@@ -10,6 +10,8 @@ import {
   getLibrarySrcDir,
 } from "../parsers/cabal-parser.js";
 import { parseHoleSummaries, HoleSummary } from "../parsers/hole-parser.js";
+import { parseBrowseOutput, inferModuleName } from "../parsers/browse-parser.js";
+import { derivePhase } from "../workflow-state.js";
 
 export type { HoleSummary } from "../parsers/hole-parser.js";
 
@@ -246,6 +248,19 @@ async function handleLoadAll(
   );
 }
 
+// --- Parse :show modules output ---
+
+/**
+ * Parse GHCi `:show modules` output to extract module names currently in scope.
+ * Format: "Parser.Core    ( src/Parser/Core.hs, interpreted )"
+ */
+export function parseShowModules(output: string): string[] {
+  return output
+    .split("\n")
+    .map((line) => line.match(/^(\S+)\s+\(/)?.[1])
+    .filter((name): name is string => !!name);
+}
+
 // --- Response builder ---
 
 function buildResponse(
@@ -256,7 +271,8 @@ function buildResponse(
   uncategorizedWarnings: GhcError[],
   holes: HoleSummary[],
   raw: string,
-  modules?: string[]
+  modules?: string[],
+  modulesInScope?: string[]
 ): string {
   const parts: string[] = [];
   if (errors.length > 0) parts.push(`${errors.length} error(s)`);
@@ -285,6 +301,7 @@ function buildResponse(
     })),
     holes,
     ...(modules ? { modules } : {}),
+    ...(modulesInScope ? { modulesInScope } : {}),
     summary,
     raw,
   });
@@ -328,16 +345,53 @@ export function register(server: McpServer, ctx: ToolContext): void {
       }
       ctx.logToolExecution("ghci_load", parsed.success);
 
+      // After successful compilation, report which modules are in scope
+      // This helps the LLM know if it needs load_all before running QuickCheck
+      if (parsed.success) {
+        try {
+          const showModResult = await session.showModules();
+          const inScope = parseShowModules(showModResult.output);
+          if (inScope.length > 0) {
+            parsed.modulesInScope = inScope;
+          }
+        } catch {
+          // Non-fatal: scope info is informational
+        }
+
+        // Track function counts via :browse so the workflow tracker works
+        // even when the developer writes implementations directly (no = undefined stubs)
+        if (module_path) {
+          try {
+            const modName = inferModuleName(module_path);
+            const browseResult = await session.execute(`:browse *${modName}`);
+            if (browseResult.success) {
+              const defs = parseBrowseOutput(browseResult.output);
+              const fnCount = defs.filter((d) => d.kind === "function").length;
+              if (fnCount > 0) {
+                const holeCount = parsed.holes?.length ?? 0;
+                const implemented = Math.max(0, fnCount - holeCount);
+                ctx.updateModuleProgress(module_path, {
+                  functionsTotal: fnCount,
+                  functionsImplemented: implemented,
+                  phase: derivePhase({
+                    functionsTotal: fnCount,
+                    functionsImplemented: implemented,
+                  } as any),
+                });
+              }
+            }
+          } catch {
+            // Non-fatal: function tracking is informational
+          }
+        }
+      }
+
       // Inject notices
       const notice = await ctx.getRulesNotice();
       const modeNotice = ctx.getModeNotice();
-      if (notice || modeNotice) {
-        const reparsed = JSON.parse(result);
-        if (notice) reparsed._notice = notice;
-        if (modeNotice) reparsed._modeSelection = modeNotice;
-        return { content: [{ type: "text" as const, text: JSON.stringify(reparsed) }] };
-      }
-      return { content: [{ type: "text" as const, text: result }] };
+      if (notice) parsed._notice = notice;
+      if (modeNotice) parsed._modeSelection = modeNotice;
+      return { content: [{ type: "text" as const, text: JSON.stringify(parsed) }] };
     }
   );
 }

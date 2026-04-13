@@ -1,10 +1,11 @@
 module Parser.Char
-  ( satisfy
-  , char
+  ( char
   , anyChar
   , string
   , digit
   , letter
+  , upper
+  , lower
   , alphaNum
   , space
   , spaces
@@ -13,50 +14,59 @@ module Parser.Char
   , noneOf
   ) where
 
-import Data.Char (isDigit, isAlpha, isAlphaNum, isSpace)
-import Control.Applicative (Alternative(..))
-import Parser.Core
-import Parser.Error
+import Data.Char (isDigit, isAlpha, isUpper, isLower, isAlphaNum, isSpace)
+import Control.Applicative (many)
+import Parser.Core (Parser, satisfy, label)
 
--- | The fundamental character parser — all others build on this
-satisfy :: (Char -> Bool) -> Parser Char
-satisfy predicate = Parser $ \st ->
-  case stateInput st of
-    []     -> Left (unexpectedError st)
-    (c:cs)
-      | predicate c -> Right (c, ParseState cs (updatePos c (statePos st)))
-      | otherwise   -> Left (unexpectedError st)
-
+-- | Match a specific character
 char :: Char -> Parser Char
-char c = satisfy (== c)
+char c = satisfy [c] (== c)
 
+-- | Match any single character
 anyChar :: Parser Char
-anyChar = satisfy (const True)
+anyChar = satisfy "any character" (const True)
 
+-- | Match an exact string
 string :: String -> Parser String
 string []     = pure []
 string (c:cs) = (:) <$> char c <*> string cs
 
+-- | Match a decimal digit
 digit :: Parser Char
-digit = satisfy isDigit
+digit = label "digit" $ satisfy "digit" isDigit
 
+-- | Match an alphabetic character
 letter :: Parser Char
-letter = satisfy isAlpha
+letter = label "letter" $ satisfy "letter" isAlpha
 
+-- | Match an uppercase letter
+upper :: Parser Char
+upper = label "uppercase" $ satisfy "uppercase" isUpper
+
+-- | Match a lowercase letter
+lower :: Parser Char
+lower = label "lowercase" $ satisfy "lowercase" isLower
+
+-- | Match an alphanumeric character
 alphaNum :: Parser Char
-alphaNum = satisfy isAlphaNum
+alphaNum = label "alphanumeric" $ satisfy "alphanumeric" isAlphaNum
 
+-- | Match a single whitespace character
 space :: Parser Char
-space = satisfy isSpace
+space = label "space" $ satisfy "space" isSpace
 
+-- | Skip zero or more whitespace characters
 spaces :: Parser String
 spaces = many space
 
+-- | Match a newline character
 newline :: Parser Char
 newline = char '\n'
 
+-- | Match one of the given characters
 oneOf :: [Char] -> Parser Char
-oneOf cs = satisfy (`elem` cs)
+oneOf cs = satisfy ("one of " ++ show cs) (`elem` cs)
 
+-- | Match any character not in the given list
 noneOf :: [Char] -> Parser Char
-noneOf cs = satisfy (`notElem` cs)
+noneOf cs = satisfy ("none of " ++ show cs) (`notElem` cs)

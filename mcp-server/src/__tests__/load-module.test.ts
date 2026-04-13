@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { handleLoadModule } from "../tools/load-module.js";
+import { handleLoadModule, parseShowModules } from "../tools/load-module.js";
 import { createMockSession } from "./helpers/mock-session.js";
 import type { GhciResult } from "../ghci-session.js";
 
@@ -233,5 +233,41 @@ describe("handleLoadModule", () => {
       expect(result.holes[0].expectedType).toBe("Int");
       expect(result.holes[0].relevantBindings.length).toBeGreaterThan(0);
     });
+  });
+});
+
+describe("parseShowModules", () => {
+  it("parses multiple modules from :show modules output", () => {
+    const output =
+      "Parser.Error   ( src/Parser/Error.hs, interpreted )\n" +
+      "Parser.Core    ( src/Parser/Core.hs, interpreted )\n" +
+      "Parser.Char    ( src/Parser/Char.hs, interpreted )";
+    expect(parseShowModules(output)).toEqual([
+      "Parser.Error",
+      "Parser.Core",
+      "Parser.Char",
+    ]);
+  });
+
+  it("parses single module", () => {
+    const output = "MyModule ( src/MyModule.hs, interpreted )";
+    expect(parseShowModules(output)).toEqual(["MyModule"]);
+  });
+
+  it("returns empty array for empty output", () => {
+    expect(parseShowModules("")).toEqual([]);
+  });
+
+  it("ignores blank lines", () => {
+    const output =
+      "Foo ( src/Foo.hs, interpreted )\n" +
+      "\n" +
+      "Bar ( src/Bar.hs, interpreted )\n";
+    expect(parseShowModules(output)).toEqual(["Foo", "Bar"]);
+  });
+
+  it("handles object-code modules", () => {
+    const output = "Data.Map ( /path/to/Data/Map.hs, object-code )";
+    expect(parseShowModules(output)).toEqual(["Data.Map"]);
   });
 });
