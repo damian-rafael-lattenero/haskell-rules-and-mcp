@@ -1,6 +1,36 @@
 # Automated Development Loop
 
+## The Development State Machine
+
+You are ALWAYS in one of these states. There is NO shortcut from EDIT to DONE.
+
+```
+┌─────────┐
+│  EDIT   │──── Write/Edit ONE function body (max ~20 lines)
+└────┬────┘
+     │
+┌────▼────┐
+│ COMPILE │──── ghci_load(diagnostics=true)
+└────┬────┘
+     │
+┌────▼────┐     ┌───────────┐
+│ CHECK   │────►│ FIX ERROR │──► back to COMPILE
+│ RESULT  │     └───────────┘
+└────┬────┘
+     │ (errors == 0)
+┌────▼─────────┐  ┌──────────────┐
+│ CHECK WARNS  │─►│ FIX WARNING  │──► back to COMPILE
+└────┬─────────┘  └──────────────┘
+     │ (warningActions == 0)
+┌────▼────┐
+│  DONE   │──── Move to next function / ghci_quickcheck
+└─────────┘
+```
+
+---
+
 ## Primary Protocol
+
 After every edit, run `ghci_load`. Read the structured output. Take the FIRST applicable action:
 
 1. If `errors` > 0 → apply Error Resolution (below)
@@ -14,20 +44,20 @@ After every edit, run `ghci_load`. Read the structured output. Take the FIRST ap
 
 ## Warning Action Table
 
-When `ghci_load` returns `warningActions`, act on each one:
+When `ghci_load` returns `warningActions[]`, act on each one by matching `warningActions[].category`:
 
-| warningFlag | category | Action |
+| category | warningFlag | Action |
 |---|---|---|
-| -Wunused-imports | unused-import | Remove the import line. If partially used, narrow to only the used names. |
-| -Wunused-matches | unused-binding | Replace binding with `_` wildcard. |
-| -Wunused-local-binds | unused-binding | If genuinely unused: prefix with `_`. If it should be used: it's a bug, investigate. |
-| -Wincomplete-patterns | incomplete-patterns | Add the missing pattern cases. Use `ghci_info` on the type to see all constructors. |
-| -Wmissing-signatures | missing-signature | The `suggestedAction` contains the inferred type. Add it as a signature. |
-| -Wname-shadowing | name-shadowing | Rename the inner binding to avoid shadowing. |
-| -Wredundant-constraints | redundant-constraint | Remove the unused constraint from the type signature. |
-| -Wunused-do-bind | unused-do-bind | Add `void $` or `_ <-` before the expression. |
-| -Wtype-defaults | type-defaults | Add explicit type annotation to remove defaulting. |
-| -Wtyped-holes | typed-hole | Read the hole fits. Pick the best one or implement. NOT auto-fixable. |
+| unused-import | -Wunused-imports | Remove the import line. If partially used, narrow to only the used names. |
+| unused-binding | -Wunused-matches | Replace binding with `_` wildcard. |
+| unused-binding | -Wunused-local-binds | If genuinely unused: prefix with `_`. If it should be used: it's a bug, investigate. |
+| incomplete-patterns | -Wincomplete-patterns | Add the missing pattern cases. Use `ghci_info` on the type to see all constructors. |
+| missing-signature | -Wmissing-signatures | The `suggestedAction` field contains the inferred type. Add it as a signature. |
+| name-shadowing | -Wname-shadowing | Rename the inner binding to avoid shadowing. |
+| redundant-constraint | -Wredundant-constraints | Remove the unused constraint from the type signature. |
+| unused-do-bind | -Wunused-do-bind | Add `void $` or `_ <-` before the expression. |
+| type-defaults | -Wtype-defaults | Add explicit type annotation to remove defaulting. |
+| typed-hole | -Wtyped-holes | Read the hole fits. Pick the best one or implement. NOT auto-fixable. |
 
 After fixing all warnings, compile again to verify 0 warnings remain.
 
@@ -35,12 +65,12 @@ After fixing all warnings, compile again to verify 0 warnings remain.
 
 ## Error Resolution Table
 
-When `ghci_load` returns errors, match on `code` and apply:
+When `ghci_load` returns `errors[]`, match on `errors[].code` and apply:
 
 | Code | Name | Action | Verify with |
 |---|---|---|---|
-| GHC-83865 | Type mismatch | Read `expected`/`actual`. expected=`X->Y`, actual=`X` → missing arg. expected=`IO X`, actual=`X` → wrap in `pure`. expected=`X`, actual=`IO X` → use `<-` not `let`. | `ghci_type` on `context` subexpr |
-| GHC-39999 | Not in scope | (1) Module in .cabal exposed-modules? (2) Missing import? → `ghci_add_import` to find the right module, then add the import. (3) Typo? → `ghci_complete` to find similar names. | `ghci_info` after adding import |
+| GHC-83865 | Type mismatch | Read `expected`/`actual` fields. expected=`X->Y`, actual=`X` → missing arg. expected=`IO X`, actual=`X` → wrap in `pure`. expected=`X`, actual=`IO X` → use `<-` not `let`. | `ghci_type` on `context` subexpr |
+| GHC-39999 | Not in scope | (1) Module in .cabal exposed-modules? (2) Missing import? → `ghci_add_import` to find the right module. (3) Typo? → `ghci_complete` to find similar names. | `ghci_info` after adding import |
 | GHC-39660 | No instance | Own type → add `deriving`. Constraint missing → add to sig. Orphan → add import. | `ghci_info` on the type |
 | GHC-46956 | Ambiguous type | Add explicit type annotation to the ambiguous expression. | `ghci_type` on subexpressions |
 
@@ -48,7 +78,56 @@ When `ghci_load` returns errors, match on `code` and apply:
 1. Replace expression with `undefined`
 2. `ghci_type` on context → see expected type
 3. Build bottom-up from verified sub-expressions
-4. NEVER rewrite large code sections speculatively
+4. **NEVER** rewrite large code sections speculatively
+
+---
+
+## ANTI-PATTERNS
+
+These are real mistakes. Each one shows the wrong way and the right way.
+
+### Bulk-Write Module
+```
+BAD:  Write entire HM/Infer.hs (200 lines) in one Write call
+GOOD: Write stubs → compile → implement infer() → compile → implement generalize() → compile
+```
+
+### Multiple Files Without Compiling
+```
+BAD:  Write Syntax.hs, then Subst.hs, then Unify.hs, then compile
+GOOD: Write Syntax.hs → ghci_load → Write Subst.hs → ghci_load → Write Unify.hs → ghci_load
+```
+
+### Skip Bootstrap
+```
+BAD:  Write .cabal + all source files + ghci_load at the very end
+GOOD: Write .cabal → ghci_scaffold → ghci_session(restart) → ghci_load → then start coding
+```
+
+### Ignore Warnings
+```
+BAD:  "It compiles, there are some warnings but I'll deal with them later"
+GOOD: Fix EVERY warningAction before moving to the next function
+```
+
+### Guess Instead of Ask the Compiler
+```
+BAD:  Write a complex expression and hope the types work out
+GOOD: Use ghci_type on subexpressions, use typed holes (_), let GHC guide you
+```
+
+### MCP Bypass (the most dangerous anti-pattern)
+```
+BAD:  MCP tool fails → fall back to manual Write/Bash → code without compilation gate
+GOOD: MCP tool fails → read error → fix root cause → retry MCP tool → mcp_restart if needed
+```
+This is the #1 way the development loop breaks. When a tool fails, the temptation is to "just write the file manually." This silently disables the entire MCP-driven workflow — you lose structured errors, typed holes, warning actions, and the compilation gate. **The tools failing is a bug to fix, not a reason to abandon them.**
+
+### Skip Pre-Flight
+```
+BAD:  Start writing .hs files immediately without checking MCP health
+GOOD: ghci_session(status) → ghci_switch_project() → verify alive → then start
+```
 
 ---
 
@@ -62,13 +141,13 @@ Use `ghci_quickcheck` to verify properties during development:
 
 ---
 
-## The Loop
+## The Loop (Summary)
 
 ```
-edit code
+edit ONE function
   → ghci_load (compile)
     → errors? fix them, recompile
-    → warnings? fix them all, recompile
+    → warnings? fix them ALL, recompile
     → clean? move on
       → ghci_quickcheck (verify properties)
         → pass? done
