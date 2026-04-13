@@ -208,3 +208,63 @@ export async function getLibrarySrcDir(
 
   return "src";
 }
+
+/**
+ * Extract build-depends package names from the library stanza.
+ * Returns just the package names (without version constraints).
+ * E.g. "base >= 4.14 && < 5, containers >= 0.6" → ["base", "containers"]
+ */
+export async function extractBuildDepends(projectDir: string): Promise<string[]> {
+  const cabalFile = await findCabalFile(projectDir);
+  const content = await readFile(cabalFile, "utf-8");
+  return extractBuildDependsFromContent(content);
+}
+
+export function extractBuildDependsFromContent(content: string): string[] {
+  const deps: string[] = [];
+  const lines = content.split("\n");
+  let inLibrary = false;
+  let inBuildDepends = false;
+  let buildDependsIndent = 0;
+
+  for (const line of lines) {
+    if (/^library\b/i.test(line)) {
+      inLibrary = true;
+      inBuildDepends = false;
+      continue;
+    }
+    if (inLibrary && /^\S/.test(line) && line.trim() !== "") {
+      inLibrary = false;
+      inBuildDepends = false;
+      continue;
+    }
+    if (inLibrary) {
+      const bdMatch = line.match(/^\s+build-depends\s*:\s*(.*)/i);
+      if (bdMatch) {
+        inBuildDepends = true;
+        buildDependsIndent = line.length - line.trimStart().length + 2;
+        if (bdMatch[1]!.trim()) {
+          for (const dep of parseDeps(bdMatch[1]!)) deps.push(dep);
+        }
+        continue;
+      }
+      if (inBuildDepends) {
+        const lineIndent = line.length - line.trimStart().length;
+        const trimmed = line.trim();
+        if (trimmed === "" || lineIndent >= buildDependsIndent) {
+          if (trimmed) for (const dep of parseDeps(trimmed)) deps.push(dep);
+        } else {
+          inBuildDepends = false;
+        }
+      }
+    }
+  }
+  return deps;
+}
+
+function parseDeps(text: string): string[] {
+  return text
+    .split(",")
+    .map((d) => d.trim().split(/\s/)[0]!.trim())
+    .filter((d) => d.length > 0 && /^[a-zA-Z]/.test(d));
+}

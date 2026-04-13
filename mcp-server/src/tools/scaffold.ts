@@ -6,6 +6,7 @@ import {
   parseCabalModules,
   moduleToFilePath,
   getLibrarySrcDir,
+  extractBuildDepends,
 } from "../parsers/cabal-parser.js";
 import type { ToolContext } from "./registry.js";
 
@@ -39,6 +40,15 @@ export async function handleScaffold(
   // Build type-owner map for cross-module import generation
   const typeOwner = signatures ? buildTypeOwnerMap(signatures) : new Map<string, string>();
 
+  // Read project dependencies to filter Hoogle results
+  let projectDeps: Set<string> | undefined;
+  try {
+    const deps = await extractBuildDepends(projectDir);
+    projectDeps = new Set(deps);
+  } catch {
+    // No deps available — Hoogle external lookups will be skipped
+  }
+
   for (const mod of modules) {
     const relPath = moduleToFilePath(mod, srcDir);
     const absPath = path.join(projectDir, relPath);
@@ -47,7 +57,7 @@ export async function handleScaffold(
     const modSigs = signatures?.[mod];
 
     // Compute cross-module imports for this module (async — may query Hoogle for external types)
-    const importLines = modSigs ? await computeImports(mod, modSigs, typeOwner) : [];
+    const importLines = modSigs ? await computeImports(mod, modSigs, typeOwner, projectDeps) : [];
 
     // Allow overwriting minimal stubs (just "module X where\n") when signatures
     // are provided. This supports the flow: auto-scaffold creates minimal stubs
@@ -187,25 +197,27 @@ async function isPreludeType(typeName: string): Promise<boolean> {
 
 /**
  * Look up the module for an unknown type using Hoogle.
- * Returns the qualified import line, or null if not found.
+ * Only returns results from packages listed in the project's build-depends.
+ * This prevents importing from random packages (e.g. aeson) that aren't dependencies.
  */
-async function lookupExternalType(typeName: string): Promise<{ module: string; qualified: boolean } | null> {
+async function lookupExternalType(
+  typeName: string,
+  projectDeps: Set<string>
+): Promise<{ module: string } | null> {
   try {
     const { handleHoogleSearch } = await import("./hoogle.js");
-    const hoogleResult = JSON.parse(await handleHoogleSearch({ query: typeName, count: 5 }));
+    const hoogleResult = JSON.parse(await handleHoogleSearch({ query: typeName, count: 10 }));
     if (!hoogleResult.success || !hoogleResult.results?.length) return null;
 
-    // Find the first result where the name matches exactly and it's a type/data
     for (const r of hoogleResult.results) {
-      if (r.module && r.module !== "Prelude") {
-        // Map, Set, etc. are typically used qualified
-        const qualifiedTypes = r.module.startsWith("Data.Map") ||
-          r.module.startsWith("Data.Set") ||
-          r.module.startsWith("Data.IntMap") ||
-          r.module.startsWith("Data.Sequence");
-        return { module: r.module, qualified: qualifiedTypes };
+      if (!r.module || r.module === "Prelude") continue;
+      // Only accept results from packages the project actually depends on
+      const pkg = r.package?.replace(/-[0-9].*$/, ""); // strip version
+      if (pkg && projectDeps.has(pkg)) {
+        return { module: r.module };
       }
     }
+    // No result from project deps — skip (ghci_load will catch it)
     return null;
   } catch {
     return null;
@@ -214,12 +226,14 @@ async function lookupExternalType(typeName: string): Promise<{ module: string; q
 
 /**
  * Compute import lines needed for a module based on cross-module type references.
- * Resolves project-internal types from the type owner map, and external types via Hoogle.
+ * Resolves project-internal types from the type owner map, and external types via Hoogle
+ * (filtered to packages in the project's build-depends).
  */
 export async function computeImports(
   moduleName: string,
   signatures: string[],
-  typeOwner: Map<string, string>
+  typeOwner: Map<string, string>,
+  projectDeps?: Set<string>
 ): Promise<string[]> {
   const usedTypes = extractUsedTypes(signatures);
   const importsByModule = new Map<string, string[]>();
@@ -246,8 +260,8 @@ export async function computeImports(
     // 2. Check if it's a Prelude type (no import needed)
     if (await isPreludeType(typeName)) continue;
 
-    // 3. Look up via Hoogle for external types
-    const external = await lookupExternalType(typeName);
+    // 3. Look up via Hoogle for external types (filtered by project deps)
+    const external = projectDeps ? await lookupExternalType(typeName, projectDeps) : null;
     if (external) {
       if (!importsByModule.has(external.module)) importsByModule.set(external.module, []);
       importsByModule.get(external.module)!.push(typeName);
