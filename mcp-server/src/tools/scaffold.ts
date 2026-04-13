@@ -46,8 +46,8 @@ export async function handleScaffold(
     const exists = await fileExists(absPath);
     const modSigs = signatures?.[mod];
 
-    // Compute cross-module imports for this module
-    const importLines = modSigs ? computeImports(mod, modSigs, typeOwner) : [];
+    // Compute cross-module imports for this module (async — may query Hoogle for external types)
+    const importLines = modSigs ? await computeImports(mod, modSigs, typeOwner) : [];
 
     // Allow overwriting minimal stubs (just "module X where\n") when signatures
     // are provided. This supports the flow: auto-scaffold creates minimal stubs
@@ -133,24 +133,21 @@ export function buildTypeOwnerMap(
 
 /**
  * Extract capitalized type names used in a list of signatures.
- * These are potential cross-module references.
+ * Only filters out Haskell keywords — everything else is a potential import.
  */
 function extractUsedTypes(signatures: string[]): Set<string> {
   const types = new Set<string>();
-  // Base types that are always in scope — never need imports
-  const builtins = new Set([
-    "Int", "Integer", "Float", "Double", "Char", "Bool", "String",
-    "IO", "Maybe", "Either", "Ordering",
-    "Show", "Eq", "Ord", "Read", "Enum", "Bounded", "Num", "Integral",
-    "Functor", "Applicative", "Monad", "Monoid", "Semigroup",
-    "Foldable", "Traversable",
+  // Only filter Haskell syntax keywords, not types. Whether a type needs
+  // an import is determined dynamically, not by a hardcoded list.
+  const syntaxKeywords = new Set([
+    "Prelude", "where", "let", "in", "do", "case", "of", "if", "then", "else",
+    "data", "newtype", "type", "class", "instance", "deriving", "module", "import",
   ]);
   for (const sig of signatures) {
-    // Find all capitalized identifiers (type constructors / type classes)
     const matches = sig.matchAll(/\b([A-Z][\w']*)\b/g);
     for (const m of matches) {
       const name = m[1]!;
-      if (!builtins.has(name)) {
+      if (!syntaxKeywords.has(name)) {
         types.add(name);
       }
     }
@@ -159,24 +156,105 @@ function extractUsedTypes(signatures: string[]): Set<string> {
 }
 
 /**
- * Compute import lines needed for a module based on cross-module type references.
+ * Check if a type name is from the Prelude (always in scope, never needs import).
+ * Uses Hoogle to verify — if a type is from "base:Prelude", it doesn't need an import.
+ * Falls back to a minimal known-safe list if Hoogle is unavailable.
  */
-export function computeImports(
+async function isPreludeType(typeName: string): Promise<boolean> {
+  try {
+    const { handleHoogleSearch } = await import("./hoogle.js");
+    const hoogleResult = JSON.parse(await handleHoogleSearch({ query: typeName, count: 3 }));
+    if (hoogleResult.success && hoogleResult.results?.length > 0) {
+      // If the first result for this exact name is from Prelude, it's builtin
+      for (const r of hoogleResult.results) {
+        if (r.module === "Prelude" || r.module === "GHC.Base" || r.module === "GHC.Types") {
+          return true;
+        }
+      }
+    }
+    return false;
+  } catch {
+    // Hoogle unavailable — fall back to Prelude types that are guaranteed by the Haskell Report
+    const haskellReportPrelude = new Set([
+      "Int", "Integer", "Float", "Double", "Char", "Bool", "String",
+      "IO", "Maybe", "Either", "Ordering",
+      "Show", "Eq", "Ord", "Read", "Enum", "Bounded", "Num",
+      "Functor", "Applicative", "Monad", "Monoid", "Semigroup",
+    ]);
+    return haskellReportPrelude.has(typeName);
+  }
+}
+
+/**
+ * Look up the module for an unknown type using Hoogle.
+ * Returns the qualified import line, or null if not found.
+ */
+async function lookupExternalType(typeName: string): Promise<{ module: string; qualified: boolean } | null> {
+  try {
+    const { handleHoogleSearch } = await import("./hoogle.js");
+    const hoogleResult = JSON.parse(await handleHoogleSearch({ query: typeName, count: 5 }));
+    if (!hoogleResult.success || !hoogleResult.results?.length) return null;
+
+    // Find the first result where the name matches exactly and it's a type/data
+    for (const r of hoogleResult.results) {
+      if (r.module && r.module !== "Prelude") {
+        // Map, Set, etc. are typically used qualified
+        const qualifiedTypes = r.module.startsWith("Data.Map") ||
+          r.module.startsWith("Data.Set") ||
+          r.module.startsWith("Data.IntMap") ||
+          r.module.startsWith("Data.Sequence");
+        return { module: r.module, qualified: qualifiedTypes };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Compute import lines needed for a module based on cross-module type references.
+ * Resolves project-internal types from the type owner map, and external types via Hoogle.
+ */
+export async function computeImports(
   moduleName: string,
   signatures: string[],
   typeOwner: Map<string, string>
-): string[] {
+): Promise<string[]> {
   const usedTypes = extractUsedTypes(signatures);
-  // Group types by source module
   const importsByModule = new Map<string, string[]>();
+
+  // Also collect types defined in THIS module's own signatures (don't import them)
+  const ownTypes = new Set<string>();
+  for (const sig of signatures) {
+    const match = /^(data|newtype|type)\s+([A-Z][\w']*)/.exec(sig.trim());
+    if (match) ownTypes.add(match[2]!);
+  }
+
   for (const typeName of usedTypes) {
+    if (ownTypes.has(typeName)) continue; // Defined in this module
+
+    // 1. Check project-internal type owner map
     const owner = typeOwner.get(typeName);
     if (owner && owner !== moduleName) {
       if (!importsByModule.has(owner)) importsByModule.set(owner, []);
       importsByModule.get(owner)!.push(typeName);
+      continue;
     }
+    if (owner === moduleName) continue; // Self-reference
+
+    // 2. Check if it's a Prelude type (no import needed)
+    if (await isPreludeType(typeName)) continue;
+
+    // 3. Look up via Hoogle for external types
+    const external = await lookupExternalType(typeName);
+    if (external) {
+      if (!importsByModule.has(external.module)) importsByModule.set(external.module, []);
+      importsByModule.get(external.module)!.push(typeName);
+    }
+    // If Hoogle can't find it either, skip — ghci_load will report the error
   }
-  // Generate import lines sorted by module name
+
   const imports: string[] = [];
   for (const [mod, typeNames] of [...importsByModule.entries()].sort()) {
     imports.push(`import ${mod} (${typeNames.sort().join(", ")})`);

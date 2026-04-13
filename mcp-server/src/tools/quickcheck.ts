@@ -367,17 +367,10 @@ export async function handleQuickCheck(
   });
 }
 
-/** Types that always have Arbitrary instances in QuickCheck — skip checking these. */
-const BASE_ARBITRARY_TYPES = new Set([
-  "Int", "Integer", "Float", "Double", "Char", "Bool", "String",
-  "Word", "Word8", "Word16", "Word32", "Word64",
-  "Int8", "Int16", "Int32", "Int64",
-  "Ordering", "()",
-]);
-
 /**
  * Extract concrete argument types from a function's type signature and check
- * if they have Arbitrary instances. Returns a list of types that are missing.
+ * if they have Arbitrary instances by querying GHCi directly.
+ * No hardcoded list — every type is verified dynamically.
  */
 export async function checkArbitraryInstances(
   session: GhciSession,
@@ -385,22 +378,18 @@ export async function checkArbitraryInstances(
 ): Promise<string[]> {
   if (!typeStr) return [];
 
-  // Extract the type part after "::" — e.g. "mergeErrors :: ParseError -> ParseError -> ParseError"
   const parts = typeStr.split("::");
   const typePart = parts.length > 1 ? parts.slice(1).join("::").trim() : typeStr.trim();
 
-  // Split on top-level arrows (not inside parens/brackets)
   const segments = splitTopLevelArrows(typePart);
-  // All segments except the last are argument types
   const argTypes = segments.slice(0, -1);
 
   // Extract concrete type names (capitalized, not type variables)
   const concreteTypes = new Set<string>();
   for (const arg of argTypes) {
     const trimmed = arg.trim();
-    // Extract the head type constructor (first capitalized word)
     const match = /^[\[(]?\s*([A-Z][\w']*)/.exec(trimmed);
-    if (match && !BASE_ARBITRARY_TYPES.has(match[1]!)) {
+    if (match) {
       concreteTypes.add(match[1]!);
     }
   }

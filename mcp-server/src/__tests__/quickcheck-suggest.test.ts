@@ -46,25 +46,26 @@ describe("checkArbitraryInstances", () => {
     expect(missing).toHaveLength(0);
   });
 
-  it("skips base types that always have Arbitrary", async () => {
-    const session = createMockSession({});
+  it("checks base types dynamically (no hardcoded skip list)", async () => {
+    // All types are now checked via GHCi — no hardcoded exceptions
+    const session = createMockSession({
+      "arbitrary :: Gen Int": { output: "arbitrary :: Gen Int", success: true },
+      "arbitrary :: Gen String": { output: "arbitrary :: Gen String", success: true },
+      "arbitrary :: Gen Bool": { output: "arbitrary :: Gen Bool", success: true },
+      "arbitrary :: Gen Char": { output: "arbitrary :: Gen Char", success: true },
+    });
     const missing = await checkArbitraryInstances(session, "foo :: Int -> String -> Bool -> Char -> ()");
     expect(missing).toHaveLength(0);
-    // session.execute should NOT have been called for base types
-    expect(session.execute).not.toHaveBeenCalled();
   });
 
   it("extracts concrete types from complex signatures", async () => {
     const session = createMockSession({
-      "arbitrary :: Gen Pos": {
-        output: "arbitrary :: Gen Pos",
-        success: true,
-      },
+      "arbitrary :: Gen Pos": { output: "arbitrary :: Gen Pos", success: true },
+      "arbitrary :: Gen Char": { output: "arbitrary :: Gen Char", success: true },
     });
     const missing = await checkArbitraryInstances(session, "advancePos :: Pos -> Char -> Pos");
     expect(missing).toHaveLength(0);
-    // Should have checked Pos (not Char, which is a base type)
-    expect(session.execute).toHaveBeenCalledTimes(1);
+    // Should have checked both Pos and Char dynamically
     expect(session.execute).toHaveBeenCalledWith(expect.stringContaining("Gen Pos"));
   });
 
