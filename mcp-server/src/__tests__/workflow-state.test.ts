@@ -10,11 +10,13 @@ import {
   suggestNextStep,
   moduleChecklist,
   serializeState,
+  MODE_SELECTION_PROMPT,
 } from "../workflow-state.js";
 
 describe("createWorkflowState", () => {
   it("returns a fresh empty state", () => {
     const state = createWorkflowState();
+    expect(state.mode).toBeNull();
     expect(state.currentFlow).toBeNull();
     expect(state.activeModule).toBeNull();
     expect(state.modules.size).toBe(0);
@@ -305,5 +307,65 @@ describe("Workflow tracking integration (Bug Fix 3)", () => {
     const mod = getModuleProgress(state, "src/Lib.hs");
     expect(mod?.functionsTotal).toBe(3);
     expect(mod?.phase).toBe("implementing");
+  });
+});
+
+describe("Mode system", () => {
+  it("mode starts as null", () => {
+    const state = createWorkflowState();
+    expect(state.mode).toBeNull();
+  });
+
+  it("mode can be set to guided, medium, or expert", () => {
+    const state = createWorkflowState();
+    state.mode = "guided";
+    expect(state.mode).toBe("guided");
+    state.mode = "medium";
+    expect(state.mode).toBe("medium");
+    state.mode = "expert";
+    expect(state.mode).toBe("expert");
+  });
+
+  it("resetWorkflowState preserves mode", () => {
+    const state = createWorkflowState();
+    state.mode = "expert";
+    state.activeModule = "src/Foo.hs";
+    resetWorkflowState(state);
+    expect(state.mode).toBe("expert");
+    expect(state.activeModule).toBeNull();
+  });
+
+  it("serializeState includes mode", () => {
+    const state = createWorkflowState();
+    state.mode = "medium";
+    const serialized = serializeState(state);
+    expect(serialized.mode).toBe("medium");
+  });
+
+  it("serializeState shows null mode when unset", () => {
+    const state = createWorkflowState();
+    const serialized = serializeState(state);
+    expect(serialized.mode).toBeNull();
+  });
+
+  it("MODE_SELECTION_PROMPT contains all three modes", () => {
+    expect(MODE_SELECTION_PROMPT).toContain("guided");
+    expect(MODE_SELECTION_PROMPT).toContain("medium");
+    expect(MODE_SELECTION_PROMPT).toContain("expert");
+    expect(MODE_SELECTION_PROMPT).toContain("ghci_mode");
+  });
+
+  it("workflowHint includes mode when set", () => {
+    const state = createWorkflowState();
+    state.mode = "expert";
+    const hint = workflowHint(state);
+    expect(hint?.mode).toBe("expert");
+  });
+
+  it("workflowHint omits mode when null", () => {
+    const state = createWorkflowState();
+    const hint = workflowHint(state);
+    // hint is null when completely empty
+    expect(hint).toBeNull();
   });
 });

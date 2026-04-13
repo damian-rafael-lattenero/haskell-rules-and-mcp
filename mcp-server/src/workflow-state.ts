@@ -6,6 +6,8 @@
  * pending actions (warnings to fix, loads to run).
  */
 
+export type WorkflowMode = "guided" | "medium" | "expert";
+
 export type FlowId =
   | "preflight"
   | "new-project"
@@ -40,6 +42,7 @@ export interface ToolExecution {
 }
 
 export interface WorkflowState {
+  mode: WorkflowMode | null;
   currentFlow: FlowStep | null;
   activeModule: string | null;
   modules: Map<string, ModuleProgress>;
@@ -66,6 +69,7 @@ export function createEmptyProgress(modulePath: string): ModuleProgress {
 
 export function createWorkflowState(): WorkflowState {
   return {
+    mode: null,
     currentFlow: null,
     activeModule: null,
     modules: new Map(),
@@ -75,6 +79,17 @@ export function createWorkflowState(): WorkflowState {
     sessionStarted: Date.now(),
   };
 }
+
+/** The mode selection prompt shown when mode is not yet set. */
+export const MODE_SELECTION_PROMPT =
+  "🎯 **Select your Haskell development mode** before continuing:\n\n" +
+  "| Mode | Best for | Mandatory tools |\n" +
+  "|------|----------|----------------|\n" +
+  "| `guided` | Beginners, unfamiliar codebases, complex type-level code | load, type, hole_fits, suggest, quickcheck |\n" +
+  "| `medium` | Intermediate devs, familiar with Haskell but new to this codebase | load, quickcheck, suggest (first time only) |\n" +
+  "| `expert` | Experienced Haskell devs who know the types | load, eval, quickcheck |\n\n" +
+  "→ **Set your mode with:** `ghci_mode(mode=\"guided\")`, `ghci_mode(mode=\"medium\")`, or `ghci_mode(mode=\"expert\")`\n\n" +
+  "_You can switch modes at any time with `ghci_mode`._";
 
 export function logTool(
   state: WorkflowState,
@@ -104,6 +119,7 @@ export function updateModuleProgress(
 }
 
 export function resetWorkflowState(state: WorkflowState): void {
+  // Preserve mode across resets — user chose it deliberately
   state.currentFlow = null;
   state.activeModule = null;
   state.modules.clear();
@@ -116,6 +132,10 @@ export function resetWorkflowState(state: WorkflowState): void {
 /** Generate a compact status summary for injection into tool responses. */
 export function workflowHint(state: WorkflowState): Record<string, unknown> | null {
   const hints: Record<string, unknown> = {};
+
+  if (state.mode) {
+    hints.mode = state.mode;
+  }
 
   if (state.currentFlow) {
     hints.currentStep = `FLOW ${state.currentFlow.flow} step ${state.currentFlow.step} (${state.currentFlow.label})`;
@@ -229,6 +249,7 @@ export function serializeState(state: WorkflowState): Record<string, unknown> {
   }
 
   return {
+    mode: state.mode,
     currentFlow: state.currentFlow,
     activeModule: state.activeModule,
     modules,

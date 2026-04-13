@@ -10,17 +10,33 @@ The compiler's structured output drives development, not pre-existing knowledge.
 
 ## MODE
 
-### guided (default)
+**On first tool use, the user selects their mode via `ghci_mode(mode="...")`.**
+If no mode is set, inject the mode selection prompt. Switch at any time with `ghci_mode`.
+
+### guided
 Full ceremony — every MANDATORY step in every flow.
 Best for: new Haskell developers, unfamiliar codebases, complex type-level code.
+- ALL Tier 1 tools mandatory: `ghci_load`, `ghci_type`, `ghci_hole_fits`, `ghci_suggest`
+- Every FLOW step must be followed in order
+
+### medium
+Balanced — the compiler still drives, but less ceremony.
+Best for: intermediate devs, familiar with Haskell but new to this codebase.
+- `ghci_load` + `ghci_quickcheck`: MANDATORY
+- `ghci_suggest`: MANDATORY on first pass per module, optional after
+- `ghci_type`, `ghci_hole_fits`: RECOMMENDED, not mandatory
+- FLOW 4 Steps 1-2 (hole phase): RECOMMENDED
+- FLOW 4 Step 7 (post-impl type verify): skip for simple functions
 
 ### expert
-Relaxed inner loop. The compiler still drives, but skip ceremony when confident:
-- FLOW 4 Steps 1-2 (hole phase): RECOMMENDED, not mandatory
-- FLOW 4 Step 7 (post-impl type verify): RECOMMENDED, not mandatory
-- FLOW 4 Step 3 (explore): skip freely when types are familiar
+Minimal loop — only the essentials.
+Best for: experienced Haskell devs who know the types.
+- `ghci_load`, `ghci_eval`, `ghci_quickcheck`: MANDATORY
+- Everything else: optional, use when stuck
+- FLOW 4 Steps 1-3: skip freely
+- FLOW 4 Step 7: skip freely
 
-### ALWAYS mandatory (both modes):
+### ALWAYS mandatory (all modes):
 - `ghci_load` after every `.hs` edit — **no exceptions**
 - `ghci_quickcheck` incremental (FLOW 4.5) AND at module-complete (FLOW 6)
 - Zero tolerance for warnings
@@ -40,6 +56,14 @@ Relaxed inner loop. The compiler still drives, but skip ceremony when confident:
 | `ghci_hole_fits` | Read typed hole analysis before implementing |
 | `ghci_suggest` | **At start of FLOW 4** — auto-discover hole fits for all undefined functions |
 
+**medium mode (balanced):**
+| Tool | When |
+|------|------|
+| `ghci_load` | After every `.hs` edit — no exceptions |
+| `ghci_quickcheck` | Incremental properties (FLOW 4.5) |
+| `ghci_suggest` | **First pass per module** — then optional |
+| `ghci_type` | RECOMMENDED when types are unclear |
+
 **expert mode (minimal inner loop):**
 | Tool | When |
 |------|------|
@@ -47,8 +71,9 @@ Relaxed inner loop. The compiler still drives, but skip ceremony when confident:
 | `ghci_eval` | Test behavior after implementation |
 | `ghci_quickcheck` | Incremental properties (FLOW 4.5) |
 
-In expert mode, `ghci_type`, `ghci_suggest`, and `ghci_hole_fits` are **Tier 2 (recommended)**,
-not mandatory. Use them when types are unfamiliar or the first implementation attempt fails.
+In medium mode, `ghci_type` and `ghci_hole_fits` are recommended but not mandatory.
+In expert mode, `ghci_type`, `ghci_suggest`, and `ghci_hole_fits` are all **Tier 2 (optional)**.
+Use them when types are unfamiliar or the first implementation attempt fails.
 
 ### Tier 2 — Frequently during development
 | Tool | When |
@@ -296,9 +321,9 @@ Fix EVERY `warningAction` immediately — never "deal with it later":
 
 ## FORBIDDEN
 
-- Implementation without hole phase (Flow 4 steps 1-2) **[guided mode only]**
-- Skipping `ghci_type` after implementation (Flow 4 step 7) **[guided mode only]**
-- **Starting FLOW 4 without running `ghci_suggest`** to preview hole fits first **[guided mode only]**
+- Implementation without hole phase (Flow 4 steps 1-2) **[guided only]**
+- Skipping `ghci_type` after implementation (Flow 4 step 7) **[guided only]**
+- **Starting FLOW 4 without running `ghci_suggest`** to preview hole fits first **[guided + medium (first pass)]**
 - **Moving to next module without running `ghci_quickcheck`** (Flow 6 step 1) **[all modes]**
 - **Skipping incremental QuickCheck when a law becomes testable** (Flow 4.5) **[all modes]**
 - **Writing Arbitrary instances by hand** when `ghci_arbitrary` can generate them (FLOW 3) **[all modes]**

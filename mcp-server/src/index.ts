@@ -20,6 +20,8 @@ import {
   workflowHint,
   suggestNextStep,
   moduleChecklist,
+  MODE_SELECTION_PROMPT,
+  type WorkflowMode,
 } from "./workflow-state.js";
 
 // Tool register functions
@@ -107,6 +109,8 @@ const ctx: ToolContext = {
   logToolExecution: (tool, success) => logTool(workflowState, tool, success),
   getModuleProgress: (path) => getModProgress(workflowState, path),
   updateModuleProgress: (path, updates) => updateModProgress(workflowState, path, updates),
+  getModeNotice: () => workflowState.mode === null ? MODE_SELECTION_PROMPT : null,
+  setMode: (mode: WorkflowMode) => { workflowState.mode = mode; },
 };
 
 // --- Register all tools from their modules ---
@@ -206,8 +210,11 @@ server.tool(
     if (action === "status") {
       const alive = ghciSession?.isAlive() ?? false;
       const notice = await ctx.getRulesNotice();
+      const modeNotice = ctx.getModeNotice();
       const response: Record<string, unknown> = { alive, projectDir };
+      if (workflowState.mode) response.mode = workflowState.mode;
       if (notice) response._notice = notice;
+      if (modeNotice) response._modeSelection = modeNotice;
       return { content: [{ type: "text", text: JSON.stringify(response) }] };
     }
     resetQuickCheckState();
@@ -233,6 +240,70 @@ server.tool(
     const session = await getSession();
     return {
       content: [{ type: "text", text: JSON.stringify({ success: true, message: "GHCi session restarted. MCP server still running.", alive: session.isAlive() }) }],
+    };
+  }
+);
+
+// --- Tool: ghci_mode ---
+server.tool(
+  "ghci_mode",
+  "Set or check the Haskell development mode. Controls which tools are mandatory vs optional. " +
+    "Use without arguments to see current mode. " +
+    "Modes: 'guided' (full ceremony, all tools mandatory), " +
+    "'medium' (balanced — load + quickcheck mandatory, suggest recommended), " +
+    "'expert' (minimal — only load, eval, quickcheck mandatory).",
+  {
+    mode: z.enum(["guided", "medium", "expert"]).optional().describe(
+      "The mode to set. Omit to check current mode."
+    ),
+  },
+  async ({ mode }) => {
+    if (!mode) {
+      const current = workflowState.mode;
+      if (!current) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            mode: null,
+            message: "No mode set yet.",
+            _modeSelection: MODE_SELECTION_PROMPT,
+          }) }],
+        };
+      }
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          mode: current,
+          message: `Current mode: ${current}`,
+          hint: "Use ghci_mode(mode=\"guided|medium|expert\") to change.",
+        }) }],
+      };
+    }
+
+    const previous = workflowState.mode;
+    ctx.setMode(mode);
+
+    const descriptions: Record<string, string> = {
+      guided: "Full ceremony — all tools mandatory. Best for beginners and unfamiliar codebases.",
+      medium: "Balanced — load + quickcheck mandatory, suggest on first pass. Best for intermediate devs.",
+      expert: "Minimal loop — only load, eval, quickcheck. Best for experienced Haskell devs.",
+    };
+
+    const mandatory: Record<string, string[]> = {
+      guided: ["ghci_load", "ghci_type", "ghci_hole_fits", "ghci_suggest", "ghci_quickcheck"],
+      medium: ["ghci_load", "ghci_quickcheck", "ghci_suggest (first time per module)"],
+      expert: ["ghci_load", "ghci_eval", "ghci_quickcheck"],
+    };
+
+    return {
+      content: [{ type: "text", text: JSON.stringify({
+        success: true,
+        mode,
+        previous: previous ?? "none",
+        description: descriptions[mode],
+        mandatoryTools: mandatory[mode],
+        message: previous
+          ? `Mode switched: ${previous} → ${mode}`
+          : `Mode set to: ${mode}`,
+      }) }],
     };
   }
 );

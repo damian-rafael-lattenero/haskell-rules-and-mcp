@@ -328,12 +328,14 @@ export function register(server: McpServer, ctx: ToolContext): void {
       }
       ctx.logToolExecution("ghci_load", parsed.success);
 
-      // Inject rules notice on first call if rules not installed
+      // Inject notices
       const notice = await ctx.getRulesNotice();
-      if (notice) {
-        const parsed = JSON.parse(result);
-        parsed._notice = notice;
-        return { content: [{ type: "text" as const, text: JSON.stringify(parsed) }] };
+      const modeNotice = ctx.getModeNotice();
+      if (notice || modeNotice) {
+        const reparsed = JSON.parse(result);
+        if (notice) reparsed._notice = notice;
+        if (modeNotice) reparsed._modeSelection = modeNotice;
+        return { content: [{ type: "text" as const, text: JSON.stringify(reparsed) }] };
       }
       return { content: [{ type: "text" as const, text: result }] };
     }
