@@ -67,20 +67,23 @@ describe("handleQuickCheck — suggest mode", () => {
   }
 
   it("suggests properties for 'apply' based on type", async () => {
-    const session = makeSuggestSession("apply :: Subst -> Type -> Type");
+    const session = makeSuggestSession("merge :: ParseError -> ParseError -> ParseError");
     const result = JSON.parse(
       await handleQuickCheck(session, {
         property: "suggest",
-        function_name: "apply",
+        function_name: "merge",
       })
     );
     expect(result.mode).toBe("suggest");
-    expect(result.function).toBe("apply");
+    expect(result.function).toBe("merge");
     expect(result.suggestedProperties.length).toBeGreaterThan(0);
-    expect(result.suggestedProperties[0].law).toBe("identity");
+    // Binary op → should get associativity
+    expect(result.suggestedProperties.some(
+      (p: { law: string }) => p.law.includes("associativity")
+    )).toBe(true);
   });
 
-  it("suggests properties for 'unify' with Either return", async () => {
+  it("suggests reflexivity for functions with Either return and same-type args", async () => {
     const session = makeSuggestSession("unify :: Type -> Type -> Either TypeError Subst");
     const result = JSON.parse(
       await handleQuickCheck(session, {
@@ -90,20 +93,20 @@ describe("handleQuickCheck — suggest mode", () => {
     );
     expect(result.suggestedProperties.length).toBeGreaterThan(0);
     expect(result.suggestedProperties.some(
-      (p: { law: string }) => p.law === "correctness"
+      (p: { law: string }) => p.law.includes("reflexivity")
     )).toBe(true);
   });
 
-  it("suggests properties for 'composeSubst'", async () => {
-    const session = makeSuggestSession("composeSubst :: Subst -> Subst -> Subst");
+  it("suggests state-threading for State -> Input -> State pattern", async () => {
+    const session = makeSuggestSession("advancePos :: Pos -> Char -> Pos");
     const result = JSON.parse(
       await handleQuickCheck(session, {
         property: "suggest",
-        function_name: "composeSubst",
+        function_name: "advancePos",
       })
     );
     expect(result.suggestedProperties.some(
-      (p: { law: string }) => p.law.includes("composition")
+      (p: { law: string }) => p.law.includes("sequential")
     )).toBe(true);
   });
 

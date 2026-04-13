@@ -462,42 +462,11 @@ function suggestPropertiesFromType(
   funcName: string,
   typeStr: string
 ): Array<{ law: string; property: string }> {
-  const suggestions: Array<{ law: string; property: string }> = [];
-
-  // Domain-specific suggestions (kept for backward compatibility with HM project)
-  if (/Subst\s*->\s*\w+\s*->\s*\w+/.test(typeStr) && funcName === "apply") {
-    suggestions.push({
-      law: "identity",
-      property: `\\t -> ${funcName} emptySubst t == t`,
-    });
-  }
-  if (funcName === "composeSubst" || funcName === "compose") {
-    suggestions.push({
-      law: "composition distributes over apply",
-      property: `\\s1 s2 t -> apply (${funcName} s1 s2) t == apply s1 (apply s2 t)`,
-    });
-  }
-  if (funcName === "unify" && typeStr.includes("Either")) {
-    suggestions.push({
-      law: "correctness",
-      property: `\\t1 t2 -> case ${funcName} t1 t2 of { Right s -> apply s t1 == apply s t2; Left _ -> True }`,
-    });
-    suggestions.push({
-      law: "reflexivity",
-      property: `\\t -> case ${funcName} t t of { Right s -> s == emptySubst; Left _ -> False }`,
-    });
-  }
-
-  // Generic heuristic-based suggestions from function-laws engine
-  const genericSuggestions = suggestFunctionProperties(funcName, typeStr);
-  for (const gs of genericSuggestions) {
-    // Avoid duplicating suggestions that already exist
-    if (!suggestions.some((s) => s.law === gs.law)) {
-      suggestions.push({ law: gs.law, property: gs.property });
-    }
-  }
-
-  return suggestions;
+  // All suggestions come from the generic engine — no domain-specific hardcoding
+  return suggestFunctionProperties(funcName, typeStr).map((gs) => ({
+    law: gs.law,
+    property: gs.property,
+  }));
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {

@@ -52,10 +52,10 @@ import { register as registerRegression } from "./tools/regression.js";
 // Base directory: the project root (parent of mcp-server/)
 const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
 
-// Active project directory — mutable, can be switched at runtime
+// Active project directory — mutable, can be switched at runtime.
+// Defaults to HASKELL_PROJECT_DIR env var, or the current working directory.
 let projectDir =
-  process.env.HASKELL_PROJECT_DIR ??
-  path.join(BASE_DIR, "playground", "hindley-milner");
+  process.env.HASKELL_PROJECT_DIR ?? process.cwd();
 
 // Load workflow instructions (single source of truth for Claude)
 const WORKFLOW_PATH = path.resolve(import.meta.dirname, "..", "rules", "haskell-mcp-workflow.md");

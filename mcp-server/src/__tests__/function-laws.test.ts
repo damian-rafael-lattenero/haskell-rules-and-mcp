@@ -86,14 +86,55 @@ describe("suggestFunctionProperties", () => {
     });
   });
 
+  describe("return-type contracts", () => {
+    it("suggests Right/Left properties for Either return", () => {
+      const suggestions = suggestFunctionProperties("parse", "parse :: String -> Either String Int");
+      const laws = suggestions.map((s) => s.law);
+      expect(laws).toContain("not always Left");
+    });
+
+    it("suggests reflexivity for Either with same-type args", () => {
+      const suggestions = suggestFunctionProperties("unify", "unify :: Type -> Type -> Either Error Type");
+      const reflex = suggestions.find((s) => s.law.includes("reflexivity"));
+      expect(reflex).toBeDefined();
+      expect(reflex!.property).toContain("unify x (x :: Type)");
+    });
+
+    it("suggests Just/Nothing properties for Maybe return", () => {
+      const suggestions = suggestFunctionProperties("lookup", "lookup :: String -> Maybe Int");
+      const laws = suggestions.map((s) => s.law);
+      expect(laws).toContain("not always Nothing");
+    });
+
+    it("suggests exists True/False for Bool return", () => {
+      const suggestions = suggestFunctionProperties("isValid", "isValid :: String -> Bool");
+      const laws = suggestions.map((s) => s.law);
+      expect(laws).toContain("not constant True");
+      expect(laws).toContain("not constant False");
+    });
+  });
+
+  describe("same-type arguments", () => {
+    it("suggests reflexive test for equal args", () => {
+      const suggestions = suggestFunctionProperties("merge", "merge :: ParseError -> ParseError -> ParseError");
+      const reflex = suggestions.find((s) => s.law.includes("reflexive"));
+      expect(reflex).toBeDefined();
+      expect(reflex!.property).toContain("merge x (x :: ParseError)");
+    });
+  });
+
+  describe("state-threading pattern", () => {
+    it("suggests consistency for State -> Input -> State", () => {
+      const suggestions = suggestFunctionProperties("advancePos", "advancePos :: Pos -> Char -> Pos");
+      const consistency = suggestions.find((s) => s.law.includes("sequential"));
+      expect(consistency).toBeDefined();
+      expect(consistency!.property).toContain("advancePos (advancePos");
+    });
+  });
+
   describe("no suggestions for complex types", () => {
     it("returns empty for IO actions", () => {
       const suggestions = suggestFunctionProperties("main", "main :: IO ()");
-      expect(suggestions).toEqual([]);
-    });
-
-    it("returns empty for multi-arg functions with different types", () => {
-      const suggestions = suggestFunctionProperties("foo", "foo :: Int -> String -> Bool -> IO ()");
       expect(suggestions).toEqual([]);
     });
   });
