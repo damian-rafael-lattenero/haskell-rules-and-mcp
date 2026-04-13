@@ -358,6 +358,38 @@ export function extractNotInScopeNames(errors: Array<{ message: string }>): stri
   return [...names];
 }
 
+/**
+ * Extract GHC's own "Suggested fix" lines from error messages.
+ * GHC outputs lines like: "Suggested fix: Add 'Gen' to the import list in the import of 'Test.QuickCheck'"
+ * These are mechanical fixes that the agent can apply directly.
+ */
+export function extractGhcSuggestedFixes(errors: Array<{ message: string; file?: string; line?: number }>): Array<{ fix: string; file?: string; line?: number }> {
+  const fixes: Array<{ fix: string; file?: string; line?: number }> = [];
+  for (const err of errors) {
+    const lines = err.message.split("\n");
+    for (const line of lines) {
+      const match = line.match(/Suggested fix:\s*(.+)/i);
+      if (match) {
+        fixes.push({
+          fix: match[1]!.trim(),
+          file: err.file,
+          line: err.line,
+        });
+      }
+      // Also catch "Perhaps you meant" suggestions
+      const perhapsMatch = line.match(/Perhaps you meant\s+['\u2018](\S+)['\u2019]/);
+      if (perhapsMatch) {
+        fixes.push({
+          fix: `Perhaps you meant '${perhapsMatch[1]}'`,
+          file: err.file,
+          line: err.line,
+        });
+      }
+    }
+  }
+  return fixes;
+}
+
 export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     "ghci_load",
@@ -450,8 +482,14 @@ export function register(server: McpServer, ctx: ToolContext): void {
         }
       }
 
-      // Suggest imports for "Not in scope" errors (max 5 to avoid latency)
+      // Extract GHC's own "Suggested fix" lines from errors
       if (parsed.errors?.length > 0) {
+        const ghcFixes = extractGhcSuggestedFixes(parsed.errors);
+        if (ghcFixes.length > 0) {
+          parsed.suggestedFixes = ghcFixes;
+        }
+
+        // Also suggest imports for "Not in scope" errors via Hoogle (max 5)
         try {
           const { lookupImportForName } = await import("./add-import.js");
           const scopeNames = extractNotInScopeNames(parsed.errors);

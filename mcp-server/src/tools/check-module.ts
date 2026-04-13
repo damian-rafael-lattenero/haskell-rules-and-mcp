@@ -46,6 +46,16 @@ export async function handleCheckModule(
 
   await session.execute(":set -fdefer-type-errors");
 
+  // Suggest explicit export list if module exports everything
+  const exportNames = [
+    ...types.map(d => `${d.name}(..)`),
+    ...classes.map(d => `${d.name}(..)`),
+    ...functions.map(d => d.name),
+  ];
+  const suggestedExportList = exportNames.length > 0
+    ? `module ${moduleName}\n  ( ${exportNames.join("\n  , ")}\n  ) where`
+    : null;
+
   return JSON.stringify({
     success: true,
     compiled: true,
@@ -60,6 +70,10 @@ export async function handleCheckModule(
       warnings: warnings.length,
     },
     module: moduleName,
+    ...(suggestedExportList ? { suggestedExportList } : {}),
+    _nextStep: suggestedExportList
+      ? "Consider adding an explicit export list to control the module's public API."
+      : undefined,
   });
 }
 

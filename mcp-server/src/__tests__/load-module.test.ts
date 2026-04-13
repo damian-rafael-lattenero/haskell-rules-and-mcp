@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { handleLoadModule, parseShowModules, extractNotInScopeNames } from "../tools/load-module.js";
+import { handleLoadModule, parseShowModules, extractNotInScopeNames, extractGhcSuggestedFixes } from "../tools/load-module.js";
 import { createMockSession } from "./helpers/mock-session.js";
 import type { GhciResult } from "../ghci-session.js";
 
@@ -375,5 +375,38 @@ describe("extractNotInScopeNames", () => {
       { message: "Not in scope: \u2018intercalate\u2019" },
     ]);
     expect(names).toEqual(["intercalate"]);
+  });
+});
+
+describe("extractGhcSuggestedFixes", () => {
+  it("extracts 'Suggested fix' lines from errors", () => {
+    const fixes = extractGhcSuggestedFixes([
+      { message: "Not in scope: 'Gen'\nSuggested fix: Add 'Gen' to the import list in the import of 'Test.QuickCheck'" },
+    ]);
+    expect(fixes).toHaveLength(1);
+    expect(fixes[0]!.fix).toContain("Add 'Gen'");
+  });
+
+  it("extracts 'Perhaps you meant' suggestions", () => {
+    const fixes = extractGhcSuggestedFixes([
+      { message: "Variable not in scope: foobar\nPerhaps you meant 'fooBar'" },
+    ]);
+    expect(fixes).toHaveLength(1);
+    expect(fixes[0]!.fix).toContain("fooBar");
+  });
+
+  it("returns empty for errors without suggestions", () => {
+    const fixes = extractGhcSuggestedFixes([
+      { message: "Type error: Couldn't match expected type" },
+    ]);
+    expect(fixes).toEqual([]);
+  });
+
+  it("extracts multiple fixes from multiple errors", () => {
+    const fixes = extractGhcSuggestedFixes([
+      { message: "Suggested fix: Add 'sort' to imports" },
+      { message: "Suggested fix: Add 'nub' to imports" },
+    ]);
+    expect(fixes).toHaveLength(2);
   });
 });

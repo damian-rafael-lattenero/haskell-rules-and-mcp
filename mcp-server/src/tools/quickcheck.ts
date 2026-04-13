@@ -402,7 +402,24 @@ export async function handleQuickCheck(
       : isCompilationError
         ? "Property has a type/syntax error. Fix the property expression and retry."
         : "Property FAILED. Debug with ghci_trace or fix the implementation.",
+    // Hint for roundtrip failures — common cause is normalization
+    ...(!parsed.success && !isCompilationError && isLikelyRoundtrip(args.property)
+      ? { _hint: "Roundtrip property failed. Common cause: normalization differences (e.g. Neg (Lit n) vs Lit (negate n)). Consider testing with a normalize function: normalize <$> parse (pretty e) == Just (normalize e)" }
+      : {}),
   });
+}
+
+/**
+ * Detect if a property looks like a roundtrip test (parse/pretty, encode/decode, etc.)
+ */
+function isLikelyRoundtrip(property: string): boolean {
+  const p = property.toLowerCase();
+  return (
+    (p.includes("parse") && p.includes("pretty")) ||
+    (p.includes("decode") && p.includes("encode")) ||
+    (p.includes("from") && p.includes("to")) ||
+    p.includes("roundtrip")
+  );
 }
 
 /**

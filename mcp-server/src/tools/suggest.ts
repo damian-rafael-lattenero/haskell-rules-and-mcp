@@ -136,6 +136,27 @@ export async function handleSuggest(
       };
     });
 
+    // For functions with empty validFits, supplement with scope info:
+    // constructors of input types, useful functions from imports
+    for (const s of suggestions) {
+      if (s.validFits.length === 0 && s.expectedType !== "unknown") {
+        try {
+          // Extract type names from the expected type to find constructors
+          const typeNames = s.expectedType.match(/\b[A-Z][\w']*/g) ?? [];
+          const scopeInfo: string[] = [];
+          for (const tn of typeNames.slice(0, 3)) { // limit to avoid latency
+            const info = await session.execute(`:i ${tn}`);
+            if (info.success && info.output.includes("data ") || info.output.includes("newtype ")) {
+              scopeInfo.push(info.output.split("\n")[0]!.trim());
+            }
+          }
+          if (scopeInfo.length > 0) {
+            (s as any).scopeInfo = scopeInfo;
+          }
+        } catch { /* non-fatal */ }
+      }
+    }
+
     return JSON.stringify({
       success: true,
       suggestions,
