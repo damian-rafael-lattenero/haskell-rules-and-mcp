@@ -181,6 +181,57 @@ export class GhciSession extends EventEmitter {
     // so we must consume both sentinels to avoid an off-by-one in execute().
     await this.waitForSentinel();
     await this.waitForSentinel();
+    // Drain any extra sentinels and verify synchronization.
+    // GHCi versions may produce additional sentinels during prompt setup;
+    // without this, a stale sentinel causes every execute() to return
+    // the previous command's output (off-by-one).
+    await this.drainAndSync();
+  }
+
+  /**
+   * Drain stale sentinels from the buffer and send a sync handshake
+   * to verify the command/output pipeline is properly aligned.
+   */
+  private async drainAndSync(): Promise<void> {
+    // Give GHCi a moment to flush any pending output
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Drain any leftover sentinels
+    this.drainStaleSentinels();
+
+    // Send a sync command and verify the response
+    const syncToken = `<<<SYNC-${Date.now()}>>>`;
+    const result = await this.executeInternal(
+      `putStrLn "${syncToken}"`,
+      DEFAULT_TIMEOUT_MS
+    );
+
+    if (result.output.includes(syncToken)) {
+      return; // Synchronized
+    }
+
+    // Retry: drain again and send another sync
+    this.drainStaleSentinels();
+    const retry = await this.executeInternal(
+      `putStrLn "${syncToken}"`,
+      DEFAULT_TIMEOUT_MS
+    );
+
+    if (!retry.output.includes(syncToken)) {
+      throw new Error(
+        `GHCi sentinel sync failed after retry. Expected "${syncToken}" but got: "${retry.output.slice(0, 200)}"`
+      );
+    }
+  }
+
+  /**
+   * Remove all sentinel occurrences currently sitting in the buffer.
+   */
+  private drainStaleSentinels(): void {
+    while (this.buffer.includes(SENTINEL)) {
+      const idx = this.buffer.indexOf(SENTINEL);
+      this.buffer = this.buffer.substring(idx + SENTINEL.length);
+    }
   }
 
   /**

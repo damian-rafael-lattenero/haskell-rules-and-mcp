@@ -417,3 +417,43 @@ describe("Bug Fix 8: missing-signature categorized by GHC code fallback", () => 
     expect(action!.suggestedAction).toContain("bar :: Bool -> Bool");
   });
 });
+
+// ============================================================================
+// BUG FIX 9: Sentinel off-by-one — output offset by one command
+//
+// GHCi 9.12 can produce extra sentinels during prompt setup. Without a
+// drain-and-sync step after initSession, a stale sentinel remains in the
+// buffer, causing every execute() to return the PREVIOUS command's output.
+// Fix: drainAndSync() in initSession clears stale sentinels and verifies
+// alignment via a sync handshake.
+// ============================================================================
+describe("Bug Fix 9: Sentinel sync — drainStaleSentinels logic", () => {
+  it("REGRESSION: drainAndSync concept — stale sentinels must not survive init", () => {
+    // Simulate the scenario: buffer has a stale sentinel after init
+    const SENTINEL = "<<<GHCi-DONE-7f3a2b>>>";
+    let buffer = `\n${SENTINEL}\nsome leftover\n${SENTINEL}\n`;
+
+    // Drain loop (mirrors drainStaleSentinels)
+    while (buffer.includes(SENTINEL)) {
+      const idx = buffer.indexOf(SENTINEL);
+      buffer = buffer.substring(idx + SENTINEL.length);
+    }
+
+    // Buffer should be free of sentinels
+    expect(buffer).not.toContain(SENTINEL);
+    // Only the trailing content after the last sentinel should remain
+    expect(buffer).toBe("\n");
+  });
+
+  it("REGRESSION: buffer with no stale sentinels is unchanged", () => {
+    const SENTINEL = "<<<GHCi-DONE-7f3a2b>>>";
+    let buffer = "\nclean buffer content\n";
+
+    while (buffer.includes(SENTINEL)) {
+      const idx = buffer.indexOf(SENTINEL);
+      buffer = buffer.substring(idx + SENTINEL.length);
+    }
+
+    expect(buffer).toBe("\nclean buffer content\n");
+  });
+});

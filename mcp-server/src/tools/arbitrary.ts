@@ -75,14 +75,22 @@ export async function handleArbitrary(
   // Detect type variables for constraints
   const typeVars = extractTypeVars(args.type_name, baseTypeName);
 
-  const instance = isRecursive
+  let instance = isRecursive
     ? generateRecursiveInstance(args.type_name, baseTypeName, constructors, typeVars)
     : generateSimpleInstance(args.type_name, baseTypeName, constructors, typeVars);
 
-  const hint = isRecursive
+  let hint = isRecursive
     ? "This type is recursive. The generated instance uses 'sized' to prevent infinite generation. " +
       "Base cases (non-recursive constructors) are used at size 0."
     : "This type is non-recursive. The generated instance uses 'oneof' to pick a random constructor.";
+
+  // Validate the instance in GHCi — if it fails with missing constraints,
+  // parse the error and add the required constraints automatically.
+  const validated = await validateInstance(session, instance);
+  if (validated.fixedInstance) {
+    instance = validated.fixedInstance;
+    hint += ` Added constraints: ${validated.addedConstraints!.join(", ")}.`;
+  }
 
   return JSON.stringify({
     success: true,
@@ -92,6 +100,50 @@ export async function handleArbitrary(
     instance,
     hint,
   });
+}
+
+/**
+ * Validate a generated Arbitrary instance by trying to evaluate it in GHCi.
+ * If GHC reports missing constraints (e.g. "No instance for (Ord k)"),
+ * parse them from the error and rebuild the instance with the extra constraints.
+ */
+async function validateInstance(
+  session: GhciSession,
+  instance: string
+): Promise<{ fixedInstance?: string; addedConstraints?: string[] }> {
+  // Try loading the instance in GHCi
+  const lines = instance.split("\n");
+  const testResult = await session.executeBlock(lines);
+
+  if (testResult.success && !testResult.output.includes("No instance for")) {
+    return {};
+  }
+
+  // Parse missing constraints from "No instance for (Constraint) arising from ..."
+  const missingConstraints: string[] = [];
+  const pattern = /No instance for \(([^)]+)\)/g;
+  let match;
+  while ((match = pattern.exec(testResult.output)) !== null) {
+    missingConstraints.push(match[1]!.trim());
+  }
+
+  if (missingConstraints.length === 0) {
+    return {};
+  }
+
+  // Rebuild instance with additional constraints
+  const fixedInstance = instance.replace(
+    /^instance\s+(?:\(([^)]*)\)\s*=>\s*)?/,
+    (_fullMatch, existingConstraints?: string) => {
+      const existing = existingConstraints
+        ? existingConstraints.split(",").map((c: string) => c.trim()).filter(Boolean)
+        : [];
+      const all = [...new Set([...existing, ...missingConstraints])];
+      return `instance (${all.join(", ")}) => `;
+    }
+  );
+
+  return { fixedInstance, addedConstraints: missingConstraints };
 }
 
 /**

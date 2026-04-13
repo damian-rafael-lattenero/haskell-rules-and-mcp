@@ -188,4 +188,46 @@ describe("handleArbitrary", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("class");
   });
+
+  it("adds missing constraints when GHCi reports them (Bug Fix 4)", async () => {
+    const session = createMockSession({
+      infoOf: {
+        output:
+          "newtype Subst = Subst (Data.Map.Internal.Map String Type)\n  -- Defined at src/HM/Subst.hs:3:1",
+        success: true,
+      },
+      executeBlock: {
+        output: 'No instance for (Ord String) arising from a use of \'arbitrary\'\nNo instance for (Arbitrary Type) arising from a use of \'arbitrary\'',
+        success: false,
+      },
+    });
+
+    const raw = await handleArbitrary(session, { type_name: "Subst" });
+    const result = JSON.parse(raw);
+
+    expect(result.success).toBe(true);
+    expect(result.instance).toContain("Ord String");
+    expect(result.instance).toContain("Arbitrary Type");
+    expect(result.hint).toContain("Added constraints");
+  });
+
+  it("does not add constraints when instance validates successfully", async () => {
+    const session = createMockSession({
+      infoOf: {
+        output: "data Lit = LInt Integer | LBool Bool\n  -- Defined at src/HM/Syntax.hs:5:1",
+        success: true,
+      },
+      executeBlock: {
+        output: "",
+        success: true,
+      },
+    });
+
+    const raw = await handleArbitrary(session, { type_name: "Lit" });
+    const result = JSON.parse(raw);
+
+    expect(result.success).toBe(true);
+    expect(result.instance).not.toContain("=>");
+    expect(result.hint).not.toContain("Added constraints");
+  });
 });

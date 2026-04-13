@@ -312,6 +312,22 @@ export function register(server: McpServer, ctx: ToolContext): void {
     async ({ module_path, load_all, diagnostics }) => {
       const session = await ctx.getSession();
       const result = await handleLoadModule(session, { module_path, load_all, diagnostics }, ctx.getProjectDir());
+
+      // Update workflow state: set activeModule and track load results
+      const parsed = JSON.parse(result);
+      if (module_path) {
+        const state = ctx.getWorkflowState();
+        state.activeModule = module_path;
+        ctx.updateModuleProgress(module_path, {
+          lastLoad: {
+            success: parsed.success,
+            errors: parsed.errors?.length ?? 0,
+            warnings: parsed.warnings?.length ?? 0,
+          },
+        });
+      }
+      ctx.logToolExecution("ghci_load", parsed.success);
+
       // Inject rules notice on first call if rules not installed
       const notice = await ctx.getRulesNotice();
       if (notice) {

@@ -171,4 +171,42 @@ describe.runIf(GHC_AVAILABLE)("GHCi Session Integration", () => {
     const result = await session.execute('putStrLn "  hello"');
     expect(result.output).toMatch(/^ {2}hello/);
   });
+
+  // --- Fix 9: Sentinel sync — no off-by-one ---
+  it("sequential eval commands return correct (non-offset) results", async () => {
+    const results: string[] = [];
+    for (let i = 1; i <= 5; i++) {
+      const r = await session.execute(`putStrLn "${i}"`);
+      results.push(r.output.trim());
+    }
+    expect(results).toEqual(["1", "2", "3", "4", "5"]);
+  });
+
+  it("reloadThenExecute returns the command result, not reload output", async () => {
+    const result = await session.typeOf("add");
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Int -> Int -> Int");
+    expect(result.output).not.toContain("Ok,");
+    expect(result.output).not.toContain("module");
+  });
+
+  it("eval after load returns eval result, not load output", async () => {
+    await session.loadModule("src/TestLib.hs");
+    const result = await session.execute("add 10 20");
+    expect(result.output.trim()).toBe("30");
+  });
+
+  it("fresh session has no sentinel offset", async () => {
+    const fresh = new GhciSession(FIXTURE_DIR, "lib:test-project");
+    await fresh.start();
+    try {
+      // Use putStrLn to avoid GHC type-defaulting warnings
+      const r1 = await fresh.execute('putStrLn "alpha"');
+      expect(r1.output.trim()).toBe("alpha");
+      const r2 = await fresh.execute('putStrLn "beta"');
+      expect(r2.output.trim()).toBe("beta");
+    } finally {
+      await fresh.kill();
+    }
+  }, 60_000);
 });

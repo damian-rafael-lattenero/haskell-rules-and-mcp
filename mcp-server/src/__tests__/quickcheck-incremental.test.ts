@@ -131,3 +131,51 @@ describe("handleQuickCheck — suggest mode", () => {
     expect(result.type).toContain("(a -> b)");
   });
 });
+
+describe("handleQuickCheck — retry on stale output", () => {
+  it("retries when first execute returns non-QC output", async () => {
+    let callCount = 0;
+    const session = createMockSession({
+      execute: async (cmd: string): Promise<GhciResult> => {
+        if (cmd.includes("import Test.QuickCheck")) {
+          return { output: "", success: true };
+        }
+        if (cmd.includes("quickCheckWith")) {
+          callCount++;
+          if (callCount === 1) {
+            // Simulate stale output from previous command
+            return { output: '"flush"', success: true };
+          }
+          return { output: "+++ OK, passed 100 tests.\n", success: true };
+        }
+        return { output: "", success: true };
+      },
+    });
+    const result = JSON.parse(
+      await handleQuickCheck(session, { property: "\\x -> x == (x :: Int)" })
+    );
+    expect(result.success).toBe(true);
+    expect(result.passed).toBe(100);
+  });
+
+  it("does not retry when output contains QC markers", async () => {
+    let callCount = 0;
+    const session = createMockSession({
+      execute: async (cmd: string): Promise<GhciResult> => {
+        if (cmd.includes("import Test.QuickCheck")) {
+          return { output: "", success: true };
+        }
+        if (cmd.includes("quickCheckWith")) {
+          callCount++;
+          return { output: "+++ OK, passed 50 tests.\n", success: true };
+        }
+        return { output: "", success: true };
+      },
+    });
+    const result = JSON.parse(
+      await handleQuickCheck(session, { property: "\\x -> True" })
+    );
+    expect(result.success).toBe(true);
+    expect(callCount).toBe(1); // No retry — QC output was valid
+  });
+});

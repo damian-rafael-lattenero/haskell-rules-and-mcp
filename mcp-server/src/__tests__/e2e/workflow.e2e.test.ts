@@ -282,4 +282,33 @@ broken x = x * 2
     expect(result.results[2].output).toContain("20");
     expect(result.results[3].output).toContain("20");
   });
+
+  // --- Step 11: Sentinel sync — no off-by-one ---
+  it("step 11: sequential evals return their own results (no offset)", async () => {
+    const r1 = parseResult(await callTool(client, "ghci_eval", { expression: "double 1" }));
+    const r2 = parseResult(await callTool(client, "ghci_eval", { expression: "double 2" }));
+    const r3 = parseResult(await callTool(client, "ghci_eval", { expression: "double 3" }));
+
+    expect(r1.output).toContain("2");
+    expect(r2.output).toContain("4");
+    expect(r3.output).toContain("6");
+
+    // Critically: r2 must NOT contain r1's result
+    expect(r2.output).not.toContain("2\n");
+  });
+
+  it("step 12: type after eval returns type, not eval result", async () => {
+    const evalResult = parseResult(
+      await callTool(client, "ghci_eval", { expression: "broken 7" })
+    );
+    expect(evalResult.output).toContain("14");
+
+    const typeResult = parseResult(
+      await callTool(client, "ghci_type", { expression: "broken" })
+    );
+    expect(typeResult.success).toBe(true);
+    expect(typeResult.type).toContain("Int -> Int");
+    // Must NOT contain the eval result
+    expect(typeResult.type).not.toContain("14");
+  });
 });

@@ -302,8 +302,10 @@ server.tool(
 // --- Tool: ghci_batch ---
 server.tool(
   "ghci_batch",
-  "Execute multiple GHCi commands in a single call. Returns all results as a JSON array. " +
-    "Useful for running several :t, :i, or eval commands without multiple roundtrips. " +
+  "Execute multiple GHCi commands in a single atomic call. Returns all results as a JSON array " +
+    "with each result aligned to its command (no offset issues). " +
+    "Ideal for: running several :t/:i/eval commands without roundtrips, " +
+    "testing multiple expressions after an edit, or batch type-checking. " +
     "Optionally reloads modules first and stops on first error.",
   {
     commands: z.array(z.string()).describe('List of GHCi commands to execute. Examples: [":t map", ":t foldr", "1 + 2"]'),

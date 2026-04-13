@@ -55,7 +55,7 @@ export async function handleQuickCheck(
     incremental?: boolean;
     function_name?: string;
   },
-  ctx?: { getWorkflowState?: () => { activeModule: string | null }; updateModuleProgress?: (path: string, updates: Record<string, unknown>) => void; getModuleProgress?: (path: string) => { propertiesPassed: string[]; propertiesFailed: string[]; functionsImplemented: number; functionsTotal: number } | undefined }
+  ctx?: { getWorkflowState?: () => { activeModule: string | null; modules: Map<string, unknown> }; updateModuleProgress?: (path: string, updates: Record<string, unknown>) => void; getModuleProgress?: (path: string) => { propertiesPassed: string[]; propertiesFailed: string[]; functionsImplemented: number; functionsTotal: number } | undefined }
 ): Promise<string> {
   const available = await ensureQuickCheck(session);
   if (!available) {
@@ -109,22 +109,49 @@ export async function handleQuickCheck(
 
   const result = await session.execute(command);
   const evalParsed = parseEvalOutput(result.output);
-  const parsed = parseQuickCheckOutput(evalParsed.result, args.property);
+  let parsed = parseQuickCheckOutput(evalParsed.result, args.property);
+
+  // If parsing failed and the output doesn't look like QC output at all,
+  // retry once — the buffer may have had a stale entry from a previous command.
+  if (
+    parsed.error?.startsWith("Couldn't parse QuickCheck output") &&
+    !evalParsed.result.includes("+++") &&
+    !evalParsed.result.includes("***")
+  ) {
+    const retryResult = await session.execute(command);
+    const retryParsed = parseEvalOutput(retryResult.output);
+    parsed = parseQuickCheckOutput(retryParsed.result, args.property);
+  }
 
   // Track in workflow state if incremental
   if (args.incremental && ctx?.getWorkflowState && ctx?.getModuleProgress) {
-    const activeMod = ctx.getWorkflowState().activeModule;
+    let activeMod = ctx.getWorkflowState().activeModule;
+
+    // If no activeModule is set, fall back to the most recently tracked module
+    if (!activeMod) {
+      const state = ctx.getWorkflowState();
+      const entries = Array.from(state.modules.entries());
+      if (entries.length > 0) {
+        activeMod = entries[entries.length - 1]![0];
+      }
+    }
+
     if (activeMod) {
       const mod = ctx.getModuleProgress(activeMod);
       if (mod && ctx.updateModuleProgress) {
         if (parsed.success) {
-          ctx.updateModuleProgress(activeMod, {
-            propertiesPassed: [...mod.propertiesPassed, args.property],
-          });
+          // Deduplicate: don't add the same property twice
+          if (!mod.propertiesPassed.includes(args.property)) {
+            ctx.updateModuleProgress(activeMod, {
+              propertiesPassed: [...mod.propertiesPassed, args.property],
+            });
+          }
         } else {
-          ctx.updateModuleProgress(activeMod, {
-            propertiesFailed: [...mod.propertiesFailed, args.property],
-          });
+          if (!mod.propertiesFailed.includes(args.property)) {
+            ctx.updateModuleProgress(activeMod, {
+              propertiesFailed: [...mod.propertiesFailed, args.property],
+            });
+          }
         }
       }
     }

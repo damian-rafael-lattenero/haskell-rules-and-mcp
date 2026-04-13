@@ -168,6 +168,22 @@ export function register(server: McpServer, ctx: ToolContext): void {
         { module_path },
         ctx.getProjectDir()
       );
+
+      // Track function counts in workflow state
+      try {
+        const parsed = JSON.parse(result);
+        if (parsed.success && parsed.suggestions) {
+          const undefinedCount = parsed.suggestions.length;
+          const existing = ctx.getModuleProgress(module_path);
+          const currentImplemented = existing?.functionsImplemented ?? 0;
+          ctx.updateModuleProgress(module_path, {
+            functionsTotal: undefinedCount + currentImplemented,
+            phase: undefinedCount > 0 ? "implementing" : "complete",
+          });
+        }
+      } catch { /* don't break suggest if tracking fails */ }
+      ctx.logToolExecution("ghci_suggest", true);
+
       return { content: [{ type: "text" as const, text: result }] };
     }
   );

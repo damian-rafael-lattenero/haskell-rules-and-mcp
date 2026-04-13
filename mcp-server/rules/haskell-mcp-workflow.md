@@ -31,12 +31,24 @@ Relaxed inner loop. The compiler still drives, but skip ceremony when confident:
 ## TOOL TIERS
 
 ### Tier 1 — Every function (the inner loop)
+
+**guided mode (all tools mandatory):**
 | Tool | When |
 |------|------|
 | `ghci_load` | After every `.hs` edit — no exceptions |
 | `ghci_type` | Verify types before AND after implementation |
 | `ghci_hole_fits` | Read typed hole analysis before implementing |
 | `ghci_suggest` | **At start of FLOW 4** — auto-discover hole fits for all undefined functions |
+
+**expert mode (minimal inner loop):**
+| Tool | When |
+|------|------|
+| `ghci_load` | After every `.hs` edit — no exceptions |
+| `ghci_eval` | Test behavior after implementation |
+| `ghci_quickcheck` | Incremental properties (FLOW 4.5) |
+
+In expert mode, `ghci_type`, `ghci_suggest`, and `ghci_hole_fits` are **Tier 2 (recommended)**,
+not mandatory. Use them when types are unfamiliar or the first implementation attempt fails.
 
 ### Tier 2 — Frequently during development
 | Tool | When |
@@ -49,6 +61,7 @@ Relaxed inner loop. The compiler still drives, but skip ceremony when confident:
 | `ghci_arbitrary` | **FLOW 3** — generate Arbitrary instances for new data types |
 | `ghci_workflow` | Check progress, get next step, view checklist |
 | `ghci_trace` | Debug logic errors — wrap expressions with Debug.Trace |
+| `ghci_batch` | Run multiple GHCi commands in one call — avoids roundtrips |
 
 ### Tier 3 — Module complete gate (MANDATORY before next module)
 | Tool | When |
@@ -59,7 +72,7 @@ Relaxed inner loop. The compiler still drives, but skip ceremony when confident:
 | `ghci_format` | Formatting pass |
 
 ### Tier 4 — As needed
-`ghci_batch` · `ghci_kind` · `ghci_doc` · `ghci_goto` · `ghci_references` · `ghci_rename` · `ghci_imports`
+`ghci_kind` · `ghci_doc` · `ghci_goto` · `ghci_references` · `ghci_rename` · `ghci_imports`
 
 ---
 
@@ -161,6 +174,25 @@ Common trigger points:
 
 **Principle**: A property is testable the moment ALL functions it references are implemented.
 Run it IMMEDIATELY — do not accumulate untested properties.
+
+### Expert Mode Minimal Loop
+
+When you know the implementation and the types are familiar:
+```
+1. IMPLEMENT  Write the function body
+2. COMPILE    ghci_load(diagnostics=true)
+3. FIX        errors/warnings → fix → recompile
+4. TEST       ghci_eval("functionName sampleArg")
+5. PROPERTY   ghci_quickcheck(incremental=true) if a law is testable
+```
+
+Fall back to the full guided loop (hole → compile → explore → ...) when:
+- The first implementation attempt fails with type errors
+- The function involves unfamiliar types or typeclasses
+- You've been stuck for 2+ attempts
+
+**Tip:** Use `ghci_batch` to combine `:t`, `:i`, and eval commands into a single call
+when exploring multiple functions at once.
 
 ## FLOW 5: Explore & Discover (use DURING Flow 4, step 3)
 
@@ -264,12 +296,12 @@ Fix EVERY `warningAction` immediately — never "deal with it later":
 
 ## FORBIDDEN
 
-- Implementation without hole phase (Flow 4 steps 1-2) **[guided mode]**
-- Skipping `ghci_type` after implementation (Flow 4 step 7) **[guided mode]**
+- Implementation without hole phase (Flow 4 steps 1-2) **[guided mode only]**
+- Skipping `ghci_type` after implementation (Flow 4 step 7) **[guided mode only]**
+- **Starting FLOW 4 without running `ghci_suggest`** to preview hole fits first **[guided mode only]**
 - **Moving to next module without running `ghci_quickcheck`** (Flow 6 step 1) **[all modes]**
 - **Skipping incremental QuickCheck when a law becomes testable** (Flow 4.5) **[all modes]**
 - **Writing Arbitrary instances by hand** when `ghci_arbitrary` can generate them (FLOW 3) **[all modes]**
-- **Starting FLOW 4 without running `ghci_suggest`** to preview hole fits first **[all modes]**
 - Multiple `.hs` edits between `ghci_load` calls **[all modes]**
 - Using Bash for ANY Haskell toolchain operation **[all modes]**
 - "I'll fix warnings later" — fix them NOW **[all modes]**

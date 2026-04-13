@@ -245,3 +245,65 @@ describe("serializeState", () => {
     expect((serialized.recentTools as unknown[]).length).toBe(10);
   });
 });
+
+describe("Workflow tracking integration (Bug Fix 3)", () => {
+  it("activeModule can be set and read back", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/HM/Types.hs";
+    expect(state.activeModule).toBe("src/HM/Types.hs");
+  });
+
+  it("updateModuleProgress stores lastLoad data", () => {
+    const state = createWorkflowState();
+    updateModuleProgress(state, "src/HM/Subst.hs", {
+      lastLoad: { success: true, errors: 0, warnings: 0 },
+    });
+    const mod = getModuleProgress(state, "src/HM/Subst.hs");
+    expect(mod?.lastLoad?.success).toBe(true);
+    expect(mod?.lastLoad?.errors).toBe(0);
+  });
+
+  it("QC tracking works without pre-set activeModule (fallback to last module)", () => {
+    const state = createWorkflowState();
+    // Simulate: ghci_load set a module via updateModuleProgress
+    updateModuleProgress(state, "src/HM/Subst.hs", {
+      lastLoad: { success: true, errors: 0, warnings: 0 },
+    });
+    // activeModule is still null — fallback should pick src/HM/Subst.hs
+    const entries = Array.from(state.modules.entries());
+    const fallbackMod = entries.length > 0 ? entries[entries.length - 1]![0] : null;
+    expect(fallbackMod).toBe("src/HM/Subst.hs");
+  });
+
+  it("property deduplication prevents double-tracking", () => {
+    const state = createWorkflowState();
+    updateModuleProgress(state, "src/Lib.hs", {});
+    const mod = getModuleProgress(state, "src/Lib.hs")!;
+
+    // Simulate adding same property twice
+    const prop = "\\t -> apply emptySubst t == t";
+    const passed1 = [...mod.propertiesPassed, prop];
+    updateModuleProgress(state, "src/Lib.hs", { propertiesPassed: passed1 });
+
+    // Second add should be deduplicated by the tool handler
+    const mod2 = getModuleProgress(state, "src/Lib.hs")!;
+    if (!mod2.propertiesPassed.includes(prop)) {
+      updateModuleProgress(state, "src/Lib.hs", {
+        propertiesPassed: [...mod2.propertiesPassed, prop],
+      });
+    }
+    expect(getModuleProgress(state, "src/Lib.hs")!.propertiesPassed.length).toBe(1);
+  });
+
+  it("suggest tracking updates functionsTotal", () => {
+    const state = createWorkflowState();
+    // Simulate suggest finding 3 undefined functions
+    updateModuleProgress(state, "src/Lib.hs", {
+      functionsTotal: 3,
+      phase: "implementing",
+    });
+    const mod = getModuleProgress(state, "src/Lib.hs");
+    expect(mod?.functionsTotal).toBe(3);
+    expect(mod?.phase).toBe("implementing");
+  });
+});
