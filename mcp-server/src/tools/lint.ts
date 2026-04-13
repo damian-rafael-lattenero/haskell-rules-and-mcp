@@ -155,6 +155,19 @@ export function register(server: McpServer, ctx: ToolContext): void {
     async ({ module_path }) => {
       const session = await ctx.getSession();
       const result = await handleLint(ctx.getProjectDir(), { module_path }, session);
+      // Mark completion gate
+      try {
+        const parsed = JSON.parse(result);
+        if (parsed.success) {
+          const activeModule = ctx.getWorkflowState().activeModule ?? module_path;
+          const mod = ctx.getModuleProgress(activeModule);
+          if (mod) {
+            ctx.updateModuleProgress(activeModule, {
+              completionGates: { ...mod.completionGates, lint: true },
+            });
+          }
+        }
+      } catch { /* non-fatal */ }
       return { content: [{ type: "text" as const, text: result }] };
     }
   );

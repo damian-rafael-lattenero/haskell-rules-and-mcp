@@ -38,6 +38,22 @@ export async function handleArbitrary(
 
   const parsed = parseInfoOutput(info.output);
 
+  // Handle type aliases: delegate to the underlying type's Arbitrary instance
+  if (parsed.kind === "type-synonym") {
+    // Extract RHS: "type Env = Map String Int" → "Map String Int"
+    const aliasMatch = parsed.definition.match(/type\s+\S+(?:\s+\w+)*\s*=\s*(.+)/);
+    const rhsType = aliasMatch ? aliasMatch[1]!.replace(/\s*--.*/, "").trim() : "";
+    const inst = `instance Arbitrary ${args.type_name} where\n  arbitrary = arbitrary`;
+    return JSON.stringify({
+      success: true,
+      typeName: args.type_name,
+      constructors: [],
+      isRecursive: false,
+      instance: inst,
+      hint: `Type alias — delegates to Arbitrary instance of underlying type (${rhsType}).`,
+    });
+  }
+
   if (parsed.kind !== "data" && parsed.kind !== "newtype") {
     return JSON.stringify({
       success: false,

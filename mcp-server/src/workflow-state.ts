@@ -31,6 +31,11 @@ export interface ModuleProgress {
   propertiesFailed: string[];
   lastLoad: { success: boolean; errors: number; warnings: number } | null;
   arbitraryInstancesDefined: boolean;
+  completionGates: {
+    checkModule: boolean;
+    lint: boolean;
+    format: boolean;
+  };
 }
 
 export interface ToolExecution {
@@ -61,6 +66,7 @@ export function createEmptyProgress(modulePath: string): ModuleProgress {
     propertiesFailed: [],
     lastLoad: null,
     arbitraryInstancesDefined: false,
+    completionGates: { checkModule: false, lint: false, format: false },
   };
 }
 
@@ -259,9 +265,11 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
     guidance.push("No Arbitrary instances — run ghci_arbitrary for data types before QuickCheck");
   }
 
-  // Functions implemented but no QC properties tested
+  // Functions implemented but no QC properties — suggest analyze mode for discovery
   if (mod.functionsImplemented > 0 && mod.propertiesPassed.length === 0 && mod.propertiesFailed.length === 0) {
-    guidance.push("Functions implemented but no properties tested — run ghci_quickcheck");
+    guidance.push(
+      `Functions implemented but untested — run ghci_suggest(module_path="${mod.modulePath}", mode="analyze") for property suggestions, then ghci_quickcheck`
+    );
   }
 
   // Failing properties
@@ -269,12 +277,26 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
     guidance.push(`${mod.propertiesFailed.length} failing property(ies) — fix before continuing`);
   }
 
-  // Properties saved — mention registry and regression
-  if (mod && mod.propertiesPassed.length > 0 && mod.propertiesFailed.length === 0) {
-    guidance.push(`${mod.propertiesPassed.length} properties saved — ghci_regression(action="run") to verify after changes`);
+  // Suggest batch when many individual properties exist
+  if (mod.propertiesPassed.length >= 3 && mod.propertiesFailed.length === 0) {
+    guidance.push(
+      `${mod.propertiesPassed.length} properties — use ghci_quickcheck_batch or ghci_regression(action="run") for efficient re-testing`
+    );
   }
 
-  // All modules complete with properties — suggest full regression
+  // Module completion gate: all functions done + properties pass → run lint/format/check
+  if (mod.phase === "complete" && mod.propertiesPassed.length > 0 && mod.propertiesFailed.length === 0) {
+    const gates = mod.completionGates ?? { checkModule: false, lint: false, format: false };
+    const missing: string[] = [];
+    if (!gates.checkModule) missing.push("ghci_check_module");
+    if (!gates.lint) missing.push("ghci_lint");
+    if (!gates.format) missing.push("ghci_format");
+    if (missing.length > 0) {
+      guidance.push(`Module complete — run completion gate: ${missing.join(" → ")}`);
+    }
+  }
+
+  // All modules complete with properties and gates — suggest full regression
   if (state.modules.size > 1) {
     const allComplete = [...state.modules.values()].every(
       (m) => m.functionsTotal > 0 && m.functionsImplemented >= m.functionsTotal

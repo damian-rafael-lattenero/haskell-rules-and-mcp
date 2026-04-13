@@ -412,18 +412,17 @@ describe("deriveGuidance", () => {
     expect(deriveGuidance(state, "ghci_load").some(g => g.includes("ghci_load"))).toBe(false);
   });
 
-  it("suggests regression when all modules complete with properties", () => {
+  it("suggests batch/regression when module has 3+ properties", () => {
     const state = createWorkflowState();
     state.activeModule = "src/Foo.hs";
     updateModuleProgress(state, "src/Foo.hs", {
       functionsImplemented: 3,
       functionsTotal: 3,
       arbitraryInstancesDefined: true,
-      propertiesPassed: ["prop1"],
+      propertiesPassed: ["p1", "p2", "p3"],
     });
     const guidance = deriveGuidance(state, "ghci_load");
-    expect(guidance).toHaveLength(1);
-    expect(guidance[0]).toContain("ghci_regression");
+    expect(guidance.some(g => g.includes("ghci_quickcheck_batch") || g.includes("ghci_regression"))).toBe(true);
   });
 
   it("returns empty when module has no functions yet", () => {
@@ -453,7 +452,7 @@ describe("deriveGuidance", () => {
     expect(deriveGuidance(state, "ghci_load").some(g => g.includes("ghci_arbitrary"))).toBe(false);
   });
 
-  it("shows property count and regression per module", () => {
+  it("shows property count and batch/regression suggestion", () => {
     const state = createWorkflowState();
     state.activeModule = "src/Foo.hs";
     updateModuleProgress(state, "src/Foo.hs", {
@@ -463,8 +462,52 @@ describe("deriveGuidance", () => {
       propertiesPassed: ["p1", "p2", "p3"],
     });
     const guidance = deriveGuidance(state, "ghci_load");
-    expect(guidance.some(g => g.includes("3 properties saved"))).toBe(true);
-    expect(guidance.some(g => g.includes("ghci_regression"))).toBe(true);
+    expect(guidance.some(g => g.includes("ghci_quickcheck_batch") || g.includes("ghci_regression"))).toBe(true);
+  });
+
+  it("suggests analyze mode when functions implemented but no properties", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      functionsImplemented: 3,
+      functionsTotal: 3,
+      arbitraryInstancesDefined: true,
+    });
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance.some(g => g.includes("mode=\"analyze\""))).toBe(true);
+  });
+
+  it("suggests completion gate when module complete with properties", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      phase: "complete",
+      functionsImplemented: 3,
+      functionsTotal: 3,
+      arbitraryInstancesDefined: true,
+      propertiesPassed: ["p1", "p2", "p3"],
+      completionGates: { checkModule: false, lint: false, format: false },
+    });
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance.some(g => g.includes("completion gate"))).toBe(true);
+    expect(guidance.some(g => g.includes("ghci_lint"))).toBe(true);
+    expect(guidance.some(g => g.includes("ghci_format"))).toBe(true);
+    expect(guidance.some(g => g.includes("ghci_check_module"))).toBe(true);
+  });
+
+  it("does not suggest gate when all gates passed", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      phase: "complete",
+      functionsImplemented: 3,
+      functionsTotal: 3,
+      arbitraryInstancesDefined: true,
+      propertiesPassed: ["p1"],
+      completionGates: { checkModule: true, lint: true, format: true },
+    });
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance.some(g => g.includes("completion gate"))).toBe(false);
   });
 });
 

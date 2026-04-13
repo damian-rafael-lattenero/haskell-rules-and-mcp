@@ -158,6 +158,19 @@ export function register(server: McpServer, ctx: ToolContext): void {
     },
     async ({ module_path, write }) => {
       const result = await handleFormat(ctx.getProjectDir(), { module_path, write });
+      // Mark completion gate
+      try {
+        const parsed = JSON.parse(result);
+        if (parsed.success) {
+          const activeModule = ctx.getWorkflowState().activeModule ?? module_path;
+          const mod = ctx.getModuleProgress(activeModule);
+          if (mod) {
+            ctx.updateModuleProgress(activeModule, {
+              completionGates: { ...mod.completionGates, format: true },
+            });
+          }
+        }
+      } catch { /* non-fatal */ }
       return { content: [{ type: "text" as const, text: result }] };
     }
   );

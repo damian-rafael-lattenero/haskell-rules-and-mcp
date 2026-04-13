@@ -126,19 +126,36 @@ describe("handleArbitrary", () => {
     expect(result.instance).toContain("resize");
   });
 
-  it("returns error for non-data types", async () => {
+  it("handles type aliases with delegating Arbitrary instance", async () => {
     const session = createMockSession({
       infoOf: {
-        output: "type String = [Char]\n  \t-- Defined in 'GHC.Internal.Base'",
+        output: "type Env = Map String Int\n  \t-- Defined at src/Types.hs:3:1",
         success: true,
       },
     });
 
-    const raw = await handleArbitrary(session, { type_name: "String" });
+    const raw = await handleArbitrary(session, { type_name: "Env" });
+    const result = JSON.parse(raw);
+
+    expect(result.success).toBe(true);
+    expect(result.instance).toContain("instance Arbitrary Env");
+    expect(result.instance).toContain("arbitrary = arbitrary");
+    expect(result.hint).toContain("Type alias");
+  });
+
+  it("returns error for class types", async () => {
+    const session = createMockSession({
+      infoOf: {
+        output: "class Eq a => Ord a where\n  compare :: a -> a -> Ordering",
+        success: true,
+      },
+    });
+
+    const raw = await handleArbitrary(session, { type_name: "Ord" });
     const result = JSON.parse(raw);
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain("type-synonym");
+    expect(result.error).toContain("class");
   });
 
   it("returns error for Not in scope types", async () => {

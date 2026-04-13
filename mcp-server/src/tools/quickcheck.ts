@@ -610,12 +610,27 @@ export function registerBatch(server: McpServer, ctx: ToolContext): void {
       module: z.string().optional().describe(
         'Module path these properties belong to (e.g. "src/Parser/Run.hs"). Used for accurate property tracking.'
       ),
+      auto_collect: z.boolean().optional().describe(
+        "If true and properties array is empty, auto-collects all saved properties from properties.json. " +
+        "Use with module to filter by module."
+      ),
     },
-    async ({ properties, tests, incremental, module: mod }) => {
+    async ({ properties, tests, incremental, module: mod, auto_collect }) => {
+      let propsToRun = properties;
+      // Auto-collect from property store if requested
+      if (auto_collect && (!properties || properties.length === 0)) {
+        try {
+          const { getAllProperties, getModuleProperties } = await import("../property-store.js");
+          const stored = mod
+            ? await getModuleProperties(ctx.getProjectDir(), mod)
+            : await getAllProperties(ctx.getProjectDir());
+          propsToRun = stored.map(p => p.property);
+        } catch { /* fallback to empty */ }
+      }
       const session = await ctx.getSession();
       const result = await handleQuickCheckBatch(
         session,
-        { properties, tests, incremental, module: mod },
+        { properties: propsToRun, tests, incremental, module: mod },
         ctx,
         ctx.getProjectDir()
       );
