@@ -29,7 +29,7 @@ The compiler's structured output drives development, not pre-existing knowledge.
 ### Tier 3 — Module complete gate (MANDATORY before next module)
 | Tool | When |
 |------|------|
-| `ghci_quickcheck` | **MANDATORY** — at least 1 property per module before moving on |
+| `ghci_quickcheck` | **MANDATORY** — 1-3 properties testing the module's algebraic contract |
 | `ghci_check_module` | Review the module's API summary |
 | `ghci_lint` | Code quality pass |
 | `ghci_format` | Formatting pass |
@@ -103,7 +103,8 @@ Don't guess — ask the compiler.
 Before starting the next module, you MUST complete ALL of these steps:
 
 ```
-1. QUICKCHECK  ghci_quickcheck with at least 1 property per exported function
+1. QUICKCHECK  ghci_quickcheck — test the MODULE'S CONTRACT (1-3 properties)
+               Properties test RELATIONSHIPS BETWEEN functions, not individual functions.
                → fail? read counterexample → fix → ghci_load → retry
 2. REVIEW      ghci_check_module(module_path="...") → review API summary
 3. LINT        ghci_lint(module_path="...") → apply good suggestions
@@ -112,16 +113,28 @@ Before starting the next module, you MUST complete ALL of these steps:
 
 **Step 1 is MANDATORY.** You cannot move to the next module without running QuickCheck.
 
-QuickCheck property ideas (pick what fits):
-- Identity: `apply nullSubst t == t`
-- Composition: `apply (compose s1 s2) t == apply s1 (apply s2 t)`
-- Roundtrip: `parse (pretty x) == x`
-- Idempotence: `f (f x) == f x`
-- Algebraic laws: associativity, commutativity, identity element
+### What to test: the module's algebraic contract
 
-If the module's types don't have Arbitrary instances yet, write inline generators:
-`ghci_quickcheck(property="\\(n :: Int) -> n + 0 == n")`
-For custom types, use `ghci_eval` to test specific cases as a minimum.
+Properties should group multiple functions together and test their relationships:
+
+```
+Substitution module:
+  "apply nullSubst t == t"                              -- identity
+  "apply (compose s1 s2) t == apply s1 (apply s2 t)"   -- composition law
+
+Unification module:
+  "unify t t == Right nullSubst"                        -- reflexivity
+  "case unify t1 t2 of Right s -> apply s t1 == apply s t2; _ -> True"
+
+Pretty printer:
+  "parse (pretty x) == x"                               -- roundtrip
+```
+
+**Don't test individual functions in isolation** — test how the module's exports
+work together. 1-3 properties per module is enough if they cover the key laws.
+
+If custom types lack Arbitrary instances, use `ghci_eval` with concrete examples
+as a minimum, but prefer QuickCheck when possible.
 
 ## FLOW 7: Add Dependency or Module
 
