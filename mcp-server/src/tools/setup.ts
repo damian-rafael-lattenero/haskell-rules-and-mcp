@@ -41,6 +41,7 @@ export async function handleSetup(
 
   // Map of rule filenames to install
   const ruleFiles: Record<string, string> = {
+    "haskell-mcp-first.md": "haskell-mcp-first",
     "haskell-automation.md": "haskell-automation",
     "haskell-development.md": "haskell-development",
   };
