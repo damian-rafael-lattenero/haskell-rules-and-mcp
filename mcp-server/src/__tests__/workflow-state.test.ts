@@ -412,7 +412,7 @@ describe("deriveGuidance", () => {
     expect(deriveGuidance(state, "ghci_load").some(g => g.includes("ghci_load"))).toBe(false);
   });
 
-  it("returns empty when everything is healthy", () => {
+  it("suggests regression when all modules complete with properties", () => {
     const state = createWorkflowState();
     state.activeModule = "src/Foo.hs";
     updateModuleProgress(state, "src/Foo.hs", {
@@ -420,6 +420,18 @@ describe("deriveGuidance", () => {
       functionsTotal: 3,
       arbitraryInstancesDefined: true,
       propertiesPassed: ["prop1"],
+    });
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance).toHaveLength(1);
+    expect(guidance[0]).toContain("ghci_regression");
+  });
+
+  it("returns empty when module has no functions yet", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      functionsImplemented: 0,
+      functionsTotal: 0,
     });
     const guidance = deriveGuidance(state, "ghci_load");
     expect(guidance).toEqual([]);

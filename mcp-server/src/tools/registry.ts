@@ -82,7 +82,8 @@ export function createRulesChecker(
     },
     reset: () => {
       cached = undefined;
-      noticeShown = false;
+      // Keep noticeShown true — the notice only needs to show once per session,
+      // not once per project switch. Resetting it causes repeated notices.
     },
   };
 }

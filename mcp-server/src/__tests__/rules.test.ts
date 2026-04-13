@@ -81,22 +81,23 @@ describe("createRulesChecker — notice-once behavior", () => {
     expect(third).toBeNull();
   });
 
-  it("shows notice again after reset()", async () => {
+  it("does NOT show notice again after reset() — once per session", async () => {
     const checker = createRulesChecker(() => "/nonexistent/path");
     await checker.check(); // shows notice
     await checker.check(); // null
     checker.reset();
+    // reset() clears the cache but noticeShown stays true to prevent spam
     const afterReset = await checker.check();
-    expect(afterReset).toContain("Haskell development rules not installed");
+    expect(afterReset).toBeNull();
   });
 
-  it("second call after reset is null again", async () => {
+  it("stays null after multiple resets", async () => {
     const checker = createRulesChecker(() => "/nonexistent/path");
-    await checker.check();
+    await checker.check(); // shows notice once
     checker.reset();
-    await checker.check(); // shows notice again
-    const second = await checker.check();
-    expect(second).toBeNull();
+    checker.reset();
+    const result = await checker.check();
+    expect(result).toBeNull();
   });
 
   it("returns null always when rules exist", async () => {

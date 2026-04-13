@@ -269,6 +269,22 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
     guidance.push(`${mod.propertiesFailed.length} failing property(ies) — fix before continuing`);
   }
 
+  // All modules complete with properties — suggest regression
+  if (state.modules.size > 0) {
+    const allComplete = [...state.modules.values()].every(
+      (m) => m.functionsTotal > 0 && m.functionsImplemented >= m.functionsTotal
+    );
+    const hasProperties = [...state.modules.values()].some(
+      (m) => m.propertiesPassed.length > 0
+    );
+    const noFailures = [...state.modules.values()].every(
+      (m) => m.propertiesFailed.length === 0
+    );
+    if (allComplete && hasProperties && noFailures && guidance.length === 0) {
+      guidance.push("All modules complete — run ghci_regression to verify all properties still pass");
+    }
+  }
+
   return guidance;
 }
 

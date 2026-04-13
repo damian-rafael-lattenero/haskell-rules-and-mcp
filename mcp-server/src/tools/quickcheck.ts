@@ -163,6 +163,7 @@ export async function handleQuickCheck(
     verbose?: boolean;
     incremental?: boolean;
     function_name?: string;
+    module?: string;
   },
   ctx?: { getWorkflowState?: () => { activeModule: string | null; modules: Map<string, unknown> }; updateModuleProgress?: (path: string, updates: Record<string, unknown>) => void; getModuleProgress?: (path: string) => { propertiesPassed: string[]; propertiesFailed: string[]; functionsImplemented: number; functionsTotal: number } | undefined },
   projectDir?: string
@@ -292,7 +293,8 @@ export async function handleQuickCheck(
 
   // Persist passing properties to disk for regression testing
   if (parsed.success && !isCompilationError && projectDir) {
-    const activeMod = ctx?.getWorkflowState?.()?.activeModule ?? "unknown";
+    // Use explicit module if provided, otherwise fall back to activeModule
+    const activeMod = args.module ?? ctx?.getWorkflowState?.()?.activeModule ?? "unknown";
     try {
       await saveProperty(projectDir, {
         property: args.property,
@@ -306,7 +308,7 @@ export async function handleQuickCheck(
 
   // Track in workflow state if incremental
   if (args.incremental && ctx?.getWorkflowState && ctx?.getModuleProgress) {
-    let activeMod = ctx.getWorkflowState().activeModule;
+    let activeMod = args.module ?? ctx.getWorkflowState().activeModule;
 
     if (!activeMod) {
       const state = ctx.getWorkflowState();
@@ -519,12 +521,17 @@ export function register(server: McpServer, ctx: ToolContext): void {
         'Function just implemented. When property="suggest", returns suggested properties ' +
           "based on the function's type signature."
       ),
+      module: z.string().optional().describe(
+        'Module path this property belongs to (e.g. "src/Parser/Run.hs"). ' +
+          "Used for accurate property tracking in properties.json. " +
+          "If omitted, uses the last module loaded with ghci_load."
+      ),
     },
-    async ({ property, tests, verbose, incremental, function_name }) => {
+    async ({ property, tests, verbose, incremental, function_name, module: mod }) => {
       const session = await ctx.getSession();
       const result = await handleQuickCheck(
         session,
-        { property, tests, verbose, incremental, function_name },
+        { property, tests, verbose, incremental, function_name, module: mod },
         ctx,
         ctx.getProjectDir()
       );
@@ -539,7 +546,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
  */
 export async function handleQuickCheckBatch(
   session: GhciSession,
-  args: { properties: string[]; tests?: number; incremental?: boolean },
+  args: { properties: string[]; tests?: number; incremental?: boolean; module?: string },
   ctx?: { getWorkflowState?: () => { activeModule: string | null; modules: Map<string, unknown> }; updateModuleProgress?: (path: string, updates: Record<string, unknown>) => void; getModuleProgress?: (path: string) => { propertiesPassed: string[]; propertiesFailed: string[]; functionsImplemented: number; functionsTotal: number } | undefined },
   projectDir?: string
 ): Promise<string> {
@@ -574,7 +581,7 @@ export async function handleQuickCheckBatch(
   for (const property of args.properties) {
     const singleResult = await handleQuickCheck(
       session,
-      { property, tests: args.tests, incremental: args.incremental },
+      { property, tests: args.tests, incremental: args.incremental, module: args.module },
       ctx,
       projectDir
     );
@@ -610,12 +617,15 @@ export function registerBatch(server: McpServer, ctx: ToolContext): void {
       incremental: z.boolean().optional().describe(
         "If true, track results in workflow state per-module."
       ),
+      module: z.string().optional().describe(
+        'Module path these properties belong to (e.g. "src/Parser/Run.hs"). Used for accurate property tracking.'
+      ),
     },
-    async ({ properties, tests, incremental }) => {
+    async ({ properties, tests, incremental, module: mod }) => {
       const session = await ctx.getSession();
       const result = await handleQuickCheckBatch(
         session,
-        { properties, tests, incremental },
+        { properties, tests, incremental, module: mod },
         ctx,
         ctx.getProjectDir()
       );
