@@ -7,25 +7,27 @@ The compiler's structured output drives development, not pre-existing knowledge.
 
 ---
 
-## MODE
+## CONTEXTUAL GUIDANCE
 
-Select your mode via `ghci_mode(mode="...")` on first tool use.
-Switch at any time with `ghci_mode`.
+The MCP provides automatic `_guidance` in tool responses based on the actual state
+of your modules. No setup required — just follow the guidance when it appears.
 
-| Mode | Best for | Mandatory tools |
-|------|----------|----------------|
-| `guided` | Beginners, unfamiliar codebases, complex type-level code | load, type, hole_fits, suggest, quickcheck |
-| `medium` | Intermediate devs, familiar with Haskell but new to this codebase | load, quickcheck, suggest (first pass) |
-| `expert` | Experienced Haskell devs who know the types | load, eval, quickcheck |
+The `_guidance` array in responses tells you what to do next based on:
+- Whether stubs exist (→ run `ghci_suggest`)
+- Whether Arbitrary instances are missing (→ run `ghci_arbitrary`)
+- Whether functions are untested (→ run `ghci_quickcheck`)
+- Whether warnings are pending (→ fix them)
+- Whether edits haven't been compiled (→ run `ghci_load`)
 
 ---
 
-## ALWAYS MANDATORY (all modes)
+## ALWAYS MANDATORY
 
 - `ghci_load` after every `.hs` edit — **no exceptions**
 - `ghci_quickcheck` incrementally when laws become testable AND at module-complete
 - Zero tolerance for warnings — fix every `warningAction` immediately
 - `ghci_arbitrary` for new data types — don't write Arbitrary instances by hand
+- Follow `_guidance` in tool responses — it's always context-aware
 
 ---
 
@@ -42,15 +44,16 @@ Switch at any time with `ghci_mode`.
 | When | Tool | Why |
 |------|------|-----|
 | Created .cabal | `ghci_scaffold` → `ghci_session(restart)` | Create module stubs, restart GHCi |
+| Created .cabal (with types) | `ghci_scaffold(signatures={"Mod": ["f :: T", "data D = ..."]})` → `ghci_session(restart)` | Create typed stubs (data types verbatim, functions with `= undefined`) |
 | New module with data types | `ghci_arbitrary(type_name="...")` | Generate Arbitrary instances |
-| Before implementing functions | `ghci_suggest(module_path="...")` | See hole fits or analyze types [guided/medium first pass] |
+| Before implementing functions | `ghci_suggest(module_path="...")` | See hole fits or analyze types |
 
 ### Implementing functions (the core loop)
 | When | Tool | Why |
 |------|------|-----|
-| Wrote/edited a function body | `ghci_load(diagnostics=true)` | Compile, see errors/warnings/holes |
+| Wrote/edited a function body | `ghci_load(diagnostics=true)` | Compile, see errors/warnings/holes + `importSuggestions` |
 | Type errors | `ghci_type` on subexpressions | Find the type divergence |
-| "Not in scope" | `ghci_add_import("name")` | Resolve missing import |
+| "Not in scope" | Check `importSuggestions` in load response, or `ghci_add_import("name")` | Resolve missing import |
 | Need a function by type | `hoogle_search("a -> b -> c")` | Find it in the ecosystem |
 | Want to understand a name | `ghci_info("name")` | See definition, instances, module |
 | After successful compilation | `ghci_eval("funcName sampleArg")` | Test behavior with sample input |
@@ -68,6 +71,13 @@ Switch at any time with `ghci_mode`.
 | After review | `ghci_lint(module_path="...")` | Code quality pass |
 | After lint | `ghci_format(module_path="...", write=true)` | Formatting pass |
 
+### Regression testing
+| When | Tool | Why |
+|------|------|-----|
+| Start of session on existing project | `ghci_regression(action="run")` | Re-run all saved QC properties |
+| After major changes | `ghci_regression(module="src/Mod.hs")` | Verify module contracts still hold |
+| Want to see what's tested | `ghci_regression(action="list")` | List all persisted properties |
+
 ### Dependencies / modules
 | When | Tool | Why |
 |------|------|-----|
@@ -81,13 +91,15 @@ Switch at any time with `ghci_mode`.
 
 | Situation | Tool |
 |-----------|------|
-| "Not in scope" | `ghci_add_import("name")` |
+| "Not in scope" | Check `importSuggestions` in load response, or `ghci_add_import("name")` |
 | Type mismatch | `ghci_type` on subexpressions |
 | "No instance" | `ghci_info("Type")` to see instances |
 | "No Arbitrary" | `ghci_arbitrary(type_name="Type")` |
 | Incomplete patterns | `ghci_info("Type")` for constructors |
 | Logic error (types OK) | `ghci_trace(expr, trace_points=[...])` |
 | Don't know where to start | `ghci_suggest(module_path="...")` |
+| ghci_suggest empty | Add `= undefined` stubs first, then re-run — check `_nextStep` in response |
+| "Not in scope" after load | Already auto-resolved — `ghci_load` brings all deps into scope |
 | 2+ failed attempts | `= undefined` → `ghci_type` on context → build bottom-up |
 
 ## WARNING AUTO-FIX
@@ -103,27 +115,12 @@ Switch at any time with `ghci_mode`.
 
 ---
 
-## GUIDED MODE — Additional Requirements
-
-In guided mode, these steps are also mandatory:
-- Replace `= undefined` with `= _` (hole phase) before implementing
-- `ghci_load(diagnostics=true)` to read hole analysis before writing code
-- `ghci_type("functionName")` after implementation to verify type
-- Follow every step in the core loop in order
-
-Fall back to guided from expert when:
-- First implementation attempt fails with type errors
-- Function involves unfamiliar types or typeclasses
-- You've been stuck for 2+ attempts
-
----
-
 ## FORBIDDEN
 
-- Multiple `.hs` edits between `ghci_load` calls — **all modes**
-- Using Bash for ANY Haskell toolchain operation — **all modes**
-- Moving to next module without `ghci_quickcheck` — **all modes**
-- Skipping incremental QuickCheck when a law becomes testable — **all modes**
-- Writing Arbitrary instances by hand when `ghci_arbitrary` can generate them — **all modes**
-- "I'll fix warnings later" — fix them NOW — **all modes**
-- MCP tool fails → falling back to Bash — diagnose → retry → `mcp_restart` → ask user — **all modes**
+- Multiple `.hs` edits between `ghci_load` calls
+- Using Bash for ANY Haskell toolchain operation
+- Moving to next module without `ghci_quickcheck`
+- Skipping incremental QuickCheck when a law becomes testable
+- Writing Arbitrary instances by hand when `ghci_arbitrary` can generate them
+- "I'll fix warnings later" — fix them NOW
+- MCP tool fails → falling back to Bash — diagnose → retry → `mcp_restart` → ask user

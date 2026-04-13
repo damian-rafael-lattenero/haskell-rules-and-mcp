@@ -64,8 +64,21 @@ export async function handleSuggest(
   }
 
   if (undefinedFns.length === 0) {
-    // No undefined stubs — switch to analyze mode automatically
-    return handleAnalyze(session, args.module_path);
+    // No stubs found — return guidance instead of silently falling back to analyze
+    return JSON.stringify({
+      success: true,
+      mode: "suggest",
+      suggestions: [],
+      summary: "No `= undefined` stubs found in this module.",
+      _nextStep:
+        "To get implementation suggestions:\n" +
+        "1. Add type signatures with `= undefined` bodies:\n" +
+        "   foo :: Int -> Int\n" +
+        "   foo = undefined\n" +
+        "2. Re-run ghci_suggest(module_path=\"...\")\n\n" +
+        "Or use ghci_suggest(mode=\"analyze\") to get QuickCheck " +
+        "property suggestions for already-implemented functions.",
+    });
   }
 
   // Pre-check: load module first to verify it compiles
@@ -127,6 +140,7 @@ export async function handleSuggest(
       success: true,
       suggestions,
       summary: `Found ${suggestions.length} undefined function(s) with suggestions`,
+      _nextStep: `Implement the ${suggestions.length} function(s) using the hole fits above. After each, run ghci_load(diagnostics=true).`,
     });
   } finally {
     // ALWAYS restore original file
@@ -150,12 +164,17 @@ export async function handleSuggest(
  * Analyze an already-implemented module: list functions with types and suggest properties.
  * This is the alternative to hole-fit analysis for modules that don't use = undefined.
  */
-async function handleAnalyze(
+export async function handleAnalyze(
   session: GhciSession,
   modulePath: string
 ): Promise<string> {
   const modName = inferModuleName(modulePath);
-  const browseResult = await session.execute(`:browse *${modName}`);
+  const browseResult = await session.execute(`:browse ${modName}`);
+  // Safety guard: truncate if output is unexpectedly large
+  if (browseResult.output.length > 50_000) {
+    browseResult.output = browseResult.output.slice(0, 50_000) +
+      "\n... (truncated — output too large)";
+  }
   if (!browseResult.success) {
     return JSON.stringify({
       success: false,
@@ -204,18 +223,21 @@ async function handleAnalyze(
     mode: "analyze",
     functions: analyzed,
     summary: `Analyzed ${analyzed.length} function(s), ${withProps.length} have suggested properties`,
+    _nextStep: withProps.length > 0
+      ? `Run ghci_quickcheck for the ${withProps.length} function(s) with suggested properties.`
+      : "All functions analyzed. Write custom QuickCheck properties based on the function contracts.",
   });
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     "ghci_suggest",
-    "Find `= undefined` functions in a Haskell module and suggest implementations. " +
+    "Find `= undefined` functions and show typed-hole implementation suggestions. " +
       "Temporarily replaces each `= undefined` with a typed hole `= _`, loads the module " +
       "in GHCi to get hole fits, and returns suggestions for each function. " +
       "The original file is always restored after analysis. " +
-      "If no `= undefined` stubs are found (or mode='analyze'), analyzes implemented functions " +
-      "and suggests QuickCheck properties based on their types.",
+      "Returns empty suggestions with guidance if no `= undefined` stubs exist — add stubs first. " +
+      "Use mode='analyze' to analyze implemented functions and suggest QuickCheck properties.",
     {
       module_path: z
         .string()

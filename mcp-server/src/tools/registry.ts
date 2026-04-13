@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { GhciSession } from "../ghci-session.js";
-import type { WorkflowState, ModuleProgress, WorkflowMode } from "../workflow-state.js";
+import type { WorkflowState, ModuleProgress } from "../workflow-state.js";
 import { access } from "node:fs/promises";
 import path from "node:path";
 
@@ -25,10 +25,6 @@ export interface ToolContext {
   getModuleProgress: (modulePath: string) => ModuleProgress | undefined;
   /** Update progress for a specific module. */
   updateModuleProgress: (modulePath: string, updates: Partial<ModuleProgress>) => void;
-  /** Get the mode selection notice if mode is not set, or null if already set. */
-  getModeNotice: () => string | null;
-  /** Set the workflow mode. */
-  setMode: (mode: WorkflowMode) => void;
 }
 
 export type RegisterFn = (server: McpServer, ctx: ToolContext) => void;

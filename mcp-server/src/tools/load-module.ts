@@ -190,19 +190,41 @@ async function handleLoadSingle(
 ): Promise<string> {
   const filterOpts: CompileOptions = { filterMissingHomeModules: true };
 
+  let errors: GhcError[], warnings: GhcError[], actions: WarningAction[];
+  let uncategorized: GhcError[], holes: HoleSummary[], rawOutput: string;
+
   if (runDiagnostics) {
     const dp = await dualPassCompile(session, () => session.loadModule(modulePath), filterOpts);
-    return buildResponse(
-      dp.errors.length === 0, dp.errors, dp.warnings,
-      dp.actions, dp.uncategorized, dp.holes, dp.rawOutput
-    );
+    ({ errors, warnings, actions, uncategorized, holes, rawOutput } = dp);
+  } else {
+    const result = await session.loadModule(modulePath);
+    const diags = singlePassDiagnostics(result.output, filterOpts);
+    errors = diags.errors;
+    warnings = diags.warnings;
+    actions = diags.actions;
+    uncategorized = diags.uncategorized;
+    holes = [];
+    rawOutput = result.output;
   }
 
-  const result = await session.loadModule(modulePath);
-  const { errors, warnings, actions, uncategorized } = singlePassDiagnostics(result.output, filterOpts);
-  return buildResponse(
-    errors.length === 0, errors, warnings, actions, uncategorized, [], result.output
-  );
+  const success = errors.length === 0;
+
+  // Auto-scope: bring loaded dependencies into interactive scope
+  // so ghci_eval/ghci_type work without needing load_all
+  let modulesInScope: string[] | undefined;
+  if (success) {
+    try {
+      const showModResult = await session.showModules();
+      const loaded = parseShowModules(showModResult.output);
+      if (loaded.length > 0) {
+        const starNames = loaded.map(n => `*${n}`).join(" ");
+        await session.execute(`:m + ${starNames}`);
+        modulesInScope = loaded;
+      }
+    } catch { /* non-fatal: scope info is best-effort */ }
+  }
+
+  return buildResponse(success, errors, warnings, actions, uncategorized, holes, rawOutput, undefined, modulesInScope);
 }
 
 // --- Handler: load all modules ---
@@ -288,6 +310,18 @@ function buildResponse(
         : "Compiled OK. No issues."
     : parts.join(", ");
 
+  // Contextual next-step guidance
+  let _nextStep: string | undefined;
+  if (errors.length > 0) {
+    _nextStep = "Fix the type errors above, then run ghci_load(diagnostics=true) again.";
+  } else if (holes.length > 0) {
+    _nextStep = `Implement ${holes.length} typed hole(s). Use ghci_type on subexpressions if the expected type is unclear.`;
+  } else if (warningActions.length > 0) {
+    _nextStep = `Fix ${warningActions.length} warning(s) — zero tolerance policy. See warningActions for specific fixes.`;
+  } else if (success) {
+    _nextStep = "Compilation clean. Test with ghci_eval or verify properties with ghci_quickcheck.";
+  }
+
   return JSON.stringify({
     success,
     errors,
@@ -304,7 +338,24 @@ function buildResponse(
     ...(modulesInScope ? { modulesInScope } : {}),
     summary,
     raw,
+    ...(_nextStep ? { _nextStep } : {}),
   });
+}
+
+/**
+ * Extract "Not in scope" names from GHC error messages.
+ * Looks for patterns like: Not in scope: 'isDigit' or Not in scope: type constructor or class 'Alternative'
+ */
+export function extractNotInScopeNames(errors: Array<{ message: string }>): string[] {
+  const names = new Set<string>();
+  for (const err of errors) {
+    // Match: Not in scope: 'name' or Not in scope: type constructor or class 'Name'
+    const matches = err.message.matchAll(/[Nn]ot in scope:.*?['\u2018]([^'\u2019]+)['\u2019]/g);
+    for (const m of matches) {
+      if (m[1]) names.add(m[1]);
+    }
+  }
+  return [...names];
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
@@ -363,7 +414,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
         if (module_path) {
           try {
             const modName = inferModuleName(module_path);
-            const browseResult = await session.execute(`:browse *${modName}`);
+            const browseResult = await session.execute(`:browse ${modName}`);
+            // Safety guard: truncate if output is unexpectedly large
+            if (browseResult.output.length > 50_000) {
+              browseResult.output = browseResult.output.slice(0, 50_000) +
+                "\n... (truncated — output too large)";
+            }
             if (browseResult.success) {
               const defs = parseBrowseOutput(browseResult.output);
               const fnCount = defs.filter((d) => d.kind === "function").length;
@@ -386,11 +442,30 @@ export function register(server: McpServer, ctx: ToolContext): void {
         }
       }
 
-      // Inject notices
+      // Suggest imports for "Not in scope" errors (max 5 to avoid latency)
+      if (parsed.errors?.length > 0) {
+        try {
+          const { lookupImportForName } = await import("./add-import.js");
+          const scopeNames = extractNotInScopeNames(parsed.errors);
+          const suggestions: Array<{ name: string; import: string; module: string }> = [];
+          for (const name of scopeNames.slice(0, 5)) {
+            const suggestion = await lookupImportForName(name);
+            if (suggestion) suggestions.push(suggestion);
+          }
+          if (suggestions.length > 0) {
+            parsed.importSuggestions = suggestions;
+          }
+        } catch {
+          // Non-fatal: Hoogle may be unavailable
+        }
+      }
+
+      // Inject notices and contextual guidance
       const notice = await ctx.getRulesNotice();
-      const modeNotice = ctx.getModeNotice();
       if (notice) parsed._notice = notice;
-      if (modeNotice) parsed._modeSelection = modeNotice;
+      const { deriveGuidance } = await import("../workflow-state.js");
+      const guidance = deriveGuidance(ctx.getWorkflowState(), "ghci_load");
+      if (guidance.length > 0) parsed._guidance = guidance;
       return { content: [{ type: "text" as const, text: JSON.stringify(parsed) }] };
     }
   );

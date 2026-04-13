@@ -6,8 +6,6 @@
  * pending actions (warnings to fix, loads to run).
  */
 
-export type WorkflowMode = "guided" | "medium" | "expert";
-
 export type FlowId =
   | "preflight"
   | "new-project"
@@ -42,7 +40,6 @@ export interface ToolExecution {
 }
 
 export interface WorkflowState {
-  mode: WorkflowMode | null;
   currentFlow: FlowStep | null;
   activeModule: string | null;
   modules: Map<string, ModuleProgress>;
@@ -69,7 +66,6 @@ export function createEmptyProgress(modulePath: string): ModuleProgress {
 
 export function createWorkflowState(): WorkflowState {
   return {
-    mode: null,
     currentFlow: null,
     activeModule: null,
     modules: new Map(),
@@ -79,17 +75,6 @@ export function createWorkflowState(): WorkflowState {
     sessionStarted: Date.now(),
   };
 }
-
-/** The mode selection prompt shown when mode is not yet set. */
-export const MODE_SELECTION_PROMPT =
-  "🎯 **Select your Haskell development mode** before continuing:\n\n" +
-  "| Mode | Best for | Mandatory tools |\n" +
-  "|------|----------|----------------|\n" +
-  "| `guided` | Beginners, unfamiliar codebases, complex type-level code | load, type, hole_fits, suggest, quickcheck |\n" +
-  "| `medium` | Intermediate devs, familiar with Haskell but new to this codebase | load, quickcheck, suggest (first time only) |\n" +
-  "| `expert` | Experienced Haskell devs who know the types | load, eval, quickcheck |\n\n" +
-  "→ **Set your mode with:** `ghci_mode(mode=\"guided\")`, `ghci_mode(mode=\"medium\")`, or `ghci_mode(mode=\"expert\")`\n\n" +
-  "_You can switch modes at any time with `ghci_mode`._";
 
 export function logTool(
   state: WorkflowState,
@@ -119,7 +104,6 @@ export function updateModuleProgress(
 }
 
 export function resetWorkflowState(state: WorkflowState): void {
-  // Preserve mode across resets — user chose it deliberately
   state.currentFlow = null;
   state.activeModule = null;
   state.modules.clear();
@@ -132,10 +116,6 @@ export function resetWorkflowState(state: WorkflowState): void {
 /** Generate a compact status summary for injection into tool responses. */
 export function workflowHint(state: WorkflowState): Record<string, unknown> | null {
   const hints: Record<string, unknown> = {};
-
-  if (state.mode) {
-    hints.mode = state.mode;
-  }
 
   if (state.currentFlow) {
     hints.currentStep = `FLOW ${state.currentFlow.flow} step ${state.currentFlow.step} (${state.currentFlow.label})`;
@@ -248,6 +228,50 @@ export function derivePhase(p: ModuleProgress): ModuleProgress["phase"] {
   return "complete";
 }
 
+/**
+ * Derive contextual guidance based on the actual state of the active module.
+ * Returns actionable strings the agent should follow. Replaces the old mode system
+ * with state-driven recommendations that are always relevant.
+ */
+export function deriveGuidance(state: WorkflowState, toolName: string): string[] {
+  const guidance: string[] = [];
+  const mod = state.activeModule ? state.modules.get(state.activeModule) : undefined;
+
+  // Pending warnings — always highest priority
+  if (state.pendingWarningCount > 0) {
+    guidance.push(`${state.pendingWarningCount} warning(s) — fix (zero tolerance)`);
+  }
+
+  // Edits since last load — compile first
+  if (state.editsSinceLastLoad > 0 && toolName !== "ghci_load") {
+    guidance.push(`${state.editsSinceLastLoad} edit(s) since last load — run ghci_load`);
+  }
+
+  if (!mod) return guidance;
+
+  // Module has undefined stubs and nothing implemented yet
+  if (mod.phase === "stub" && mod.functionsTotal > 0 && mod.functionsImplemented === 0) {
+    guidance.push(`${mod.functionsTotal} undefined stub(s) — run ghci_suggest to see hole fits`);
+  }
+
+  // Has functions but no Arbitrary instances
+  if (!mod.arbitraryInstancesDefined && mod.functionsImplemented > 0) {
+    guidance.push("No Arbitrary instances — run ghci_arbitrary for data types before QuickCheck");
+  }
+
+  // Functions implemented but no QC properties tested
+  if (mod.functionsImplemented > 0 && mod.propertiesPassed.length === 0 && mod.propertiesFailed.length === 0) {
+    guidance.push("Functions implemented but no properties tested — run ghci_quickcheck");
+  }
+
+  // Failing properties
+  if (mod.propertiesFailed.length > 0) {
+    guidance.push(`${mod.propertiesFailed.length} failing property(ies) — fix before continuing`);
+  }
+
+  return guidance;
+}
+
 /** Serialize state for MCP resource / JSON response. */
 export function serializeState(state: WorkflowState): Record<string, unknown> {
   const modules: Record<string, ModuleProgress> = {};
@@ -256,7 +280,6 @@ export function serializeState(state: WorkflowState): Record<string, unknown> {
   }
 
   return {
-    mode: state.mode,
     currentFlow: state.currentFlow,
     activeModule: state.activeModule,
     modules,

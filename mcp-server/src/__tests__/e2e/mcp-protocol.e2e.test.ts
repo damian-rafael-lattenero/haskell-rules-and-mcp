@@ -278,53 +278,19 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     expect(parsed.totalReferences).toBeGreaterThan(0);
   });
 
-  // --- ghci_mode ---
-  it("ghci_mode without args shows mode selection when unset", async () => {
-    const result = await client.callTool({ name: "ghci_mode", arguments: {} });
-    const parsed = JSON.parse((result.content as any)[0].text);
-    expect(parsed.mode).toBeNull();
-    expect(parsed._modeSelection).toContain("guided");
-    expect(parsed._modeSelection).toContain("medium");
-    expect(parsed._modeSelection).toContain("expert");
-  });
-
-  it("ghci_mode sets mode to expert", async () => {
-    const result = await client.callTool({ name: "ghci_mode", arguments: { mode: "expert" } });
-    const parsed = JSON.parse((result.content as any)[0].text);
-    expect(parsed.success).toBe(true);
-    expect(parsed.mode).toBe("expert");
-    expect(parsed.previous).toBe("none");
-    expect(parsed.mandatoryTools).toContain("ghci_load");
-  });
-
-  it("ghci_mode switches from expert to medium", async () => {
-    const result = await client.callTool({ name: "ghci_mode", arguments: { mode: "medium" } });
-    const parsed = JSON.parse((result.content as any)[0].text);
-    expect(parsed.success).toBe(true);
-    expect(parsed.mode).toBe("medium");
-    expect(parsed.previous).toBe("expert");
-  });
-
-  it("ghci_mode check shows current mode after set", async () => {
-    const result = await client.callTool({ name: "ghci_mode", arguments: {} });
-    const parsed = JSON.parse((result.content as any)[0].text);
-    expect(parsed.mode).toBe("medium");
-    expect(parsed.message).toContain("medium");
-  });
-
-  it("ghci_session status includes mode when set", async () => {
+  // --- ghci_session (no mode) ---
+  it("ghci_session status has no mode fields", async () => {
     const result = await client.callTool({ name: "ghci_session", arguments: { action: "status" } });
     const parsed = JSON.parse((result.content as any)[0].text);
-    expect(parsed.mode).toBe("medium");
-    // No mode selection prompt since mode is already set
     expect(parsed._modeSelection).toBeUndefined();
+    expect(parsed.mode).toBeUndefined();
   });
 
-  // --- tool listing updated ---
-  it("lists all tools including ghci_mode", async () => {
+  // --- tool listing ---
+  it("lists tools without ghci_mode", async () => {
     const result = await client.listTools();
     const names = result.tools.map((t) => t.name);
-    expect(names).toContain("ghci_mode");
+    expect(names).not.toContain("ghci_mode");
     expect(names).toContain("ghci_goto");
     expect(names).toContain("ghci_complete");
     expect(names).toContain("ghci_doc");

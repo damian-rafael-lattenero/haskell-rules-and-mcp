@@ -11,13 +11,12 @@ import {
   moduleChecklist,
   serializeState,
   derivePhase,
-  MODE_SELECTION_PROMPT,
+  deriveGuidance,
 } from "../workflow-state.js";
 
 describe("createWorkflowState", () => {
   it("returns a fresh empty state", () => {
     const state = createWorkflowState();
-    expect(state.mode).toBeNull();
     expect(state.currentFlow).toBeNull();
     expect(state.activeModule).toBeNull();
     expect(state.modules.size).toBe(0);
@@ -311,66 +310,6 @@ describe("Workflow tracking integration (Bug Fix 3)", () => {
   });
 });
 
-describe("Mode system", () => {
-  it("mode starts as null", () => {
-    const state = createWorkflowState();
-    expect(state.mode).toBeNull();
-  });
-
-  it("mode can be set to guided, medium, or expert", () => {
-    const state = createWorkflowState();
-    state.mode = "guided";
-    expect(state.mode).toBe("guided");
-    state.mode = "medium";
-    expect(state.mode).toBe("medium");
-    state.mode = "expert";
-    expect(state.mode).toBe("expert");
-  });
-
-  it("resetWorkflowState preserves mode", () => {
-    const state = createWorkflowState();
-    state.mode = "expert";
-    state.activeModule = "src/Foo.hs";
-    resetWorkflowState(state);
-    expect(state.mode).toBe("expert");
-    expect(state.activeModule).toBeNull();
-  });
-
-  it("serializeState includes mode", () => {
-    const state = createWorkflowState();
-    state.mode = "medium";
-    const serialized = serializeState(state);
-    expect(serialized.mode).toBe("medium");
-  });
-
-  it("serializeState shows null mode when unset", () => {
-    const state = createWorkflowState();
-    const serialized = serializeState(state);
-    expect(serialized.mode).toBeNull();
-  });
-
-  it("MODE_SELECTION_PROMPT contains all three modes", () => {
-    expect(MODE_SELECTION_PROMPT).toContain("guided");
-    expect(MODE_SELECTION_PROMPT).toContain("medium");
-    expect(MODE_SELECTION_PROMPT).toContain("expert");
-    expect(MODE_SELECTION_PROMPT).toContain("ghci_mode");
-  });
-
-  it("workflowHint includes mode when set", () => {
-    const state = createWorkflowState();
-    state.mode = "expert";
-    const hint = workflowHint(state);
-    expect(hint?.mode).toBe("expert");
-  });
-
-  it("workflowHint omits mode when null", () => {
-    const state = createWorkflowState();
-    const hint = workflowHint(state);
-    // hint is null when completely empty
-    expect(hint).toBeNull();
-  });
-});
-
 describe("derivePhase", () => {
   it("returns 'stub' when functionsTotal is 0", () => {
     const progress = createEmptyProgress("src/Foo.hs");
@@ -404,3 +343,86 @@ describe("derivePhase", () => {
     expect(derivePhase(progress)).toBe("complete");
   });
 });
+
+describe("deriveGuidance", () => {
+  it("returns empty for no active module", () => {
+    const state = createWorkflowState();
+    expect(deriveGuidance(state, "ghci_load")).toEqual([]);
+  });
+
+  it("suggests ghci_suggest for stub modules", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      phase: "stub",
+      functionsTotal: 5,
+      functionsImplemented: 0,
+    });
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance.some(g => g.includes("ghci_suggest"))).toBe(true);
+  });
+
+  it("suggests ghci_arbitrary when no instances defined", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      functionsImplemented: 3,
+      functionsTotal: 5,
+      arbitraryInstancesDefined: false,
+    });
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance.some(g => g.includes("ghci_arbitrary"))).toBe(true);
+  });
+
+  it("suggests quickcheck when functions implemented but no properties", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      functionsImplemented: 3,
+      functionsTotal: 3,
+      arbitraryInstancesDefined: true,
+    });
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance.some(g => g.includes("ghci_quickcheck"))).toBe(true);
+  });
+
+  it("warns about failing properties", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      functionsImplemented: 3,
+      functionsTotal: 3,
+      propertiesFailed: ["prop1", "prop2"],
+    });
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance.some(g => g.includes("2 failing"))).toBe(true);
+  });
+
+  it("warns about pending warnings", () => {
+    const state = createWorkflowState();
+    state.pendingWarningCount = 3;
+    const guidance = deriveGuidance(state, "ghci_eval");
+    expect(guidance.some(g => g.includes("3 warning(s)"))).toBe(true);
+  });
+
+  it("warns about edits since last load (except on ghci_load itself)", () => {
+    const state = createWorkflowState();
+    state.editsSinceLastLoad = 2;
+    expect(deriveGuidance(state, "ghci_eval").some(g => g.includes("ghci_load"))).toBe(true);
+    expect(deriveGuidance(state, "ghci_load").some(g => g.includes("ghci_load"))).toBe(false);
+  });
+
+  it("returns empty when everything is healthy", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      functionsImplemented: 3,
+      functionsTotal: 3,
+      arbitraryInstancesDefined: true,
+      propertiesPassed: ["prop1"],
+    });
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance).toEqual([]);
+  });
+});
+

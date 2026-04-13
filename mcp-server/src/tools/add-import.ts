@@ -82,6 +82,26 @@ export async function handleAddImport(args: {
   });
 }
 
+/**
+ * Look up the best import for a single name. Returns null if Hoogle is unavailable
+ * or no results found. Designed for inline use in ghci_load import suggestions.
+ */
+export async function lookupImportForName(
+  name: string
+): Promise<{ name: string; import: string; module: string } | null> {
+  try {
+    const result = JSON.parse(await handleAddImport({ name }));
+    if (!result.success) return null;
+    return {
+      name,
+      import: result.suggestedImport,
+      module: result.module,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function register(server: McpServer, _ctx: ToolContext): void {
   server.tool(
     "ghci_add_import",

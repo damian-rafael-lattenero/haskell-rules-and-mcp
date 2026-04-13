@@ -20,8 +20,7 @@ import {
   workflowHint,
   suggestNextStep,
   moduleChecklist,
-  MODE_SELECTION_PROMPT,
-  type WorkflowMode,
+  deriveGuidance,
 } from "./workflow-state.js";
 
 // Tool register functions
@@ -48,6 +47,7 @@ import { register as registerSetup } from "./tools/setup.js";
 import { register as registerSuggest } from "./tools/suggest.js";
 import { register as registerArbitrary } from "./tools/arbitrary.js";
 import { register as registerTrace } from "./tools/trace.js";
+import { register as registerRegression } from "./tools/regression.js";
 
 // Base directory: the project root (parent of mcp-server/)
 const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
@@ -109,8 +109,6 @@ const ctx: ToolContext = {
   logToolExecution: (tool, success) => logTool(workflowState, tool, success),
   getModuleProgress: (path) => getModProgress(workflowState, path),
   updateModuleProgress: (path, updates) => updateModProgress(workflowState, path, updates),
-  getModeNotice: () => workflowState.mode === null ? MODE_SELECTION_PROMPT : null,
-  setMode: (mode: WorkflowMode) => { workflowState.mode = mode; },
 };
 
 // --- Register all tools from their modules ---
@@ -138,6 +136,7 @@ registerSetup(server, ctx);
 registerSuggest(server, ctx);
 registerArbitrary(server, ctx);
 registerTrace(server, ctx);
+registerRegression(server, ctx);
 
 // --- Tool: ghci_kind (inline, simple) ---
 server.tool(
@@ -168,17 +167,20 @@ server.tool(
       'The expression to evaluate. Examples: "map (+1) [1,2,3]", "show (Just 42)"'
     ),
     statements: z.array(z.string()).optional().describe(
-      "Array of GHCi statements to execute as a block (using :{ / :} syntax). " +
-        "Use for multi-line definitions or let-binding sequences. " +
-        'Example: ["let x = 42", "let y = x * 2", "x + y"]. ' +
-        "Note: GHCi commands (starting with :) are not supported inside blocks."
+      "Array of lines executed as a GHCi :{ :} block. " +
+        "Both 'x = 42' and 'let x = 42' work for bindings (auto-prefixed with 'let' if needed). " +
+        "The last line should be the expression to evaluate. " +
+        "GHCi commands (starting with :) are NOT supported inside blocks."
     ),
   },
   async ({ expression, statements }) => {
     const session = await getSession();
     let result;
     if (statements && statements.length > 0) {
-      result = await session.executeBlock(statements);
+      // Group consecutive bare bindings into single let blocks to support
+      // recursive and mutually recursive definitions in GHCi.
+      const fixed = groupBindingsIntoLetBlocks(statements);
+      result = await session.executeBlock(fixed);
     } else if (expression.includes("\n")) {
       result = await session.executeBlock(expression.split("\n"));
     } else {
@@ -186,6 +188,7 @@ server.tool(
     }
     const parsed = parseEvalOutput(result.output);
     const isException = parsed.result.startsWith("*** Exception:");
+    const guidance = deriveGuidance(workflowState, "ghci_eval");
     return {
       content: [{
         type: "text",
@@ -194,6 +197,7 @@ server.tool(
           output: parsed.result,
           ...(parsed.warnings.length > 0 ? { warnings: parsed.warnings } : {}),
           ...(parsed.result !== parsed.raw ? { raw: parsed.raw } : {}),
+          ...(guidance.length > 0 ? { _guidance: guidance } : {}),
         }),
       }],
     };
@@ -211,11 +215,8 @@ server.tool(
     if (action === "status") {
       const alive = ghciSession?.isAlive() ?? false;
       const notice = await ctx.getRulesNotice();
-      const modeNotice = ctx.getModeNotice();
       const response: Record<string, unknown> = { alive, projectDir };
-      if (workflowState.mode) response.mode = workflowState.mode;
       if (notice) response._notice = notice;
-      if (modeNotice) response._modeSelection = modeNotice;
       return { content: [{ type: "text", text: JSON.stringify(response) }] };
     }
     resetQuickCheckState();
@@ -241,70 +242,6 @@ server.tool(
     const session = await getSession();
     return {
       content: [{ type: "text", text: JSON.stringify({ success: true, message: "GHCi session restarted. MCP server still running.", alive: session.isAlive() }) }],
-    };
-  }
-);
-
-// --- Tool: ghci_mode ---
-server.tool(
-  "ghci_mode",
-  "Set or check the Haskell development mode. Controls which tools are mandatory vs optional. " +
-    "Use without arguments to see current mode. " +
-    "Modes: 'guided' (full ceremony, all tools mandatory), " +
-    "'medium' (balanced — load + quickcheck mandatory, suggest recommended), " +
-    "'expert' (minimal — only load, eval, quickcheck mandatory).",
-  {
-    mode: z.enum(["guided", "medium", "expert"]).optional().describe(
-      "The mode to set. Omit to check current mode."
-    ),
-  },
-  async ({ mode }) => {
-    if (!mode) {
-      const current = workflowState.mode;
-      if (!current) {
-        return {
-          content: [{ type: "text", text: JSON.stringify({
-            mode: null,
-            message: "No mode set yet.",
-            _modeSelection: MODE_SELECTION_PROMPT,
-          }) }],
-        };
-      }
-      return {
-        content: [{ type: "text", text: JSON.stringify({
-          mode: current,
-          message: `Current mode: ${current}`,
-          hint: "Use ghci_mode(mode=\"guided|medium|expert\") to change.",
-        }) }],
-      };
-    }
-
-    const previous = workflowState.mode;
-    ctx.setMode(mode);
-
-    const descriptions: Record<string, string> = {
-      guided: "Full ceremony — all tools mandatory. Best for beginners and unfamiliar codebases.",
-      medium: "Balanced — load + quickcheck mandatory, suggest on first pass. Best for intermediate devs.",
-      expert: "Minimal loop — only load, eval, quickcheck. Best for experienced Haskell devs.",
-    };
-
-    const mandatory: Record<string, string[]> = {
-      guided: ["ghci_load", "ghci_type", "ghci_hole_fits", "ghci_suggest", "ghci_quickcheck"],
-      medium: ["ghci_load", "ghci_quickcheck", "ghci_suggest (first time per module)"],
-      expert: ["ghci_load", "ghci_eval", "ghci_quickcheck"],
-    };
-
-    return {
-      content: [{ type: "text", text: JSON.stringify({
-        success: true,
-        mode,
-        previous: previous ?? "none",
-        description: descriptions[mode],
-        mandatoryTools: mandatory[mode],
-        message: previous
-          ? `Mode switched: ${previous} → ${mode}`
-          : `Mode set to: ${mode}`,
-      }) }],
     };
   }
 );
@@ -472,6 +409,52 @@ server.registerResource("workflow-state", "workflow://haskell/state", {
 }, async (uri) => ({
   contents: [{ uri: uri.toString(), text: JSON.stringify(serializeState(workflowState)), mimeType: "application/json" }],
 }));
+
+/**
+ * Group consecutive bare bindings (non-last lines) into single `let` blocks.
+ * Supports recursive and mutually recursive definitions by merging them
+ * into one `let` with continuation-line indentation.
+ *
+ * Example: ["f 0 = 1", "f n = n * f (n-1)", "f 5"]
+ *       → ["let f 0 = 1\n    f n = n * f (n-1)", "f 5"]
+ */
+export function groupBindingsIntoLetBlocks(statements: string[]): string[] {
+  if (statements.length === 0) return [];
+
+  const result: string[] = [];
+  let bindingGroup: string[] = [];
+
+  const isBareBinding = (s: string): boolean => {
+    const trimmed = s.trim();
+    if (trimmed.startsWith("let ") || trimmed.startsWith("import ") ||
+        trimmed.startsWith(":") || trimmed === "") return false;
+    return /^[\w'][\w']*(\s+\S+)*\s+=(?!=)/.test(trimmed);
+  };
+
+  const flushGroup = () => {
+    if (bindingGroup.length === 0) return;
+    // Join as a single let block with 4-space continuation indentation
+    const firstLine = `let ${bindingGroup[0]}`;
+    const rest = bindingGroup.slice(1).map(s => `    ${s}`);
+    result.push([firstLine, ...rest].join("\n"));
+    bindingGroup = [];
+  };
+
+  for (let i = 0; i < statements.length; i++) {
+    const isLast = i === statements.length - 1;
+    if (isLast) {
+      flushGroup();
+      result.push(statements[i]!);
+    } else if (isBareBinding(statements[i]!)) {
+      bindingGroup.push(statements[i]!);
+    } else {
+      flushGroup();
+      result.push(statements[i]!);
+    }
+  }
+
+  return result;
+}
 
 // --- Start the server ---
 async function main() {

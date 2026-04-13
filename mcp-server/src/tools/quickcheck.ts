@@ -10,6 +10,7 @@ import {
 } from "../parsers/cabal-parser.js";
 import type { ToolContext } from "./registry.js";
 import { suggestFunctionProperties } from "../laws/function-laws.js";
+import { saveProperty } from "../property-store.js";
 
 // Re-export for consumers
 export type { QuickCheckResult } from "../parsers/quickcheck-parser.js";
@@ -98,10 +99,22 @@ export function createLoadAllFromProjectDir(projectDir: string): LoadAllFn {
 export async function runPropertyWithAutoResolve(
   session: GhciSession,
   command: string,
-  loadAll?: LoadAllFn
+  loadAll?: LoadAllFn,
+  preCommands?: string[]
 ): Promise<{ result: GhciResult; autoResolved: boolean }> {
   const MAX_RETRIES = 2;
-  let lastResult = await session.execute(command);
+
+  // Execute pre-commands (let-bindings) then the main command
+  const runPreAndCommand = async (): Promise<GhciResult> => {
+    if (preCommands) {
+      for (const pre of preCommands) {
+        await session.execute(pre);
+      }
+    }
+    return session.execute(command);
+  };
+
+  let lastResult = await runPreAndCommand();
   let autoResolved = false;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -115,7 +128,7 @@ export async function runPropertyWithAutoResolve(
         if (loaded) {
           // Re-import QuickCheck (loadModules clears imports)
           await reimportWithHiding(session);
-          lastResult = await session.execute(command);
+          lastResult = await runPreAndCommand();
           autoResolved = true;
         } else {
           break;
@@ -129,7 +142,7 @@ export async function runPropertyWithAutoResolve(
         hiddenNames.add(name);
       }
       await reimportWithHiding(session);
-      lastResult = await session.execute(command);
+      lastResult = await runPreAndCommand();
       autoResolved = true;
     } else {
       break; // not-in-scope but no loadAll — can't auto-resolve
@@ -187,6 +200,24 @@ export async function handleQuickCheck(
   if (trimmed === "suggest" && args.function_name) {
     const typeResult = await session.typeOf(args.function_name);
     const typeStr = typeResult.success ? typeResult.output : "";
+
+    // Check if argument types have Arbitrary instances before suggesting properties
+    const missingArbitrary = await checkArbitraryInstances(session, typeStr);
+    if (missingArbitrary.length > 0) {
+      return JSON.stringify({
+        success: true,
+        mode: "suggest",
+        function: args.function_name,
+        type: typeStr,
+        missingArbitrary,
+        suggestedProperties: [],
+        _guidance: [
+          "Generate Arbitrary instances first: " +
+          missingArbitrary.map(t => `ghci_arbitrary(type_name="${t}")`).join(", "),
+        ],
+      });
+    }
+
     const rawSuggestions = suggestPropertiesFromType(args.function_name, typeStr);
 
     // Validate each suggested property compiles by type-checking with :t
@@ -197,7 +228,9 @@ export async function handleQuickCheck(
       if (checkResult.success && !checkResult.output.toLowerCase().includes("error")) {
         suggestions.push(s);
       } else {
-        rejected.push({ ...s, reason: "Property doesn't type-check" });
+        // Extract specific reason from GHCi error
+        const reason = extractRejectionReason(checkResult.output);
+        rejected.push({ ...s, reason });
       }
     }
 
@@ -222,11 +255,16 @@ export async function handleQuickCheck(
   if (normalizedProp.startsWith("\\") && !normalizedProp.startsWith("(")) {
     normalizedProp = `(${normalizedProp})`;
   }
-  const command = `${checkFn} (stdArgs { maxSuccess = ${maxTests} }) ${normalizedProp}`;
+
+  // Use a let-binding to isolate the property from the quickCheck command.
+  // This prevents quote/escaping issues when properties contain string literals.
+  const propId = `__qcProp`;
+  const preCommands = [`let ${propId} = ${normalizedProp}`];
+  const command = `${checkFn} (stdArgs { maxSuccess = ${maxTests} }) ${propId}`;
 
   // Run with automatic scope resolution (load_all on "not in scope", hiding on "Ambiguous")
   const loadAll = projectDir ? createLoadAllFromProjectDir(projectDir) : undefined;
-  const { result, autoResolved } = await runPropertyWithAutoResolve(session, command, loadAll);
+  const { result, autoResolved } = await runPropertyWithAutoResolve(session, command, loadAll, preCommands);
   const evalParsed = parseEvalOutput(result.output);
   let parsed = parseQuickCheckOutput(evalParsed.result, args.property);
 
@@ -251,6 +289,20 @@ export async function handleQuickCheck(
     result.output.toLowerCase().includes("parse error") ||
     (parsed.error?.includes("Exception:") ?? false)
   );
+
+  // Persist passing properties to disk for regression testing
+  if (parsed.success && !isCompilationError && projectDir) {
+    const activeMod = ctx?.getWorkflowState?.()?.activeModule ?? "unknown";
+    try {
+      await saveProperty(projectDir, {
+        property: args.property,
+        module: activeMod,
+        functionName: args.function_name,
+      });
+    } catch {
+      // Non-fatal: persistence failure shouldn't break the tool
+    }
+  }
 
   // Track in workflow state if incremental
   if (args.incremental && ctx?.getWorkflowState && ctx?.getModuleProgress) {
@@ -296,13 +348,111 @@ export async function handleQuickCheck(
       hint: parsed.success
         ? "Incremental property passed. Continue implementing next function."
         : "Incremental property FAILED. Fix before continuing.",
+      _nextStep: parsed.success
+        ? "Incremental property passed. Continue implementing the next function."
+        : "Incremental property FAILED. Fix the implementation before continuing.",
     });
   }
 
   return JSON.stringify({
     ...parsed,
     ...(autoResolved ? { _autoResolved: true } : {}),
+    _nextStep: parsed.success
+      ? "Property passed. Test more properties or move to the next function."
+      : isCompilationError
+        ? "Property has a type/syntax error. Fix the property expression and retry."
+        : "Property FAILED. Debug with ghci_trace or fix the implementation.",
   });
+}
+
+/** Types that always have Arbitrary instances in QuickCheck — skip checking these. */
+const BASE_ARBITRARY_TYPES = new Set([
+  "Int", "Integer", "Float", "Double", "Char", "Bool", "String",
+  "Word", "Word8", "Word16", "Word32", "Word64",
+  "Int8", "Int16", "Int32", "Int64",
+  "Ordering", "()",
+]);
+
+/**
+ * Extract concrete argument types from a function's type signature and check
+ * if they have Arbitrary instances. Returns a list of types that are missing.
+ */
+export async function checkArbitraryInstances(
+  session: GhciSession,
+  typeStr: string
+): Promise<string[]> {
+  if (!typeStr) return [];
+
+  // Extract the type part after "::" — e.g. "mergeErrors :: ParseError -> ParseError -> ParseError"
+  const parts = typeStr.split("::");
+  const typePart = parts.length > 1 ? parts.slice(1).join("::").trim() : typeStr.trim();
+
+  // Split on top-level arrows (not inside parens/brackets)
+  const segments = splitTopLevelArrows(typePart);
+  // All segments except the last are argument types
+  const argTypes = segments.slice(0, -1);
+
+  // Extract concrete type names (capitalized, not type variables)
+  const concreteTypes = new Set<string>();
+  for (const arg of argTypes) {
+    const trimmed = arg.trim();
+    // Extract the head type constructor (first capitalized word)
+    const match = /^[\[(]?\s*([A-Z][\w']*)/.exec(trimmed);
+    if (match && !BASE_ARBITRARY_TYPES.has(match[1]!)) {
+      concreteTypes.add(match[1]!);
+    }
+  }
+
+  // Check each concrete type for Arbitrary instance
+  const missing: string[] = [];
+  for (const typeName of concreteTypes) {
+    const result = await session.execute(`:t (arbitrary :: Gen ${typeName})`);
+    if (!result.success || result.output.toLowerCase().includes("no instance") || result.output.toLowerCase().includes("not in scope")) {
+      missing.push(typeName);
+    }
+  }
+
+  return missing;
+}
+
+/** Split a type string on top-level arrows, respecting parentheses and brackets. */
+function splitTopLevelArrows(typeStr: string): string[] {
+  const segments: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (let i = 0; i < typeStr.length; i++) {
+    const c = typeStr[i]!;
+    if (c === "(" || c === "[") depth++;
+    else if (c === ")" || c === "]") depth--;
+    else if (c === "-" && typeStr[i + 1] === ">" && depth === 0) {
+      segments.push(current);
+      current = "";
+      i++; // skip >
+      continue;
+    }
+    current += c;
+  }
+  if (current.trim()) segments.push(current);
+  return segments;
+}
+
+/**
+ * Extract a specific rejection reason from GHCi error output.
+ */
+function extractRejectionReason(output: string): string {
+  const lower = output.toLowerCase();
+  // Check for missing Arbitrary instance
+  const arbitraryMatch = /no instance for \(Arbitrary\s+(\S+)\)/i.exec(output);
+  if (arbitraryMatch) return `Missing Arbitrary instance for ${arbitraryMatch[1]}`;
+  // Check for missing Eq instance
+  const eqMatch = /no instance for \(Eq\s+(\S+)\)/i.exec(output);
+  if (eqMatch) return `Missing Eq instance for ${eqMatch[1]}`;
+  // Check for not in scope
+  if (lower.includes("not in scope")) return "Name not in scope — load all modules first";
+  // Check for type mismatch
+  if (lower.includes("couldn't match")) return "Type mismatch in property expression";
+  // Generic fallback
+  return "Property doesn't type-check";
 }
 
 /** Suggest QuickCheck properties based on a function's type signature. */

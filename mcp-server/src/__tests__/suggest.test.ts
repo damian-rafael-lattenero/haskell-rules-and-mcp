@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { handleSuggest } from "../tools/suggest.js";
+import { handleSuggest, handleAnalyze } from "../tools/suggest.js";
 import { createMockSession } from "./helpers/mock-session.js";
 import { writeFile, readFile, mkdtemp, rm, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -26,7 +26,7 @@ describe("handleSuggest", () => {
     tmpDirs.length = 0;
   });
 
-  it("switches to analyze mode for module without undefined stubs", async () => {
+  it("returns guidance when no undefined stubs found (no silent fallback)", async () => {
     const dir = await makeTmpDir();
     const srcDir = path.join(dir, "src");
     await mkdir(srcDir, { recursive: true });
@@ -36,14 +36,10 @@ describe("handleSuggest", () => {
       "utf-8"
     );
 
+    const executeCalls: string[] = [];
     const session = createMockSession({
       execute: async (cmd: string): Promise<GhciResult> => {
-        if (typeof cmd === "string" && cmd.startsWith(":browse")) {
-          return {
-            output: "foo :: Int",
-            success: true,
-          };
-        }
+        executeCalls.push(cmd);
         return { output: "", success: true };
       },
       loadModule: { output: "Ok, one module loaded.", success: true },
@@ -53,10 +49,14 @@ describe("handleSuggest", () => {
       await handleSuggest(session, { module_path: "src/Clean.hs" }, dir)
     );
     expect(result.success).toBe(true);
-    expect(result.mode).toBe("analyze");
-    expect(result.functions).toBeDefined();
-    expect(result.functions.length).toBeGreaterThan(0);
-    expect(result.functions[0].name).toBe("foo");
+    expect(result.mode).toBe("suggest");
+    expect(result.suggestions).toEqual([]);
+    expect(result._nextStep).toBeDefined();
+    expect(result._nextStep).toContain("= undefined");
+
+    // Should NOT have called :browse (no silent fallback to analyze)
+    const browseCall = executeCalls.find((c) => c.startsWith(":browse"));
+    expect(browseCall).toBeUndefined();
   });
 
   it("finds undefined functions", async () => {
@@ -240,5 +240,47 @@ describe("handleSuggest", () => {
 
     const afterContent = await readFile(filePath, "utf-8");
     expect(afterContent).toBe(originalContent);
+  });
+
+  it("analyze mode uses :browse without * prefix", async () => {
+    const executeCalls: string[] = [];
+    const session = createMockSession({
+      execute: async (cmd: string): Promise<GhciResult> => {
+        executeCalls.push(cmd);
+        if (cmd.startsWith(":browse")) {
+          return { output: "foo :: Int", success: true };
+        }
+        return { output: "", success: true };
+      },
+      loadModule: { output: "Ok, one module loaded.", success: true },
+    });
+
+    const result = JSON.parse(await handleAnalyze(session, "src/A.hs"));
+    expect(result.success).toBe(true);
+    expect(result.mode).toBe("analyze");
+
+    const browseCmd = executeCalls.find((c) => c.startsWith(":browse"));
+    expect(browseCmd).toBeDefined();
+    expect(browseCmd).toBe(":browse A");
+    expect(browseCmd).not.toContain("*");
+  });
+
+  it("explicit mode=analyze still works when called directly", async () => {
+    const session = createMockSession({
+      execute: async (cmd: string): Promise<GhciResult> => {
+        if (cmd.startsWith(":browse")) {
+          return { output: "bar :: String -> Bool", success: true };
+        }
+        return { output: "", success: true };
+      },
+      loadModule: { output: "Ok, one module loaded.", success: true },
+    });
+
+    const result = JSON.parse(await handleAnalyze(session, "src/Impl.hs"));
+    expect(result.success).toBe(true);
+    expect(result.mode).toBe("analyze");
+    expect(result.functions).toBeDefined();
+    expect(result.functions.length).toBeGreaterThan(0);
+    expect(result.functions[0].name).toBe("bar");
   });
 });

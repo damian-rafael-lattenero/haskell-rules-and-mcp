@@ -181,23 +181,26 @@ describe("handleQuickCheck — retry on stale output", () => {
 });
 
 describe("handleQuickCheck — lambda escaping normalization (Bug 7)", () => {
-  it("wraps bare lambda in parens", async () => {
-    let capturedCmd = "";
+  it("wraps bare lambda in parens via let-binding", async () => {
+    let capturedLetCmd = "";
     const session = createMockSession({
       execute: async (cmd: string): Promise<GhciResult> => {
         if (cmd.includes("import Test.QuickCheck")) {
           return { output: "", success: true };
         }
+        if (cmd.startsWith("let __qcProp")) {
+          capturedLetCmd = cmd;
+          return { output: "", success: true };
+        }
         if (cmd.includes("quickCheckWith")) {
-          capturedCmd = cmd;
           return { output: "+++ OK, passed 100 tests.\n", success: true };
         }
         return { output: "", success: true };
       },
     });
     await handleQuickCheck(session, { property: "\\pos c -> True" });
-    // The lambda should be wrapped in parens
-    expect(capturedCmd).toContain("(\\pos c -> True)");
+    // The lambda should be wrapped in parens inside the let-binding
+    expect(capturedLetCmd).toContain("(\\pos c -> True)");
   });
 
   it("compilation error in property is flagged, not counted as logic failure", async () => {
@@ -227,22 +230,25 @@ describe("handleQuickCheck — lambda escaping normalization (Bug 7)", () => {
   });
 
   it("does not double-wrap already parenthesized lambda", async () => {
-    let capturedCmd = "";
+    let capturedLetCmd = "";
     const session = createMockSession({
       execute: async (cmd: string): Promise<GhciResult> => {
         if (cmd.includes("import Test.QuickCheck")) {
           return { output: "", success: true };
         }
+        if (cmd.startsWith("let __qcProp")) {
+          capturedLetCmd = cmd;
+          return { output: "", success: true };
+        }
         if (cmd.includes("quickCheckWith")) {
-          capturedCmd = cmd;
           return { output: "+++ OK, passed 100 tests.\n", success: true };
         }
         return { output: "", success: true };
       },
     });
     await handleQuickCheck(session, { property: "(\\x -> x == (x :: Int))" });
-    // Should NOT double-wrap
-    expect(capturedCmd).not.toContain("((\\");
-    expect(capturedCmd).toContain("(\\x -> x == (x :: Int))");
+    // Should NOT double-wrap in the let-binding
+    expect(capturedLetCmd).not.toContain("((\\");
+    expect(capturedLetCmd).toContain("(\\x -> x == (x :: Int))");
   });
 });

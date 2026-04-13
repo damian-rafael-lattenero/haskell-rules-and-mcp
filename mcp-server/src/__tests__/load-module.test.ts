@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { handleLoadModule, parseShowModules } from "../tools/load-module.js";
+import { handleLoadModule, parseShowModules, extractNotInScopeNames } from "../tools/load-module.js";
 import { createMockSession } from "./helpers/mock-session.js";
 import type { GhciResult } from "../ghci-session.js";
 
@@ -269,5 +269,111 @@ describe("parseShowModules", () => {
   it("handles object-code modules", () => {
     const output = "Data.Map ( /path/to/Data/Map.hs, object-code )";
     expect(parseShowModules(output)).toEqual(["Data.Map"]);
+  });
+});
+
+describe("auto-scope dependencies", () => {
+  it("brings all loaded modules into scope after single-module load", async () => {
+    const executeCalls: string[] = [];
+    const session = createMockSession({
+      execute: async (cmd: string): Promise<GhciResult> => {
+        executeCalls.push(cmd);
+        return { output: "", success: true };
+      },
+      loadModule: { output: "Ok, two modules loaded.", success: true },
+      showModules: {
+        output:
+          "Parser.Core    ( src/Parser/Core.hs, interpreted )\n" +
+          "Parser.Error   ( src/Parser/Error.hs, interpreted )",
+        success: true,
+      },
+    });
+
+    const result = JSON.parse(
+      await handleLoadModule(session, { module_path: "src/Parser/Core.hs", diagnostics: false })
+    );
+    expect(result.success).toBe(true);
+
+    // Verify :m + was called with both modules
+    const mCmd = executeCalls.find((c) => c.startsWith(":m +"));
+    expect(mCmd).toBeDefined();
+    expect(mCmd).toContain("*Parser.Core");
+    expect(mCmd).toContain("*Parser.Error");
+
+    // Verify modulesInScope in response
+    expect(result.modulesInScope).toContain("Parser.Core");
+    expect(result.modulesInScope).toContain("Parser.Error");
+  });
+
+  it("does not call :m + on compile failure", async () => {
+    const executeCalls: string[] = [];
+    const session = createMockSession({
+      execute: async (cmd: string): Promise<GhciResult> => {
+        executeCalls.push(cmd);
+        return { output: "", success: true };
+      },
+      loadModule: {
+        output:
+          "src/Bad.hs:1:1: error: [GHC-83865]\n    Type error\nFailed.",
+        success: false,
+      },
+      showModules: { output: "", success: true },
+    });
+
+    const result = JSON.parse(
+      await handleLoadModule(session, { module_path: "src/Bad.hs", diagnostics: false })
+    );
+    expect(result.success).toBe(false);
+
+    const mCmd = executeCalls.find((c) => c.startsWith(":m +"));
+    expect(mCmd).toBeUndefined();
+  });
+});
+
+describe("extractNotInScopeNames", () => {
+  it("extracts names from 'Not in scope' errors with single quotes", () => {
+    const names = extractNotInScopeNames([
+      { message: "Not in scope: 'isDigit'" },
+    ]);
+    expect(names).toEqual(["isDigit"]);
+  });
+
+  it("extracts names from 'Not in scope: type constructor or class'", () => {
+    const names = extractNotInScopeNames([
+      { message: "Not in scope: type constructor or class 'Alternative'" },
+    ]);
+    expect(names).toEqual(["Alternative"]);
+  });
+
+  it("extracts multiple names from multiple errors", () => {
+    const names = extractNotInScopeNames([
+      { message: "Not in scope: 'isDigit'" },
+      { message: "Not in scope: 'isAlpha'" },
+    ]);
+    expect(names).toContain("isDigit");
+    expect(names).toContain("isAlpha");
+    expect(names).toHaveLength(2);
+  });
+
+  it("deduplicates repeated names", () => {
+    const names = extractNotInScopeNames([
+      { message: "Not in scope: 'sort'" },
+      { message: "Not in scope: 'sort'" },
+    ]);
+    expect(names).toEqual(["sort"]);
+  });
+
+  it("returns empty for non-scope errors", () => {
+    const names = extractNotInScopeNames([
+      { message: "Type error: Couldn't match expected type" },
+    ]);
+    expect(names).toEqual([]);
+  });
+
+  it("handles unicode quotes", () => {
+    const names = extractNotInScopeNames([
+      { message: "Not in scope: \u2018intercalate\u2019" },
+    ]);
+    expect(names).toEqual(["intercalate"]);
   });
 });

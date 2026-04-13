@@ -16,21 +16,12 @@ describe("handleQuickCheckBatch", () => {
   });
 
   it("runs multiple properties and aggregates results", async () => {
-    let callIndex = 0;
-    const qcResponses = [
-      // First: import QuickCheck (ensureQuickCheck)
-      { output: "", success: true },
-      // Second: run property 1
-      { output: "+++ OK, passed 100 tests.", success: true },
-      // Third: run property 2
-      { output: "+++ OK, passed 100 tests.", success: true },
-      // Fourth: run property 3
-      { output: "+++ OK, passed 100 tests.", success: true },
-    ];
-
     const session = createMockSession({
-      execute: vi.fn(async () => {
-        return qcResponses[callIndex++] ?? { output: "+++ OK, passed 100 tests.", success: true };
+      execute: vi.fn(async (cmd: string) => {
+        if (cmd.includes("quickCheckWith") || cmd.includes("verboseCheckWith")) {
+          return { output: "+++ OK, passed 100 tests.", success: true };
+        }
+        return { output: "", success: true };
       }),
     });
 
@@ -46,23 +37,20 @@ describe("handleQuickCheckBatch", () => {
   });
 
   it("reports allPassed=false when any property fails", async () => {
-    let callIndex = 0;
-    const qcResponses = [
-      // Import
-      { output: "", success: true },
-      // Prop 1: pass
-      { output: "+++ OK, passed 100 tests.", success: true },
-      // Prop 2: fail
-      {
-        output:
-          "*** Failed! Falsifiable (after 3 tests and 0 shrinks):\n42\n",
-        success: true,
-      },
-    ];
-
+    let qcCallIndex = 0;
     const session = createMockSession({
-      execute: vi.fn(async () => {
-        return qcResponses[callIndex++] ?? { output: "", success: true };
+      execute: vi.fn(async (cmd: string) => {
+        if (cmd.includes("quickCheckWith") || cmd.includes("verboseCheckWith")) {
+          qcCallIndex++;
+          if (qcCallIndex === 1) {
+            return { output: "+++ OK, passed 100 tests.", success: true };
+          }
+          return {
+            output: "*** Failed! Falsifiable (after 3 tests and 0 shrinks):\n42\n",
+            success: true,
+          };
+        }
+        return { output: "", success: true };
       }),
     });
 
@@ -78,15 +66,15 @@ describe("handleQuickCheckBatch", () => {
   });
 
   it("includes error details for failing properties", async () => {
-    let callIndex = 0;
     const session = createMockSession({
-      execute: vi.fn(async () => {
-        if (callIndex++ === 0) return { output: "", success: true }; // import
-        return {
-          output:
-            "*** Failed! Falsifiable (after 5 tests and 2 shrinks):\n0\n\n",
-          success: true,
-        };
+      execute: vi.fn(async (cmd: string) => {
+        if (cmd.includes("quickCheckWith") || cmd.includes("verboseCheckWith")) {
+          return {
+            output: "*** Failed! Falsifiable (after 5 tests and 2 shrinks):\n0\n\n",
+            success: true,
+          };
+        }
+        return { output: "", success: true };
       }),
     });
 
