@@ -179,3 +179,44 @@ describe("handleQuickCheck — retry on stale output", () => {
     expect(callCount).toBe(1); // No retry — QC output was valid
   });
 });
+
+describe("handleQuickCheck — lambda escaping normalization (Bug 7)", () => {
+  it("wraps bare lambda in parens", async () => {
+    let capturedCmd = "";
+    const session = createMockSession({
+      execute: async (cmd: string): Promise<GhciResult> => {
+        if (cmd.includes("import Test.QuickCheck")) {
+          return { output: "", success: true };
+        }
+        if (cmd.includes("quickCheckWith")) {
+          capturedCmd = cmd;
+          return { output: "+++ OK, passed 100 tests.\n", success: true };
+        }
+        return { output: "", success: true };
+      },
+    });
+    await handleQuickCheck(session, { property: "\\pos c -> True" });
+    // The lambda should be wrapped in parens
+    expect(capturedCmd).toContain("(\\pos c -> True)");
+  });
+
+  it("does not double-wrap already parenthesized lambda", async () => {
+    let capturedCmd = "";
+    const session = createMockSession({
+      execute: async (cmd: string): Promise<GhciResult> => {
+        if (cmd.includes("import Test.QuickCheck")) {
+          return { output: "", success: true };
+        }
+        if (cmd.includes("quickCheckWith")) {
+          capturedCmd = cmd;
+          return { output: "+++ OK, passed 100 tests.\n", success: true };
+        }
+        return { output: "", success: true };
+      },
+    });
+    await handleQuickCheck(session, { property: "(\\x -> x == (x :: Int))" });
+    // Should NOT double-wrap
+    expect(capturedCmd).not.toContain("((\\");
+    expect(capturedCmd).toContain("(\\x -> x == (x :: Int))");
+  });
+});

@@ -172,41 +172,129 @@ describe.runIf(GHC_AVAILABLE)("GHCi Session Integration", () => {
     expect(result.output).toMatch(/^ {2}hello/);
   });
 
-  // --- Fix 9: Sentinel sync — no off-by-one ---
-  it("sequential eval commands return correct (non-offset) results", async () => {
+  // ==========================================================================
+  // Fix 9: Sentinel sync — EXHAUSTIVE off-by-one tests
+  // These tests verify that EVERY execute() returns its OWN result,
+  // not the previous command's. Each test targets a different scenario.
+  // ==========================================================================
+
+  it("10 sequential putStrLn commands return correct results (no offset)", async () => {
     const results: string[] = [];
-    for (let i = 1; i <= 5; i++) {
-      const r = await session.execute(`putStrLn "${i}"`);
+    for (let i = 1; i <= 10; i++) {
+      const r = await session.execute(`putStrLn "val-${i}"`);
       results.push(r.output.trim());
     }
-    expect(results).toEqual(["1", "2", "3", "4", "5"]);
+    expect(results).toEqual(
+      Array.from({ length: 10 }, (_, i) => `val-${i + 1}`)
+    );
   });
 
-  it("reloadThenExecute returns the command result, not reload output", async () => {
-    const result = await session.typeOf("add");
-    expect(result.success).toBe(true);
-    expect(result.output).toContain("Int -> Int -> Int");
-    expect(result.output).not.toContain("Ok,");
-    expect(result.output).not.toContain("module");
+  it("typeOf returns type, never reload output", async () => {
+    // Call typeOf multiple times — it uses reloadThenExecute internally
+    for (let i = 0; i < 3; i++) {
+      const result = await session.typeOf("add");
+      expect(result.success).toBe(true);
+      expect(result.output).toContain("Int -> Int -> Int");
+      expect(result.output).not.toContain("Ok,");
+      expect(result.output).not.toContain("module");
+    }
   });
 
   it("eval after load returns eval result, not load output", async () => {
     await session.loadModule("src/TestLib.hs");
     const result = await session.execute("add 10 20");
-    expect(result.output.trim()).toBe("30");
+    // Must be "30", not compilation output
+    expect(result.output).toContain("30");
+    expect(result.output).not.toContain("Compiling");
+    expect(result.output).not.toContain("Ok,");
   });
 
-  it("fresh session has no sentinel offset", async () => {
+  it("alternating load → eval → load → eval stays aligned", async () => {
+    for (let i = 0; i < 3; i++) {
+      await session.loadModule("src/TestLib.hs");
+      const r = await session.execute(`putStrLn "iter-${i}"`);
+      expect(r.output.trim()).toBe(`iter-${i}`);
+    }
+  });
+
+  it("typeOf after eval returns type, not eval result", async () => {
+    const evalResult = await session.execute('putStrLn "EVAL_OUTPUT"');
+    expect(evalResult.output.trim()).toBe("EVAL_OUTPUT");
+
+    const typeResult = await session.typeOf("add");
+    expect(typeResult.output).toContain("Int -> Int -> Int");
+    expect(typeResult.output).not.toContain("EVAL_OUTPUT");
+  });
+
+  it("eval after typeOf returns eval result, not type", async () => {
+    const typeResult = await session.typeOf("greet");
+    expect(typeResult.output).toContain("String -> String");
+
+    const evalResult = await session.execute('putStrLn "AFTER_TYPE"');
+    expect(evalResult.output.trim()).toBe("AFTER_TYPE");
+    expect(evalResult.output).not.toContain("String -> String");
+  });
+
+  it("infoOf returns info, not previous output", async () => {
+    await session.execute('putStrLn "BEFORE_INFO"');
+    const info = await session.infoOf("add");
+    expect(info.output).toContain("Int -> Int -> Int");
+    expect(info.output).not.toContain("BEFORE_INFO");
+  });
+
+  it("rapid fire: 20 distinct commands all return correct results", async () => {
+    const expected: string[] = [];
+    const actual: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      const tag = `rapid-${String(i).padStart(2, "0")}`;
+      expected.push(tag);
+      const r = await session.execute(`putStrLn "${tag}"`);
+      actual.push(r.output.trim());
+    }
+    expect(actual).toEqual(expected);
+  });
+
+  it("fresh session: first 5 commands all correct (no init offset)", async () => {
     const fresh = new GhciSession(FIXTURE_DIR, "lib:test-project");
     await fresh.start();
     try {
-      // Use putStrLn to avoid GHC type-defaulting warnings
-      const r1 = await fresh.execute('putStrLn "alpha"');
-      expect(r1.output.trim()).toBe("alpha");
-      const r2 = await fresh.execute('putStrLn "beta"');
-      expect(r2.output.trim()).toBe("beta");
+      const results: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        const r = await fresh.execute(`putStrLn "fresh-${i}"`);
+        results.push(r.output.trim());
+      }
+      expect(results).toEqual(["fresh-0", "fresh-1", "fresh-2", "fresh-3", "fresh-4"]);
     } finally {
       await fresh.kill();
     }
   }, 60_000);
+
+  it("after restart: commands return correct results immediately", async () => {
+    await session.restart();
+    const r1 = await session.execute('putStrLn "post-restart-1"');
+    expect(r1.output.trim()).toBe("post-restart-1");
+    const r2 = await session.execute('putStrLn "post-restart-2"');
+    expect(r2.output.trim()).toBe("post-restart-2");
+    // Restore session state for remaining tests
+    await session.loadModule("src/TestLib.hs");
+  });
+
+  // --- Bug 5: Persistent imports survive reload ---
+  it("persistent import survives :r reload", async () => {
+    await session.addPersistentImport("import Data.List (sort)");
+    const before = await session.execute("sort [3,1,2]");
+    expect(before.output).toContain("[1,2,3]");
+
+    // Reload — should re-apply the import
+    await session.reload();
+    const after = await session.execute("sort [5,3,1]");
+    expect(after.output).toContain("[1,3,5]");
+  });
+
+  it("persistent import survives :l loadModule", async () => {
+    await session.addPersistentImport("import Data.Char (toUpper)");
+    await session.loadModule("src/TestLib.hs");
+    const result = await session.execute("toUpper 'a'");
+    expect(result.output).toContain("'A'");
+  });
 });

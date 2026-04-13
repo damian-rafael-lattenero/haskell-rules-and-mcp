@@ -22,6 +22,8 @@ export class GhciSession extends EventEmitter {
   private projectDir: string;
   private libraryTarget: string | undefined;
   private ghcupBin: string;
+  /** Tracked imports that persist across :r/:l reloads. */
+  private persistentImports: Set<string> = new Set();
 
   constructor(projectDir: string, libraryTarget?: string) {
     super();
@@ -162,6 +164,11 @@ export class GhciSession extends EventEmitter {
       const success = !output.toLowerCase().includes("error:");
       resolve({ output, success });
     }
+    // NOTE: We intentionally do NOT drain orphan sentinels here.
+    // waitForSentinel() also checks the buffer with pendingResolve=null,
+    // and draining here would steal sentinels from it.
+    // Instead, drainStaleSentinels() is called in executeInternal()
+    // as defense-in-depth against any accumulated orphans.
   }
 
   private clearPending(): void {
@@ -302,6 +309,12 @@ export class GhciSession extends EventEmitter {
     command: string,
     timeoutMs: number = DEFAULT_TIMEOUT_MS
   ): Promise<GhciResult> {
+    // Defense-in-depth: drain any stale sentinels that accumulated in the buffer
+    // from previous operations (e.g., GHCi producing extra prompts during reload).
+    // This is safe because the queue guarantees no concurrent execution, and
+    // the previous command has already resolved and consumed its sentinel.
+    this.drainStaleSentinels();
+
     if (this.pendingResolve) {
       // Defensive assertion — the queue should prevent this
       throw new Error("Another command is already in progress");
@@ -369,10 +382,11 @@ export class GhciSession extends EventEmitter {
    * This ensures GHCi always sees the latest source code.
    */
   private async reloadThenExecute(command: string): Promise<GhciResult> {
-    const reloadResult = await this.execute(":r");
-    // If reload has errors, we still proceed with the command —
-    // the user wants to know the type even if there are warnings,
-    // and if there are errors the :t will fail with a clear message.
+    await this.execute(":r");
+    // Re-apply persistent imports after reload
+    if (this.persistentImports.size > 0) {
+      await this.reapplyImports();
+    }
     return this.execute(command);
   }
 
@@ -421,10 +435,14 @@ export class GhciSession extends EventEmitter {
   }
 
   /**
-   * Load a single module.
+   * Load a single module and re-apply persistent imports.
    */
   async loadModule(modulePath: string): Promise<GhciResult> {
-    return this.execute(`:l ${modulePath}`);
+    const result = await this.execute(`:l ${modulePath}`);
+    if (this.persistentImports.size > 0) {
+      await this.reapplyImports();
+    }
+    return result;
   }
 
   /**
@@ -446,10 +464,35 @@ export class GhciSession extends EventEmitter {
   }
 
   /**
-   * Reload all modules.
+   * Add a persistent import that survives :r/:l reloads.
+   * The import is executed immediately and re-applied after each reload.
+   */
+  async addPersistentImport(importCmd: string): Promise<GhciResult> {
+    const result = await this.execute(importCmd);
+    if (result.success) {
+      this.persistentImports.add(importCmd);
+    }
+    return result;
+  }
+
+  /**
+   * Re-apply all persistent imports. Called internally after :r/:l.
+   */
+  private async reapplyImports(): Promise<void> {
+    for (const imp of this.persistentImports) {
+      await this.execute(imp);
+    }
+  }
+
+  /**
+   * Reload all modules and re-apply persistent imports.
    */
   async reload(): Promise<GhciResult> {
-    return this.execute(":r");
+    const result = await this.execute(":r");
+    if (this.persistentImports.size > 0) {
+      await this.reapplyImports();
+    }
+    return result;
   }
 
   /**

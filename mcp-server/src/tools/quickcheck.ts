@@ -105,7 +105,13 @@ export async function handleQuickCheck(
 
   const maxTests = args.tests ?? 100;
   const checkFn = args.verbose ? "verboseCheckWith" : "quickCheckWith";
-  const command = `${checkFn} (stdArgs { maxSuccess = ${maxTests} }) (${args.property})`;
+  // Normalize the property: ensure lambdas are wrapped in parentheses
+  // to avoid GHCi parse errors with bare \x -> ... at top level.
+  let normalizedProp = args.property;
+  if (normalizedProp.startsWith("\\") && !normalizedProp.startsWith("(")) {
+    normalizedProp = `(${normalizedProp})`;
+  }
+  const command = `${checkFn} (stdArgs { maxSuccess = ${maxTests} }) ${normalizedProp}`;
 
   const result = await session.execute(command);
   const evalParsed = parseEvalOutput(result.output);

@@ -308,7 +308,55 @@ broken x = x * 2
     );
     expect(typeResult.success).toBe(true);
     expect(typeResult.type).toContain("Int -> Int");
-    // Must NOT contain the eval result
     expect(typeResult.type).not.toContain("14");
+  });
+
+  // --- Step 13-17: EXHAUSTIVE sentinel offset tests via MCP protocol ---
+  it("step 13: 10 sequential evals all return correct results", async () => {
+    for (let i = 1; i <= 10; i++) {
+      const r = parseResult(
+        await callTool(client, "ghci_eval", { expression: `double ${i}` })
+      );
+      expect(r.success).toBe(true);
+      expect(r.output).toContain(String(i * 2));
+    }
+  });
+
+  it("step 14: load → eval → load → eval stays aligned", async () => {
+    for (let i = 0; i < 3; i++) {
+      await callTool(client, "ghci_load", { module_path: "src/WorkflowTest.hs" });
+      const r = parseResult(
+        await callTool(client, "ghci_eval", { expression: `double ${i + 10}` })
+      );
+      expect(r.output).toContain(String((i + 10) * 2));
+    }
+  });
+
+  it("step 15: quickcheck after eval returns QC result, not eval output", async () => {
+    const evalR = parseResult(
+      await callTool(client, "ghci_eval", { expression: "double 99" })
+    );
+    expect(evalR.output).toContain("198");
+
+    const qcR = parseResult(
+      await callTool(client, "ghci_quickcheck", {
+        property: "\\x -> double x == x + (x :: Int)",
+      })
+    );
+    expect(qcR.success).toBe(true);
+    expect(qcR.passed).toBe(100);
+  });
+
+  it("step 16: eval after quickcheck returns eval result, not QC output", async () => {
+    await callTool(client, "ghci_quickcheck", {
+      property: "\\x -> double x == x + (x :: Int)",
+    });
+
+    const r = parseResult(
+      await callTool(client, "ghci_eval", { expression: "broken 3" })
+    );
+    expect(r.output).toContain("6");
+    expect(r.output).not.toContain("OK");
+    expect(r.output).not.toContain("passed");
   });
 });

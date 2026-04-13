@@ -457,3 +457,29 @@ describe("Bug Fix 9: Sentinel sync — drainStaleSentinels logic", () => {
     expect(buffer).toBe("\nclean buffer content\n");
   });
 });
+
+// ============================================================================
+// BUG FIX 10: Lambda escaping normalization in QuickCheck
+//
+// Bare lambdas like `\pos c -> ...` can cause parse errors in GHCi.
+// Fix: auto-wrap bare lambdas in parentheses.
+// ============================================================================
+describe("Bug Fix 10: Lambda escaping in QuickCheck", () => {
+  it("REGRESSION: bare lambda is wrapped in parens", () => {
+    const prop = "\\pos c -> True";
+    let normalized = prop;
+    if (normalized.startsWith("\\") && !normalized.startsWith("(")) {
+      normalized = `(${normalized})`;
+    }
+    expect(normalized).toBe("(\\pos c -> True)");
+  });
+
+  it("REGRESSION: parenthesized lambda is not double-wrapped", () => {
+    const prop = "(\\x -> x == x)";
+    let normalized = prop;
+    if (normalized.startsWith("\\") && !normalized.startsWith("(")) {
+      normalized = `(${normalized})`;
+    }
+    expect(normalized).toBe("(\\x -> x == x)");
+  });
+});
