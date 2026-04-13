@@ -116,6 +116,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
     },
     async ({ target_dir, force }) => {
       const result = await handleSetup(ctx.getBaseDir(), { target_dir, force });
+      ctx.resetRulesCache();
       return { content: [{ type: "text" as const, text: result }] };
     }
   );

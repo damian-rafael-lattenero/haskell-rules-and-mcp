@@ -7,7 +7,7 @@ import { resetQuickCheckState } from "./tools/quickcheck.js";
 import { discoverProjects, getPlaygroundDir } from "./project-manager.js";
 import { RULES_REGISTRY, loadRule } from "./resources/rules.js";
 import { parseEvalOutput } from "./parsers/eval-output-parser.js";
-import type { ToolContext } from "./tools/registry.js";
+import { createRulesChecker, type ToolContext } from "./tools/registry.js";
 
 // Tool register functions
 import { register as registerTypeCheck } from "./tools/type-check.js";
@@ -64,12 +64,17 @@ async function getSession(): Promise<GhciSession> {
   return session;
 }
 
+// --- Rules checker (cached, reset on project switch) ---
+const rulesChecker = createRulesChecker(() => projectDir);
+
 // --- Tool Context ---
 const ctx: ToolContext = {
   getSession,
   getProjectDir: () => projectDir,
   getBaseDir: () => BASE_DIR,
   resetQuickCheckState,
+  getRulesNotice: rulesChecker.check,
+  resetRulesCache: rulesChecker.reset,
 };
 
 // --- Register all tools from their modules ---
@@ -150,7 +155,10 @@ server.tool(
   async ({ action }) => {
     if (action === "status") {
       const alive = ghciSession?.isAlive() ?? false;
-      return { content: [{ type: "text", text: JSON.stringify({ alive, projectDir }) }] };
+      const notice = await ctx.getRulesNotice();
+      const response: Record<string, unknown> = { alive, projectDir };
+      if (notice) response._notice = notice;
+      return { content: [{ type: "text", text: JSON.stringify(response) }] };
     }
     resetQuickCheckState();
     if (ghciSession) { await ghciSession.kill(); ghciSession = null; }
@@ -221,6 +229,7 @@ server.tool(
     resetQuickCheckState();
     if (ghciSession) { await ghciSession.kill(); ghciSession = null; }
     projectDir = target.path;
+    rulesChecker.reset(); // Re-check rules in new project
     const session = await getSession();
     return {
       content: [{ type: "text", text: JSON.stringify({ success: true, message: `Switched to project '${target.name}'`, projectDir: target.path, alive: session.isAlive() }) }],

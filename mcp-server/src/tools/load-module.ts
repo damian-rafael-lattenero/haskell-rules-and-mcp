@@ -297,6 +297,13 @@ export function register(server: McpServer, ctx: ToolContext): void {
     async ({ module_path, load_all, diagnostics }) => {
       const session = await ctx.getSession();
       const result = await handleLoadModule(session, { module_path, load_all, diagnostics }, ctx.getProjectDir());
+      // Inject rules notice on first call if rules not installed
+      const notice = await ctx.getRulesNotice();
+      if (notice) {
+        const parsed = JSON.parse(result);
+        parsed._notice = notice;
+        return { content: [{ type: "text" as const, text: JSON.stringify(parsed) }] };
+      }
       return { content: [{ type: "text" as const, text: result }] };
     }
   );
