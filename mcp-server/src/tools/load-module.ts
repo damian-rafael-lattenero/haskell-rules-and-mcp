@@ -462,7 +462,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
       // Inject notices and contextual guidance
       const notice = await ctx.getRulesNotice();
-      if (notice) parsed._notice = notice;
+      if (notice) parsed._info = notice;
       const { deriveGuidance } = await import("../workflow-state.js");
       const guidance = deriveGuidance(ctx.getWorkflowState(), "ghci_load");
       if (guidance.length > 0) parsed._guidance = guidance;

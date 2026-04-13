@@ -306,6 +306,16 @@ export function register(server: McpServer, ctx: ToolContext): void {
     async ({ type_name }) => {
       const session = await ctx.getSession();
       const result = await handleArbitrary(session, { type_name });
+      // Mark that Arbitrary instances have been defined for the active module
+      try {
+        const parsed = JSON.parse(result);
+        if (parsed.success) {
+          const activeModule = ctx.getWorkflowState().activeModule;
+          if (activeModule) {
+            ctx.updateModuleProgress(activeModule, { arbitraryInstancesDefined: true });
+          }
+        }
+      } catch { /* non-fatal */ }
       return { content: [{ type: "text" as const, text: result }] };
     }
   );

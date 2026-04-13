@@ -86,11 +86,14 @@ describe("suggestFunctionProperties", () => {
     });
   });
 
-  describe("return-type contracts", () => {
-    it("suggests Right/Left properties for Either return", () => {
+  describe("return-type contracts (safe properties only)", () => {
+    it("suggests determinism for Either return (not 'not always Left')", () => {
       const suggestions = suggestFunctionProperties("parse", "parse :: String -> Either String Int");
       const laws = suggestions.map((s) => s.law);
-      expect(laws).toContain("not always Left");
+      expect(laws).toContain("determinism");
+      // MUST NOT suggest universally wrong properties
+      expect(laws).not.toContain("not always Left");
+      expect(laws).not.toContain("not always Nothing");
     });
 
     it("suggests reflexivity for Either with same-type args", () => {
@@ -100,17 +103,13 @@ describe("suggestFunctionProperties", () => {
       expect(reflex!.property).toContain("unify x (x :: Type)");
     });
 
-    it("suggests Just/Nothing properties for Maybe return", () => {
-      const suggestions = suggestFunctionProperties("lookup", "lookup :: String -> Maybe Int");
-      const laws = suggestions.map((s) => s.law);
-      expect(laws).toContain("not always Nothing");
-    });
+    it("does NOT suggest universal Maybe/Bool properties", () => {
+      const maybeSuggestions = suggestFunctionProperties("lookup", "lookup :: String -> Maybe Int");
+      expect(maybeSuggestions.map(s => s.law)).not.toContain("not always Nothing");
 
-    it("suggests exists True/False for Bool return", () => {
-      const suggestions = suggestFunctionProperties("isValid", "isValid :: String -> Bool");
-      const laws = suggestions.map((s) => s.law);
-      expect(laws).toContain("not constant True");
-      expect(laws).toContain("not constant False");
+      const boolSuggestions = suggestFunctionProperties("isValid", "isValid :: String -> Bool");
+      expect(boolSuggestions.map(s => s.law)).not.toContain("not constant True");
+      expect(boolSuggestions.map(s => s.law)).not.toContain("not constant False");
     });
   });
 

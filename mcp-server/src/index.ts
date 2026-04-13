@@ -180,7 +180,16 @@ server.tool(
       // Group consecutive bare bindings into single let blocks to support
       // recursive and mutually recursive definitions in GHCi.
       const fixed = groupBindingsIntoLetBlocks(statements);
-      result = await session.executeBlock(fixed);
+      // Extract imports — they can't go inside :{ :} blocks.
+      // Execute them separately before the block.
+      const imports = fixed.filter(s => s.trim().startsWith("import "));
+      const nonImports = fixed.filter(s => !s.trim().startsWith("import "));
+      for (const imp of imports) {
+        await session.execute(imp);
+      }
+      result = nonImports.length > 0
+        ? await session.executeBlock(nonImports)
+        : { output: "", success: true };
     } else if (expression.includes("\n")) {
       result = await session.executeBlock(expression.split("\n"));
     } else {
@@ -216,7 +225,7 @@ server.tool(
       const alive = ghciSession?.isAlive() ?? false;
       const notice = await ctx.getRulesNotice();
       const response: Record<string, unknown> = { alive, projectDir };
-      if (notice) response._notice = notice;
+      if (notice) response._info = notice;
       return { content: [{ type: "text", text: JSON.stringify(response) }] };
     }
     resetQuickCheckState();

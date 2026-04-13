@@ -143,4 +143,16 @@ describe("groupBindingsIntoLetBlocks", () => {
     const result = groupBindingsIntoLetBlocks(["x' = 42", "x'"]);
     expect(result).toEqual(["let x' = 42", "x'"]);
   });
+
+  it("passes imports through unchanged (for extraction before executeBlock)", () => {
+    const result = groupBindingsIntoLetBlocks([
+      "import Data.List",
+      "x = sort [3,1,2]",
+      "x",
+    ]);
+    // import should pass through, binding should get let
+    expect(result[0]).toBe("import Data.List");
+    expect(result[1]).toBe("let x = sort [3,1,2]");
+    expect(result[2]).toBe("x");
+  });
 });

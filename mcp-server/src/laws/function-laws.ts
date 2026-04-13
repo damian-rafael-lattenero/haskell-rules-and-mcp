@@ -92,58 +92,35 @@ export function suggestFunctionProperties(
     }
   }
 
-  // --- Strategy 2: Return-type contracts ---
+  // --- Strategy 2: Safe return-type properties ---
+  // PRINCIPLE: Only suggest properties that are correct without domain knowledge.
+  // Determinism and totality are always safe. Reachability is NOT (the function
+  // may correctly reject arbitrary inputs). Silence > wrong suggestion.
   if (arrows.length >= 2) {
     const returnType = arrows[arrows.length - 1]!.trim();
     const argTypes = arrows.slice(0, -1).map((a) => a.trim());
 
-    // Either return → test that some input gives Right and the function doesn't crash
+    // Either return: determinism (safe) + reflexivity for same-type args (often correct)
     if (returnType.startsWith("Either ")) {
-      const innerTypes = returnType.replace(/^Either\s+/, "");
-      const eitherParts = splitTopLevelArrows(innerTypes.replace(/\s+/g, " -> "));
-      // Suggest: function doesn't always fail
+      // Determinism: same input always gives same output (always correct for pure functions)
       suggestions.push({
-        law: "not always Left",
-        property: buildNArgs(funcName, argTypes, `case ${funcName} ${buildArgApply(argTypes)} of { Right _ -> True; Left _ -> False }`, "not always"),
-        confidence: "low",
+        law: "determinism",
+        property: buildNArgs(funcName, argTypes, `${funcName} ${buildArgApply(argTypes)} == ${funcName} ${buildArgApply(argTypes)}`, "determinism"),
+        confidence: "high",
       });
-      // Suggest: reflexive input (same args) should succeed if applicable
+      // Reflexive: f x x should be consistent (often succeeds for well-behaved functions)
       if (argTypes.length === 2 && argTypes[0] === argTypes[1]) {
         suggestions.push({
-          law: "reflexivity (equal args → Right)",
-          property: `\\x -> case ${funcName} x (x :: ${argTypes[0]}) of { Right _ -> True; Left _ -> False }`,
+          law: "reflexivity (equal args consistent)",
+          property: `\\x -> ${funcName} x (x :: ${argTypes[0]}) == ${funcName} x x`,
           confidence: "medium",
         });
       }
     }
 
-    // Maybe return → test both Just and Nothing are reachable
-    if (returnType.startsWith("Maybe ")) {
-      suggestions.push({
-        law: "not always Nothing",
-        property: buildNArgs(funcName, argTypes, `case ${funcName} ${buildArgApply(argTypes)} of { Just _ -> True; Nothing -> False }`, "not always"),
-        confidence: "low",
-      });
-    }
-
-    // Bool return → test exists True and exists False
-    if (returnType === "Bool") {
-      suggestions.push({
-        law: "not constant True",
-        property: buildNArgs(funcName, argTypes, `not (${funcName} ${buildArgApply(argTypes)})`, "exists"),
-        confidence: "low",
-      });
-      suggestions.push({
-        law: "not constant False",
-        property: buildNArgs(funcName, argTypes, `${funcName} ${buildArgApply(argTypes)}`, "exists"),
-        confidence: "low",
-      });
-    }
-
     // --- Strategy 3: Same-type arguments → test with equal args ---
     if (argTypes.length === 2 && argTypes[0] === argTypes[1] && !returnType.startsWith("Either ")) {
       const t = argTypes[0]!;
-      // f x x should be deterministic/reflexive
       suggestions.push({
         law: "reflexive (equal args)",
         property: `\\x -> ${funcName} x (x :: ${t}) == ${funcName} x x`,

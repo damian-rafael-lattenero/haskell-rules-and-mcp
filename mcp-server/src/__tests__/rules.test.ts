@@ -63,7 +63,7 @@ describe("createRulesChecker — notice-once behavior", () => {
   it("returns notice on first call when rules are missing", async () => {
     const checker = createRulesChecker(() => "/nonexistent/path");
     const first = await checker.check();
-    expect(first).toContain("Haskell development rules not installed");
+    expect(first).toContain("ghci_setup()");
   });
 
   it("returns null on second call (notice already shown)", async () => {

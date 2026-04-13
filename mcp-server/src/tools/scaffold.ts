@@ -209,15 +209,23 @@ async function lookupExternalType(
     const hoogleResult = JSON.parse(await handleHoogleSearch({ query: typeName, count: 10 }));
     if (!hoogleResult.success || !hoogleResult.results?.length) return null;
 
+    // Pass 1: prefer public modules (skip .Internal)
     for (const r of hoogleResult.results) {
       if (!r.module || r.module === "Prelude") continue;
-      // Only accept results from packages the project actually depends on
-      const pkg = r.package?.replace(/-[0-9].*$/, ""); // strip version
+      if (r.module.includes(".Internal")) continue;
+      const pkg = r.package?.replace(/-[0-9].*$/, "");
       if (pkg && projectDeps.has(pkg)) {
         return { module: r.module };
       }
     }
-    // No result from project deps — skip (ghci_load will catch it)
+    // Pass 2: fallback to internal modules if no public alternative
+    for (const r of hoogleResult.results) {
+      if (!r.module || r.module === "Prelude") continue;
+      const pkg = r.package?.replace(/-[0-9].*$/, "");
+      if (pkg && projectDeps.has(pkg)) {
+        return { module: r.module };
+      }
+    }
     return null;
   } catch {
     return null;

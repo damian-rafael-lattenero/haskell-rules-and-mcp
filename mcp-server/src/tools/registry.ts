@@ -75,8 +75,8 @@ export function createRulesChecker(
       }
 
       cached =
-        "Haskell development rules not installed. Run ghci_setup() to enable the automation loop, " +
-        "warning action table, and development workflow.";
+        "Optional: run ghci_setup() to install development rules in .claude/rules/. " +
+        "All tools work without it.";
       noticeShown = true;
       return cached;
     },

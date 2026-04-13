@@ -269,8 +269,13 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
     guidance.push(`${mod.propertiesFailed.length} failing property(ies) — fix before continuing`);
   }
 
-  // All modules complete with properties — suggest regression
-  if (state.modules.size > 0) {
+  // Properties saved — mention registry and regression
+  if (mod && mod.propertiesPassed.length > 0 && mod.propertiesFailed.length === 0) {
+    guidance.push(`${mod.propertiesPassed.length} properties saved — ghci_regression(action="run") to verify after changes`);
+  }
+
+  // All modules complete with properties — suggest full regression
+  if (state.modules.size > 1) {
     const allComplete = [...state.modules.values()].every(
       (m) => m.functionsTotal > 0 && m.functionsImplemented >= m.functionsTotal
     );
@@ -281,7 +286,7 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
       (m) => m.propertiesFailed.length === 0
     );
     if (allComplete && hasProperties && noFailures && guidance.length === 0) {
-      guidance.push("All modules complete — run ghci_regression to verify all properties still pass");
+      guidance.push("All modules complete — run ghci_regression to verify all properties");
     }
   }
 

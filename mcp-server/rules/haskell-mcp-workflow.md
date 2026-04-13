@@ -27,7 +27,8 @@ The `_guidance` array in responses tells you what to do next based on:
 - `ghci_quickcheck` incrementally when laws become testable AND at module-complete
 - Zero tolerance for warnings — fix every `warningAction` immediately
 - `ghci_arbitrary` for new data types — don't write Arbitrary instances by hand
-- Follow `_guidance` in tool responses — it's always context-aware
+- `ghci_regression(action="run")` at start of session on existing projects — verify saved properties still pass
+- Follow `_guidance` in tool responses — it's context-aware and verified against GHCi state
 
 ---
 
