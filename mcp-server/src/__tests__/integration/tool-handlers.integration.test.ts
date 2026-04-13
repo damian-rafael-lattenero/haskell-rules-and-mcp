@@ -7,6 +7,12 @@ import { handleTypeInfo } from "../../tools/type-info.js";
 import { handleCheckModule } from "../../tools/check-module.js";
 import { handleLoadModule } from "../../tools/load-module.js";
 import { handleQuickCheck, resetQuickCheckState } from "../../tools/quickcheck.js";
+import { handleGoto } from "../../tools/goto.js";
+import { handleComplete } from "../../tools/complete.js";
+import { handleDoc } from "../../tools/doc.js";
+import { handleImports } from "../../tools/imports.js";
+import { handleReferences } from "../../tools/references.js";
+import { handleRename } from "../../tools/rename.js";
 
 const FIXTURE_DIR = path.resolve(import.meta.dirname, "../fixtures/test-project");
 const GHCUP_BIN = path.join(process.env.HOME ?? "", ".ghcup", "bin");
@@ -117,6 +123,80 @@ describe.runIf(GHC_AVAILABLE)("Tool Handlers Integration", () => {
       const names = result.definitions.map((d: any) => d.name);
       expect(names).toContain("add");
       expect(names).toContain("greet");
+    });
+  });
+
+  // --- ghci_goto ---
+  describe("handleGoto", () => {
+    it("finds local definition", async () => {
+      const result = JSON.parse(await handleGoto(session, { name: "add" }));
+      expect(result.success).toBe(true);
+      expect(result.location).toBeDefined();
+      expect(result.location.file).toContain("TestLib.hs");
+      expect(result.location.line).toBeGreaterThan(0);
+    });
+
+    it("finds library definition", async () => {
+      const result = JSON.parse(await handleGoto(session, { name: "map" }));
+      expect(result.success).toBe(true);
+      expect(result.location).toBeDefined();
+    });
+
+    it("returns error for nonexistent name", async () => {
+      const result = JSON.parse(await handleGoto(session, { name: "nonExistentXYZ" }));
+      expect(result.success).toBe(false);
+    });
+  });
+
+  // --- ghci_complete ---
+  describe("handleComplete", () => {
+    it("returns completions for a prefix", async () => {
+      const result = JSON.parse(await handleComplete(session, { prefix: "ad" }));
+      expect(result.success).toBe(true);
+      expect(result.completions).toContain("add");
+    });
+
+    it("returns empty for no matches", async () => {
+      const result = JSON.parse(await handleComplete(session, { prefix: "zzzzNonExistent" }));
+      expect(result.success).toBe(true);
+      expect(result.completions).toHaveLength(0);
+    });
+  });
+
+  // --- ghci_doc ---
+  describe("handleDoc", () => {
+    it("handles doc lookup without crashing", async () => {
+      const result = JSON.parse(await handleDoc(session, { name: "map" }));
+      expect(result.success).toBe(true);
+      expect(result.name).toBe("map");
+    });
+  });
+
+  // --- ghci_imports ---
+  describe("handleImports", () => {
+    it("returns current imports", async () => {
+      const result = JSON.parse(await handleImports(session));
+      expect(result.success).toBe(true);
+      expect(result.imports).toBeDefined();
+      expect(result.count).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  // --- ghci_references ---
+  describe("handleReferences", () => {
+    it("finds references to add", async () => {
+      const result = JSON.parse(await handleReferences(FIXTURE_DIR, { name: "add" }));
+      expect(result.success).toBe(true);
+      expect(result.count).toBeGreaterThan(0);
+    });
+  });
+
+  // --- ghci_rename ---
+  describe("handleRename", () => {
+    it("previews rename", async () => {
+      const result = JSON.parse(await handleRename(FIXTURE_DIR, { oldName: "add", newName: "addInts" }));
+      expect(result.success).toBe(true);
+      expect(result.totalReferences).toBeGreaterThan(0);
     });
   });
 

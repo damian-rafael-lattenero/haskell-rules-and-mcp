@@ -25,6 +25,18 @@ When a compilation error persists after 2 fix attempts:
 3. Build the expression bottom-up from verified sub-expressions
 4. Never rewrite large code sections speculatively — isolate the specific failing subexpression
 
+## Navigation & Discovery
+- Use `ghci_goto` to jump to the definition of any name (returns file:line for local, module for library).
+- Use `ghci_complete` to discover available functions matching a prefix.
+- Use `ghci_doc` to read Haddock documentation for library functions.
+- Use `ghci_imports` to see what's currently in scope.
+- Use `ghci_add_import` when a name is "Not in scope" — it finds the right module via Hoogle.
+
+## Code Quality
+- Use `ghci_format` to format code with ormolu/fourmolu (if installed).
+- Use `ghci_lint` to get hlint suggestions (if installed).
+- Apply lint suggestions that improve clarity; skip those that reduce readability.
+
 ## Module Hygiene
 - New modules must be added to `exposed-modules` in `.cabal` before compiling
 - Use explicit export lists

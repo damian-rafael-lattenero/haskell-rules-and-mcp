@@ -34,6 +34,13 @@ After every edit, run \`ghci_load\`. Read the structured output. Take the FIRST 
 | -Wmissing-signatures | Add the inferred type from \`suggestedAction\` as a signature. |
 | -Wtyped-holes | Read hole fits. Pick the best one or implement. |
 
+## Error Resolution
+| Code | Action |
+|---|---|
+| GHC-83865 | Type mismatch: read expected/actual. |
+| GHC-39999 | Not in scope: use \`ghci_add_import\` to find the module, or \`ghci_complete\` for typos. |
+| GHC-39660 | No instance: add deriving, constraint, or import. |
+
 ## The Loop
 \`\`\`
 edit → ghci_load → errors? fix → warnings? fix → clean? → ghci_quickcheck → done
@@ -54,6 +61,17 @@ const DEVELOPMENT_FALLBACK = `# Haskell Development Workflow
 ## Typed Holes
 Use \`_\` (typed hole) when unsure what expression to write.
 \`ghci_hole_fits\` gives structured fits with types.
+
+## Navigation & Discovery
+- \`ghci_goto\`: jump to definition (file:line for local, module for library)
+- \`ghci_complete\`: find functions matching a prefix
+- \`ghci_doc\`: read Haddock documentation
+- \`ghci_imports\`: see what's in scope
+- \`ghci_add_import\`: find the right module for an out-of-scope name
+
+## Code Quality
+- \`ghci_format\`: format with ormolu/fourmolu (if installed)
+- \`ghci_lint\`: hlint suggestions (if installed)
 
 ## Module Hygiene
 - Add modules to \`exposed-modules\` in \`.cabal\` before compiling

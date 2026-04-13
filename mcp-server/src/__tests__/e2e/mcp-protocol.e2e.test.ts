@@ -230,6 +230,70 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     expect(typeParsed.success).toBe(true);
   });
 
+  // --- ghci_goto ---
+  it("calls ghci_goto on local function", async () => {
+    const result = await client.callTool({ name: "ghci_goto", arguments: { name: "add" } });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(parsed.location).toBeDefined();
+  });
+
+  // --- ghci_complete ---
+  it("calls ghci_complete", async () => {
+    const result = await client.callTool({ name: "ghci_complete", arguments: { prefix: "ad" } });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(parsed.completions).toContain("add");
+  });
+
+  // --- ghci_doc ---
+  it("calls ghci_doc", async () => {
+    const result = await client.callTool({ name: "ghci_doc", arguments: { name: "map" } });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(parsed.name).toBe("map");
+  });
+
+  // --- ghci_imports ---
+  it("calls ghci_imports", async () => {
+    const result = await client.callTool({ name: "ghci_imports", arguments: {} });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(parsed).toHaveProperty("imports");
+  });
+
+  // --- ghci_references ---
+  it("calls ghci_references", async () => {
+    const result = await client.callTool({ name: "ghci_references", arguments: { name: "add" } });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(parsed.count).toBeGreaterThan(0);
+  });
+
+  // --- ghci_rename ---
+  it("calls ghci_rename preview", async () => {
+    const result = await client.callTool({ name: "ghci_rename", arguments: { old_name: "add", new_name: "addInts" } });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(parsed.totalReferences).toBeGreaterThan(0);
+  });
+
+  // --- tool listing updated ---
+  it("lists all 25 tools", async () => {
+    const result = await client.listTools();
+    const names = result.tools.map((t) => t.name);
+    expect(names).toContain("ghci_goto");
+    expect(names).toContain("ghci_complete");
+    expect(names).toContain("ghci_doc");
+    expect(names).toContain("ghci_imports");
+    expect(names).toContain("ghci_format");
+    expect(names).toContain("ghci_lint");
+    expect(names).toContain("ghci_add_import");
+    expect(names).toContain("ghci_references");
+    expect(names).toContain("ghci_rename");
+    expect(names.length).toBeGreaterThanOrEqual(25);
+  });
+
   // --- Resources ---
   it("lists resources including rules", async () => {
     const result = await client.listResources();
