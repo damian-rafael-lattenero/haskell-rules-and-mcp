@@ -29,6 +29,7 @@ import { register as registerLint } from "./tools/lint.js";
 import { register as registerAddImport } from "./tools/add-import.js";
 import { register as registerReferences } from "./tools/references.js";
 import { register as registerRename } from "./tools/rename.js";
+import { register as registerSetup } from "./tools/setup.js";
 
 // Base directory: the project root (parent of mcp-server/)
 const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
@@ -91,6 +92,7 @@ registerLint(server, ctx);
 registerAddImport(server, ctx);
 registerReferences(server, ctx);
 registerRename(server, ctx);
+registerSetup(server, ctx);
 
 // --- Tool: ghci_kind (inline, simple) ---
 server.tool(
