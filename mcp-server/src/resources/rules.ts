@@ -30,7 +30,7 @@ Even if you already know the implementation — USE THE TOOLS FIRST.
 \`ghci_info\` · \`hoogle_search\` · \`ghci_eval\` · \`ghci_add_import\` · \`ghci_complete\`
 
 ### Tier 3 — Module complete gate (MANDATORY before next module)
-\`ghci_quickcheck\` (MANDATORY) · \`ghci_check_module\` · \`ghci_lint\` · \`ghci_format\`
+\`ghci_quickcheck\` (MANDATORY — complete contract) · \`ghci_check_module\` · \`ghci_lint\` · \`ghci_format\`
 
 ## FLOW 4: Implement One Function (THE CORE LOOP)
 1. HOLE: Replace = undefined with = _
@@ -45,7 +45,7 @@ Even if you already know the implementation — USE THE TOOLS FIRST.
 Steps 1-2 and 7 are MANDATORY. Never skip them.
 
 ## FLOW 6: Module Complete (MANDATORY before next module)
-1. ghci_quickcheck — at least 1 property per module. CANNOT skip this.
+1. ghci_quickcheck — test the COMPLETE algebraic contract. CANNOT skip this.
 2. ghci_check_module → review API
 3. ghci_lint / ghci_format
 

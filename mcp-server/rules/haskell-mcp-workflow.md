@@ -29,7 +29,7 @@ The compiler's structured output drives development, not pre-existing knowledge.
 ### Tier 3 — Module complete gate (MANDATORY before next module)
 | Tool | When |
 |------|------|
-| `ghci_quickcheck` | **MANDATORY** — 1-3 properties testing the module's algebraic contract |
+| `ghci_quickcheck` | **MANDATORY** — test the module's COMPLETE algebraic contract |
 | `ghci_check_module` | Review the module's API summary |
 | `ghci_lint` | Code quality pass |
 | `ghci_format` | Formatting pass |
@@ -103,8 +103,8 @@ Don't guess — ask the compiler.
 Before starting the next module, you MUST complete ALL of these steps:
 
 ```
-1. QUICKCHECK  ghci_quickcheck — test the MODULE'S CONTRACT (1-3 properties)
-               Properties test RELATIONSHIPS BETWEEN functions, not individual functions.
+1. QUICKCHECK  ghci_quickcheck — test the module's COMPLETE algebraic contract
+               One property per law. The module dictates how many, not an arbitrary cap.
                → fail? read counterexample → fix → ghci_load → retry
 2. REVIEW      ghci_check_module(module_path="...") → review API summary
 3. LINT        ghci_lint(module_path="...") → apply good suggestions
@@ -113,28 +113,35 @@ Before starting the next module, you MUST complete ALL of these steps:
 
 **Step 1 is MANDATORY.** You cannot move to the next module without running QuickCheck.
 
-### What to test: the module's algebraic contract
+### What to test: the COMPLETE algebraic contract
 
-Properties should group multiple functions together and test their relationships:
+Identify ALL the laws that the module's exports should satisfy, then test each one.
+Properties test RELATIONSHIPS BETWEEN functions, not individual functions in isolation.
 
 ```
-Substitution module:
+Substitution module — 4 laws:
   "apply nullSubst t == t"                              -- identity
-  "apply (compose s1 s2) t == apply s1 (apply s2 t)"   -- composition law
+  "apply (compose s1 s2) t == apply s1 (apply s2 t)"   -- composition
+  "compose nullSubst s == s"                            -- left unit
+  "compose s nullSubst == s"                            -- right unit
 
-Unification module:
+Unification module — 3 laws:
   "unify t t == Right nullSubst"                        -- reflexivity
-  "case unify t1 t2 of Right s -> apply s t1 == apply s t2; _ -> True"
+  "case unify t1 t2 of Right s -> apply s t1 == apply s t2; _ -> True"  -- correctness
+  "case unify t1 t2 of Right _ -> unify t2 t1 is also Right; _ -> True" -- symmetry
 
-Pretty printer:
+Pretty printer — 1 law:
   "parse (pretty x) == x"                               -- roundtrip
+
+Type inference — 2 laws:
+  "inferExpr env (ELit (LInt n)) == Right (Forall [] typeInt)"  -- literal typing
+  "inferExpr env (ELam x body) returns a function type"         -- lambda typing
 ```
 
-**Don't test individual functions in isolation** — test how the module's exports
-work together. 1-3 properties per module is enough if they cover the key laws.
+Testing a partial contract is like not testing — a bug in an untested law passes silently.
 
-If custom types lack Arbitrary instances, use `ghci_eval` with concrete examples
-as a minimum, but prefer QuickCheck when possible.
+If custom types lack Arbitrary instances, use `ghci_eval` with concrete cases
+as a minimum, but prefer QuickCheck whenever possible.
 
 ## FLOW 7: Add Dependency or Module
 
