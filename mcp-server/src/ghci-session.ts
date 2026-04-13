@@ -189,10 +189,15 @@ export class GhciSession extends EventEmitter {
     await this.waitForSentinel();
     await this.waitForSentinel();
     // Drain any extra sentinels and verify synchronization.
-    // GHCi versions may produce additional sentinels during prompt setup;
-    // without this, a stale sentinel causes every execute() to return
-    // the previous command's output (off-by-one).
     await this.drainAndSync();
+
+    // Enable commonly-needed GHC extensions so users don't have to add
+    // them manually. ScopedTypeVariables is critical for QuickCheck
+    // properties with type annotations like (\(x :: Int) -> ...).
+    // Use executeInternal since the session isn't marked "ready" yet.
+    await this.executeInternal(":set -XScopedTypeVariables");
+    await this.executeInternal(":set -XTypeApplications");
+    await this.executeInternal(":set -XOverloadedStrings");
   }
 
   /**

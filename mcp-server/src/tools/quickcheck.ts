@@ -90,15 +90,29 @@ export async function handleQuickCheck(
   if (trimmed === "suggest" && args.function_name) {
     const typeResult = await session.typeOf(args.function_name);
     const typeStr = typeResult.success ? typeResult.output : "";
-    const suggestions = suggestPropertiesFromType(args.function_name, typeStr);
+    const rawSuggestions = suggestPropertiesFromType(args.function_name, typeStr);
+
+    // Validate each suggested property compiles by type-checking with :t
+    const suggestions: Array<{ law: string; property: string }> = [];
+    const rejected: Array<{ law: string; property: string; reason: string }> = [];
+    for (const s of rawSuggestions) {
+      const checkResult = await session.execute(`:t (${s.property})`);
+      if (checkResult.success && !checkResult.output.toLowerCase().includes("error")) {
+        suggestions.push(s);
+      } else {
+        rejected.push({ ...s, reason: "Property doesn't type-check" });
+      }
+    }
+
     return JSON.stringify({
       success: true,
       mode: "suggest",
       function: args.function_name,
       type: typeStr,
       suggestedProperties: suggestions,
+      ...(rejected.length > 0 ? { rejectedProperties: rejected } : {}),
       hint: suggestions.length > 0
-        ? `Found ${suggestions.length} suggested propert(ies). Run each with ghci_quickcheck.`
+        ? `Found ${suggestions.length} valid propert(ies)${rejected.length > 0 ? ` (${rejected.length} rejected — didn't type-check)` : ""}. Run each with ghci_quickcheck.`
         : "No automatic suggestions — write a custom property based on the function's contract.",
     });
   }
@@ -129,11 +143,20 @@ export async function handleQuickCheck(
     parsed = parseQuickCheckOutput(retryParsed.result, args.property);
   }
 
+  // Detect if the failure was a compilation error (type mismatch, not in scope)
+  // vs a genuine logic failure (counterexample found).
+  const isCompilationError = !parsed.success && (
+    result.output.toLowerCase().includes("not in scope") ||
+    result.output.toLowerCase().includes("couldn't match") ||
+    result.output.toLowerCase().includes("no instance for") ||
+    result.output.toLowerCase().includes("parse error") ||
+    (parsed.error?.includes("Exception:") ?? false)
+  );
+
   // Track in workflow state if incremental
   if (args.incremental && ctx?.getWorkflowState && ctx?.getModuleProgress) {
     let activeMod = ctx.getWorkflowState().activeModule;
 
-    // If no activeModule is set, fall back to the most recently tracked module
     if (!activeMod) {
       const state = ctx.getWorkflowState();
       const entries = Array.from(state.modules.entries());
@@ -146,19 +169,21 @@ export async function handleQuickCheck(
       const mod = ctx.getModuleProgress(activeMod);
       if (mod && ctx.updateModuleProgress) {
         if (parsed.success) {
-          // Deduplicate: don't add the same property twice
           if (!mod.propertiesPassed.includes(args.property)) {
             ctx.updateModuleProgress(activeMod, {
               propertiesPassed: [...mod.propertiesPassed, args.property],
             });
           }
-        } else {
+        } else if (!isCompilationError) {
+          // Only track as failed if it's a genuine logic failure,
+          // not a syntax/type error in the property expression
           if (!mod.propertiesFailed.includes(args.property)) {
             ctx.updateModuleProgress(activeMod, {
               propertiesFailed: [...mod.propertiesFailed, args.property],
             });
           }
         }
+        // Compilation errors are NOT counted as failed properties
       }
     }
   }
@@ -166,6 +191,7 @@ export async function handleQuickCheck(
   if (args.incremental) {
     return JSON.stringify({
       ...parsed,
+      ...(isCompilationError ? { compilationError: true } : {}),
       incremental: true,
       hint: parsed.success
         ? "Incremental property passed. Continue implementing next function."

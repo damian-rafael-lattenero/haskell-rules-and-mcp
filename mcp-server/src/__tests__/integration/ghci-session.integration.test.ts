@@ -297,4 +297,13 @@ describe.runIf(GHC_AVAILABLE)("GHCi Session Integration", () => {
     const result = await session.execute("toUpper 'a'");
     expect(result.output).toContain("'A'");
   });
+
+  // --- Common extensions enabled at init ---
+  it("ScopedTypeVariables is enabled by default", async () => {
+    const result = await session.execute(':set | grep "ScopedTypeVariables"');
+    // ScopedTypeVariables should be on — if not, the grep would return nothing
+    // Alternative check: use it directly
+    const testResult = await session.execute('(\\(x :: Int) -> x + 1) 5');
+    expect(testResult.output).toContain("6");
+  });
 });

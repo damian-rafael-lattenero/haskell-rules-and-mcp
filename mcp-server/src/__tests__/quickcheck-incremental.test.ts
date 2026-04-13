@@ -200,6 +200,32 @@ describe("handleQuickCheck — lambda escaping normalization (Bug 7)", () => {
     expect(capturedCmd).toContain("(\\pos c -> True)");
   });
 
+  it("compilation error in property is flagged, not counted as logic failure", async () => {
+    const session = createMockSession({
+      execute: async (cmd: string): Promise<GhciResult> => {
+        if (cmd.includes("import Test.QuickCheck")) {
+          return { output: "", success: true };
+        }
+        if (cmd.includes("quickCheckWith")) {
+          return {
+            output: "<interactive>:1:1: error:\n    Not in scope: 'nonExistent'\n",
+            success: false,
+          };
+        }
+        return { output: "", success: true };
+      },
+    });
+    const result = JSON.parse(
+      await handleQuickCheck(session, {
+        property: "\\x -> nonExistent x == (x :: Int)",
+        incremental: true,
+      })
+    );
+    expect(result.success).toBe(false);
+    expect(result.compilationError).toBe(true);
+    expect(result.incremental).toBe(true);
+  });
+
   it("does not double-wrap already parenthesized lambda", async () => {
     let capturedCmd = "";
     const session = createMockSession({

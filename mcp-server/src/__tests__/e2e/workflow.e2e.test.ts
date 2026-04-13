@@ -359,4 +359,15 @@ broken x = x * 2
     expect(r.output).not.toContain("OK");
     expect(r.output).not.toContain("passed");
   });
+
+  // --- ScopedTypeVariables enabled by default ---
+  it("step 17: ScopedTypeVariables works in eval", async () => {
+    const r = parseResult(
+      await callTool(client, "ghci_eval", {
+        expression: '(\\(x :: Int) -> x + 1) 5',
+      })
+    );
+    expect(r.success).toBe(true);
+    expect(r.output).toContain("6");
+  });
 });
