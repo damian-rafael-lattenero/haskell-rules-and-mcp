@@ -6,34 +6,138 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { mkdir, writeFile, access, readdir } from "node:fs/promises";
+import { mkdir, writeFile, access, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { ToolContext } from "./registry.js";
 
+/**
+ * Check if we're currently in an existing Haskell project directory.
+ * Returns the .cabal file name if found, null otherwise.
+ */
+async function checkExistingProject(dir: string): Promise<string | null> {
+  try {
+    const files = await readdir(dir);
+    for (const file of files) {
+      if (file.endsWith(".cabal")) {
+        const fullPath = path.join(dir, file);
+        const stats = await stat(fullPath);
+        if (stats.isFile()) {
+          return file;
+        }
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function handleInit(
   targetDir: string,
+  currentProjectDir: string,
+  workspaceRoot: string,
   args: {
     name: string;
     modules: string[];
     deps?: string[];
     language?: string;
+    target_path?: string;
+    force_in_current?: boolean;
   }
 ): Promise<string> {
-  const { name, modules, deps, language } = args;
+  const { name, modules, deps, language, target_path, force_in_current } = args;
 
-  // Check if a .cabal already exists in the target directory
+  // SMART PATH RESOLUTION:
+  // 1. If target_path provided → use it (explicit user intent)
+  // 2. If no target_path:
+  //    a. If name matches current project → work in current project dir
+  //    b. Otherwise → suggest creating in workspace root or subdirectory
+  
+  let resolvedTargetDir = targetDir;
+  const currentProjectCabal = await checkExistingProject(currentProjectDir);
+  const currentProjectName = currentProjectCabal?.replace(".cabal", "");
+  
+  // Case 1: User provided explicit target_path
+  if (target_path) {
+    resolvedTargetDir = path.resolve(workspaceRoot, target_path);
+  }
+  // Case 2: No target_path, but name matches current project
+  else if (currentProjectName && currentProjectName === name) {
+    // User wants to reinit/work with current project
+    resolvedTargetDir = currentProjectDir;
+  }
+  // Case 3: No target_path, name differs from current project
+  else if (currentProjectName && currentProjectName !== name) {
+    // Ambiguous: user might want new project alongside or inside current
+    return JSON.stringify({
+      success: false,
+      error: `Ambiguous intent: You're in project '${currentProjectName}' but trying to create '${name}'.`,
+      context: {
+        currentProject: currentProjectName,
+        currentProjectDir,
+        intendedProject: name,
+        workspaceRoot,
+      },
+      question: "Where do you want to create the new project?",
+      options: [
+        {
+          id: "current_project",
+          description: `Reinit current project '${currentProjectName}' (dangerous - will overwrite)`,
+          action: `Use force_in_current: true if you really want this`,
+        },
+        {
+          id: "workspace_root",
+          description: `Create '${name}' in workspace root: ${workspaceRoot}/${name}/`,
+          action: `Use: target_path: "${name}"`,
+        },
+        {
+          id: "playground",
+          description: `Create '${name}' in playground: ${workspaceRoot}/playground/${name}/`,
+          action: `Use: target_path: "playground/${name}"`,
+        },
+        {
+          id: "custom",
+          description: `Create '${name}' in custom location`,
+          action: `Use: target_path: "your/custom/path/${name}"`,
+        },
+      ],
+      hint: "Specify target_path parameter to indicate where to create the project.",
+    });
+  }
+  // Case 4: No current project, no target_path → create in workspace root
+  else {
+    resolvedTargetDir = path.join(workspaceRoot, name);
+  }
+  
+  // Check if a .cabal already exists in the resolved target directory
+  const existingCabal = await checkExistingProject(resolvedTargetDir);
+  
+  if (existingCabal && !force_in_current) {
+    const existingProjectName = existingCabal.replace(".cabal", "");
+    // We're trying to init in a directory that already has a project
+    return JSON.stringify({
+      success: false,
+      error: `A .cabal file already exists in ${resolvedTargetDir} (${existingCabal}).`,
+      context: {
+        targetDir: resolvedTargetDir,
+        existingProject: existingProjectName,
+        intendedProject: name,
+      },
+      suggestions: [
+        existingProjectName === name
+          ? "If you want to add modules to the existing project, use ghci_scaffold instead."
+          : `Project '${existingProjectName}' exists but you requested '${name}'. Check your project name.`,
+        `If you want to REPLACE the existing project (dangerous), use: force_in_current: true`,
+        `If you want a NEW project, use a different target_path.`,
+      ],
+    });
+  }
+  
+  // Proceed with project creation
   try {
-    const files = await readdir(targetDir);
-    const existingCabal = files.find(f => f.endsWith(".cabal"));
-    if (existingCabal) {
-      return JSON.stringify({
-        success: false,
-        error: `A .cabal file already exists in ${targetDir} (${existingCabal}). Use ghci_scaffold to add modules.`,
-      });
-    }
+    await mkdir(resolvedTargetDir, { recursive: true });
   } catch {
-    // Directory doesn't exist yet — create it
-    await mkdir(targetDir, { recursive: true });
+    // Directory might already exist but without .cabal — that's fine
   }
 
   const allDeps = ["base >= 4.20 && < 5"];
@@ -69,10 +173,10 @@ ${depsSection}
   ghc-options:       -Wall
 `;
 
-  await writeFile(path.join(targetDir, `${name}.cabal`), cabalContent, "utf-8");
-  await writeFile(path.join(targetDir, "cabal.project"), "packages: .\n", "utf-8");
+  await writeFile(path.join(resolvedTargetDir, `${name}.cabal`), cabalContent, "utf-8");
+  await writeFile(path.join(resolvedTargetDir, "cabal.project"), "packages: .\n", "utf-8");
 
-  const srcDir = path.join(targetDir, "src");
+  const srcDir = path.join(resolvedTargetDir, "src");
   await mkdir(srcDir, { recursive: true });
 
   for (const mod of modules) {
@@ -83,23 +187,37 @@ ${depsSection}
     }
   }
 
+  // Smart next step based on where we created the project
+  let nextStep: string;
+  if (resolvedTargetDir === currentProjectDir) {
+    nextStep = `Project created/updated in current directory. Run ghci_scaffold(signatures={...}) to generate typed stubs, then ghci_session(restart) to start GHCi.`;
+  } else {
+    const relativePath = path.relative(workspaceRoot, resolvedTargetDir);
+    nextStep = `Project created at ${relativePath}. Run ghci_switch_project(name="${name}") to switch to it, then ghci_scaffold(signatures={...}) to generate typed stubs.`;
+  }
+
   return JSON.stringify({
     success: true,
-    projectDir: targetDir,
+    projectDir: resolvedTargetDir,
+    relativePath: path.relative(workspaceRoot, resolvedTargetDir),
     cabalFile: `${name}.cabal`,
     modules: modules.length > 0 ? modules : ["Lib"],
     dependencies: allDeps,
     language: lang,
-    _nextStep: `Project created. Run ghci_scaffold(signatures={...}) to generate typed stubs, then ghci_session(restart) to start GHCi.`,
+    _nextStep: nextStep,
   });
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     "ghci_init",
-    "Create a new Haskell project from scratch. Generates .cabal file, cabal.project, " +
-      "and src/ directory structure in the current project directory. " +
-      "After init, run ghci_scaffold(signatures=...) to add typed stubs.",
+    "Create a new Haskell project from scratch. Generates .cabal file, cabal.project, and src/ directory structure. " +
+      "SMART PATH RESOLUTION: " +
+      "1) If target_path provided → uses it explicitly. " +
+      "2) If name matches current project → works in current project directory. " +
+      "3) If name differs → asks for clarification (workspace root vs playground vs custom). " +
+      "4) If no current project → creates in workspace root. " +
+      "This prevents accidental overwrites and makes intent clear.",
     {
       name: z.string().describe(
         'Project name (used for .cabal filename). Examples: "expr-eval", "parser-lib"'
@@ -113,9 +231,33 @@ export function register(server: McpServer, ctx: ToolContext): void {
       language: z.string().optional().describe(
         'Default language. Default: "GHC2024". Other: "Haskell2010"'
       ),
+      target_path: z.string().optional().describe(
+        'Optional: relative path from workspace root where to create the project. ' +
+        'Examples: "expr-eval" (creates in root), "playground/expr-eval" (in playground), "projects/my-lib". ' +
+        'If not provided, uses smart resolution based on current project context.'
+      ),
+      force_in_current: z.boolean().optional().describe(
+        'Advanced: Set to true to skip the smart detection and force project creation even if .cabal exists. Use only when you know what you are doing.'
+      ),
     },
-    async ({ name, modules, deps, language }) => {
-      const result = await handleInit(ctx.getProjectDir(), { name, modules, deps, language });
+    async ({ name, modules, deps, language, target_path, force_in_current }) => {
+      const workspaceRoot = ctx.getBaseDir();
+      const currentProjectDir = ctx.getProjectDir();
+      
+      // Pass a dummy targetDir (will be resolved in handleInit)
+      const result = await handleInit(
+        workspaceRoot, // Used as base for resolution
+        currentProjectDir, 
+        workspaceRoot,
+        { 
+          name, 
+          modules, 
+          deps, 
+          language,
+          target_path,
+          force_in_current 
+        }
+      );
       return { content: [{ type: "text" as const, text: result }] };
     }
   );
