@@ -324,8 +324,9 @@ export async function handleQuickCheck(
   );
 
   // Persist passing properties to disk for regression testing
+  let propertySaved = false;
+  let propertyStoreCount = 0;
   if (parsed.success && !isCompilationError && projectDir) {
-    // Use explicit module if provided, otherwise fall back to activeModule
     const activeMod = args.module ?? ctx?.getWorkflowState?.()?.activeModule ?? "unknown";
     try {
       await saveProperty(projectDir, {
@@ -333,6 +334,9 @@ export async function handleQuickCheck(
         module: activeMod,
         functionName: args.function_name,
       });
+      propertySaved = true;
+      const { getAllProperties } = await import("../property-store.js");
+      propertyStoreCount = (await getAllProperties(projectDir)).length;
     } catch {
       // Non-fatal: persistence failure shouldn't break the tool
     }
@@ -378,6 +382,7 @@ export async function handleQuickCheck(
       ...parsed,
       ...(isCompilationError ? { compilationError: true } : {}),
       ...(autoResolved ? { _autoResolved: true } : {}),
+      ...(propertySaved ? { _propertySaved: true, _propertyStoreCount: propertyStoreCount } : {}),
       incremental: true,
       hint: parsed.success
         ? "Incremental property passed. Continue implementing next function."
@@ -391,6 +396,7 @@ export async function handleQuickCheck(
   return JSON.stringify({
     ...parsed,
     ...(autoResolved ? { _autoResolved: true } : {}),
+    ...(propertySaved ? { _propertySaved: true, _propertyStoreCount: propertyStoreCount } : {}),
     _nextStep: parsed.success
       ? "Property passed. Test more properties or move to the next function."
       : isCompilationError

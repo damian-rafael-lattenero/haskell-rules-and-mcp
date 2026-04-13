@@ -48,6 +48,8 @@ import { register as registerSuggest } from "./tools/suggest.js";
 import { register as registerArbitrary } from "./tools/arbitrary.js";
 import { register as registerTrace } from "./tools/trace.js";
 import { register as registerRegression } from "./tools/regression.js";
+import { register as registerInit } from "./tools/init.js";
+import { register as registerExportTests } from "./tools/export-tests.js";
 
 // Base directory: the project root (parent of mcp-server/)
 const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
@@ -137,6 +139,8 @@ registerSuggest(server, ctx);
 registerArbitrary(server, ctx);
 registerTrace(server, ctx);
 registerRegression(server, ctx);
+registerInit(server, ctx);
+registerExportTests(server, ctx);
 
 // --- Tool: ghci_kind (inline, simple) ---
 server.tool(
@@ -198,12 +202,23 @@ server.tool(
     const parsed = parseEvalOutput(result.output);
     const isException = parsed.result.startsWith("*** Exception:");
     const guidance = deriveGuidance(workflowState, "ghci_eval");
+    // Get type of result via :t it (non-fatal)
+    let resultType: string | undefined;
+    if (result.success && !isException) {
+      try {
+        const typeResult = await session.execute(":t it");
+        if (typeResult.success && typeResult.output.includes("::")) {
+          resultType = typeResult.output.replace(/^it\s*::\s*/, "").trim();
+        }
+      } catch { /* non-fatal */ }
+    }
     return {
       content: [{
         type: "text",
         text: JSON.stringify({
           success: result.success && !isException,
           output: parsed.result,
+          ...(resultType ? { type: resultType } : {}),
           ...(parsed.warnings.length > 0 ? { warnings: parsed.warnings } : {}),
           ...(parsed.result !== parsed.raw ? { raw: parsed.raw } : {}),
           ...(guidance.length > 0 ? { _guidance: guidance } : {}),

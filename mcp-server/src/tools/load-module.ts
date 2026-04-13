@@ -396,8 +396,16 @@ export function register(server: McpServer, ctx: ToolContext): void {
       }
       ctx.logToolExecution("ghci_load", parsed.success);
 
+      // Clear stale failed properties on successful recompile
+      // (code changed, old failures may no longer apply)
+      if (parsed.success && module_path) {
+        const mod = ctx.getModuleProgress(module_path);
+        if (mod && mod.propertiesFailed.length > 0) {
+          ctx.updateModuleProgress(module_path, { propertiesFailed: [] });
+        }
+      }
+
       // After successful compilation, report which modules are in scope
-      // This helps the LLM know if it needs load_all before running QuickCheck
       if (parsed.success) {
         try {
           const showModResult = await session.showModules();

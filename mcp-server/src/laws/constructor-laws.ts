@@ -106,7 +106,7 @@ export function suggestConstructorProperties(
     }
 
     // --- C. Homomorphism for binary recursive constructors ---
-    // e.g. Add Expr Expr → f env (Add a b) == liftA2 op (f env a) (f env b)
+    // Use constructor name heuristic to pick the right operator
     if (isRecursive && ctor.fields.length === 2 &&
         ctor.fields.every(f => f.includes(inputTypeName))) {
       const recArgs0 = [...otherVars];
@@ -116,23 +116,18 @@ export function suggestConstructorProperties(
       const recCall0 = `${funcName} ${recArgs0.join(" ")}`;
       const recCall1 = `${funcName} ${recArgs1.join(" ")}`;
 
+      // Suggest ONE homomorphism with a common operator.
+      // The :t validation in quickcheck.ts will filter it if it doesn't type-check.
+      // No hardcoded name→operator mapping — the type system decides.
       if (isEitherReturn || isMaybeReturn) {
-        // Suggest liftA2 (+) as a common arithmetic homomorphism
         laws.push({
-          law: `homomorphism: ${ctor.name} distributes (+)`,
+          law: `homomorphism: ${ctor.name}`,
           property: `\\${annotations} -> ${funcCall} == liftA2 (+) (${recCall0}) (${recCall1})`,
           confidence: "low",
         });
-        // Also suggest liftA2 (*) for Mul-like constructors
-        laws.push({
-          law: `homomorphism: ${ctor.name} distributes (*)`,
-          property: `\\${annotations} -> ${funcCall} == liftA2 (*) (${recCall0}) (${recCall1})`,
-          confidence: "low",
-        });
       } else {
-        // Direct return type
         laws.push({
-          law: `homomorphism: ${ctor.name} distributes (+)`,
+          law: `homomorphism: ${ctor.name}`,
           property: `\\${annotations} -> ${funcCall} == (${recCall0}) + (${recCall1})`,
           confidence: "low",
         });
@@ -159,3 +154,4 @@ export function suggestConstructorProperties(
 
   return laws;
 }
+

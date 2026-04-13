@@ -44,6 +44,7 @@ The `_guidance` array in responses tells you what to do next based on:
 ### New project / module
 | When | Tool | Why |
 |------|------|-----|
+| Starting from scratch | `ghci_init(name, modules, deps)` | Generate .cabal + directory structure |
 | Created .cabal | `ghci_scaffold` → `ghci_session(restart)` | Create module stubs, restart GHCi |
 | Created .cabal (with types) | `ghci_scaffold(signatures={"Mod": ["f :: T", "data D = ..."]})` → `ghci_session(restart)` | Create typed stubs (data types verbatim, functions with `= undefined`, cross-module imports auto-generated) |
 | New module with data types | `ghci_arbitrary(type_name="...")` | Generate Arbitrary instances |
@@ -57,7 +58,8 @@ The `_guidance` array in responses tells you what to do next based on:
 | "Not in scope" | Check `importSuggestions` in load response, or `ghci_add_import("name")` | Resolve missing import |
 | Need a function by type | `hoogle_search("a -> b -> c")` | Find it in the ecosystem |
 | Want to understand a name | `ghci_info("name")` | See definition, instances, module |
-| After successful compilation | `ghci_eval("funcName sampleArg")` | Test behavior with sample input |
+| After successful compilation | `ghci_eval("funcName sampleArg")` | Test behavior (includes result type in output) |
+| Multiple eval/type checks | `ghci_batch(commands=[":t f", "f 42", ":i Type"])` | Combine multiple GHCi commands in one call |
 | A law becomes testable | `ghci_quickcheck(property, incremental=true, module="src/X.hs")` | Test the law immediately (module= for accurate tracking) |
 | Multiple properties to test | `ghci_quickcheck_batch(properties=[...], module="src/X.hs")` | Test all in one call |
 | Logic error (types OK, wrong result) | `ghci_trace(expression, trace_points=[...])` | Debug intermediate values |
@@ -78,6 +80,12 @@ The `_guidance` array in responses tells you what to do next based on:
 | Start of session on existing project | `ghci_regression(action="run")` | Re-run all saved QC properties |
 | After major changes | `ghci_regression(module="src/Mod.hs")` | Verify module contracts still hold |
 | Want to see what's tested | `ghci_regression(action="list")` | List all persisted properties |
+
+### Exporting tests
+| When | Tool | Why |
+|------|------|-----|
+| Project done | `ghci_quickcheck_export()` | Generate .hs test file from saved properties |
+| For CI/CD | `ghci_quickcheck_export(output_path="test/Spec.hs")` | Persistent test suite |
 
 ### Dependencies / modules
 | When | Tool | Why |
