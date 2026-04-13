@@ -29,8 +29,8 @@ Even if you already know the implementation — USE THE TOOLS FIRST.
 ### Tier 2 — Frequently
 \`ghci_info\` · \`hoogle_search\` · \`ghci_eval\` · \`ghci_add_import\` · \`ghci_complete\`
 
-### Tier 3 — At milestones
-\`ghci_quickcheck\` · \`ghci_check_module\` · \`ghci_lint\` · \`ghci_format\`
+### Tier 3 — Module complete gate (MANDATORY before next module)
+\`ghci_quickcheck\` (MANDATORY) · \`ghci_check_module\` · \`ghci_lint\` · \`ghci_format\`
 
 ## FLOW 4: Implement One Function (THE CORE LOOP)
 1. HOLE: Replace = undefined with = _
@@ -44,9 +44,15 @@ Even if you already know the implementation — USE THE TOOLS FIRST.
 
 Steps 1-2 and 7 are MANDATORY. Never skip them.
 
+## FLOW 6: Module Complete (MANDATORY before next module)
+1. ghci_quickcheck — at least 1 property per module. CANNOT skip this.
+2. ghci_check_module → review API
+3. ghci_lint / ghci_format
+
 ## FORBIDDEN
 - Implementation without hole phase (steps 1-2)
 - Skipping ghci_type after implementation (step 7)
+- Moving to next module without running ghci_quickcheck
 - Multiple .hs edits between ghci_load calls
 - Using Bash for any Haskell toolchain operation
 - MCP tool fails → falling back to Bash

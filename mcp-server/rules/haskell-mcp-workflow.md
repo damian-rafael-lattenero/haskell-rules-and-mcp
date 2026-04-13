@@ -26,11 +26,11 @@ The compiler's structured output drives development, not pre-existing knowledge.
 | `ghci_add_import` | Resolve "Not in scope" errors |
 | `ghci_complete` | Discover available names by prefix |
 
-### Tier 3 — At milestones
+### Tier 3 — Module complete gate (MANDATORY before next module)
 | Tool | When |
 |------|------|
-| `ghci_quickcheck` | After implementing 3-5 related functions |
-| `ghci_check_module` | After finishing a module — review the API |
+| `ghci_quickcheck` | **MANDATORY** — at least 1 property per module before moving on |
+| `ghci_check_module` | Review the module's API summary |
 | `ghci_lint` | Code quality pass |
 | `ghci_format` | Formatting pass |
 
@@ -86,17 +86,7 @@ Write: module header + exports + imports + type sigs with = undefined
 **Steps 1-2 are MANDATORY.** Never skip the hole phase — even if you know the answer.
 **Step 7 is MANDATORY.** Never skip type verification after implementation.
 
-## FLOW 5: Verify with QuickCheck
-
-```
-After 3-5 related functions:
-  → ghci_quickcheck(property="\\x -> prop x") → pass? done
-  → fail? read counterexample → fix → ghci_load → ghci_quickcheck again
-```
-
-Properties to test: roundtrips, algebraic laws, identity, associativity, inverses.
-
-## FLOW 6: Explore & Discover (use DURING Flow 4, step 3)
+## FLOW 5: Explore & Discover (use DURING Flow 4, step 3)
 
 ```
 Need a function for a type?     → hoogle_search("a -> b -> c")
@@ -108,15 +98,32 @@ Jump to definition?             → ghci_goto("name")
 
 Don't guess — ask the compiler.
 
-## FLOW 7: Module Complete
+## FLOW 6: Module Complete ← MANDATORY GATE (do NOT skip to next module)
+
+Before starting the next module, you MUST complete ALL of these steps:
 
 ```
-ghci_check_module(module_path="...") → review API summary
-  → ghci_lint(module_path="...") → apply good suggestions
-  → ghci_format(module_path="...", write=true) → format code
+1. QUICKCHECK  ghci_quickcheck with at least 1 property per exported function
+               → fail? read counterexample → fix → ghci_load → retry
+2. REVIEW      ghci_check_module(module_path="...") → review API summary
+3. LINT        ghci_lint(module_path="...") → apply good suggestions
+4. FORMAT      ghci_format(module_path="...", write=true) → format code
 ```
 
-## FLOW 8: Add Dependency or Module
+**Step 1 is MANDATORY.** You cannot move to the next module without running QuickCheck.
+
+QuickCheck property ideas (pick what fits):
+- Identity: `apply nullSubst t == t`
+- Composition: `apply (compose s1 s2) t == apply s1 (apply s2 t)`
+- Roundtrip: `parse (pretty x) == x`
+- Idempotence: `f (f x) == f x`
+- Algebraic laws: associativity, commutativity, identity element
+
+If the module's types don't have Arbitrary instances yet, write inline generators:
+`ghci_quickcheck(property="\\(n :: Int) -> n + 0 == n")`
+For custom types, use `ghci_eval` to test specific cases as a minimum.
+
+## FLOW 7: Add Dependency or Module
 
 ```
 Edit .cabal
@@ -156,6 +163,7 @@ Fix EVERY `warningAction` immediately — never "deal with it later":
 
 - Implementation without hole phase (Flow 4 steps 1-2)
 - Skipping `ghci_type` after implementation (Flow 4 step 7)
+- **Moving to next module without running `ghci_quickcheck`** (Flow 6 step 1)
 - Multiple `.hs` edits between `ghci_load` calls
 - Using Bash for ANY Haskell toolchain operation
 - "I'll fix warnings later" — fix them NOW
