@@ -1,0 +1,14 @@
+cabal-version:      3.12
+name:               hm-project
+version:            0.1.0.0
+
+library
+  exposed-modules:  HM
+  build-depends:
+    base >= 4.21 && < 5,
+    containers >= 0.6,
+    mtl >= 2.3,
+    QuickCheck >= 2.14
+  hs-source-dirs:   src
+  default-language:  GHC2024
+  ghc-options:       -Wall
