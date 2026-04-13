@@ -219,7 +219,39 @@ export async function handleQuickCheck(
       });
     }
 
+    // Type-level suggestions (existing)
     const rawSuggestions = suggestPropertiesFromType(args.function_name, typeStr);
+
+    // Constructor-level suggestions (NEW): inspect ADT input types
+    try {
+      const { suggestConstructorProperties } = await import("../laws/constructor-laws.js");
+      const { parseInfoOutput } = await import("../parsers/type-parser.js");
+      const { parseConstructors } = await import("../parsers/constructor-parser.js");
+      const { splitTopLevelArrows } = await import("../laws/function-laws.js");
+
+      const cleanedType = typeStr.replace(/^\S+\s*::\s*/, "").trim();
+      const argTypes = splitTopLevelArrows(cleanedType);
+      const returnType = argTypes[argTypes.length - 1] ?? "";
+
+      for (let i = 0; i < argTypes.length - 1; i++) {
+        const typeName = argTypes[i]!.trim().split(/\s/)[0]!;
+        if (!/^[A-Z]/.test(typeName)) continue;
+        try {
+          const info = await session.infoOf(typeName);
+          const parsed = parseInfoOutput(info.output);
+          if ((parsed.kind === "data" || parsed.kind === "newtype") && parsed.definition) {
+            const ctors = parseConstructors(parsed.definition);
+            if (ctors.length > 0) {
+              const otherArgs = argTypes.slice(0, -1).filter((_, idx) => idx !== i).map(a => a.trim());
+              const ctorSuggestions = suggestConstructorProperties(
+                args.function_name, returnType, otherArgs, ctors, typeName, i
+              );
+              rawSuggestions.push(...ctorSuggestions);
+            }
+          }
+        } catch { /* skip if type inspection fails */ }
+      }
+    } catch { /* constructor-laws not available */ }
 
     // Validate each suggested property compiles by type-checking with :t
     const suggestions: Array<{ law: string; property: string }> = [];
