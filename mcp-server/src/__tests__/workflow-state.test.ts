@@ -436,5 +436,35 @@ describe("deriveGuidance", () => {
     const guidance = deriveGuidance(state, "ghci_load");
     expect(guidance).toEqual([]);
   });
+
+  it("stops suggesting Arbitrary after flag is set (Bug 1 fix)", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Foo.hs";
+    // Before: guidance suggests Arbitrary
+    updateModuleProgress(state, "src/Foo.hs", {
+      functionsImplemented: 2,
+      functionsTotal: 3,
+      arbitraryInstancesDefined: false,
+    });
+    expect(deriveGuidance(state, "ghci_load").some(g => g.includes("ghci_arbitrary"))).toBe(true);
+
+    // After: flag set, guidance stops
+    updateModuleProgress(state, "src/Foo.hs", { arbitraryInstancesDefined: true });
+    expect(deriveGuidance(state, "ghci_load").some(g => g.includes("ghci_arbitrary"))).toBe(false);
+  });
+
+  it("shows property count and regression per module", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      functionsImplemented: 3,
+      functionsTotal: 3,
+      arbitraryInstancesDefined: true,
+      propertiesPassed: ["p1", "p2", "p3"],
+    });
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance.some(g => g.includes("3 properties saved"))).toBe(true);
+    expect(guidance.some(g => g.includes("ghci_regression"))).toBe(true);
+  });
 });
 

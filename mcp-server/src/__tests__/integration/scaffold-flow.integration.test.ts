@@ -160,6 +160,35 @@ library
     expect(coreHs).toContain("satisfy = undefined");
   });
 
+  it("prefers public modules over .Internal in Hoogle results", async () => {
+    // If the cabal has containers as dependency and a signature uses Map,
+    // scaffold should import Data.Map (not Data.Map.Internal)
+    await writeFile(
+      path.join(tmpDir, "test.cabal"),
+      `cabal-version: 2.4
+name: test-parser
+version: 0.1.0.0
+
+library
+  exposed-modules: Lib
+  hs-source-dirs: src
+  build-depends: base >= 4.14 && < 5, containers >= 0.6
+  default-language: Haskell2010
+`
+    );
+    await mkdir(path.join(tmpDir, "src"), { recursive: true });
+
+    await handleScaffold(tmpDir, {
+      "Lib": ["type Env = Map String Int", "lookup :: String -> Env -> Maybe Int"],
+    });
+
+    const content = await readFile(path.join(tmpDir, "src/Lib.hs"), "utf-8");
+    // If Hoogle resolved Map, it should NOT be Data.Map.Internal
+    if (content.includes("import")) {
+      expect(content).not.toContain("Internal");
+    }
+  });
+
   it("does not overwrite modules with real implementations", async () => {
     // Create a module with real code
     await mkdir(path.join(tmpDir, "src", "Parser"), { recursive: true });

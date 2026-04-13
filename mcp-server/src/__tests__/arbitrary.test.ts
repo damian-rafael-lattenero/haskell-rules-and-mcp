@@ -231,3 +231,24 @@ describe("handleArbitrary", () => {
     expect(result.hint).not.toContain("Added constraints");
   });
 });
+
+describe("arbitrary — workflow state integration", () => {
+  it("handleArbitrary returns success:true for valid types (register sets flag)", async () => {
+    // The register wrapper in arbitrary.ts sets arbitraryInstancesDefined on success.
+    // We test handleArbitrary directly — it returns { success: true } which the
+    // register wrapper uses to trigger the update.
+    const session = createMockSession({
+      infoOf: {
+        output: "data Pos = Pos Int Int\n  -- Defined at src/Pos.hs:1:1",
+        success: true,
+      },
+      executeBlock: { output: "", success: true },
+    });
+
+    const raw = await handleArbitrary(session, { type_name: "Pos" });
+    const result = JSON.parse(raw);
+    expect(result.success).toBe(true);
+    // The register function in arbitrary.ts checks this flag and calls
+    // ctx.updateModuleProgress({ arbitraryInstancesDefined: true })
+  });
+});

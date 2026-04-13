@@ -396,5 +396,34 @@ describe.runIf(GHC_AVAILABLE)(
       expect(r.failed).toBe(0);
       expect(r.passed).toBe(r.total);
     });
+
+    // =========================================================
+    // PHASE 6: Verify Round 3 fixes (Bug 4, Feature 6)
+    // =========================================================
+
+    it("QC suggest does NOT produce 'not always Left' for Either functions", async () => {
+      // parse :: Parser a -> String -> Either ParseError a
+      const r = parseResult(
+        await callTool(client, "ghci_quickcheck", {
+          property: "suggest",
+          function_name: "parse",
+        })
+      );
+      expect(r.mode).toBe("suggest");
+      // Must NOT contain universally wrong properties
+      if (r.suggestedProperties?.length > 0) {
+        const laws = r.suggestedProperties.map((p: any) => p.law);
+        expect(laws).not.toContain("not always Left");
+        expect(laws).not.toContain("not always Nothing");
+      }
+    });
+
+    it("session _info instead of _notice for setup", async () => {
+      const r = parseResult(
+        await callTool(client, "ghci_session", { action: "status" })
+      );
+      // Should use _info (non-actionable) not _notice (actionable)
+      expect(r._notice).toBeUndefined();
+    });
   }
 );
