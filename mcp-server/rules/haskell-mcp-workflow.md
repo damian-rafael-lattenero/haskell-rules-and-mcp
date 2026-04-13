@@ -62,13 +62,19 @@ Write .cabal
 ## FLOW 3: New Module (stub phase)
 
 ```
-Write: module header + exports + imports + type sigs with = undefined
+Write: module header + exports + imports + data types + type sigs with = undefined
+  → If the module defines data types: add Arbitrary instances (import Test.QuickCheck)
   → ghci_load(diagnostics=true) → fix any type design errors
   → 0 errors? → start FLOW 4 for each function
 ```
 
 **Stubs** (OK in one Write): module declaration, exports, imports, data types, type sigs with `= undefined`.
 **Implementation** (ONE at a time): function bodies replacing `= undefined`.
+
+**IMPORTANT: Add Arbitrary instances for data types IN THE MODULE, not inline in GHCi.**
+GHCi multiline definitions are fragile and time out. Define them in the source file
+during the stub phase so QuickCheck is available from the start. Add `QuickCheck` to
+the `.cabal` build-depends if not already there (FLOW 7).
 
 ## FLOW 4: Implement One Function ← THE CORE LOOP
 
@@ -81,10 +87,13 @@ Write: module header + exports + imports + type sigs with = undefined
 6. FIX        errors → fix → recompile | warnings → fix ALL → recompile (zero tolerance)
 7. VERIFY     ghci_type("functionName") → confirm the type is what you expect
 8. TEST       ghci_eval("functionName sampleArg") → verify runtime behavior
+9. PROPERTY   ghci_quickcheck if this function completes a testable law
 ```
 
 **Steps 1-2 are MANDATORY.** Never skip the hole phase — even if you know the answer.
 **Step 7 is MANDATORY.** Never skip type verification after implementation.
+**Step 9**: Run `ghci_quickcheck` as soon as you have enough functions to test a law.
+Don't wait until the module is complete — test laws incrementally as they become testable.
 
 ## FLOW 5: Explore & Discover (use DURING Flow 4, step 3)
 
