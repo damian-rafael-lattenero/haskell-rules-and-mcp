@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "haskell-ghci": {
+    "haskell-flows": {
       "command": "node",
       "args": ["mcp-server/dist/index.js"],
       "cwd": "/Users/dlattenero/Personal-Projects/haskell-rules-and-mcp",

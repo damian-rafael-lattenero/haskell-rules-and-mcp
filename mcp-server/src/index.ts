@@ -47,11 +47,11 @@ let workflowInstructions: string;
 try {
   workflowInstructions = await readFile(WORKFLOW_PATH, "utf-8");
 } catch {
-  workflowInstructions = "Use haskell-ghci MCP tools for all Haskell operations. Never use Bash for cabal/ghc/ghci.";
+  workflowInstructions = "Use haskell-flows MCP tools for all Haskell operations. Never use Bash for cabal/ghc/ghci.";
 }
 
 const server = new McpServer(
-  { name: "haskell-ghci", version: "0.4.0" },
+  { name: "haskell-flows", version: "0.4.0" },
   { instructions: workflowInstructions },
 );
 
@@ -311,7 +311,7 @@ for (const rule of RULES_REGISTRY) {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`haskell-ghci MCP server running (project: ${projectDir})`);
+  console.error(`haskell-flows MCP server running (project: ${projectDir})`);
 }
 
 main().catch((err) => {
