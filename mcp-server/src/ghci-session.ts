@@ -251,6 +251,43 @@ export class GhciSession extends EventEmitter {
   }
 
   /**
+   * Execute a block of statements using GHCi's :{ / :} multi-line syntax.
+   * Useful for multi-line definitions or sequences of let bindings.
+   * Note: GHCi commands (starting with :) are NOT supported inside blocks.
+   */
+  async executeBlock(lines: string[], timeoutMs?: number): Promise<GhciResult> {
+    const block = ":{\n" + lines.map((l) => l + "\n").join("") + ":}\n";
+    return this.execute(block, timeoutMs);
+  }
+
+  /**
+   * Execute with automatic retry on "already in progress" errors.
+   * Useful when concurrent tool calls may overlap.
+   */
+  async executeWithRetry(
+    command: string,
+    retries: number = 2,
+    timeoutMs?: number
+  ): Promise<GhciResult> {
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await this.execute(command, timeoutMs);
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          err.message.includes("already in progress") &&
+          i < retries - 1
+        ) {
+          await new Promise((r) => setTimeout(r, 100 * (i + 1)));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error("executeWithRetry: unreachable");
+  }
+
+  /**
    * Reload modules first, then execute a command.
    * This ensures GHCi always sees the latest source code.
    */

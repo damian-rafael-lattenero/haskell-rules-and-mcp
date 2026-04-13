@@ -10,6 +10,17 @@ import { RULES_REGISTRY, loadRule } from "./resources/rules.js";
 import { parseEvalOutput } from "./parsers/eval-output-parser.js";
 import { createRulesChecker, type ToolContext } from "./tools/registry.js";
 import { parseCabalModules, moduleToFilePath, getLibrarySrcDir } from "./parsers/cabal-parser.js";
+import {
+  createWorkflowState,
+  resetWorkflowState,
+  logTool,
+  getModuleProgress as getModProgress,
+  updateModuleProgress as updateModProgress,
+  serializeState,
+  workflowHint,
+  suggestNextStep,
+  moduleChecklist,
+} from "./workflow-state.js";
 
 // Tool register functions
 import { register as registerTypeCheck } from "./tools/type-check.js";
@@ -32,6 +43,9 @@ import { register as registerAddImport } from "./tools/add-import.js";
 import { register as registerReferences } from "./tools/references.js";
 import { register as registerRename } from "./tools/rename.js";
 import { register as registerSetup } from "./tools/setup.js";
+import { register as registerSuggest } from "./tools/suggest.js";
+import { register as registerArbitrary } from "./tools/arbitrary.js";
+import { register as registerTrace } from "./tools/trace.js";
 
 // Base directory: the project root (parent of mcp-server/)
 const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
@@ -78,6 +92,9 @@ async function getSession(): Promise<GhciSession> {
 // --- Rules checker (cached, reset on project switch) ---
 const rulesChecker = createRulesChecker(() => projectDir, () => BASE_DIR);
 
+// --- Workflow State ---
+const workflowState = createWorkflowState();
+
 // --- Tool Context ---
 const ctx: ToolContext = {
   getSession,
@@ -86,6 +103,10 @@ const ctx: ToolContext = {
   resetQuickCheckState,
   getRulesNotice: rulesChecker.check,
   resetRulesCache: rulesChecker.reset,
+  getWorkflowState: () => workflowState,
+  logToolExecution: (tool, success) => logTool(workflowState, tool, success),
+  getModuleProgress: (path) => getModProgress(workflowState, path),
+  updateModuleProgress: (path, updates) => updateModProgress(workflowState, path, updates),
 };
 
 // --- Register all tools from their modules ---
@@ -109,6 +130,9 @@ registerAddImport(server, ctx);
 registerReferences(server, ctx);
 registerRename(server, ctx);
 registerSetup(server, ctx);
+registerSuggest(server, ctx);
+registerArbitrary(server, ctx);
+registerTrace(server, ctx);
 
 // --- Tool: ghci_kind (inline, simple) ---
 server.tool(
@@ -131,15 +155,30 @@ server.tool(
 // --- Tool: ghci_eval (inline, uses parseEvalOutput) ---
 server.tool(
   "ghci_eval",
-  "Evaluate a Haskell expression in GHCi and return the result. Useful for testing pure functions.",
+  "Evaluate a Haskell expression in GHCi and return the result. Useful for testing pure functions. " +
+    "Supports multi-line evaluation: use the 'statements' parameter for sequential bindings, " +
+    "or put newlines in 'expression' for auto-block detection.",
   {
     expression: z.string().describe(
       'The expression to evaluate. Examples: "map (+1) [1,2,3]", "show (Just 42)"'
     ),
+    statements: z.array(z.string()).optional().describe(
+      "Array of GHCi statements to execute as a block (using :{ / :} syntax). " +
+        "Use for multi-line definitions or let-binding sequences. " +
+        'Example: ["let x = 42", "let y = x * 2", "x + y"]. ' +
+        "Note: GHCi commands (starting with :) are not supported inside blocks."
+    ),
   },
-  async ({ expression }) => {
+  async ({ expression, statements }) => {
     const session = await getSession();
-    const result = await session.execute(expression);
+    let result;
+    if (statements && statements.length > 0) {
+      result = await session.executeBlock(statements);
+    } else if (expression.includes("\n")) {
+      result = await session.executeBlock(expression.split("\n"));
+    } else {
+      result = await session.execute(expression);
+    }
     const parsed = parseEvalOutput(result.output);
     const isException = parsed.result.startsWith("*** Exception:");
     return {
@@ -228,6 +267,7 @@ server.tool(
       };
     }
     resetQuickCheckState();
+    resetWorkflowState(workflowState);
     if (ghciSession) { await ghciSession.kill(); ghciSession = null; }
     projectDir = target.path;
     rulesChecker.reset(); // Re-check rules in new project
@@ -297,6 +337,50 @@ server.tool(
   }
 );
 
+// --- Tool: ghci_workflow ---
+server.tool(
+  "ghci_workflow",
+  "Query the development workflow state: current flow/step, module progress, next action, or checklist. " +
+    "Use to understand where you are in the development process and what to do next.",
+  {
+    action: z.enum(["status", "next", "progress", "checklist"]).describe(
+      '"status": full workflow state summary. "next": what step to do next. ' +
+      '"progress": per-module progress (functions, properties). "checklist": TODO list for active module.'
+    ),
+  },
+  async ({ action }) => {
+    if (action === "status") {
+      return {
+        content: [{ type: "text", text: JSON.stringify(serializeState(workflowState)) }],
+      };
+    }
+    if (action === "next") {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ nextStep: suggestNextStep(workflowState) }) }],
+      };
+    }
+    if (action === "progress") {
+      const modules: Record<string, unknown> = {};
+      for (const [k, v] of workflowState.modules) {
+        modules[k] = {
+          phase: v.phase,
+          functions: `${v.functionsImplemented}/${v.functionsTotal}`,
+          propertiesPassed: v.propertiesPassed.length,
+          propertiesFailed: v.propertiesFailed.length,
+          arbitraryDefined: v.arbitraryInstancesDefined,
+        };
+      }
+      return {
+        content: [{ type: "text", text: JSON.stringify({ activeModule: workflowState.activeModule, modules }) }],
+      };
+    }
+    // checklist
+    return {
+      content: [{ type: "text", text: JSON.stringify({ checklist: moduleChecklist(workflowState) }) }],
+    };
+  }
+);
+
 // --- MCP Resources: Haskell Rules ---
 for (const rule of RULES_REGISTRY) {
   server.registerResource(rule.name, rule.uri, {
@@ -306,6 +390,14 @@ for (const rule of RULES_REGISTRY) {
     contents: [{ uri: uri.toString(), text: await loadRule(rule), mimeType: "text/markdown" }],
   }));
 }
+
+// --- MCP Resource: Workflow State ---
+server.registerResource("workflow-state", "workflow://haskell/state", {
+  description: "Current workflow progress: active flow, module status, pending actions",
+  mimeType: "application/json",
+}, async (uri) => ({
+  contents: [{ uri: uri.toString(), text: JSON.stringify(serializeState(workflowState)), mimeType: "application/json" }],
+}));
 
 // --- Start the server ---
 async function main() {

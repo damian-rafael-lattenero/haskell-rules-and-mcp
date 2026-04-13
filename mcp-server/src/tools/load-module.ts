@@ -78,10 +78,20 @@ interface DualPassResult {
   rawOutput: string;
 }
 
+interface CompileOptions {
+  /** Filter out GHC-32850 (-Wmissing-home-modules) noise from single-module loads. */
+  filterMissingHomeModules?: boolean;
+}
+
 async function dualPassCompile(
   session: GhciSession,
-  loadFn: () => Promise<GhciResult>
+  loadFn: () => Promise<GhciResult>,
+  options?: CompileOptions
 ): Promise<DualPassResult> {
+  const filterCodes = ["GHC-88464"];
+  if (options?.filterMissingHomeModules) filterCodes.push("GHC-32850");
+  const isFiltered = (e: GhcError) => filterCodes.includes(e.code ?? "");
+
   // Pass 1: strict — catch real type errors
   await session.execute(":set -fno-defer-type-errors");
   const strictResult = await loadFn();
@@ -89,10 +99,10 @@ async function dualPassCompile(
 
   const allDiags = parseGhcErrors(strictResult.output);
   const strictErrors = allDiags.filter(
-    (e) => e.severity === "error" && e.code !== "GHC-88464"
+    (e) => e.severity === "error" && !isFiltered(e)
   );
   const warnings = allDiags.filter(
-    (e) => e.severity === "warning" && e.code !== "GHC-88464"
+    (e) => e.severity === "warning" && !isFiltered(e)
   );
   const { actions, uncategorized } = categorizeWarnings(warnings);
 
@@ -116,7 +126,7 @@ async function dualPassCompile(
 
   const deferredDiags = parseGhcErrors(deferredResult.output);
   const deferredWarnings = deferredDiags.filter(
-    (e) => e.severity === "warning" && e.code !== "GHC-88464"
+    (e) => e.severity === "warning" && !isFiltered(e)
   );
   const deferredCat = categorizeWarnings(deferredWarnings);
 
@@ -132,7 +142,7 @@ async function dualPassCompile(
 
 // --- Single-pass helper (no dual-pass, used when diagnostics=false) ---
 
-function singlePassDiagnostics(output: string): {
+function singlePassDiagnostics(output: string, options?: CompileOptions): {
   errors: GhcError[];
   warnings: GhcError[];
   actions: WarningAction[];
@@ -140,7 +150,10 @@ function singlePassDiagnostics(output: string): {
 } {
   const allDiags = parseGhcErrors(output);
   const errors = allDiags.filter((e) => e.severity === "error");
-  const warnings = allDiags.filter((e) => e.severity === "warning");
+  const warnings = allDiags.filter((e) =>
+    e.severity === "warning" &&
+    !(options?.filterMissingHomeModules && e.code === "GHC-32850")
+  );
   const { actions, uncategorized } = categorizeWarnings(warnings);
   return { errors, warnings, actions, uncategorized };
 }
@@ -173,8 +186,10 @@ async function handleLoadSingle(
   modulePath: string,
   runDiagnostics: boolean
 ): Promise<string> {
+  const filterOpts: CompileOptions = { filterMissingHomeModules: true };
+
   if (runDiagnostics) {
-    const dp = await dualPassCompile(session, () => session.loadModule(modulePath));
+    const dp = await dualPassCompile(session, () => session.loadModule(modulePath), filterOpts);
     return buildResponse(
       dp.errors.length === 0, dp.errors, dp.warnings,
       dp.actions, dp.uncategorized, dp.holes, dp.rawOutput
@@ -182,7 +197,7 @@ async function handleLoadSingle(
   }
 
   const result = await session.loadModule(modulePath);
-  const { errors, warnings, actions, uncategorized } = singlePassDiagnostics(result.output);
+  const { errors, warnings, actions, uncategorized } = singlePassDiagnostics(result.output, filterOpts);
   return buildResponse(
     errors.length === 0, errors, warnings, actions, uncategorized, [], result.output
   );

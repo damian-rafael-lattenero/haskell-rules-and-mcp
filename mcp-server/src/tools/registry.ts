@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { GhciSession } from "../ghci-session.js";
+import type { WorkflowState, ModuleProgress } from "../workflow-state.js";
 import { access } from "node:fs/promises";
 import path from "node:path";
 
@@ -16,6 +17,14 @@ export interface ToolContext {
   getRulesNotice: () => Promise<string | null>;
   /** Reset the rules notice cache (call after ghci_setup installs rules). */
   resetRulesCache: () => void;
+  /** Get the current workflow state. */
+  getWorkflowState: () => WorkflowState;
+  /** Log a tool execution to workflow history. */
+  logToolExecution: (toolName: string, success: boolean) => void;
+  /** Get progress for a specific module. */
+  getModuleProgress: (modulePath: string) => ModuleProgress | undefined;
+  /** Update progress for a specific module. */
+  updateModuleProgress: (modulePath: string, updates: Partial<ModuleProgress>) => void;
 }
 
 export type RegisterFn = (server: McpServer, ctx: ToolContext) => void;

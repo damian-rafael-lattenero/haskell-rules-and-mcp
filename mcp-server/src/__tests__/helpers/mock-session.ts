@@ -25,6 +25,7 @@ export function createMockSession(
     docOf: makeHandler("docOf"),
     completionsOf: makeHandler("completionsOf"),
     showImports: makeHandler("showImports"),
+    executeBlock: makeHandler("executeBlock"),
     loadModule: makeHandler("loadModule"),
     loadModules: makeHandler("loadModules"),
     reload: makeHandler("reload"),

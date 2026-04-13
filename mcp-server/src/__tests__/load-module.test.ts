@@ -150,6 +150,49 @@ describe("handleLoadModule", () => {
     });
   });
 
+  // --- GHC-32850 filtering ---
+  describe("GHC-32850 filtering", () => {
+    it("filters missing-home-modules warning on single module load", async () => {
+      const session = makeLoadSession({
+        loadOutput:
+          "<no location info>: warning: [GHC-32850] [-Wmissing-home-modules]\n" +
+          "    These modules are needed for compilation but not listed in your .cabal file's other-modules:\n" +
+          "        HM.Types\n\n" +
+          "[1 of 2] Compiling HM.Types\n" +
+          "[2 of 2] Compiling HM.Env\nOk, two modules loaded.",
+      });
+      const result = JSON.parse(await handleLoadModule(session, { module_path: "src/HM/Env.hs", diagnostics: false }));
+      expect(result.success).toBe(true);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it("preserves other warnings when filtering GHC-32850", async () => {
+      const session = makeLoadSession({
+        loadOutput:
+          "<no location info>: warning: [GHC-32850] [-Wmissing-home-modules]\n" +
+          "    Missing modules\n\n" +
+          "src/Foo.hs:2:1-22: warning: [GHC-66111] [-Wunused-imports]\n" +
+          "    The import of 'Data.List' is redundant\nOk, one module loaded.",
+      });
+      const result = JSON.parse(await handleLoadModule(session, { module_path: "src/Foo.hs", diagnostics: false }));
+      expect(result.success).toBe(true);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0].code).toBe("GHC-66111");
+    });
+
+    it("does NOT filter GHC-32850 on plain reload", async () => {
+      const session = makeLoadSession({
+        reloadOutput:
+          "<no location info>: warning: [GHC-32850] [-Wmissing-home-modules]\n" +
+          "    Missing modules\nOk, one module loaded.",
+      });
+      const result = JSON.parse(await handleLoadModule(session, {}));
+      expect(result.success).toBe(true);
+      expect(result.warnings.length).toBeGreaterThan(0);
+      expect(result.warnings[0].code).toBe("GHC-32850");
+    });
+  });
+
   // --- Hole detection ---
   describe("typed holes", () => {
     it("detects typed holes in diagnostics mode", async () => {
