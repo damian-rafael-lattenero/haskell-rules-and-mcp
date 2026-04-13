@@ -61,6 +61,28 @@ describe("parseTypeOutput", () => {
     expect(result!.expression).toBe("id");
     expect(result!.type).toBe("a -> a");
   });
+
+  // Bug Fix 0A: expression containing :: type annotation
+  it("handles expression with :: type annotation (splits on LAST ::)", () => {
+    const result = parseTypeOutput("\\x -> x + (1 :: Int) :: Int -> Int");
+    expect(result).not.toBeNull();
+    expect(result!.expression).toBe("\\x -> x + (1 :: Int)");
+    expect(result!.type).toBe("Int -> Int");
+  });
+
+  it("handles simple expression with :: annotation", () => {
+    const result = parseTypeOutput("(1 :: Int) :: Int");
+    expect(result).not.toBeNull();
+    expect(result!.expression).toBe("(1 :: Int)");
+    expect(result!.type).toBe("Int");
+  });
+
+  it("still works with single :: (no annotation in expression)", () => {
+    const result = parseTypeOutput("map :: (a -> b) -> [a] -> [b]");
+    expect(result).not.toBeNull();
+    expect(result!.expression).toBe("map");
+    expect(result!.type).toBe("(a -> b) -> [a] -> [b]");
+  });
 });
 
 describe("parseInfoOutput", () => {

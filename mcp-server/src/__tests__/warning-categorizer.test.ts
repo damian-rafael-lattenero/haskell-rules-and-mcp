@@ -75,6 +75,36 @@ describe("categorizeWarning", () => {
     expect(action!.confidence).toBe("high");
   });
 
+  // Bug Fix 0B: GHC 9.12 single-line format for missing-signatures
+  it("categorizes -Wmissing-signatures with single-line format (GHC 9.12)", () => {
+    const w = makeWarning({
+      warningFlag: "-Wmissing-signatures",
+      line: 4,
+      message:
+        "Top-level binding with no type signature: double :: Num a => a -> a\n" +
+        "  |\n" +
+        "4 | double x = x + x\n" +
+        "  | ^^^^^^",
+    });
+    const action = categorizeWarning(w);
+    expect(action).not.toBeNull();
+    expect(action!.category).toBe("missing-signature");
+    expect(action!.suggestedAction).toContain("double :: Num a => a -> a");
+  });
+
+  it("categorizes -Wmissing-signatures even with unrecognized format", () => {
+    const w = makeWarning({
+      warningFlag: "-Wmissing-signatures",
+      line: 7,
+      message: "Top-level binding with no type signature (some future format)",
+    });
+    const action = categorizeWarning(w);
+    expect(action).not.toBeNull();
+    expect(action!.category).toBe("missing-signature");
+    expect(action!.suggestedAction).toContain("line 7");
+    expect(action!.confidence).toBe("medium");
+  });
+
   it("categorizes -Wunused-matches with Unicode quotes", () => {
     const w = makeWarning({
       warningFlag: "-Wunused-matches",

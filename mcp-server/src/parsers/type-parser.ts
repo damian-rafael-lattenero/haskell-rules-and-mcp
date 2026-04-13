@@ -11,7 +11,7 @@ export function parseTypeOutput(output: string): {
   type: string;
 } | null {
   // Match "expr :: type" pattern, handling multiline types
-  const match = output.match(/^(.+?)\s+::\s+([\s\S]+)$/m);
+  const match = output.match(/^(.+)\s+::\s+([\s\S]+)$/m);
   if (!match) return null;
 
   const expression = match[1]!.trim();

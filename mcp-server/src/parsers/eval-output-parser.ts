@@ -60,8 +60,12 @@ export function parseEvalOutput(raw: string): ParsedEvalOutput {
   }
   if (currentWarning) warningBlocks.push(currentWarning);
 
+  // Trim only leading/trailing blank lines, preserving leading spaces on first content line
+  const joined = resultLines.join("\n");
+  const trimmed = joined.replace(/^(\s*\n)+/, "").replace(/\s+$/, "");
+
   return {
-    result: resultLines.join("\n").trim(),
+    result: trimmed,
     warnings: warningBlocks.map((block) => block.join("\n").trim()),
     raw,
   };

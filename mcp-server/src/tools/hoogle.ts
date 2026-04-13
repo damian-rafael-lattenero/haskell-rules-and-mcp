@@ -1,3 +1,7 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import type { ToolContext } from "./registry.js";
+
 export const hoogleSearchTool = {
   name: "hoogle_search",
   description:
@@ -69,6 +73,23 @@ export async function handleHoogleSearch(args: {
       error: `Hoogle request failed: ${err instanceof Error ? err.message : String(err)}`,
     });
   }
+}
+
+export function register(server: McpServer, _ctx: ToolContext): void {
+  server.tool(
+    "hoogle_search",
+    'Search Hoogle for Haskell functions by name or type signature. Example: search "(a -> b) -> [a] -> [b]" to find "map".',
+    {
+      query: z.string().describe(
+        'Search query: function name ("mapM") or type signature ("(a -> b) -> [a] -> [b]")'
+      ),
+      count: z.number().optional().describe("Number of results (default 10, max 30)"),
+    },
+    async ({ query, count }) => {
+      const result = await handleHoogleSearch({ query, count });
+      return { content: [{ type: "text" as const, text: result }] };
+    }
+  );
 }
 
 function stripHtml(html: string): string {

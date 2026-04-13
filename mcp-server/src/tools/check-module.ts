@@ -1,11 +1,12 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import { GhciSession } from "../ghci-session.js";
 import { parseGhcErrors } from "../parsers/error-parser.js";
+import { parseBrowseOutput, inferModuleName } from "../parsers/browse-parser.js";
+import type { ToolContext } from "./registry.js";
 
-export interface ModuleDefinition {
-  name: string;
-  type: string;
-  kind: "function" | "type" | "class" | "data" | "instance";
-}
+// Re-export for consumers
+export type { ModuleDefinition } from "../parsers/browse-parser.js";
 
 /**
  * Load a module and return a structured summary of its exports:
@@ -15,17 +16,15 @@ export async function handleCheckModule(
   session: GhciSession,
   args: { module_path: string; module_name?: string }
 ): Promise<string> {
-  // Step 0: Disable -fdefer-type-errors so real type errors show up
+  // Disable -fdefer-type-errors so real type errors show up
   await session.execute(":set -fno-defer-type-errors");
 
-  // Step 1: Load the module
   const loadResult = await session.loadModule(args.module_path);
   const errors = parseGhcErrors(loadResult.output);
   const compileErrors = errors.filter((e) => e.severity === "error");
   const warnings = errors.filter((e) => e.severity === "warning");
 
   if (compileErrors.length > 0) {
-    // Restore deferred type errors before returning
     await session.execute(":set -fdefer-type-errors");
     return JSON.stringify({
       success: false,
@@ -37,22 +36,14 @@ export async function handleCheckModule(
     });
   }
 
-  // Step 2: Determine module name from path if not given
-  const moduleName =
-    args.module_name ?? inferModuleName(args.module_path);
-
-  // Step 3: Browse the module to get all exported definitions
+  const moduleName = args.module_name ?? inferModuleName(args.module_path);
   const browseResult = await session.execute(`:browse ${moduleName}`);
   const definitions = parseBrowseOutput(browseResult.output);
 
-  // Step 4: Build summary
   const functions = definitions.filter((d) => d.kind === "function");
-  const types = definitions.filter(
-    (d) => d.kind === "type" || d.kind === "data"
-  );
+  const types = definitions.filter((d) => d.kind === "type" || d.kind === "data");
   const classes = definitions.filter((d) => d.kind === "class");
 
-  // Restore deferred type errors for normal interactive use
   await session.execute(":set -fdefer-type-errors");
 
   return JSON.stringify({
@@ -72,175 +63,24 @@ export async function handleCheckModule(
   });
 }
 
-/**
- * Infer a Haskell module name from a file path.
- * E.g. "src/HM/Infer.hs" -> "HM.Infer"
- */
-function inferModuleName(filePath: string): string {
-  return filePath
-    .replace(/^src\//, "")
-    .replace(/\.hs$/, "")
-    .replace(/\//g, ".");
-}
-
-/**
- * Parse the output of GHCi :browse into structured definitions.
- *
- * Handles formats:
- *   functionName :: Type -> Type
- *   type TypeAlias :: Kind\ntype TypeAlias = Definition
- *   data DataType = Constructor1 | Constructor2
- *   class ClassName a where ...
- */
-function parseBrowseOutput(output: string): ModuleDefinition[] {
-  const definitions: ModuleDefinition[] = [];
-  const lines = output.split("\n");
-
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i]!.trim();
-
-    // Skip empty lines and GHCi noise
-    if (line === "" || line.startsWith("ghci>") || line.startsWith("--")) {
-      i++;
-      continue;
+export function register(server: McpServer, ctx: ToolContext): void {
+  server.tool(
+    "ghci_check_module",
+    "Load a module and return a structured summary of all its exported definitions with types. " +
+      "Shows: total definitions, functions with signatures, type aliases, data types, classes, " +
+      "and any compilation errors or warnings. Use for a quick overview of a module's API.",
+    {
+      module_path: z.string().describe(
+        'Path to the module to check. Examples: "src/HM/Infer.hs", "src/Lib.hs"'
+      ),
+      module_name: z.string().optional().describe(
+        'Haskell module name (optional, inferred from path). Examples: "HM.Infer", "Lib"'
+      ),
+    },
+    async ({ module_path, module_name }) => {
+      const session = await ctx.getSession();
+      const result = await handleCheckModule(session, { module_path, module_name });
+      return { content: [{ type: "text" as const, text: result }] };
     }
-
-    // Kind annotation: "type TypeName :: Kind"
-    // Followed by either "type TypeName = ..." or "data TypeName = ..."
-    if (line.startsWith("type ") && line.includes("::")) {
-      const nameMatch = line.match(/^type\s+(\S+)/);
-      if (nameMatch) {
-        const defLine = i + 1 < lines.length ? lines[i + 1]!.trim() : "";
-        if (defLine.startsWith("type ")) {
-          definitions.push({
-            name: nameMatch[1]!,
-            type: defLine,
-            kind: "type",
-          });
-          i += 2;
-        } else if (defLine.startsWith("data ")) {
-          // Collect multiline data declaration
-          const fullData = collectContinuation(lines, i + 1);
-          const dataName = defLine.match(/^data\s+(\S+)/);
-          definitions.push({
-            name: dataName?.[1] ?? nameMatch[1]!,
-            type: fullData.text,
-            kind: "data",
-          });
-          i = fullData.nextIndex;
-        } else {
-          definitions.push({
-            name: nameMatch[1]!,
-            type: line,
-            kind: "type",
-          });
-          i++;
-        }
-        continue;
-      }
-    }
-
-    // data type: "data DataType" or "data DataType = ..."
-    if (line.startsWith("data ")) {
-      const nameMatch = line.match(/^data\s+(\S+)/);
-      if (nameMatch) {
-        const fullData = collectContinuation(lines, i);
-        definitions.push({
-          name: nameMatch[1]!,
-          type: fullData.text,
-          kind: "data",
-        });
-        i = fullData.nextIndex;
-        continue;
-      }
-    }
-
-    // class: "class ClassName ..."
-    if (line.startsWith("class ")) {
-      const nameMatch = line.match(/^class\s+(?:\(.*?\)\s+=>\s+)?(\S+)/);
-      if (nameMatch) {
-        definitions.push({
-          name: nameMatch[1]!,
-          type: line,
-          kind: "class",
-        });
-        // Consume indented class body and extract method signatures
-        while (
-          i + 1 < lines.length &&
-          lines[i + 1]!.match(/^\s/) &&
-          lines[i + 1]!.trim() !== ""
-        ) {
-          i++;
-          const bodyLine = lines[i]!.trim();
-          // Skip pragmas like {-# MINIMAL ... #-}
-          if (bodyLine.startsWith("{-#")) continue;
-          const methodMatch = bodyLine.match(/^(\S+)\s+::\s+(.+)/);
-          if (methodMatch) {
-            definitions.push({
-              name: methodMatch[1]!,
-              type: methodMatch[2]!,
-              kind: "function",
-            });
-          }
-        }
-        i++;
-        continue;
-      }
-    }
-
-    // Function signature: "name :: Type"
-    const sigMatch = line.match(/^(\S+)\s+::\s+(.+)/);
-    if (sigMatch) {
-      // Type might span multiple lines (indented continuation)
-      let fullType = sigMatch[2]!;
-      while (
-        i + 1 < lines.length &&
-        lines[i + 1]!.match(/^\s+/) &&
-        !lines[i + 1]!.trim().startsWith("type ") &&
-        !lines[i + 1]!.trim().startsWith("data ") &&
-        !lines[i + 1]!.trim().startsWith("class ") &&
-        !lines[i + 1]!.trim().startsWith("{-#") &&
-        !/^\S+\s+::/.test(lines[i + 1]!.trim())
-      ) {
-        i++;
-        fullType += " " + lines[i]!.trim();
-      }
-      definitions.push({
-        name: sigMatch[1]!,
-        type: fullType,
-        kind: "function",
-      });
-      i++;
-      continue;
-    }
-
-    i++;
-  }
-
-  return definitions;
-}
-
-/**
- * Collect a multiline declaration starting at `startIndex`.
- * Continuation lines are indented (start with whitespace).
- * Returns the full text and the next index to process.
- */
-function collectContinuation(
-  lines: string[],
-  startIndex: number
-): { text: string; nextIndex: number } {
-  let text = lines[startIndex]!.trim();
-  let i = startIndex + 1;
-  while (i < lines.length) {
-    const raw = lines[i]!;
-    // Continuation lines start with whitespace
-    if (raw.match(/^\s/) && raw.trim() !== "") {
-      text += " " + raw.trim();
-      i++;
-    } else {
-      break;
-    }
-  }
-  return { text, nextIndex: i };
+  );
 }

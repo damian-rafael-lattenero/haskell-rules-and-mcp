@@ -1,4 +1,7 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import { GhciSession, GhciResult } from "../ghci-session.js";
+import type { ToolContext } from "./registry.js";
 import { parseGhcErrors, GhcError } from "../parsers/error-parser.js";
 import { categorizeWarnings, WarningAction } from "../parsers/warning-categorizer.js";
 import {
@@ -6,15 +9,9 @@ import {
   moduleToFilePath,
   getLibrarySrcDir,
 } from "../parsers/cabal-parser.js";
+import { parseHoleSummaries, HoleSummary } from "../parsers/hole-parser.js";
 
-export interface HoleSummary {
-  hole: string;
-  expectedType: string;
-  line: number;
-  column: number;
-  relevantBindings: string[];
-  topFits: string[];
-}
+export type { HoleSummary } from "../parsers/hole-parser.js";
 
 export const loadModuleTool = {
   name: "ghci_load",
@@ -115,7 +112,7 @@ async function dualPassCompile(
   await session.execute(":set -frefinement-level-hole-fits=1");
   const deferredResult = await loadFn();
   await session.execute(":set -frefinement-level-hole-fits=0");
-  const holes = parseHolesFromOutput(deferredResult.output);
+  const holes = parseHoleSummaries(deferredResult.output);
 
   const deferredDiags = parseGhcErrors(deferredResult.output);
   const deferredWarnings = deferredDiags.filter(
@@ -278,83 +275,29 @@ function buildResponse(
   });
 }
 
-// --- Hole parsing ---
-
-function parseHolesFromOutput(output: string): HoleSummary[] {
-  const holes: HoleSummary[] = [];
-  const lines = output.split("\n");
-
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i]!;
-
-    const headerMatch = line.match(
-      /^.+?:(\d+):(\d+).*?warning:.*?\[GHC-88464\]/
-    );
-    if (!headerMatch) {
-      i++;
-      continue;
+export function register(server: McpServer, ctx: ToolContext): void {
+  server.tool(
+    "ghci_load",
+    "Load or reload Haskell modules in GHCi. Returns parsed compilation errors and warnings. " +
+      "Without module_path: reloads current modules (:r). " +
+      "With module_path: loads that specific module. " +
+      "With load_all=true: reads .cabal and loads ALL library modules at once (lighter than cabal_build).",
+    {
+      module_path: z.string().optional().describe(
+        'Path to a module to load. If omitted, reloads current modules. Examples: "src/Lib.hs"'
+      ),
+      load_all: z.boolean().optional().describe(
+        "If true, reads the .cabal file and loads ALL library modules into GHCi at once."
+      ),
+      diagnostics: z.boolean().optional().describe(
+        "If true, runs dual-pass compilation (strict errors + typed holes) and categorizes warnings with suggested fix actions. " +
+          "Defaults to true for module_path/load_all, false for plain reload."
+      ),
+    },
+    async ({ module_path, load_all, diagnostics }) => {
+      const session = await ctx.getSession();
+      const result = await handleLoadModule(session, { module_path, load_all, diagnostics }, ctx.getProjectDir());
+      return { content: [{ type: "text" as const, text: result }] };
     }
-
-    const holeLine = parseInt(headerMatch[1]!, 10);
-    const holeCol = parseInt(headerMatch[2]!, 10);
-
-    let block = line + "\n";
-    i++;
-    while (i < lines.length) {
-      const next = lines[i]!;
-      if (/^\S+:\d+:\d+/.test(next)) break;
-      block += next + "\n";
-      i++;
-    }
-
-    const holeMatch = block.match(/Found hole:\s+(\S+)\s+::\s+(.+?)(?:\n|$)/);
-    const holeName = holeMatch ? holeMatch[1]! : "_";
-    const expectedType = holeMatch
-      ? holeMatch[2]!.trim().replace(/\s*Where:.*$/, "")
-      : "unknown";
-
-    const bindings: string[] = [];
-    const bindSection = block.match(
-      /Relevant bindings include\n([\s\S]*?)(?:Valid hole fits|$)/
-    );
-    if (bindSection) {
-      for (const bLine of bindSection[1]!.split("\n")) {
-        const bMatch = bLine.trim().match(/^(\S+)\s+::\s+(.+?)\s+\(bound/);
-        if (bMatch) {
-          bindings.push(`${bMatch[1]} :: ${bMatch[2]}`);
-        }
-      }
-    }
-
-    const fits: string[] = [];
-    const fitSection = block.match(
-      /Valid hole fits include\n([\s\S]*?)(?:\s*\||\s*$)/
-    );
-    if (fitSection) {
-      for (const fLine of fitSection[1]!.split("\n")) {
-        const fMatch = fLine
-          .trim()
-          .match(/^(\S+)\s+::\s+(.+?)(?:\s+\(bound|\s*$)/);
-        if (
-          fMatch &&
-          !fLine.trim().startsWith("with ") &&
-          !fLine.trim().startsWith("(")
-        ) {
-          fits.push(`${fMatch[1]} :: ${fMatch[2]}`);
-        }
-      }
-    }
-
-    holes.push({
-      hole: holeName,
-      expectedType,
-      line: holeLine,
-      column: holeCol,
-      relevantBindings: bindings,
-      topFits: fits,
-    });
-  }
-
-  return holes;
+  );
 }

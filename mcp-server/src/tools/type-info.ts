@@ -1,5 +1,8 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import { GhciSession } from "../ghci-session.js";
 import { parseInfoOutput } from "../parsers/type-parser.js";
+import type { ToolContext } from "./registry.js";
 
 export const typeInfoTool = {
   name: "ghci_info",
@@ -45,4 +48,21 @@ export async function handleTypeInfo(
     success: true,
     ...parsed,
   });
+}
+
+export function register(server: McpServer, ctx: ToolContext): void {
+  server.tool(
+    "ghci_info",
+    "Get detailed info about a Haskell name (function, type, typeclass) using GHCi :i. Shows definition, instances, and module.",
+    {
+      name: z.string().describe(
+        'The name to look up. Examples: "Functor", "Map.Map", "Maybe", "(++)"'
+      ),
+    },
+    async ({ name }) => {
+      const session = await ctx.getSession();
+      const result = await handleTypeInfo(session, { name });
+      return { content: [{ type: "text" as const, text: result }] };
+    }
+  );
 }

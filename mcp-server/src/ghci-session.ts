@@ -285,6 +285,28 @@ export class GhciSession extends EventEmitter {
   }
 
   /**
+   * Get documentation for a name. Auto-reloads first.
+   */
+  async docOf(name: string): Promise<GhciResult> {
+    return this.reloadThenExecute(`:doc ${name}`);
+  }
+
+  /**
+   * Get completions for a prefix from GHCi's :complete command.
+   * Does NOT auto-reload (operates on in-scope names).
+   */
+  async completionsOf(prefix: string): Promise<GhciResult> {
+    return this.execute(`:complete repl "${prefix}"`);
+  }
+
+  /**
+   * Show currently loaded imports.
+   */
+  async showImports(): Promise<GhciResult> {
+    return this.execute(":show imports");
+  }
+
+  /**
    * Load a single module.
    */
   async loadModule(modulePath: string): Promise<GhciResult> {

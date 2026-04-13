@@ -1,3 +1,4 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -5,6 +6,7 @@ import {
   moduleToFilePath,
   getLibrarySrcDir,
 } from "../parsers/cabal-parser.js";
+import type { ToolContext } from "./registry.js";
 
 export interface ScaffoldResult {
   created: string[];
@@ -70,6 +72,20 @@ export async function handleScaffold(
  */
 function generateStub(moduleName: string): string {
   return `module ${moduleName} where\n`;
+}
+
+export function register(server: McpServer, ctx: ToolContext): void {
+  server.tool(
+    "ghci_scaffold",
+    "Read the .cabal file, find library modules that don't have source files yet, and create minimal stubs. " +
+      "Use after adding new modules to the .cabal file, before restarting GHCi. " +
+      "This prevents the 'can't find source for Module' error on GHCi startup.",
+    {},
+    async () => {
+      const result = await handleScaffold(ctx.getProjectDir());
+      return { content: [{ type: "text" as const, text: result }] };
+    }
+  );
 }
 
 async function fileExists(filePath: string): Promise<boolean> {

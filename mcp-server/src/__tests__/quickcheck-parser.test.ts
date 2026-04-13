@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseQuickCheckOutput } from "../tools/quickcheck.js";
+import { parseQuickCheckOutput } from "../parsers/quickcheck-parser.js";
 
 const PROP = "\\xs -> reverse (reverse xs) == (xs :: [Int])";
 

@@ -8,6 +8,24 @@ describe("parseEvalOutput", () => {
     expect(parsed.warnings).toEqual([]);
   });
 
+  // Bug Fix 0C: preserve leading spaces on first line of result
+  it("preserves leading spaces on result", () => {
+    const parsed = parseEvalOutput("  indented output");
+    expect(parsed.result).toBe("  indented output");
+    expect(parsed.warnings).toEqual([]);
+  });
+
+  it("preserves leading spaces after warning block", () => {
+    const raw =
+      "<interactive>:1:1: warning: [GHC-18042] [-Wtype-defaults]\n" +
+      "    • Defaulting the type variable\n" +
+      "\n" +
+      "  fromList [(1,2)]";
+    const parsed = parseEvalOutput(raw);
+    expect(parsed.result).toBe("  fromList [(1,2)]");
+    expect(parsed.warnings).toHaveLength(1);
+  });
+
   it("separates type-defaults warning from result", () => {
     const raw =
       "<interactive>:1:1: warning: [GHC-18042] [-Wtype-defaults]\n" +

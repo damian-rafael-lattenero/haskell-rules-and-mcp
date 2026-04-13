@@ -59,7 +59,26 @@ export function categorizeWarning(w: GhcError): WarningAction | null {
           confidence: "high",
         };
       }
-      return null;
+      // GHC 9.12 single-line format: "Top-level binding with no type signature: name :: Type"
+      const singleLineMatch = msg.match(
+        /Top-level binding with no type signature:\s+(.+)/
+      );
+      if (singleLineMatch) {
+        const sig = singleLineMatch[1]!.replace(/\s+/g, " ").trim();
+        return {
+          warning: w,
+          category: "missing-signature",
+          suggestedAction: `Add type signature: ${sig}`,
+          confidence: "high",
+        };
+      }
+      // Final fallback: still categorize even without extracted type
+      return {
+        warning: w,
+        category: "missing-signature",
+        suggestedAction: `Add missing type signature at line ${w.line}`,
+        confidence: "medium",
+      };
     }
 
     case "-Wunused-matches":

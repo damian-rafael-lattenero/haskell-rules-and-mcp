@@ -8,7 +8,7 @@ import { parseGhcErrors } from "../parsers/error-parser.js";
 import { parseInfoOutput } from "../parsers/type-parser.js";
 import { parseEvalOutput } from "../parsers/eval-output-parser.js";
 import { categorizeWarning } from "../parsers/warning-categorizer.js";
-import { parseQuickCheckOutput } from "../tools/quickcheck.js";
+import { parseQuickCheckOutput } from "../parsers/quickcheck-parser.js";
 import { handleTypeInfo } from "../tools/type-info.js";
 import { handleCheckModule } from "../tools/check-module.js";
 import { extractModules } from "../parsers/cabal-parser.js";

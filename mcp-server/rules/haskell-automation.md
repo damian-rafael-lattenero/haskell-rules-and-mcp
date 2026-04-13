@@ -40,7 +40,7 @@ When `ghci_load` returns errors, match on `code` and apply:
 | Code | Name | Action | Verify with |
 |---|---|---|---|
 | GHC-83865 | Type mismatch | Read `expected`/`actual`. expected=`X->Y`, actual=`X` → missing arg. expected=`IO X`, actual=`X` → wrap in `pure`. expected=`X`, actual=`IO X` → use `<-` not `let`. | `ghci_type` on `context` subexpr |
-| GHC-39999 | Not in scope | (1) Module in .cabal exposed-modules? (2) Missing import? → `hoogle_search`. (3) Typo? → similar names. | `ghci_info` after adding import |
+| GHC-39999 | Not in scope | (1) Module in .cabal exposed-modules? (2) Missing import? → `ghci_add_import` to find the right module, then add the import. (3) Typo? → `ghci_complete` to find similar names. | `ghci_info` after adding import |
 | GHC-39660 | No instance | Own type → add `deriving`. Constraint missing → add to sig. Orphan → add import. | `ghci_info` on the type |
 | GHC-46956 | Ambiguous type | Add explicit type annotation to the ambiguous expression. | `ghci_type` on subexpressions |
 

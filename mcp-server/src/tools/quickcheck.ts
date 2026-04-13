@@ -1,13 +1,11 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import { GhciSession } from "../ghci-session.js";
+import { parseQuickCheckOutput } from "../parsers/quickcheck-parser.js";
+import type { ToolContext } from "./registry.js";
 
-interface QuickCheckResult {
-  success: boolean;
-  passed: number;
-  property: string;
-  counterexample?: string;
-  shrinks?: number;
-  error?: string;
-}
+// Re-export for consumers
+export type { QuickCheckResult } from "../parsers/quickcheck-parser.js";
 
 let quickCheckAvailable: boolean | null = null;
 
@@ -18,14 +16,12 @@ let quickCheckAvailable: boolean | null = null;
 async function ensureQuickCheck(session: GhciSession): Promise<boolean> {
   if (quickCheckAvailable === true) return true;
 
-  // Try importing — works if QuickCheck is a project dependency
   const importResult = await session.execute("import Test.QuickCheck");
   if (importResult.success && !importResult.output.toLowerCase().includes("could not find module")) {
     quickCheckAvailable = true;
     return true;
   }
 
-  // Try setting the package flag first (works if installed globally)
   const setResult = await session.execute(":set -package QuickCheck");
   if (setResult.success && !setResult.output.toLowerCase().includes("unknown package")) {
     const importRetry = await session.execute("import Test.QuickCheck");
@@ -61,10 +57,9 @@ export async function handleQuickCheck(
       property: args.property,
       error:
         "QuickCheck not available. Add 'QuickCheck >= 2.14' to build-depends in the .cabal file, then run 'cabal build' and restart the GHCi session.",
-    } satisfies QuickCheckResult);
+    });
   }
 
-  // Basic input validation
   const trimmed = args.property.trim();
   if (trimmed.startsWith(":")) {
     return JSON.stringify({
@@ -72,7 +67,7 @@ export async function handleQuickCheck(
       passed: 0,
       property: args.property,
       error: "Property cannot start with ':' (looks like a GHCi command)",
-    } satisfies QuickCheckResult);
+    });
   }
   if (trimmed.length > 2000) {
     return JSON.stringify({
@@ -80,7 +75,7 @@ export async function handleQuickCheck(
       passed: 0,
       property: args.property,
       error: "Property too long (max 2000 characters)",
-    } satisfies QuickCheckResult);
+    });
   }
 
   const maxTests = args.tests ?? 100;
@@ -91,69 +86,24 @@ export async function handleQuickCheck(
   return JSON.stringify(parseQuickCheckOutput(result.output, args.property));
 }
 
-/**
- * Parse QuickCheck output into structured result.
- * Exported for unit testing.
- */
-export function parseQuickCheckOutput(
-  output: string,
-  property: string
-): QuickCheckResult {
-  // Parse success: "+++ OK, passed 100 tests."
-  const passMatch = output.match(/\+\+\+ OK, passed (\d+) tests?/);
-  if (passMatch) {
-    return {
-      success: true,
-      passed: parseInt(passMatch[1]!, 10),
-      property,
-    };
-  }
-
-  // Parse exception (check BEFORE general failure — exception is more specific)
-  const exnMatch = output.match(
-    /\*\*\* Failed! Exception:\s*['\u2018]?(.+?)['\u2019]?\s*\(after/
+export function register(server: McpServer, ctx: ToolContext): void {
+  server.tool(
+    "ghci_quickcheck",
+    "Run a QuickCheck property in GHCi. The property should be a Haskell expression of type `Testable prop => prop`. " +
+      "Returns structured results: pass/fail, test count, counterexample if any. " +
+      "Requires QuickCheck to be available as a project dependency.",
+    {
+      property: z.string().describe(
+        'QuickCheck property expression. Examples: "\\xs -> reverse (reverse xs) == (xs :: [Int])", ' +
+          '"\\x -> x + 0 == (x :: Int)"'
+      ),
+      tests: z.number().optional().describe("Number of tests to run (default 100)"),
+      verbose: z.boolean().optional().describe("If true, print each test case (default false)"),
+    },
+    async ({ property, tests, verbose }) => {
+      const session = await ctx.getSession();
+      const result = await handleQuickCheck(session, { property, tests, verbose });
+      return { content: [{ type: "text" as const, text: result }] };
+    }
   );
-  if (exnMatch) {
-    return {
-      success: false,
-      passed: 0,
-      property,
-      error: `Exception: ${exnMatch[1]!.trim()}`,
-    };
-  }
-
-  // Parse failure: "*** Failed! Falsifiable (after N tests and M shrinks):"
-  const failMatch = output.match(
-    /\*\*\* Failed!.*?\(after (\d+) tests?(?: and (\d+) shrinks?)?\):\s*\n([\s\S]*?)(?:\n\n|$)/
-  );
-  if (failMatch) {
-    return {
-      success: false,
-      passed: parseInt(failMatch[1]!, 10) - 1,
-      property,
-      shrinks: failMatch[2] ? parseInt(failMatch[2], 10) : 0,
-      counterexample: failMatch[3]?.trim() ?? "unknown",
-    };
-  }
-
-  // Parse "gave up" — QuickCheck discarded too many tests (common with ==> preconditions)
-  const gaveUpMatch = output.match(
-    /\*\*\* Gave up! Passed only (\d+) tests?;\s*(\d+) discarded/
-  );
-  if (gaveUpMatch) {
-    return {
-      success: false,
-      passed: parseInt(gaveUpMatch[1]!, 10),
-      property,
-      error: `Gave up after ${gaveUpMatch[1]} tests (${gaveUpMatch[2]} discarded). Too many inputs rejected by precondition (==>). Consider relaxing the precondition or using a custom generator.`,
-    };
-  }
-
-  // Fallback: couldn't parse output
-  return {
-    success: false,
-    passed: 0,
-    property,
-    error: `Couldn't parse QuickCheck output: ${output.slice(0, 300)}`,
-  };
 }

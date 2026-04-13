@@ -1,5 +1,8 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import { GhciSession } from "../ghci-session.js";
 import { parseTypeOutput } from "../parsers/type-parser.js";
+import type { ToolContext } from "./registry.js";
 
 export const typeCheckTool = {
   name: "ghci_type",
@@ -54,4 +57,21 @@ export async function handleTypeCheck(
     success: true,
     raw: result.output,
   });
+}
+
+export function register(server: McpServer, ctx: ToolContext): void {
+  server.tool(
+    "ghci_type",
+    "Get the type of a Haskell expression using GHCi :t. Use to verify types of subexpressions before composing them.",
+    {
+      expression: z.string().describe(
+        'The Haskell expression to type-check. Examples: "map (+1)", "foldr", "Just . show"'
+      ),
+    },
+    async ({ expression }) => {
+      const session = await ctx.getSession();
+      const result = await handleTypeCheck(session, { expression });
+      return { content: [{ type: "text" as const, text: result }] };
+    }
+  );
 }
