@@ -8,6 +8,7 @@ import { discoverProjects, getPlaygroundDir } from "./project-manager.js";
 import { RULES_REGISTRY, loadRule } from "./resources/rules.js";
 import { parseEvalOutput } from "./parsers/eval-output-parser.js";
 import { createRulesChecker, type ToolContext } from "./tools/registry.js";
+import { parseCabalModules, moduleToFilePath, getLibrarySrcDir } from "./parsers/cabal-parser.js";
 
 // Tool register functions
 import { register as registerTypeCheck } from "./tools/type-check.js";
@@ -65,7 +66,7 @@ async function getSession(): Promise<GhciSession> {
 }
 
 // --- Rules checker (cached, reset on project switch) ---
-const rulesChecker = createRulesChecker(() => projectDir);
+const rulesChecker = createRulesChecker(() => projectDir, () => BASE_DIR);
 
 // --- Tool Context ---
 const ctx: ToolContext = {
@@ -172,24 +173,14 @@ server.tool(
 // --- Tool: mcp_restart ---
 server.tool(
   "mcp_restart",
-  "Restart the GHCi session (default) or the entire MCP server process. " +
-    "Default behavior restarts only GHCi — use after .cabal changes, new modules, or dependency updates. " +
-    "Set full_restart=true to also exit the MCP server process — use only after recompiling TypeScript " +
-    "with 'cd mcp-server && npx tsc'. WARNING: full_restart=true will disconnect the MCP client temporarily.",
-  {
-    full_restart: z.boolean().optional().describe(
-      "If true, exit the MCP server process (for TypeScript code reload). Default: false (GHCi restart only)."
-    ),
-  },
-  async ({ full_restart }) => {
+  "Restart the GHCi session. Use after .cabal changes, new modules, or dependency updates. " +
+    "Kills the current GHCi process and starts a fresh one in the same project directory. " +
+    "For TypeScript code changes (after 'cd mcp-server && npx tsc'), the user must start a new Claude Code session — " +
+    "do NOT use process.exit() as it permanently disconnects tools from the conversation.",
+  {},
+  async () => {
     resetQuickCheckState();
     if (ghciSession) { await ghciSession.kill(); ghciSession = null; }
-    if (full_restart) {
-      setTimeout(() => process.exit(0), 100);
-      return {
-        content: [{ type: "text", text: JSON.stringify({ success: true, message: "MCP server exiting for full restart. Next tool call will reconnect." }) }],
-      };
-    }
     const session = await getSession();
     return {
       content: [{ type: "text", text: JSON.stringify({ success: true, message: "GHCi session restarted. MCP server still running.", alive: session.isAlive() }) }],
@@ -231,8 +222,29 @@ server.tool(
     projectDir = target.path;
     rulesChecker.reset(); // Re-check rules in new project
     const session = await getSession();
+
+    // Auto-load all library modules so names are in scope immediately
+    let modulesLoaded: string[] = [];
+    try {
+      const cabalModules = await parseCabalModules(target.path);
+      const srcDir = await getLibrarySrcDir(target.path);
+      const paths = cabalModules.library.map((mod) => moduleToFilePath(mod, srcDir));
+      if (paths.length > 0) {
+        await session.loadModules(paths, cabalModules.library);
+        modulesLoaded = paths;
+      }
+    } catch {
+      // Non-fatal: modules can be loaded manually with ghci_load
+    }
+
     return {
-      content: [{ type: "text", text: JSON.stringify({ success: true, message: `Switched to project '${target.name}'`, projectDir: target.path, alive: session.isAlive() }) }],
+      content: [{ type: "text", text: JSON.stringify({
+        success: true,
+        message: `Switched to project '${target.name}'`,
+        projectDir: target.path,
+        alive: session.isAlive(),
+        ...(modulesLoaded.length > 0 ? { modulesLoaded: modulesLoaded.length } : {}),
+      }) }],
     };
   }
 );

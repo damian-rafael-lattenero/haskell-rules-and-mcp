@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { handleHoleFits } from "../tools/hole-fits.js";
+import { parseHoleSummaries, parseTypedHoles } from "../parsers/hole-parser.js";
 import { createMockSession } from "./helpers/mock-session.js";
 import type { GhciResult } from "../ghci-session.js";
 
@@ -136,5 +137,59 @@ describe("handleHoleFits", () => {
     const fit = result.holes[0].validFits.find((f: any) => f.name === "maxBound");
     expect(fit.source).toBeTruthy();
     expect(fit.source).toContain("imported from");
+  });
+});
+
+// --- Tests for refinement hole fits (the "Valid refinement hole fits" variant) ---
+
+const REFINEMENT_HOLE_OUTPUT = `src/Calc/Eval.hs:16:18: warning: [GHC-88464] [-Wtyped-holes]
+    \u2022 Found hole: _ :: Either EvalError Double
+    \u2022 In a case alternative: Var x -> _
+    \u2022 Relevant bindings include
+        x :: String (bound at src/Calc/Eval.hs:16:7)
+        env :: Env (bound at src/Calc/Eval.hs:14:6)
+      Valid refinement hole fits include
+        Left (_ :: EvalError)
+          where Left :: forall a b. a -> Either a b
+          with Left @EvalError @Double
+          (imported from 'Prelude' at src/Calc/Eval.hs:1:8-16)
+        Right (_ :: Double)
+          where Right :: forall a b. b -> Either a b
+          with Right @EvalError @Double
+          (imported from 'Prelude' at src/Calc/Eval.hs:1:8-16)
+   |
+16 |   Var x       -> _
+   |                  ^
+Ok, one module loaded.`;
+
+describe("parseHoleSummaries — refinement fits", () => {
+  it("parses 'Valid refinement hole fits include' correctly", () => {
+    const holes = parseHoleSummaries(REFINEMENT_HOLE_OUTPUT);
+    expect(holes).toHaveLength(1);
+    expect(holes[0].expectedType).toBe("Either EvalError Double");
+    expect(holes[0].topFits.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("extracts bindings before refinement fits section", () => {
+    const holes = parseHoleSummaries(REFINEMENT_HOLE_OUTPUT);
+    expect(holes[0].relevantBindings).toContainEqual(expect.stringContaining("x :: String"));
+    expect(holes[0].relevantBindings).toContainEqual(expect.stringContaining("env :: Env"));
+  });
+});
+
+describe("parseTypedHoles — refinement fits", () => {
+  it("parses refinement fits into validFits", () => {
+    const holes = parseTypedHoles(REFINEMENT_HOLE_OUTPUT);
+    expect(holes).toHaveLength(1);
+    expect(holes[0].validFits.length).toBeGreaterThanOrEqual(2);
+    expect(holes[0].validFits.some((f) => f.name === "Left")).toBe(true);
+    expect(holes[0].validFits.some((f) => f.name === "Right")).toBe(true);
+  });
+
+  it("extracts specialization for refinement fits", () => {
+    const holes = parseTypedHoles(REFINEMENT_HOLE_OUTPUT);
+    const leftFit = holes[0].validFits.find((f) => f.name === "Left");
+    expect(leftFit).toBeDefined();
+    expect(leftFit!.specialization).toContain("Left @EvalError @Double");
   });
 });

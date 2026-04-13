@@ -125,7 +125,7 @@ export function parseHoleSummaries(output: string): HoleSummary[] {
 
     const bindings: string[] = [];
     const bindSection = block.match(
-      /Relevant bindings include\n([\s\S]*?)(?:Valid hole fits|$)/
+      /Relevant bindings include\n([\s\S]*?)(?:Valid (?:refinement )?hole fits|$)/
     );
     if (bindSection) {
       for (const bLine of bindSection[1]!.split("\n")) {
@@ -138,19 +138,22 @@ export function parseHoleSummaries(output: string): HoleSummary[] {
 
     const fits: string[] = [];
     const fitSection = block.match(
-      /Valid hole fits include\n([\s\S]*?)(?:\s*\||\s*$)/
+      /Valid (?:refinement )?hole fits include\n([\s\S]*?)(?:\s*\||\s*$)/
     );
     if (fitSection) {
       for (const fLine of fitSection[1]!.split("\n")) {
-        const fMatch = fLine
-          .trim()
-          .match(/^(\S+)\s+::\s+(.+?)(?:\s+\(bound|\s*$)/);
-        if (
-          fMatch &&
-          !fLine.trim().startsWith("with ") &&
-          !fLine.trim().startsWith("(")
-        ) {
+        const trimmedFit = fLine.trim();
+        if (trimmedFit.startsWith("with ") || trimmedFit.startsWith("(") || trimmedFit.startsWith("where ")) {
+          continue;
+        }
+        // Standard fit: "name :: Type"
+        const fMatch = trimmedFit.match(/^(\S+)\s+::\s+(.+?)(?:\s+\(bound|\s*$)/);
+        // Refinement fit: "Name (_ :: ArgType)"
+        const rMatch = !fMatch ? trimmedFit.match(/^(\S+)\s+\(_\s+::\s+(.+?)\)\s*$/) : null;
+        if (fMatch) {
           fits.push(`${fMatch[1]} :: ${fMatch[2]}`);
+        } else if (rMatch) {
+          fits.push(`${rMatch[1]} (_ :: ${rMatch[2]})`);
         }
       }
     }
@@ -214,7 +217,7 @@ function parseRelevantBindings(block: string): RelevantBinding[] {
   const bindings: RelevantBinding[] = [];
 
   const section = block.match(
-    /Relevant bindings include\n([\s\S]*?)(?:Valid hole fits|$)/
+    /Relevant bindings include\n([\s\S]*?)(?:Valid (?:refinement )?hole fits|$)/
   );
   if (!section) return bindings;
 
@@ -241,7 +244,7 @@ function parseValidFits(block: string): {
   const fits: HoleFit[] = [];
   let suppressed = false;
 
-  const section = block.match(/Valid hole fits include\n([\s\S]*?)(?:\s*\||$)/);
+  const section = block.match(/Valid (?:refinement )?hole fits include\n([\s\S]*?)(?:\s*\||$)/);
   if (!section) return { fits, suppressed };
 
   const lines = section[1]!.split("\n");
@@ -257,21 +260,33 @@ function parseValidFits(block: string): {
       continue;
     }
 
+    // Standard fit: "name :: Type (bound at ...)"
     const fitMatch = trimmed.match(/^(\S+)\s+::\s+(.+?)(?:\s+\(bound at (.+?)\))?\s*$/);
-    if (fitMatch) {
+    // Refinement fit: "Name (_ :: ArgType)" — type comes from the "where" line
+    const refinementMatch = !fitMatch ? trimmed.match(/^(\S+)\s+\(_\s+::\s+(.+?)\)\s*$/) : null;
+
+    if (fitMatch || refinementMatch) {
+      const match = fitMatch ?? refinementMatch!;
       const fit: HoleFit = {
-        name: fitMatch[1]!,
-        type: fitMatch[2]!,
+        name: match[1]!,
+        type: match[2]!,
       };
 
-      if (fitMatch[3]) {
+      if (fitMatch && fitMatch[3]) {
         fit.source = `bound at ${fitMatch[3]}`;
       }
 
       while (i + 1 < lines.length) {
         const nextTrimmed = lines[i + 1]!.trim();
 
-        if (nextTrimmed.startsWith("with ")) {
+        if (nextTrimmed.startsWith("where ")) {
+          // "where Name :: full type" — extract full type for refinement fits
+          const whereMatch = nextTrimmed.match(/^where\s+\S+\s+::\s+(.+)$/);
+          if (whereMatch && refinementMatch) {
+            fit.type = whereMatch[1]!;
+          }
+          i++;
+        } else if (nextTrimmed.startsWith("with ")) {
           fit.specialization = nextTrimmed;
           i++;
         } else if (nextTrimmed.startsWith("(imported from ")) {

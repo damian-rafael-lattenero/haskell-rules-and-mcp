@@ -25,7 +25,10 @@ export type RegisterFn = (server: McpServer, ctx: ToolContext) => void;
  * Checks once, then caches the result for the session lifetime.
  * Reset by calling the returned resetFn.
  */
-export function createRulesChecker(getProjectDir: () => string): {
+export function createRulesChecker(
+  getProjectDir: () => string,
+  getBaseDir?: () => string
+): {
   check: () => Promise<string | null>;
   reset: () => void;
 } {
@@ -35,17 +38,29 @@ export function createRulesChecker(getProjectDir: () => string): {
     check: async () => {
       if (cached !== undefined) return cached;
 
-      const rulesDir = path.join(getProjectDir(), ".claude", "rules");
-      const automationPath = path.join(rulesDir, "haskell-automation.md");
-
-      try {
-        await access(automationPath);
-        cached = null; // Rules exist
-      } catch {
-        cached =
-          "Haskell development rules not installed. Run ghci_setup() to enable the automation loop, " +
-          "warning action table, and development workflow.";
+      // Check project dir first, then walk up to repo root (base dir)
+      const dirsToCheck = [getProjectDir()];
+      if (getBaseDir) {
+        const baseDir = getBaseDir();
+        if (baseDir !== getProjectDir()) {
+          dirsToCheck.push(baseDir);
+        }
       }
+
+      for (const dir of dirsToCheck) {
+        const automationPath = path.join(dir, ".claude", "rules", "haskell-automation.md");
+        try {
+          await access(automationPath);
+          cached = null; // Rules exist
+          return cached;
+        } catch {
+          // Not found here, try next directory
+        }
+      }
+
+      cached =
+        "Haskell development rules not installed. Run ghci_setup() to enable the automation loop, " +
+        "warning action table, and development workflow.";
       return cached;
     },
     reset: () => {
