@@ -17,6 +17,7 @@ export class GhciSession extends EventEmitter {
   private pendingResolve: ((result: GhciResult) => void) | null = null;
   private pendingReject: ((error: Error) => void) | null = null;
   private pendingTimer: NodeJS.Timeout | null = null;
+  private commandQueue: Promise<void> = Promise.resolve();
   private ready: boolean = false;
   private projectDir: string;
   private libraryTarget: string | undefined;
@@ -151,7 +152,9 @@ export class GhciSession extends EventEmitter {
   private checkForSentinel(): void {
     const sentinelIndex = this.buffer.indexOf(SENTINEL);
     if (sentinelIndex !== -1 && this.pendingResolve) {
-      const output = this.buffer.substring(0, sentinelIndex).trim();
+      const output = this.buffer.substring(0, sentinelIndex)
+        .replace(/^\n+/, "")     // strip leading newlines (sentinel protocol artifact)
+        .replace(/\s+$/, "");    // strip trailing whitespace
       this.buffer = this.buffer.substring(sentinelIndex + SENTINEL.length);
       const resolve = this.pendingResolve;
       this.clearPending();
@@ -204,7 +207,9 @@ export class GhciSession extends EventEmitter {
       const check = () => {
         const sentinelIndex = this.buffer.indexOf(SENTINEL);
         if (sentinelIndex !== -1) {
-          const output = this.buffer.substring(0, sentinelIndex).trim();
+          const output = this.buffer.substring(0, sentinelIndex)
+            .replace(/^\n+/, "")     // strip leading newlines (sentinel protocol artifact)
+            .replace(/\s+$/, "");    // strip trailing whitespace
           this.buffer = this.buffer.substring(sentinelIndex + SENTINEL.length);
           resolve(output);
         } else {
@@ -217,6 +222,7 @@ export class GhciSession extends EventEmitter {
 
   /**
    * Execute a GHCi command and return the output.
+   * Concurrent calls are automatically serialized via an internal queue.
    */
   async execute(
     command: string,
@@ -226,7 +232,27 @@ export class GhciSession extends EventEmitter {
       throw new Error("GHCi session not running. Call start() first.");
     }
 
+    return new Promise<GhciResult>((outerResolve, outerReject) => {
+      this.commandQueue = this.commandQueue.then(async () => {
+        try {
+          const result = await this.executeInternal(command, timeoutMs);
+          outerResolve(result);
+        } catch (err) {
+          outerReject(err);
+        }
+      });
+    });
+  }
+
+  /**
+   * Internal: execute a single GHCi command (must not be called concurrently).
+   */
+  private executeInternal(
+    command: string,
+    timeoutMs: number = DEFAULT_TIMEOUT_MS
+  ): Promise<GhciResult> {
     if (this.pendingResolve) {
+      // Defensive assertion — the queue should prevent this
       throw new Error("Another command is already in progress");
     }
 
@@ -421,6 +447,7 @@ export class GhciSession extends EventEmitter {
     const proc = this.process;
     this.process = null;
     this.clearPending();
+    this.commandQueue = Promise.resolve();
 
     return new Promise<void>((resolve) => {
       // If the process is already dead, resolve immediately

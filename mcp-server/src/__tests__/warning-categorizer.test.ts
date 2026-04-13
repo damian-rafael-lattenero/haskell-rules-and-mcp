@@ -281,7 +281,7 @@ describe("categorizeWarning", () => {
     expect(categorizeWarning(w)).toBeNull();
   });
 
-  it("returns null when warningFlag is empty", () => {
+  it("returns null when warningFlag is empty and no known GHC code", () => {
     const w = makeWarning({
       warningFlag: "",
       message: "No flag attached",
@@ -319,5 +319,67 @@ describe("categorizeWarnings", () => {
     const { actions, uncategorized } = categorizeWarnings([]);
     expect(actions).toEqual([]);
     expect(uncategorized).toEqual([]);
+  });
+});
+
+// ============================================================================
+// GHC_CODE_TO_FLAG fallback
+// ============================================================================
+describe("GHC code fallback categorization", () => {
+  it("categorizes missing-signature by GHC-38417 when warningFlag absent", () => {
+    const w: GhcError = {
+      file: "src/Test.hs",
+      line: 3,
+      column: 1,
+      severity: "warning",
+      code: "GHC-38417",
+      // warningFlag intentionally omitted
+      message: "Top-level binding with no type signature: foo :: Int -> Int",
+    };
+    const action = categorizeWarning(w);
+    expect(action).not.toBeNull();
+    expect(action!.category).toBe("missing-signature");
+    expect(action!.suggestedAction).toContain("foo :: Int -> Int");
+  });
+
+  it("categorizes unused-matches by GHC-40910 when warningFlag absent", () => {
+    const w: GhcError = {
+      file: "src/Test.hs",
+      line: 5,
+      column: 1,
+      severity: "warning",
+      code: "GHC-40910",
+      message: "Defined but not used: \u2018x\u2019",
+    };
+    const action = categorizeWarning(w);
+    expect(action).not.toBeNull();
+    expect(action!.category).toBe("unused-binding");
+    expect(action!.suggestedAction).toContain("_x");
+  });
+
+  it("categorizes type-defaults by GHC-18042 when warningFlag absent", () => {
+    const w: GhcError = {
+      file: "<interactive>",
+      line: 1,
+      column: 1,
+      severity: "warning",
+      code: "GHC-18042",
+      message: "Defaulting the type variable",
+    };
+    const action = categorizeWarning(w);
+    expect(action).not.toBeNull();
+    expect(action!.category).toBe("type-defaults");
+  });
+
+  it("returns null for unknown GHC code without warningFlag", () => {
+    const w: GhcError = {
+      file: "src/Test.hs",
+      line: 1,
+      column: 1,
+      severity: "warning",
+      code: "GHC-99999",
+      message: "Some unknown warning",
+    };
+    expect(categorizeWarning(w)).toBeNull();
   });
 });

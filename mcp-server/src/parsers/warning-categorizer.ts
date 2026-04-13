@@ -8,11 +8,25 @@ export interface WarningAction {
 }
 
 /**
+ * Fallback mapping from GHC error codes to warning flags.
+ * Used when GHC doesn't include the -W flag in the header line.
+ */
+const GHC_CODE_TO_FLAG: Record<string, string> = {
+  "GHC-38417": "-Wmissing-signatures",
+  "GHC-40910": "-Wunused-matches",
+  "GHC-68441": "-Wunused-imports",
+  "GHC-62161": "-Wunused-local-binds",
+  "GHC-61382": "-Wincomplete-patterns",
+  "GHC-63394": "-Wx-partial",
+  "GHC-18042": "-Wtype-defaults",
+};
+
+/**
  * Categorize a GHC warning and suggest a concrete fix action.
  * Returns null for warnings we don't know how to categorize.
  */
 export function categorizeWarning(w: GhcError): WarningAction | null {
-  const flag = w.warningFlag ?? "";
+  const flag = w.warningFlag ?? GHC_CODE_TO_FLAG[w.code ?? ""] ?? "";
   const msg = w.message;
 
   switch (flag) {

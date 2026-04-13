@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { GhciSession } from "../ghci-session.js";
 import { parseQuickCheckOutput } from "../parsers/quickcheck-parser.js";
+import { parseEvalOutput } from "../parsers/eval-output-parser.js";
 import type { ToolContext } from "./registry.js";
 
 // Re-export for consumers
@@ -107,7 +108,8 @@ export async function handleQuickCheck(
   const command = `${checkFn} (stdArgs { maxSuccess = ${maxTests} }) (${args.property})`;
 
   const result = await session.execute(command);
-  const parsed = parseQuickCheckOutput(result.output, args.property);
+  const evalParsed = parseEvalOutput(result.output);
+  const parsed = parseQuickCheckOutput(evalParsed.result, args.property);
 
   // Track in workflow state if incremental
   if (args.incremental && ctx?.getWorkflowState && ctx?.getModuleProgress) {

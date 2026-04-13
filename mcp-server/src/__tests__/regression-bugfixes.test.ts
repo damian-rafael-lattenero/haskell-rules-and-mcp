@@ -10,6 +10,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { parseGhcErrors } from "../parsers/error-parser.js";
 import { parseInfoOutput, parseTypeOutput } from "../parsers/type-parser.js";
 import { parseEvalOutput } from "../parsers/eval-output-parser.js";
+import { categorizeWarning } from "../parsers/warning-categorizer.js";
 import { handleTypeCheck } from "../tools/type-check.js";
 import { handleCheckModule } from "../tools/check-module.js";
 import { handleHoogleSearch } from "../tools/hoogle.js";
@@ -316,5 +317,103 @@ describe("Edge case: parseTypeOutput resilience", () => {
     const result = parseTypeOutput("f :: \u2200 a. Show a => a -> String");
     // Depending on how GHCi formats, this should parse
     expect(result).not.toBeNull();
+  });
+});
+
+// ============================================================================
+// BUG FIX 6: ghci_eval strips leading whitespace from output
+//
+// checkForSentinel() called .trim() on extracted output, stripping leading
+// spaces that could be significant (e.g., `putStrLn "  indented"`).
+// Fix: Replace .trim() with selective newline/trailing-whitespace strip.
+// ============================================================================
+describe("Bug Fix 6: eval output preserves leading whitespace", () => {
+  it("REGRESSION: leading spaces survive parseEvalOutput pipeline", () => {
+    const parsed = parseEvalOutput("  indented result");
+    expect(parsed.result).toBe("  indented result");
+  });
+
+  it("REGRESSION: leading newlines ARE stripped (protocol artifact)", () => {
+    const parsed = parseEvalOutput("\n\n  indented result");
+    expect(parsed.result).toBe("  indented result");
+  });
+
+  it("REGRESSION: trailing whitespace still stripped", () => {
+    const parsed = parseEvalOutput("result  \n\n");
+    expect(parsed.result).toBe("result");
+  });
+});
+
+// ============================================================================
+// BUG FIX 7: QuickCheck parser fails when GHC warnings prepend QC output
+//
+// GHC prepends -Wtype-defaults and other warnings to QuickCheck output.
+// The QC parser would fall through to "Couldn't parse" for complex warnings.
+// Fix: Strip warnings via parseEvalOutput before parsing QC output.
+// ============================================================================
+describe("Bug Fix 7: QuickCheck parsing with GHC warnings", () => {
+  it("REGRESSION: QC success with -Wtype-defaults warning", () => {
+    const output =
+      "<interactive>:1:1: warning: [GHC-18042] [-Wtype-defaults]\n" +
+      "    \u2022 Defaulting the type variable 't0' to type '()'\n" +
+      "    \u2022 In the first argument of 'quickCheckWith'\n\n" +
+      "+++ OK, passed 100 tests.";
+    const evalParsed = parseEvalOutput(output);
+    expect(evalParsed.result).toContain("+++ OK");
+    expect(evalParsed.warnings.length).toBeGreaterThan(0);
+  });
+
+  it("REGRESSION: QC failure with warning still parseable", () => {
+    const output =
+      "<interactive>:1:1: warning: [GHC-40910] [-Wunused-matches]\n" +
+      "    Defined but not used: 't'\n\n" +
+      "*** Failed! Falsifiable (after 3 tests and 2 shrinks):\n" +
+      "0";
+    const evalParsed = parseEvalOutput(output);
+    expect(evalParsed.result).toContain("*** Failed!");
+  });
+});
+
+// ============================================================================
+// BUG FIX 8: missing-signature not categorized when warningFlag is absent
+//
+// GHC 9.12 sometimes omits the [-Wmissing-signatures] flag from the header
+// line, leaving only [GHC-38417]. The categorizer returned null because
+// warningFlag was undefined.
+// Fix: GHC_CODE_TO_FLAG fallback map in categorizeWarning.
+// ============================================================================
+describe("Bug Fix 8: missing-signature categorized by GHC code fallback", () => {
+  it("REGRESSION: categorizes by GHC-38417 when warningFlag is absent", () => {
+    // categorizeWarning imported at top of file
+    const w = {
+      file: "src/Test.hs",
+      line: 3,
+      column: 1,
+      severity: "warning" as const,
+      code: "GHC-38417",
+      // warningFlag is undefined — GHC didn't include [-Wmissing-signatures]
+      message: "Top-level binding with no type signature: foo :: Int -> Int",
+    };
+    const action = categorizeWarning(w);
+    expect(action).not.toBeNull();
+    expect(action!.category).toBe("missing-signature");
+    expect(action!.suggestedAction).toContain("foo :: Int -> Int");
+  });
+
+  it("REGRESSION: still works with warningFlag present", () => {
+    // categorizeWarning imported at top of file
+    const w = {
+      file: "src/Test.hs",
+      line: 3,
+      column: 1,
+      severity: "warning" as const,
+      code: "GHC-38417",
+      warningFlag: "-Wmissing-signatures",
+      message: "Top-level binding with no type signature: bar :: Bool -> Bool",
+    };
+    const action = categorizeWarning(w);
+    expect(action).not.toBeNull();
+    expect(action!.category).toBe("missing-signature");
+    expect(action!.suggestedAction).toContain("bar :: Bool -> Bool");
   });
 });

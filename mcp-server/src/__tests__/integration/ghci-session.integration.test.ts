@@ -142,4 +142,33 @@ describe.runIf(GHC_AVAILABLE)("GHCi Session Integration", () => {
     await tempSession.kill();
     expect(tempSession.isAlive()).toBe(false);
   }, 60_000);
+
+  // --- Fix 1: Command queue serializes concurrent calls ---
+  it("handles concurrent execute calls via command queue", async () => {
+    const [r1, r2, r3] = await Promise.all([
+      session.execute("1 + 1"),
+      session.execute("2 + 2"),
+      session.execute("3 + 3"),
+    ]);
+    expect(r1.output).toContain("2");
+    expect(r2.output).toContain("4");
+    expect(r3.output).toContain("6");
+  });
+
+  it("handles concurrent typeOf and infoOf", async () => {
+    const [typeResult, infoResult] = await Promise.all([
+      session.typeOf("add"),
+      session.infoOf("add"),
+    ]);
+    expect(typeResult.success).toBe(true);
+    expect(typeResult.output).toContain("Int -> Int -> Int");
+    expect(infoResult.success).toBe(true);
+    expect(infoResult.output).toContain("Int -> Int -> Int");
+  });
+
+  // --- Fix 2: Leading whitespace preserved in eval output ---
+  it("preserves leading spaces in eval output", async () => {
+    const result = await session.execute('putStrLn "  hello"');
+    expect(result.output).toMatch(/^ {2}hello/);
+  });
 });

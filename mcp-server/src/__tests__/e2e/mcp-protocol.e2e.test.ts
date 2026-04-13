@@ -298,14 +298,13 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
   it("lists resources including rules", async () => {
     const result = await client.listResources();
     const uris = result.resources.map(r => r.uri);
-    expect(uris).toContain("rules://haskell/automation");
-    expect(uris).toContain("rules://haskell/development");
+    expect(uris).toContain("rules://haskell/mcp-workflow");
     expect(uris).toContain("rules://haskell/project-conventions");
   });
 
-  it("reads automation rule resource", async () => {
-    const result = await client.readResource({ uri: "rules://haskell/automation" });
+  it("reads mcp-workflow rule resource", async () => {
+    const result = await client.readResource({ uri: "rules://haskell/mcp-workflow" });
     const text = (result.contents[0] as any).text;
-    expect(text).toContain("Warning Action Table");
+    expect(text).toContain("PRIME DIRECTIVE");
   });
 });
