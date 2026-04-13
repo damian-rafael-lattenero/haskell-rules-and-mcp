@@ -449,7 +449,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           const scopeNames = extractNotInScopeNames(parsed.errors);
           const suggestions: Array<{ name: string; import: string; module: string }> = [];
           for (const name of scopeNames.slice(0, 5)) {
-            const suggestion = await lookupImportForName(name);
+            const suggestion = await lookupImportForName(name, ctx.getProjectDir());
             if (suggestion) suggestions.push(suggestion);
           }
           if (suggestions.length > 0) {

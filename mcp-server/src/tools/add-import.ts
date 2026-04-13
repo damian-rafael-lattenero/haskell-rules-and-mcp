@@ -17,6 +17,7 @@ interface ImportSuggestion {
 export async function handleAddImport(args: {
   name: string;
   qualified?: boolean;
+  projectDir?: string;
 }): Promise<string> {
   // Search Hoogle for the name
   const hoogleResult = JSON.parse(await handleHoogleSearch({ query: args.name, count: 10 }));
@@ -27,6 +28,18 @@ export async function handleAddImport(args: {
       name: args.name,
       error: `No Hoogle results found for '${args.name}'`,
     });
+  }
+
+  // Read project dependencies to rank results (prefer project deps over random packages)
+  let projectDeps: Set<string> | null = null;
+  if (args.projectDir) {
+    try {
+      const { extractBuildDepends } = await import("../parsers/cabal-parser.js");
+      const deps = await extractBuildDepends(args.projectDir);
+      projectDeps = new Set(deps);
+    } catch {
+      // No .cabal or no deps — use generic ranking
+    }
   }
 
   // Deduplicate and rank modules
@@ -49,14 +62,13 @@ export async function handleAddImport(args: {
     });
   }
 
-  // Prefer base/containers/mtl modules over obscure packages
-  const preferred = ["base", "containers", "mtl", "text", "bytestring", "transformers"];
+  // Rank by project dependencies first, then by Hoogle order
   suggestions.sort((a, b) => {
-    const aIdx = preferred.indexOf(a.package);
-    const bIdx = preferred.indexOf(b.package);
-    const aScore = aIdx >= 0 ? aIdx : preferred.length;
-    const bScore = bIdx >= 0 ? bIdx : preferred.length;
-    return aScore - bScore;
+    const aPkg = a.package.replace(/-[0-9].*$/, "");
+    const bPkg = b.package.replace(/-[0-9].*$/, "");
+    const aInProject = projectDeps?.has(aPkg) ? 0 : 1;
+    const bInProject = projectDeps?.has(bPkg) ? 0 : 1;
+    return aInProject - bInProject;
   });
 
   const best = suggestions[0];
@@ -85,12 +97,14 @@ export async function handleAddImport(args: {
 /**
  * Look up the best import for a single name. Returns null if Hoogle is unavailable
  * or no results found. Designed for inline use in ghci_load import suggestions.
+ * When projectDir is provided, results are ranked by project dependencies.
  */
 export async function lookupImportForName(
-  name: string
+  name: string,
+  projectDir?: string
 ): Promise<{ name: string; import: string; module: string } | null> {
   try {
-    const result = JSON.parse(await handleAddImport({ name }));
+    const result = JSON.parse(await handleAddImport({ name, projectDir }));
     if (!result.success) return null;
     return {
       name,
@@ -102,11 +116,11 @@ export async function lookupImportForName(
   }
 }
 
-export function register(server: McpServer, _ctx: ToolContext): void {
+export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     "ghci_add_import",
     "Suggest an import line for a Haskell name that is 'Not in scope'. " +
-      "Uses Hoogle to find which module the name lives in, then returns the import line to add. " +
+      "Uses Hoogle to find which module the name lives in, ranked by project dependencies. " +
       "Does NOT edit files — the import line is returned for the agent to apply.",
     {
       name: z.string().describe(
@@ -117,7 +131,7 @@ export function register(server: McpServer, _ctx: ToolContext): void {
       ),
     },
     async ({ name, qualified }) => {
-      const result = await handleAddImport({ name, qualified });
+      const result = await handleAddImport({ name, qualified, projectDir: ctx.getProjectDir() });
       return { content: [{ type: "text" as const, text: result }] };
     }
   );
