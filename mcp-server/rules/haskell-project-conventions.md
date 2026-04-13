@@ -1,15 +1,15 @@
 # Haskell Project Conventions
 
 ## Toolchain
-- Use GHC2024 as default language
+- Use `Haskell2010` or `GHC2024` as default-language (project's choice)
 - Enable `-Wall` for both library and executable
-- Use `.ghci` with `-fdefer-type-errors -ferror-spans -fprint-explicit-foralls`
 - Dependencies: keep base, containers, mtl as core; add QuickCheck for property testing
 
 ## Import Style
-- All Map/Set imports should be `qualified` (e.g., `import Data.Map.Strict qualified as Map`)
+- Qualified imports for Map/Set (e.g., `import qualified Data.Map.Strict as Map`)
 - Prefer explicit import lists for application modules
 - Use unqualified imports only for the project's own modules
+- Cross-module imports are generated automatically by `ghci_scaffold`
 
 ## Module Structure
 - New modules must be added to `exposed-modules` in `.cabal` before compiling
@@ -28,3 +28,5 @@
 - Write properties alongside implementations
 - Test algebraic laws: associativity, identity, roundtrip
 - Use `Arbitrary` instances with size-controlled generation for AST types
+- Pass `module="src/X.hs"` to `ghci_quickcheck` for accurate property tracking
+- Use `ghci_regression` to re-run all saved properties after changes

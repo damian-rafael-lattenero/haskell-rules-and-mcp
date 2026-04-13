@@ -44,7 +44,7 @@ The `_guidance` array in responses tells you what to do next based on:
 | When | Tool | Why |
 |------|------|-----|
 | Created .cabal | `ghci_scaffold` → `ghci_session(restart)` | Create module stubs, restart GHCi |
-| Created .cabal (with types) | `ghci_scaffold(signatures={"Mod": ["f :: T", "data D = ..."]})` → `ghci_session(restart)` | Create typed stubs (data types verbatim, functions with `= undefined`) |
+| Created .cabal (with types) | `ghci_scaffold(signatures={"Mod": ["f :: T", "data D = ..."]})` → `ghci_session(restart)` | Create typed stubs (data types verbatim, functions with `= undefined`, cross-module imports auto-generated) |
 | New module with data types | `ghci_arbitrary(type_name="...")` | Generate Arbitrary instances |
 | Before implementing functions | `ghci_suggest(module_path="...")` | See hole fits or analyze types |
 
@@ -57,8 +57,8 @@ The `_guidance` array in responses tells you what to do next based on:
 | Need a function by type | `hoogle_search("a -> b -> c")` | Find it in the ecosystem |
 | Want to understand a name | `ghci_info("name")` | See definition, instances, module |
 | After successful compilation | `ghci_eval("funcName sampleArg")` | Test behavior with sample input |
-| A law becomes testable | `ghci_quickcheck(property, incremental=true)` | Test the law immediately |
-| Multiple properties to test | `ghci_quickcheck_batch(properties=[...])` | Test all in one call |
+| A law becomes testable | `ghci_quickcheck(property, incremental=true, module="src/X.hs")` | Test the law immediately (module= for accurate tracking) |
+| Multiple properties to test | `ghci_quickcheck_batch(properties=[...], module="src/X.hs")` | Test all in one call |
 | Logic error (types OK, wrong result) | `ghci_trace(expression, trace_points=[...])` | Debug intermediate values |
 | Property suggests needed | `ghci_quickcheck(property="suggest", function_name="...")` | Discover testable laws |
 | Lost track of progress | `ghci_workflow(action="next")` | See what step comes next |
