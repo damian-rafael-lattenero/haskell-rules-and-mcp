@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import {
   TOOL_SPECS,
@@ -7,7 +7,15 @@ import {
   ensureTool,
   resolveToolBinary,
   resetBundledManifestCache,
+  getBundledToolStatus,
 } from "../tools/tool-installer.js";
+import {
+  bundledToolPath,
+  readManifestRaw,
+  restoreManifest,
+  updateRuntimeManifestEntry,
+  writeExecutable,
+} from "./helpers/bundled-tools.js";
 
 // Re-export helpers tested here via their canonical modules
 import { isTrivialProperty, detectQualifiedImports } from "../tools/export-tests.js";
@@ -70,28 +78,30 @@ describe("ensureTool — unknown tool", () => {
 
 describe("bundled tool resolution", () => {
   const rootDir = path.resolve(import.meta.dirname, "..", "..");
-  const runtimePlatform = process.platform as "darwin" | "linux" | "win32";
-  const runtimeArch = process.arch as "x64" | "arm64";
-  const runtimeExt = runtimePlatform === "win32" ? ".exe" : "";
-  const runtimeBinRel = `hlint/${runtimePlatform}-${runtimeArch}/hlint${runtimeExt}`;
-  const runtimeBinAbs = path.join(rootDir, "vendor-tools", runtimeBinRel);
+  const runtimeBinAbs = bundledToolPath("hlint");
+  let manifestSnapshot = "";
+
+  beforeEach(async () => {
+    manifestSnapshot = await readManifestRaw();
+    resetBundledManifestCache();
+  });
 
   afterEach(async () => {
     resetBundledManifestCache();
     await rm(runtimeBinAbs, { force: true });
+    await restoreManifest(manifestSnapshot);
   });
 
-  it("prefers bundled binary when present for runtime platform", async () => {
+  it("resolves bundled binary when a verified runtime artifact exists", async () => {
     if (!["darwin", "linux", "win32"].includes(process.platform)) return;
     if (!["x64", "arm64"].includes(process.arch)) return;
 
-    await mkdir(path.dirname(runtimeBinAbs), { recursive: true });
     if (process.platform === "win32") {
-      await writeFile(runtimeBinAbs, "@echo off\r\necho bundled hlint\r\n", "utf8");
+      await writeExecutable(runtimeBinAbs, "@echo off\r\necho bundled hlint\r\n");
     } else {
-      await writeFile(runtimeBinAbs, "#!/usr/bin/env sh\necho bundled hlint\n", "utf8");
-      await chmod(runtimeBinAbs, 0o755);
+      await writeExecutable(runtimeBinAbs, "#!/usr/bin/env sh\necho bundled hlint\n");
     }
+    await updateRuntimeManifestEntry("hlint");
 
     const resolved = await resolveToolBinary("hlint");
     expect(resolved).not.toBeNull();
@@ -99,21 +109,60 @@ describe("bundled tool resolution", () => {
     expect(resolved?.binaryPath).toBe(runtimeBinAbs);
   });
 
-  it("ensureTool reports source=bundled when bundled binary exists", async () => {
+  it("ensureTool reports source=bundled when a verified bundled binary exists", async () => {
     if (!["darwin", "linux", "win32"].includes(process.platform)) return;
     if (!["x64", "arm64"].includes(process.arch)) return;
 
-    await mkdir(path.dirname(runtimeBinAbs), { recursive: true });
     if (process.platform === "win32") {
-      await writeFile(runtimeBinAbs, "@echo off\r\necho bundled hlint\r\n", "utf8");
+      await writeExecutable(runtimeBinAbs, "@echo off\r\necho bundled hlint\r\n");
     } else {
-      await writeFile(runtimeBinAbs, "#!/usr/bin/env sh\necho bundled hlint\n", "utf8");
-      await chmod(runtimeBinAbs, 0o755);
+      await writeExecutable(runtimeBinAbs, "#!/usr/bin/env sh\necho bundled hlint\n");
     }
+    await updateRuntimeManifestEntry("hlint");
 
     const ensured = await ensureTool("hlint");
     expect(ensured.available).toBe(true);
     expect(ensured.source).toBe("bundled");
     expect(ensured.binaryPath).toBe(runtimeBinAbs);
+    expect(ensured.checksumVerified).toBe(true);
+  });
+
+  it("reports checksum-missing when the bundled binary exists but manifest is incomplete", async () => {
+    if (!["darwin", "linux", "win32"].includes(process.platform)) return;
+    if (!["x64", "arm64"].includes(process.arch)) return;
+
+    await writeExecutable(
+      runtimeBinAbs,
+      process.platform === "win32"
+        ? "@echo off\r\necho bundled hlint\r\n"
+        : "#!/usr/bin/env sh\necho bundled hlint\n"
+    );
+
+    const bundled = await getBundledToolStatus("hlint");
+    expect(bundled.available).toBe(false);
+    expect(bundled.reason).toBe("checksum-missing");
+  });
+
+  it("reports checksum-mismatch when binary hash differs from manifest", async () => {
+    if (!["darwin", "linux", "win32"].includes(process.platform)) return;
+    if (!["x64", "arm64"].includes(process.arch)) return;
+
+    await writeExecutable(
+      runtimeBinAbs,
+      process.platform === "win32"
+        ? "@echo off\r\necho bundled hlint\r\n"
+        : "#!/usr/bin/env sh\necho bundled hlint\n"
+    );
+    await updateRuntimeManifestEntry("hlint");
+    await writeExecutable(
+      runtimeBinAbs,
+      process.platform === "win32"
+        ? "@echo off\r\necho tampered\r\n"
+        : "#!/usr/bin/env sh\necho tampered\n"
+    );
+
+    const bundled = await getBundledToolStatus("hlint");
+    expect(bundled.available).toBe(false);
+    expect(bundled.reason).toBe("checksum-mismatch");
   });
 });

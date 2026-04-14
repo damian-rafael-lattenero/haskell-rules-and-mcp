@@ -142,10 +142,10 @@ export async function handleInit(
     // Directory might already exist but without .cabal — that's fine
   }
 
-  const allDeps = ["base >= 4.20 && < 5"];
+  const allDeps = ["base >= 4.20 && < 5", "containers"];
   if (deps) {
     for (const d of deps) {
-      if (!d.startsWith("base")) allDeps.push(d);
+      if (!d.startsWith("base") && !allDeps.includes(d)) allDeps.push(d);
     }
   }
   if (!allDeps.some(d => d.includes("QuickCheck"))) {
@@ -240,7 +240,7 @@ main = putStrLn "No properties exported yet. Run ghci_quickcheck_export first."
     const relativePath = path.relative(workspaceRoot, resolvedTargetDir);
     nextStep =
       `Project created at ${relativePath}. ` +
-      `Run ghci_switch_project(name="${name}") — it switches AND auto-scaffolds source files on switch. ` +
+      `Run ghci_switch_project(project="${name}") — it switches AND auto-scaffolds source files on switch. ` +
       `Only call ghci_scaffold(signatures={...}) separately if you want typed stubs with = undefined bodies for ghci_suggest hole-fit mode.`;
   }
 
@@ -251,6 +251,7 @@ main = putStrLn "No properties exported yet. Run ghci_quickcheck_export first."
     cabalFile: `${name}.cabal`,
     modules: modules.length > 0 ? modules : ["Lib"],
     dependencies: allDeps,
+    dependencyDefaultsApplied: allDeps.filter((dep) => dep === "containers" || dep.includes("QuickCheck")),
     language: lang,
     ...(testSuiteCreated ? { testSuite: { created: true, specFile: "test/Spec.hs" } } : {}),
     _nextStep: nextStep,

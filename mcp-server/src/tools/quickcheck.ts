@@ -406,6 +406,15 @@ export async function handleQuickCheck(
     ...parsed,
     ...(autoResolved ? { _autoResolved: true } : {}),
     ...(propertySaved ? { _propertySaved: true, _propertyStoreCount: propertyStoreCount } : {}),
+    ...(!parsed.success && !isCompilationError
+      ? {
+          _guidance: [
+            parsed.counterexample
+              ? `QuickCheck found counterexample: ${parsed.counterexample}. Use ghci_trace with the failing function under these inputs before changing the implementation.`
+              : "QuickCheck failed. Use ghci_trace to inspect the failing execution path before changing the implementation.",
+          ],
+        }
+      : {}),
     _nextStep: parsed.success
       ? "Property passed. Test more properties or move to the next function."
       : isCompilationError

@@ -4,6 +4,7 @@
 - Use `Haskell2010` or `GHC2024` as default-language (project's choice)
 - Enable `-Wall` for both library and executable
 - Dependencies: keep base, containers, mtl as core; add QuickCheck for property testing
+- `ghci_init` now seeds `containers` and QuickCheck by default so Map-heavy projects don't start in a broken state
 - Build tool: Cabal by default; pass `build_tool="stack"` to `ghci_init` for Stack projects
 - MCP toolchain resolution for `hlint`, `fourmolu`/`ormolu`, and `hls` is:
   **host PATH first, then bundled binary**.
@@ -41,19 +42,24 @@
 - Write properties alongside implementations
 - Test algebraic laws: associativity, identity, roundtrip
 - Use `Arbitrary` instances with size-controlled generation for AST types
+- If `ghci_arbitrary` warns about `listOf`/recursive growth, prefer `resize` or other bounded generation helpers
 - Pass `module_path="src/X.hs"` to `ghci_quickcheck` for accurate property tracking
   (`module="src/X.hs"` is also accepted for backward compatibility)
 - Use `ghci_regression` to re-run all saved properties after changes
 - Use `ghci_hole(module_path="...")` to explore typed holes before implementing
+- If QuickCheck returns a counterexample, use `ghci_trace` before guessing at a fix
 - **Do NOT use trivially-true properties** (`\x -> True`, `const True`) — they are
   automatically dropped by `ghci_quickcheck_export` and provide no test coverage
 - `ghci_quickcheck_export` auto-adds qualified imports (`Data.Map.Strict`, `Data.Set`, etc.)
   based on what the properties actually use — no manual import editing needed in `Spec.hs`
+- `ghci_quickcheck_export` validates the exported suite with `cabal_test` by default
+- Use `ghci_fuzz_parser(parser="...")` when parser robustness or malformed-input handling matters
 
 ## Refactoring
 - Use `ghci_refactor(action="rename_local")` to rename a binding across a module
   — never use manual find/replace or `sed` for this
 - Use `ghci_refactor(action="extract_binding")` to lift code to a new top-level function
+- Use `ghci_apply_exports(module_path="...")` to materialize the explicit export list suggested by `ghci_check_module`
 - Always run `ghci_load(diagnostics=true)` after any refactor to verify compilation
 
 ## Performance
@@ -79,4 +85,10 @@
 - Bundled binaries are tracked in `vendor-tools/bundled-tools-manifest.json`.
 - Update checksums/version metadata with:
   `npm run tools:update-manifest -- --tool <name> --platform <platform> --arch <arch> --version <version> --provenance <url>`
-- Run unit/integration/e2e test suites after updating bundled binaries.
+- Maintain production-ready entries with real `sha256`, `version`, and `provenance`.
+- When a bundled tool is unavailable, `ghci_lint` / `ghci_format` become recommended but not blocking in `_guidance`.
+- Run unit/integration/e2e test suites after updating bundled binaries or workflow policy.
+
+## MCP Maintenance Policy
+- Every MCP code change must carry unit, integration, and e2e coverage unless a stronger justification is documented.
+- Keep `rules/`, embedded fallbacks in `src/resources/rules.ts`, tool descriptions, and workflow behavior aligned in the same change.

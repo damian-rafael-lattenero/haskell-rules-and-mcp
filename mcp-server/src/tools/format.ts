@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { ToolContext } from "./registry.js";
-import { resolveToolBinary, TOOL_PATH } from "./tool-installer.js";
+import { getBundledToolStatus, resolveToolBinary, TOOL_PATH } from "./tool-installer.js";
 
 /**
  * Detect which formatter is available. Prefers fourmolu over ormolu.
@@ -16,6 +16,23 @@ async function detectFormatter(): Promise<string | null> {
     if (resolved) return resolved.binaryPath;
   }
   return null;
+}
+
+async function detectFormatterVersion(binaryPath: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile(
+      binaryPath,
+      ["--version"],
+      { env: { ...process.env, PATH: TOOL_PATH }, timeout: 10_000 },
+      (err, stdout, stderr) => {
+        if (err) {
+          resolve(undefined);
+          return;
+        }
+        resolve((stdout || stderr).trim().split("\n")[0]);
+      }
+    );
+  });
 }
 
 function runFormatter(
@@ -48,23 +65,31 @@ export async function handleFormat(
   let formatterVersion: string | undefined;
 
   if (!formatter) {
+    const bundledFourmolu = await getBundledToolStatus("fourmolu");
+    const bundledOrmolu = await getBundledToolStatus("ormolu");
+    const bundledFailure = bundledFourmolu.available ? bundledOrmolu : bundledFourmolu;
     return JSON.stringify({
       success: false,
       unavailable: true,
       formatter: "fourmolu|ormolu",
       source: "none",
+      reason: bundledFailure.reason ?? "not-found",
       error:
         "No formatter available (not found in host PATH or bundled toolchain).",
       _hint:
-        "Provide fourmolu/ormolu in host PATH, or bundle one in vendor-tools for this platform.",
+        bundledFailure.reason === "checksum-missing" || bundledFailure.reason === "checksum-mismatch"
+          ? "Fix the bundled formatter manifest entry (sha256/version/provenance) or use a host installation."
+          : "Provide fourmolu/ormolu in host PATH, or bundle one in vendor-tools for this platform.",
     });
   } else {
     const fourmoluResolved = await resolveToolBinary("fourmolu");
     const ormoluResolved = await resolveToolBinary("ormolu");
     if (fourmoluResolved && fourmoluResolved.binaryPath === formatter) {
       formatterSource = fourmoluResolved.source;
+      formatterVersion = await detectFormatterVersion(formatter);
     } else if (ormoluResolved && ormoluResolved.binaryPath === formatter) {
       formatterSource = ormoluResolved.source;
+      formatterVersion = await detectFormatterVersion(formatter);
     }
   }
 
@@ -133,6 +158,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       // format gate, which would give a false "formatted" signal.
       try {
         const parsed = JSON.parse(result);
+        ctx.setOptionalToolAvailability("format", parsed.unavailable ? "unavailable" : "available");
         if (parsed.success && parsed.format_tool && !parsed.fallback) {
           const activeModule = ctx.getWorkflowState().activeModule ?? module_path;
           const mod = ctx.getModuleProgress(activeModule);

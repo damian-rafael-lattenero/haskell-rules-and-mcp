@@ -322,6 +322,16 @@ export function register(server: McpServer, ctx: ToolContext): void {
     },
     async ({ action, module_path, line, character }) => {
       const result = await handleHls(ctx.getProjectDir(), { action, module_path, line, character });
+      try {
+        const parsed = JSON.parse(result);
+        if (action === "available") {
+          ctx.setOptionalToolAvailability("hls", parsed.available ? "available" : "unavailable");
+        } else if (action === "hover" && parsed.unavailable) {
+          ctx.setOptionalToolAvailability("hls", "unavailable");
+        }
+      } catch {
+        // non-fatal
+      }
       return { content: [{ type: "text" as const, text: result }] };
     }
   );

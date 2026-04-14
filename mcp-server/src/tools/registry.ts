@@ -25,6 +25,11 @@ export interface ToolContext {
   getModuleProgress: (modulePath: string) => ModuleProgress | undefined;
   /** Update progress for a specific module. */
   updateModuleProgress: (modulePath: string, updates: Partial<ModuleProgress>) => void;
+  /** Track availability of optional bundled/host-backed tools. */
+  setOptionalToolAvailability: (
+    tool: "lint" | "format" | "hls",
+    status: "unknown" | "available" | "unavailable"
+  ) => void;
 }
 
 export type RegisterFn = (server: McpServer, ctx: ToolContext) => void;

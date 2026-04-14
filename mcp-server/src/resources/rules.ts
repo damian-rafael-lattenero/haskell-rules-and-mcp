@@ -33,6 +33,11 @@ Lost? Not sure what to do next? → ghci_workflow(action="help") for contextual 
 - ghci_regression(action="run") at session start on existing projects
 - Follow _guidance in tool responses
 
+## TOOLCHAIN
+- Resolution order: host PATH -> bundled binary
+- ghci_lint / ghci_format / ghci_hls report source, binaryPath, and version when available
+- If ghci_lint / ghci_format are unavailable, guidance downgrades them to recommended but not blocking
+
 ## WHEN → TOOL → WHY
 
 ### Session startup
@@ -44,6 +49,7 @@ Lost? Not sure what to do next? → ghci_workflow(action="help") for contextual 
 ### Project / dependency management
 | When | Tool | Why |
 |------|------|-----|
+| Start a new project | ghci_init(name, modules, deps) | Creates a project with containers + QuickCheck defaults |
 | Need to add a dependency | ghci_deps(action="add", package="name") | Edits .cabal — never edit by hand |
 | Remove a dependency | ghci_deps(action="remove", package="name") | Safe removal (protects base) |
 | List current deps | ghci_deps(action="list") | See all packages with versions |
@@ -58,7 +64,10 @@ Lost? Not sure what to do next? → ghci_workflow(action="help") for contextual 
 | Module has typed holes | ghci_hole(module_path="src/X.hs") | Expected type + valid fits |
 | After compilation | ghci_eval("funcName arg") | Test behavior |
 | A law becomes testable | ghci_quickcheck(property, module_path="src/X.hs") | Test immediately |
+| QuickCheck failed with counterexample | ghci_trace(...) | Follow trace-first debugging guidance |
 | All functions done | ghci_quickcheck_batch | Complete contract |
+| Apply suggested export list | ghci_apply_exports(module_path="src/X.hs") | Materialize ghci_check_module suggestions |
+| Smoke-test parser robustness | ghci_fuzz_parser(parser="...") | Detect malformed-input crashes |
 | Need to rename a binding | ghci_refactor(action="rename_local", module_path="...", old_name="foo", new_name="bar") | Word-boundary safe rename |
 | Extract code to function | ghci_refactor(action="extract_binding", module_path="...", new_name="helper", lines=[5,8]) | Lift lines to top-level |
 | Enable GHC extension | ghci_flags(action="set", flags="-XOverloadedStrings") | Session-only flag |
@@ -68,7 +77,14 @@ Lost? Not sure what to do next? → ghci_workflow(action="help") for contextual 
 | When | Tool | Why |
 |------|------|-----|
 | Session on existing project | ghci_regression(action="run") | Re-run saved properties |
-| Before next module | ghci_check_module, ghci_lint, ghci_format(write=true) | Quality gate |
+| Before next module | ghci_check_module, ghci_lint, ghci_format(write=true) | Quality gate; lint/format become recommended if unavailable |
+
+### Session close
+| When | Tool | Why |
+|------|------|-----|
+| After all modules pass | ghci_quickcheck_export(output_path="test/Spec.hs") | Generate the persistent test suite |
+| After export | cabal_test | Validate exported tests actually run |
+| After tests | cabal_build | Verify full package compilation |
 
 ### Performance analysis
 | When | Tool | Why |
@@ -84,9 +100,10 @@ Lost? Not sure what to do next? → ghci_workflow(action="help") for contextual 
 
 ## PARAMETER NOTES
 - ghci_quickcheck: use module_path="src/X.hs" (preferred) or module="src/X.hs" (also works)
+- ghci_quickcheck_export validates with cabal_test by default
 - ghci_format write=true: requires fourmolu/ormolu from host or bundled toolchain
 - ghci_flags: session-only; persist with default-extensions in .cabal
-- ghci_refactor: text-based; run ghci_load after to verify compilation
+- ghci_refactor / ghci_apply_exports: run ghci_load after to verify compilation
 
 ## FORBIDDEN
 - Multiple .hs edits between ghci_load calls
@@ -97,6 +114,11 @@ Lost? Not sure what to do next? → ghci_workflow(action="help") for contextual 
 `;
 
 const CONVENTIONS_FALLBACK = `# Haskell Project Conventions
+
+## Toolchain
+- host PATH -> bundled binary for hlint / fourmolu / ormolu / hls
+- ghci_init includes containers + QuickCheck defaults
+- update rules/docs/tests together when workflow behavior changes
 
 ## Import Style
 - Qualified imports for Map/Set: \`import qualified Data.Map.Strict as Map\`
@@ -119,6 +141,13 @@ const CONVENTIONS_FALLBACK = `# Haskell Project Conventions
 - Pass module_path="src/X.hs" to ghci_quickcheck for accurate tracking (module= also accepted)
 - Use ghci_regression to re-run saved properties
 - Use ghci_hole(module_path="...") to explore typed holes before implementing
+- Use ghci_trace when QuickCheck returns a counterexample
+- Use ghci_fuzz_parser(parser="...") for malformed-input parser checks
+- ghci_quickcheck_export validates with cabal_test by default
+
+## MCP Maintenance
+- Every MCP code change should include unit, integration, and e2e coverage
+- Keep rules/, embedded fallbacks, tool descriptions, and workflow behavior aligned
 
 ## Refactoring
 - Use ghci_refactor(action="rename_local") to rename bindings — never manual find/replace

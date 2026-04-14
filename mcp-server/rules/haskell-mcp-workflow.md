@@ -19,7 +19,7 @@ The `_guidance` array in responses tells you what to do next based on:
 - Whether warnings are pending (→ fix them)
 - Whether edits haven't been compiled (→ run `ghci_load`)
 - Whether module-complete gates are missing (→ run `ghci_check_module`, `ghci_lint`, `ghci_format`)
-- Whether all modules are gate-complete (→ run `ghci_quickcheck_export`, then `cabal_build`)
+- Whether all modules are gate-complete (→ run `ghci_quickcheck_export`, then `cabal_test`, then `cabal_build`)
 
 **Guidance is state-aware:** once QuickCheck properties pass, the "untested" hint disappears
 automatically. Once gates are complete, the session-close hint appears.
@@ -45,12 +45,16 @@ automatically. Once gates are complete, the session-close hint appears.
 The MCP resolves optional binaries (`hlint`, `fourmolu`/`ormolu`, `hls`) with:
 
 - Tool resolution order: **host PATH -> bundled binary**
+- Bundled-first release scope is currently: `hlint`, `fourmolu`, `ormolu`
 - `ghci_lint`, `ghci_format`, and `ghci_hls` responses include:
   - `source` (`host` or `bundled`) when available
   - `binaryPath`
   - `version` (when available)
+  - `reason` / `provenance` / `checksumVerified` when relevant
 - If neither host nor bundled binary is available, the tool returns
   **unavailable** and does not run fallback analysis/formatting.
+- If `ghci_lint` / `ghci_format` are unavailable for the current environment, `_guidance`
+  degrades them to **recommended but not blocking** instead of trapping the workflow forever.
 
 When triaging issues, always check `source` first to confirm execution path.
 
@@ -69,7 +73,7 @@ When triaging issues, always check `source` first to confirm execution path.
 ### New project / module
 | When | Tool | Why |
 |------|------|-----|
-| Starting from scratch | `ghci_init(name, modules, deps)` | Generate .cabal + directory structure |
+| Starting from scratch | `ghci_init(name, modules, deps)` | Generate .cabal + directory structure. Includes `containers` and QuickCheck defaults. |
 | With test target | `ghci_init(name, modules, deps, test_suite=true)` | Also generates `test-suite` stanza in .cabal + `test/Spec.hs` scaffold |
 | Starting with Stack | `ghci_init(name, modules, deps, build_tool="stack")` | Also generates `stack.yaml` with LTS resolver |
 | Need to add a dependency | `ghci_deps(action="add", package="containers")` | Edits `.cabal` build-depends — no manual editing |
@@ -97,23 +101,26 @@ When triaging issues, always check `source` first to confirm execution path.
 | Multiple properties to test | `ghci_quickcheck_batch(properties=[...], module_path="src/X.hs")` | Test all in one call |
 | Properties test a different module | `ghci_quickcheck_batch(properties=[...], module_path="src/Syntax.hs", tests_module="src/Eval.hs")` | Set `tests_module` so regression filters by the module being tested, not by where Arbitrary lives |
 | Logic error (types OK, wrong result) | `ghci_trace(expression, trace_points=[...])` | Debug intermediate values |
+| QuickCheck returned a counterexample | `ghci_trace(...)` | `_guidance` now points to trace-first debugging instead of blind manual evals |
 | Property suggests needed | `ghci_quickcheck(property="suggest", function_name="...")` | Discover testable laws |
 | Lost track of progress | `ghci_workflow(action="next")` | See what step comes next |
 | Need richer context-aware help | `ghci_workflow(action="help")` | Returns `suggested_tools`, `reasoning`, and `steps` |
 | Want to rename a binding in a module | `ghci_refactor(action="rename_local", module_path="src/X.hs", old_name="foo", new_name="bar")` | Word-boundary safe rename across entire module |
 | Want to extract code to a new function | `ghci_refactor(action="extract_binding", module_path="src/X.hs", new_name="helper", lines=[5,8])` | Lifts a line range to a top-level binding |
+| Want to apply suggested export list | `ghci_apply_exports(module_path="src/X.hs")` | Materialize the export list suggested by `ghci_check_module` |
+| Want a parser no-crash smoke test | `ghci_fuzz_parser(parser="...")` | Run malformed inputs through a parser and detect crashes |
 | Need to enable a GHC extension | `ghci_flags(action="set", flags="-XOverloadedStrings")` | Sets flag for the current session (not persisted to .cabal) |
 | Want to see active language settings | `ghci_flags(action="list")` | Shows base language + active modifiers |
 | Need to disable a flag | `ghci_flags(action="unset", flags="-XSomething")` | Removes flag from current session |
-| Want always-on toolchain from MCP | `ghci_lint`, `ghci_format`, `ghci_hls` | These tools now try bundled binaries first and report `source`/`binaryPath` in responses |
+| Want always-on toolchain from MCP | `ghci_lint`, `ghci_format`, `ghci_hls` | These tools resolve `host -> bundled` and report executable provenance in responses |
 
 ### Module complete gate (MANDATORY before next module)
 | When | Tool | Why |
 |------|------|-----|
 | All functions implemented | `ghci_quickcheck` / `ghci_quickcheck_batch` | Test COMPLETE algebraic contract |
 | After quickcheck passes | `ghci_check_module(module_path="...")` | Review API summary — `_guidance` will prompt this automatically |
-| After review | `ghci_lint(module_path="...")` | Code quality pass. **Gate completes only when hlint runs** (host or bundled). If unavailable, provide the binary and re-run. |
-| After lint | `ghci_format(module_path="...", write=true)` | Formatting pass. **Gate completes only when fourmolu/ormolu runs** (host or bundled). If unavailable, provide the binary and re-run. |
+| After review | `ghci_lint(module_path="...")` | Code quality pass. **Gate completes only when hlint runs** (host or bundled). If unavailable, it becomes recommended but not blocking. |
+| After lint | `ghci_format(module_path="...", write=true)` | Formatting pass. **Gate completes only when fourmolu/ormolu runs** (host or bundled). If unavailable, it becomes recommended but not blocking. |
 
 **Note:** `_guidance` in `ghci_load` responses guides you through each gate individually
 once properties pass. Each gate has its own hint that disappears when that gate is complete.
@@ -121,8 +128,9 @@ once properties pass. Each gate has its own hint that disappears when that gate 
 ### Session complete gate (after ALL modules pass all gates)
 | When | Tool | Why |
 |------|------|-----|
-| All modules: gates complete | `ghci_quickcheck_export(output_path="test/Spec.hs")` | Generate persistent test file from saved properties |
-| After export | `cabal_build` | Verify full GHC compilation (not just GHCi interpreted) |
+| All modules: gates complete | `ghci_quickcheck_export(output_path="test/Spec.hs")` | Generate persistent test file from saved properties and validate it with `cabal_test` by default |
+| After export | `cabal_test` | Verify the exported test-suite compiles and executes |
+| After tests | `cabal_build` | Verify full GHC compilation (not just GHCi interpreted) |
 | After build | Commit | Persist the work |
 
 **Note:** `_guidance` will emit a session-close hint once all tracked modules have all three
@@ -139,8 +147,9 @@ gates complete (checkModule, lint, format). Follow it to close the session prope
 ### Exporting tests
 | When | Tool | Why |
 |------|------|-----|
-| Project done | `ghci_quickcheck_export()` | Generate .hs test file from saved properties |
+| Project done | `ghci_quickcheck_export()` | Generate .hs test file from saved properties and validate it with `cabal_test` |
 | For CI/CD | `ghci_quickcheck_export(output_path="test/Spec.hs")` | Persistent test suite |
+| Want to re-run package tests later | `cabal_test` | Structured wrapper around `cabal test` |
 
 ### Dependencies / modules
 | When | Tool | Why |
@@ -210,8 +219,9 @@ The MCP does **not** auto-install optional tools.
 | `fourmolu` / `ormolu` | use host PATH first, else bundled binary |
 | `hls` | use host PATH first, else bundled binary |
 
-If no binary is available, the tool returns unavailable and the corresponding
-completion gate remains pending until the real tool runs.
+If no binary is available, the tool returns unavailable with a structured `reason`.
+For `ghci_lint` / `ghci_format`, `_guidance` downgrades the step to recommended
+when the tool cannot run in the current environment.
 
 ---
 

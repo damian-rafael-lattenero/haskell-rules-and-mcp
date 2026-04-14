@@ -1,38 +1,31 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import { resetBundledManifestCache } from "../../tools/tool-installer.js";
+import {
+  TEST_PLATFORM,
+  bundledToolPath,
+  readManifestRaw,
+  restoreManifest,
+  updateRuntimeManifestEntry,
+  writeExecutable,
+} from "../helpers/bundled-tools.js";
 
 const fixtureDir = path.resolve(import.meta.dirname, "../fixtures/test-project");
 const serverScript = path.resolve(import.meta.dirname, "../../../dist/index.js");
-const rootDir = path.resolve(import.meta.dirname, "..", "..", "..");
-const platform = process.platform as "darwin" | "linux" | "win32";
-const arch = process.arch as "x64" | "arm64";
-const ext = platform === "win32" ? ".exe" : "";
-
-const fmtBin = path.join(rootDir, "vendor-tools", `fourmolu/${platform}-${arch}/fourmolu${ext}`);
-const hlsBin = path.join(
-  rootDir,
-  "vendor-tools",
-  `hls/${platform}-${arch}/haskell-language-server-wrapper${ext}`
-);
-
-async function writeExecutable(filePath: string, content: string): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, content, "utf8");
-  if (platform !== "win32") {
-    await chmod(filePath, 0o755);
-  }
-}
+const fmtBin = bundledToolPath("fourmolu");
+const hlsBin = bundledToolPath("hls");
 
 describe("bundled tools e2e", () => {
   let client: Client;
   let transport: StdioClientTransport;
+  let manifestSnapshot = "";
 
   beforeAll(async () => {
-    if (platform === "win32") {
+    manifestSnapshot = await readManifestRaw();
+    if (TEST_PLATFORM === "win32") {
       await writeExecutable(
         fmtBin,
         "@echo off\r\nif \"%1\"==\"--mode\" if \"%2\"==\"stdout\" type \"%3\"\r\nif \"%1\"==\"--mode\" if \"%2\"==\"inplace\" exit /b 0\r\n"
@@ -48,6 +41,8 @@ describe("bundled tools e2e", () => {
         "#!/usr/bin/env sh\nif [ \"$1\" = \"--version\" ]; then echo 'haskell-language-server-wrapper 2.9.0'; exit 0; fi\nexit 1\n"
       );
     }
+    await updateRuntimeManifestEntry("fourmolu");
+    await updateRuntimeManifestEntry("hls");
     resetBundledManifestCache();
 
     transport = new StdioClientTransport({
@@ -71,6 +66,7 @@ describe("bundled tools e2e", () => {
     }
     await rm(fmtBin, { force: true });
     await rm(hlsBin, { force: true });
+    await restoreManifest(manifestSnapshot);
     resetBundledManifestCache();
   });
 

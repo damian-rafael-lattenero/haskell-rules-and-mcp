@@ -48,6 +48,11 @@ export interface WorkflowState {
   currentFlow: FlowStep | null;
   activeModule: string | null;
   modules: Map<string, ModuleProgress>;
+  optionalTooling: {
+    lint: "unknown" | "available" | "unavailable";
+    format: "unknown" | "available" | "unavailable";
+    hls: "unknown" | "available" | "unavailable";
+  };
   toolHistory: ToolExecution[];
   editsSinceLastLoad: number;
   pendingWarningCount: number;
@@ -75,6 +80,7 @@ export function createWorkflowState(): WorkflowState {
     currentFlow: null,
     activeModule: null,
     modules: new Map(),
+    optionalTooling: { lint: "unknown", format: "unknown", hls: "unknown" },
     toolHistory: [],
     editsSinceLastLoad: 0,
     pendingWarningCount: 0,
@@ -113,6 +119,7 @@ export function resetWorkflowState(state: WorkflowState): void {
   state.currentFlow = null;
   state.activeModule = null;
   state.modules.clear();
+  state.optionalTooling = { lint: "unknown", format: "unknown", hls: "unknown" };
   state.toolHistory = [];
   state.editsSinceLastLoad = 0;
   state.pendingWarningCount = 0;
@@ -221,8 +228,16 @@ export function moduleChecklist(state: WorkflowState): string[] {
   }
 
   items.push("[ ] ghci_check_module — review API");
-  items.push("[ ] ghci_lint — code quality");
-  items.push("[ ] ghci_format — formatting");
+  items.push(
+    state.optionalTooling.lint === "unavailable"
+      ? "[~] ghci_lint — recommended (tool unavailable)"
+      : "[ ] ghci_lint — code quality"
+  );
+  items.push(
+    state.optionalTooling.format === "unavailable"
+      ? "[~] ghci_format — recommended (tool unavailable)"
+      : "[ ] ghci_format — formatting"
+  );
 
   return items;
 }
@@ -295,19 +310,29 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
   // Fires as soon as any properties pass — no need to wait for phase === "complete".
   if (mod.propertiesPassed.length > 0 && mod.propertiesFailed.length === 0) {
     const gates = mod.completionGates ?? { checkModule: false, lint: false, format: false };
+    const lintSatisfied = gates.lint || state.optionalTooling.lint === "unavailable";
+    const formatSatisfied = gates.format || state.optionalTooling.format === "unavailable";
     if (!gates.checkModule) {
       guidance.push(
         `Properties pass — run ghci_check_module(module_path="${mod.modulePath}") to review exported API before moving on`
       );
     }
-    if (!gates.lint) {
+    if (!lintSatisfied) {
       guidance.push(
         `Run ghci_lint(module_path="${mod.modulePath}") for code quality pass (module-complete gate)`
       );
+    } else if (!gates.lint && state.optionalTooling.lint === "unavailable") {
+      guidance.push(
+        "ghci_lint is unavailable in this environment — recommended but not blocking for module completion"
+      );
     }
-    if (!gates.format) {
+    if (!formatSatisfied) {
       guidance.push(
         `Run ghci_format(module_path="${mod.modulePath}", write=true) to normalize formatting (module-complete gate)`
+      );
+    } else if (!gates.format && state.optionalTooling.format === "unavailable") {
+      guidance.push(
+        "ghci_format is unavailable in this environment — recommended but not blocking for module completion"
       );
     }
   }
@@ -319,12 +344,12 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
     allModules.every(
       (m) =>
         m.completionGates?.checkModule &&
-        m.completionGates?.lint &&
-        m.completionGates?.format
+        (m.completionGates?.lint || state.optionalTooling.lint === "unavailable") &&
+        (m.completionGates?.format || state.optionalTooling.format === "unavailable")
     );
   if (allGatesComplete) {
     guidance.push(
-      "All modules complete — export test suite with ghci_quickcheck_export(output_path=\"test/Spec.hs\"), then cabal_build to verify full compilation"
+      "All modules complete — export test suite with ghci_quickcheck_export(output_path=\"test/Spec.hs\"), then cabal_test and cabal_build to verify the package"
     );
   } else if (state.modules.size > 1) {
     // Multi-module project: suggest regression when all modules have properties
@@ -452,8 +477,8 @@ export function workflowHelp(state: WorkflowState): WorkflowHelpResult {
     const gates = mod.completionGates;
     const missing: string[] = [];
     if (!gates.checkModule) missing.push("ghci_check_module");
-    if (!gates.lint) missing.push("ghci_lint");
-    if (!gates.format) missing.push("ghci_format");
+    if (!gates.lint && state.optionalTooling.lint !== "unavailable") missing.push("ghci_lint");
+    if (!gates.format && state.optionalTooling.format !== "unavailable") missing.push("ghci_format");
 
     if (missing.length > 0) {
       return {
@@ -470,11 +495,12 @@ export function workflowHelp(state: WorkflowState): WorkflowHelpResult {
 
   // 8. Everything looks complete
   return {
-    suggested_tools: ["ghci_regression", "ghci_quickcheck_export"],
+    suggested_tools: ["ghci_regression", "ghci_quickcheck_export", "cabal_test"],
     reasoning: "Module looks complete. Run regression to verify all saved properties still pass.",
     steps: [
       "Run ghci_regression(action='run') to re-run all saved properties",
       "Run ghci_quickcheck_export() to generate a persistent test file",
+      "Run cabal_test to verify the generated test-suite executes correctly",
       "Consider starting the next module with ghci_scaffold",
     ],
   };
@@ -491,9 +517,18 @@ export function serializeState(state: WorkflowState): Record<string, unknown> {
     currentFlow: state.currentFlow,
     activeModule: state.activeModule,
     modules,
+    optionalTooling: state.optionalTooling,
     recentTools: state.toolHistory.slice(-10),
     editsSinceLastLoad: state.editsSinceLastLoad,
     pendingWarningCount: state.pendingWarningCount,
     sessionStarted: state.sessionStarted,
   };
+}
+
+export function setOptionalToolAvailability(
+  state: WorkflowState,
+  tool: "lint" | "format" | "hls",
+  status: "unknown" | "available" | "unavailable"
+): void {
+  state.optionalTooling[tool] = status;
 }

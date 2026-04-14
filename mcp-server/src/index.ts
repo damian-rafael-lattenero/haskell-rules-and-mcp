@@ -16,6 +16,7 @@ import {
   logTool,
   getModuleProgress as getModProgress,
   updateModuleProgress as updateModProgress,
+  setOptionalToolAvailability,
   serializeState,
   workflowHint,
   suggestNextStep,
@@ -29,9 +30,11 @@ import { register as registerTypeCheck } from "./tools/type-check.js";
 import { register as registerTypeInfo } from "./tools/type-info.js";
 import { register as registerLoadModule } from "./tools/load-module.js";
 import { register as registerBuild } from "./tools/build.js";
+import { register as registerTest } from "./tools/test.js";
 import { register as registerHoogleSearch } from "./tools/hoogle.js";
 import { register as registerScaffold } from "./tools/scaffold.js";
 import { register as registerCheckModule } from "./tools/check-module.js";
+import { register as registerApplyExports } from "./tools/apply-exports.js";
 import { register as registerDiagnostics } from "./tools/diagnostics.js";
 import { register as registerHoleFits } from "./tools/hole-fits.js";
 import { register as registerQuickCheck, registerBatch as registerQuickCheckBatch } from "./tools/quickcheck.js";
@@ -58,6 +61,7 @@ import { register as registerFlags } from "./tools/flags.js";
 import { register as registerProfile } from "./tools/profile.js";
 import { register as registerHls } from "./tools/hls.js";
 import { register as registerWatch } from "./tools/watch.js";
+import { register as registerFuzzParser } from "./tools/fuzz-parser.js";
 
 // Base directory: the project root (parent of mcp-server/)
 const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
@@ -119,6 +123,7 @@ const ctx: ToolContext = {
   logToolExecution: (tool, success) => logTool(workflowState, tool, success),
   getModuleProgress: (path) => getModProgress(workflowState, path),
   updateModuleProgress: (path, updates) => updateModProgress(workflowState, path, updates),
+  setOptionalToolAvailability: (tool, status) => setOptionalToolAvailability(workflowState, tool, status),
 };
 
 // --- Register all tools from their modules ---
@@ -126,9 +131,11 @@ registerTypeCheck(server, ctx);
 registerTypeInfo(server, ctx);
 registerLoadModule(server, ctx);
 registerBuild(server, ctx);
+registerTest(server, ctx);
 registerHoogleSearch(server, ctx);
 registerScaffold(server, ctx);
 registerCheckModule(server, ctx);
+registerApplyExports(server, ctx);
 registerDiagnostics(server, ctx);
 registerHoleFits(server, ctx);
 registerQuickCheck(server, ctx);
@@ -156,6 +163,7 @@ registerFlags(server, ctx);
 registerProfile(server, ctx);
 registerHls(server, ctx);
 registerWatch(server, ctx);
+registerFuzzParser(server, ctx);
 
 // --- Tool: ghci_kind (inline, simple) ---
 server.tool(

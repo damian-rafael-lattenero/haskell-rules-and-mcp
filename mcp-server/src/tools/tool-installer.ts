@@ -37,6 +37,26 @@ export interface ToolSpec {
   checkCmd: string;
 }
 
+export type BundledToolFailureReason =
+  | "unsupported-platform"
+  | "manifest-missing"
+  | "entry-missing"
+  | "binary-missing"
+  | "not-executable"
+  | "checksum-missing"
+  | "checksum-mismatch";
+
+export interface BundledToolStatus {
+  available: boolean;
+  source: "bundled";
+  reason?: BundledToolFailureReason;
+  message: string;
+  binaryPath?: string;
+  version?: string;
+  provenance?: string;
+  checksumVerified?: boolean;
+}
+
 /**
  * Tool registry: the set of optional tools the MCP can auto-install.
  * hoogle is intentionally absent — it uses the Hoogle web API.
@@ -74,6 +94,9 @@ export interface EnsureResult {
   source?: "bundled" | "host" | "installed";
   binaryPath?: string;
   version?: string;
+  provenance?: string;
+  checksumVerified?: boolean;
+  bundledReason?: BundledToolFailureReason;
   /** Human-readable status message suitable for including in a tool response. */
   message: string;
 }
@@ -95,20 +118,23 @@ export async function ensureTool(toolName: string): Promise<EnsureResult> {
     };
   }
 
-  const bundled = await resolveBundledBinary(toolName);
-  if (bundled) {
+  const bundled = await getBundledToolStatus(toolName);
+  if (bundled.available) {
     return {
       available: true,
       source: "bundled",
       binaryPath: bundled.binaryPath,
       version: bundled.version,
-      message: `${toolName} available via bundled toolchain (${bundled.version ?? "unknown version"})`,
+      provenance: bundled.provenance,
+      checksumVerified: bundled.checksumVerified,
+      message: bundled.message,
     };
   }
 
   return {
     available: false,
-    message: `${toolName} is not available (not found in host PATH or bundled toolchain)`,
+    bundledReason: bundled.reason,
+    message: bundled.message,
   };
 }
 
@@ -126,11 +152,125 @@ export function getInstallStatus(toolName: string): undefined {
 export async function resolveToolBinary(toolName: string): Promise<ResolvedToolBinary | null> {
   const host = await locateHostBinary(toolName);
   if (host) return host;
-  return resolveBundledBinary(toolName);
+  const bundled = await getBundledToolStatus(toolName);
+  if (!bundled.available || !bundled.binaryPath) return null;
+  return {
+    source: "bundled",
+    binaryPath: bundled.binaryPath,
+    version: bundled.version,
+  };
 }
 
 export function resetBundledManifestCache(): void {
   bundledManifestCache = null;
+}
+
+export async function getBundledToolStatus(toolName: string): Promise<BundledToolStatus> {
+  const runtime = getRuntimePlatformArch();
+  if (!runtime) {
+    return {
+      available: false,
+      source: "bundled",
+      reason: "unsupported-platform",
+      message:
+        `${toolName} is not available from the bundled toolchain on this platform ` +
+        `(${process.platform}-${process.arch}). Supported runtime tuples are darwin/linux/win32 x x64/arm64.`,
+    };
+  }
+
+  const manifest = await loadBundledManifest();
+  if (!manifest) {
+    return {
+      available: false,
+      source: "bundled",
+      reason: "manifest-missing",
+      message: `${toolName} is not available because the bundled tools manifest is missing or unreadable.`,
+    };
+  }
+
+  const entry = manifest.tools.find(
+    (item) =>
+      item.tool === toolName &&
+      item.platform === runtime.platform &&
+      item.arch === runtime.arch
+  );
+  if (!entry) {
+    return {
+      available: false,
+      source: "bundled",
+      reason: "entry-missing",
+      message:
+        `${toolName} has no bundled entry for ${runtime.platform}-${runtime.arch}. ` +
+        "Use a host installation or add a bundled artifact for this runtime.",
+    };
+  }
+
+  const absolute = path.resolve(ROOT_DIR, "vendor-tools", entry.filename);
+  if (!(await fileExists(absolute))) {
+    return {
+      available: false,
+      source: "bundled",
+      reason: "binary-missing",
+      message:
+        `${toolName} has a manifest entry for ${runtime.platform}-${runtime.arch}, ` +
+        `but the bundled binary is missing at ${entry.filename}.`,
+      version: entry.version,
+      provenance: entry.provenance,
+    };
+  }
+
+  if (!(await verifyExecutable(absolute))) {
+    return {
+      available: false,
+      source: "bundled",
+      reason: "not-executable",
+      message:
+        `${toolName} exists at ${entry.filename}, but it is not executable on this platform.`,
+      binaryPath: absolute,
+      version: entry.version,
+      provenance: entry.provenance,
+    };
+  }
+
+  const checksum = entry.sha256?.trim();
+  if (!checksum) {
+    return {
+      available: false,
+      source: "bundled",
+      reason: "checksum-missing",
+      message:
+        `${toolName} exists at ${entry.filename}, but the bundled manifest entry has no sha256. ` +
+        "Populate version/provenance/sha256 before treating this bundle as production-ready.",
+      binaryPath: absolute,
+      version: entry.version,
+      provenance: entry.provenance,
+    };
+  }
+
+  const digest = await sha256File(absolute);
+  if (digest !== checksum) {
+    return {
+      available: false,
+      source: "bundled",
+      reason: "checksum-mismatch",
+      message:
+        `${toolName} failed bundled checksum verification for ${entry.filename}. ` +
+        `Expected ${checksum}, got ${digest}.`,
+      binaryPath: absolute,
+      version: entry.version,
+      provenance: entry.provenance,
+    };
+  }
+
+  return {
+    available: true,
+    source: "bundled",
+    binaryPath: absolute,
+    version: entry.version,
+    provenance: entry.provenance,
+    checksumVerified: true,
+    message: `${toolName} available via bundled toolchain (${entry.version ?? "unknown version"})`,
+  };
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -182,37 +322,6 @@ async function verifyExecutable(filePath: string): Promise<boolean> {
 async function sha256File(filePath: string): Promise<string> {
   const raw = await readFile(filePath);
   return createHash("sha256").update(raw).digest("hex");
-}
-
-async function resolveBundledBinary(toolName: string): Promise<ResolvedToolBinary | null> {
-  const runtime = getRuntimePlatformArch();
-  if (!runtime) return null;
-
-  const manifest = await loadBundledManifest();
-  if (!manifest) return null;
-
-  const entry = manifest.tools.find(
-    (item) =>
-      item.tool === toolName &&
-      item.platform === runtime.platform &&
-      item.arch === runtime.arch
-  );
-  if (!entry) return null;
-
-  const absolute = path.resolve(ROOT_DIR, "vendor-tools", entry.filename);
-  if (!(await fileExists(absolute))) return null;
-  if (!(await verifyExecutable(absolute))) return null;
-
-  if (entry.sha256 && entry.sha256.trim().length > 0) {
-    const digest = await sha256File(absolute);
-    if (digest !== entry.sha256) return null;
-  }
-
-  return {
-    source: "bundled",
-    binaryPath: absolute,
-    version: entry.version,
-  };
 }
 
 async function locateHostBinary(toolName: string): Promise<ResolvedToolBinary | null> {

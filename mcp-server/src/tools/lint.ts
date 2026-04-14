@@ -31,9 +31,12 @@ export async function handleLint(
       lint_tool: "hlint",
       unavailable: true,
       source: "none",
+      reason: hlint.bundledReason ?? "not-found",
       error: hlint.message,
       _hint:
-        "Install hlint in host PATH or provide bundled hlint in vendor-tools for this platform.",
+        hlint.bundledReason === "checksum-missing" || hlint.bundledReason === "checksum-mismatch"
+          ? "Fix the bundled hlint manifest entry (sha256/version/provenance) or use a host installation."
+          : "Install hlint in host PATH or provide a verified bundled hlint in vendor-tools for this platform.",
     });
   }
 
@@ -121,6 +124,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       // false "clean code" signal when hlint is not installed.
       try {
         const parsed = JSON.parse(result);
+        ctx.setOptionalToolAvailability("lint", parsed.unavailable ? "unavailable" : "available");
         if (parsed.success && parsed.lint_tool === "hlint") {
           const activeModule = ctx.getWorkflowState().activeModule ?? module_path;
           const mod = ctx.getModuleProgress(activeModule);

@@ -46,6 +46,7 @@ describe("handleInit", () => {
     expect(cabal).toContain("Types");
     expect(cabal).toContain("QuickCheck");
     expect(cabal).toContain("base");
+    expect(cabal).toContain("containers");
   });
 
   it("creates cabal.project", async () => {
@@ -77,6 +78,16 @@ describe("handleInit", () => {
     const cabal = await readFile(path.join(targetDir, "test.cabal"), "utf-8");
     expect(cabal).toContain("containers");
     expect(cabal).toContain("mtl >= 2.2");
+  });
+
+  it("adds containers by default even when user does not request it", async () => {
+    await handleInit(targetDir, currentProjectDir, workspaceRoot, {
+      name: "defaults-test",
+      modules: ["Lib"],
+      target_path: path.relative(workspaceRoot, targetDir),
+    });
+    const cabal = await readFile(path.join(targetDir, "defaults-test.cabal"), "utf-8");
+    expect(cabal).toContain("containers");
   });
 
   it("fails if .cabal already exists", async () => {
@@ -129,6 +140,7 @@ describe("handleInit", () => {
       })
     );
     expect(result._nextStep).toContain("ghci_switch_project");
+    expect(result._nextStep).toContain('project="brand-new-proj"');
   });
 
   it("_nextStep does not say 'then ghci_scaffold separately' for non-current dir", async () => {

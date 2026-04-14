@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execSync } from "node:child_process";
+import { writeFile, rm, readFile } from "node:fs/promises";
 import path from "node:path";
 import { GhciSession } from "../../ghci-session.js";
 import { handleTypeCheck } from "../../tools/type-check.js";
 import { handleTypeInfo } from "../../tools/type-info.js";
 import { handleCheckModule } from "../../tools/check-module.js";
+import { handleApplyExports } from "../../tools/apply-exports.js";
 import { handleLoadModule } from "../../tools/load-module.js";
 import { handleQuickCheck, resetQuickCheckState } from "../../tools/quickcheck.js";
 import { handleGoto } from "../../tools/goto.js";
@@ -13,8 +15,15 @@ import { handleDoc } from "../../tools/doc.js";
 import { handleImports } from "../../tools/imports.js";
 import { handleReferences } from "../../tools/references.js";
 import { handleRename } from "../../tools/rename.js";
+import { handleCabalTest } from "../../tools/test.js";
+import { handleFuzzParser } from "../../tools/fuzz-parser.js";
+import { handleExportTests } from "../../tools/export-tests.js";
+import { saveProperty } from "../../property-store.js";
 
 const FIXTURE_DIR = path.resolve(import.meta.dirname, "../fixtures/test-project");
+const TEMP_EXPORTS_MODULE = path.join(FIXTURE_DIR, "src", "TempExports.hs");
+const PROPERTY_STORE_DIR = path.join(FIXTURE_DIR, ".haskell-flows");
+const TEST_SPEC_FILE = path.join(FIXTURE_DIR, "test", "Spec.hs");
 const GHCUP_BIN = path.join(process.env.HOME ?? "", ".ghcup", "bin");
 const TEST_PATH = `${GHCUP_BIN}:${process.env.PATH}`;
 
@@ -27,14 +36,19 @@ const GHC_AVAILABLE = (() => {
 
 describe.runIf(GHC_AVAILABLE)("Tool Handlers Integration", () => {
   let session: GhciSession;
+  let originalSpec = "";
 
   beforeAll(async () => {
+    originalSpec = await readFile(TEST_SPEC_FILE, "utf8");
     session = new GhciSession(FIXTURE_DIR, "lib:test-project");
     await session.start();
   }, 60_000);
 
   afterAll(async () => {
     if (session?.isAlive()) await session.kill();
+    await rm(TEMP_EXPORTS_MODULE, { force: true });
+    await rm(PROPERTY_STORE_DIR, { recursive: true, force: true });
+    await writeFile(TEST_SPEC_FILE, originalSpec, "utf8");
   });
 
   // --- ghci_type ---
@@ -270,6 +284,59 @@ describe.runIf(GHC_AVAILABLE)("Tool Handlers Integration", () => {
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe("handleCabalTest", () => {
+    it("runs the fixture test-suite successfully", async () => {
+      const result = JSON.parse(await handleCabalTest(FIXTURE_DIR, {}));
+      expect(result.success).toBe(true);
+      expect(result.summary).toContain("Tests passed");
+    });
+  });
+
+  describe("handleApplyExports", () => {
+    it("applies a suggested export list to a module file", async () => {
+      await writeFile(
+        TEMP_EXPORTS_MODULE,
+        `module TempExports where\n\nfoo :: Int\nfoo = 1\n`,
+        "utf8"
+      );
+      const result = JSON.parse(
+        await handleApplyExports(FIXTURE_DIR, {
+          module_path: "src/TempExports.hs",
+          module_name: "TempExports",
+          suggested_export_list: "module TempExports\n  ( foo\n  ) where",
+        })
+      );
+      expect(result.success).toBe(true);
+      const content = await readFile(TEMP_EXPORTS_MODULE, "utf8");
+      expect(content).toContain("( foo");
+    });
+  });
+
+  describe("handleFuzzParser", () => {
+    it("detects crashing parser expressions", async () => {
+      const result = JSON.parse(
+        await handleFuzzParser(session, { parser: "(\\s -> read s :: Int)", inputs: ["abc", "("] })
+      );
+      expect(result.success).toBe(false);
+      expect(result.crashes.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("handleExportTests", () => {
+    it("writes the test file and validates it with cabal test", async () => {
+      await rm(PROPERTY_STORE_DIR, { recursive: true, force: true });
+      await saveProperty(FIXTURE_DIR, {
+        property: "\\x y -> add x y == x + (y :: Int)",
+        module: "src/TestLib.hs",
+      });
+      const result = JSON.parse(
+        await handleExportTests(FIXTURE_DIR, { module: "src/TestLib.hs" })
+      );
+      expect(result.success).toBe(true);
+      expect(result.testRun?.success).toBe(true);
     });
   });
 

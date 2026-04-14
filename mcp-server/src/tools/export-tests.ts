@@ -9,10 +9,11 @@ import path from "node:path";
 import type { ToolContext } from "./registry.js";
 import { getAllProperties, getModuleProperties } from "../property-store.js";
 import { parseCabalModules } from "../parsers/cabal-parser.js";
+import { handleCabalTest } from "./test.js";
 
 export async function handleExportTests(
   projectDir: string,
-  args: { output_path?: string; module?: string }
+  args: { output_path?: string; module?: string; validate_test_suite?: boolean }
 ): Promise<string> {
   const properties = args.module
     ? await getModuleProperties(projectDir, args.module)
@@ -96,13 +97,38 @@ ${propertyLines}
 
   await writeFile(absPath, testContent, "utf-8");
 
+  const validateTestSuite = args.validate_test_suite ?? true;
+  let testRun:
+    | {
+        success: boolean;
+        summary: string;
+        command?: string;
+        errors?: unknown[];
+        warnings?: unknown[];
+      }
+    | undefined;
+
+  if (validateTestSuite) {
+    const testResult = JSON.parse(await handleCabalTest(projectDir, {}));
+    testRun = {
+      success: testResult.success,
+      summary: testResult.summary,
+      command: testResult.command,
+      errors: testResult.errors,
+      warnings: testResult.warnings,
+    };
+  }
+
   return JSON.stringify({
     success: true,
     outputPath,
     propertyCount: nonTrivial.length,
     ...(dropped > 0 ? { droppedTrivial: dropped } : {}),
     modules: [...moduleSet].sort(),
-    _nextStep: `Test file written to ${outputPath}. Add a test-suite stanza to your .cabal file to run with 'cabal test'.`,
+    ...(testRun ? { testRun } : {}),
+    _nextStep: validateTestSuite
+      ? `Test file written to ${outputPath}. Review testRun above, then use cabal_test for future re-runs.`
+      : `Test file written to ${outputPath}. Run cabal_test to validate the generated test-suite.`,
   });
 }
 
@@ -166,9 +192,16 @@ export function register(server: McpServer, ctx: ToolContext): void {
       module: z.string().optional().describe(
         "Filter properties by module path. If omitted, exports all properties."
       ),
+      validate_test_suite: z.boolean().optional().describe(
+        "If true (default), run cabal_test after writing the exported test file and report the result."
+      ),
     },
-    async ({ output_path, module: mod }) => {
-      const result = await handleExportTests(ctx.getProjectDir(), { output_path, module: mod });
+    async ({ output_path, module: mod, validate_test_suite }) => {
+      const result = await handleExportTests(ctx.getProjectDir(), {
+        output_path,
+        module: mod,
+        validate_test_suite,
+      });
       return { content: [{ type: "text" as const, text: result }] };
     }
   );

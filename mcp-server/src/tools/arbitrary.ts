@@ -12,6 +12,7 @@ export interface ArbitraryResult {
   isRecursive: boolean;
   instance: string;
   hint: string;
+  warnings?: string[];
   error?: string;
 }
 
@@ -99,6 +100,7 @@ export async function handleArbitrary(
     ? "This type is recursive. The generated instance uses 'sized' to prevent infinite generation. " +
       "Base cases (non-recursive constructors) are used at size 0."
     : "This type is non-recursive. The generated instance uses 'oneof' to pick a random constructor.";
+  const warnings = detectGeneratorWarnings(instance, isRecursive);
 
   // Validate the instance in GHCi — if it fails with missing constraints,
   // parse the error and add the required constraints automatically.
@@ -115,6 +117,7 @@ export async function handleArbitrary(
     isRecursive,
     instance,
     hint,
+    ...(warnings.length > 0 ? { warnings } : {}),
   });
 }
 
@@ -160,6 +163,23 @@ async function validateInstance(
   );
 
   return { fixedInstance, addedConstraints: missingConstraints };
+}
+
+export function detectGeneratorWarnings(instance: string, isRecursive: boolean): string[] {
+  const warnings: string[] = [];
+  const usesListOf = /\blistOf\b/.test(instance) || /\blistOf1\b/.test(instance);
+  const usesResize = /\bresize\s*\(/.test(instance);
+  if (usesListOf && !usesResize) {
+    warnings.push(
+      "Generator uses listOf/listOf1 without resize. Prefer bounding list growth so QuickCheck data stays small and shrinking remains effective."
+    );
+  }
+  if (isRecursive && !usesResize) {
+    warnings.push(
+      "Recursive generator detected without resize/sized control. Prefer shrinking recursion with resize to avoid explosive test data."
+    );
+  }
+  return warnings;
 }
 
 /**

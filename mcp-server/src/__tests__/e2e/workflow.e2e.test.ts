@@ -399,7 +399,7 @@ holeFunc x = _result
     expect(result.holes[0].expectedType).toContain("Int");
   });
 
-  it("step 18c: ghci_format write:true fixes trailing whitespace (fallback)", async () => {
+  it("step 18c: ghci_format write:true either formats or reports unavailable clearly", async () => {
     // Write a module with trailing whitespace
     await writeFile(
       WORKFLOW_MODULE,
@@ -413,12 +413,11 @@ holeFunc x = _result
         write: true,
       })
     );
-    // Should succeed regardless of whether a formatter is installed or fallback is used
-    expect(result.success).toBe(true);
-    // In fallback mode, written must be true
-    if (result.fallback) {
+    if (result.success) {
       expect(result.written).toBe(true);
-      expect(typeof result.fixesApplied).toBe("number");
+    } else {
+      expect(result.unavailable).toBe(true);
+      expect(result.reason).toBeDefined();
     }
   });
 
@@ -503,7 +502,7 @@ holeFunc x = _result
     expect(hasGateHint).toBe(true);
   });
 
-  it("step 21: ghci_format fallback response includes _formatWarning", async () => {
+  it("step 21: ghci_format unavailable response includes actionable metadata", async () => {
     await writeFile(
       WORKFLOW_MODULE,
       `module WorkflowTest where\n\ndouble :: Int -> Int\ndouble x = x + x\n`,
@@ -516,11 +515,12 @@ holeFunc x = _result
         write: true,
       })
     );
-    expect(result.success).toBe(true);
-    // When fourmolu is not installed (fallback mode), _formatWarning must be present
-    if (result.fallback) {
-      expect(result._formatWarning).toBeDefined();
-      expect(result._formatWarning).toContain("fourmolu");
+    if (result.success) {
+      expect(result.written).toBe(true);
+    } else {
+      expect(result.unavailable).toBe(true);
+      expect(result.reason).toBeDefined();
+      expect(result._hint).toBeDefined();
     }
   });
 });

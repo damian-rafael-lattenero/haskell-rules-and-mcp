@@ -30,7 +30,7 @@ describe("handleExportTests", () => {
     await saveProperty(tmpDir, { property: "\\x -> x == x", module: "src/Lib.hs" });
     await saveProperty(tmpDir, { property: "\\x -> reverse (reverse x) == x", module: "src/Lib.hs" });
 
-    const result = JSON.parse(await handleExportTests(tmpDir, {}));
+    const result = JSON.parse(await handleExportTests(tmpDir, { validate_test_suite: false }));
     expect(result.success).toBe(true);
     expect(result.propertyCount).toBe(2);
 
@@ -44,7 +44,7 @@ describe("handleExportTests", () => {
   it("uses custom output path", async () => {
     await saveProperty(tmpDir, { property: "True", module: "src/Lib.hs" });
     const result = JSON.parse(
-      await handleExportTests(tmpDir, { output_path: "test/Props.hs" })
+      await handleExportTests(tmpDir, { output_path: "test/Props.hs", validate_test_suite: false })
     );
     expect(result.success).toBe(true);
     expect(result.outputPath).toBe("test/Props.hs");
@@ -56,14 +56,14 @@ describe("handleExportTests", () => {
     await saveProperty(tmpDir, { property: "p2", module: "src/B.hs" });
 
     const result = JSON.parse(
-      await handleExportTests(tmpDir, { module: "src/A.hs" })
+      await handleExportTests(tmpDir, { module: "src/A.hs", validate_test_suite: false })
     );
     expect(result.propertyCount).toBe(1);
   });
 
   it("includes module imports from properties", async () => {
     await saveProperty(tmpDir, { property: "True", module: "src/Expr/Eval.hs" });
-    const result = JSON.parse(await handleExportTests(tmpDir, {}));
+    const result = JSON.parse(await handleExportTests(tmpDir, { validate_test_suite: false }));
     const content = await readFile(path.join(tmpDir, "test/Spec.hs"), "utf-8");
     expect(content).toContain("import Expr.Eval");
   });
@@ -74,15 +74,15 @@ describe("handleExportTests", () => {
       module: "src/Lib.hs",
       law: "reflexivity",
     });
-    const result = JSON.parse(await handleExportTests(tmpDir, {}));
+    const result = JSON.parse(await handleExportTests(tmpDir, { validate_test_suite: false }));
     const content = await readFile(path.join(tmpDir, "test/Spec.hs"), "utf-8");
     expect(content).toContain("reflexivity");
   });
 
   it("includes _nextStep guidance", async () => {
     await saveProperty(tmpDir, { property: "\\x -> x == x", module: "src/Lib.hs" });
-    const result = JSON.parse(await handleExportTests(tmpDir, {}));
-    expect(result._nextStep).toContain("cabal test");
+    const result = JSON.parse(await handleExportTests(tmpDir, { validate_test_suite: false }));
+    expect(result._nextStep).toContain("cabal_test");
   });
 
   // ─── Bug Fix 8a: trivial property filter ────────────────────────────────────
@@ -116,7 +116,7 @@ describe("handleExportTests", () => {
       await saveProperty(tmpDir, { property: "\\x -> True", module: "src/Lib.hs" });
       await saveProperty(tmpDir, { property: "\\x -> x == x", module: "src/Lib.hs" });
 
-      const result = JSON.parse(await handleExportTests(tmpDir, {}));
+      const result = JSON.parse(await handleExportTests(tmpDir, { validate_test_suite: false }));
       expect(result.success).toBe(true);
       expect(result.propertyCount).toBe(1); // only the non-trivial one
       expect(result.droppedTrivial).toBe(1);
@@ -126,7 +126,7 @@ describe("handleExportTests", () => {
       await saveProperty(tmpDir, { property: "\\x -> True", module: "src/Lib.hs" });
       await saveProperty(tmpDir, { property: "const True", module: "src/Lib.hs" });
 
-      const result = JSON.parse(await handleExportTests(tmpDir, {}));
+      const result = JSON.parse(await handleExportTests(tmpDir, { validate_test_suite: false }));
       expect(result.success).toBe(false);
       expect(result.error).toContain("trivially true");
       expect(result.droppedTrivial).toBe(2);
@@ -136,7 +136,7 @@ describe("handleExportTests", () => {
       await saveProperty(tmpDir, { property: "\\_ -> True", module: "src/Lib.hs" });
       await saveProperty(tmpDir, { property: "\\n -> n + 1 > n", module: "src/Lib.hs" });
 
-      await handleExportTests(tmpDir, {});
+      await handleExportTests(tmpDir, { validate_test_suite: false });
       const content = await readFile(path.join(tmpDir, "test/Spec.hs"), "utf-8");
       expect(content).toContain("trivial propert");
     });
@@ -186,7 +186,7 @@ describe("handleExportTests", () => {
         module: "src/Expr/Eval.hs",
       });
 
-      await handleExportTests(tmpDir, {});
+      await handleExportTests(tmpDir, { validate_test_suite: false });
       const content = await readFile(path.join(tmpDir, "test/Spec.hs"), "utf-8");
       expect(content).toContain("import qualified Data.Map.Strict as Map");
     });
@@ -197,7 +197,7 @@ describe("handleExportTests", () => {
         module: "src/Lib.hs",
       });
 
-      await handleExportTests(tmpDir, {});
+      await handleExportTests(tmpDir, { validate_test_suite: false });
       const content = await readFile(path.join(tmpDir, "test/Spec.hs"), "utf-8");
       expect(content).not.toContain("import qualified Data.Map");
     });

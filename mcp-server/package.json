@@ -4,6 +4,12 @@
   "description": "MCP server providing persistent GHCi session for incremental Haskell type-checking",
   "type": "module",
   "main": "dist/index.js",
+  "files": [
+    "dist",
+    "rules",
+    "vendor-tools",
+    "package.json"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",

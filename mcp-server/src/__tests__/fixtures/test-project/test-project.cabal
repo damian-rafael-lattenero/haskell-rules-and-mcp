@@ -10,3 +10,14 @@ library
   hs-source-dirs:   src
   default-language:  GHC2024
   ghc-options:       -Wall
+
+test-suite test-project-test
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Spec.hs
+  build-depends:
+    base >= 4.21 && < 5,
+    test-project,
+    QuickCheck >= 2.14
+  default-language: GHC2024
+  ghc-options:      -Wall

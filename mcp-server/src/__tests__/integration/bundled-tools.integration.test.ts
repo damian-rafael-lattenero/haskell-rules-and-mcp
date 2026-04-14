@@ -1,39 +1,34 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import { handleLint } from "../../tools/lint.js";
 import { handleFormat } from "../../tools/format.js";
 import { handleHls } from "../../tools/hls.js";
 import { resetBundledManifestCache } from "../../tools/tool-installer.js";
 
-const rootDir = path.resolve(import.meta.dirname, "..", "..", "..");
 const fixtureDir = path.resolve(import.meta.dirname, "../fixtures/test-project");
-const platform = process.platform as "darwin" | "linux" | "win32";
-const arch = process.arch as "x64" | "arm64";
-const ext = platform === "win32" ? ".exe" : "";
+import {
+  TEST_PLATFORM,
+  TEST_ARCH,
+  bundledToolPath,
+  readManifestRaw,
+  restoreManifest,
+  updateRuntimeManifestEntry,
+  writeExecutable,
+} from "../helpers/bundled-tools.js";
 
-const lintBin = path.join(rootDir, "vendor-tools", `hlint/${platform}-${arch}/hlint${ext}`);
-const fmtBin = path.join(rootDir, "vendor-tools", `fourmolu/${platform}-${arch}/fourmolu${ext}`);
-const hlsBin = path.join(
-  rootDir,
-  "vendor-tools",
-  `hls/${platform}-${arch}/haskell-language-server-wrapper${ext}`
-);
-
-async function writeExecutable(filePath: string, content: string): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, content, "utf8");
-  if (platform !== "win32") {
-    await chmod(filePath, 0o755);
-  }
-}
+const lintBin = bundledToolPath("hlint");
+const fmtBin = bundledToolPath("fourmolu");
+const hlsBin = bundledToolPath("hls");
 
 describe("bundled tools integration", () => {
+  let manifestSnapshot = "";
   beforeAll(async () => {
-    if (!["darwin", "linux", "win32"].includes(platform)) return;
-    if (!["x64", "arm64"].includes(arch)) return;
+    manifestSnapshot = await readManifestRaw();
+    if (!["darwin", "linux", "win32"].includes(TEST_PLATFORM)) return;
+    if (!["x64", "arm64"].includes(TEST_ARCH)) return;
 
-    if (platform === "win32") {
+    if (TEST_PLATFORM === "win32") {
       await writeExecutable(lintBin, "@echo off\r\necho []\r\n");
       await writeExecutable(
         fmtBin,
@@ -51,6 +46,9 @@ describe("bundled tools integration", () => {
         "#!/usr/bin/env sh\nif [ \"$1\" = \"--version\" ]; then echo 'haskell-language-server-wrapper 2.9.0'; exit 0; fi\nexit 1\n"
       );
     }
+    await updateRuntimeManifestEntry("hlint");
+    await updateRuntimeManifestEntry("fourmolu");
+    await updateRuntimeManifestEntry("hls");
     resetBundledManifestCache();
   });
 
@@ -58,6 +56,7 @@ describe("bundled tools integration", () => {
     await rm(lintBin, { force: true });
     await rm(fmtBin, { force: true });
     await rm(hlsBin, { force: true });
+    await restoreManifest(manifestSnapshot);
     resetBundledManifestCache();
   });
 
