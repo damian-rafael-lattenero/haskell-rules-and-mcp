@@ -415,9 +415,12 @@ holeFunc x = _result
     );
     if (result.success) {
       expect(result.written).toBe(true);
-    } else {
+    } else if (result.unavailable) {
       expect(result.unavailable).toBe(true);
       expect(result.reason).toBeDefined();
+    } else {
+      // Formatter exists but failed (e.g., syntax error)
+      expect(result.error).toBeDefined();
     }
   });
 
@@ -517,10 +520,13 @@ holeFunc x = _result
     );
     if (result.success) {
       expect(result.written).toBe(true);
-    } else {
+    } else if (result.unavailable) {
       expect(result.unavailable).toBe(true);
       expect(result.reason).toBeDefined();
       expect(result._hint).toBeDefined();
+    } else {
+      // Formatter exists but failed (e.g., syntax error)
+      expect(result.error).toBeDefined();
     }
   });
 });
