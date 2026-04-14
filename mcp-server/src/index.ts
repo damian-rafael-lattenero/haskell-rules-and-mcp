@@ -125,6 +125,9 @@ const ctx: ToolContext = {
   getModuleProgress: (path) => getModProgress(workflowState, path),
   updateModuleProgress: (path, updates) => updateModProgress(workflowState, path, updates),
   setOptionalToolAvailability: (tool, status) => setOptionalToolAvailability(workflowState, tool, status),
+  invalidateProjectsCache: () => {
+    projectsCache = null;
+  },
 };
 
 // --- Register all tools from their modules ---
@@ -372,17 +375,40 @@ server.tool(
   }
 );
 
+// --- Project Discovery Cache ---
+let projectsCache: { projects: Awaited<ReturnType<typeof discoverProjects>>; timestamp: number } | null = null;
+const CACHE_TTL_MS = 5000; // 5 seconds
+
+async function getProjects(searchDir: string, forceRefresh = false): Promise<Awaited<ReturnType<typeof discoverProjects>>> {
+  const now = Date.now();
+  if (!forceRefresh && projectsCache && (now - projectsCache.timestamp) < CACHE_TTL_MS) {
+    return projectsCache.projects;
+  }
+  const projects = await discoverProjects(searchDir, 3);
+  projectsCache = { projects, timestamp: now };
+  return projects;
+}
+
 // --- Tool: ghci_switch_project ---
 server.tool(
   "ghci_switch_project",
   "List available Haskell projects or switch to a different one. " +
-    "Projects are discovered from subdirectories containing .cabal files. " +
-    "Omit the project parameter to list available projects.",
+    "Projects are discovered recursively from subdirectories containing .cabal files (max depth: 3). " +
+    "Omit the project parameter to list available projects. " +
+    "Use search_dir to search in a specific subdirectory.",
   {
     project: z.string().optional().describe("Project name to switch to. Omit to list available projects."),
+    search_dir: z.string().optional().describe(
+      "Optional: subdirectory to search for projects (relative to workspace root). " +
+      "Default: workspace root (searches everywhere recursively up to depth 3)."
+    ),
+    refresh: z.boolean().optional().describe(
+      "Optional: force refresh of project cache. Use after creating new projects with ghci_init."
+    ),
   },
-  async ({ project }) => {
-    const projects = await discoverProjects(BASE_DIR);
+  async ({ project, search_dir, refresh }) => {
+    const searchPath = search_dir ? path.join(BASE_DIR, search_dir) : BASE_DIR;
+    const projects = await getProjects(searchPath, refresh ?? false);
     if (!project) {
       return {
         content: [{

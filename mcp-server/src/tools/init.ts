@@ -174,8 +174,8 @@ export async function handleInit(
         },
         {
           id: "subdirectory",
-          description: `Create '${name}' in a subdirectory: ${workspaceRoot}/projects/${name}/`,
-          action: `Use: target_path: "projects/${name}"`,
+          description: `Create '${name}' in a subdirectory`,
+          action: `Use: target_path: "subdirectory/${name}" (replace 'subdirectory' with your desired folder name)`,
         },
         {
           id: "custom",
@@ -367,7 +367,8 @@ main = putStrLn "No properties exported yet. Run ghci_quickcheck_export first."
     const relativePath = path.relative(workspaceRoot, resolvedTargetDir);
     nextStep =
       `Project created at ${relativePath}. ` +
-      `Run ghci_switch_project(project="${name}") — it switches AND auto-scaffolds source files on switch. ` +
+      `Run ghci_switch_project(project="${name}") to switch to it — it auto-scaffolds source files on switch. ` +
+      `The project cache has been refreshed automatically. ` +
       `Only call ghci_scaffold(signatures={...}) separately if you want typed stubs with = undefined bodies for ghci_suggest hole-fit mode.`;
   }
 
@@ -410,7 +411,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       ),
       target_path: z.string().optional().describe(
         'Optional: relative path from workspace root where to create the project. ' +
-        'Examples: "my-project" (creates in root), "projects/my-lib" (in projects subdirectory). ' +
+        'Examples: "my-project" (creates in root), "subfolder/my-lib" (in subdirectory). ' +
         'If not provided, uses smart resolution based on current project context.'
       ),
       force_in_current: z.boolean().optional().describe(
@@ -445,6 +446,13 @@ export function register(server: McpServer, ctx: ToolContext): void {
           test_suite,
         }
       );
+      
+      // Invalidate projects cache so ghci_switch_project finds the new project
+      const parsed = JSON.parse(result);
+      if (parsed.success && ctx.invalidateProjectsCache) {
+        ctx.invalidateProjectsCache();
+      }
+      
       return { content: [{ type: "text" as const, text: result }] };
     }
   );

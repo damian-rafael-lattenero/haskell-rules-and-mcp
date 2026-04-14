@@ -66,14 +66,19 @@ When triaging issues, always check `source` first to confirm execution path.
 | When | Tool | Why |
 |------|------|-----|
 | Start of session | `ghci_session(status)` | Verify MCP is alive. When no active session, response includes `_hint` listing available projects. |
-| Switch project | `ghci_switch_project(project="name")` | Change active project — also auto-scaffolds missing source files on switch. Uses `project=` parameter (not `name=`). Rolls back safely if GHCi fails to start. |
+| Switch project | `ghci_switch_project(project="name")` | Change active project — also auto-scaffolds missing source files on switch. Uses `project=` parameter (not `name=`). Rolls back safely if GHCi fails to start. Searches recursively up to depth 3. |
+| List all projects | `ghci_switch_project()` | Lists all discoverable projects in workspace (searches recursively). |
+| Search in subdirectory | `ghci_switch_project(search_dir="dirnamedbyuser")` | Lists projects only in specific subdirectory. |
+| After creating project | `ghci_switch_project(project="name")` | Project cache is auto-refreshed after `ghci_init`, no manual refresh needed. |
 | After switch | `ghci_load(load_all=true)` | Verify all modules compile |
 | Lost / unsure what to do | `ghci_workflow(action="help")` | Context-aware next steps with `suggested_tools` and `reasoning` |
 
 ### New project / module
 | When | Tool | Why |
 |------|------|-----|
-| Starting from scratch | `ghci_init(name, modules, deps)` | Generate .cabal + directory structure. Includes `containers` and QuickCheck defaults. |
+| Starting from scratch | `ghci_init(name, modules, deps, target_path="path/to/project")` | Generate .cabal + directory structure. Includes `containers` and QuickCheck defaults. Use `target_path` to specify location. |
+| In workspace root | `ghci_init(name, modules, deps)` | Creates project in workspace root if no `target_path` specified and no current project. |
+| In subdirectory | `ghci_init(name, modules, deps, target_path="subdirectory/my-project")` | Creates project in subdirectory. Automatically discoverable by `ghci_switch_project` (searches recursively up to depth 3). |
 | With test target | `ghci_init(name, modules, deps, test_suite=true)` | Also generates `test-suite` stanza in .cabal + `test/Spec.hs` scaffold |
 | Starting with Stack | `ghci_init(name, modules, deps, build_tool="stack")` | Also generates `stack.yaml` with LTS resolver |
 | Need to add a dependency | `ghci_deps(action="add", package="containers")` | Edits `.cabal` build-depends — no manual editing |

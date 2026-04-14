@@ -30,6 +30,8 @@ export interface ToolContext {
     tool: "lint" | "format" | "hls",
     status: "unknown" | "available" | "unavailable"
   ) => void;
+  /** Invalidate project discovery cache after creating a new project. */
+  invalidateProjectsCache?: () => void;
 }
 
 export type RegisterFn = (server: McpServer, ctx: ToolContext) => void;
