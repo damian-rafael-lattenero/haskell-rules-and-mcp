@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { handleInit, generateTestSuiteSection } from "../tools/init.js";
-import { mkdtemp, rm, readFile, access, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, access, writeFile, mkdir } from "node:fs/promises";
 import { detectBuildTool } from "../parsers/cabal-parser.js";
 import path from "node:path";
 import os from "node:os";
@@ -339,5 +339,132 @@ describe("detectBuildTool", () => {
 
   it("returns 'cabal' by default (nothing present)", async () => {
     expect(await detectBuildTool(dir)).toBe("cabal");
+  });
+});
+
+describe("handleInit — conflict detection", () => {
+  let workspaceRoot: string;
+  let targetDir: string;
+
+  beforeEach(async () => {
+    workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "conflict-test-"));
+    targetDir = workspaceRoot; // Tests will create subdirs
+  });
+
+  afterEach(async () => {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  it("detects direct conflict when .cabal exists in target directory", async () => {
+    const projectDir = path.join(workspaceRoot, "my-project");
+    await mkdir(projectDir);
+    await writeFile(
+      path.join(projectDir, "my-project.cabal"),
+      "name: my-project\n",
+      "utf-8"
+    );
+
+    const result = JSON.parse(
+      await handleInit(projectDir, projectDir, workspaceRoot, {
+        name: "my-project",
+        modules: ["Lib"],
+      })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.conflict_type).toBe("direct");
+    expect(result.details.existingProject).toBe("my-project");
+    expect(result.options).toBeDefined();
+    expect(result.options.length).toBeGreaterThan(0);
+  });
+
+  it("detects subdirectory conflicts when target contains other projects", async () => {
+    const parentDir = path.join(workspaceRoot, "projects");
+    await mkdir(parentDir);
+    
+    // Create existing project in subdirectory
+    const existingProject = path.join(parentDir, "existing-lib");
+    await mkdir(existingProject);
+    await writeFile(
+      path.join(existingProject, "existing-lib.cabal"),
+      "name: existing-lib\n",
+      "utf-8"
+    );
+
+    // Try to create new project in same parent directory
+    const result = JSON.parse(
+      await handleInit(parentDir, workspaceRoot, workspaceRoot, {
+        name: "new-project",
+        modules: ["Lib"],
+        target_path: "projects",
+      })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.conflict_type).toBe("subdirectory");
+    expect(result.details.existingProjects).toContain("existing-lib");
+    expect(result.options).toBeDefined();
+  });
+
+  it("allows creation when force_in_current is true despite conflicts", async () => {
+    const projectDir = path.join(workspaceRoot, "forced-project");
+    await mkdir(projectDir);
+    await writeFile(
+      path.join(projectDir, "old-project.cabal"),
+      "name: old-project\n",
+      "utf-8"
+    );
+
+    const result = JSON.parse(
+      await handleInit(projectDir, projectDir, workspaceRoot, {
+        name: "forced-project",
+        modules: ["Lib"],
+        target_path: "forced-project",
+        force_in_current: true,
+      })
+    );
+
+    expect(result.success).toBe(true);
+    await access(path.join(projectDir, "forced-project.cabal"));
+  });
+
+  it("provides clear options when name differs from existing project", async () => {
+    const projectDir = path.join(workspaceRoot, "existing-name");
+    await mkdir(projectDir);
+    await writeFile(
+      path.join(projectDir, "existing-name.cabal"),
+      "name: existing-name\n",
+      "utf-8"
+    );
+
+    const result = JSON.parse(
+      await handleInit(projectDir, projectDir, workspaceRoot, {
+        name: "different-name",
+        modules: ["Lib"],
+        target_path: "existing-name",
+      })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.conflict_type).toBe("direct");
+    expect(result.details.existingProject).toBe("existing-name");
+    expect(result.details.intendedProject).toBe("different-name");
+    expect(result.question).toContain("existing-name");
+    expect(result.question).toContain("different-name");
+  });
+
+  it("succeeds when target directory is clean", async () => {
+    const cleanDir = path.join(workspaceRoot, "clean-project");
+    
+    const result = JSON.parse(
+      await handleInit(cleanDir, workspaceRoot, workspaceRoot, {
+        name: "clean-project",
+        modules: ["Lib"],
+        target_path: "clean-project",
+      })
+    );
+
+    expect(result.success).toBe(true);
+    await access(path.join(cleanDir, "clean-project.cabal"));
   });
 });

@@ -32,6 +32,52 @@ async function checkExistingProject(dir: string): Promise<string | null> {
   }
 }
 
+/**
+ * Check if target directory or any of its immediate subdirectories contain Haskell projects.
+ * Returns info about found projects.
+ */
+async function checkForConflictingProjects(
+  targetDir: string,
+  intendedName: string
+): Promise<{ hasDirectConflict: boolean; hasSubdirProjects: boolean; subdirProjects: string[] }> {
+  const result = {
+    hasDirectConflict: false,
+    hasSubdirProjects: false,
+    subdirProjects: [] as string[],
+  };
+
+  // Check if target directory itself has a .cabal
+  const directCabal = await checkExistingProject(targetDir);
+  if (directCabal) {
+    result.hasDirectConflict = true;
+    return result;
+  }
+
+  // Check immediate subdirectories for .cabal files
+  try {
+    const entries = await readdir(targetDir);
+    for (const entry of entries) {
+      const subPath = path.join(targetDir, entry);
+      try {
+        const stats = await stat(subPath);
+        if (stats.isDirectory()) {
+          const subCabal = await checkExistingProject(subPath);
+          if (subCabal) {
+            result.hasSubdirProjects = true;
+            result.subdirProjects.push(entry);
+          }
+        }
+      } catch {
+        // Skip entries we can't read
+      }
+    }
+  } catch {
+    // Target directory doesn't exist yet - that's fine
+  }
+
+  return result;
+}
+
 function buildTestSuiteDeps(allDeps: string[]): string[] {
   const testDeps = allDeps.filter((d) => !d.startsWith("base"));
   const quickCheckIndex = testDeps.findIndex((d) => d.includes("QuickCheck"));
@@ -145,26 +191,84 @@ export async function handleInit(
     resolvedTargetDir = path.join(workspaceRoot, name);
   }
   
-  // Check if a .cabal already exists in the resolved target directory
-  const existingCabal = await checkExistingProject(resolvedTargetDir);
+  // CRITICAL VALIDATION: Check for conflicting projects
+  const conflicts = await checkForConflictingProjects(resolvedTargetDir, name);
   
-  if (existingCabal && !force_in_current) {
-    const existingProjectName = existingCabal.replace(".cabal", "");
-    // We're trying to init in a directory that already has a project
+  // Case A: Direct conflict - target directory already has a .cabal file
+  if (conflicts.hasDirectConflict && !force_in_current) {
+    const existingCabal = await checkExistingProject(resolvedTargetDir);
+    const existingProjectName = existingCabal!.replace(".cabal", "");
+    
     return JSON.stringify({
       success: false,
-      error: `A .cabal file already exists in ${resolvedTargetDir} (${existingCabal}).`,
-      context: {
+      error: `Project already exists at target location`,
+      conflict_type: "direct",
+      details: {
         targetDir: resolvedTargetDir,
         existingProject: existingProjectName,
+        existingCabalFile: existingCabal,
         intendedProject: name,
       },
-      suggestions: [
-        existingProjectName === name
-          ? "If you want to add modules to the existing project, use ghci_scaffold instead."
-          : `Project '${existingProjectName}' exists but you requested '${name}'. Check your project name.`,
-        `If you want to REPLACE the existing project (dangerous), use: force_in_current: true`,
-        `If you want a NEW project, use a different target_path.`,
+      question: existingProjectName === name
+        ? `Project '${name}' already exists. What do you want to do?`
+        : `Project '${existingProjectName}' exists but you requested '${name}'. What do you want to do?`,
+      options: [
+        {
+          id: "use_existing",
+          description: `Use existing project '${existingProjectName}' (recommended if names match)`,
+          action: existingProjectName === name
+            ? `Switch to it with: ghci_switch_project(project="${name}")`
+            : `Check if you meant to use '${existingProjectName}' instead of '${name}'`,
+        },
+        {
+          id: "add_modules",
+          description: `Add modules to existing project without overwriting`,
+          action: `Use: ghci_scaffold(signatures={...})`,
+        },
+        {
+          id: "replace",
+          description: `DANGER: Replace existing project completely`,
+          action: `Use: force_in_current: true (will delete existing .cabal and recreate)`,
+        },
+        {
+          id: "new_location",
+          description: `Create '${name}' in a different location`,
+          action: `Use: target_path: "different/path/${name}"`,
+        },
+      ],
+    });
+  }
+  
+  // Case B: Subdirectory conflicts - target path contains other projects
+  if (conflicts.hasSubdirProjects && !force_in_current) {
+    return JSON.stringify({
+      success: false,
+      error: `Target directory contains existing Haskell projects`,
+      conflict_type: "subdirectory",
+      details: {
+        targetDir: resolvedTargetDir,
+        intendedProject: name,
+        existingProjects: conflicts.subdirProjects,
+      },
+      question: `Directory '${path.basename(resolvedTargetDir)}' already contains ${conflicts.subdirProjects.length} project(s): ${conflicts.subdirProjects.join(", ")}. What do you want to do?`,
+      options: [
+        {
+          id: "create_alongside",
+          description: `Create '${name}' as a sibling project in the same directory`,
+          action: `Confirm by re-running with: force_in_current: true`,
+          warning: "This will create a multi-project directory structure",
+        },
+        {
+          id: "use_existing",
+          description: `Use one of the existing projects instead`,
+          action: `Switch with: ghci_switch_project(project="<project-name>")`,
+          available: conflicts.subdirProjects,
+        },
+        {
+          id: "new_location",
+          description: `Create '${name}' in a clean directory`,
+          action: `Use: target_path: "clean/path/${name}"`,
+        },
       ],
     });
   }
