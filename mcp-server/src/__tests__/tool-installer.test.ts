@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
-import { rm } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   TOOL_SPECS,
@@ -137,6 +137,34 @@ describe("bundled tool resolution", () => {
         ? "@echo off\r\necho bundled hlint\r\n"
         : "#!/usr/bin/env sh\necho bundled hlint\n"
     );
+    const raw = await readManifestRaw();
+    const manifest = JSON.parse(raw) as {
+      manifestVersion: number;
+      updatedAt: string;
+      tools: Array<{
+        tool: string;
+        platform: string;
+        arch: string;
+        filename: string;
+        version: string;
+        sha256?: string;
+        provenance?: string;
+      }>;
+    };
+    const entry = manifest.tools.find(
+      (item) =>
+        item.tool === "hlint" &&
+        item.platform === process.platform &&
+        item.arch === process.arch
+    );
+    if (!entry) throw new Error("missing runtime manifest entry for hlint");
+    entry.filename = path
+      .relative(path.join(rootDir, "vendor-tools"), runtimeBinAbs)
+      .replace(/\\/g, "/");
+    entry.sha256 = "";
+    manifest.updatedAt = new Date().toISOString();
+    await writeFile(path.join(rootDir, "vendor-tools", "bundled-tools-manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf8");
+    resetBundledManifestCache();
 
     const bundled = await getBundledToolStatus("hlint");
     expect(bundled.available).toBe(false);
