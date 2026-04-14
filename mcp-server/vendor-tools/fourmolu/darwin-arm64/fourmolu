@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if command -v fourmolu >/dev/null 2>&1; then
+  exec fourmolu "$@"
+fi
+
+echo "Bundled fourmolu shim could not find host 'fourmolu' in PATH." >&2
+exit 127

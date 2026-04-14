@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if command -v ormolu >/dev/null 2>&1; then
+  exec ormolu "$@"
+fi
+
+echo "Bundled ormolu shim could not find host 'ormolu' in PATH." >&2
+exit 127

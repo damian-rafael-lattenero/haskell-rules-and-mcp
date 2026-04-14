@@ -21,7 +21,7 @@ chmod +x scripts/setup-bundled-tools.sh
 This script:
 
 - Builds TypeScript scripts
-- Downloads `hlint`, `fourmolu`, and `ormolu` for the current platform
+- Downloads `hlint`, `fourmolu`, `ormolu`, and `hls` for the current platform
 - Updates `bundled-tools-manifest.json` checksums and metadata
 - Runs validation and smoke checks
 
@@ -33,6 +33,7 @@ npm run tools:download -- hlint darwin-arm64
 npm run tools:update-manifest -- --tool hlint --platform darwin --arch arm64 --version 3.9 --provenance https://github.com/ndmitchell/hlint/releases/tag/v3.9
 npm run tools:validate
 npm run tools:test -- hlint
+npm run tools:test -- hls
 ```
 
 ## Manifest

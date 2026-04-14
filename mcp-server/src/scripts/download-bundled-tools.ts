@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 
-type SupportedTool = "hlint" | "fourmolu" | "ormolu";
+type SupportedTool = "hlint" | "fourmolu" | "ormolu" | "hls";
 type SupportedTarget =
   | "darwin-arm64"
   | "darwin-x64"
@@ -26,6 +26,16 @@ export const TOOL_URLS: Record<SupportedTool, Partial<Record<SupportedTarget, st
     "darwin-x64": "https://github.com/tweag/ormolu/releases/download/0.7.7.0/ormolu-x86_64-darwin.zip",
     "linux-x64": "https://github.com/tweag/ormolu/releases/download/0.7.7.0/ormolu-x86_64-linux.zip",
   },
+  hls: {
+    "darwin-arm64":
+      "https://github.com/haskell/haskell-language-server/releases/download/2.13.0.0/haskell-language-server-2.13.0.0-aarch64-apple-darwin.tar.xz",
+    "darwin-x64":
+      "https://github.com/haskell/haskell-language-server/releases/download/2.13.0.0/haskell-language-server-2.13.0.0-x86_64-apple-darwin.tar.xz",
+    "linux-arm64":
+      "https://github.com/haskell/haskell-language-server/releases/download/2.13.0.0/haskell-language-server-2.13.0.0-aarch64-linux-ubuntu2204.tar.xz",
+    "linux-x64":
+      "https://github.com/haskell/haskell-language-server/releases/download/2.13.0.0/haskell-language-server-2.13.0.0-x86_64-linux-ubuntu2204.tar.xz",
+  },
 };
 
 function usage(): string {
@@ -33,7 +43,7 @@ function usage(): string {
 }
 
 function isSupportedTool(tool: string): tool is SupportedTool {
-  return tool === "hlint" || tool === "fourmolu" || tool === "ormolu";
+  return tool === "hlint" || tool === "fourmolu" || tool === "ormolu" || tool === "hls";
 }
 
 function isSupportedTarget(target: string): target is SupportedTarget {
@@ -47,6 +57,7 @@ function isSupportedTarget(target: string): target is SupportedTarget {
 
 export function getBinaryName(tool: SupportedTool, target: SupportedTarget): string {
   const ext = target.startsWith("win32") ? ".exe" : "";
+  if (tool === "hls") return `haskell-language-server-wrapper${ext}`;
   return `${tool}${ext}`;
 }
 
@@ -114,6 +125,28 @@ export async function extractZip(
   }
 }
 
+export async function extractTarXz(
+  archivePath: string,
+  destinationDir: string,
+  binaryName: string
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    execFile("tar", ["-xJf", archivePath, "-C", destinationDir], (error) =>
+      error ? reject(error) : resolve()
+    );
+  });
+
+  const located = await findFileRecursive(destinationDir, binaryName);
+  if (!located) {
+    throw new Error(`Could not locate ${binaryName} after extracting ${archivePath}`);
+  }
+
+  const targetPath = path.join(destinationDir, binaryName);
+  if (located !== targetPath) {
+    await rename(located, targetPath);
+  }
+}
+
 export async function ensureExecutable(binaryPath: string): Promise<void> {
   await chmod(binaryPath, 0o755);
 }
@@ -140,8 +173,10 @@ export async function downloadBundledTool(tool: SupportedTool, target: Supported
   const outputDir = path.join(rootDir, "vendor-tools", tool, target);
   const outputBinary = path.join(outputDir, binaryName);
   const isArchive = url.endsWith(".tar.gz");
+  const isTarXz = url.endsWith(".tar.xz");
   const isZip = url.endsWith(".zip");
   const tempArchive = path.join(outputDir, `${tool}.tar.gz`);
+  const tempTarXz = path.join(outputDir, `${tool}.tar.xz`);
   const tempZip = path.join(outputDir, `${tool}.zip`);
 
   await mkdir(outputDir, { recursive: true });
@@ -149,6 +184,10 @@ export async function downloadBundledTool(tool: SupportedTool, target: Supported
     await downloadFile(url, tempArchive);
     await extractTarGz(tempArchive, outputDir, binaryName);
     await rm(tempArchive, { force: true });
+  } else if (isTarXz) {
+    await downloadFile(url, tempTarXz);
+    await extractTarXz(tempTarXz, outputDir, binaryName);
+    await rm(tempTarXz, { force: true });
   } else if (isZip) {
     await downloadFile(url, tempZip);
     await extractZip(tempZip, outputDir, binaryName);

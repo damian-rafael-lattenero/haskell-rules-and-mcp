@@ -35,6 +35,9 @@ npm run tools:download -- fourmolu "${target}"
 echo "Downloading ormolu for ${target}..."
 npm run tools:download -- ormolu "${target}" || echo "ormolu download skipped for ${target}"
 
+echo "Downloading hls for ${target}..."
+npm run tools:download -- hls "${target}" || echo "hls download skipped for ${target}"
+
 echo "Updating manifest checksums..."
 npm run tools:update-manifest -- \
   --tool hlint \
@@ -59,12 +62,24 @@ if [ -f "vendor-tools/ormolu/${target}/ormolu" ]; then
     --provenance "https://github.com/tweag/ormolu/releases/tag/0.7.7.0"
 fi
 
+if [ -f "vendor-tools/hls/${target}/haskell-language-server-wrapper" ]; then
+  npm run tools:update-manifest -- \
+    --tool hls \
+    --platform "${platform}" \
+    --arch "${target_arch}" \
+    --version "2.13.0.0" \
+    --provenance "https://github.com/haskell/haskell-language-server/releases/tag/2.13.0.0"
+fi
+
 echo "Validating bundled tools..."
 npm run tools:validate
 npm run tools:test -- hlint
 npm run tools:test -- fourmolu
 if [ -f "vendor-tools/ormolu/${target}/ormolu" ]; then
   npm run tools:test -- ormolu
+fi
+if [ -f "vendor-tools/hls/${target}/haskell-language-server-wrapper" ]; then
+  npm run tools:test -- hls
 fi
 
 echo "Bundled tools setup complete for ${target}."

@@ -33,10 +33,11 @@ jobs:
         run: npm run build
 
       - name: Validate bundled manifest and checksums
-        run: npm run tools:validate
+        run: npm run tools:validate -- --include-hls
 
       - name: Smoke test bundled binaries
         run: |
           npm run tools:test -- hlint
           npm run tools:test -- fourmolu
           npm run tools:test -- ormolu
+          npm run tools:test -- hls
