@@ -11,23 +11,23 @@ export interface ProjectInfo {
 }
 
 /**
- * Discover Haskell projects in the playground directory.
+ * Discover Haskell projects in a directory.
  * A project is any subdirectory containing a .cabal file.
  */
 export async function discoverProjects(
-  playgroundDir: string
+  searchDir: string
 ): Promise<ProjectInfo[]> {
   const projects: ProjectInfo[] = [];
 
   let entries: string[];
   try {
-    entries = await readdir(playgroundDir);
+    entries = await readdir(searchDir);
   } catch {
     return [];
   }
 
   for (const entry of entries) {
-    const fullPath = path.join(playgroundDir, entry);
+    const fullPath = path.join(searchDir, entry);
     try {
       const cabalFile = await findCabalFile(fullPath);
       const content = await readFile(cabalFile, "utf-8");
@@ -43,11 +43,4 @@ export async function discoverProjects(
   }
 
   return projects;
-}
-
-/**
- * Resolve the playground directory from the MCP server's base directory.
- */
-export function getPlaygroundDir(baseDir: string): string {
-  return path.join(baseDir, "playground");
 }

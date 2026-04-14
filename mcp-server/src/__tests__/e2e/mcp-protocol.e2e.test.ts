@@ -149,7 +149,7 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
       .text;
     const parsed = JSON.parse(text);
     expect(parsed).toHaveProperty("projects");
-    // May be empty array since test-project is set via env, not in playground/
+    // May be empty array since test-project is set via env, not discovered from subdirectories
     expect(parsed).toHaveProperty("activeProject");
   });
 

@@ -5,7 +5,7 @@ import path from "node:path";
 import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { GhciSession } from "./ghci-session.js";
 import { resetQuickCheckState } from "./tools/quickcheck.js";
-import { discoverProjects, getPlaygroundDir } from "./project-manager.js";
+import { discoverProjects } from "./project-manager.js";
 import { RULES_REGISTRY, loadRule } from "./resources/rules.js";
 import { parseEvalOutput } from "./parsers/eval-output-parser.js";
 import { createRulesChecker, type ToolContext } from "./tools/registry.js";
@@ -305,7 +305,7 @@ server.tool(
       // When no active session, surface available projects so the LLM can switch
       if (!alive) {
         try {
-          const projects = await discoverProjects(getPlaygroundDir(BASE_DIR));
+          const projects = await discoverProjects(BASE_DIR);
           const others = projects.filter((p) => p.path !== projectDir);
           if (others.length > 0) {
             response._hint =
@@ -376,14 +376,13 @@ server.tool(
 server.tool(
   "ghci_switch_project",
   "List available Haskell projects or switch to a different one. " +
-    "Projects are discovered from the playground/ directory. " +
+    "Projects are discovered from subdirectories containing .cabal files. " +
     "Omit the project parameter to list available projects.",
   {
     project: z.string().optional().describe("Project name to switch to. Omit to list available projects."),
   },
   async ({ project }) => {
-    const playgroundDir = getPlaygroundDir(BASE_DIR);
-    const projects = await discoverProjects(playgroundDir);
+    const projects = await discoverProjects(BASE_DIR);
     if (!project) {
       return {
         content: [{

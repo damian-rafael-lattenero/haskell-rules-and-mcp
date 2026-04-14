@@ -127,9 +127,9 @@ export async function handleInit(
           action: `Use: target_path: "${name}"`,
         },
         {
-          id: "playground",
-          description: `Create '${name}' in playground: ${workspaceRoot}/playground/${name}/`,
-          action: `Use: target_path: "playground/${name}"`,
+          id: "subdirectory",
+          description: `Create '${name}' in a subdirectory: ${workspaceRoot}/projects/${name}/`,
+          action: `Use: target_path: "projects/${name}"`,
         },
         {
           id: "custom",
@@ -288,7 +288,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       "SMART PATH RESOLUTION: " +
       "1) If target_path provided → uses it explicitly. " +
       "2) If name matches current project → works in current project directory. " +
-      "3) If name differs → asks for clarification (workspace root vs playground vs custom). " +
+      "3) If name differs → asks for clarification (workspace root vs subdirectory vs custom). " +
       "4) If no current project → creates in workspace root. " +
       "This prevents accidental overwrites and makes intent clear.",
     {
@@ -306,7 +306,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       ),
       target_path: z.string().optional().describe(
         'Optional: relative path from workspace root where to create the project. ' +
-        'Examples: "expr-eval" (creates in root), "playground/expr-eval" (in playground), "projects/my-lib". ' +
+        'Examples: "my-project" (creates in root), "projects/my-lib" (in projects subdirectory). ' +
         'If not provided, uses smart resolution based on current project context.'
       ),
       force_in_current: z.boolean().optional().describe(
