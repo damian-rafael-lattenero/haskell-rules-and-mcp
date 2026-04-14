@@ -3,6 +3,7 @@ import {
   handleExportTests,
   isTrivialProperty,
   detectQualifiedImports,
+  normalizePropertyForExport,
 } from "../tools/export-tests.js";
 import { saveProperty } from "../property-store.js";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
@@ -83,6 +84,35 @@ describe("handleExportTests", () => {
     await saveProperty(tmpDir, { property: "\\x -> x == x", module: "src/Lib.hs" });
     const result = JSON.parse(await handleExportTests(tmpDir, { validate_test_suite: false }));
     expect(result._nextStep).toContain("cabal_test");
+  });
+
+  describe("normalizePropertyForExport", () => {
+    it("adds annotation for single wildcard lambda", () => {
+      expect(normalizePropertyForExport("\\_ -> True")).toBe("(\\_ -> True :: () -> Bool)");
+    });
+
+    it("adds annotation for multi-argument lambda with wildcard", () => {
+      expect(normalizePropertyForExport("\\x _ -> x == x")).toBe(
+        "(\\x _ -> x == x :: () -> Bool)"
+      );
+      expect(normalizePropertyForExport("\\_ y -> y > 0")).toBe(
+        "(\\_ y -> y > 0 :: () -> Bool)"
+      );
+      expect(normalizePropertyForExport("\\_ _ -> True")).toBe(
+        "(\\_ _ -> True :: () -> Bool)"
+      );
+    });
+
+    it("does not mutate normal property lambdas", () => {
+      expect(normalizePropertyForExport("\\x -> x == x")).toBe("\\x -> x == x");
+      expect(normalizePropertyForExport("\\x y -> x + y == y + x")).toBe(
+        "\\x y -> x + y == y + x"
+      );
+    });
+
+    it("does not mutate point-free properties", () => {
+      expect(normalizePropertyForExport("const True")).toBe("const True");
+    });
   });
 
   // ─── Bug Fix 8a: trivial property filter ────────────────────────────────────
@@ -200,6 +230,17 @@ describe("handleExportTests", () => {
       await handleExportTests(tmpDir, { validate_test_suite: false });
       const content = await readFile(path.join(tmpDir, "test/Spec.hs"), "utf-8");
       expect(content).not.toContain("import qualified Data.Map");
+    });
+
+    it("normalizes wildcard properties so generated test file compiles", async () => {
+      await saveProperty(tmpDir, {
+        property: "\\_ -> (1 :: Int) == 1",
+        module: "src/Lib.hs",
+      });
+
+      await handleExportTests(tmpDir, { validate_test_suite: false });
+      const content = await readFile(path.join(tmpDir, "test/Spec.hs"), "utf-8");
+      expect(content).toContain("quickCheck ((\\_ -> (1 :: Int) == 1 :: () -> Bool))");
     });
   });
 });

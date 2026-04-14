@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { handleInit } from "../tools/init.js";
+import { handleInit, generateTestSuiteSection } from "../tools/init.js";
 import { mkdtemp, rm, readFile, access, writeFile } from "node:fs/promises";
 import { detectBuildTool } from "../parsers/cabal-parser.js";
 import path from "node:path";
@@ -167,6 +167,7 @@ describe("handleInit", () => {
     expect(cabal).toContain("test-suite");
     expect(cabal).toContain("exitcode-stdio-1.0");
     expect(cabal).toContain("Spec.hs");
+    expect(cabal).toContain("containers");
   });
 
   it("test_suite=true creates test/Spec.hs", async () => {
@@ -275,6 +276,42 @@ describe("handleInit", () => {
       found = true;
     } catch { /* expected */ }
     expect(found).toBe(false);
+  });
+});
+
+describe("generateTestSuiteSection", () => {
+  it("includes library dependencies in the test suite stanza", () => {
+    const allDeps = ["base >= 4.20 && < 5", "containers", "text >= 2.0", "QuickCheck >= 2.14"];
+    const section = generateTestSuiteSection("my-lib", allDeps, "GHC2024");
+
+    expect(section).toContain("test-suite my-lib-test");
+    expect(section).toContain("containers");
+    expect(section).toContain("text >= 2.0");
+    expect(section).toContain("QuickCheck >= 2.14");
+  });
+
+  it("does not duplicate base dependency in copied test deps", () => {
+    const section = generateTestSuiteSection(
+      "my-lib",
+      ["base >= 4.20 && < 5", "containers", "QuickCheck >= 2.14"],
+      "GHC2024"
+    );
+
+    const baseMatches = section.match(/base\s+>=\s+4\.20/g) ?? [];
+    expect(baseMatches).toHaveLength(1);
+  });
+
+  it("keeps valid stanza shape when only QuickCheck is present", () => {
+    const section = generateTestSuiteSection(
+      "my-lib",
+      ["base >= 4.20 && < 5", "QuickCheck >= 2.14"],
+      "GHC2024"
+    );
+
+    expect(section).toContain("test-suite my-lib-test");
+    expect(section).toContain("main-is:          Spec.hs");
+    expect(section).toContain("QuickCheck >= 2.14");
+    expect(section).toContain("default-language: GHC2024");
   });
 });
 

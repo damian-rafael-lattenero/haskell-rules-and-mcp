@@ -32,6 +32,40 @@ async function checkExistingProject(dir: string): Promise<string | null> {
   }
 }
 
+function buildTestSuiteDeps(allDeps: string[]): string[] {
+  const testDeps = allDeps.filter((d) => !d.startsWith("base"));
+  const quickCheckIndex = testDeps.findIndex((d) => d.includes("QuickCheck"));
+
+  if (quickCheckIndex > 0) {
+    const [quickCheck] = testDeps.splice(quickCheckIndex, 1);
+    testDeps.push(quickCheck!);
+  }
+
+  return testDeps;
+}
+
+export function generateTestSuiteSection(
+  packageName: string,
+  allDeps: string[],
+  lang: string
+): string {
+  const testDeps = buildTestSuiteDeps(allDeps);
+  const renderedDeps = testDeps.map((dep) => `    ${dep}`).join(",\n");
+
+  const copiedDeps = renderedDeps.length > 0 ? `${renderedDeps},\n` : "";
+  return `
+test-suite ${packageName}-test
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Spec.hs
+  build-depends:
+    base >= 4.20 && < 5,
+    ${packageName},
+${copiedDeps}  default-language: ${lang}
+  ghc-options:       -Wall
+`;
+}
+
 export async function handleInit(
   targetDir: string,
   currentProjectDir: string,
@@ -160,18 +194,7 @@ export async function handleInit(
 
   const depsSection = allDeps.map(d => `    ${d}`).join(",\n");
 
-  const testSuiteSection = test_suite ? `
-test-suite ${name}-test
-  type:             exitcode-stdio-1.0
-  hs-source-dirs:   test
-  main-is:          Spec.hs
-  build-depends:
-    base >= 4.20 && < 5,
-    ${name},
-    QuickCheck >= 2.14
-  default-language: ${lang}
-  ghc-options:       -Wall
-` : "";
+  const testSuiteSection = test_suite ? generateTestSuiteSection(name, allDeps, lang) : "";
 
   const cabalContent = `cabal-version:      2.4
 name:               ${name}
