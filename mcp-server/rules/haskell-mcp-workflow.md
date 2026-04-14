@@ -40,6 +40,23 @@ automatically. Once gates are complete, the session-close hint appears.
 
 ---
 
+## BUNDLED TOOLCHAIN FIRST
+
+The MCP now prioritizes bundled binaries for lint/format/HLS so users don't
+need local host tooling installed.
+
+- Tool resolution order: **bundled binary -> host PATH -> auto-install**
+- `ghci_lint`, `ghci_format`, and `ghci_hls` responses include:
+  - `source` (`bundled`, `host`, or `installed`)
+  - `binaryPath`
+  - `version` (when available)
+- If bundled binary for current OS/arch is missing or invalid, MCP falls back
+  safely to host/installer paths without blocking core workflows.
+
+When triaging issues, always check `source` first to confirm execution path.
+
+---
+
 ## WHEN → TOOL → WHY
 
 ### Session startup
@@ -89,6 +106,7 @@ automatically. Once gates are complete, the session-close hint appears.
 | Need to enable a GHC extension | `ghci_flags(action="set", flags="-XOverloadedStrings")` | Sets flag for the current session (not persisted to .cabal) |
 | Want to see active language settings | `ghci_flags(action="list")` | Shows base language + active modifiers |
 | Need to disable a flag | `ghci_flags(action="unset", flags="-XSomething")` | Removes flag from current session |
+| Want always-on toolchain from MCP | `ghci_lint`, `ghci_format`, `ghci_hls` | These tools now try bundled binaries first and report `source`/`binaryPath` in responses |
 
 ### Module complete gate (MANDATORY before next module)
 | When | Tool | Why |

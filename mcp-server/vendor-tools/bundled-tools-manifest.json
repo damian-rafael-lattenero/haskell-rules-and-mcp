@@ -1,0 +1,222 @@
+{
+  "manifestVersion": 1,
+  "updatedAt": "2026-04-14T00:00:00Z",
+  "tools": [
+    {
+      "tool": "hlint",
+      "version": "latest-stable",
+      "platform": "darwin",
+      "arch": "arm64",
+      "filename": "hlint/darwin-arm64/hlint",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "hlint",
+      "version": "latest-stable",
+      "platform": "darwin",
+      "arch": "x64",
+      "filename": "hlint/darwin-x64/hlint",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "hlint",
+      "version": "latest-stable",
+      "platform": "linux",
+      "arch": "x64",
+      "filename": "hlint/linux-x64/hlint",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "hlint",
+      "version": "latest-stable",
+      "platform": "linux",
+      "arch": "arm64",
+      "filename": "hlint/linux-arm64/hlint",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "hlint",
+      "version": "latest-stable",
+      "platform": "win32",
+      "arch": "x64",
+      "filename": "hlint/win32-x64/hlint.exe",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "hlint",
+      "version": "latest-stable",
+      "platform": "win32",
+      "arch": "arm64",
+      "filename": "hlint/win32-arm64/hlint.exe",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "fourmolu",
+      "version": "latest-stable",
+      "platform": "darwin",
+      "arch": "arm64",
+      "filename": "fourmolu/darwin-arm64/fourmolu",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "fourmolu",
+      "version": "latest-stable",
+      "platform": "darwin",
+      "arch": "x64",
+      "filename": "fourmolu/darwin-x64/fourmolu",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "fourmolu",
+      "version": "latest-stable",
+      "platform": "linux",
+      "arch": "x64",
+      "filename": "fourmolu/linux-x64/fourmolu",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "fourmolu",
+      "version": "latest-stable",
+      "platform": "linux",
+      "arch": "arm64",
+      "filename": "fourmolu/linux-arm64/fourmolu",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "fourmolu",
+      "version": "latest-stable",
+      "platform": "win32",
+      "arch": "x64",
+      "filename": "fourmolu/win32-x64/fourmolu.exe",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "fourmolu",
+      "version": "latest-stable",
+      "platform": "win32",
+      "arch": "arm64",
+      "filename": "fourmolu/win32-arm64/fourmolu.exe",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "ormolu",
+      "version": "latest-stable",
+      "platform": "darwin",
+      "arch": "arm64",
+      "filename": "ormolu/darwin-arm64/ormolu",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "ormolu",
+      "version": "latest-stable",
+      "platform": "darwin",
+      "arch": "x64",
+      "filename": "ormolu/darwin-x64/ormolu",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "ormolu",
+      "version": "latest-stable",
+      "platform": "linux",
+      "arch": "x64",
+      "filename": "ormolu/linux-x64/ormolu",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "ormolu",
+      "version": "latest-stable",
+      "platform": "linux",
+      "arch": "arm64",
+      "filename": "ormolu/linux-arm64/ormolu",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "ormolu",
+      "version": "latest-stable",
+      "platform": "win32",
+      "arch": "x64",
+      "filename": "ormolu/win32-x64/ormolu.exe",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "ormolu",
+      "version": "latest-stable",
+      "platform": "win32",
+      "arch": "arm64",
+      "filename": "ormolu/win32-arm64/ormolu.exe",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "hls",
+      "version": "latest-stable",
+      "platform": "darwin",
+      "arch": "arm64",
+      "filename": "hls/darwin-arm64/haskell-language-server-wrapper",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "hls",
+      "version": "latest-stable",
+      "platform": "darwin",
+      "arch": "x64",
+      "filename": "hls/darwin-x64/haskell-language-server-wrapper",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "hls",
+      "version": "latest-stable",
+      "platform": "linux",
+      "arch": "x64",
+      "filename": "hls/linux-x64/haskell-language-server-wrapper",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "hls",
+      "version": "latest-stable",
+      "platform": "linux",
+      "arch": "arm64",
+      "filename": "hls/linux-arm64/haskell-language-server-wrapper",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "hls",
+      "version": "latest-stable",
+      "platform": "win32",
+      "arch": "x64",
+      "filename": "hls/win32-x64/haskell-language-server-wrapper.exe",
+      "sha256": "",
+      "provenance": "placeholder"
+    },
+    {
+      "tool": "hls",
+      "version": "latest-stable",
+      "platform": "win32",
+      "arch": "arm64",
+      "filename": "hls/win32-arm64/haskell-language-server-wrapper.exe",
+      "sha256": "",
+      "provenance": "placeholder"
+    }
+  ]
+}

@@ -2,9 +2,11 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { execFile } from "node:child_process";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import type { GhciSession } from "../ghci-session.js";
 import { parseGhcErrors } from "../parsers/error-parser.js";
 import { categorizeWarnings } from "../parsers/warning-categorizer.js";
+import { analyzeBasicLintRules } from "../parsers/basic-lint-rules.js";
 import type { ToolContext } from "./registry.js";
 import { ensureTool, TOOL_PATH } from "./tool-installer.js";
 
@@ -55,6 +57,33 @@ async function ghciLintFallback(
   }
 }
 
+async function basicLintFallback(
+  projectDir: string,
+  modulePath: string
+): Promise<string> {
+  const absPath = path.resolve(projectDir, modulePath);
+  try {
+    const code = await readFile(absPath, "utf8");
+    const suggestions = analyzeBasicLintRules(code, modulePath);
+    return JSON.stringify({
+      success: true,
+      fallback: true,
+      source: "basic-lint-rules",
+      count: suggestions.length,
+      suggestions,
+      installHint:
+        "Install hlint for deeper analysis. MCP will prefer bundled hlint when available.",
+    });
+  } catch {
+    return JSON.stringify({
+      success: false,
+      fallback: true,
+      source: "basic-lint-rules",
+      error: `Could not read module for lint fallback: ${modulePath}`,
+    });
+  }
+}
+
 export async function handleLint(
   projectDir: string,
   args: { module_path: string },
@@ -66,26 +95,38 @@ export async function handleLint(
     // Provide the GHC-warnings fallback so the LLM gets some signal now,
     // but flag it clearly so it knows to retry once hlint is ready.
     if (session) {
-      const fallback = JSON.parse(await ghciLintFallback(session, args.module_path));
+      const ghcFallback = JSON.parse(await ghciLintFallback(session, args.module_path));
+      const basicFallback = JSON.parse(await basicLintFallback(projectDir, args.module_path));
+      const mergedSuggestions = [
+        ...(Array.isArray(ghcFallback.suggestions) ? ghcFallback.suggestions : []),
+        ...(Array.isArray(basicFallback.suggestions) ? basicFallback.suggestions : []),
+      ];
       return JSON.stringify({
-        ...fallback,
+        success: true,
+        fallback: true,
+        source: "ghc-warnings+basic-lint-rules",
+        count: mergedSuggestions.length,
+        suggestions: mergedSuggestions,
+        installHint:
+          "Bundled hlint not available for this platform yet. Host/auto-install hlint will be used when ready.",
         _hlint_status: hlint.installing ? "installing" : hlint.failed ? "failed" : "unavailable",
         _hlint_message: hlint.message,
       });
     }
+    const basicFallback = JSON.parse(await basicLintFallback(projectDir, args.module_path));
     return JSON.stringify({
-      success: false,
-      installing: hlint.installing,
-      failed: hlint.failed,
-      error: hlint.message,
+      ...basicFallback,
+      _hlint_status: hlint.installing ? "installing" : hlint.failed ? "failed" : "unavailable",
+      _hlint_message: hlint.message,
     });
   }
 
   const absPath = path.resolve(projectDir, args.module_path);
+  const hlintCmd = hlint.binaryPath ?? "hlint";
 
   return new Promise<string>((resolve) => {
     execFile(
-      "hlint",
+      hlintCmd,
       ["--json", absPath],
       { env: { ...process.env, PATH: TOOL_PATH }, timeout: 30_000 },
       (error, stdout, stderr) => {
@@ -122,6 +163,9 @@ export async function handleLint(
             JSON.stringify({
               success: true,
               lint_tool: "hlint",
+              source: hlint.source ?? "host",
+              version: hlint.version,
+              binaryPath: hlint.binaryPath,
               count: suggestions.length,
               suggestions,
               summary:

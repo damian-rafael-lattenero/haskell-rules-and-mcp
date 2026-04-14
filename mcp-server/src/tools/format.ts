@@ -4,15 +4,16 @@ import { execFile } from "node:child_process";
 import { readFile, writeFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { ToolContext } from "./registry.js";
-import { ensureTool, toolAvailable, TOOL_PATH } from "./tool-installer.js";
+import { ensureTool, resolveToolBinary, TOOL_PATH } from "./tool-installer.js";
 
 /**
  * Detect which formatter is available. Prefers fourmolu over ormolu.
  * Returns the binary name, or null if neither is installed.
  */
 async function detectFormatter(): Promise<string | null> {
-  for (const cmd of ["fourmolu", "ormolu"]) {
-    if (await toolAvailable(cmd)) return cmd;
+  for (const cmd of ["fourmolu", "ormolu"] as const) {
+    const resolved = await resolveToolBinary(cmd);
+    if (resolved) return resolved.binaryPath;
   }
   return null;
 }
@@ -141,12 +142,18 @@ export async function handleFormat(
   args: { module_path: string; write?: boolean }
 ): Promise<string> {
   let formatter = await detectFormatter();
+  let formatterSource: "bundled" | "host" | "installed" = "host";
+  let formatterVersion: string | undefined;
 
   if (!formatter) {
     // Trigger auto-installation of fourmolu (preferred over ormolu).
     const fourmolu = await ensureTool("fourmolu");
 
-    if (fourmolu.installing || fourmolu.failed) {
+    if (fourmolu.available) {
+      formatter = fourmolu.binaryPath ?? null;
+      formatterSource = fourmolu.source ?? "installed";
+      formatterVersion = fourmolu.version;
+    } else if (fourmolu.installing || fourmolu.failed) {
       // Return basic style check results while fourmolu is being installed,
       // but flag the status so the LLM knows to retry for real formatting.
       const absPath = path.resolve(projectDir, args.module_path);
@@ -164,6 +171,16 @@ export async function handleFormat(
       const absPath = path.resolve(projectDir, args.module_path);
       return basicStyleChecks(absPath, args.write);
     }
+    const resolved = await resolveToolBinary("fourmolu") ?? await resolveToolBinary("ormolu");
+    if (resolved) formatterSource = resolved.source;
+  } else {
+    const fourmoluResolved = await resolveToolBinary("fourmolu");
+    const ormoluResolved = await resolveToolBinary("ormolu");
+    if (fourmoluResolved && fourmoluResolved.binaryPath === formatter) {
+      formatterSource = fourmoluResolved.source;
+    } else if (ormoluResolved && ormoluResolved.binaryPath === formatter) {
+      formatterSource = ormoluResolved.source;
+    }
   }
 
   const absPath = path.resolve(projectDir, args.module_path);
@@ -173,13 +190,16 @@ export async function handleFormat(
     if (result.code !== 0) {
       return JSON.stringify({
         success: false,
-        formatter,
+        formatter: path.basename(formatter),
         error: result.stderr || "Formatting failed",
       });
     }
     return JSON.stringify({
       success: true,
-      format_tool: formatter,
+      format_tool: path.basename(formatter),
+      source: formatterSource,
+      version: formatterVersion,
+      binaryPath: formatter,
       written: true,
       message: `Formatted ${args.module_path} in place`,
     });
@@ -190,7 +210,7 @@ export async function handleFormat(
   if (result.code !== 0) {
     return JSON.stringify({
       success: false,
-      formatter,
+      formatter: path.basename(formatter),
       error: result.stderr || "Formatting failed",
     });
   }
@@ -201,7 +221,10 @@ export async function handleFormat(
 
   return JSON.stringify({
     success: true,
-    format_tool: formatter,
+    format_tool: path.basename(formatter),
+    source: formatterSource,
+    version: formatterVersion,
+    binaryPath: formatter,
     changed,
     ...(changed ? { formatted } : { message: "Already formatted" }),
   });

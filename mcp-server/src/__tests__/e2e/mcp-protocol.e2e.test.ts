@@ -84,6 +84,17 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     expect(parsed.projectDir).toContain("test-project");
   });
 
+  it("calls ghci_session stats", async () => {
+    const result = await client.callTool({
+      name: "ghci_session",
+      arguments: { action: "stats" },
+    });
+    const parsed = JSON.parse((result.content as Array<{ type: string; text: string }>)[0]!.text);
+    expect(parsed.success).toBe(true);
+    expect(parsed).toHaveProperty("modulesTracked");
+    expect(parsed).toHaveProperty("recentTools");
+  });
+
   it("calls ghci_type on a function", async () => {
     const result = await client.callTool({
       name: "ghci_type",
@@ -117,6 +128,16 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     const parsed = JSON.parse(text);
     expect(parsed.success).toBe(true);
     expect(parsed.output).toContain("30");
+  });
+
+  it("ghci_eval supports timeout_ms", async () => {
+    const result = await client.callTool({
+      name: "ghci_eval",
+      arguments: { expression: "let loop = loop in loop", timeout_ms: 200 },
+    });
+    const parsed = JSON.parse((result.content as Array<{ type: string; text: string }>)[0]!.text);
+    expect(parsed.success).toBe(false);
+    expect(parsed.error).toContain("timeout");
   });
 
   it("calls ghci_switch_project in list mode", async () => {

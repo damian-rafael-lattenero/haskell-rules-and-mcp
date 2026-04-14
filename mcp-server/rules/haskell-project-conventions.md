@@ -5,6 +5,10 @@
 - Enable `-Wall` for both library and executable
 - Dependencies: keep base, containers, mtl as core; add QuickCheck for property testing
 - Build tool: Cabal by default; pass `build_tool="stack"` to `ghci_init` for Stack projects
+- MCP toolchain is bundled-first for `hlint`, `fourmolu`/`ormolu`, and `hls`:
+  the server prefers bundled binaries before host PATH.
+- Always check `source` and `binaryPath` fields in tool responses when diagnosing
+  lint/format/HLS behavior.
 
 ## Import Style
 - Qualified imports for Map/Set (e.g., `import qualified Data.Map.Strict as Map`)
@@ -67,6 +71,13 @@
 ## HLS Integration
 - Run `ghci_hls(action="available")` to check if HLS is installed
 - Use `ghci_hls(action="hover", module_path="...", line=N, character=M)` for type info at position
-- **HLS auto-installs** if missing — no manual `ghcup install hls` required. If response has
-  `{ installing: true }`, wait 2–5 minutes and retry.
+- **HLS bundled-first behavior**: MCP first tries bundled `haskell-language-server-wrapper`.
+  If bundled is unavailable for current platform, it falls back to host/auto-install.
+- If response has `{ installing: true }`, wait 2–5 minutes and retry.
 - For all compilation diagnostics: prefer `ghci_load(diagnostics=true)` — it doesn't require HLS
+
+## Bundled Toolchain Maintenance
+- Bundled binaries are tracked in `vendor-tools/bundled-tools-manifest.json`.
+- Update checksums/version metadata with:
+  `npm run tools:update-manifest -- --tool <name> --platform <platform> --arch <arch> --version <version> --provenance <url>`
+- Run unit/integration/e2e test suites after updating bundled binaries.

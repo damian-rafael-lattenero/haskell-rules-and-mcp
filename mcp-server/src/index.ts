@@ -57,6 +57,7 @@ import { register as registerRefactor } from "./tools/refactor.js";
 import { register as registerFlags } from "./tools/flags.js";
 import { register as registerProfile } from "./tools/profile.js";
 import { register as registerHls } from "./tools/hls.js";
+import { register as registerWatch } from "./tools/watch.js";
 
 // Base directory: the project root (parent of mcp-server/)
 const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
@@ -74,16 +75,6 @@ try {
 } catch {
   workflowInstructions = "Use haskell-flows MCP tools for all Haskell operations. Never use Bash for cabal/ghc/ghci.";
 }
-
-// Auto-sync the Cursor agent cache so serverUseInstructions is always
-// up-to-date without manual copy-paste.
-//
-// Cursor caches MCP server instructions at:
-//   ~/.cursor/projects/<encoded-workspace-path>/mcps/<server-id>/INSTRUCTIONS.md
-//
-// The encoded path is the absolute workspace path with leading "/" stripped
-// and remaining "/" replaced by "-".
-void syncAgentInstructionsCaches(BASE_DIR, workflowInstructions);
 
 const server = new McpServer(
   { name: "haskell-flows", version: "0.4.0" },
@@ -164,6 +155,7 @@ registerRefactor(server, ctx);
 registerFlags(server, ctx);
 registerProfile(server, ctx);
 registerHls(server, ctx);
+registerWatch(server, ctx);
 
 // --- Tool: ghci_kind (inline, simple) ---
 server.tool(
@@ -199,11 +191,23 @@ server.tool(
         "The last line should be the expression to evaluate. " +
         "GHCi commands (starting with :) are NOT supported inside blocks."
     ),
+    timeout_ms: z.number().int().positive().optional().describe(
+      "Optional timeout in milliseconds for evaluation. Default: 30000."
+    ),
   },
-  async ({ expression, statements }) => {
+  async ({ expression, statements, timeout_ms }) => {
     const session = await getSession();
+    const timeout = timeout_ms ?? 30_000;
+    const withTimeout = async <T>(promise: Promise<T>): Promise<T> =>
+      await Promise.race([
+        promise,
+        new Promise<T>((_, reject) =>
+          setTimeout(() => reject(new Error(`Evaluation timeout after ${timeout}ms`)), timeout)
+        ),
+      ]);
     let result;
-    if (statements && statements.length > 0) {
+    try {
+      if (statements && statements.length > 0) {
       // Group consecutive bare bindings into single let blocks to support
       // recursive and mutually recursive definitions in GHCi.
       const fixed = groupBindingsIntoLetBlocks(statements);
@@ -212,15 +216,39 @@ server.tool(
       const imports = fixed.filter(s => s.trim().startsWith("import "));
       const nonImports = fixed.filter(s => !s.trim().startsWith("import "));
       for (const imp of imports) {
-        await session.execute(imp);
+        await withTimeout(session.execute(imp));
       }
       result = nonImports.length > 0
-        ? await session.executeBlock(nonImports)
+        ? await withTimeout(session.executeBlock(nonImports))
         : { output: "", success: true };
-    } else if (expression.includes("\n")) {
-      result = await session.executeBlock(expression.split("\n"));
-    } else {
-      result = await session.execute(expression);
+      } else if (expression.includes("\n")) {
+        result = await withTimeout(session.executeBlock(expression.split("\n")));
+      } else {
+        result = await withTimeout(session.execute(expression));
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.toLowerCase().includes("timeout")) {
+        // If eval times out, the running GHCi command may still be executing.
+        // Reset the session proactively so subsequent tool calls don't stall.
+        try {
+          if (ghciSession) {
+            await ghciSession.kill();
+            ghciSession = null;
+          }
+        } catch {
+          // non-fatal; caller already gets timeout error
+        }
+      }
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: message,
+          }),
+        }],
+      };
     }
     const parsed = parseEvalOutput(result.output);
     const isException = parsed.result.startsWith("*** Exception:");
@@ -256,7 +284,7 @@ server.tool(
   "ghci_session",
   "Manage the GHCi session: restart it or check its status. Use 'restart' after changing .cabal file or adding new modules.",
   {
-    action: z.enum(["status", "restart"]).describe('"status" to check if GHCi is alive, "restart" to restart the session'),
+    action: z.enum(["status", "restart", "stats"]).describe('"status" to check if GHCi is alive, "restart" to restart the session, "stats" for workflow/project summary'),
   },
   async ({ action }) => {
     if (action === "status") {
@@ -279,6 +307,33 @@ server.tool(
         }
       }
       return { content: [{ type: "text", text: JSON.stringify(response) }] };
+    }
+    if (action === "stats") {
+      const modules = [...workflowState.modules.values()];
+      const totalProperties = modules.reduce((acc, mod) => acc + mod.propertiesPassed.length, 0);
+      const gatesComplete = modules.filter(
+        (mod) =>
+          mod.completionGates.checkModule &&
+          mod.completionGates.lint &&
+          mod.completionGates.format
+      ).length;
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            projectDir,
+            sessionAlive: ghciSession?.isAlive() ?? false,
+            activeModule: workflowState.activeModule,
+            modulesTracked: modules.length,
+            modulesGateComplete: gatesComplete,
+            totalProperties,
+            pendingWarningCount: workflowState.pendingWarningCount,
+            editsSinceLastLoad: workflowState.editsSinceLastLoad,
+            recentTools: workflowState.toolHistory.slice(-10),
+          }),
+        }],
+      };
     }
     resetQuickCheckState();
     if (ghciSession) { await ghciSession.kill(); ghciSession = null; }
@@ -682,6 +737,10 @@ export async function syncAgentInstructionsCaches(
 
   return { synced, skipped };
 }
+
+// Auto-sync the Cursor/Windsurf agent caches so serverUseInstructions stay
+// up-to-date without manual copy-paste.
+void syncAgentInstructionsCaches(BASE_DIR, workflowInstructions);
 
 // --- Start the server ---
 async function main() {

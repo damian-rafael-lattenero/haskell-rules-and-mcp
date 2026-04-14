@@ -16,7 +16,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ToolContext } from "./registry.js";
-import { ensureTool, TOOL_PATH } from "./tool-installer.js";
+import { ensureTool, resolveToolBinary, TOOL_PATH } from "./tool-installer.js";
 
 // ─── LSP wire protocol helpers ────────────────────────────────────────────────
 
@@ -96,10 +96,10 @@ export function buildHoverRequest(fileUri: string, line: number, character: numb
 
 // ─── HLS availability check ───────────────────────────────────────────────────
 
-function hlsVersion(): Promise<string | undefined> {
+function hlsVersion(binaryPath = "haskell-language-server-wrapper"): Promise<string | undefined> {
   return new Promise((resolve) => {
     execFile(
-      "haskell-language-server-wrapper",
+      binaryPath,
       ["--version"],
       { env: { ...process.env, PATH: TOOL_PATH }, timeout: 10_000 },
       (err, stdout) => resolve(err ? undefined : stdout.trim().split("\n")[0])
@@ -114,6 +114,7 @@ async function hlsHover(
   filePath: string,
   line: number,
   character: number,
+  binaryPath = "haskell-language-server-wrapper",
   timeout = 30_000
 ): Promise<string> {
   const absFile = path.resolve(projectDir, filePath);
@@ -127,7 +128,7 @@ async function hlsHover(
   }
 
   return new Promise((resolve) => {
-    const hls = spawn("haskell-language-server-wrapper", ["--lsp"], {
+    const hls = spawn(binaryPath, ["--lsp"], {
       cwd: projectDir,
       env: { ...process.env, PATH: TOOL_PATH },
       stdio: ["pipe", "pipe", "pipe"],
@@ -230,13 +231,16 @@ export async function handleHls(
   args: { action: string; module_path?: string; line?: number; character?: number }
 ): Promise<string> {
   if (args.action === "available") {
-    const version = await hlsVersion();
+    const resolved = await resolveToolBinary("hls");
+    const version = await hlsVersion(resolved?.binaryPath ?? "haskell-language-server-wrapper");
     if (version) {
       return JSON.stringify({
         success: true,
         action: "available",
         available: true,
         version,
+        source: resolved?.source ?? "host",
+        binaryPath: resolved?.binaryPath,
         _hint: "HLS is available. Use action='hover' to get type info at a position.",
       });
     }
@@ -256,10 +260,9 @@ export async function handleHls(
     if (!args.module_path) {
       return JSON.stringify({ success: false, error: "module_path is required for action 'hover'" });
     }
-    const version = await hlsVersion();
-    if (!version) {
+    const install = await ensureTool("hls");
+    if (!install.available) {
       // Trigger auto-installation and report status.
-      const install = await ensureTool("hls");
       return JSON.stringify({
         success: false,
         installing: install.installing,
@@ -268,7 +271,20 @@ export async function handleHls(
       });
     }
 
-    return hlsHover(projectDir, args.module_path, args.line ?? 0, args.character ?? 0);
+    const hover = await hlsHover(
+      projectDir,
+      args.module_path,
+      args.line ?? 0,
+      args.character ?? 0,
+      install.binaryPath ?? "haskell-language-server-wrapper"
+    );
+    const parsed = JSON.parse(hover) as Record<string, unknown>;
+    return JSON.stringify({
+      ...parsed,
+      source: install.source ?? "host",
+      version: install.version,
+      binaryPath: install.binaryPath,
+    });
   }
 
   if (args.action === "diagnostics") {

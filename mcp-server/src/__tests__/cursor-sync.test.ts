@@ -123,7 +123,7 @@ describe("DEFAULT_SPECS registry", () => {
     expect(p).toContain("projects");
     expect(p).toContain("my-project");
     expect(p).toContain("my-server");
-    expect(p).toEndWith("INSTRUCTIONS.md");
+    expect(p).toMatch(/INSTRUCTIONS\.md$/);
   });
 
   it("Windsurf path uses ~/.windsurf/projects/...", () => {
@@ -131,7 +131,7 @@ describe("DEFAULT_SPECS registry", () => {
     const p = spec.instructionsPath("/home/user", "my-project", "my-server");
     expect(p).toContain(".windsurf");
     expect(p).toContain("projects");
-    expect(p).toEndWith("INSTRUCTIONS.md");
+    expect(p).toMatch(/INSTRUCTIONS\.md$/);
   });
 
   it("does NOT include Claude Code (uses MCP protocol, not file cache)", () => {

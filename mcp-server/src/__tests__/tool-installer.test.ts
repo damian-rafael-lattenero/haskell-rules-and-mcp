@@ -1,12 +1,14 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 import {
   TOOL_SPECS,
   toolAvailable,
   ensureTool,
   resetInstallState,
   getInstallStatus,
-  isTrivialProperty as _trivial,
-  detectQualifiedImports as _detect,
+  resolveToolBinary,
+  resetBundledManifestCache,
 } from "../tools/tool-installer.js";
 
 // Re-export helpers tested here via their canonical modules
@@ -132,5 +134,55 @@ describe("ensureTool — install state machine", () => {
     await ensureTool(FAKE_TOOL); // sets state to "installing"
     resetInstallState(FAKE_TOOL);
     expect(getInstallStatus(FAKE_TOOL)).toBeUndefined();
+  });
+});
+
+describe("bundled tool resolution", () => {
+  const rootDir = path.resolve(import.meta.dirname, "..", "..");
+  const runtimePlatform = process.platform as "darwin" | "linux" | "win32";
+  const runtimeArch = process.arch as "x64" | "arm64";
+  const runtimeExt = runtimePlatform === "win32" ? ".exe" : "";
+  const runtimeBinRel = `hlint/${runtimePlatform}-${runtimeArch}/hlint${runtimeExt}`;
+  const runtimeBinAbs = path.join(rootDir, "vendor-tools", runtimeBinRel);
+
+  afterEach(async () => {
+    resetBundledManifestCache();
+    await rm(runtimeBinAbs, { force: true });
+  });
+
+  it("prefers bundled binary when present for runtime platform", async () => {
+    if (!["darwin", "linux", "win32"].includes(process.platform)) return;
+    if (!["x64", "arm64"].includes(process.arch)) return;
+
+    await mkdir(path.dirname(runtimeBinAbs), { recursive: true });
+    if (process.platform === "win32") {
+      await writeFile(runtimeBinAbs, "@echo off\r\necho bundled hlint\r\n", "utf8");
+    } else {
+      await writeFile(runtimeBinAbs, "#!/usr/bin/env sh\necho bundled hlint\n", "utf8");
+      await chmod(runtimeBinAbs, 0o755);
+    }
+
+    const resolved = await resolveToolBinary("hlint");
+    expect(resolved).not.toBeNull();
+    expect(resolved?.source).toBe("bundled");
+    expect(resolved?.binaryPath).toBe(runtimeBinAbs);
+  });
+
+  it("ensureTool reports source=bundled when bundled binary exists", async () => {
+    if (!["darwin", "linux", "win32"].includes(process.platform)) return;
+    if (!["x64", "arm64"].includes(process.arch)) return;
+
+    await mkdir(path.dirname(runtimeBinAbs), { recursive: true });
+    if (process.platform === "win32") {
+      await writeFile(runtimeBinAbs, "@echo off\r\necho bundled hlint\r\n", "utf8");
+    } else {
+      await writeFile(runtimeBinAbs, "#!/usr/bin/env sh\necho bundled hlint\n", "utf8");
+      await chmod(runtimeBinAbs, 0o755);
+    }
+
+    const ensured = await ensureTool("hlint");
+    expect(ensured.available).toBe(true);
+    expect(ensured.source).toBe("bundled");
+    expect(ensured.binaryPath).toBe(runtimeBinAbs);
   });
 });
