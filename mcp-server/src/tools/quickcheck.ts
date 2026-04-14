@@ -166,6 +166,12 @@ export async function handleQuickCheck(
     /** Preferred alias — takes precedence over `module` */
     module_path?: string;
     module?: string;
+    /**
+     * Semantic module this property is testing.
+     * Distinct from module_path (load context).
+     * Used for regression filtering in properties.json.
+     */
+    tests_module?: string;
   },
   ctx?: { getWorkflowState?: () => { activeModule: string | null; modules: Map<string, unknown> }; updateModuleProgress?: (path: string, updates: Record<string, unknown>) => void; getModuleProgress?: (path: string) => { propertiesPassed: string[]; propertiesFailed: string[]; functionsImplemented: number; functionsTotal: number } | undefined },
   projectDir?: string
@@ -335,6 +341,7 @@ export async function handleQuickCheck(
         property: args.property,
         module: activeMod,
         functionName: args.function_name,
+        tests_module: args.tests_module,
       });
       propertySaved = true;
       const { getAllProperties } = await import("../property-store.js");
@@ -344,8 +351,8 @@ export async function handleQuickCheck(
     }
   }
 
-  // Track in workflow state if incremental
-  if (args.incremental && ctx?.getWorkflowState && ctx?.getModuleProgress) {
+  // Track in workflow state (always, not just when incremental=true, so guidance is accurate)
+  if (ctx?.getWorkflowState && ctx?.getModuleProgress) {
     let activeMod = args.module_path ?? args.module ?? ctx.getWorkflowState().activeModule;
 
     if (!activeMod) {
@@ -545,12 +552,18 @@ export function register(server: McpServer, ctx: ToolContext): void {
         'Alias for module. Preferred spelling — module_path takes precedence when both are provided. ' +
           'Examples: "src/Expr/Eval.hs", "src/Parser/Run.hs"'
       ),
+      tests_module: z.string().optional().describe(
+        'Module this property is semantically testing. Distinct from module_path (load context). ' +
+          'Used so regression filtering works by semantic target, not just load context. ' +
+          'Example: if Arbitrary lives in src/Expr/Syntax.hs but the property tests Expr.Eval, ' +
+          'set module_path="src/Expr/Syntax.hs" and tests_module="src/Expr/Eval.hs".'
+      ),
     },
-    async ({ property, tests, verbose, incremental, function_name, module: mod, module_path }) => {
+    async ({ property, tests, verbose, incremental, function_name, module: mod, module_path, tests_module }) => {
       const session = await ctx.getSession();
       const result = await handleQuickCheck(
         session,
-        { property, tests, verbose, incremental, function_name, module: mod, module_path },
+        { property, tests, verbose, incremental, function_name, module: mod, module_path, tests_module },
         ctx,
         ctx.getProjectDir()
       );
@@ -565,7 +578,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
  */
 export async function handleQuickCheckBatch(
   session: GhciSession,
-  args: { properties: string[]; tests?: number; incremental?: boolean; module?: string; module_path?: string },
+  args: { properties: string[]; tests?: number; incremental?: boolean; module?: string; module_path?: string; tests_module?: string },
   ctx?: { getWorkflowState?: () => { activeModule: string | null; modules: Map<string, unknown> }; updateModuleProgress?: (path: string, updates: Record<string, unknown>) => void; getModuleProgress?: (path: string) => { propertiesPassed: string[]; propertiesFailed: string[]; functionsImplemented: number; functionsTotal: number } | undefined },
   projectDir?: string
 ): Promise<string> {
@@ -600,7 +613,7 @@ export async function handleQuickCheckBatch(
   for (const property of args.properties) {
     const singleResult = await handleQuickCheck(
       session,
-      { property, tests: args.tests, incremental: args.incremental, module: args.module, module_path: args.module_path },
+      { property, tests: args.tests, incremental: args.incremental, module: args.module, module_path: args.module_path, tests_module: args.tests_module },
       ctx,
       projectDir
     );
@@ -642,12 +655,18 @@ export function registerBatch(server: McpServer, ctx: ToolContext): void {
       module_path: z.string().optional().describe(
         'Alias for module. Preferred spelling — takes precedence when both are provided.'
       ),
+      tests_module: z.string().optional().describe(
+        'Module these properties are semantically testing. Stored in properties.json so ' +
+          'ghci_regression can filter by the correct module. ' +
+          'Example: tests_module="src/Expr/Eval.hs" when testing Eval functions, ' +
+          'even if module_path points to Syntax.hs where Arbitrary lives.'
+      ),
       auto_collect: z.boolean().optional().describe(
         "If true and properties array is empty, auto-collects all saved properties from properties.json. " +
         "Use with module to filter by module."
       ),
     },
-    async ({ properties, tests, incremental, module: mod, module_path, auto_collect }) => {
+    async ({ properties, tests, incremental, module: mod, module_path, tests_module, auto_collect }) => {
       const resolvedMod = module_path ?? mod;
       let propsToRun = properties;
       // Auto-collect from property store if requested
@@ -663,7 +682,7 @@ export function registerBatch(server: McpServer, ctx: ToolContext): void {
       const session = await ctx.getSession();
       const result = await handleQuickCheckBatch(
         session,
-        { properties: propsToRun, tests, incremental, module: mod, module_path },
+        { properties: propsToRun, tests, incremental, module: mod, module_path, tests_module },
         ctx,
         ctx.getProjectDir()
       );

@@ -410,3 +410,60 @@ describe("extractGhcSuggestedFixes", () => {
     expect(fixes).toHaveLength(2);
   });
 });
+
+describe("_ghci_quirks isolation", () => {
+  it("GHC-32850 lines are absent from raw when present in output", async () => {
+    const quirkyOutput =
+      "<no location info>: warning: [GHC-32850] [-Wmissing-home-modules]\n" +
+      "    These modules are needed for compilation but not listed\n" +
+      "\n" +
+      "[1 of 2] Compiling Expr.Syntax      ( src/Expr/Syntax.hs, interpreted )\n" +
+      "[2 of 2] Compiling Expr.Eval        ( src/Expr/Eval.hs, interpreted )\n" +
+      "Ok, two modules loaded.";
+
+    const session = makeLoadSession({ loadOutput: quirkyOutput });
+    const result = JSON.parse(await handleLoadModule(session, { module_path: "src/Expr/Syntax.hs" }));
+
+    // raw must not contain GHC-32850
+    expect(result.raw).not.toContain("GHC-32850");
+    expect(result.raw).not.toContain("-Wmissing-home-modules");
+    // real compilation lines must still be in raw
+    expect(result.raw).toContain("Compiling Expr.Syntax");
+  });
+
+  it("_ghci_quirks is present when GHC-32850 found", async () => {
+    const quirkyOutput =
+      "<no location info>: warning: [GHC-32850] [-Wmissing-home-modules]\n" +
+      "    These modules are needed\n" +
+      "\n" +
+      "Ok, one module loaded.";
+
+    const session = makeLoadSession({ loadOutput: quirkyOutput });
+    const result = JSON.parse(await handleLoadModule(session, { module_path: "src/Foo.hs" }));
+
+    expect(result._ghci_quirks).toBeDefined();
+    expect(Array.isArray(result._ghci_quirks)).toBe(true);
+    expect(result._ghci_quirks.length).toBeGreaterThan(0);
+  });
+
+  it("_quirks_note is present when _ghci_quirks non-empty", async () => {
+    const quirkyOutput =
+      "<no location info>: warning: [GHC-32850] [-Wmissing-home-modules]\n" +
+      "    These modules\n\nOk, one module loaded.";
+
+    const session = makeLoadSession({ loadOutput: quirkyOutput });
+    const result = JSON.parse(await handleLoadModule(session, { module_path: "src/Foo.hs" }));
+
+    expect(result._quirks_note).toBeDefined();
+    expect(result._quirks_note).toContain("not real issues");
+  });
+
+  it("_ghci_quirks is absent when no GHC-32850 in output", async () => {
+    const cleanOutput = "[1 of 1] Compiling Lib ( src/Lib.hs, interpreted )\nOk, one module loaded.";
+    const session = makeLoadSession({ loadOutput: cleanOutput });
+    const result = JSON.parse(await handleLoadModule(session, { module_path: "src/Lib.hs" }));
+
+    expect(result._ghci_quirks).toBeUndefined();
+    expect(result._quirks_note).toBeUndefined();
+  });
+});

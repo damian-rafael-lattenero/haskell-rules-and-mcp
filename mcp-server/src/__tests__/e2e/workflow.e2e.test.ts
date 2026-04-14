@@ -440,4 +440,87 @@ holeFunc x = _result
     expect(result.holes[0].hole).toBe("_result");
   });
 
+  // --- New: guidance intelligence ---
+
+  it("step 19: _guidance does not contain 'untested' hint after QuickCheck passes", async () => {
+    // Load a module so workflow state has a module tracked
+    await callTool(client, "ghci_load", {
+      module_path: "src/WorkflowTest.hs",
+      diagnostics: true,
+    });
+
+    // Run a QuickCheck property (no incremental flag needed — state tracks automatically)
+    const qcResult = parseResult(
+      await callTool(client, "ghci_quickcheck", {
+        property: "\\x -> x + 0 == (x :: Int)",
+        module_path: "src/WorkflowTest.hs",
+      })
+    );
+    expect(qcResult.success).toBe(true);
+
+    // Now reload — guidance should no longer say "untested"
+    const loadResult = parseResult(
+      await callTool(client, "ghci_load", {
+        module_path: "src/WorkflowTest.hs",
+        diagnostics: true,
+      })
+    );
+    const guidance: string[] = loadResult._guidance ?? [];
+    const hasUntested = guidance.some(
+      (g) => g.includes("untested") || g.includes("mode=\"analyze\"")
+    );
+    expect(hasUntested).toBe(false);
+  });
+
+  it("step 20: module-complete gate hints appear individually after properties pass", async () => {
+    // Load module
+    await callTool(client, "ghci_load", {
+      module_path: "src/WorkflowTest.hs",
+      diagnostics: true,
+    });
+
+    // Pass a property
+    await callTool(client, "ghci_quickcheck", {
+      property: "\\x -> x * 1 == (x :: Int)",
+      module_path: "src/WorkflowTest.hs",
+    });
+
+    // Reload — check for gate hints
+    const loadResult = parseResult(
+      await callTool(client, "ghci_load", {
+        module_path: "src/WorkflowTest.hs",
+        diagnostics: true,
+      })
+    );
+    const guidance: string[] = loadResult._guidance ?? [];
+    // At least one gate hint should be present (check_module, lint, or format)
+    const hasGateHint = guidance.some(
+      (g) =>
+        g.includes("ghci_check_module") ||
+        g.includes("ghci_lint") ||
+        g.includes("ghci_format")
+    );
+    expect(hasGateHint).toBe(true);
+  });
+
+  it("step 21: ghci_format fallback response includes _formatWarning", async () => {
+    await writeFile(
+      WORKFLOW_MODULE,
+      `module WorkflowTest where\n\ndouble :: Int -> Int\ndouble x = x + x\n`,
+      "utf-8"
+    );
+
+    const result = parseResult(
+      await callTool(client, "ghci_format", {
+        module_path: "src/WorkflowTest.hs",
+        write: true,
+      })
+    );
+    expect(result.success).toBe(true);
+    // When fourmolu is not installed (fallback mode), _formatWarning must be present
+    if (result.fallback) {
+      expect(result._formatWarning).toBeDefined();
+      expect(result._formatWarning).toContain("fourmolu");
+    }
+  });
 });

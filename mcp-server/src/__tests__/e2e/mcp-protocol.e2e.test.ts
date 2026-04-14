@@ -452,4 +452,55 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     const text = (result.contents[0] as any).text;
     expect(text).toContain("PRIME DIRECTIVE");
   });
+
+  // --- New: ghci_init has test_suite param in schema ---
+  it("ghci_init schema includes test_suite param", async () => {
+    const result = await client.listTools();
+    const initTool = result.tools.find((t) => t.name === "ghci_init");
+    expect(initTool).toBeDefined();
+    const paramNames = Object.keys(initTool?.inputSchema?.properties ?? {});
+    expect(paramNames).toContain("test_suite");
+  });
+
+  // --- New: ghci_quickcheck schema includes tests_module param ---
+  it("ghci_quickcheck schema includes tests_module param", async () => {
+    const result = await client.listTools();
+    const qcTool = result.tools.find((t) => t.name === "ghci_quickcheck");
+    expect(qcTool).toBeDefined();
+    const paramNames = Object.keys(qcTool?.inputSchema?.properties ?? {});
+    expect(paramNames).toContain("tests_module");
+  });
+
+  // --- New: ghci_quickcheck_batch schema includes tests_module param ---
+  it("ghci_quickcheck_batch schema includes tests_module param", async () => {
+    const result = await client.listTools();
+    const batchTool = result.tools.find((t) => t.name === "ghci_quickcheck_batch");
+    expect(batchTool).toBeDefined();
+    const paramNames = Object.keys(batchTool?.inputSchema?.properties ?? {});
+    expect(paramNames).toContain("tests_module");
+  });
+
+  // --- New: ghci_regression save alias returns explanatory message ---
+  it("ghci_regression action=save returns explanatory message", async () => {
+    const result = await client.callTool({
+      name: "ghci_regression",
+      arguments: { action: "save" },
+    });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.saved).toBe(false);
+    expect(parsed.message).toContain("auto-saved");
+    expect(parsed.tip).toContain("tests_module");
+  });
+
+  // --- New: ghci_load raw does not contain GHC-32850 ---
+  it("ghci_load raw output does not contain GHC-32850 when loading single module", async () => {
+    const result = await client.callTool({
+      name: "ghci_load",
+      arguments: { module_path: "src/TestModule.hs", diagnostics: true },
+    });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    const raw: string = parsed.raw ?? "";
+    expect(raw).not.toContain("GHC-32850");
+    expect(raw).not.toContain("-Wmissing-home-modules");
+  });
 });

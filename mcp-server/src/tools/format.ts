@@ -119,9 +119,12 @@ async function basicStyleChecks(filePath: string, write?: boolean): Promise<stri
       message: fixesApplied > 0
         ? `Applied ${fixesApplied} fix(es): trailing whitespace, tabs→spaces, final newline`
         : "File already clean — no fixes needed",
+      _formatWarning:
+        "fourmolu not installed: only basic whitespace/tab fixes applied. " +
+        "For full Haskell formatting, install fourmolu: ghcup install fourmolu",
       installSuggestions: [
-        "cabal install fourmolu",
         "ghcup install fourmolu",
+        "cabal install fourmolu",
         "brew install fourmolu",
       ],
     });
@@ -133,9 +136,12 @@ async function basicStyleChecks(filePath: string, write?: boolean): Promise<stri
     source: "basic-style-checks",
     count: issues.length,
     issues,
+    _formatWarning:
+      "fourmolu not installed: analysis limited to basic whitespace/tab checks. " +
+      "For full Haskell formatting, install fourmolu: ghcup install fourmolu",
     installSuggestions: [
-      "cabal install fourmolu",
       "ghcup install fourmolu",
+      "cabal install fourmolu",
       "brew install fourmolu",
     ],
   });

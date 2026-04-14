@@ -283,6 +283,52 @@ export function parseShowModules(output: string): string[] {
     .filter((name): name is string => !!name);
 }
 
+// --- GHCi quirk filter ---
+
+/**
+ * Separate GHCi session-specific noise from real compilation output.
+ * GHC-32850 (-Wmissing-home-modules) fires when loading individual modules
+ * without the full cabal context — it is NOT a real project issue.
+ * Returns { cleanRaw, ghciQuirks } so callers can present them separately.
+ */
+function separateGhciQuirks(raw: string): { cleanRaw: string; ghciQuirks: string[] } {
+  const ghciQuirks: string[] = [];
+  const kept: string[] = [];
+  // GHC-32850 warning spans multiple lines; collect the entire warning block.
+  // Pattern: a line containing "GHC-32850" or "-Wmissing-home-modules" starts the block,
+  // and the block continues until the next blank line or next compilation message.
+  const lines = raw.split("\n");
+  let inQuirkBlock = false;
+  let quirkBlock: string[] = [];
+
+  for (const line of lines) {
+    if (line.includes("GHC-32850") || line.includes("-Wmissing-home-modules")) {
+      inQuirkBlock = true;
+      quirkBlock.push(line);
+    } else if (inQuirkBlock) {
+      // Continue the quirk block until a blank line or a new GHC message
+      if (line.trim() === "" || /^\[/.test(line) || /^[A-Za-z]/.test(line)) {
+        // End of quirk block — save it and start tracking the current line normally
+        ghciQuirks.push(quirkBlock.join("\n").trim());
+        quirkBlock = [];
+        inQuirkBlock = false;
+        kept.push(line);
+      } else {
+        quirkBlock.push(line);
+      }
+    } else {
+      kept.push(line);
+    }
+  }
+
+  // Flush any trailing quirk block
+  if (quirkBlock.length > 0) {
+    ghciQuirks.push(quirkBlock.join("\n").trim());
+  }
+
+  return { cleanRaw: kept.join("\n"), ghciQuirks };
+}
+
 // --- Response builder ---
 
 function buildResponse(
@@ -322,6 +368,9 @@ function buildResponse(
     _nextStep = "Compilation clean. Test with ghci_eval or verify properties with ghci_quickcheck.";
   }
 
+  // Isolate GHCi session-specific noise (GHC-32850) from real output
+  const { cleanRaw, ghciQuirks } = separateGhciQuirks(raw);
+
   return JSON.stringify({
     success,
     errors,
@@ -337,7 +386,13 @@ function buildResponse(
     ...(modules ? { modules } : {}),
     ...(modulesInScope ? { modulesInScope } : {}),
     summary,
-    raw,
+    raw: cleanRaw,
+    ...(ghciQuirks.length > 0
+      ? {
+          _ghci_quirks: ghciQuirks,
+          _quirks_note: "GHCi session artifacts (not real issues). Safe to ignore.",
+        }
+      : {}),
     ...(_nextStep ? { _nextStep } : {}),
   });
 }

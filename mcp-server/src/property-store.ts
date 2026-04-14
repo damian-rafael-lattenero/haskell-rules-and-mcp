@@ -9,7 +9,16 @@ import path from "node:path";
 
 export interface PropertyRecord {
   property: string;
+  /** Module path used as load context when running the property. */
   module: string;
+  /**
+   * Module path this property is semantically testing.
+   * Distinct from `module` (load context): e.g. a property for Expr.Eval loaded
+   * via Expr.Syntax (where Arbitrary lives) has module="src/Expr/Syntax.hs" but
+   * tests_module="src/Expr/Eval.hs".
+   * When present, regression filtering uses this field instead of `module`.
+   */
+  tests_module?: string;
   functionName?: string;
   law?: string;
   lastPassed: string; // ISO date
@@ -42,7 +51,14 @@ export async function saveStore(projectDir: string, store: PropertyStore): Promi
 
 export async function saveProperty(
   projectDir: string,
-  record: { property: string; module: string; functionName?: string; law?: string }
+  record: {
+    property: string;
+    module: string;
+    functionName?: string;
+    law?: string;
+    /** Semantic module being tested — used for regression filtering. */
+    tests_module?: string;
+  }
 ): Promise<void> {
   const store = await loadStore(projectDir);
   // Deduplicate by property string — a property is unique regardless of which
@@ -57,6 +73,10 @@ export async function saveProperty(
     if (record.module !== "unknown" && existing.module === "unknown") {
       existing.module = record.module;
     }
+    // Update tests_module if we now have one and didn't before
+    if (record.tests_module && !existing.tests_module) {
+      existing.tests_module = record.tests_module;
+    }
   } else {
     store.properties.push({
       ...record,
@@ -67,12 +87,19 @@ export async function saveProperty(
   await saveStore(projectDir, store);
 }
 
+/**
+ * Return properties associated with a module.
+ * Filters by `tests_module` when present (semantic target), falls back to
+ * `module` (load context) for records that pre-date the tests_module field.
+ */
 export async function getModuleProperties(
   projectDir: string,
   modulePath: string
 ): Promise<PropertyRecord[]> {
   const store = await loadStore(projectDir);
-  return store.properties.filter((p) => p.module === modulePath);
+  return store.properties.filter(
+    (p) => (p.tests_module ?? p.module) === modulePath
+  );
 }
 
 export async function getAllProperties(projectDir: string): Promise<PropertyRecord[]> {

@@ -244,5 +244,42 @@ describe.runIf(GHC_AVAILABLE)("Tool Handlers Integration", () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain("too long");
     });
+
+    it("stores tests_module in property store when provided", async () => {
+      const { mkdtemp, rm } = await import("node:fs/promises");
+      const { loadStore } = await import("../../property-store.js");
+      const os = await import("node:os");
+      const pathMod = await import("node:path");
+      const tmpDir = await mkdtemp(pathMod.join(os.tmpdir(), "qc-tests-module-int-"));
+      try {
+        resetQuickCheckState();
+        await handleQuickCheck(
+          session,
+          {
+            property: "\\x y -> add x y == x + (y :: Int)",
+            module_path: "src/TestModule.hs",
+            tests_module: "src/AnotherModule.hs",
+          },
+          undefined,
+          tmpDir
+        );
+        const store = await loadStore(tmpDir);
+        expect(store.properties).toHaveLength(1);
+        expect(store.properties[0]!.module).toBe("src/TestModule.hs");
+        expect(store.properties[0]!.tests_module).toBe("src/AnotherModule.hs");
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("GHC-32850 quirk isolation", () => {
+    it("ghci_load raw output does not contain GHC-32850 when single module loaded", async () => {
+      const result = JSON.parse(
+        await handleLoadModule(session, { module_path: "src/TestModule.hs", diagnostics: true }, FIXTURE_DIR)
+      );
+      // raw must never contain the quirk warning
+      expect(result.raw ?? "").not.toContain("GHC-32850");
+    });
   });
 });

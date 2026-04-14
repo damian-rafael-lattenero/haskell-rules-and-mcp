@@ -18,6 +18,11 @@ The `_guidance` array in responses tells you what to do next based on:
 - Whether functions are untested (→ run `ghci_quickcheck`)
 - Whether warnings are pending (→ fix them)
 - Whether edits haven't been compiled (→ run `ghci_load`)
+- Whether module-complete gates are missing (→ run `ghci_check_module`, `ghci_lint`, `ghci_format`)
+- Whether all modules are gate-complete (→ run `ghci_quickcheck_export`, then `cabal_build`)
+
+**Guidance is state-aware:** once QuickCheck properties pass, the "untested" hint disappears
+automatically. Once gates are complete, the session-close hint appears.
 
 **Lost? Not sure what to do next?** → `ghci_workflow(action="help")` returns
 `suggested_tools`, `reasoning`, and `steps` based on the current session state.
@@ -40,8 +45,8 @@ The `_guidance` array in responses tells you what to do next based on:
 ### Session startup
 | When | Tool | Why |
 |------|------|-----|
-| Start of session | `ghci_session(status)` | Verify MCP is alive |
-| Switch project | `ghci_switch_project(name)` | Change active project |
+| Start of session | `ghci_session(status)` | Verify MCP is alive. When no active session, response includes `_hint` listing available projects. |
+| Switch project | `ghci_switch_project(name)` | Change active project — also auto-scaffolds missing source files on switch |
 | After switch | `ghci_load(load_all=true)` | Verify all modules compile |
 | Lost / unsure what to do | `ghci_workflow(action="help")` | Context-aware next steps with `suggested_tools` and `reasoning` |
 
@@ -49,14 +54,14 @@ The `_guidance` array in responses tells you what to do next based on:
 | When | Tool | Why |
 |------|------|-----|
 | Starting from scratch | `ghci_init(name, modules, deps)` | Generate .cabal + directory structure |
+| With test target | `ghci_init(name, modules, deps, test_suite=true)` | Also generates `test-suite` stanza in .cabal + `test/Spec.hs` scaffold |
 | Starting with Stack | `ghci_init(name, modules, deps, build_tool="stack")` | Also generates `stack.yaml` with LTS resolver |
 | Need to add a dependency | `ghci_deps(action="add", package="containers")` | Edits `.cabal` build-depends — no manual editing |
 | Need to add dep with version | `ghci_deps(action="add", package="text", version=">= 2.0")` | Inserts `text >= 2.0` in build-depends |
 | Check current dependencies | `ghci_deps(action="list")` | Shows all build-depends with version constraints |
 | Remove a dependency | `ghci_deps(action="remove", package="old-pkg")` | Removes from build-depends safely |
 | Visualize module imports | `ghci_deps(action="graph")` | Import graph with cycle detection and orphan analysis |
-| Created .cabal | `ghci_scaffold` → `ghci_session(restart)` | Create module stubs, restart GHCi |
-| Created .cabal (with types) | `ghci_scaffold(signatures={"Mod": ["f :: T", "data D = ..."]})` → `ghci_session(restart)` | Create typed stubs (data types verbatim, functions with `= undefined`, cross-module imports auto-generated) |
+| Created .cabal, need typed stubs | `ghci_scaffold(signatures={"Mod": ["f :: T", "data D = ..."]})` → `ghci_session(restart)` | Create typed stubs with `= undefined` bodies for ghci_suggest hole-fit mode. **Note:** `ghci_switch_project` already auto-scaffolds empty files on switch — only call `ghci_scaffold` when you specifically want typed `= undefined` stubs. |
 | New module with data types | `ghci_arbitrary(type_name="...")` | Generate Arbitrary instances |
 | Before implementing functions | `ghci_suggest(module_path="...")` | See hole fits or analyze types |
 
@@ -74,6 +79,7 @@ The `_guidance` array in responses tells you what to do next based on:
 | Multiple eval/type checks | `ghci_batch(commands=[":t f", "f 42", ":i Type"])` | Combine multiple GHCi commands in one call |
 | A law becomes testable | `ghci_quickcheck(property, incremental=true, module_path="src/X.hs")` | Test the law immediately (`module_path` is the preferred spelling; `module` also works) |
 | Multiple properties to test | `ghci_quickcheck_batch(properties=[...], module_path="src/X.hs")` | Test all in one call |
+| Properties test a different module | `ghci_quickcheck_batch(properties=[...], module_path="src/Syntax.hs", tests_module="src/Eval.hs")` | Set `tests_module` so regression filters by the module being tested, not by where Arbitrary lives |
 | Logic error (types OK, wrong result) | `ghci_trace(expression, trace_points=[...])` | Debug intermediate values |
 | Property suggests needed | `ghci_quickcheck(property="suggest", function_name="...")` | Discover testable laws |
 | Lost track of progress | `ghci_workflow(action="next")` | See what step comes next |
@@ -88,16 +94,30 @@ The `_guidance` array in responses tells you what to do next based on:
 | When | Tool | Why |
 |------|------|-----|
 | All functions implemented | `ghci_quickcheck` / `ghci_quickcheck_batch` | Test COMPLETE algebraic contract |
-| After quickcheck passes | `ghci_check_module(module_path="...")` | Review API summary |
-| After review | `ghci_lint(module_path="...")` | Code quality pass |
-| After lint | `ghci_format(module_path="...", write=true)` | Formatting pass — fixes trailing whitespace, tabs, missing newline even without fourmolu |
+| After quickcheck passes | `ghci_check_module(module_path="...")` | Review API summary — `_guidance` will prompt this automatically |
+| After review | `ghci_lint(module_path="...")` | Code quality pass — `_guidance` will prompt this automatically |
+| After lint | `ghci_format(module_path="...", write=true)` | Formatting pass — `_guidance` will prompt this automatically |
+
+**Note:** `_guidance` in `ghci_load` responses guides you through each gate individually
+once properties pass. Each gate has its own hint that disappears when that gate is complete.
+
+### Session complete gate (after ALL modules pass all gates)
+| When | Tool | Why |
+|------|------|-----|
+| All modules: gates complete | `ghci_quickcheck_export(output_path="test/Spec.hs")` | Generate persistent test file from saved properties |
+| After export | `cabal_build` | Verify full GHC compilation (not just GHCi interpreted) |
+| After build | Commit | Persist the work |
+
+**Note:** `_guidance` will emit a session-close hint once all tracked modules have all three
+gates complete (checkModule, lint, format). Follow it to close the session properly.
 
 ### Regression testing
 | When | Tool | Why |
 |------|------|-----|
 | Start of session on existing project | `ghci_regression(action="run")` | Re-run all saved QC properties |
-| After major changes | `ghci_regression(module="src/Mod.hs")` | Verify module contracts still hold |
-| Want to see what's tested | `ghci_regression(action="list")` | List all persisted properties |
+| After major changes | `ghci_regression(module="src/Mod.hs")` | Verify module contracts still hold (uses `tests_module` for filtering) |
+| Want to see what's tested | `ghci_regression(action="list")` | List all persisted properties grouped by semantic module |
+| Wondering how to save properties | `ghci_regression(action="save")` | Returns explanation: auto-saved on pass, no manual action needed |
 
 ### Exporting tests
 | When | Tool | Why |
@@ -189,10 +209,64 @@ ghci_quickcheck(property="\\x -> f x == x", module_path="src/MyModule.hs")   ✅
 ghci_quickcheck(property="\\x -> f x == x", module="src/MyModule.hs")        ✅ also works
 ```
 
+### `tests_module` — semantic tagging for regression filtering
+
+`module_path` / `module` is the **load context** (which module GHCi loads to run the property).
+`tests_module` is the **semantic target** (which module the property is actually testing).
+
+**Why this matters:** In multi-module projects, `Arbitrary` instances often live in a
+`Syntax` or `Types` module. If you run all properties from `module_path="src/Syntax.hs"`,
+every property gets tagged to `Syntax` — and `ghci_regression(module="src/Eval.hs")` returns
+zero results even though you tested Eval thoroughly.
+
+**Pattern:**
+```
+ghci_quickcheck_batch(
+  properties=["\\e -> eval [] (Lit n) == Right n", ...],
+  module_path="src/Syntax.hs",    -- load context (where Arbitrary lives)
+  tests_module="src/Eval.hs"      -- semantic target (what we're testing)
+)
+```
+
+`ghci_regression(module="src/Eval.hs")` then correctly finds those properties.
+
+### `ghci_init` with `test_suite=true`
+
+Generates a `test-suite` stanza in the `.cabal` file and creates `test/Spec.hs`:
+
+```
+ghci_init(name="my-lib", modules=["Lib"], test_suite=true)
+```
+
+Use `ghci_quickcheck_export(output_path="test/Spec.hs")` after development to
+populate the test file with saved QuickCheck properties.
+
+### `ghci_switch_project` auto-scaffolds
+
+`ghci_switch_project` **automatically creates empty source files** for any module
+listed in `.cabal` that doesn't have a source file yet. You do NOT need to call
+`ghci_scaffold` after switching — empty stubs are already in place.
+
+Only call `ghci_scaffold(signatures={...})` if you want typed `= undefined` stubs
+for use with `ghci_suggest` hole-fit mode.
+
+### `ghci_regression(action="save")`
+
+Calling `ghci_regression(action="save")` returns an explanation:
+properties are **auto-saved** when they pass via `ghci_quickcheck` or
+`ghci_quickcheck_batch`. No manual save action exists or is needed.
+
 ### `ghci_format` fallback
 When neither `fourmolu` nor `ormolu` is installed, `write=true` still works:
 it applies automatic fixes (trailing whitespace, tabs→spaces, missing final newline)
 and returns `{ written: true, fixesApplied: N }`.
+The response includes `_formatWarning` explaining that only basic fixes were applied,
+with install instructions for fourmolu.
+
+### `ghci_load` and `_ghci_quirks`
+`ghci_load` isolates GHCi session artifacts (like `GHC-32850 -Wmissing-home-modules`)
+into a separate `_ghci_quirks` field with `_quirks_note: "GHCi session artifacts (not real issues)"`.
+The `raw` field contains only real compilation output. Ignore `_ghci_quirks` entirely.
 
 ### `ghci_deps` protects `base`
 `ghci_deps(action="remove", package="base")` is blocked — `base` is a protected

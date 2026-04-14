@@ -267,8 +267,13 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
     guidance.push("No Arbitrary instances in any module — run ghci_arbitrary for data types before QuickCheck");
   }
 
-  // Functions implemented but no QC properties — suggest analyze mode for discovery
-  if (mod.functionsImplemented > 0 && mod.propertiesPassed.length === 0 && mod.propertiesFailed.length === 0) {
+  // Functions implemented but no QC properties yet — suggest analyze mode for discovery.
+  // Suppressed once properties have passed (guidance already achieved its goal).
+  if (
+    mod.functionsImplemented > 0 &&
+    mod.propertiesPassed.length === 0 &&
+    mod.propertiesFailed.length === 0
+  ) {
     guidance.push(
       `Functions implemented but untested — run ghci_suggest(module_path="${mod.modulePath}", mode="analyze") for property suggestions, then ghci_quickcheck`
     );
@@ -286,30 +291,49 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
     );
   }
 
-  // Module completion gate: all functions done + properties pass → run lint/format/check
-  if (mod.phase === "complete" && mod.propertiesPassed.length > 0 && mod.propertiesFailed.length === 0) {
+  // Module-complete gate: individual hint per missing gate.
+  // Fires as soon as any properties pass — no need to wait for phase === "complete".
+  if (mod.propertiesPassed.length > 0 && mod.propertiesFailed.length === 0) {
     const gates = mod.completionGates ?? { checkModule: false, lint: false, format: false };
-    const missing: string[] = [];
-    if (!gates.checkModule) missing.push("ghci_check_module");
-    if (!gates.lint) missing.push("ghci_lint");
-    if (!gates.format) missing.push("ghci_format");
-    if (missing.length > 0) {
-      guidance.push(`Module complete — run completion gate: ${missing.join(" → ")}`);
+    if (!gates.checkModule) {
+      guidance.push(
+        `Properties pass — run ghci_check_module(module_path="${mod.modulePath}") to review exported API before moving on`
+      );
+    }
+    if (!gates.lint) {
+      guidance.push(
+        `Run ghci_lint(module_path="${mod.modulePath}") for code quality pass (module-complete gate)`
+      );
+    }
+    if (!gates.format) {
+      guidance.push(
+        `Run ghci_format(module_path="${mod.modulePath}", write=true) to normalize formatting (module-complete gate)`
+      );
     }
   }
 
-  // All modules complete with properties and gates — suggest full regression
-  if (state.modules.size > 1) {
-    const allComplete = [...state.modules.values()].every(
+  // Session-close hint: all tracked modules have all gates complete
+  const allModules = [...state.modules.values()];
+  const allGatesComplete =
+    allModules.length > 0 &&
+    allModules.every(
+      (m) =>
+        m.completionGates?.checkModule &&
+        m.completionGates?.lint &&
+        m.completionGates?.format
+    );
+  if (allGatesComplete) {
+    guidance.push(
+      "All modules complete — export test suite with ghci_quickcheck_export(output_path=\"test/Spec.hs\"), then cabal_build to verify full compilation"
+    );
+  } else if (state.modules.size > 1) {
+    // Multi-module project: suggest regression when all modules have properties
+    const allImplemented = allModules.every(
       (m) => m.functionsTotal > 0 && m.functionsImplemented >= m.functionsTotal
     );
-    const hasProperties = [...state.modules.values()].some(
-      (m) => m.propertiesPassed.length > 0
-    );
-    const noFailures = [...state.modules.values()].every(
-      (m) => m.propertiesFailed.length === 0
-    );
-    if (allComplete && hasProperties && noFailures && guidance.length === 0) {
+    const hasProperties = allModules.some((m) => m.propertiesPassed.length > 0);
+    const noFailures = allModules.every((m) => m.propertiesFailed.length === 0);
+    if (allImplemented && hasProperties && noFailures && guidance.length === 0) {
       guidance.push("All modules complete — run ghci_regression to verify all properties");
     }
   }

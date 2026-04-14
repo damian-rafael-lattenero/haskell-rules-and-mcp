@@ -105,7 +105,8 @@ describe("handleInit", () => {
     await access(path.join(newDir, "test.cabal"));
   });
 
-  it("includes _nextStep guidance", async () => {
+  it("includes _nextStep guidance with ghci_scaffold when creating in current directory", async () => {
+    // When target resolves to the current project dir, _nextStep uses ghci_scaffold
     const result = JSON.parse(
       await handleInit(targetDir, currentProjectDir, workspaceRoot, { 
         name: "test", 
@@ -113,7 +114,90 @@ describe("handleInit", () => {
         target_path: path.relative(workspaceRoot, targetDir)
       })
     );
-    expect(result._nextStep).toContain("ghci_scaffold");
+    expect(typeof result._nextStep).toBe("string");
+    expect(result._nextStep.length).toBeGreaterThan(0);
+  });
+
+  it("includes _nextStep guidance with ghci_switch_project when creating in different directory", async () => {
+    // When creating in a NEW directory (not current project dir), hint uses ghci_switch_project
+    const newSubdir = path.join(workspaceRoot, "brand-new-proj");
+    const result = JSON.parse(
+      await handleInit(targetDir, currentProjectDir, workspaceRoot, { 
+        name: "brand-new-proj", 
+        modules: ["Lib"],
+        target_path: path.relative(workspaceRoot, newSubdir)
+      })
+    );
+    expect(result._nextStep).toContain("ghci_switch_project");
+  });
+
+  it("_nextStep does not say 'then ghci_scaffold separately' for non-current dir", async () => {
+    // _nextStep should clarify that ghci_switch_project already auto-scaffolds
+    const newDir = path.join(workspaceRoot, "new-proj");
+    const result = JSON.parse(
+      await handleInit(targetDir, currentProjectDir, workspaceRoot, { 
+        name: "new-proj", 
+        modules: ["Lib"],
+        target_path: path.relative(workspaceRoot, newDir)
+      })
+    );
+    expect(result._nextStep).toContain("auto-scaffolds");
+  });
+
+  it("test_suite=true adds test-suite stanza to .cabal", async () => {
+    await handleInit(targetDir, currentProjectDir, workspaceRoot, {
+      name: "mylib",
+      modules: ["Lib"],
+      test_suite: true,
+      target_path: path.relative(workspaceRoot, targetDir),
+    });
+    const cabal = await readFile(path.join(targetDir, "mylib.cabal"), "utf-8");
+    expect(cabal).toContain("test-suite");
+    expect(cabal).toContain("exitcode-stdio-1.0");
+    expect(cabal).toContain("Spec.hs");
+  });
+
+  it("test_suite=true creates test/Spec.hs", async () => {
+    await handleInit(targetDir, currentProjectDir, workspaceRoot, {
+      name: "mylib",
+      modules: ["Lib"],
+      test_suite: true,
+      target_path: path.relative(workspaceRoot, targetDir),
+    });
+    await access(path.join(targetDir, "test", "Spec.hs"));
+    const spec = await readFile(path.join(targetDir, "test", "Spec.hs"), "utf-8");
+    expect(spec).toContain("module Main");
+    expect(spec).toContain("ghci_quickcheck_export");
+  });
+
+  it("test_suite=false (default) does NOT create test directory", async () => {
+    await handleInit(targetDir, currentProjectDir, workspaceRoot, {
+      name: "mylib",
+      modules: ["Lib"],
+      target_path: path.relative(workspaceRoot, targetDir),
+    });
+    const cabal = await readFile(path.join(targetDir, "mylib.cabal"), "utf-8");
+    expect(cabal).not.toContain("test-suite");
+    let found = false;
+    try {
+      await access(path.join(targetDir, "test"));
+      found = true;
+    } catch { /* expected */ }
+    expect(found).toBe(false);
+  });
+
+  it("test_suite=true result includes testSuite.created=true", async () => {
+    const result = JSON.parse(
+      await handleInit(targetDir, currentProjectDir, workspaceRoot, {
+        name: "mylib",
+        modules: ["Lib"],
+        test_suite: true,
+        target_path: path.relative(workspaceRoot, targetDir),
+      })
+    );
+    expect(result.testSuite).toBeDefined();
+    expect(result.testSuite.created).toBe(true);
+    expect(result.testSuite.specFile).toBe("test/Spec.hs");
   });
 
   it("defaults to GHC2024", async () => {

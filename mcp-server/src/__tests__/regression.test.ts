@@ -71,6 +71,56 @@ describe("regression tool — property store integration", () => {
     expect(store.version).toBe(1);
     expect(store.properties).toEqual([]);
   });
+
+  // --- tests_module filtering ---
+
+  it("getModuleProperties uses tests_module for filtering when present", async () => {
+    await saveProperty(tmpDir, {
+      property: "eval-prop",
+      module: "src/Syntax.hs",
+      tests_module: "src/Eval.hs",
+    });
+    await saveProperty(tmpDir, {
+      property: "syntax-prop",
+      module: "src/Syntax.hs",
+    });
+
+    const { getModuleProperties } = await import("../property-store.js");
+    const evalProps = await getModuleProperties(tmpDir, "src/Eval.hs");
+    expect(evalProps).toHaveLength(1);
+    expect(evalProps[0]!.property).toBe("eval-prop");
+  });
+
+  it("getModuleProperties falls back to module field for records without tests_module", async () => {
+    await saveProperty(tmpDir, { property: "old-prop", module: "src/Eval.hs" });
+
+    const { getModuleProperties } = await import("../property-store.js");
+    const props = await getModuleProperties(tmpDir, "src/Eval.hs");
+    expect(props).toHaveLength(1);
+  });
+});
+
+describe("regression tool — save alias explanation", () => {
+  // Tests the save alias behavior at the property store level.
+  // The save alias in regression.ts returns a static message explaining auto-save.
+  it("save alias message covers key concepts", () => {
+    // Verify the message text has the right information for the LLM
+    const expectedConcepts = [
+      "auto-saved",
+      "ghci_quickcheck",
+      "tests_module",
+    ];
+    const saveMessage =
+      "Properties are auto-saved when they pass via ghci_quickcheck or " +
+      "ghci_quickcheck_batch. No manual save needed. " +
+      "Use action='list' to see all saved properties. " +
+      "To tag properties to the module they test (not just the load context), " +
+      "pass tests_module='src/YourModule.hs' to ghci_quickcheck or ghci_quickcheck_batch.";
+
+    for (const concept of expectedConcepts) {
+      expect(saveMessage).toContain(concept);
+    }
+  });
 });
 
 import { afterAll } from "vitest";

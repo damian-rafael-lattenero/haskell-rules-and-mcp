@@ -188,4 +188,72 @@ describe("ghci_quickcheck module parameter", () => {
     const store = await loadStore(tmpDir);
     expect(store.properties[0]!.module).toBe("src/Explicit.hs");
   });
+
+  // --- tests_module field ---
+
+  it("tests_module is stored separately from module_path", async () => {
+    const session = createMockSession("+++ OK, passed 100 tests.");
+
+    await handleQuickCheck(
+      session,
+      {
+        property: "\\e -> eval [] (Lit n) == Right n",
+        module_path: "src/Expr/Syntax.hs",
+        tests_module: "src/Expr/Eval.hs",
+      },
+      undefined,
+      tmpDir
+    );
+
+    const store = await loadStore(tmpDir);
+    expect(store.properties).toHaveLength(1);
+    // Load context
+    expect(store.properties[0]!.module).toBe("src/Expr/Syntax.hs");
+    // Semantic target
+    expect(store.properties[0]!.tests_module).toBe("src/Expr/Eval.hs");
+  });
+
+  it("workflow state propertiesPassed updated even without incremental=true", async () => {
+    const session = createMockSession("+++ OK, passed 100 tests.");
+    const updateModuleProgress = vi.fn();
+    const propertiesPassed: string[] = [];
+
+    const ctx = {
+      getWorkflowState: () => ({
+        activeModule: "src/Foo.hs",
+        modules: new Map([
+          ["src/Foo.hs", {
+            propertiesPassed,
+            propertiesFailed: [],
+            functionsImplemented: 2,
+            functionsTotal: 2,
+          }],
+        ]),
+      }),
+      getModuleProgress: () => ({
+        propertiesPassed,
+        propertiesFailed: [],
+        functionsImplemented: 2,
+        functionsTotal: 2,
+      }),
+      updateModuleProgress,
+    };
+
+    await handleQuickCheck(
+      session,
+      {
+        property: "\\x -> x == x",
+        module_path: "src/Foo.hs",
+        // incremental NOT set
+      },
+      ctx,
+      tmpDir
+    );
+
+    // updateModuleProgress should have been called to track propertiesPassed
+    expect(updateModuleProgress).toHaveBeenCalled();
+    const callArgs = updateModuleProgress.mock.calls[0];
+    expect(callArgs[0]).toBe("src/Foo.hs");
+    expect(callArgs[1]).toHaveProperty("propertiesPassed");
+  });
 });

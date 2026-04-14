@@ -89,4 +89,75 @@ describe("property-store", () => {
     expect(store.properties[0]!.law).toBe("Functor identity");
     expect(store.properties[0]!.functionName).toBe("fmap");
   });
+
+  // --- tests_module field ---
+
+  it("saveProperty stores tests_module when provided", async () => {
+    await saveProperty(tmpDir, {
+      property: "\\e -> eval [] (Lit n) == Right n",
+      module: "src/Expr/Syntax.hs",
+      tests_module: "src/Expr/Eval.hs",
+    });
+    const store = await loadStore(tmpDir);
+    expect(store.properties[0]!.tests_module).toBe("src/Expr/Eval.hs");
+    expect(store.properties[0]!.module).toBe("src/Expr/Syntax.hs");
+  });
+
+  it("getModuleProperties filters by tests_module when present", async () => {
+    await saveProperty(tmpDir, {
+      property: "prop-eval",
+      module: "src/Syntax.hs",
+      tests_module: "src/Eval.hs",
+    });
+    await saveProperty(tmpDir, {
+      property: "prop-syntax",
+      module: "src/Syntax.hs",
+    });
+
+    const evalProps = await getModuleProperties(tmpDir, "src/Eval.hs");
+    expect(evalProps).toHaveLength(1);
+    expect(evalProps[0]!.property).toBe("prop-eval");
+
+    // src/Syntax.hs via legacy module field
+    const syntaxProps = await getModuleProperties(tmpDir, "src/Syntax.hs");
+    expect(syntaxProps).toHaveLength(1);
+    expect(syntaxProps[0]!.property).toBe("prop-syntax");
+  });
+
+  it("getModuleProperties falls back to module field for old records without tests_module", async () => {
+    // Simulate a record saved before tests_module existed
+    const { saveStore } = await import("../property-store.js");
+    const legacyStore = {
+      version: 1 as const,
+      properties: [
+        {
+          property: "\\x -> x == x",
+          module: "src/Legacy.hs",
+          lastPassed: new Date().toISOString(),
+          passCount: 1,
+          // No tests_module field
+        },
+      ],
+    };
+    await saveStore(tmpDir, legacyStore);
+
+    const props = await getModuleProperties(tmpDir, "src/Legacy.hs");
+    expect(props).toHaveLength(1);
+    expect(props[0]!.property).toBe("\\x -> x == x");
+  });
+
+  it("dedup upgrade: sets tests_module on existing record when not previously stored", async () => {
+    // First save without tests_module
+    await saveProperty(tmpDir, { property: "prop1", module: "src/Syntax.hs" });
+    // Second save with tests_module — should upgrade
+    await saveProperty(tmpDir, {
+      property: "prop1",
+      module: "src/Syntax.hs",
+      tests_module: "src/Eval.hs",
+    });
+    const store = await loadStore(tmpDir);
+    expect(store.properties).toHaveLength(1);
+    expect(store.properties[0]!.tests_module).toBe("src/Eval.hs");
+    expect(store.properties[0]!.passCount).toBe(2);
+  });
 });

@@ -254,6 +254,20 @@ server.tool(
       const notice = await ctx.getRulesNotice();
       const response: Record<string, unknown> = { alive, projectDir };
       if (notice) response._info = notice;
+      // When no active session, surface available projects so the LLM can switch
+      if (!alive) {
+        try {
+          const projects = await discoverProjects(getPlaygroundDir(BASE_DIR));
+          const others = projects.filter((p) => p.path !== projectDir);
+          if (others.length > 0) {
+            response._hint =
+              `No active session. Available projects: ${others.map((p) => p.name).join(", ")}. ` +
+              `Call ghci_switch_project(name="<name>") to activate one.`;
+          }
+        } catch {
+          // Non-fatal: project discovery failure should not break status
+        }
+      }
       return { content: [{ type: "text", text: JSON.stringify(response) }] };
     }
     resetQuickCheckState();

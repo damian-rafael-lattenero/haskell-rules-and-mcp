@@ -185,5 +185,33 @@ describe("handleFormat", () => {
         expect(result.written).toBeFalsy();
       }
     });
+
+    it("fallback write:true response includes _formatWarning", async () => {
+      const dir = await makeTmpDir();
+      const filePath = path.join(dir, "Warn.hs");
+      await writeFile(filePath, "module Warn where\nfoo = 42\n", "utf-8");
+
+      const result = JSON.parse(await handleFormat(dir, { module_path: "Warn.hs", write: true }));
+
+      if (result.fallback) {
+        expect(result._formatWarning).toBeDefined();
+        expect(typeof result._formatWarning).toBe("string");
+        expect(result._formatWarning).toContain("fourmolu");
+        expect(result._formatWarning).toContain("ghcup install fourmolu");
+      }
+    });
+
+    it("fallback dry-run response includes _formatWarning", async () => {
+      const dir = await makeTmpDir();
+      const filePath = path.join(dir, "WarnDry.hs");
+      await writeFile(filePath, "module WarnDry where\nfoo = 42   \n", "utf-8");
+
+      const result = JSON.parse(await handleFormat(dir, { module_path: "WarnDry.hs" }));
+
+      if (result.fallback) {
+        expect(result._formatWarning).toBeDefined();
+        expect(result._formatWarning).toContain("fourmolu");
+      }
+    });
   });
 });

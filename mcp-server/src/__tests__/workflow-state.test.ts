@@ -478,7 +478,7 @@ describe("deriveGuidance", () => {
     expect(guidance.some(g => g.includes("mode=\"analyze\""))).toBe(true);
   });
 
-  it("suggests completion gate when module complete with properties", () => {
+  it("suggests individual completion gate hints when properties pass and gates incomplete", () => {
     const state = createWorkflowState();
     state.activeModule = "src/Foo.hs";
     updateModuleProgress(state, "src/Foo.hs", {
@@ -490,9 +490,30 @@ describe("deriveGuidance", () => {
       completionGates: { checkModule: false, lint: false, format: false },
     });
     const guidance = deriveGuidance(state, "ghci_load");
-    expect(guidance.some(g => g.includes("completion gate"))).toBe(true);
+    // Each gate has its own separate hint
     expect(guidance.some(g => g.includes("ghci_lint"))).toBe(true);
     expect(guidance.some(g => g.includes("ghci_format"))).toBe(true);
+    expect(guidance.some(g => g.includes("ghci_check_module"))).toBe(true);
+    // Hints are now individual — there are exactly 3 gate hints (one per gate)
+    const gateHints = guidance.filter(
+      g => g.includes("ghci_check_module") || g.includes("ghci_lint") || g.includes("ghci_format")
+    );
+    expect(gateHints.length).toBe(3);
+  });
+
+  it("gate hint fires as soon as any property passes (not just phase=complete)", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      phase: "implementing",  // not complete yet
+      functionsImplemented: 2,
+      functionsTotal: 4,
+      arbitraryInstancesDefined: true,
+      propertiesPassed: ["p1"],  // one property already passed
+      completionGates: { checkModule: false, lint: false, format: false },
+    });
+    const guidance = deriveGuidance(state, "ghci_load");
+    // Gate hints fire even before all functions are implemented
     expect(guidance.some(g => g.includes("ghci_check_module"))).toBe(true);
   });
 
@@ -508,7 +529,99 @@ describe("deriveGuidance", () => {
       completionGates: { checkModule: true, lint: true, format: true },
     });
     const guidance = deriveGuidance(state, "ghci_load");
-    expect(guidance.some(g => g.includes("completion gate"))).toBe(false);
+    // No individual gate hints when all are done
+    expect(guidance.some(g => g.includes("ghci_check_module") && !g.includes("ghci_quickcheck_export"))).toBe(false);
+    expect(guidance.some(g => g.includes("ghci_lint"))).toBe(false);
+    expect(guidance.some(g => g.includes("ghci_format") && !g.includes("ghci_quickcheck_export"))).toBe(false);
+  });
+});
+
+describe("deriveGuidance — guidance intelligence improvements", () => {
+  it("omits suggest hint when propertiesPassed.length > 0", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      functionsImplemented: 3,
+      functionsTotal: 3,
+      arbitraryInstancesDefined: true,
+      propertiesPassed: ["p1", "p2"],
+    });
+    const guidance = deriveGuidance(state, "ghci_load");
+    // "Functions implemented but untested" hint must NOT appear once properties have passed
+    expect(guidance.some(g => g.includes("untested"))).toBe(false);
+    expect(guidance.some(g => g.includes("mode=\"analyze\""))).toBe(false);
+  });
+
+  it("shows suggest hint when no properties have passed yet", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      functionsImplemented: 2,
+      functionsTotal: 3,
+      arbitraryInstancesDefined: true,
+      propertiesPassed: [],
+      propertiesFailed: [],
+    });
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance.some(g => g.includes("untested") || g.includes("mode=\"analyze\""))).toBe(true);
+  });
+
+  it("adds check_module hint when properties pass but checkModule gate is false", () => {
+    const state = createWorkflowState();
+    state.activeModule = "src/Eval.hs";
+    updateModuleProgress(state, "src/Eval.hs", {
+      functionsImplemented: 2,
+      functionsTotal: 2,
+      arbitraryInstancesDefined: true,
+      propertiesPassed: ["p1"],
+      completionGates: { checkModule: false, lint: true, format: true },
+    });
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance.some(g => g.includes("ghci_check_module"))).toBe(true);
+    // lint and format are done — no hints for them
+    expect(guidance.some(g => g.includes("ghci_lint"))).toBe(false);
+    expect(guidance.some(g => g.includes("ghci_format") && !g.includes("export"))).toBe(false);
+  });
+
+  it("adds session-close hint when all tracked modules have all gates complete", () => {
+    const state = createWorkflowState();
+    updateModuleProgress(state, "src/A.hs", {
+      functionsImplemented: 2,
+      functionsTotal: 2,
+      propertiesPassed: ["p1"],
+      completionGates: { checkModule: true, lint: true, format: true },
+    });
+    updateModuleProgress(state, "src/B.hs", {
+      functionsImplemented: 1,
+      functionsTotal: 1,
+      propertiesPassed: ["p2"],
+      completionGates: { checkModule: true, lint: true, format: true },
+    });
+    state.activeModule = "src/B.hs";
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance.some(g => g.includes("ghci_quickcheck_export"))).toBe(true);
+    expect(guidance.some(g => g.includes("cabal_build"))).toBe(true);
+  });
+
+  it("does NOT add session-close hint when only one module has all gates but another is incomplete", () => {
+    const state = createWorkflowState();
+    updateModuleProgress(state, "src/A.hs", {
+      functionsImplemented: 2,
+      functionsTotal: 2,
+      propertiesPassed: ["p1"],
+      completionGates: { checkModule: true, lint: true, format: true },
+    });
+    updateModuleProgress(state, "src/B.hs", {
+      functionsImplemented: 1,
+      functionsTotal: 1,
+      propertiesPassed: ["p2"],
+      completionGates: { checkModule: false, lint: true, format: true }, // checkModule missing
+    });
+    state.activeModule = "src/B.hs";
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance.some(g => g.includes("ghci_quickcheck_export"))).toBe(false);
+    // Instead, checkModule hint for B should appear
+    expect(guidance.some(g => g.includes("ghci_check_module"))).toBe(true);
   });
 });
 
