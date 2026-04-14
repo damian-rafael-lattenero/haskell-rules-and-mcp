@@ -125,4 +125,67 @@ describe("ghci_quickcheck module parameter", () => {
     const store = await loadStore(tmpDir);
     expect(store.properties).toHaveLength(0);
   });
+
+  // --- module_path alias (Change 3) ---
+
+  it("module_path works as alias for module", async () => {
+    const session = createMockSession("+++ OK, passed 100 tests.");
+
+    await handleQuickCheck(
+      session,
+      {
+        property: "\\x -> reverse (reverse x) == (x :: [Int])",
+        module_path: "src/Parser/Run.hs",
+      },
+      undefined,
+      tmpDir
+    );
+
+    const store = await loadStore(tmpDir);
+    expect(store.properties).toHaveLength(1);
+    expect(store.properties[0]!.module).toBe("src/Parser/Run.hs");
+  });
+
+  it("module_path takes precedence over module when both provided", async () => {
+    const session = createMockSession("+++ OK, passed 100 tests.");
+
+    await handleQuickCheck(
+      session,
+      {
+        property: "\\x -> x == x",
+        module: "src/Old.hs",
+        module_path: "src/New.hs",
+      },
+      undefined,
+      tmpDir
+    );
+
+    const store = await loadStore(tmpDir);
+    expect(store.properties[0]!.module).toBe("src/New.hs");
+  });
+
+  it("module_path alone overrides activeModule", async () => {
+    const session = createMockSession("+++ OK, passed 100 tests.");
+    const ctx = {
+      getWorkflowState: () => ({
+        activeModule: "src/Active.hs",
+        modules: new Map(),
+      }),
+      getModuleProgress: () => undefined,
+      updateModuleProgress: vi.fn(),
+    };
+
+    await handleQuickCheck(
+      session,
+      {
+        property: "\\x -> x == x",
+        module_path: "src/Explicit.hs",
+      },
+      ctx,
+      tmpDir
+    );
+
+    const store = await loadStore(tmpDir);
+    expect(store.properties[0]!.module).toBe("src/Explicit.hs");
+  });
 });

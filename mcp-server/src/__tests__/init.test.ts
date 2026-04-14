@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { handleInit } from "../tools/init.js";
 import { mkdtemp, rm, readFile, access, writeFile } from "node:fs/promises";
+import { detectBuildTool } from "../parsers/cabal-parser.js";
 import path from "node:path";
 import os from "node:os";
+
 
 describe("handleInit", () => {
   let targetDir: string;
@@ -133,5 +135,76 @@ describe("handleInit", () => {
     });
     const cabal = await readFile(path.join(targetDir, "test.cabal"), "utf-8");
     expect(cabal).toContain("Haskell2010");
+  });
+
+  it("build_tool:stack generates stack.yaml", async () => {
+    const result = JSON.parse(
+      await handleInit(targetDir, currentProjectDir, workspaceRoot, {
+        name: "test",
+        modules: ["Lib"],
+        build_tool: "stack",
+        target_path: path.relative(workspaceRoot, targetDir),
+      })
+    );
+    expect(result.success).toBe(true);
+    const stackYaml = await readFile(path.join(targetDir, "stack.yaml"), "utf-8");
+    expect(stackYaml).toContain("resolver");
+    expect(stackYaml).toContain("packages");
+  });
+
+  it("build_tool:cabal does NOT generate stack.yaml", async () => {
+    await handleInit(targetDir, currentProjectDir, workspaceRoot, {
+      name: "test",
+      modules: ["Lib"],
+      build_tool: "cabal",
+      target_path: path.relative(workspaceRoot, targetDir),
+    });
+    let found = false;
+    try {
+      await access(path.join(targetDir, "stack.yaml"));
+      found = true;
+    } catch { /* expected */ }
+    expect(found).toBe(false);
+  });
+
+  it("default (no build_tool) does NOT generate stack.yaml", async () => {
+    await handleInit(targetDir, currentProjectDir, workspaceRoot, {
+      name: "test",
+      modules: ["Lib"],
+      target_path: path.relative(workspaceRoot, targetDir),
+    });
+    let found = false;
+    try {
+      await access(path.join(targetDir, "stack.yaml"));
+      found = true;
+    } catch { /* expected */ }
+    expect(found).toBe(false);
+  });
+});
+
+describe("detectBuildTool", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), "build-tool-test-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("returns 'stack' when stack.yaml is present", async () => {
+    await writeFile(path.join(dir, "stack.yaml"), "resolver: lts-22.0\n", "utf-8");
+    await writeFile(path.join(dir, "pkg.cabal"), "name: pkg\n", "utf-8");
+    expect(await detectBuildTool(dir)).toBe("stack");
+  });
+
+  it("returns 'cabal' when only .cabal exists", async () => {
+    await writeFile(path.join(dir, "pkg.cabal"), "name: pkg\n", "utf-8");
+    expect(await detectBuildTool(dir)).toBe("cabal");
+  });
+
+  it("returns 'cabal' by default (nothing present)", async () => {
+    expect(await detectBuildTool(dir)).toBe("cabal");
   });
 });

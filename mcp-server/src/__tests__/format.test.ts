@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { handleFormat } from "../tools/format.js";
-import { writeFile, mkdtemp, rm } from "node:fs/promises";
+import { writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 
@@ -103,6 +103,86 @@ describe("handleFormat", () => {
         expect(result.installSuggestions).toBeDefined();
         expect(result.installSuggestions.length).toBeGreaterThan(0);
         expect(result.installSuggestions.some((s: string) => s.includes("fourmolu"))).toBe(true);
+      }
+    });
+  });
+
+  // --- Fallback write mode (Change 4) ---
+  describe("fallback write mode", () => {
+    it("write:true strips trailing whitespace and sets written:true", async () => {
+      const dir = await makeTmpDir();
+      const filePath = path.join(dir, "Dirty.hs");
+      await writeFile(filePath, "module Dirty where   \n\nfoo = 42   \n", "utf-8");
+
+      const result = JSON.parse(await handleFormat(dir, { module_path: "Dirty.hs", write: true }));
+
+      if (result.fallback) {
+        expect(result.success).toBe(true);
+        expect(result.written).toBe(true);
+        expect(result.fixesApplied).toBeGreaterThan(0);
+        const content = await readFile(filePath, "utf-8");
+        expect(content).not.toMatch(/ +\n/);
+      }
+    });
+
+    it("write:true converts tabs to spaces", async () => {
+      const dir = await makeTmpDir();
+      const filePath = path.join(dir, "Tabbed.hs");
+      await writeFile(filePath, "module Tabbed where\n\tfoo = 42\n", "utf-8");
+
+      const result = JSON.parse(await handleFormat(dir, { module_path: "Tabbed.hs", write: true }));
+
+      if (result.fallback) {
+        expect(result.success).toBe(true);
+        expect(result.written).toBe(true);
+        const content = await readFile(filePath, "utf-8");
+        expect(content).not.toContain("\t");
+      }
+    });
+
+    it("write:true adds missing final newline", async () => {
+      const dir = await makeTmpDir();
+      const filePath = path.join(dir, "NoNL.hs");
+      await writeFile(filePath, "module NoNL where\nfoo = 42", "utf-8");
+
+      const result = JSON.parse(await handleFormat(dir, { module_path: "NoNL.hs", write: true }));
+
+      if (result.fallback) {
+        expect(result.success).toBe(true);
+        expect(result.written).toBe(true);
+        const content = await readFile(filePath, "utf-8");
+        expect(content.endsWith("\n")).toBe(true);
+      }
+    });
+
+    it("write:true on clean file returns fixesApplied:0", async () => {
+      const dir = await makeTmpDir();
+      const filePath = path.join(dir, "Clean2.hs");
+      await writeFile(filePath, "module Clean2 where\n\nfoo :: Int\nfoo = 42\n", "utf-8");
+
+      const result = JSON.parse(await handleFormat(dir, { module_path: "Clean2.hs", write: true }));
+
+      if (result.fallback) {
+        expect(result.success).toBe(true);
+        expect(result.written).toBe(true);
+        expect(result.fixesApplied).toBe(0);
+      }
+    });
+
+    it("write:false leaves file unchanged even with issues", async () => {
+      const dir = await makeTmpDir();
+      const filePath = path.join(dir, "Unchanged.hs");
+      const original = "module Unchanged where   \nfoo = 42   \n";
+      await writeFile(filePath, original, "utf-8");
+
+      const result = JSON.parse(await handleFormat(dir, { module_path: "Unchanged.hs", write: false }));
+
+      if (result.fallback) {
+        // Should report issues but NOT modify the file
+        const content = await readFile(filePath, "utf-8");
+        expect(content).toBe(original);
+        // written should be falsy
+        expect(result.written).toBeFalsy();
       }
     });
   });

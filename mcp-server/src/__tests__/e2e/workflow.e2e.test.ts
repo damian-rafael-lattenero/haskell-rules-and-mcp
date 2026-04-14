@@ -17,7 +17,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { execSync } from "node:child_process";
-import { writeFile, unlink, readFile } from "node:fs/promises";
+import { writeFile, unlink, readFile, access } from "node:fs/promises";
 import path from "node:path";
 
 const FIXTURE_DIR = path.resolve(
@@ -32,6 +32,7 @@ const GHCUP_BIN = path.join(process.env.HOME ?? "", ".ghcup", "bin");
 const TEST_PATH = `${GHCUP_BIN}:${process.env.PATH}`;
 
 const WORKFLOW_MODULE = path.join(FIXTURE_DIR, "src", "WorkflowTest.hs");
+const HOLE_MODULE = path.join(FIXTURE_DIR, "src", "HoleTest.hs");
 const CABAL_FILE = path.join(FIXTURE_DIR, "test-project.cabal");
 
 const GHC_AVAILABLE = (() => {
@@ -64,10 +65,10 @@ describe.runIf(GHC_AVAILABLE)("E2E Workflow: Development Loop", () => {
     // Save original cabal file
     originalCabal = await readFile(CABAL_FILE, "utf-8");
 
-    // Add WorkflowTest to exposed-modules
+    // Add WorkflowTest and HoleTest to exposed-modules
     const updatedCabal = originalCabal.replace(
       "exposed-modules:  TestLib",
-      "exposed-modules:  TestLib\n                  WorkflowTest"
+      "exposed-modules:  TestLib\n                  WorkflowTest\n                  HoleTest"
     );
     await writeFile(CABAL_FILE, updatedCabal, "utf-8");
 
@@ -93,8 +94,9 @@ describe.runIf(GHC_AVAILABLE)("E2E Workflow: Development Loop", () => {
   }, 60_000);
 
   afterAll(async () => {
-    // Clean up: remove temp module, restore cabal
+    // Clean up: remove temp modules, restore cabal
     try { await unlink(WORKFLOW_MODULE); } catch { /* ignore */ }
+    try { await unlink(HOLE_MODULE); } catch { /* ignore */ }
     await writeFile(CABAL_FILE, originalCabal, "utf-8");
     try { await client.close(); } catch { /* ignore */ }
   });
@@ -370,4 +372,72 @@ broken x = x * 2
     expect(r.success).toBe(true);
     expect(r.output).toContain("6");
   });
+
+  // --- ghci_hole: typed hole exploration ---
+  it("step 18: ghci_hole finds typed hole and returns fits", async () => {
+    // Write a module with a typed hole
+    await writeFile(
+      HOLE_MODULE,
+      `module HoleTest where
+
+holeFunc :: Int -> Int
+holeFunc x = _result
+`,
+      "utf-8"
+    );
+
+    // Restart so GHCi picks up the new module
+    await callTool(client, "ghci_session", { action: "restart" });
+
+    const result = parseResult(
+      await callTool(client, "ghci_hole", { module_path: "src/HoleTest.hs" })
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.holes.length).toBeGreaterThan(0);
+    expect(result.holes[0].hole).toBe("_result");
+    expect(result.holes[0].expectedType).toContain("Int");
+  });
+
+  it("step 18c: ghci_format write:true fixes trailing whitespace (fallback)", async () => {
+    // Write a module with trailing whitespace
+    await writeFile(
+      WORKFLOW_MODULE,
+      `module WorkflowTest where   \n\ndouble :: Int -> Int   \ndouble x = x + x\n`,
+      "utf-8"
+    );
+
+    const result = parseResult(
+      await callTool(client, "ghci_format", {
+        module_path: "src/WorkflowTest.hs",
+        write: true,
+      })
+    );
+    // Should succeed regardless of whether a formatter is installed or fallback is used
+    expect(result.success).toBe(true);
+    // In fallback mode, written must be true
+    if (result.fallback) {
+      expect(result.written).toBe(true);
+      expect(typeof result.fixesApplied).toBe("number");
+    }
+  });
+
+  it("step 18b: ghci_hole with hole_name filter returns only that hole", async () => {
+    // HoleTest.hs was written in step 18
+    try { await access(HOLE_MODULE); } catch {
+      await writeFile(HOLE_MODULE, `module HoleTest where\nholeFunc :: Int -> Int\nholeFunc x = _result\n`, "utf-8");
+      await callTool(client, "ghci_session", { action: "restart" });
+    }
+
+    const result = parseResult(
+      await callTool(client, "ghci_hole", {
+        module_path: "src/HoleTest.hs",
+        hole_name: "_result",
+      })
+    );
+    expect(result.success).toBe(true);
+    expect(result.holes.length).toBe(1);
+    expect(result.holes[0].hole).toBe("_result");
+  });
+
 });

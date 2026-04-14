@@ -200,6 +200,28 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     expect(parsed.passed).toBe(100);
   });
 
+  it("ghci_quickcheck accepts module_path as alias for module", async () => {
+    const result = await client.callTool({
+      name: "ghci_quickcheck",
+      arguments: {
+        property: "\\x y -> add x y == x + (y :: Int)",
+        module_path: "src/TestLib.hs",
+      },
+    });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(parsed.passed).toBe(100);
+  });
+
+  it("ghci_quickcheck schema lists module_path parameter", async () => {
+    const result = await client.listTools();
+    const qcTool = result.tools.find((t) => t.name === "ghci_quickcheck");
+    expect(qcTool).toBeDefined();
+    const paramNames = Object.keys(qcTool?.inputSchema?.properties ?? {});
+    expect(paramNames).toContain("module_path");
+    expect(paramNames).toContain("module");
+  });
+
   // --- ghci_load with diagnostics ---
   it("calls ghci_load with diagnostics", async () => {
     const result = await client.callTool({
@@ -286,7 +308,114 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     expect(parsed.mode).toBeUndefined();
   });
 
-  // --- tool listing ---
+  // --- ghci_workflow help action ---
+  it("ghci_workflow action:help returns suggested_tools and reasoning", async () => {
+    const result = await client.callTool({
+      name: "ghci_workflow",
+      arguments: { action: "help" },
+    });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(Array.isArray(parsed.suggested_tools)).toBe(true);
+    expect(parsed.suggested_tools.length).toBeGreaterThan(0);
+    expect(typeof parsed.reasoning).toBe("string");
+    expect(parsed.reasoning.length).toBeGreaterThan(0);
+    expect(Array.isArray(parsed.steps)).toBe(true);
+    expect(parsed.steps.length).toBeGreaterThanOrEqual(2);
+  });
+
+  // --- Stack support ---
+  // --- ghci_hls ---
+  it("ghci_hls appears in listTools()", async () => {
+    const result = await client.listTools();
+    const names = result.tools.map((t) => t.name);
+    expect(names).toContain("ghci_hls");
+  });
+
+  it("ghci_hls available action always returns a response (no crash)", async () => {
+    const result = await client.callTool({
+      name: "ghci_hls",
+      arguments: { action: "available" },
+    });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    // Must have success:true and available:boolean regardless of HLS installation
+    expect(parsed.success).toBe(true);
+    expect(typeof parsed.available).toBe("boolean");
+  });
+
+  // --- ghci_profile ---
+  it("ghci_profile appears in listTools()", async () => {
+    const result = await client.listTools();
+    const names = result.tools.map((t) => t.name);
+    expect(names).toContain("ghci_profile");
+  });
+
+  // --- ghci_flags ---
+  it("ghci_flags appears in listTools()", async () => {
+    const result = await client.listTools();
+    const names = result.tools.map((t) => t.name);
+    expect(names).toContain("ghci_flags");
+  });
+
+  it("ghci_flags list returns flags array", async () => {
+    const result = await client.callTool({
+      name: "ghci_flags",
+      arguments: { action: "list" },
+    });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(Array.isArray(parsed.flags)).toBe(true);
+  });
+
+  it("ghci_flags set then eval uses extension", async () => {
+    await client.callTool({
+      name: "ghci_flags",
+      arguments: { action: "set", flags: "-XScopedTypeVariables" },
+    });
+    // ScopedTypeVariables is GHC2024 default but setting it explicitly should still work
+    const evalResult = await client.callTool({
+      name: "ghci_eval",
+      arguments: { expression: "(\\(x :: Int) -> x + 1) 41" },
+    });
+    const parsed = JSON.parse((evalResult.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(parsed.output).toContain("42");
+  });
+
+  // --- ghci_init with build_tool:stack ---
+  it("ghci_init with build_tool:stack schema includes build_tool param", async () => {
+    const result = await client.listTools();
+    const initTool = result.tools.find((t) => t.name === "ghci_init");
+    expect(initTool).toBeDefined();
+    const paramNames = Object.keys(initTool?.inputSchema?.properties ?? {});
+    expect(paramNames).toContain("build_tool");
+  });
+
+  it("ghci_workflow help: suggested_tools are valid tool names in listTools()", async () => {
+    const listResult = await client.listTools();
+    const allNames = new Set(listResult.tools.map((t) => t.name));
+
+    const helpResult = await client.callTool({
+      name: "ghci_workflow",
+      arguments: { action: "help" },
+    });
+    const parsed = JSON.parse((helpResult.content as any)[0].text);
+    for (const toolName of parsed.suggested_tools) {
+      expect(allNames.has(toolName), `"${toolName}" not in tool list`).toBe(true);
+    }
+  });
+
+  // --- multi-package: ghci_deps with cabal.project awareness ---
+  it("ghci_deps list works correctly on the test fixture", async () => {
+    const result = await client.callTool({
+      name: "ghci_deps",
+      arguments: { action: "list" },
+    });
+    const parsed = JSON.parse((result.content as any)[0].text);
+    expect(parsed.success).toBe(true);
+    expect(Array.isArray(parsed.dependencies)).toBe(true);
+  });
+
+  // --- tool listing (all new tools included) ---
   it("lists tools without ghci_mode", async () => {
     const result = await client.listTools();
     const names = result.tools.map((t) => t.name);
@@ -300,7 +429,14 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     expect(names).toContain("ghci_add_import");
     expect(names).toContain("ghci_references");
     expect(names).toContain("ghci_rename");
-    expect(names.length).toBeGreaterThanOrEqual(26);
+    // New tools from improvements
+    expect(names).toContain("ghci_deps");
+    expect(names).toContain("ghci_hole");
+    expect(names).toContain("ghci_refactor");
+    expect(names).toContain("ghci_flags");
+    expect(names).toContain("ghci_profile");
+    expect(names).toContain("ghci_hls");
+    expect(names.length).toBeGreaterThanOrEqual(32); // 26 original + 6 new
   });
 
   // --- Resources ---

@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, access } from "node:fs/promises";
 import path from "node:path";
 
 export interface CabalModules {
@@ -260,6 +260,91 @@ export function extractBuildDependsFromContent(content: string): string[] {
     }
   }
   return deps;
+}
+
+/**
+ * Parse a cabal.project file and extract the list of package directories.
+ *
+ * Handles:
+ *   packages: ./a ./b
+ *   packages:
+ *     ./pkg-a
+ *     ./pkg-b
+ *   packages: .
+ *
+ * Returns absolute paths of listed packages. Returns [] if cabal.project
+ * does not exist or has no packages entry.
+ */
+export async function parseCabalProject(dir: string): Promise<string[]> {
+  const projectFile = path.join(dir, "cabal.project");
+  let content: string;
+  try {
+    content = await readFile(projectFile, "utf-8");
+  } catch {
+    return [];
+  }
+
+  const packages: string[] = [];
+  const lines = content.split("\n");
+  let inPackages = false;
+  let packagesIndent = 0;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+
+    // Skip comments
+    if (line.trimStart().startsWith("--")) continue;
+
+    // Detect packages: field
+    const pkgMatch = line.match(/^(\s*)packages\s*:\s*(.*)/i);
+    if (pkgMatch) {
+      inPackages = true;
+      packagesIndent = pkgMatch[1]!.length + 2;
+
+      // Same-line packages
+      const sameLine = pkgMatch[2]!.trim();
+      if (sameLine) {
+        for (const pkg of sameLine.split(/\s+/).filter(Boolean)) {
+          if (!pkg.startsWith("--")) packages.push(path.resolve(dir, pkg));
+        }
+      }
+      continue;
+    }
+
+    // Continuation lines (indented more than field start)
+    if (inPackages) {
+      const lineIndent = line.length - line.trimStart().length;
+      const trimmed = line.trim();
+      if (trimmed === "") continue;
+
+      if (lineIndent >= packagesIndent) {
+        // Package continuation line
+        for (const pkg of trimmed.split(/\s+/).filter(Boolean)) {
+          if (!pkg.startsWith("--")) packages.push(path.resolve(dir, pkg));
+        }
+      } else {
+        // New field at lower indentation — end of packages section
+        inPackages = false;
+      }
+    }
+  }
+
+  return packages;
+}
+
+/**
+ * Detect which build tool is used in a project directory.
+ * Returns "stack" if stack.yaml is present, "cabal" otherwise.
+ */
+export async function detectBuildTool(
+  projectDir: string
+): Promise<"cabal" | "stack"> {
+  try {
+    await access(path.join(projectDir, "stack.yaml"));
+    return "stack";
+  } catch {
+    return "cabal";
+  }
 }
 
 function parseDeps(text: string): string[] {

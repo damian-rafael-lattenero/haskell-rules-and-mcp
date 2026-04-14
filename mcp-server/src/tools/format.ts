@@ -49,7 +49,7 @@ function runFormatter(
   });
 }
 
-async function basicStyleChecks(filePath: string): Promise<string> {
+async function basicStyleChecks(filePath: string, write?: boolean): Promise<string> {
   let stats;
   try {
     stats = await stat(filePath);
@@ -65,7 +65,7 @@ async function basicStyleChecks(filePath: string): Promise<string> {
   const issues: Array<{ line: number; issue: string; severity: string }> = [];
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = lines[i]!;
     if (/\t/.test(line)) {
       issues.push({ line: i + 1, issue: "Tab character found (use spaces)", severity: "warning" });
     }
@@ -79,6 +79,52 @@ async function basicStyleChecks(filePath: string): Promise<string> {
 
   if (content.length > 0 && !content.endsWith("\n")) {
     issues.push({ line: lines.length, issue: "Missing final newline", severity: "warning" });
+  }
+
+  if (write) {
+    // Apply auto-fixable issues: strip trailing whitespace, convert tabs to spaces, add final newline
+    let fixesApplied = 0;
+    let fixed = lines
+      .map((line) => {
+        let out = line;
+        // Tabs → 2 spaces
+        if (/\t/.test(out)) {
+          out = out.replace(/\t/g, "  ");
+          fixesApplied++;
+        }
+        // Trailing whitespace
+        const stripped = out.replace(/[ \t]+$/, "");
+        if (stripped !== out) {
+          out = stripped;
+          fixesApplied++;
+        }
+        return out;
+      })
+      .join("\n");
+
+    // Ensure final newline
+    if (content.length > 0 && !fixed.endsWith("\n")) {
+      fixed += "\n";
+      fixesApplied++;
+    }
+
+    await writeFile(filePath, fixed, "utf-8");
+
+    return JSON.stringify({
+      success: true,
+      fallback: true,
+      written: true,
+      fixesApplied,
+      source: "basic-style-checks",
+      message: fixesApplied > 0
+        ? `Applied ${fixesApplied} fix(es): trailing whitespace, tabs→spaces, final newline`
+        : "File already clean — no fixes needed",
+      installSuggestions: [
+        "cabal install fourmolu",
+        "ghcup install fourmolu",
+        "brew install fourmolu",
+      ],
+    });
   }
 
   return JSON.stringify({
@@ -102,7 +148,7 @@ export async function handleFormat(
   const formatter = await detectFormatter();
   if (!formatter) {
     const absPath = path.resolve(projectDir, args.module_path);
-    return basicStyleChecks(absPath);
+    return basicStyleChecks(absPath, args.write);
   }
 
   const absPath = path.resolve(projectDir, args.module_path);

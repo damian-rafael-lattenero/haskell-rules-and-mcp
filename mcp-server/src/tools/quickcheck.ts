@@ -163,6 +163,8 @@ export async function handleQuickCheck(
     verbose?: boolean;
     incremental?: boolean;
     function_name?: string;
+    /** Preferred alias — takes precedence over `module` */
+    module_path?: string;
     module?: string;
   },
   ctx?: { getWorkflowState?: () => { activeModule: string | null; modules: Map<string, unknown> }; updateModuleProgress?: (path: string, updates: Record<string, unknown>) => void; getModuleProgress?: (path: string) => { propertiesPassed: string[]; propertiesFailed: string[]; functionsImplemented: number; functionsTotal: number } | undefined },
@@ -327,7 +329,7 @@ export async function handleQuickCheck(
   let propertySaved = false;
   let propertyStoreCount = 0;
   if (parsed.success && !isCompilationError && projectDir) {
-    const activeMod = args.module ?? ctx?.getWorkflowState?.()?.activeModule ?? "unknown";
+    const activeMod = args.module_path ?? args.module ?? ctx?.getWorkflowState?.()?.activeModule ?? "unknown";
     try {
       await saveProperty(projectDir, {
         property: args.property,
@@ -344,7 +346,7 @@ export async function handleQuickCheck(
 
   // Track in workflow state if incremental
   if (args.incremental && ctx?.getWorkflowState && ctx?.getModuleProgress) {
-    let activeMod = args.module ?? ctx.getWorkflowState().activeModule;
+    let activeMod = args.module_path ?? args.module ?? ctx.getWorkflowState().activeModule;
 
     if (!activeMod) {
       const state = ctx.getWorkflowState();
@@ -539,12 +541,16 @@ export function register(server: McpServer, ctx: ToolContext): void {
           "Used for accurate property tracking in properties.json. " +
           "If omitted, uses the last module loaded with ghci_load."
       ),
+      module_path: z.string().optional().describe(
+        'Alias for module. Preferred spelling — module_path takes precedence when both are provided. ' +
+          'Examples: "src/Expr/Eval.hs", "src/Parser/Run.hs"'
+      ),
     },
-    async ({ property, tests, verbose, incremental, function_name, module: mod }) => {
+    async ({ property, tests, verbose, incremental, function_name, module: mod, module_path }) => {
       const session = await ctx.getSession();
       const result = await handleQuickCheck(
         session,
-        { property, tests, verbose, incremental, function_name, module: mod },
+        { property, tests, verbose, incremental, function_name, module: mod, module_path },
         ctx,
         ctx.getProjectDir()
       );
@@ -559,7 +565,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
  */
 export async function handleQuickCheckBatch(
   session: GhciSession,
-  args: { properties: string[]; tests?: number; incremental?: boolean; module?: string },
+  args: { properties: string[]; tests?: number; incremental?: boolean; module?: string; module_path?: string },
   ctx?: { getWorkflowState?: () => { activeModule: string | null; modules: Map<string, unknown> }; updateModuleProgress?: (path: string, updates: Record<string, unknown>) => void; getModuleProgress?: (path: string) => { propertiesPassed: string[]; propertiesFailed: string[]; functionsImplemented: number; functionsTotal: number } | undefined },
   projectDir?: string
 ): Promise<string> {
@@ -594,7 +600,7 @@ export async function handleQuickCheckBatch(
   for (const property of args.properties) {
     const singleResult = await handleQuickCheck(
       session,
-      { property, tests: args.tests, incremental: args.incremental, module: args.module },
+      { property, tests: args.tests, incremental: args.incremental, module: args.module, module_path: args.module_path },
       ctx,
       projectDir
     );
@@ -633,19 +639,23 @@ export function registerBatch(server: McpServer, ctx: ToolContext): void {
       module: z.string().optional().describe(
         'Module path these properties belong to (e.g. "src/Parser/Run.hs"). Used for accurate property tracking.'
       ),
+      module_path: z.string().optional().describe(
+        'Alias for module. Preferred spelling — takes precedence when both are provided.'
+      ),
       auto_collect: z.boolean().optional().describe(
         "If true and properties array is empty, auto-collects all saved properties from properties.json. " +
         "Use with module to filter by module."
       ),
     },
-    async ({ properties, tests, incremental, module: mod, auto_collect }) => {
+    async ({ properties, tests, incremental, module: mod, module_path, auto_collect }) => {
+      const resolvedMod = module_path ?? mod;
       let propsToRun = properties;
       // Auto-collect from property store if requested
       if (auto_collect && (!properties || properties.length === 0)) {
         try {
           const { getAllProperties, getModuleProperties } = await import("../property-store.js");
-          const stored = mod
-            ? await getModuleProperties(ctx.getProjectDir(), mod)
+          const stored = resolvedMod
+            ? await getModuleProperties(ctx.getProjectDir(), resolvedMod)
             : await getAllProperties(ctx.getProjectDir());
           propsToRun = stored.map(p => p.property);
         } catch { /* fallback to empty */ }
@@ -653,7 +663,7 @@ export function registerBatch(server: McpServer, ctx: ToolContext): void {
       const session = await ctx.getSession();
       const result = await handleQuickCheckBatch(
         session,
-        { properties: propsToRun, tests, incremental, module: mod },
+        { properties: propsToRun, tests, incremental, module: mod, module_path },
         ctx,
         ctx.getProjectDir()
       );

@@ -12,6 +12,7 @@ import {
   serializeState,
   derivePhase,
   deriveGuidance,
+  workflowHelp,
 } from "../workflow-state.js";
 
 describe("createWorkflowState", () => {
@@ -508,6 +509,65 @@ describe("deriveGuidance", () => {
     });
     const guidance = deriveGuidance(state, "ghci_load");
     expect(guidance.some(g => g.includes("completion gate"))).toBe(false);
+  });
+});
+
+describe("workflowHelp", () => {
+  it("initial state suggests ghci_load as first step", () => {
+    const state = createWorkflowState();
+    const help = workflowHelp(state);
+    expect(help.suggested_tools).toContain("ghci_load");
+    expect(help.reasoning).toBeTruthy();
+    expect(help.steps.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("after ghci_load logged, suggests ghci_quickcheck or ghci_arbitrary", () => {
+    const state = createWorkflowState();
+    logTool(state, "ghci_load", true);
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      functionsImplemented: 2,
+      functionsTotal: 2,
+    });
+    const help = workflowHelp(state);
+    const hasQC = help.suggested_tools.includes("ghci_quickcheck");
+    const hasArb = help.suggested_tools.includes("ghci_arbitrary");
+    expect(hasQC || hasArb).toBe(true);
+  });
+
+  it("after passing tests, suggests ghci_check_module", () => {
+    const state = createWorkflowState();
+    logTool(state, "ghci_load", true);
+    logTool(state, "ghci_quickcheck", true);
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      functionsImplemented: 2,
+      functionsTotal: 2,
+      propertiesPassed: ["p1", "p2"],
+      arbitraryInstancesDefined: true, // already defined, skip that step
+    });
+    const help = workflowHelp(state);
+    expect(help.suggested_tools).toContain("ghci_check_module");
+  });
+
+  it("suggested_tools is always a non-empty array", () => {
+    const state = createWorkflowState();
+    const help = workflowHelp(state);
+    expect(Array.isArray(help.suggested_tools)).toBe(true);
+    expect(help.suggested_tools.length).toBeGreaterThan(0);
+  });
+
+  it("steps contains at least 2 items", () => {
+    const state = createWorkflowState();
+    const help = workflowHelp(state);
+    expect(help.steps.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("reasoning is a non-empty string", () => {
+    const state = createWorkflowState();
+    const help = workflowHelp(state);
+    expect(typeof help.reasoning).toBe("string");
+    expect(help.reasoning.length).toBeGreaterThan(0);
   });
 });
 

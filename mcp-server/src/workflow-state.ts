@@ -317,6 +317,145 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
   return guidance;
 }
 
+export interface WorkflowHelpResult {
+  suggested_tools: string[];
+  reasoning: string;
+  steps: string[];
+}
+
+/**
+ * Context-aware help: looks at the current workflow state and returns
+ * actionable next-step guidance for the LLM agent.
+ *
+ * Decision tree:
+ * 1. Nothing loaded yet → load a module
+ * 2. Load failed → fix errors
+ * 3. Pending warnings → fix warnings
+ * 4. No arbitrary instances but functions exist → define arbitrary
+ * 5. No properties tested → run quickcheck
+ * 6. Properties failing → fix implementation
+ * 7. All properties pass but gates missing → run check_module/lint/format
+ * 8. Everything done → run regression
+ */
+export function workflowHelp(state: WorkflowState): WorkflowHelpResult {
+  const recentTools = new Set(state.toolHistory.slice(-10).map((t) => t.tool));
+  const mod = state.activeModule ? state.modules.get(state.activeModule) : undefined;
+
+  // 1. Fresh session — nothing loaded
+  if (state.toolHistory.length === 0 || !recentTools.has("ghci_load")) {
+    return {
+      suggested_tools: ["ghci_load", "ghci_session"],
+      reasoning: "No modules have been loaded yet. Start by loading your module to get compilation feedback.",
+      steps: [
+        "Run ghci_load(module_path='src/YourModule.hs', diagnostics=true) to compile and see errors/warnings",
+        "Fix any errors reported, then reload",
+        "Once clean, proceed to implement functions",
+      ],
+    };
+  }
+
+  // 2. Last load failed
+  if (mod?.lastLoad && !mod.lastLoad.success && mod.lastLoad.errors > 0) {
+    return {
+      suggested_tools: ["ghci_load", "ghci_type"],
+      reasoning: `The last compilation had ${mod.lastLoad.errors} error(s). Fix them before continuing.`,
+      steps: [
+        "Read the error messages from the last ghci_load result",
+        "Fix the type errors or missing definitions",
+        "Re-run ghci_load(diagnostics=true) to verify",
+      ],
+    };
+  }
+
+  // 3. Pending warnings
+  if (state.pendingWarningCount > 0) {
+    return {
+      suggested_tools: ["ghci_load"],
+      reasoning: `There are ${state.pendingWarningCount} pending warning(s). Zero tolerance — fix them now.`,
+      steps: [
+        "Check the warningActions from the last ghci_load result",
+        "Apply each suggestedAction (add type signatures, remove unused imports, etc.)",
+        "Re-run ghci_load to confirm warnings are gone",
+      ],
+    };
+  }
+
+  // 4. Need Arbitrary instances
+  if (mod && mod.functionsImplemented > 0) {
+    const anyArbitrary = [...state.modules.values()].some((m) => m.arbitraryInstancesDefined);
+    if (!anyArbitrary) {
+      return {
+        suggested_tools: ["ghci_arbitrary", "ghci_quickcheck"],
+        reasoning: "Functions are implemented but no Arbitrary instances found. QuickCheck needs them to generate test data.",
+        steps: [
+          "Run ghci_arbitrary(type_name='YourType') to generate Arbitrary instances",
+          "Add the generated instance to your Syntax/Types module",
+          "Re-run ghci_load, then proceed to ghci_quickcheck",
+        ],
+      };
+    }
+  }
+
+  // 5. No properties tested yet
+  if (mod && mod.functionsImplemented > 0 && mod.propertiesPassed.length === 0 && mod.propertiesFailed.length === 0) {
+    return {
+      suggested_tools: ["ghci_quickcheck", "ghci_quickcheck_batch"],
+      reasoning: "Functions are implemented but no QuickCheck properties have been run. Test your algebraic laws.",
+      steps: [
+        "Identify algebraic laws for your functions (identity, associativity, roundtrip, etc.)",
+        "Run ghci_quickcheck(property='\\\\x -> ...', incremental=true)",
+        "If unsure what to test, use ghci_quickcheck(property='suggest', function_name='yourFunc')",
+      ],
+    };
+  }
+
+  // 6. Failing properties
+  if (mod && mod.propertiesFailed.length > 0) {
+    return {
+      suggested_tools: ["ghci_eval", "ghci_trace"],
+      reasoning: `${mod.propertiesFailed.length} QuickCheck property(ies) are failing. Fix the implementation.`,
+      steps: [
+        "Examine the counterexample from the failing ghci_quickcheck result",
+        "Use ghci_eval to manually test edge cases",
+        "Use ghci_trace to debug intermediate values if needed",
+        "Fix the implementation, reload, and re-run quickcheck",
+      ],
+    };
+  }
+
+  // 7. Properties pass but completion gates missing
+  if (mod && mod.propertiesPassed.length > 0) {
+    const gates = mod.completionGates;
+    const missing: string[] = [];
+    if (!gates.checkModule) missing.push("ghci_check_module");
+    if (!gates.lint) missing.push("ghci_lint");
+    if (!gates.format) missing.push("ghci_format");
+
+    if (missing.length > 0) {
+      return {
+        suggested_tools: missing,
+        reasoning: `Properties pass! Complete the module-complete gate: ${missing.join(", ")} still needed.`,
+        steps: [
+          ...missing.map((t) => `Run ${t}(module_path='${state.activeModule ?? "src/YourModule.hs"}')`),
+          "Fix any issues found",
+          "Then run ghci_regression to persist all properties",
+        ],
+      };
+    }
+  }
+
+  // 8. Everything looks complete
+  return {
+    suggested_tools: ["ghci_regression", "ghci_quickcheck_export"],
+    reasoning: "Module looks complete. Run regression to verify all saved properties still pass.",
+    steps: [
+      "Run ghci_regression(action='run') to re-run all saved properties",
+      "Run ghci_quickcheck_export() to generate a persistent test file",
+      "Consider starting the next module with ghci_scaffold",
+    ],
+  };
+}
+
 /** Serialize state for MCP resource / JSON response. */
 export function serializeState(state: WorkflowState): Record<string, unknown> {
   const modules: Record<string, ModuleProgress> = {};

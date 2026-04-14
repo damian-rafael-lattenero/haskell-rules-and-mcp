@@ -43,9 +43,10 @@ export async function handleInit(
     language?: string;
     target_path?: string;
     force_in_current?: boolean;
+    build_tool?: "cabal" | "stack";
   }
 ): Promise<string> {
-  const { name, modules, deps, language, target_path, force_in_current } = args;
+  const { name, modules, deps, language, target_path, force_in_current, build_tool } = args;
 
   // SMART PATH RESOLUTION:
   // 1. If target_path provided → use it (explicit user intent)
@@ -176,6 +177,15 @@ ${depsSection}
   await writeFile(path.join(resolvedTargetDir, `${name}.cabal`), cabalContent, "utf-8");
   await writeFile(path.join(resolvedTargetDir, "cabal.project"), "packages: .\n", "utf-8");
 
+  // Stack support: generate minimal stack.yaml when build_tool is "stack"
+  if (build_tool === "stack") {
+    const stackYaml = `resolver: lts-23.0
+packages:
+  - .
+`;
+    await writeFile(path.join(resolvedTargetDir, "stack.yaml"), stackYaml, "utf-8");
+  }
+
   const srcDir = path.join(resolvedTargetDir, "src");
   await mkdir(srcDir, { recursive: true });
 
@@ -239,8 +249,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
       force_in_current: z.boolean().optional().describe(
         'Advanced: Set to true to skip the smart detection and force project creation even if .cabal exists. Use only when you know what you are doing.'
       ),
+      build_tool: z.enum(["cabal", "stack"]).optional().describe(
+        'Build tool to use. "cabal" (default): generates .cabal + cabal.project. ' +
+        '"stack": also generates stack.yaml with a recent LTS resolver.'
+      ),
     },
-    async ({ name, modules, deps, language, target_path, force_in_current }) => {
+    async ({ name, modules, deps, language, target_path, force_in_current, build_tool }) => {
       const workspaceRoot = ctx.getBaseDir();
       const currentProjectDir = ctx.getProjectDir();
       
@@ -255,7 +269,8 @@ export function register(server: McpServer, ctx: ToolContext): void {
           deps, 
           language,
           target_path,
-          force_in_current 
+          force_in_current,
+          build_tool,
         }
       );
       return { content: [{ type: "text" as const, text: result }] };

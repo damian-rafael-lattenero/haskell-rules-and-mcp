@@ -1,9 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   extractPackageName,
   extractModules,
   moduleToFilePath,
+  parseCabalProject,
 } from "../parsers/cabal-parser.js";
+import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
 
 const SAMPLE_CABAL = `cabal-version:      3.12
 name:               haskell-rules-and-mcp
@@ -128,3 +132,49 @@ describe("moduleToFilePath", () => {
     expect(moduleToFilePath("Foo", "lib")).toBe("lib/Foo.hs");
   });
 });
+
+describe("parseCabalProject", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), "cabal-project-test-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("returns [] when no cabal.project exists", async () => {
+    const result = await parseCabalProject(dir);
+    expect(result).toEqual([]);
+  });
+
+  it("parses packages: ./a ./b on a single line", async () => {
+    await writeFile(path.join(dir, "cabal.project"), "packages: ./a ./b\n", "utf-8");
+    const result = await parseCabalProject(dir);
+    expect(result.length).toBe(2);
+    expect(result.some((p) => p.endsWith("a"))).toBe(true);
+    expect(result.some((p) => p.endsWith("b"))).toBe(true);
+  });
+
+  it("parses packages on multiple lines with continuation .", async () => {
+    const content = `packages:\n  ./pkg-a\n  ./pkg-b\n  ./pkg-c\n`;
+    await writeFile(path.join(dir, "cabal.project"), content, "utf-8");
+    const result = await parseCabalProject(dir);
+    expect(result.length).toBe(3);
+  });
+
+  it("resolves paths relative to the directory", async () => {
+    await writeFile(path.join(dir, "cabal.project"), "packages: ./sub\n", "utf-8");
+    const result = await parseCabalProject(dir);
+    expect(result[0]).toBe(path.join(dir, "sub"));
+  });
+
+  it("ignores comments (lines starting with --)", async () => {
+    const content = `-- This is a comment\npackages: ./pkg-a\n-- another comment\n`;
+    await writeFile(path.join(dir, "cabal.project"), content, "utf-8");
+    const result = await parseCabalProject(dir);
+    expect(result.length).toBe(1);
+  });
+});
+

@@ -21,6 +21,7 @@ import {
   suggestNextStep,
   moduleChecklist,
   deriveGuidance,
+  workflowHelp,
 } from "./workflow-state.js";
 
 // Tool register functions
@@ -50,6 +51,12 @@ import { register as registerTrace } from "./tools/trace.js";
 import { register as registerRegression } from "./tools/regression.js";
 import { register as registerInit } from "./tools/init.js";
 import { register as registerExportTests } from "./tools/export-tests.js";
+import { register as registerDeps } from "./tools/deps.js";
+import { register as registerHole } from "./tools/hole.js";
+import { register as registerRefactor } from "./tools/refactor.js";
+import { register as registerFlags } from "./tools/flags.js";
+import { register as registerProfile } from "./tools/profile.js";
+import { register as registerHls } from "./tools/hls.js";
 
 // Base directory: the project root (parent of mcp-server/)
 const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
@@ -141,6 +148,12 @@ registerTrace(server, ctx);
 registerRegression(server, ctx);
 registerInit(server, ctx);
 registerExportTests(server, ctx);
+registerDeps(server, ctx);
+registerHole(server, ctx);
+registerRefactor(server, ctx);
+registerFlags(server, ctx);
+registerProfile(server, ctx);
+registerHls(server, ctx);
 
 // --- Tool: ghci_kind (inline, simple) ---
 server.tool(
@@ -393,9 +406,10 @@ server.tool(
   "Query the development workflow state: current flow/step, module progress, next action, or checklist. " +
     "Use to understand where you are in the development process and what to do next.",
   {
-    action: z.enum(["status", "next", "progress", "checklist"]).describe(
+    action: z.enum(["status", "next", "progress", "checklist", "help"]).describe(
       '"status": full workflow state summary. "next": what step to do next. ' +
-      '"progress": per-module progress (functions, properties). "checklist": TODO list for active module.'
+      '"progress": per-module progress (functions, properties). "checklist": TODO list for active module. ' +
+      '"help": context-aware guidance with suggested_tools, reasoning, and steps.'
     ),
   },
   async ({ action }) => {
@@ -422,6 +436,11 @@ server.tool(
       }
       return {
         content: [{ type: "text", text: JSON.stringify({ activeModule: workflowState.activeModule, modules }) }],
+      };
+    }
+    if (action === "help") {
+      return {
+        content: [{ type: "text", text: JSON.stringify(workflowHelp(workflowState)) }],
       };
     }
     // checklist

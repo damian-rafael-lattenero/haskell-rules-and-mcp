@@ -23,31 +23,77 @@ The compiler's structured output drives development, not pre-existing knowledge.
 
 ## CONTEXTUAL GUIDANCE
 The MCP provides automatic \`_guidance\` in tool responses based on module state.
-No setup required — just follow the guidance when it appears.
+Lost? Not sure what to do next? → ghci_workflow(action="help") for contextual guidance.
 
 ## ALWAYS MANDATORY
 - ghci_load after every .hs edit — no exceptions
 - ghci_quickcheck incrementally when laws become testable AND at module-complete
 - Zero tolerance for warnings — fix every warningAction immediately
 - ghci_arbitrary for new data types — don't write Arbitrary instances by hand
+- ghci_regression(action="run") at session start on existing projects
 - Follow _guidance in tool responses
 
 ## WHEN → TOOL → WHY
+
+### Session startup
 | When | Tool | Why |
 |------|------|-----|
-| Created .cabal | ghci_scaffold(signatures=...) → ghci_session(restart) | Typed stubs + auto-imports |
+| Start of session | ghci_session(status) | Verify MCP is alive |
+| Lost / unsure what to do | ghci_workflow(action="help") | Context-aware next steps |
+
+### Project / dependency management
+| When | Tool | Why |
+|------|------|-----|
+| Need to add a dependency | ghci_deps(action="add", package="name") | Edits .cabal — never edit by hand |
+| Remove a dependency | ghci_deps(action="remove", package="name") | Safe removal (protects base) |
+| List current deps | ghci_deps(action="list") | See all packages with versions |
+| See module import graph | ghci_deps(action="graph") | Detects cycles and orphan modules |
+| After add/remove dep | ghci_session(restart) | Pick up the change in GHCi |
+| New project with Stack | ghci_init(name, modules, deps, build_tool="stack") | Also generates stack.yaml |
+
+### Implementing functions
+| When | Tool | Why |
+|------|------|-----|
 | Wrote/edited a function | ghci_load(diagnostics=true) | Compile, see errors + importSuggestions |
+| Module has typed holes | ghci_hole(module_path="src/X.hs") | Expected type + valid fits |
 | After compilation | ghci_eval("funcName arg") | Test behavior |
-| A law becomes testable | ghci_quickcheck(property, module="src/X.hs") | Test immediately |
+| A law becomes testable | ghci_quickcheck(property, module_path="src/X.hs") | Test immediately |
 | All functions done | ghci_quickcheck_batch | Complete contract |
+| Need to rename a binding | ghci_refactor(action="rename_local", module_path="...", old_name="foo", new_name="bar") | Word-boundary safe rename |
+| Extract code to function | ghci_refactor(action="extract_binding", module_path="...", new_name="helper", lines=[5,8]) | Lift lines to top-level |
+| Enable GHC extension | ghci_flags(action="set", flags="-XOverloadedStrings") | Session-only flag |
+| See active flags | ghci_flags(action="list") | Language settings |
+
+### Module complete gate
+| When | Tool | Why |
+|------|------|-----|
 | Session on existing project | ghci_regression(action="run") | Re-run saved properties |
-| Before next module | ghci_check_module, ghci_lint, ghci_format | Quality gate |
+| Before next module | ghci_check_module, ghci_lint, ghci_format(write=true) | Quality gate |
+
+### Performance analysis
+| When | Tool | Why |
+|------|------|-----|
+| Code seems slow, quick hints | ghci_profile(action="suggest", module_path="src/X.hs") | Static heuristic analysis |
+| GHC time profiling | ghci_profile(action="time") | Top cost centres |
+
+### HLS integration
+| When | Tool | Why |
+|------|------|-----|
+| Check if HLS installed | ghci_hls(action="available") | Returns { available: bool } |
+| Type info at position | ghci_hls(action="hover", module_path="...", line=5, character=3) | LSP hover (requires HLS) |
+
+## PARAMETER NOTES
+- ghci_quickcheck: use module_path="src/X.hs" (preferred) or module="src/X.hs" (also works)
+- ghci_format write=true: works even without fourmolu — fixes whitespace/tabs/newlines
+- ghci_flags: session-only; persist with default-extensions in .cabal
+- ghci_refactor: text-based; run ghci_load after to verify compilation
 
 ## FORBIDDEN
 - Multiple .hs edits between ghci_load calls
 - Using Bash for Haskell toolchain operations
 - Moving to next module without ghci_quickcheck
 - Writing Arbitrary instances by hand
+- Manually editing .cabal for dependencies — use ghci_deps instead
 `;
 
 const CONVENTIONS_FALLBACK = `# Haskell Project Conventions
@@ -62,11 +108,25 @@ const CONVENTIONS_FALLBACK = `# Haskell Project Conventions
 - Explicit export lists
 - Modules match directory structure
 
+## Dependencies
+- NEVER edit .cabal build-depends manually for adding/removing packages
+- Use ghci_deps(action="add"/"remove"/"list") instead
+- After any dep change: ghci_session(restart) to reload
+
 ## Testing
 - QuickCheck for property-based testing
 - Test algebraic laws: associativity, identity, roundtrip
-- Pass module="src/X.hs" to ghci_quickcheck for accurate tracking
+- Pass module_path="src/X.hs" to ghci_quickcheck for accurate tracking (module= also accepted)
 - Use ghci_regression to re-run saved properties
+- Use ghci_hole(module_path="...") to explore typed holes before implementing
+
+## Refactoring
+- Use ghci_refactor(action="rename_local") to rename bindings — never manual find/replace
+- Always run ghci_load after refactoring to verify compilation
+
+## Performance
+- Use ghci_profile(action="suggest") for quick static analysis before optimizing
+- Check for: String (++) in loops, naive recursion without accumulator, partial functions
 `;
 
 export const RULES_REGISTRY: RuleDefinition[] = [
