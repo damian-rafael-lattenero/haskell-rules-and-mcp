@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-if command -v haskell-language-server-wrapper >/dev/null 2>&1; then
-  exec haskell-language-server-wrapper "$@"
-fi
-
-echo "Bundled hls shim could not find host 'haskell-language-server-wrapper' in PATH." >&2
-exit 127
