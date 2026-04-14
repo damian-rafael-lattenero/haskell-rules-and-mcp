@@ -4,6 +4,7 @@ import { access, readFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { autoDownloadTool, canAutoDownload } from "./auto-download.js";
 
 const GHCUP_BIN = path.join(process.env.HOME ?? "/Users", ".ghcup", "bin");
 const CABAL_BIN = path.join(process.env.HOME ?? "/Users", ".cabal", "bin");
@@ -108,6 +109,7 @@ export interface ResolvedToolBinary {
 }
 
 export async function ensureTool(toolName: string): Promise<EnsureResult> {
+  // Step 1: Check host PATH
   const hostBinary = await locateHostBinary(toolName);
   if (hostBinary) {
     return {
@@ -118,6 +120,7 @@ export async function ensureTool(toolName: string): Promise<EnsureResult> {
     };
   }
 
+  // Step 2: Check existing bundled binary
   const bundled = await getBundledToolStatus(toolName);
   if (bundled.available) {
     return {
@@ -131,6 +134,28 @@ export async function ensureTool(toolName: string): Promise<EnsureResult> {
     };
   }
 
+  // Step 3: Try auto-download if supported
+  if (canAutoDownload(toolName as "hlint" | "fourmolu" | "ormolu" | "hls")) {
+    const downloadResult = await autoDownloadTool(toolName as "hlint" | "fourmolu" | "ormolu" | "hls");
+    if (downloadResult.success) {
+      return {
+        available: true,
+        source: "bundled",
+        binaryPath: downloadResult.binaryPath,
+        version: downloadResult.version,
+        justInstalled: downloadResult.downloaded,
+        message: downloadResult.message,
+      };
+    }
+    // Download failed - include error in message
+    return {
+      available: false,
+      error: downloadResult.error,
+      message: `${bundled.message}. Auto-download failed: ${downloadResult.error}`,
+    };
+  }
+
+  // Step 4: Not available
   return {
     available: false,
     bundledReason: bundled.reason,
