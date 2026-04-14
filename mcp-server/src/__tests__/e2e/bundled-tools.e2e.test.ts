@@ -95,8 +95,10 @@ describe("bundled tools e2e", () => {
     const parsed = JSON.parse((result.content as Array<{ type: string; text: string }>)[0]!.text);
     expect(parsed.success).toBe(true);
     if (parsed.available) {
-      expect(parsed.source).toBe("bundled");
-      expect(parsed.binaryPath).toContain("vendor-tools");
+      expect(["host", "bundled"]).toContain(parsed.source);
+      if (parsed.source === "bundled") {
+        expect(parsed.binaryPath).toContain("vendor-tools");
+      }
     }
   });
 

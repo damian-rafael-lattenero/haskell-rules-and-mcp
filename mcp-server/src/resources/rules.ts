@@ -79,12 +79,12 @@ Lost? Not sure what to do next? → ghci_workflow(action="help") for contextual 
 ### HLS integration
 | When | Tool | Why |
 |------|------|-----|
-| Check if HLS installed | ghci_hls(action="available") | Returns { available: bool } |
+| Check if HLS installed | ghci_hls(action="available") | Returns { available: bool } from host/bundled resolution |
 | Type info at position | ghci_hls(action="hover", module_path="...", line=5, character=3) | LSP hover (requires HLS) |
 
 ## PARAMETER NOTES
 - ghci_quickcheck: use module_path="src/X.hs" (preferred) or module="src/X.hs" (also works)
-- ghci_format write=true: works even without fourmolu — fixes whitespace/tabs/newlines
+- ghci_format write=true: requires fourmolu/ormolu from host or bundled toolchain
 - ghci_flags: session-only; persist with default-extensions in .cabal
 - ghci_refactor: text-based; run ghci_load after to verify compilation
 

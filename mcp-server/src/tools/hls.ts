@@ -16,7 +16,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ToolContext } from "./registry.js";
-import { ensureTool, resolveToolBinary, TOOL_PATH } from "./tool-installer.js";
+import { resolveToolBinary, TOOL_PATH } from "./tool-installer.js";
 
 // ─── LSP wire protocol helpers ────────────────────────────────────────────────
 
@@ -244,15 +244,13 @@ export async function handleHls(
         _hint: "HLS is available. Use action='hover' to get type info at a position.",
       });
     }
-    // Not installed — start auto-installation.
-    const install = await ensureTool("hls");
     return JSON.stringify({
       success: true,
       action: "available",
       available: false,
-      installing: install.installing,
-      failed: install.failed,
-      _hint: install.message,
+      source: "none",
+      _hint:
+        "HLS is not available (not found in host PATH or bundled toolchain).",
     });
   }
 
@@ -260,14 +258,13 @@ export async function handleHls(
     if (!args.module_path) {
       return JSON.stringify({ success: false, error: "module_path is required for action 'hover'" });
     }
-    const install = await ensureTool("hls");
-    if (!install.available) {
-      // Trigger auto-installation and report status.
+    const resolved = await resolveToolBinary("hls");
+    if (!resolved) {
       return JSON.stringify({
         success: false,
-        installing: install.installing,
-        failed: install.failed,
-        error: install.message,
+        unavailable: true,
+        error:
+          "HLS is not available (not found in host PATH or bundled toolchain).",
       });
     }
 
@@ -276,14 +273,14 @@ export async function handleHls(
       args.module_path,
       args.line ?? 0,
       args.character ?? 0,
-      install.binaryPath ?? "haskell-language-server-wrapper"
+      resolved.binaryPath
     );
     const parsed = JSON.parse(hover) as Record<string, unknown>;
     return JSON.stringify({
       ...parsed,
-      source: install.source ?? "host",
-      version: install.version,
-      binaryPath: install.binaryPath,
+      source: resolved.source,
+      version: resolved.version,
+      binaryPath: resolved.binaryPath,
     });
   }
 

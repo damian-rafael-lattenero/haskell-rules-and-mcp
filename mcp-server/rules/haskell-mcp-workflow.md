@@ -40,18 +40,17 @@ automatically. Once gates are complete, the session-close hint appears.
 
 ---
 
-## BUNDLED TOOLCHAIN FIRST
+## TOOLCHAIN RESOLUTION POLICY
 
-The MCP now prioritizes bundled binaries for lint/format/HLS so users don't
-need local host tooling installed.
+The MCP resolves optional binaries (`hlint`, `fourmolu`/`ormolu`, `hls`) with:
 
-- Tool resolution order: **bundled binary -> host PATH -> auto-install**
+- Tool resolution order: **host PATH -> bundled binary**
 - `ghci_lint`, `ghci_format`, and `ghci_hls` responses include:
-  - `source` (`bundled`, `host`, or `installed`)
+  - `source` (`host` or `bundled`) when available
   - `binaryPath`
   - `version` (when available)
-- If bundled binary for current OS/arch is missing or invalid, MCP falls back
-  safely to host/installer paths without blocking core workflows.
+- If neither host nor bundled binary is available, the tool returns
+  **unavailable** and does not run fallback analysis/formatting.
 
 When triaging issues, always check `source` first to confirm execution path.
 
@@ -113,8 +112,8 @@ When triaging issues, always check `source` first to confirm execution path.
 |------|------|-----|
 | All functions implemented | `ghci_quickcheck` / `ghci_quickcheck_batch` | Test COMPLETE algebraic contract |
 | After quickcheck passes | `ghci_check_module(module_path="...")` | Review API summary — `_guidance` will prompt this automatically |
-| After review | `ghci_lint(module_path="...")` | Code quality pass. **Gate completes only when hlint runs** — if hlint is missing it auto-installs in background; retry after 1–5 min. GHC-warnings fallback runs immediately but does NOT complete the gate. |
-| After lint | `ghci_format(module_path="...", write=true)` | Formatting pass. **Gate completes only when fourmolu/ormolu runs** — if missing, auto-installs in background. Basic whitespace fallback does NOT complete the gate. |
+| After review | `ghci_lint(module_path="...")` | Code quality pass. **Gate completes only when hlint runs** (host or bundled). If unavailable, provide the binary and re-run. |
+| After lint | `ghci_format(module_path="...", write=true)` | Formatting pass. **Gate completes only when fourmolu/ormolu runs** (host or bundled). If unavailable, provide the binary and re-run. |
 
 **Note:** `_guidance` in `ghci_load` responses guides you through each gate individually
 once properties pass. Each gate has its own hint that disappears when that gate is complete.
@@ -165,8 +164,8 @@ gates complete (checkModule, lint, format). Follow it to close the session prope
 ### HLS integration
 | When | Tool | Why |
 |------|------|-----|
-| Check if HLS is installed | `ghci_hls(action="available")` | Returns `{ available: bool, version? }`. If missing, **auto-installs HLS via ghcup in background**. Returns `{ installing: true }` — retry after 1–5 min. |
-| Get type info at a position | `ghci_hls(action="hover", module_path="src/X.hs", line=5, character=3)` | LSP hover: exact type at cursor. Auto-installs HLS if missing. |
+| Check if HLS is installed | `ghci_hls(action="available")` | Returns `{ available: bool, version?, source?, binaryPath? }`. If missing from host and bundled, reports unavailable. |
+| Get type info at a position | `ghci_hls(action="hover", module_path="src/X.hs", line=5, character=3)` | LSP hover: exact type at cursor. Requires available HLS binary (host or bundled). |
 
 ---
 
@@ -201,30 +200,18 @@ gates complete (checkModule, lint, format). Follow it to close the session prope
 
 ---
 
-## AUTO-INSTALLATION
+## TOOL AVAILABILITY
 
-The MCP automatically installs optional tools in the background when they are first needed.
-You do **not** need to run `cabal install` or `ghcup install` manually.
+The MCP does **not** auto-install optional tools.
 
-| Tool | Trigger | Install command | Wait time |
-|------|---------|----------------|-----------|
-| `hlint` | `ghci_lint` called without hlint | `cabal install hlint` | 2–5 min |
-| `fourmolu` | `ghci_format` called without formatter | `ghcup install fourmolu` (fallback: cabal) | 1–3 min |
-| `ormolu` | Only if fourmolu also unavailable | `cabal install ormolu` | 2–5 min |
-| `hls` | `ghci_hls(action="available/hover")` | `ghcup install hls` | 2–5 min |
+| Tool | Resolution policy |
+|------|-------------------|
+| `hlint` | use host PATH first, else bundled binary |
+| `fourmolu` / `ormolu` | use host PATH first, else bundled binary |
+| `hls` | use host PATH first, else bundled binary |
 
-**Response pattern when installing:**
-```json
-{ "installing": true, "_message": "hlint not found — installing now... Retry in 1–5 min." }
-```
-
-**What to do:** Wait and retry the same tool call. State is tracked across calls — no need to restart.
-
-**If installation fails:** Response includes `{ "failed": true, "error": "...", "manualInstallHint": "cabal install hlint" }`.
-
-**Gates and auto-install:** `ghci_lint` and `ghci_format` gates are NOT completed by fallback mode.
-They complete only when the real tool (hlint / fourmolu) has run successfully.
-Call the tool again after installation to complete the gate.
+If no binary is available, the tool returns unavailable and the corresponding
+completion gate remains pending until the real tool runs.
 
 ---
 
@@ -312,18 +299,15 @@ Calling `ghci_regression(action="save")` returns an explanation:
 properties are **auto-saved** when they pass via `ghci_quickcheck` or
 `ghci_quickcheck_batch`. No manual save action exists or is needed.
 
-### `ghci_format` — auto-install and gate behavior
+### `ghci_format` — availability and gate behavior
 
-When fourmolu/ormolu are missing, `ghci_format` **auto-installs fourmolu** in background
-(via `ghcup install fourmolu`, falling back to `cabal install fourmolu`).
-
-While installing, a basic whitespace/tabs fallback runs immediately and returns
-`{ fallback: true, _formatter_status: "installing" }`. This does **NOT** complete the
-format gate — retry after installation to run the real formatter and complete the gate.
+`ghci_format` requires an available formatter binary (`fourmolu` or `ormolu`)
+from host PATH or bundled toolchain. If unavailable, it returns an unavailable
+error and does not run style-only fallback formatting.
 
 The `format_tool` field indicates which formatter ran:
 - `"fourmolu"` or `"ormolu"` → gate completed
-- absent (fallback mode) → gate NOT completed
+- absent (tool unavailable) → gate NOT completed
 
 ### `ghci_load` and `_ghci_quirks`
 `ghci_load` isolates GHCi session artifacts (like `GHC-32850 -Wmissing-home-modules`)
@@ -341,13 +325,11 @@ core dependency. All other packages can be removed freely.
 `rename_local` and `extract_binding` work by text substitution (word-boundary aware).
 Always run `ghci_load(diagnostics=true)` immediately after to verify the result compiles.
 
-### `ghci_hls` — auto-install
+### `ghci_hls` — availability
 
-`ghci_hls(action="available")` and `ghci_hls(action="hover")` **auto-install HLS** via
-`ghcup install hls` when it is not found. No manual user action needed.
-
-Response when installing: `{ available: false, installing: true }` — retry after 2–5 minutes.
-Response when done: `{ available: true, version: "..." }`.
+`ghci_hls(action="available")` and `ghci_hls(action="hover")` require an HLS
+binary in host PATH or bundled toolchain. If neither exists, responses report
+unavailable.
 
 For compilation diagnostics without HLS, use `ghci_load(diagnostics=true)` — it doesn't
 require HLS and is always available.

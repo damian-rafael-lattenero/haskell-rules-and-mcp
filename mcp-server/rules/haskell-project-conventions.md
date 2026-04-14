@@ -5,8 +5,8 @@
 - Enable `-Wall` for both library and executable
 - Dependencies: keep base, containers, mtl as core; add QuickCheck for property testing
 - Build tool: Cabal by default; pass `build_tool="stack"` to `ghci_init` for Stack projects
-- MCP toolchain is bundled-first for `hlint`, `fourmolu`/`ormolu`, and `hls`:
-  the server prefers bundled binaries before host PATH.
+- MCP toolchain resolution for `hlint`, `fourmolu`/`ormolu`, and `hls` is:
+  **host PATH first, then bundled binary**.
 - Always check `source` and `binaryPath` fields in tool responses when diagnosing
   lint/format/HLS behavior.
 
@@ -71,9 +71,8 @@
 ## HLS Integration
 - Run `ghci_hls(action="available")` to check if HLS is installed
 - Use `ghci_hls(action="hover", module_path="...", line=N, character=M)` for type info at position
-- **HLS bundled-first behavior**: MCP first tries bundled `haskell-language-server-wrapper`.
-  If bundled is unavailable for current platform, it falls back to host/auto-install.
-- If response has `{ installing: true }`, wait 2–5 minutes and retry.
+- HLS resolution is host-first, then bundled. MCP does not auto-install HLS.
+- If unavailable, provide the binary in host PATH or bundled toolchain and retry.
 - For all compilation diagnostics: prefer `ghci_load(diagnostics=true)` — it doesn't require HLS
 
 ## Bundled Toolchain Maintenance

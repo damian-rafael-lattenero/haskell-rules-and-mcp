@@ -85,8 +85,10 @@ describe("bundled tools integration", () => {
     const result = JSON.parse(await handleHls(fixtureDir, { action: "available" }));
     expect(result.success).toBe(true);
     if (result.available) {
-      expect(result.source).toBe("bundled");
-      expect(result.binaryPath).toContain("vendor-tools");
+      expect(["host", "bundled"]).toContain(result.source);
+      if (result.source === "bundled") {
+        expect(result.binaryPath).toContain("vendor-tools");
+      }
     }
   });
 });

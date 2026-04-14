@@ -60,11 +60,11 @@ ghci_refactor(action="extract_binding", module_path="src/X.hs", new_name="helper
 Always `ghci_load(diagnostics=true)` after to verify compilation.
 Never use `sed`, manual find/replace, or other text tools for Haskell refactoring.
 
-### Format fallback
+### Format availability
 
-`ghci_format(module_path="...", write=true)` now works even without `fourmolu`/`ormolu`.
-It fixes trailing whitespace, converts tabs to spaces, and adds missing final newlines.
-Always run it as part of the module-complete gate.
+`ghci_format(module_path="...", write=true)` requires an actual formatter binary
+(`fourmolu` or `ormolu`) available via host PATH or bundled toolchain.
+If unavailable, the tool reports unavailable and the format gate remains pending.
 
 ### Session flags
 
@@ -86,9 +86,11 @@ ghci_profile(action="time", executable="my-app")        # GHC time profiling
 ### HLS integration
 
 ```
-ghci_hls(action="available")                            # check installation — never crashes
+ghci_hls(action="available")                            # check host/bundled availability
 ghci_hls(action="hover", module_path="...", line=5, character=3)  # type at position
 ```
+
+No auto-install is attempted by MCP. If unavailable, provide host or bundled binary.
 
 ### Stack projects
 
