@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseConstructors } from "../parsers/constructor-parser.js";
-import { handleArbitrary } from "../tools/arbitrary.js";
+import { handleArbitrary, fieldContainsType } from "../tools/arbitrary.js";
 import { createMockSession } from "./helpers/mock-session.js";
 
 describe("parseConstructors", () => {
@@ -246,6 +246,85 @@ describe("handleArbitrary", () => {
     expect(result.success).toBe(true);
     expect(result.instance).not.toContain("=>");
     expect(result.hint).not.toContain("Added constraints");
+  });
+});
+
+// ─── Bug Fix 7: fieldContainsType must not match qualified module paths ────────
+
+describe("fieldContainsType (Bug Fix 7)", () => {
+  it("returns true when field IS the type", () => {
+    expect(fieldContainsType("Expr", "Expr")).toBe(true);
+  });
+
+  it("returns true when field is parameterized by the type", () => {
+    expect(fieldContainsType("Maybe Expr", "Expr")).toBe(true);
+    expect(fieldContainsType("[Expr]", "Expr")).toBe(true);
+  });
+
+  it("returns true for two-field recursive constructor", () => {
+    expect(fieldContainsType("Expr Expr", "Expr")).toBe(true);
+  });
+
+  it("returns FALSE for a qualified name where type is just the module prefix", () => {
+    // Core bug: `Expr.Syntax.Name` contains `\bExpr\b` because `.` is not a
+    // word character.  Without the fix, `Var :: Expr.Syntax.Name -> Expr`
+    // was classified as recursive in `Expr`, generating `Var <$> sub` where
+    // `sub :: Gen Expr` but `Var :: String -> Expr` — a type error.
+    expect(fieldContainsType("Expr.Syntax.Name", "Expr")).toBe(false);
+  });
+
+  it("returns FALSE for other qualified names that start with the type name", () => {
+    expect(fieldContainsType("Expr.Eval.Env", "Expr")).toBe(false);
+    expect(fieldContainsType("Map.Map.Internal", "Map")).toBe(false);
+  });
+
+  it("returns true when the type appears after the qualified prefix", () => {
+    // e.g. `HM.Syntax.Expr` — the actual type IS Expr at the end
+    // Note: we check for the base type name, so "HM.Syntax.Expr" with
+    // baseName "Expr" should match because \bExpr\b appears at the end
+    // without a following dot.
+    expect(fieldContainsType("HM.Syntax.Expr", "Expr")).toBe(true);
+  });
+});
+
+describe("handleArbitrary — qualified Name field not treated as recursive (Bug Fix 7)", () => {
+  it("does not classify Var :: Expr.Syntax.Name -> Expr as recursive in Expr", async () => {
+    // GHCi :i output for a type like:
+    //   data Expr = Lit Int | Add Expr Expr | Neg Expr | Var Expr.Syntax.Name
+    // The Var constructor's field is "Expr.Syntax.Name" (a type alias for String).
+    // Before the fix, fieldContainsType("Expr.Syntax.Name", "Expr") returned true,
+    // so Var was treated as recursive and its generator was `Var <$> sub`
+    // where sub :: Gen Expr — a type error at runtime.
+    const session = createMockSession({
+      infoOf: {
+        output:
+          "type Expr :: *\n" +
+          "data Expr\n" +
+          "  = Lit Int\n" +
+          "  | Add Expr Expr\n" +
+          "  | Neg Expr\n" +
+          "  | Var Expr.Syntax.Name\n" +
+          "  \t-- Defined at src/Expr/Syntax.hs:14:1",
+        success: true,
+      },
+      executeBlock: { output: "", success: true },
+    });
+
+    const raw = await handleArbitrary(session, { type_name: "Expr" });
+    const result = JSON.parse(raw);
+
+    expect(result.success).toBe(true);
+    expect(result.isRecursive).toBe(true); // Expr IS recursive (Add, Neg)
+
+    // Var's generator must use `arbitrary` (for String/Name), NOT `sub` (Gen Expr)
+    // The generated instance should contain something like: `Var <$> arbitrary`
+    // and NOT `Var <$> sub`
+    const lines = result.instance.split("\n");
+    const varLine = lines.find((l: string) => l.includes("Var"));
+    expect(varLine).toBeDefined();
+    expect(varLine).toContain("arbitrary");
+    // Must NOT use `sub` for the Var constructor's Name field
+    expect(varLine).not.toMatch(/Var\s+<\$>\s+sub/);
   });
 });
 

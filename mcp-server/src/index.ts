@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { GhciSession } from "./ghci-session.js";
 import { resetQuickCheckState } from "./tools/quickcheck.js";
 import { discoverProjects, getPlaygroundDir } from "./project-manager.js";
@@ -74,6 +74,16 @@ try {
 } catch {
   workflowInstructions = "Use haskell-flows MCP tools for all Haskell operations. Never use Bash for cabal/ghc/ghci.";
 }
+
+// Auto-sync the Cursor agent cache so serverUseInstructions is always
+// up-to-date without manual copy-paste.
+//
+// Cursor caches MCP server instructions at:
+//   ~/.cursor/projects/<encoded-workspace-path>/mcps/<server-id>/INSTRUCTIONS.md
+//
+// The encoded path is the absolute workspace path with leading "/" stripped
+// and remaining "/" replaced by "-".
+void syncAgentInstructionsCaches(BASE_DIR, workflowInstructions);
 
 const server = new McpServer(
   { name: "haskell-flows", version: "0.4.0" },
@@ -262,7 +272,7 @@ server.tool(
           if (others.length > 0) {
             response._hint =
               `No active session. Available projects: ${others.map((p) => p.name).join(", ")}. ` +
-              `Call ghci_switch_project(name="<name>") to activate one.`;
+              `Call ghci_switch_project(project="<name>") to activate one.`;
           }
         } catch {
           // Non-fatal: project discovery failure should not break status
@@ -329,11 +339,8 @@ server.tool(
     resetQuickCheckState();
     resetWorkflowState(workflowState);
     if (ghciSession) { await ghciSession.kill(); ghciSession = null; }
-    projectDir = target.path;
-    rulesChecker.reset(); // Re-check rules in new project
 
-    // Auto-scaffold: if .cabal lists modules without source files, create stubs
-    // so GHCi can start. Without this, cabal repl crashes on missing sources.
+    // Auto-scaffold before switching so GHCi finds all source files.
     let scaffoldedModules: string[] = [];
     try {
       const { handleScaffold } = await import("./tools/scaffold.js");
@@ -345,7 +352,29 @@ server.tool(
       // Non-fatal: scaffold may fail if no .cabal or other issue
     }
 
-    const session = await getSession();
+    // Only commit the switch AFTER GHCi starts successfully.
+    // Mutating projectDir before startup can leave the server pointing at a
+    // broken project when cabal/ghci fails (e.g. empty .cabal file).
+    const previousProjectDir = projectDir;
+    projectDir = target.path;
+    rulesChecker.reset();
+
+    let session: GhciSession;
+    try {
+      session = await getSession();
+    } catch (err) {
+      // Rollback: restore the previous project so the server is still usable.
+      projectDir = previousProjectDir;
+      rulesChecker.reset();
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          success: false,
+          error: `Failed to start GHCi in project '${target.name}': ${msg}. ` +
+            `Project directory not changed — still in '${previousProjectDir}'.`,
+        }) }],
+      };
+    }
 
     // Auto-load all library modules so names are in scope immediately
     let modulesLoaded: string[] = [];
@@ -526,6 +555,132 @@ export function groupBindingsIntoLetBlocks(statements: string[]): string[] {
   }
 
   return result;
+}
+
+// --- Agent instructions cache sync ---
+//
+// ARCHITECTURE: Two complementary layers cover all MCP-compatible agents.
+//
+// Layer 1 — MCP protocol (universal, automatic):
+//   McpServer({ instructions: ... }) sends the instructions in the MCP
+//   initialize response. Every spec-compliant client receives them:
+//     • Claude Code      — reads server_info.instructions from protocol
+//     • GitHub Copilot   — reads from MCP protocol in VS Code
+//     • Zed              — reads from MCP protocol
+//     • Continue.dev     — reads from MCP protocol
+//
+// Layer 2 — file cache (agent-specific):
+//   Some agents maintain a local file cache of server instructions so they
+//   survive reconnects without re-reading the protocol. We sync to all
+//   detected file-cache agents at startup.
+//
+//   Known file-cache agents:
+//     • Cursor   → ~/.cursor/projects/<id>/mcps/<server>/INSTRUCTIONS.md
+//     • Windsurf → ~/.windsurf/projects/<id>/mcps/<server>/INSTRUCTIONS.md
+//
+//   Detection: only sync to agents whose config directory actually exists.
+//   This avoids creating phantom directories for non-installed agents.
+
+/**
+ * Agent descriptor for file-cache sync.
+ * Add new entries here when a new agent with file-cache semantics is found.
+ */
+export interface AgentCacheSpec {
+  /** Human-readable name (for logging/testing). */
+  name: string;
+  /** Subdirectory of HOME that indicates the agent is installed. */
+  configDir: string;
+  /**
+   * Given home dir, project ID, and MCP server name, return the full path
+   * to the INSTRUCTIONS.md file that the agent reads.
+   */
+  instructionsPath: (home: string, projectId: string, serverName: string) => string;
+}
+
+/**
+ * Registry of all known file-cache agents.
+ *
+ * PROTOCOL-ONLY agents are NOT listed here — they get instructions from the
+ * MCP protocol `initialize` response and need no file sync:
+ *
+ *   • Claude Code — reads `instructions` from MCP protocol on every startup.
+ *     Uses ~/.claude/projects/ for conversation state but has NO mcps cache.
+ *     Path encoding: /Users/foo/bar → -Users-foo-bar (leading dash, unlike Cursor).
+ *     Already covered by McpServer({ instructions: ... }) — no entry needed.
+ *
+ *   • GitHub Copilot (VS Code) — reads from MCP protocol.
+ *   • Zed, Continue.dev, etc.  — read from MCP protocol.
+ *
+ * Add an entry below ONLY for agents that maintain a persistent INSTRUCTIONS.md
+ * file-cache that is NOT re-read from the protocol on every session.
+ */
+export const AGENT_CACHE_SPECS: AgentCacheSpec[] = [
+  {
+    name: "cursor",
+    configDir: ".cursor",
+    instructionsPath: (home, projectId, serverName) =>
+      path.join(home, ".cursor", "projects", projectId, "mcps", serverName, "INSTRUCTIONS.md"),
+  },
+  {
+    name: "windsurf",
+    configDir: ".windsurf",
+    instructionsPath: (home, projectId, serverName) =>
+      path.join(home, ".windsurf", "projects", projectId, "mcps", serverName, "INSTRUCTIONS.md"),
+  },
+];
+
+/**
+ * Encode an absolute workspace path as the project ID used by Cursor-style
+ * agents (strip leading "/" and replace remaining "/" with "-").
+ *
+ *   /Users/foo/bar/project  →  Users-foo-bar-project
+ */
+export function encodeProjectId(workspaceRoot: string): string {
+  return workspaceRoot.replace(/^\//, "").replace(/\//g, "-");
+}
+
+/**
+ * Sync MCP server instructions to all detected file-cache agents.
+ *
+ * Runs at server startup — any edit to haskell-mcp-workflow.md is
+ * automatically picked up the next time the MCP server starts, for every
+ * installed agent simultaneously.
+ *
+ * Non-fatal: errors are silently swallowed so the server always starts.
+ */
+export async function syncAgentInstructionsCaches(
+  workspaceRoot: string,
+  instructions: string,
+  specs: AgentCacheSpec[] = AGENT_CACHE_SPECS,
+  overrideHome?: string
+): Promise<{ synced: string[]; skipped: string[] }> {
+  const home = overrideHome ?? process.env.HOME ?? process.env.USERPROFILE ?? "";
+  const synced: string[] = [];
+  const skipped: string[] = [];
+
+  if (!home) return { synced, skipped: specs.map((s) => s.name) };
+
+  const projectId = encodeProjectId(workspaceRoot);
+  const SERVER_NAME = "user-haskell-flows";
+
+  await Promise.all(
+    specs.map(async (spec) => {
+      try {
+        // Only sync to agents that are actually installed.
+        await stat(path.join(home, spec.configDir));
+
+        const cachePath = spec.instructionsPath(home, projectId, SERVER_NAME);
+        await mkdir(path.dirname(cachePath), { recursive: true });
+        await writeFile(cachePath, instructions, "utf-8");
+        synced.push(spec.name);
+      } catch {
+        // Agent not installed, or write failed — skip silently.
+        skipped.push(spec.name);
+      }
+    })
+  );
+
+  return { synced, skipped };
 }
 
 // --- Start the server ---

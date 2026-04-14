@@ -46,7 +46,7 @@ automatically. Once gates are complete, the session-close hint appears.
 | When | Tool | Why |
 |------|------|-----|
 | Start of session | `ghci_session(status)` | Verify MCP is alive. When no active session, response includes `_hint` listing available projects. |
-| Switch project | `ghci_switch_project(name)` | Change active project — also auto-scaffolds missing source files on switch |
+| Switch project | `ghci_switch_project(project="name")` | Change active project — also auto-scaffolds missing source files on switch. Uses `project=` parameter (not `name=`). Rolls back safely if GHCi fails to start. |
 | After switch | `ghci_load(load_all=true)` | Verify all modules compile |
 | Lost / unsure what to do | `ghci_workflow(action="help")` | Context-aware next steps with `suggested_tools` and `reasoning` |
 
@@ -95,8 +95,8 @@ automatically. Once gates are complete, the session-close hint appears.
 |------|------|-----|
 | All functions implemented | `ghci_quickcheck` / `ghci_quickcheck_batch` | Test COMPLETE algebraic contract |
 | After quickcheck passes | `ghci_check_module(module_path="...")` | Review API summary — `_guidance` will prompt this automatically |
-| After review | `ghci_lint(module_path="...")` | Code quality pass — `_guidance` will prompt this automatically |
-| After lint | `ghci_format(module_path="...", write=true)` | Formatting pass — `_guidance` will prompt this automatically |
+| After review | `ghci_lint(module_path="...")` | Code quality pass. **Gate completes only when hlint runs** — if hlint is missing it auto-installs in background; retry after 1–5 min. GHC-warnings fallback runs immediately but does NOT complete the gate. |
+| After lint | `ghci_format(module_path="...", write=true)` | Formatting pass. **Gate completes only when fourmolu/ormolu runs** — if missing, auto-installs in background. Basic whitespace fallback does NOT complete the gate. |
 
 **Note:** `_guidance` in `ghci_load` responses guides you through each gate individually
 once properties pass. Each gate has its own hint that disappears when that gate is complete.
@@ -147,8 +147,8 @@ gates complete (checkModule, lint, format). Follow it to close the session prope
 ### HLS integration
 | When | Tool | Why |
 |------|------|-----|
-| Check if HLS is installed | `ghci_hls(action="available")` | Returns `{ available: bool, version? }` — never crashes |
-| Get type info at a position | `ghci_hls(action="hover", module_path="src/X.hs", line=5, character=3)` | LSP hover: exact type at cursor (requires HLS installed: `ghcup install hls`) |
+| Check if HLS is installed | `ghci_hls(action="available")` | Returns `{ available: bool, version? }`. If missing, **auto-installs HLS via ghcup in background**. Returns `{ installing: true }` — retry after 1–5 min. |
+| Get type info at a position | `ghci_hls(action="hover", module_path="src/X.hs", line=5, character=3)` | LSP hover: exact type at cursor. Auto-installs HLS if missing. |
 
 ---
 
@@ -180,6 +180,33 @@ gates complete (checkModule, lint, format). Follow it to close the session prope
 | `unused-binding` | Prefix with `_` or remove |
 | `name-shadowing` | Rename the inner binding — use `ghci_refactor(action="rename_local", ...)` |
 | `typed-hole` | Run `ghci_hole(module_path="...")` to see fits, then implement |
+
+---
+
+## AUTO-INSTALLATION
+
+The MCP automatically installs optional tools in the background when they are first needed.
+You do **not** need to run `cabal install` or `ghcup install` manually.
+
+| Tool | Trigger | Install command | Wait time |
+|------|---------|----------------|-----------|
+| `hlint` | `ghci_lint` called without hlint | `cabal install hlint` | 2–5 min |
+| `fourmolu` | `ghci_format` called without formatter | `ghcup install fourmolu` (fallback: cabal) | 1–3 min |
+| `ormolu` | Only if fourmolu also unavailable | `cabal install ormolu` | 2–5 min |
+| `hls` | `ghci_hls(action="available/hover")` | `ghcup install hls` | 2–5 min |
+
+**Response pattern when installing:**
+```json
+{ "installing": true, "_message": "hlint not found — installing now... Retry in 1–5 min." }
+```
+
+**What to do:** Wait and retry the same tool call. State is tracked across calls — no need to restart.
+
+**If installation fails:** Response includes `{ "failed": true, "error": "...", "manualInstallHint": "cabal install hlint" }`.
+
+**Gates and auto-install:** `ghci_lint` and `ghci_format` gates are NOT completed by fallback mode.
+They complete only when the real tool (hlint / fourmolu) has run successfully.
+Call the tool again after installation to complete the gate.
 
 ---
 
@@ -241,7 +268,14 @@ ghci_init(name="my-lib", modules=["Lib"], test_suite=true)
 Use `ghci_quickcheck_export(output_path="test/Spec.hs")` after development to
 populate the test file with saved QuickCheck properties.
 
-### `ghci_switch_project` auto-scaffolds
+### `ghci_switch_project` — parameter and behavior
+
+**Correct parameter name: `project=` (not `name=`).**
+
+```
+ghci_switch_project(project="expr-eval")   ✅ correct
+ghci_switch_project(name="expr-eval")      ❌ wrong — parameter ignored
+```
 
 `ghci_switch_project` **automatically creates empty source files** for any module
 listed in `.cabal` that doesn't have a source file yet. You do NOT need to call
@@ -250,23 +284,36 @@ listed in `.cabal` that doesn't have a source file yet. You do NOT need to call
 Only call `ghci_scaffold(signatures={...})` if you want typed `= undefined` stubs
 for use with `ghci_suggest` hole-fit mode.
 
+**Safe rollback:** If GHCi fails to start in the target project (e.g. broken `.cabal`),
+the server automatically rolls back to the previous project. No manual recovery needed.
+Projects with empty or invalid `.cabal` files are excluded from the project list entirely.
+
 ### `ghci_regression(action="save")`
 
 Calling `ghci_regression(action="save")` returns an explanation:
 properties are **auto-saved** when they pass via `ghci_quickcheck` or
 `ghci_quickcheck_batch`. No manual save action exists or is needed.
 
-### `ghci_format` fallback
-When neither `fourmolu` nor `ormolu` is installed, `write=true` still works:
-it applies automatic fixes (trailing whitespace, tabs→spaces, missing final newline)
-and returns `{ written: true, fixesApplied: N }`.
-The response includes `_formatWarning` explaining that only basic fixes were applied,
-with install instructions for fourmolu.
+### `ghci_format` — auto-install and gate behavior
+
+When fourmolu/ormolu are missing, `ghci_format` **auto-installs fourmolu** in background
+(via `ghcup install fourmolu`, falling back to `cabal install fourmolu`).
+
+While installing, a basic whitespace/tabs fallback runs immediately and returns
+`{ fallback: true, _formatter_status: "installing" }`. This does **NOT** complete the
+format gate — retry after installation to run the real formatter and complete the gate.
+
+The `format_tool` field indicates which formatter ran:
+- `"fourmolu"` or `"ormolu"` → gate completed
+- absent (fallback mode) → gate NOT completed
 
 ### `ghci_load` and `_ghci_quirks`
 `ghci_load` isolates GHCi session artifacts (like `GHC-32850 -Wmissing-home-modules`)
 into a separate `_ghci_quirks` field with `_quirks_note: "GHCi session artifacts (not real issues)"`.
 The `raw` field contains only real compilation output. Ignore `_ghci_quirks` entirely.
+
+**`ghci_check_module` also suppresses GHC-32850** — it no longer appears in the `warnings`
+array. If you see `warnings: []` and `summary.warnings: 0`, the module is genuinely clean.
 
 ### `ghci_deps` protects `base`
 `ghci_deps(action="remove", package="base")` is blocked — `base` is a protected
@@ -276,10 +323,31 @@ core dependency. All other packages can be removed freely.
 `rename_local` and `extract_binding` work by text substitution (word-boundary aware).
 Always run `ghci_load(diagnostics=true)` immediately after to verify the result compiles.
 
-### `ghci_hls hover` requires HLS installed
-Check availability first: `ghci_hls(action="available")`.
-If not installed: `ghcup install hls` (outside MCP — user runs this once).
-For compilation diagnostics without HLS, use `ghci_load(diagnostics=true)`.
+### `ghci_hls` — auto-install
+
+`ghci_hls(action="available")` and `ghci_hls(action="hover")` **auto-install HLS** via
+`ghcup install hls` when it is not found. No manual user action needed.
+
+Response when installing: `{ available: false, installing: true }` — retry after 2–5 minutes.
+Response when done: `{ available: true, version: "..." }`.
+
+For compilation diagnostics without HLS, use `ghci_load(diagnostics=true)` — it doesn't
+require HLS and is always available.
+
+### `ghci_quickcheck_export` — trivial filter and qualified imports
+
+`ghci_quickcheck_export` automatically:
+
+1. **Filters trivially-true properties** — `\x -> True`, `\_ -> True`, `const True` are
+   dropped from the exported file. If ALL properties are trivial, the export fails with a
+   clear error. The response includes `droppedTrivial: N` when properties were dropped.
+
+2. **Detects and adds qualified imports** — if any property references `Map.*`, `Set.*`,
+   `Seq.*`, `Vector.*`, `Text.*`, or `NonEmpty.*`, the corresponding qualified imports are
+   added automatically to the generated `Spec.hs`.
+
+**Example:** a property like `\n -> eval Map.empty (Lit n) == Right n` will cause
+`import qualified Data.Map.Strict as Map` to be included in the output file.
 
 ### `ghci_flags` is session-only
 Flags set with `ghci_flags(action="set", flags="...")` apply only to the current GHCi session.

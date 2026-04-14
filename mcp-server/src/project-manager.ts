@@ -31,7 +31,11 @@ export async function discoverProjects(
     try {
       const cabalFile = await findCabalFile(fullPath);
       const content = await readFile(cabalFile, "utf-8");
-      const name = extractPackageName(content) ?? entry;
+      const name = extractPackageName(content);
+      // Skip projects whose .cabal file is empty or missing the required name: field.
+      // An empty cabal file causes GHCi startup to fail with a confusing error,
+      // and pollutes the project list with unusable entries.
+      if (!name) continue;
       projects.push({ name, dirName: entry, path: fullPath, cabalFile: path.basename(cabalFile) });
     } catch {
       // Not a project directory — skip

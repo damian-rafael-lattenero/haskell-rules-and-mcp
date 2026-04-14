@@ -163,12 +163,25 @@ async function validateInstance(
 }
 
 /**
- * Check if a field type string references the given type name.
+ * Exported for testing.
+ *
+ * Check if a field type string references the given type name as an actual
+ * type reference (not as a module-path prefix).
+ *
+ * Problem: `\bExpr\b` matches inside `"Expr.Syntax.Name"` because `Expr` is
+ * followed by `.` — which is NOT a word character, so `\b` fires.  This
+ * causes constructors like `Var :: Expr.Syntax.Name -> Expr` to be misclassified
+ * as recursive in `Expr` (because the `Name` field "contains" `Expr`), leading
+ * to `Var <$> sub` in the generated instance where `sub :: Gen Expr` but
+ * `Var :: String -> Expr` — a type error.
+ *
+ * Fix: require that the type name is NOT immediately followed by a dot, ruling
+ * out qualified module-path prefixes like `Expr.Syntax.Name`.
  */
-function fieldContainsType(field: string, typeName: string): boolean {
-  // Match the type name as a whole word
+export function fieldContainsType(field: string, typeName: string): boolean {
   const escaped = typeName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`\\b${escaped}\\b`).test(field);
+  // \b<Name>(?!\.) — word boundary before, negative lookahead for dot after.
+  return new RegExp(`\\b${escaped}(?!\\.)\\b`).test(field);
 }
 
 /**

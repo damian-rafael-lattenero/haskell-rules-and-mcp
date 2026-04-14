@@ -22,7 +22,13 @@ export async function handleCheckModule(
   const loadResult = await session.loadModule(args.module_path);
   const errors = parseGhcErrors(loadResult.output);
   const compileErrors = errors.filter((e) => e.severity === "error");
-  const warnings = errors.filter((e) => e.severity === "warning");
+  // GHC-32850 (-Wmissing-home-modules) is a GHCi session artifact, not a real
+  // code warning.  It fires when GHCi is started for a single module rather
+  // than the full package.  Suppress it so it doesn't confuse the LLM into
+  // thinking the module has a real warning to fix.
+  const warnings = errors.filter(
+    (e) => e.severity === "warning" && e.code !== "GHC-32850"
+  );
 
   if (compileErrors.length > 0) {
     await session.execute(":set -fdefer-type-errors");

@@ -16,10 +16,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ToolContext } from "./registry.js";
-
-const GHCUP_BIN = path.join(process.env.HOME ?? "/Users", ".ghcup", "bin");
-const CABAL_BIN = path.join(process.env.HOME ?? "/Users", ".cabal", "bin");
-const TOOL_PATH = `${GHCUP_BIN}:${CABAL_BIN}:${process.env.PATH}`;
+import { ensureTool, TOOL_PATH } from "./tool-installer.js";
 
 // ─── LSP wire protocol helpers ────────────────────────────────────────────────
 
@@ -99,20 +96,13 @@ export function buildHoverRequest(fileUri: string, line: number, character: numb
 
 // ─── HLS availability check ───────────────────────────────────────────────────
 
-function hlsAvailable(): Promise<{ available: boolean; version?: string }> {
+function hlsVersion(): Promise<string | undefined> {
   return new Promise((resolve) => {
     execFile(
       "haskell-language-server-wrapper",
       ["--version"],
       { env: { ...process.env, PATH: TOOL_PATH }, timeout: 10_000 },
-      (err, stdout) => {
-        if (err) {
-          resolve({ available: false });
-        } else {
-          const version = stdout.trim().split("\n")[0];
-          resolve({ available: true, version });
-        }
-      }
+      (err, stdout) => resolve(err ? undefined : stdout.trim().split("\n")[0])
     );
   });
 }
@@ -240,14 +230,25 @@ export async function handleHls(
   args: { action: string; module_path?: string; line?: number; character?: number }
 ): Promise<string> {
   if (args.action === "available") {
-    const result = await hlsAvailable();
+    const version = await hlsVersion();
+    if (version) {
+      return JSON.stringify({
+        success: true,
+        action: "available",
+        available: true,
+        version,
+        _hint: "HLS is available. Use action='hover' to get type info at a position.",
+      });
+    }
+    // Not installed — start auto-installation.
+    const install = await ensureTool("hls");
     return JSON.stringify({
       success: true,
       action: "available",
-      ...result,
-      _hint: result.available
-        ? "HLS is available. Use action='hover' to get type info at a position."
-        : "HLS not found. Install: ghcup install hls",
+      available: false,
+      installing: install.installing,
+      failed: install.failed,
+      _hint: install.message,
     });
   }
 
@@ -255,20 +256,19 @@ export async function handleHls(
     if (!args.module_path) {
       return JSON.stringify({ success: false, error: "module_path is required for action 'hover'" });
     }
-    const avail = await hlsAvailable();
-    if (!avail.available) {
+    const version = await hlsVersion();
+    if (!version) {
+      // Trigger auto-installation and report status.
+      const install = await ensureTool("hls");
       return JSON.stringify({
         success: false,
-        error: "haskell-language-server-wrapper not found. Install: ghcup install hls",
+        installing: install.installing,
+        failed: install.failed,
+        error: install.message,
       });
     }
 
-    return hlsHover(
-      projectDir,
-      args.module_path,
-      args.line ?? 0,
-      args.character ?? 0
-    );
+    return hlsHover(projectDir, args.module_path, args.line ?? 0, args.character ?? 0);
   }
 
   if (args.action === "diagnostics") {

@@ -4,28 +4,17 @@ import { execFile } from "node:child_process";
 import { readFile, writeFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { ToolContext } from "./registry.js";
-
-const GHCUP_BIN = path.join(process.env.HOME ?? "/Users", ".ghcup", "bin");
-const CABAL_BIN = path.join(process.env.HOME ?? "/Users", ".cabal", "bin");
-const TOOL_PATH = `${GHCUP_BIN}:${CABAL_BIN}:${process.env.PATH}`;
+import { ensureTool, toolAvailable, TOOL_PATH } from "./tool-installer.js";
 
 /**
  * Detect which formatter is available. Prefers fourmolu over ormolu.
+ * Returns the binary name, or null if neither is installed.
  */
 async function detectFormatter(): Promise<string | null> {
   for (const cmd of ["fourmolu", "ormolu"]) {
-    const found = await commandExists(cmd);
-    if (found) return cmd;
+    if (await toolAvailable(cmd)) return cmd;
   }
   return null;
-}
-
-function commandExists(cmd: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    execFile("which", [cmd], { env: { ...process.env, PATH: TOOL_PATH } }, (err) => {
-      resolve(!err);
-    });
-  });
 }
 
 function runFormatter(
@@ -151,10 +140,30 @@ export async function handleFormat(
   projectDir: string,
   args: { module_path: string; write?: boolean }
 ): Promise<string> {
-  const formatter = await detectFormatter();
+  let formatter = await detectFormatter();
+
   if (!formatter) {
-    const absPath = path.resolve(projectDir, args.module_path);
-    return basicStyleChecks(absPath, args.write);
+    // Trigger auto-installation of fourmolu (preferred over ormolu).
+    const fourmolu = await ensureTool("fourmolu");
+
+    if (fourmolu.installing || fourmolu.failed) {
+      // Return basic style check results while fourmolu is being installed,
+      // but flag the status so the LLM knows to retry for real formatting.
+      const absPath = path.resolve(projectDir, args.module_path);
+      const basic = JSON.parse(await basicStyleChecks(absPath, args.write));
+      return JSON.stringify({
+        ...basic,
+        _formatter_status: fourmolu.installing ? "installing" : "failed",
+        _formatter_message: fourmolu.message,
+      });
+    }
+
+    // Still not available (e.g. first call returned installing, now it's done).
+    formatter = await detectFormatter();
+    if (!formatter) {
+      const absPath = path.resolve(projectDir, args.module_path);
+      return basicStyleChecks(absPath, args.write);
+    }
   }
 
   const absPath = path.resolve(projectDir, args.module_path);
@@ -170,7 +179,7 @@ export async function handleFormat(
     }
     return JSON.stringify({
       success: true,
-      formatter,
+      format_tool: formatter,
       written: true,
       message: `Formatted ${args.module_path} in place`,
     });
@@ -192,7 +201,7 @@ export async function handleFormat(
 
   return JSON.stringify({
     success: true,
-    formatter,
+    format_tool: formatter,
     changed,
     ...(changed ? { formatted } : { message: "Already formatted" }),
   });
@@ -210,10 +219,13 @@ export function register(server: McpServer, ctx: ToolContext): void {
     },
     async ({ module_path, write }) => {
       const result = await handleFormat(ctx.getProjectDir(), { module_path, write });
-      // Mark completion gate
+      // Mark completion gate only when a real formatter ran (fourmolu/ormolu).
+      // The basic-style-checks fallback only fixes whitespace and tabs — it
+      // cannot be considered a full formatting pass and should not unlock the
+      // format gate, which would give a false "formatted" signal.
       try {
         const parsed = JSON.parse(result);
-        if (parsed.success) {
+        if (parsed.success && parsed.format_tool && !parsed.fallback) {
           const activeModule = ctx.getWorkflowState().activeModule ?? module_path;
           const mod = ctx.getModuleProgress(activeModule);
           if (mod) {

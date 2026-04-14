@@ -111,4 +111,65 @@ describe("handleCheckModule", () => {
     expect(result.summary.classes).toBeGreaterThanOrEqual(1);
     expect(result.summary.functions).toBeGreaterThanOrEqual(1);
   });
+
+  // ─── Bug fix: GHC-32850 must not appear in warnings array ──────────────────
+
+  describe("GHC-32850 suppression (Bug Fix 4)", () => {
+    it("does not include GHC-32850 (-Wmissing-home-modules) in warnings", async () => {
+      // GHC-32850 is a GHCi session artifact that fires when a single module is
+      // loaded instead of the full package via 'cabal repl'.  It is NOT a real
+      // code warning and must be suppressed so the LLM doesn't try to fix it.
+      const sessionWithArtifact = createMockSession({
+        loadModule: {
+          output:
+            "<no location info>: warning: [GHC-32850] [-Wmissing-home-modules]\n" +
+            "    These modules are needed for compilation but not listed in your .cabal file\n" +
+            "Ok, one module loaded.",
+          success: true,
+        },
+        execute: async (cmd: string): Promise<GhciResult> => {
+          if (cmd.startsWith(":browse")) return { output: "foo :: Int -> Int", success: true };
+          return { output: "", success: true };
+        },
+      });
+
+      const result = JSON.parse(
+        await handleCheckModule(sessionWithArtifact, { module_path: "src/Foo.hs", module_name: "Foo" })
+      );
+
+      expect(result.success).toBe(true);
+      const warningCodes = (result.warnings ?? []).map((w: { code?: string }) => w.code);
+      expect(warningCodes).not.toContain("GHC-32850");
+      expect(result.summary.warnings).toBe(0);
+    });
+
+    it("keeps real warnings that are not GHC-32850", async () => {
+      const sessionWithRealWarning = createMockSession({
+        loadModule: {
+          output:
+            "src/Foo.hs:2:1-22: warning: [GHC-66111] [-Wunused-imports]\n" +
+            "    The import of 'Data.List' is redundant\n" +
+            "<no location info>: warning: [GHC-32850] [-Wmissing-home-modules]\n" +
+            "    These modules are needed for compilation\n" +
+            "Ok, one module loaded.",
+          success: true,
+        },
+        execute: async (cmd: string): Promise<GhciResult> => {
+          if (cmd.startsWith(":browse")) return { output: "foo :: Int -> Int", success: true };
+          return { output: "", success: true };
+        },
+      });
+
+      const result = JSON.parse(
+        await handleCheckModule(sessionWithRealWarning, { module_path: "src/Foo.hs", module_name: "Foo" })
+      );
+
+      expect(result.success).toBe(true);
+      const warningCodes = (result.warnings ?? []).map((w: { code?: string }) => w.code);
+      expect(warningCodes).not.toContain("GHC-32850");
+      // The unused-import warning should still be present
+      expect(warningCodes).toContain("GHC-66111");
+      expect(result.summary.warnings).toBe(1);
+    });
+  });
 });

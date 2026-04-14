@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { handleExportTests } from "../tools/export-tests.js";
+import {
+  handleExportTests,
+  isTrivialProperty,
+  detectQualifiedImports,
+} from "../tools/export-tests.js";
 import { saveProperty } from "../property-store.js";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -76,8 +80,126 @@ describe("handleExportTests", () => {
   });
 
   it("includes _nextStep guidance", async () => {
-    await saveProperty(tmpDir, { property: "True", module: "src/Lib.hs" });
+    await saveProperty(tmpDir, { property: "\\x -> x == x", module: "src/Lib.hs" });
     const result = JSON.parse(await handleExportTests(tmpDir, {}));
     expect(result._nextStep).toContain("cabal test");
+  });
+
+  // ─── Bug Fix 8a: trivial property filter ────────────────────────────────────
+
+  describe("isTrivialProperty", () => {
+    it("flags '\\x -> True' as trivial", () => {
+      expect(isTrivialProperty("\\x -> True")).toBe(true);
+    });
+    it("flags '\\_ -> True' as trivial", () => {
+      expect(isTrivialProperty("\\_ -> True")).toBe(true);
+    });
+    it("flags '\\x y -> True' as trivial (multiple binders)", () => {
+      expect(isTrivialProperty("\\x y -> True")).toBe(true);
+    });
+    it("flags 'const True' as trivial", () => {
+      expect(isTrivialProperty("const True")).toBe(true);
+    });
+    it("does NOT flag '\\x -> x == x' as trivial", () => {
+      expect(isTrivialProperty("\\x -> x == x")).toBe(false);
+    });
+    it("does NOT flag '\\xs -> reverse (reverse xs) == xs' as trivial", () => {
+      expect(isTrivialProperty("\\xs -> reverse (reverse xs) == xs")).toBe(false);
+    });
+    it("does NOT flag '\\n -> n >= 0' as trivial", () => {
+      expect(isTrivialProperty("\\n -> n >= 0")).toBe(false);
+    });
+  });
+
+  describe("handleExportTests — trivial filtering", () => {
+    it("drops trivial properties and reports count", async () => {
+      await saveProperty(tmpDir, { property: "\\x -> True", module: "src/Lib.hs" });
+      await saveProperty(tmpDir, { property: "\\x -> x == x", module: "src/Lib.hs" });
+
+      const result = JSON.parse(await handleExportTests(tmpDir, {}));
+      expect(result.success).toBe(true);
+      expect(result.propertyCount).toBe(1); // only the non-trivial one
+      expect(result.droppedTrivial).toBe(1);
+    });
+
+    it("returns error when ALL properties are trivial", async () => {
+      await saveProperty(tmpDir, { property: "\\x -> True", module: "src/Lib.hs" });
+      await saveProperty(tmpDir, { property: "const True", module: "src/Lib.hs" });
+
+      const result = JSON.parse(await handleExportTests(tmpDir, {}));
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("trivially true");
+      expect(result.droppedTrivial).toBe(2);
+    });
+
+    it("comment in generated file notes dropped trivial properties", async () => {
+      await saveProperty(tmpDir, { property: "\\_ -> True", module: "src/Lib.hs" });
+      await saveProperty(tmpDir, { property: "\\n -> n + 1 > n", module: "src/Lib.hs" });
+
+      await handleExportTests(tmpDir, {});
+      const content = await readFile(path.join(tmpDir, "test/Spec.hs"), "utf-8");
+      expect(content).toContain("trivial propert");
+    });
+  });
+
+  // ─── Bug Fix 8b: qualified imports in generated Spec.hs ─────────────────────
+
+  describe("detectQualifiedImports", () => {
+    it("adds Map import when properties use Map.*", () => {
+      const imports = detectQualifiedImports(["\\n -> eval Map.empty (Lit n) == Right n"]);
+      expect(imports).toContain("import qualified Data.Map.Strict as Map");
+    });
+
+    it("adds Set import when properties use Set.*", () => {
+      const imports = detectQualifiedImports(["\\xs -> Set.fromList xs == Set.fromList xs"]);
+      expect(imports).toContain("import qualified Data.Set as Set");
+    });
+
+    it("adds multiple imports when needed", () => {
+      const imports = detectQualifiedImports([
+        "\\n -> eval Map.empty (Lit n) == Right n",
+        "\\xs -> Set.size xs >= 0",
+      ]);
+      expect(imports).toContain("import qualified Data.Map.Strict as Map");
+      expect(imports).toContain("import qualified Data.Set as Set");
+    });
+
+    it("returns empty array when no qualified modules are referenced", () => {
+      const imports = detectQualifiedImports(["\\x -> x == x", "\\n -> n + 1 > n"]);
+      expect(imports).toHaveLength(0);
+    });
+
+    it("does not duplicate imports for the same module", () => {
+      const imports = detectQualifiedImports([
+        "\\n -> eval Map.empty (Lit n) == Right n",
+        "\\m -> eval Map.empty (Var m) == Left (UnboundVar m)",
+      ]);
+      const mapImports = imports.filter((i) => i.includes("Data.Map"));
+      expect(mapImports).toHaveLength(1);
+    });
+  });
+
+  describe("handleExportTests — Map import in generated file", () => {
+    it("adds 'import qualified Data.Map.Strict as Map' when properties use Map.*", async () => {
+      await saveProperty(tmpDir, {
+        property: "\\n -> eval Map.empty (Lit n) == Right n",
+        module: "src/Expr/Eval.hs",
+      });
+
+      await handleExportTests(tmpDir, {});
+      const content = await readFile(path.join(tmpDir, "test/Spec.hs"), "utf-8");
+      expect(content).toContain("import qualified Data.Map.Strict as Map");
+    });
+
+    it("does NOT add Map import when properties don't use Map.*", async () => {
+      await saveProperty(tmpDir, {
+        property: "\\x -> x == x",
+        module: "src/Lib.hs",
+      });
+
+      await handleExportTests(tmpDir, {});
+      const content = await readFile(path.join(tmpDir, "test/Spec.hs"), "utf-8");
+      expect(content).not.toContain("import qualified Data.Map");
+    });
   });
 });

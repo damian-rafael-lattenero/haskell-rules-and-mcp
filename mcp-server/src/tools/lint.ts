@@ -6,10 +6,7 @@ import type { GhciSession } from "../ghci-session.js";
 import { parseGhcErrors } from "../parsers/error-parser.js";
 import { categorizeWarnings } from "../parsers/warning-categorizer.js";
 import type { ToolContext } from "./registry.js";
-
-const GHCUP_BIN = path.join(process.env.HOME ?? "/Users", ".ghcup", "bin");
-const CABAL_BIN = path.join(process.env.HOME ?? "/Users", ".cabal", "bin");
-const TOOL_PATH = `${GHCUP_BIN}:${CABAL_BIN}:${process.env.PATH}`;
+import { ensureTool, TOOL_PATH } from "./tool-installer.js";
 
 export interface LintSuggestion {
   hint: string;
@@ -22,14 +19,6 @@ export interface LintSuggestion {
   endLine: number;
   endColumn: number;
   note: string[];
-}
-
-function hlintAvailable(): Promise<boolean> {
-  return new Promise((resolve) => {
-    execFile("which", ["hlint"], { env: { ...process.env, PATH: TOOL_PATH } }, (err) => {
-      resolve(!err);
-    });
-  });
 }
 
 async function ghciLintFallback(
@@ -71,14 +60,24 @@ export async function handleLint(
   args: { module_path: string },
   session?: GhciSession
 ): Promise<string> {
-  const available = await hlintAvailable();
-  if (!available) {
+  const hlint = await ensureTool("hlint");
+  if (!hlint.available) {
+    // Auto-installation started (or already in progress / failed).
+    // Provide the GHC-warnings fallback so the LLM gets some signal now,
+    // but flag it clearly so it knows to retry once hlint is ready.
     if (session) {
-      return ghciLintFallback(session, args.module_path);
+      const fallback = JSON.parse(await ghciLintFallback(session, args.module_path));
+      return JSON.stringify({
+        ...fallback,
+        _hlint_status: hlint.installing ? "installing" : hlint.failed ? "failed" : "unavailable",
+        _hlint_message: hlint.message,
+      });
     }
     return JSON.stringify({
       success: false,
-      error: "hlint not found. Install it: cabal install hlint",
+      installing: hlint.installing,
+      failed: hlint.failed,
+      error: hlint.message,
     });
   }
 
@@ -122,6 +121,7 @@ export async function handleLint(
           resolve(
             JSON.stringify({
               success: true,
+              lint_tool: "hlint",
               count: suggestions.length,
               suggestions,
               summary:
@@ -155,10 +155,13 @@ export function register(server: McpServer, ctx: ToolContext): void {
     async ({ module_path }) => {
       const session = await ctx.getSession();
       const result = await handleLint(ctx.getProjectDir(), { module_path }, session);
-      // Mark completion gate
+      // Mark completion gate only when a real linter ran (hlint), not the
+      // GHC-warnings fallback.  The fallback is useful for surfacing issues but
+      // cannot replace a full hlint analysis — marking it complete would give a
+      // false "clean code" signal when hlint is not installed.
       try {
         const parsed = JSON.parse(result);
-        if (parsed.success) {
+        if (parsed.success && parsed.lint_tool === "hlint") {
           const activeModule = ctx.getWorkflowState().activeModule ?? module_path;
           const mod = ctx.getModuleProgress(activeModule);
           if (mod) {

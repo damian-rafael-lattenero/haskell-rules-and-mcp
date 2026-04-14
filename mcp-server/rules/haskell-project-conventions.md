@@ -41,6 +41,10 @@
   (`module="src/X.hs"` is also accepted for backward compatibility)
 - Use `ghci_regression` to re-run all saved properties after changes
 - Use `ghci_hole(module_path="...")` to explore typed holes before implementing
+- **Do NOT use trivially-true properties** (`\x -> True`, `const True`) — they are
+  automatically dropped by `ghci_quickcheck_export` and provide no test coverage
+- `ghci_quickcheck_export` auto-adds qualified imports (`Data.Map.Strict`, `Data.Set`, etc.)
+  based on what the properties actually use — no manual import editing needed in `Spec.hs`
 
 ## Refactoring
 - Use `ghci_refactor(action="rename_local")` to rename a binding across a module
@@ -63,5 +67,6 @@
 ## HLS Integration
 - Run `ghci_hls(action="available")` to check if HLS is installed
 - Use `ghci_hls(action="hover", module_path="...", line=N, character=M)` for type info at position
-  (requires `ghcup install hls` — one-time setup by the user)
+- **HLS auto-installs** if missing — no manual `ghcup install hls` required. If response has
+  `{ installing: true }`, wait 2–5 minutes and retry.
 - For all compilation diagnostics: prefer `ghci_load(diagnostics=true)` — it doesn't require HLS
