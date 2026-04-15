@@ -82,14 +82,14 @@ describe("ghci_property_lifecycle", () => {
         module: "src/A.hs",
       });
       await saveProperty(TEST_PROJECT_DIR, {
-        property: "\\x -> True",
+        property: "\\_ -> True",
         module: "src/A.hs",
       });
 
       // Deprecate one
       await handlePropertyLifecycle(TEST_PROJECT_DIR, {
         action: "deprecate",
-        property: "\\x -> True",
+        property: "\\_ -> True",
         reason: "Trivial property",
       });
 
@@ -246,7 +246,7 @@ describe("ghci_property_lifecycle", () => {
         module: "src/A.hs",
       });
       await saveProperty(TEST_PROJECT_DIR, {
-        property: "\\x -> True",
+        property: "\\_ -> True",
         module: "src/A.hs",
       });
       await saveProperty(TEST_PROJECT_DIR, {
@@ -257,13 +257,13 @@ describe("ghci_property_lifecycle", () => {
       // Deprecate the trivial one
       await handlePropertyLifecycle(TEST_PROJECT_DIR, {
         action: "deprecate",
-        property: "\\x -> True",
+        property: "\\_ -> True",
         reason: "Trivial",
       });
 
       const active = await getActiveProperties(TEST_PROJECT_DIR);
       expect(active).toHaveLength(2);
-      expect(active.map((p) => p.property)).not.toContain("\\x -> True");
+      expect(active.map((p) => p.property)).not.toContain("\\_ -> True");
     });
   });
 });

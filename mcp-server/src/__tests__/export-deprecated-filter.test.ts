@@ -57,7 +57,7 @@ describe("ghci_quickcheck_export with deprecated filtering", () => {
       functionName: "identity",
     });
     await saveProperty(TEST_PROJECT_DIR, {
-      property: "\\x -> True",
+      property: "\\_ -> True",
       module: "src/TestModule.hs",
       functionName: "trivial",
     });
@@ -68,7 +68,7 @@ describe("ghci_quickcheck_export with deprecated filtering", () => {
     });
 
     // Deprecate the trivial one
-    await deprecateProperty(TEST_PROJECT_DIR, "\\x -> True", {
+    await deprecateProperty(TEST_PROJECT_DIR, "\\_ -> True", {
       reason: "Trivial property provides no signal",
     });
 
@@ -88,12 +88,12 @@ describe("ghci_quickcheck_export with deprecated filtering", () => {
     );
     expect(exported).toContain("\\x -> x == x");
     expect(exported).toContain("reverse (reverse xs)");
-    expect(exported).not.toContain("\\x -> True");
+    expect(exported).not.toContain("\\_ -> True");
   });
 
   it("should handle all properties being deprecated", async () => {
     await saveProperty(TEST_PROJECT_DIR, {
-      property: "\\x -> True",
+      property: "\\_ -> True",
       module: "src/TestModule.hs",
     });
     await saveProperty(TEST_PROJECT_DIR, {
@@ -101,7 +101,7 @@ describe("ghci_quickcheck_export with deprecated filtering", () => {
       module: "src/TestModule.hs",
     });
 
-    await deprecateProperty(TEST_PROJECT_DIR, "\\x -> True");
+    await deprecateProperty(TEST_PROJECT_DIR, "\\_ -> True");
     await deprecateProperty(TEST_PROJECT_DIR, "\\_ -> True");
 
     const result = JSON.parse(
@@ -121,11 +121,11 @@ describe("ghci_quickcheck_export with deprecated filtering", () => {
       module: "src/TestModule.hs",
     });
     await saveProperty(TEST_PROJECT_DIR, {
-      property: "\\x -> True",
+      property: "\\_ -> True",
       module: "src/TestModule.hs",
     });
 
-    await deprecateProperty(TEST_PROJECT_DIR, "\\x -> True");
+    await deprecateProperty(TEST_PROJECT_DIR, "\\_ -> True");
 
     // Note: only_passing parameter is for future extension
     // Currently we always filter deprecated properties
@@ -147,7 +147,7 @@ describe("ghci_quickcheck_export with deprecated filtering", () => {
       module: "src/TestModule.hs",
     });
     await saveProperty(TEST_PROJECT_DIR, {
-      property: "\\x -> True",
+      property: "\\_ -> True",
       module: "src/TestModule.hs",
     });
     await saveProperty(TEST_PROJECT_DIR, {
@@ -155,7 +155,7 @@ describe("ghci_quickcheck_export with deprecated filtering", () => {
       module: "src/TestModule.hs",
     });
 
-    await deprecateProperty(TEST_PROJECT_DIR, "\\x -> True");
+    await deprecateProperty(TEST_PROJECT_DIR, "\\_ -> True");
     await deprecateProperty(TEST_PROJECT_DIR, "\\_ -> True");
 
     const result = JSON.parse(

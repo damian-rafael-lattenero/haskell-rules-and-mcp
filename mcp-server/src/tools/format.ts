@@ -4,17 +4,29 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { ToolContext } from "./registry.js";
-import { getBundledToolStatus, resolveToolBinary, ensureTool, TOOL_PATH } from "./tool-installer.js";
+import { getBundledToolStatus, ensureTool, TOOL_PATH } from "./tool-installer.js";
 
 /**
  * Detect which formatter is available. Prefers fourmolu over ormolu.
  * Returns the binary name, or null if neither is installed.
  * Now uses ensureTool to enable auto-download if needed.
  */
-async function detectFormatter(): Promise<string | null | undefined> {
+interface FormatterResolution {
+  binaryPath: string;
+  source: "bundled" | "host" | "installed";
+  version?: string;
+}
+
+async function detectFormatter(): Promise<FormatterResolution | null> {
   for (const cmd of ["fourmolu", "ormolu"] as const) {
     const resolved = await ensureTool(cmd);
-    if (resolved.available) return resolved.binaryPath ?? null;
+    if (resolved.available && resolved.binaryPath) {
+      return {
+        binaryPath: resolved.binaryPath,
+        source: resolved.source ?? "host",
+        version: resolved.version,
+      };
+    }
   }
   return null;
 }
@@ -61,9 +73,10 @@ export async function handleFormat(
   projectDir: string,
   args: { module_path: string; write?: boolean }
 ): Promise<string> {
-  let formatter = await detectFormatter();
-  let formatterSource: "bundled" | "host" = "host";
-  let formatterVersion: string | undefined;
+  const formatterResolution = await detectFormatter();
+  let formatter = formatterResolution?.binaryPath ?? null;
+  let formatterSource: "bundled" | "host" | "installed" = formatterResolution?.source ?? "host";
+  let formatterVersion: string | undefined = formatterResolution?.version;
 
   if (!formatter) {
     const bundledFourmolu = await getBundledToolStatus("fourmolu");
@@ -82,16 +95,8 @@ export async function handleFormat(
           ? "Fix the bundled formatter manifest entry (sha256/version/provenance) or use a host installation."
           : "Provide fourmolu/ormolu in host PATH, or bundle one in vendor-tools for this platform.",
     });
-  } else {
-    const fourmoluResolved = await resolveToolBinary("fourmolu");
-    const ormoluResolved = await resolveToolBinary("ormolu");
-    if (fourmoluResolved && fourmoluResolved.binaryPath === formatter) {
-      formatterSource = fourmoluResolved.source;
-      formatterVersion = await detectFormatterVersion(formatter);
-    } else if (ormoluResolved && ormoluResolved.binaryPath === formatter) {
-      formatterSource = ormoluResolved.source;
-      formatterVersion = await detectFormatterVersion(formatter);
-    }
+  } else if (!formatterVersion) {
+    formatterVersion = await detectFormatterVersion(formatter);
   }
 
   const absPath = path.resolve(projectDir, args.module_path);

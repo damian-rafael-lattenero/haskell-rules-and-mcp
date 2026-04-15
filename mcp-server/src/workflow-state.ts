@@ -47,6 +47,7 @@ export interface ToolExecution {
 export interface WorkflowState {
   currentFlow: FlowStep | null;
   activeModule: string | null;
+  strictMode: boolean;
   modules: Map<string, ModuleProgress>;
   optionalTooling: {
     lint: "unknown" | "available" | "unavailable";
@@ -79,6 +80,7 @@ export function createWorkflowState(): WorkflowState {
   return {
     currentFlow: null,
     activeModule: null,
+    strictMode: process.env.HASKELL_WORKFLOW_STRICT === "1",
     modules: new Map(),
     optionalTooling: { lint: "unknown", format: "unknown", hls: "unknown" },
     toolHistory: [],
@@ -118,6 +120,7 @@ export function updateModuleProgress(
 export function resetWorkflowState(state: WorkflowState): void {
   state.currentFlow = null;
   state.activeModule = null;
+  state.strictMode = process.env.HASKELL_WORKFLOW_STRICT === "1";
   state.modules.clear();
   state.optionalTooling = { lint: "unknown", format: "unknown", hls: "unknown" };
   state.toolHistory = [];
@@ -228,15 +231,21 @@ export function moduleChecklist(state: WorkflowState): string[] {
   }
 
   items.push("[ ] ghci_check_module — review API");
+  const lintRequired = state.strictMode || state.optionalTooling.lint !== "unavailable";
   items.push(
-    state.optionalTooling.lint === "unavailable"
+    state.optionalTooling.lint === "unavailable" && !lintRequired
       ? "[~] ghci_lint — recommended (tool unavailable)"
-      : "[ ] ghci_lint — code quality"
+      : state.optionalTooling.lint === "unavailable" && lintRequired
+        ? "[ ] ghci_lint — required (strict mode, tool unavailable)"
+        : "[ ] ghci_lint — code quality"
   );
+  const formatRequired = state.strictMode || state.optionalTooling.format !== "unavailable";
   items.push(
-    state.optionalTooling.format === "unavailable"
+    state.optionalTooling.format === "unavailable" && !formatRequired
       ? "[~] ghci_format — recommended (tool unavailable)"
-      : "[ ] ghci_format — formatting"
+      : state.optionalTooling.format === "unavailable" && formatRequired
+        ? "[ ] ghci_format — required (strict mode, tool unavailable)"
+        : "[ ] ghci_format — formatting"
   );
 
   return items;
@@ -310,8 +319,8 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
   // Fires as soon as any properties pass — no need to wait for phase === "complete".
   if (mod.propertiesPassed.length > 0 && mod.propertiesFailed.length === 0) {
     const gates = mod.completionGates ?? { checkModule: false, lint: false, format: false };
-    const lintSatisfied = gates.lint || state.optionalTooling.lint === "unavailable";
-    const formatSatisfied = gates.format || state.optionalTooling.format === "unavailable";
+    const lintSatisfied = isLintGateSatisfied(state, mod);
+    const formatSatisfied = isFormatGateSatisfied(state, mod);
     if (!gates.checkModule) {
       guidance.push(
         `Properties pass — run ghci_check_module(module_path="${mod.modulePath}") to review exported API before moving on`
@@ -321,7 +330,12 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
       guidance.push(
         `Run ghci_lint(module_path="${mod.modulePath}") for code quality pass (module-complete gate)`
       );
-    } else if (!gates.lint && state.optionalTooling.lint === "unavailable") {
+      if (!gates.lint && state.optionalTooling.lint === "unavailable" && state.strictMode) {
+        guidance.push(
+          "ghci_lint is unavailable and strict mode is enabled — blocking gate. Install hlint or fix bundled toolchain."
+        );
+      }
+    } else if (!gates.lint && state.optionalTooling.lint === "unavailable" && !state.strictMode) {
       guidance.push(
         "ghci_lint is unavailable in this environment — recommended but not blocking for module completion"
       );
@@ -330,7 +344,12 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
       guidance.push(
         `Run ghci_format(module_path="${mod.modulePath}", write=true) to normalize formatting (module-complete gate)`
       );
-    } else if (!gates.format && state.optionalTooling.format === "unavailable") {
+      if (!gates.format && state.optionalTooling.format === "unavailable" && state.strictMode) {
+        guidance.push(
+          "ghci_format is unavailable and strict mode is enabled — blocking gate. Install fourmolu/ormolu or fix bundled toolchain."
+        );
+      }
+    } else if (!gates.format && state.optionalTooling.format === "unavailable" && !state.strictMode) {
       guidance.push(
         "ghci_format is unavailable in this environment — recommended but not blocking for module completion"
       );
@@ -344,12 +363,12 @@ export function deriveGuidance(state: WorkflowState, toolName: string): string[]
     allModules.every(
       (m) =>
         m.completionGates?.checkModule &&
-        (m.completionGates?.lint || state.optionalTooling.lint === "unavailable") &&
-        (m.completionGates?.format || state.optionalTooling.format === "unavailable")
+        isLintGateSatisfied(state, m) &&
+        isFormatGateSatisfied(state, m)
     );
   if (allGatesComplete) {
     guidance.push(
-      "All modules complete — export test suite with ghci_quickcheck_export(output_path=\"test/Spec.hs\"), then cabal_test and cabal_build to verify the package"
+      "All modules complete — export test suite with ghci_quickcheck_export(output_path=\"test/Spec.hs\"), then cabal_test, cabal_coverage, and cabal_build to verify the package"
     );
   } else if (state.modules.size > 1) {
     // Multi-module project: suggest regression when all modules have properties
@@ -477,8 +496,8 @@ export function workflowHelp(state: WorkflowState): WorkflowHelpResult {
     const gates = mod.completionGates;
     const missing: string[] = [];
     if (!gates.checkModule) missing.push("ghci_check_module");
-    if (!gates.lint && state.optionalTooling.lint !== "unavailable") missing.push("ghci_lint");
-    if (!gates.format && state.optionalTooling.format !== "unavailable") missing.push("ghci_format");
+    if (!isLintGateSatisfied(state, mod)) missing.push("ghci_lint");
+    if (!isFormatGateSatisfied(state, mod)) missing.push("ghci_format");
 
     if (missing.length > 0) {
       return {
@@ -495,12 +514,13 @@ export function workflowHelp(state: WorkflowState): WorkflowHelpResult {
 
   // 8. Everything looks complete
   return {
-    suggested_tools: ["ghci_regression", "ghci_quickcheck_export", "cabal_test"],
+    suggested_tools: ["ghci_regression", "ghci_quickcheck_export", "cabal_test", "cabal_coverage"],
     reasoning: "Module looks complete. Run regression to verify all saved properties still pass.",
     steps: [
       "Run ghci_regression(action='run') to re-run all saved properties",
       "Run ghci_quickcheck_export() to generate a persistent test file",
       "Run cabal_test to verify the generated test-suite executes correctly",
+      "Run cabal_coverage(min_percent=80) to report test coverage before closing the session",
       "Consider starting the next module with ghci_scaffold",
     ],
   };
@@ -516,6 +536,7 @@ export function serializeState(state: WorkflowState): Record<string, unknown> {
   return {
     currentFlow: state.currentFlow,
     activeModule: state.activeModule,
+    strictMode: state.strictMode,
     modules,
     optionalTooling: state.optionalTooling,
     recentTools: state.toolHistory.slice(-10),
@@ -531,4 +552,20 @@ export function setOptionalToolAvailability(
   status: "unknown" | "available" | "unavailable"
 ): void {
   state.optionalTooling[tool] = status;
+}
+
+export function setStrictWorkflowMode(state: WorkflowState, strict: boolean): void {
+  state.strictMode = strict;
+}
+
+export function isLintGateSatisfied(state: WorkflowState, mod: ModuleProgress): boolean {
+  return mod.completionGates.lint || (!state.strictMode && state.optionalTooling.lint === "unavailable");
+}
+
+export function isFormatGateSatisfied(state: WorkflowState, mod: ModuleProgress): boolean {
+  return mod.completionGates.format || (!state.strictMode && state.optionalTooling.format === "unavailable");
+}
+
+export function moduleGatesComplete(state: WorkflowState, mod: ModuleProgress): boolean {
+  return mod.completionGates.checkModule && isLintGateSatisfied(state, mod) && isFormatGateSatisfied(state, mod);
 }

@@ -11,6 +11,7 @@ import {
 import type { ToolContext } from "./registry.js";
 import { suggestFunctionProperties } from "../laws/function-laws.js";
 import { saveProperty } from "../property-store.js";
+import { validatePropertyText } from "../parsers/property-validator.js";
 
 // Re-export for consumers
 export type { QuickCheckResult } from "../parsers/quickcheck-parser.js";
@@ -212,20 +213,14 @@ export async function handleQuickCheck(
   }
 
   const trimmed = actualProperty.trim();
-  if (trimmed.startsWith(":")) {
+  const validation = validatePropertyText(actualProperty);
+  if (!validation.ok) {
     return JSON.stringify({
       success: false,
       passed: 0,
       property: actualProperty,
-      error: "Property cannot start with ':' (looks like a GHCi command)",
-    });
-  }
-  if (trimmed.length > 2000) {
-    return JSON.stringify({
-      success: false,
-      passed: 0,
-      property: actualProperty,
-      error: "Property too long (max 2000 characters)",
+      error: validation.issues[0]?.message ?? "Invalid property",
+      validationIssues: validation.issues,
     });
   }
 
@@ -253,6 +248,7 @@ export async function handleQuickCheck(
 
     // Type-level suggestions (existing)
     const rawSuggestions = suggestPropertiesFromType(args.function_name, typeStr);
+    rawSuggestions.push(...suggestNameBasedProperties(args.function_name));
 
     // Constructor-level suggestions (NEW): inspect ADT input types
     try {
@@ -319,6 +315,25 @@ export async function handleQuickCheck(
   let normalizedProp = actualProperty;
   if (normalizedProp.startsWith("\\") && !normalizedProp.startsWith("(")) {
     normalizedProp = `(${normalizedProp})`;
+  }
+
+  const typeCheckResult = await session.execute(`:t (${normalizedProp})`);
+  const typeCheckOutput = typeCheckResult.output.toLowerCase();
+  if (
+    !typeCheckResult.success ||
+    typeCheckOutput.includes("ambiguous") ||
+    typeCheckOutput.includes("not in scope") ||
+    typeCheckOutput.includes("couldn't match") ||
+    typeCheckOutput.includes("parse error")
+  ) {
+    return JSON.stringify({
+      success: false,
+      passed: 0,
+      property: actualProperty,
+      error: "Property failed type-check validation before execution.",
+      typecheckOutput: typeCheckResult.output,
+      _nextStep: "Fix the property expression (types/scope/ambiguity), then re-run ghci_quickcheck.",
+    });
   }
 
   // Use a let-binding to isolate the property from the quickCheck command.
@@ -555,6 +570,36 @@ function suggestPropertiesFromType(
     law: gs.law,
     property: gs.property,
   }));
+}
+
+function suggestNameBasedProperties(
+  funcName: string
+): Array<{ law: string; property: string }> {
+  const n = funcName.toLowerCase();
+  const out: Array<{ law: string; property: string }> = [];
+
+  if (n.includes("parse")) {
+    out.push({
+      law: "parser totality (no exceptions)",
+      property: `\\input -> seq (${funcName} input) True`,
+    });
+  }
+
+  if (n.includes("simplify") || n.includes("normalize")) {
+    out.push({
+      law: "idempotence",
+      property: `\\x -> ${funcName} (${funcName} x) == ${funcName} x`,
+    });
+  }
+
+  if (n.includes("eval")) {
+    out.push({
+      law: "determinism",
+      property: `\\x -> ${funcName} x == ${funcName} x`,
+    });
+  }
+
+  return out;
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {

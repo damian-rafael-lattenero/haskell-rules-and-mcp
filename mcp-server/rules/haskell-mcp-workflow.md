@@ -19,7 +19,7 @@ The `_guidance` array in responses tells you what to do next based on:
 - Whether warnings are pending (→ fix them)
 - Whether edits haven't been compiled (→ run `ghci_load`)
 - Whether module-complete gates are missing (→ run `ghci_check_module`, `ghci_lint`, `ghci_format`)
-- Whether all modules are gate-complete (→ run `ghci_quickcheck_export`, then `cabal_test`, then `cabal_build`)
+- Whether all modules are gate-complete (→ run `ghci_quickcheck_export`, then `cabal_test`, `cabal_coverage`, then `cabal_build`)
 
 **Guidance is state-aware:** once QuickCheck properties pass, the "untested" hint disappears
 automatically. Once gates are complete, the session-close hint appears.
@@ -44,17 +44,18 @@ automatically. Once gates are complete, the session-close hint appears.
 
 The MCP resolves optional binaries (`hlint`, `fourmolu`/`ormolu`, `hls`) with:
 
-- Tool resolution order: **host PATH -> bundled binary**
+- Tool resolution order: **host PATH -> bundled binary -> auto-download -> unavailable**
 - Bundled-first release scope is currently: `hlint`, `fourmolu`, `ormolu`
 - `ghci_lint`, `ghci_format`, and `ghci_hls` responses include:
-  - `source` (`host` or `bundled`) when available
+  - `source` (`host`, `bundled`, or `installed`) when available
   - `binaryPath`
   - `version` (when available)
   - `reason` / `provenance` / `checksumVerified` when relevant
-- If neither host nor bundled binary is available, the tool returns
-  **unavailable** and does not run fallback analysis/formatting.
-- If `ghci_lint` / `ghci_format` are unavailable for the current environment, `_guidance`
-  degrades them to **recommended but not blocking** instead of trapping the workflow forever.
+- `ghci_toolchain_status` returns a runtime + release/checksum matrix for reproducible diagnostics.
+- `ghci_lint_basic` is a degraded fallback and does **not** satisfy lint gate completion.
+- If `ghci_lint` / `ghci_format` are unavailable, `_guidance` is:
+  - **recommended/non-blocking** in default mode
+  - **blocking** when strict mode is enabled
 
 When triaging issues, always check `source` first to confirm execution path.
 
@@ -72,6 +73,7 @@ When triaging issues, always check `source` first to confirm execution path.
 | After creating project | `ghci_switch_project(project="name")` | Project cache is auto-refreshed after `ghci_init`, no manual refresh needed. |
 | After switch | `ghci_load(load_all=true)` | Verify all modules compile |
 | Lost / unsure what to do | `ghci_workflow(action="help")` | Context-aware next steps with `suggested_tools` and `reasoning` |
+| Diagnose toolchain issues | `ghci_toolchain_status(include_matrix=true)` | Runtime + release/checksum matrix for lint/format/HLS availability |
 
 ### Session Health
 | When | Tool | Why |
@@ -131,8 +133,8 @@ When triaging issues, always check `source` first to confirm execution path.
 |------|------|-----|
 | All functions implemented | `ghci_quickcheck` / `ghci_quickcheck_batch` | Test COMPLETE algebraic contract |
 | After quickcheck passes | `ghci_check_module(module_path="...")` | Review API summary — `_guidance` will prompt this automatically |
-| After review | `ghci_lint(module_path="...")` | Code quality pass. **Gate completes only when hlint runs** (host or bundled). If unavailable, it becomes recommended but not blocking. |
-| After lint | `ghci_format(module_path="...", write=true)` | Formatting pass. **Gate completes only when fourmolu/ormolu runs** (host or bundled). If unavailable, it becomes recommended but not blocking. |
+| After review | `ghci_lint(module_path="...")` | Code quality pass. **Gate completes only when hlint runs** (host/bundled/installed). If unavailable, use `ghci_lint_basic` for degraded hints. |
+| After lint | `ghci_format(module_path="...", write=true)` | Formatting pass. **Gate completes only when fourmolu/ormolu runs** (host/bundled/installed). In strict mode, unavailable formatter remains blocking. |
 
 **Note:** `_guidance` in `ghci_load` responses guides you through each gate individually
 once properties pass. Each gate has its own hint that disappears when that gate is complete.
@@ -142,6 +144,7 @@ once properties pass. Each gate has its own hint that disappears when that gate 
 |------|------|-----|
 | All modules: gates complete | `ghci_quickcheck_export(output_path="test/Spec.hs")` | Generate persistent test file from saved properties and validate it with `cabal_test` by default |
 | After export | `cabal_test` | Verify the exported test-suite compiles and executes |
+| Coverage verification | `cabal_coverage(min_percent=80)` | Run HPC coverage and parse percentages into structured output |
 | After tests | `cabal_build` | Verify full GHC compilation (not just GHCi interpreted) |
 | After build | Commit | Persist the work |
 
@@ -262,6 +265,7 @@ when the tool cannot run in the current environment.
 Both `module_path` and `module` are accepted and equivalent.
 `module_path` is the **preferred spelling** — it matches the convention used by all other tools.
 `module_path` takes precedence when both are provided.
+Properties are validated before execution/persistence; unused lambda binders are rejected to avoid ambiguous exported tests.
 
 ```
 ghci_quickcheck(property="\\x -> f x == x", module_path="src/MyModule.hs")   ✅ preferred
@@ -372,6 +376,7 @@ require HLS and is always available.
 2. **Detects and adds qualified imports** — if any property references `Map.*`, `Set.*`,
    `Seq.*`, `Vector.*`, `Text.*`, or `NonEmpty.*`, the corresponding qualified imports are
    added automatically to the generated `Spec.hs`.
+3. **Blocks invalid persisted properties** — export fails fast when the property store contains unsafe entries (for example, unused binders), with guidance to clean via `ghci_property_lifecycle`.
 
 **Example:** a property like `\n -> eval Map.empty (Lit n) == Right n` will cause
 `import qualified Data.Map.Strict as Map` to be included in the output file.

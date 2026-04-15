@@ -13,6 +13,8 @@ import {
   derivePhase,
   deriveGuidance,
   workflowHelp,
+  setStrictWorkflowMode,
+  moduleGatesComplete,
 } from "../workflow-state.js";
 
 describe("createWorkflowState", () => {
@@ -681,6 +683,46 @@ describe("workflowHelp", () => {
     const help = workflowHelp(state);
     expect(typeof help.reasoning).toBe("string");
     expect(help.reasoning.length).toBeGreaterThan(0);
+  });
+});
+
+describe("strict workflow gates", () => {
+  it("treats unavailable lint/format as blocking when strict mode is enabled", () => {
+    const state = createWorkflowState();
+    setStrictWorkflowMode(state, true);
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      modulePath: "src/Foo.hs",
+      functionsTotal: 1,
+      functionsImplemented: 1,
+      propertiesPassed: ["\\x -> x == x"],
+      completionGates: { checkModule: true, lint: false, format: false },
+    });
+    state.optionalTooling.lint = "unavailable";
+    state.optionalTooling.format = "unavailable";
+
+    const mod = getModuleProgress(state, "src/Foo.hs")!;
+    expect(moduleGatesComplete(state, mod)).toBe(false);
+    const guidance = deriveGuidance(state, "ghci_load");
+    expect(guidance.some((g) => g.includes("strict mode is enabled"))).toBe(true);
+  });
+
+  it("keeps unavailable lint/format non-blocking when strict mode is disabled", () => {
+    const state = createWorkflowState();
+    setStrictWorkflowMode(state, false);
+    state.activeModule = "src/Foo.hs";
+    updateModuleProgress(state, "src/Foo.hs", {
+      modulePath: "src/Foo.hs",
+      functionsTotal: 1,
+      functionsImplemented: 1,
+      propertiesPassed: ["\\x -> x == x"],
+      completionGates: { checkModule: true, lint: false, format: false },
+    });
+    state.optionalTooling.lint = "unavailable";
+    state.optionalTooling.format = "unavailable";
+
+    const mod = getModuleProgress(state, "src/Foo.hs")!;
+    expect(moduleGatesComplete(state, mod)).toBe(true);
   });
 });
 

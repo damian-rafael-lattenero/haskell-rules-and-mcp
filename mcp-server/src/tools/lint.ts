@@ -1,9 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { ToolContext } from "./registry.js";
 import { ensureTool, TOOL_PATH } from "./tool-installer.js";
+import { analyzeBasicLintRules } from "../parsers/basic-lint-rules.js";
 
 export interface LintSuggestion {
   hint: string;
@@ -106,6 +108,39 @@ export async function handleLint(
   });
 }
 
+export async function handleLintBasic(
+  projectDir: string,
+  args: { module_path: string }
+): Promise<string> {
+  const absPath = path.resolve(projectDir, args.module_path);
+  let code = "";
+  try {
+    code = await readFile(absPath, "utf8");
+  } catch {
+    return JSON.stringify({
+      success: false,
+      lint_tool: "basic-lint-rules",
+      error: `File not found: ${args.module_path}`,
+    });
+  }
+
+  const suggestions = analyzeBasicLintRules(code, args.module_path);
+  return JSON.stringify({
+    success: true,
+    lint_tool: "basic-lint-rules",
+    degraded: true,
+    gateEligible: false,
+    count: suggestions.length,
+    suggestions,
+    summary:
+      suggestions.length === 0
+        ? "No basic lint suggestions"
+        : `${suggestions.length} basic suggestion(s)`,
+    _hint:
+      "This is a fallback heuristic lint and does not satisfy the module-complete lint gate. Use ghci_lint with hlint when available.",
+  });
+}
+
 export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     "ghci_lint",
@@ -135,6 +170,19 @@ export function register(server: McpServer, ctx: ToolContext): void {
           }
         }
       } catch { /* non-fatal */ }
+      return { content: [{ type: "text" as const, text: result }] };
+    }
+  );
+
+  server.tool(
+    "ghci_lint_basic",
+    "Run lightweight heuristic lint checks when hlint is unavailable. " +
+      "Reports basic anti-patterns but does NOT satisfy the module-complete lint gate.",
+    {
+      module_path: z.string().describe('Path to the module to lint. Examples: "src/MyModule.hs"'),
+    },
+    async ({ module_path }) => {
+      const result = await handleLintBasic(ctx.getProjectDir(), { module_path });
       return { content: [{ type: "text" as const, text: result }] };
     }
   );

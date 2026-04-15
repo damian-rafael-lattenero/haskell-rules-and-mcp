@@ -167,7 +167,7 @@ describe("Property Lifecycle Integration", () => {
 
   it("should handle remove action permanently", async () => {
     await saveProperty(TEST_PROJECT_DIR, {
-      property: "\\x -> True",
+      property: "\\_ -> True",
       module: "src/TestModule.hs",
     });
     await saveProperty(TEST_PROJECT_DIR, {
@@ -179,7 +179,7 @@ describe("Property Lifecycle Integration", () => {
     const removeResult = JSON.parse(
       await handlePropertyLifecycle(TEST_PROJECT_DIR, {
         action: "remove",
-        property: "\\x -> True",
+        property: "\\_ -> True",
       })
     );
     expect(removeResult.success).toBe(true);

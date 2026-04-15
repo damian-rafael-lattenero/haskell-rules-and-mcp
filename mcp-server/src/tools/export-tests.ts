@@ -11,6 +11,7 @@ import { getActiveProperties, getActiveModuleProperties } from "../property-stor
 import { parseCabalModules } from "../parsers/cabal-parser.js";
 import { handleCabalTest } from "./test.js";
 import { handleValidateCabal } from "./validate-cabal.js";
+import { validatePropertyText } from "../parsers/property-validator.js";
 
 export async function handleExportTests(
   projectDir: string,
@@ -40,6 +41,27 @@ export async function handleExportTests(
         "All saved properties are trivially true (e.g. `\\x -> True`). " +
         "Add meaningful QuickCheck properties before exporting.",
       droppedTrivial: dropped,
+    });
+  }
+
+  const invalidProperties = nonTrivial
+    .map((p) => ({
+      property: p.property,
+      module: p.tests_module ?? p.module,
+      issues: validatePropertyText(p.property).issues,
+    }))
+    .filter((entry) => entry.issues.length > 0);
+
+  if (invalidProperties.length > 0) {
+    return JSON.stringify({
+      success: false,
+      error:
+        "Property store contains invalid entries that are unsafe to export. " +
+        "Use ghci_property_lifecycle(action='deprecate'|'remove') to clean them.",
+      invalidCount: invalidProperties.length,
+      invalidProperties,
+      _nextStep:
+        "Deprecate/remove invalid properties, then rerun ghci_quickcheck to store corrected versions before exporting.",
     });
   }
 

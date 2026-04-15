@@ -32,46 +32,60 @@ describe("Session Corruption E2E", () => {
   });
 
   async function callTool(name: string, args: Record<string, unknown>) {
-    const response = await client.request(
-      { method: "tools/call", params: { name, arguments: args } },
-      { timeout: 60000 }
-    );
-    return response;
+    return client.callTool({ name, arguments: args });
+  }
+
+  function parseResult(result: Awaited<ReturnType<Client["callTool"]>>): any {
+    const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { rawText: text };
+    }
   }
 
   it("handles timeout → corruption → restart flow", async () => {
     // Execute a normal command first
-    const result1 = await callTool("ghci_type", { expression: "map" });
-    expect(result1.content[0].text).toContain("map");
+    const result1 = parseResult(await callTool("ghci_type", { expression: "map" }));
+    expect(result1.success).toBe(true);
+    expect(result1.expression).toBe("map");
+    expect(result1.type ?? result1.raw).toContain("->");
     
     // Cause a timeout with a very short timeout
-    try {
+    const timeoutResult = parseResult(
       await callTool("ghci_eval", {
         expression: "let loop = loop in loop",
-        timeout_ms: 100
-      });
-      expect.fail("Should have thrown timeout error");
-    } catch (error: any) {
-      expect(error.message || error.toString()).toMatch(/timeout|timed out/i);
-    }
+        timeout_ms: 100,
+      })
+    );
+    expect(timeoutResult.success).toBe(false);
+    expect(timeoutResult.error).toMatch(/timeout|timed out/i);
     
     // Wait a bit for recovery
     await new Promise(r => setTimeout(r, 500));
     
     // Next command should auto-recover and work
-    const result2 = await callTool("ghci_type", { expression: "foldr" });
-    expect(result2.content[0].text).toContain("foldr");
+    const result2 = parseResult(await callTool("ghci_type", { expression: "foldr" }));
+    expect(result2.success).toBe(true);
+    expect(result2.expression).toBe("foldr");
+    expect(result2.type ?? result2.raw).toContain("->");
   }, 30000);
 
   it("rejects dangerous batch commands", async () => {
+    let rejectedMessage: string | null = null;
     try {
-      await callTool("ghci_batch", {
+      const response = parseResult(await callTool("ghci_batch", {
         commands: [":t map", ":set +m", ":t foldr"]
-      });
-      expect.fail("Should have rejected dangerous command");
+      }));
+      rejectedMessage =
+        response.error ??
+        response.message ??
+        response.rawText ??
+        JSON.stringify(response);
     } catch (error: any) {
-      expect(error.message || error.toString()).toMatch(/Dangerous GHCi command/i);
+      rejectedMessage = error.message || error.toString();
     }
+    expect(rejectedMessage ?? "").toMatch(/Dangerous GHCi command/i);
     
     // Session should still work after rejection
     const result = await callTool("ghci_type", { expression: "map" });
@@ -79,12 +93,10 @@ describe("Session Corruption E2E", () => {
   });
 
   it("batch execution works normally with safe commands", async () => {
-    const result = await callTool("ghci_batch", {
+    const result = parseResult(await callTool("ghci_batch", {
       commands: [":t map", ":t foldr", "1 + 1"]
-    });
-    
-    const data = JSON.parse(result.content[0].text);
-    expect(data.allSuccess).toBe(true);
-    expect(data.results).toHaveLength(3);
+    }));
+    expect(result.allSuccess).toBe(true);
+    expect(result.results).toHaveLength(3);
   });
 });

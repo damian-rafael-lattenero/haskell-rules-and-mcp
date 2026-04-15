@@ -33,6 +33,8 @@ export interface BundledToolsManifest {
   tools: BundledToolEntry[];
 }
 
+const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
+
 export interface ToolSpec {
   /** Binary name used to check availability with `which`. */
   checkCmd: string;
@@ -103,7 +105,7 @@ export interface EnsureResult {
 }
 
 export interface ResolvedToolBinary {
-  source: "bundled" | "host";
+  source: "bundled" | "host" | "installed";
   binaryPath: string;
   version?: string;
 }
@@ -140,9 +142,10 @@ export async function ensureTool(toolName: string): Promise<EnsureResult> {
     if (downloadResult.success) {
       return {
         available: true,
-        source: "bundled",
+        source: "installed",
         binaryPath: downloadResult.binaryPath,
         version: downloadResult.version,
+        checksumVerified: downloadResult.checksumVerified,
         justInstalled: downloadResult.downloaded,
         message: downloadResult.message,
       };
@@ -258,7 +261,7 @@ export async function getBundledToolStatus(toolName: string): Promise<BundledToo
   }
 
   const checksum = entry.sha256?.trim();
-  if (!checksum) {
+  if (!checksum || !SHA256_PATTERN.test(checksum)) {
     return {
       available: false,
       source: "bundled",

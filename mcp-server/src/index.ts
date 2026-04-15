@@ -23,6 +23,8 @@ import {
   moduleChecklist,
   deriveGuidance,
   workflowHelp,
+  moduleGatesComplete,
+  setStrictWorkflowMode,
 } from "./workflow-state.js";
 
 // Tool register functions
@@ -65,6 +67,8 @@ import { register as registerWatch } from "./tools/watch.js";
 import { register as registerFuzzParser } from "./tools/fuzz-parser.js";
 import { register as registerEquiv } from "./tools/equiv.js";
 import { register as registerPropertyLifecycle } from "./tools/property-lifecycle.js";
+import { register as registerToolchainStatus } from "./tools/toolchain-status.js";
+import { register as registerCoverage } from "./tools/coverage.js";
 
 // Base directory: the project root (parent of mcp-server/)
 const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
@@ -179,6 +183,8 @@ registerWatch(server, ctx);
 registerFuzzParser(server, ctx);
 registerEquiv(server, ctx);
 registerPropertyLifecycle(server, ctx);
+registerToolchainStatus(server, ctx);
+registerCoverage(server, ctx);
 
 // --- Tool: ghci_fix_warning (inline) ---
 server.tool(
@@ -356,10 +362,7 @@ server.tool(
       const modules = [...workflowState.modules.values()];
       const totalProperties = modules.reduce((acc, mod) => acc + mod.propertiesPassed.length, 0);
       const gatesComplete = modules.filter(
-        (mod) =>
-          mod.completionGates.checkModule &&
-          mod.completionGates.lint &&
-          mod.completionGates.format
+        (mod) => moduleGatesComplete(workflowState, mod)
       ).length;
       return {
         content: [{
@@ -369,6 +372,7 @@ server.tool(
             projectDir,
             sessionAlive: ghciSession?.isAlive() ?? false,
             activeModule: workflowState.activeModule,
+            strictMode: workflowState.strictMode,
             modulesTracked: modules.length,
             modulesGateComplete: gatesComplete,
             totalProperties,
@@ -575,8 +579,14 @@ server.tool(
       '"progress": per-module progress (functions, properties). "checklist": TODO list for active module. ' +
       '"help": context-aware guidance with suggested_tools, reasoning, and steps.'
     ),
+    strict: z.boolean().optional().describe(
+      "Optional strict-mode toggle. When true, unavailable lint/format tools remain blocking gates."
+    ),
   },
-  async ({ action }) => {
+  async ({ action, strict }) => {
+    if (strict !== undefined) {
+      setStrictWorkflowMode(workflowState, strict);
+    }
     if (action === "status") {
       return {
         content: [{ type: "text", text: JSON.stringify(serializeState(workflowState)) }],

@@ -176,7 +176,7 @@ describe("handleQuickCheck — retry on stale output", () => {
       },
     });
     const result = JSON.parse(
-      await handleQuickCheck(session, { property: "\\x -> True" })
+      await handleQuickCheck(session, { property: "\\_ -> True" })
     );
     expect(result.success).toBe(true);
     expect(callCount).toBe(1); // No retry — QC output was valid
@@ -201,9 +201,9 @@ describe("handleQuickCheck — lambda escaping normalization (Bug 7)", () => {
         return { output: "", success: true };
       },
     });
-    await handleQuickCheck(session, { property: "\\pos c -> True" });
+    await handleQuickCheck(session, { property: "\\_ _ -> True" });
     // The lambda should be wrapped in parens inside the let-binding
-    expect(capturedLetCmd).toContain("(\\pos c -> True)");
+    expect(capturedLetCmd).toContain("(\\_ _ -> True)");
   });
 
   it("compilation error in property is flagged, not counted as logic failure", async () => {

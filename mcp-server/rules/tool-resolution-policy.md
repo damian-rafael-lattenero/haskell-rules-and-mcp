@@ -28,7 +28,7 @@ In short:
 Tool handlers that depend on optional binaries should return structured metadata:
 
 - `available` (boolean)
-- `source` (`host` | `bundled` | `none`)
+- `source` (`host` | `bundled` | `installed` | `none`)
 - `binaryPath` (when available)
 - `version` (when available)
 - `reason` (when unavailable, e.g. `binary-missing`, `checksum-mismatch`, `entry-missing`)
@@ -41,9 +41,13 @@ When tool resolution fails:
 
 - `ghci_lint`:
   - returns unavailable with machine-readable reason
-  - guidance marks lint as recommended/non-blocking when unavailable
+  - guidance marks lint as recommended/non-blocking when unavailable **unless strict mode is enabled**
 - `ghci_format`:
   - same as lint
+- `ghci_lint_basic`:
+  - explicit degraded heuristic fallback
+  - must report `degraded=true` and `gateEligible=false`
+  - must not silently mark lint gate complete
 - `ghci_hls`:
   - `available=false` for HLS-specific operations
   - users still use compiler diagnostics via `ghci_load(diagnostics=true)`
@@ -94,7 +98,7 @@ CI should verify:
 
 - No silent fallback that changes semantics without metadata
 - No fake success responses
-- No blocking workflow step when tool is optional and unavailable
+- No silent bypass in strict mode (unavailable optional tools can remain blocking if strict is on)
 - No manual user intervention required to choose host vs bundled in normal operation
 
 ## Auto-Download Extension (Updated)
@@ -121,5 +125,6 @@ Windows users must install tools via ghcup or stack.
 
 - Downloads occur on first use when tool is not in PATH and not bundled
 - Binaries are cached in `vendor-tools/` after download
-- SHA256 checksums are verified post-download
+- SHA256 checksums are verified post-download when metadata is available
 - Failed downloads degrade gracefully to unavailable state
+- Use `ghci_toolchain_status` to diagnose release matrix/checksum/runtime resolution end-to-end

@@ -7,6 +7,19 @@ const SENTINEL = "<<<GHCi-DONE-7f3a2b>>>";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const STARTUP_TIMEOUT_MS = 90_000;
 
+function startupLooksReady(output: string): boolean {
+  if (
+    output.includes("Ok,") ||
+    output.includes("Ok.") ||
+    output.includes("Loaded GHCi")
+  ) {
+    return true;
+  }
+  // Prompt-based readiness fallback (covers cases where Cabal/GHCi output
+  // does not include "Ok," after crash/restart flows).
+  return /(?:^|\n)(?:ghci|Prelude|\*?[A-Za-z0-9_.']+)> ?$/m.test(output);
+}
+
 export interface GhciResult {
   output: string;
   success: boolean;
@@ -63,24 +76,27 @@ export class GhciSession extends EventEmitter {
     const target = this.libraryTarget ?? `lib:${await parseCabalPackageName(this.projectDir)}`;
 
     return new Promise<void>((resolve, reject) => {
-      this.process = spawn("cabal", ["repl", target], {
+      const proc = spawn("cabal", ["repl", target], {
         cwd: this.projectDir,
         env,
         stdio: ["pipe", "pipe", "pipe"],
       });
+      this.process = proc;
 
       let startupBuffer = "";
       let startupStderr = "";
       let settled = false;
 
       const onStartupData = (data: Buffer) => {
+        if (settled || this.process !== proc) return;
         startupBuffer += data.toString();
         // GHCi is ready when we see the prompt after loading
-        if (startupBuffer.includes("Ok,") || startupBuffer.includes("Ok.") || startupBuffer.includes("Loaded GHCi")) {
-          this.process!.stdout!.removeListener("data", onStartupData);
-          this.process!.stderr!.removeListener("data", onStartupStderr);
+        if (startupLooksReady(startupBuffer)) {
+          if (!proc.stdin?.writable) return;
+          proc.stdout?.removeListener("data", onStartupData);
+          proc.stderr?.removeListener("data", onStartupStderr);
           // Remove the startup-only exit handler before installing the permanent one
-          this.process!.removeListener("exit", onStartupExit);
+          proc.removeListener("exit", onStartupExit);
           this.setupHandlers();
           this.initSession().then(() => {
             this.ready = true;
@@ -94,6 +110,7 @@ export class GhciSession extends EventEmitter {
       };
 
       const onStartupStderr = (data: Buffer) => {
+        if (settled || this.process !== proc) return;
         startupStderr += data.toString();
       };
 
@@ -118,10 +135,10 @@ export class GhciSession extends EventEmitter {
         this.emit("exit", code);
       };
 
-      this.process.stdout!.on("data", onStartupData);
-      this.process.stderr!.on("data", onStartupStderr);
+      proc.stdout?.on("data", onStartupData);
+      proc.stderr?.on("data", onStartupStderr);
 
-      this.process.on("error", (err) => {
+      proc.on("error", (err) => {
         this.ready = false;
         if (!settled) {
           settled = true;
@@ -129,13 +146,13 @@ export class GhciSession extends EventEmitter {
         }
       });
 
-      this.process.on("exit", onStartupExit);
+      proc.on("exit", onStartupExit);
 
       // Timeout for startup — 90s to allow first-time cabal dependency resolution
       setTimeout(() => {
         if (!settled) {
           settled = true;
-          this.kill();
+          void this.kill();
           reject(
             new Error(
               `GHCi startup timed out after ${STARTUP_TIMEOUT_MS / 1000}s. stdout: ${startupBuffer}, stderr: ${startupStderr}`
@@ -373,10 +390,10 @@ export class GhciSession extends EventEmitter {
         // Mark session as corrupted on timeout
         this.sessionHealth = 'corrupted';
         this.clearPending();
-        
-        // Auto-kill the process to prevent zombie state
-        if (this.process) {
-          this.process.kill('SIGTERM');
+
+        // Interrupt long-running evaluation so restart can shut down cleanly.
+        if (this.process && this.process.exitCode === null && !this.process.killed) {
+          this.process.kill("SIGINT");
         }
         
         reject(
@@ -561,7 +578,7 @@ export class GhciSession extends EventEmitter {
    */
   async executeBatch(
     commands: string[],
-    options?: { stopOnError?: boolean; reload?: boolean }
+    options?: { stopOnError?: boolean; reload?: boolean; timeoutMs?: number }
   ): Promise<{ results: GhciResult[]; allSuccess: boolean }> {
     const results: GhciResult[] = [];
     const stopOnError = options?.stopOnError ?? false;
@@ -578,7 +595,7 @@ export class GhciSession extends EventEmitter {
     }
 
     for (const cmd of commands) {
-      const result = await this.execute(cmd);
+      const result = await this.execute(cmd, options?.timeoutMs);
       results.push(result);
       if (stopOnError && !result.success) {
         break;
@@ -623,7 +640,7 @@ export class GhciSession extends EventEmitter {
           proc.kill("SIGKILL");
         }
         resolve();
-      }, 5000);
+      }, 1500);
       
       proc.once("exit", () => {
         clearTimeout(forceKillTimeout);

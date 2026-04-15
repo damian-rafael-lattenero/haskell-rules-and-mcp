@@ -12,17 +12,42 @@ import {
   deprecateProperty,
   type PropertyRecord,
 } from "../property-store.js";
+import { validatePropertyText } from "../parsers/property-validator.js";
 
 export async function handlePropertyLifecycle(
   projectDir: string,
   args: {
-    action: "list" | "remove" | "deprecate" | "replace";
+    action: "list" | "audit" | "remove" | "deprecate" | "replace";
     property?: string;
     module?: string;
     replaced_by?: string;
     reason?: string;
   }
 ): Promise<string> {
+  if (args.action === "audit") {
+    const properties = args.module
+      ? await getModuleProperties(projectDir, args.module)
+      : await getAllProperties(projectDir);
+    const invalid = properties
+      .map((prop) => ({
+        property: prop.property,
+        module: prop.tests_module ?? prop.module,
+        issues: validatePropertyText(prop.property).issues,
+      }))
+      .filter((entry) => entry.issues.length > 0);
+    return JSON.stringify({
+      success: true,
+      action: "audit",
+      count: properties.length,
+      invalidCount: invalid.length,
+      invalid,
+      _nextStep:
+        invalid.length > 0
+          ? "Deprecate/remove invalid properties with ghci_property_lifecycle and re-run ghci_quickcheck to store fixed versions."
+          : "No invalid properties detected in the store.",
+    });
+  }
+
   if (args.action === "list") {
     const properties = args.module
       ? await getModuleProperties(projectDir, args.module)
@@ -160,9 +185,10 @@ export function register(server: McpServer, ctx: ToolContext): void {
     "Manage QuickCheck property lifecycle: list, remove, deprecate, or replace properties. " +
       "Use this to clean up obsolete properties, mark properties as deprecated, or link old properties to replacements.",
     {
-      action: z.enum(["list", "remove", "deprecate", "replace"]).describe(
+      action: z.enum(["list", "audit", "remove", "deprecate", "replace"]).describe(
         "Action to perform: " +
           "'list' shows all properties (optionally filtered by module), " +
+          "'audit' validates persisted properties and reports unsafe ones, " +
           "'remove' permanently deletes a property, " +
           "'deprecate' marks a property as deprecated (filters from exports), " +
           "'replace' deprecates old property and links to new one"

@@ -197,7 +197,7 @@ describe("ghci_quickcheck module parameter", () => {
     await handleQuickCheck(
       session,
       {
-        property: "\\e -> eval [] (Lit n) == Right n",
+        property: "\\n -> eval [] (Lit n) == Right n",
         module_path: "src/Expr/Syntax.hs",
         tests_module: "src/Expr/Eval.hs",
       },

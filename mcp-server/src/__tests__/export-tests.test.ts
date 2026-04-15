@@ -143,7 +143,7 @@ describe("handleExportTests", () => {
 
   describe("handleExportTests — trivial filtering", () => {
     it("drops trivial properties and reports count", async () => {
-      await saveProperty(tmpDir, { property: "\\x -> True", module: "src/Lib.hs" });
+      await saveProperty(tmpDir, { property: "\\_ -> True", module: "src/Lib.hs" });
       await saveProperty(tmpDir, { property: "\\x -> x == x", module: "src/Lib.hs" });
 
       const result = JSON.parse(await handleExportTests(tmpDir, { validate_test_suite: false }));
@@ -153,7 +153,7 @@ describe("handleExportTests", () => {
     });
 
     it("returns error when ALL properties are trivial", async () => {
-      await saveProperty(tmpDir, { property: "\\x -> True", module: "src/Lib.hs" });
+      await saveProperty(tmpDir, { property: "\\_ -> True", module: "src/Lib.hs" });
       await saveProperty(tmpDir, { property: "const True", module: "src/Lib.hs" });
 
       const result = JSON.parse(await handleExportTests(tmpDir, { validate_test_suite: false }));

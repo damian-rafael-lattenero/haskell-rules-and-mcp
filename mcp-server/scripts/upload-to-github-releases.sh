@@ -72,21 +72,25 @@ upload_binary() {
 # Upload hlint
 upload_binary "hlint" "darwin" "arm64" "hlint"
 upload_binary "hlint" "darwin" "x64" "hlint"
+upload_binary "hlint" "linux" "arm64" "hlint"
 upload_binary "hlint" "linux" "x64" "hlint"
 
 # Upload fourmolu
 upload_binary "fourmolu" "darwin" "arm64" "fourmolu"
 upload_binary "fourmolu" "darwin" "x64" "fourmolu"
+upload_binary "fourmolu" "linux" "arm64" "fourmolu"
 upload_binary "fourmolu" "linux" "x64" "fourmolu"
 
 # Upload ormolu
 upload_binary "ormolu" "darwin" "arm64" "ormolu"
 upload_binary "ormolu" "darwin" "x64" "ormolu"
+upload_binary "ormolu" "linux" "arm64" "ormolu"
 upload_binary "ormolu" "linux" "x64" "ormolu"
 
 # Upload hls
 upload_binary "hls" "darwin" "arm64" "haskell-language-server-wrapper"
 upload_binary "hls" "darwin" "x64" "haskell-language-server-wrapper"
+upload_binary "hls" "linux" "arm64" "haskell-language-server-wrapper"
 upload_binary "hls" "linux" "x64" "haskell-language-server-wrapper"
 
 echo ""

@@ -232,15 +232,20 @@ export async function handleHls(
 ): Promise<string> {
   if (args.action === "available") {
     const resolved = await ensureTool("hls");
-    const version = await hlsVersion(resolved?.binaryPath ?? "haskell-language-server-wrapper");
-    if (version) {
+    if (resolved.available) {
+      const version = await hlsVersion(resolved.binaryPath ?? "haskell-language-server-wrapper");
       return JSON.stringify({
         success: true,
         action: "available",
         available: true,
-        version,
+        binaryResolved: true,
+        versionProbeOk: Boolean(version),
+        ...(version ? { version } : {}),
         source: resolved?.source ?? "host",
         binaryPath: resolved?.binaryPath,
+        ...(resolved.checksumVerified !== undefined
+          ? { checksumVerified: resolved.checksumVerified }
+          : {}),
         _hint: "HLS is available. Use action='hover' to get type info at a position.",
       });
     }
@@ -248,7 +253,10 @@ export async function handleHls(
       success: true,
       action: "available",
       available: false,
+      binaryResolved: false,
+      versionProbeOk: false,
       source: "none",
+      ...(resolved.error ? { error: resolved.error } : {}),
       _hint:
         "HLS is not available (not found in host PATH or bundled toolchain).",
     });

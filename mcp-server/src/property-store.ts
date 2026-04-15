@@ -6,6 +6,7 @@
  */
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { validatePropertyText } from "./parsers/property-validator.js";
 
 export interface PropertyRecord {
   property: string;
@@ -68,6 +69,12 @@ export async function saveProperty(
     tests_module?: string;
   }
 ): Promise<void> {
+  const validation = validatePropertyText(record.property);
+  if (!validation.ok) {
+    throw new Error(
+      `Refusing to save invalid property: ${validation.issues.map((i) => i.message).join("; ")}`
+    );
+  }
   const store = await loadStore(projectDir);
   // Deduplicate by property string — a property is unique regardless of which
   // module it was run from. Prevents duplicates from batch vs individual runs.

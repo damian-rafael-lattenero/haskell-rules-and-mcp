@@ -7,9 +7,10 @@
 - `ghci_init` now seeds `containers` and QuickCheck by default so Map-heavy projects don't start in a broken state
 - Build tool: Cabal by default; pass `build_tool="stack"` to `ghci_init` for Stack projects
 - MCP toolchain resolution for `hlint`, `fourmolu`/`ormolu`, and `hls` is:
-  **host PATH first, then bundled binary**.
+  **host PATH first, then bundled binary, then auto-download**.
 - Always check `source` and `binaryPath` fields in tool responses when diagnosing
   lint/format/HLS behavior.
+- Use `ghci_toolchain_status` to capture runtime + cross-platform matrix diagnostics before changing release metadata.
 
 ## Import Style
 - Qualified imports for Map/Set (e.g., `import qualified Data.Map.Strict as Map`)
@@ -53,6 +54,8 @@
 - `ghci_quickcheck_export` auto-adds qualified imports (`Data.Map.Strict`, `Data.Set`, etc.)
   based on what the properties actually use — no manual import editing needed in `Spec.hs`
 - `ghci_quickcheck_export` validates the exported suite with `cabal_test` by default
+- `ghci_quickcheck` rejects unsafe properties (e.g., unused binders) before persistence
+- Run `ghci_property_lifecycle(action="audit")` to find invalid persisted properties before export
 - Use `ghci_fuzz_parser(parser="...")` when parser robustness or malformed-input handling matters
 
 ## Refactoring
@@ -96,6 +99,7 @@
 - HLS resolution is host-first, then bundled, then auto-download. MCP handles installation automatically.
 - If unavailable, provide the binary in host PATH or bundled toolchain and retry.
 - For all compilation diagnostics: prefer `ghci_load(diagnostics=true)` — it doesn't require HLS
+- Strict mode (`ghci_workflow(..., strict=true)`) keeps unavailable lint/format as blocking gates.
 
 ## Bundled Toolchain Maintenance
 - Bundled binaries are tracked in `vendor-tools/bundled-tools-manifest.json`.
@@ -103,7 +107,12 @@
   `npm run tools:update-manifest -- --tool <name> --platform <platform> --arch <arch> --version <version> --provenance <url>`
 - Maintain production-ready entries with real `sha256`, `version`, and `provenance`.
 - When a bundled tool is unavailable, `ghci_lint` / `ghci_format` become recommended but not blocking in `_guidance`.
+- `ghci_lint_basic` is a degraded fallback for hints only and does not satisfy lint gate completion.
 - Run unit/integration/e2e test suites after updating bundled binaries or workflow policy.
+
+## Coverage
+- Use `cabal_coverage` near session close to collect structured HPC percentages.
+- Treat coverage threshold checks as CI policy, not ad-hoc manual judgment.
 
 ## MCP Maintenance Policy
 - Every MCP code change must carry unit, integration, and e2e coverage unless a stronger justification is documented.

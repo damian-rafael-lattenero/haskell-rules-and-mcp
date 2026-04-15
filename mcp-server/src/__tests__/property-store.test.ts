@@ -94,7 +94,7 @@ describe("property-store", () => {
 
   it("saveProperty stores tests_module when provided", async () => {
     await saveProperty(tmpDir, {
-      property: "\\e -> eval [] (Lit n) == Right n",
+      property: "\\n -> eval [] (Lit n) == Right n",
       module: "src/Expr/Syntax.hs",
       tests_module: "src/Expr/Eval.hs",
     });

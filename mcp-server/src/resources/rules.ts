@@ -32,11 +32,14 @@ Lost? Not sure what to do next? → ghci_workflow(action="help") for contextual 
 - ghci_arbitrary for new data types — don't write Arbitrary instances by hand
 - ghci_regression(action="run") at session start on existing projects
 - Follow _guidance in tool responses
+- Use ghci_workflow(action="status", strict=true) in CI-like runs when lint/format gates must stay blocking
 
 ## TOOLCHAIN
-- Resolution order: host PATH -> bundled binary
+- Resolution order: host PATH -> bundled binary -> auto-download -> unavailable
 - ghci_lint / ghci_format / ghci_hls report source, binaryPath, and version when available
-- If ghci_lint / ghci_format are unavailable, guidance downgrades them to recommended but not blocking
+- ghci_toolchain_status reports runtime + release/checksum matrix diagnostics
+- ghci_lint_basic is degraded fallback and does not satisfy lint gate completion
+- If ghci_lint / ghci_format are unavailable, guidance downgrades only when strict mode is off
 
 ## WHEN → TOOL → WHY
 
@@ -45,7 +48,9 @@ Lost? Not sure what to do next? → ghci_workflow(action="help") for contextual 
 |------|------|-----|
 | Start of session | ghci_session(status) | Verify MCP is alive |
 | Lost / unsure what to do | ghci_workflow(action="help") | Context-aware next steps |
+| Diagnose optional tooling | ghci_toolchain_status(include_matrix=true) | Runtime + release/checksum diagnostics |
 | Clean obsolete properties | ghci_property_lifecycle(action="list") | See all saved properties |
+| Audit stored properties | ghci_property_lifecycle(action="audit") | Detect invalid persisted properties |
 | Remove old property | ghci_property_lifecycle(action="remove", property="...") | Delete from store |
 | Deprecate property | ghci_property_lifecycle(action="deprecate", property="...", reason="...") | Mark as deprecated (filters from exports) |
 | Replace property | ghci_property_lifecycle(action="replace", property="old", replaced_by="new") | Link old to new version |
@@ -83,13 +88,14 @@ Lost? Not sure what to do next? → ghci_workflow(action="help") for contextual 
 | When | Tool | Why |
 |------|------|-----|
 | Session on existing project | ghci_regression(action="run") | Re-run saved properties |
-| Before next module | ghci_check_module, ghci_lint, ghci_format(write=true) | Quality gate; lint/format become recommended if unavailable |
+| Before next module | ghci_check_module, ghci_lint, ghci_format(write=true) | Quality gate; lint/format can degrade only when strict mode is off |
 
 ### Session close
 | When | Tool | Why |
 |------|------|-----|
 | After all modules pass | ghci_quickcheck_export(output_path="test/Spec.hs") | Generate persistent test suite (auto-filters deprecated properties) |
 | After export | cabal_test | Validate exported tests actually run |
+| Coverage verification | cabal_coverage(min_percent=80) | Structured HPC percentages |
 | After tests | cabal_build | Verify full package compilation |
 
 ### Performance analysis
@@ -150,7 +156,9 @@ const CONVENTIONS_FALLBACK = `# Haskell Project Conventions
 - Use ghci_trace when QuickCheck returns a counterexample
 - Use ghci_fuzz_parser(parser="...") for malformed-input parser checks
 - ghci_quickcheck_export validates with cabal_test by default and auto-filters deprecated properties
+- ghci_quickcheck validates properties pre-save and rejects unsafe lambdas (unused binders)
 - Use ghci_property_lifecycle to manage property lifecycle (list/remove/deprecate/replace)
+- Use ghci_property_lifecycle(action="audit") before export to detect invalid persisted properties
 - Deprecate old properties instead of deleting to maintain audit trail
 
 ## MCP Maintenance

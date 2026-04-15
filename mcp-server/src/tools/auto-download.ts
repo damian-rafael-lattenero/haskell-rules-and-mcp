@@ -19,7 +19,7 @@ type SupportedArch = "x64" | "arm64";
 interface ToolRelease {
   version: string;
   url: string;
-  sha256: string;
+  sha256?: string;
   binaryName: string;
 }
 
@@ -42,19 +42,19 @@ const GITHUB_RELEASES: Record<
     "darwin-x64": {
       version: "v3.10",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-darwin-x64",
-      sha256: "PENDING_CHECKSUM_DARWIN_X64",
+      sha256: undefined,
       binaryName: "hlint",
     },
     "linux-x64": {
       version: "v3.10",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-linux-x64",
-      sha256: "PENDING_CHECKSUM_LINUX_X64",
+      sha256: undefined,
       binaryName: "hlint",
     },
     "linux-arm64": {
       version: "v3.10",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-linux-arm64",
-      sha256: "PENDING_CHECKSUM_LINUX_ARM64",
+      sha256: undefined,
       binaryName: "hlint",
     },
   },
@@ -68,19 +68,19 @@ const GITHUB_RELEASES: Record<
     "darwin-x64": {
       version: "v0.19.0.1",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-darwin-x64",
-      sha256: "PENDING_CHECKSUM_DARWIN_X64",
+      sha256: undefined,
       binaryName: "fourmolu",
     },
     "linux-x64": {
       version: "v0.19.0.1",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-linux-x64",
-      sha256: "PENDING_CHECKSUM_LINUX_X64",
+      sha256: undefined,
       binaryName: "fourmolu",
     },
     "linux-arm64": {
       version: "v0.19.0.1",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-linux-arm64",
-      sha256: "PENDING_CHECKSUM_LINUX_ARM64",
+      sha256: undefined,
       binaryName: "fourmolu",
     },
   },
@@ -94,19 +94,19 @@ const GITHUB_RELEASES: Record<
     "darwin-x64": {
       version: "v0.7.7.0",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-darwin-x64",
-      sha256: "PENDING_CHECKSUM_DARWIN_X64",
+      sha256: undefined,
       binaryName: "ormolu",
     },
     "linux-x64": {
       version: "v0.7.7.0",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-linux-x64",
-      sha256: "PENDING_CHECKSUM_LINUX_X64",
+      sha256: undefined,
       binaryName: "ormolu",
     },
     "linux-arm64": {
       version: "v0.7.7.0",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-linux-arm64",
-      sha256: "PENDING_CHECKSUM_LINUX_ARM64",
+      sha256: undefined,
       binaryName: "ormolu",
     },
   },
@@ -120,19 +120,19 @@ const GITHUB_RELEASES: Record<
     "darwin-x64": {
       version: "v2.13.0.0",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-darwin-x64",
-      sha256: "PENDING_CHECKSUM_DARWIN_X64",
+      sha256: undefined,
       binaryName: "haskell-language-server-wrapper",
     },
     "linux-x64": {
       version: "v2.13.0.0",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-linux-x64",
-      sha256: "PENDING_CHECKSUM_LINUX_X64",
+      sha256: undefined,
       binaryName: "haskell-language-server-wrapper",
     },
     "linux-arm64": {
       version: "v2.13.0.0",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-linux-arm64",
-      sha256: "PENDING_CHECKSUM_LINUX_ARM64",
+      sha256: undefined,
       binaryName: "haskell-language-server-wrapper",
     },
   },
@@ -175,8 +175,17 @@ export interface AutoDownloadResult {
   version?: string;
   downloaded?: boolean;
   cached?: boolean;
+  checksumVerified?: boolean;
+  checksumState?: "verified" | "missing";
   error?: string;
   message: string;
+}
+
+const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
+
+function hasVerifiableChecksum(release: ToolRelease): boolean {
+  if (!release.sha256) return false;
+  return SHA256_PATTERN.test(release.sha256.trim());
 }
 
 /**
@@ -211,12 +220,26 @@ export async function autoDownloadTool(tool: SupportedTool): Promise<AutoDownloa
       // Already executable or can't change permissions
     }
     
+    const verifyCached = hasVerifiableChecksum(release);
+    if (verifyCached) {
+      const actualSHA = await computeSHA256(binaryPath);
+      if (actualSHA !== release.sha256!.trim()) {
+        throw new Error(
+          `Cached binary checksum mismatch: expected ${release.sha256}, got ${actualSHA}`
+        );
+      }
+    }
+
     return {
       success: true,
       binaryPath,
       version: release.version,
       cached: true,
-      message: `Using cached ${tool} ${release.version}`,
+      checksumVerified: verifyCached,
+      checksumState: verifyCached ? "verified" : "missing",
+      message: verifyCached
+        ? `Using cached ${tool} ${release.version} (checksum verified)`
+        : `Using cached ${tool} ${release.version} (checksum metadata missing)`,
     };
   } catch {
     // Binary doesn't exist - download it
@@ -232,8 +255,9 @@ export async function autoDownloadTool(tool: SupportedTool): Promise<AutoDownloa
     // Make executable
     await chmod(tempPath, 0o755);
     
-    // Verify checksum if provided
-    if (release.sha256) {
+    // Verify checksum if provided and valid hex digest
+    const verifyDownloaded = hasVerifiableChecksum(release);
+    if (verifyDownloaded) {
       const actualSHA = await computeSHA256(tempPath);
       if (actualSHA !== release.sha256) {
         throw new Error(`Checksum mismatch: expected ${release.sha256}, got ${actualSHA}`);
@@ -249,7 +273,11 @@ export async function autoDownloadTool(tool: SupportedTool): Promise<AutoDownloa
       binaryPath,
       version: release.version,
       downloaded: true,
-      message: `Downloaded ${tool} ${release.version} (first time setup)`,
+      checksumVerified: verifyDownloaded,
+      checksumState: verifyDownloaded ? "verified" : "missing",
+      message: verifyDownloaded
+        ? `Downloaded ${tool} ${release.version} (first time setup, checksum verified)`
+        : `Downloaded ${tool} ${release.version} (first time setup, checksum metadata missing)`,
     };
   } catch (error) {
     return {
@@ -268,4 +296,40 @@ export function canAutoDownload(tool: SupportedTool): boolean {
   const arch = process.arch as SupportedArch;
   const target = `${platform}-${arch}` as const;
   return GITHUB_RELEASES[tool]?.[target] !== undefined;
+}
+
+export interface ToolchainTupleStatus {
+  tool: SupportedTool;
+  target: `${SupportedPlatform}-${SupportedArch}`;
+  autoDownloadConfigured: boolean;
+  checksumConfigured: boolean;
+  url?: string;
+  version?: string;
+}
+
+export function getToolchainTupleMatrix(): ToolchainTupleStatus[] {
+  const targets: Array<`${SupportedPlatform}-${SupportedArch}`> = [
+    "darwin-arm64",
+    "darwin-x64",
+    "linux-arm64",
+    "linux-x64",
+    "win32-arm64",
+    "win32-x64",
+  ];
+  const tools: SupportedTool[] = ["hlint", "fourmolu", "ormolu", "hls"];
+  const rows: ToolchainTupleStatus[] = [];
+  for (const tool of tools) {
+    for (const target of targets) {
+      const release = GITHUB_RELEASES[tool]?.[target];
+      rows.push({
+        tool,
+        target,
+        autoDownloadConfigured: release !== undefined,
+        checksumConfigured: release ? hasVerifiableChecksum(release) : false,
+        url: release?.url,
+        version: release?.version,
+      });
+    }
+  }
+  return rows;
 }

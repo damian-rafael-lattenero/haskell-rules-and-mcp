@@ -238,7 +238,7 @@ function generateSimpleInstance(
     if (ctor.fields.length === 0) {
       return `    pure ${ctor.name}`;
     }
-    const parts = [ctor.name, ...ctor.fields.map(() => "arbitrary")];
+    const parts = [ctor.name, ...ctor.fields.map((field) => selectFieldGenerator(ctor.name, field, false))];
     return `    ${parts[0]} <$> ${parts.slice(1).join(" <*> ")}`;
   });
 
@@ -309,7 +309,9 @@ function generateRecursiveInstance(
       return `pure ${ctor.name}`;
     }
     const fieldGens = ctor.fields.map((f) =>
-      useSub && fieldContainsType(f, baseName) ? "sub" : "arbitrary"
+      useSub && fieldContainsType(f, baseName)
+        ? "sub"
+        : selectFieldGenerator(ctor.name, f, false)
     );
     return `${ctor.name} <$> ${fieldGens.join(" <*> ")}`;
   };
@@ -339,6 +341,18 @@ function generateRecursiveInstance(
     `      go n = let sub = resize (n \`div\` ${k}) arbitrary\n` +
     `             in ${formatOneof(recursiveItems)}`
   );
+}
+
+function selectFieldGenerator(
+  constructorName: string,
+  fieldType: string,
+  _recursive: boolean
+): string {
+  const normalized = fieldType.replace(/\s+/g, " ").trim();
+  if (normalized === "String" && /(var|name|ident|key)/i.test(constructorName)) {
+    return 'elements ["x","y","z","foo","bar"]';
+  }
+  return "arbitrary";
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
