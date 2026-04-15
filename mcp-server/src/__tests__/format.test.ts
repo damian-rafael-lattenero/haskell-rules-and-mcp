@@ -20,15 +20,13 @@ describe("handleFormat", () => {
     tmpDirs.length = 0;
   });
 
-  it("returns error when formatting fails (formatter available via auto-download)", async () => {
+  it("returns error when formatter is not available", async () => {
     const result = JSON.parse(await handleFormat("/tmp/fake", { module_path: "src/Test.hs" }));
-    // With auto-download, formatters are now available on-demand
-    // This test verifies that formatter is available but fails on invalid path
+    // Formatter not available in test environment (no host installation, no bundled binary)
     expect(result.success).toBe(false);
     expect(result.formatter).toMatch(/fourmolu|ormolu/);
-    expect(result.error).toBe("Formatting failed");
-    // unavailable is NOT set because formatter IS available (just failed to run)
-    expect(result.unavailable).toBeUndefined();
+    expect(result.error).toContain("No formatter available");
+    expect(result.unavailable).toBe(true);
   });
 
   it("does not modify file when formatter is unavailable", async () => {

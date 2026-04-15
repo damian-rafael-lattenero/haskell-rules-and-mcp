@@ -218,6 +218,9 @@ export class GhciSession extends EventEmitter {
     await this.executeInternal(":set -XScopedTypeVariables");
     await this.executeInternal(":set -XTypeApplications");
     await this.executeInternal(":set -XOverloadedStrings");
+    
+    // Disable warnings for cleaner output (especially for equiv checks)
+    await this.executeInternal(":set -w");
   }
 
   /**
@@ -613,7 +616,19 @@ export class GhciSession extends EventEmitter {
         resolve();
         return;
       }
-      proc.once("exit", () => resolve());
+      
+      // Set a timeout for force kill
+      const forceKillTimeout = setTimeout(() => {
+        if (proc.exitCode === null && !proc.killed) {
+          proc.kill("SIGKILL");
+        }
+        resolve();
+      }, 5000);
+      
+      proc.once("exit", () => {
+        clearTimeout(forceKillTimeout);
+        resolve();
+      });
       proc.kill("SIGTERM");
     });
   }

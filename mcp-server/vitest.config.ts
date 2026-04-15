@@ -10,6 +10,9 @@ export default defineConfig({
     ],
     globals: true,
     testTimeout: 30000,
+    // Run tests with limited concurrency to reduce dist-newstyle conflicts
+    maxConcurrency: 1,
+    fileParallelism: false,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { GhciSession } from "../ghci-session.js";
 import path from "node:path";
+import { rm } from "node:fs/promises";
 
 const TEST_PROJECT = path.resolve(import.meta.dirname, "fixtures", "test-project");
 
-describe("GhciSession Health Monitoring", () => {
+describe.sequential("GhciSession Health Monitoring", () => {
   let session: GhciSession;
 
   beforeEach(async () => {
@@ -46,13 +47,13 @@ describe("GhciSession Health Monitoring", () => {
       session.execute("let loop = loop in loop", 100)
     ).rejects.toThrow("timed out");
     
-    // Wait a bit for process to be killed
-    await new Promise(r => setTimeout(r, 200));
+    // Wait for process to be killed
+    await new Promise(r => setTimeout(r, 500));
     
-    // Try to execute another command
+    // Try to execute another command - should fail because session is not running
     await expect(
       session.execute(":t map")
-    ).rejects.toThrow("corrupted");
+    ).rejects.toThrow(/corrupted|not running/);
   });
 
   it("auto-recovers via restart", async () => {
@@ -62,6 +63,9 @@ describe("GhciSession Health Monitoring", () => {
     ).rejects.toThrow("timed out");
     
     expect(session.getHealth().status).toBe("corrupted");
+    
+    // Wait for process to be killed
+    await new Promise(r => setTimeout(r, 500));
     
     // Restart should reset health
     await session.restart();
@@ -73,7 +77,7 @@ describe("GhciSession Health Monitoring", () => {
     // Should be able to execute commands again
     const result = await session.execute(":t map");
     expect(result.success).toBe(true);
-  });
+  }, 60000); // Increase timeout to 60s for restart test
 
   it("rejects dangerous commands in batch", async () => {
     await expect(

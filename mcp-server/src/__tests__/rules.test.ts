@@ -3,8 +3,8 @@ import { RULES_REGISTRY, loadRule } from "../resources/rules.js";
 import { createRulesChecker } from "../tools/registry.js";
 
 describe("RULES_REGISTRY", () => {
-  it("has 2 rules (workflow + conventions)", () => {
-    expect(RULES_REGISTRY).toHaveLength(2);
+  it("has 3 rules (workflow + conventions + session-management)", () => {
+    expect(RULES_REGISTRY).toHaveLength(3);
   });
 
   it("each rule has required fields", () => {

@@ -20,18 +20,24 @@ export async function checkEquivalence(
   context?: Record<string, string>
 ): Promise<EquivResult> {
   try {
-    // Construct environment if context is provided
-    let envSetup = '';
-    if (context) {
-      const bindings = Object.entries(context)
-        .map(([k, v]) => `let ${k} = ${v}`)
-        .join('; ');
-      envSetup = bindings + '; ';
+    // Set up context bindings if provided
+    if (context && Object.keys(context).length > 0) {
+      for (const [k, v] of Object.entries(context)) {
+        const bindResult = await session.execute(`let ${k} = ${v}`);
+        if (!bindResult.success) {
+          return {
+            equivalent: false,
+            reason: `Failed to bind ${k} = ${v}: ${bindResult.output}`,
+            expr1Result: '',
+            expr2Result: ''
+          };
+        }
+      }
     }
 
     // Evaluate both expressions
-    const result1 = await session.execute(`${envSetup}${expr1}`);
-    const result2 = await session.execute(`${envSetup}${expr2}`);
+    const result1 = await session.execute(expr1);
+    const result2 = await session.execute(expr2);
 
     // Check if both evaluations succeeded
     if (!result1.success || !result2.success) {
