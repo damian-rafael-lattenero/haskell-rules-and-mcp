@@ -45,6 +45,10 @@ Lost? Not sure what to do next? → ghci_workflow(action="help") for contextual 
 |------|------|-----|
 | Start of session | ghci_session(status) | Verify MCP is alive |
 | Lost / unsure what to do | ghci_workflow(action="help") | Context-aware next steps |
+| Clean obsolete properties | ghci_property_lifecycle(action="list") | See all saved properties |
+| Remove old property | ghci_property_lifecycle(action="remove", property="...") | Delete from store |
+| Deprecate property | ghci_property_lifecycle(action="deprecate", property="...", reason="...") | Mark as deprecated (filters from exports) |
+| Replace property | ghci_property_lifecycle(action="replace", property="old", replaced_by="new") | Link old to new version |
 
 ### Project / dependency management
 | When | Tool | Why |
@@ -64,7 +68,9 @@ Lost? Not sure what to do next? → ghci_workflow(action="help") for contextual 
 | Module has typed holes | ghci_hole(module_path="src/X.hs") | Expected type + valid fits |
 | After compilation | ghci_eval("funcName arg") | Test behavior |
 | A law becomes testable | ghci_quickcheck(property, module_path="src/X.hs") | Test immediately |
+| Testing roundtrip property | ghci_quickcheck(roundtrip="pretty,parse,normalize") | Auto-generate roundtrip test |
 | QuickCheck failed with counterexample | ghci_trace(...) | Follow trace-first debugging guidance |
+| Debugging parser failures | ghci_trace(expression="parse input", parser_mode=true) | Get call tree + backtracking analysis |
 | All functions done | ghci_quickcheck_batch | Complete contract |
 | Apply suggested export list | ghci_apply_exports(module_path="src/X.hs") | Materialize ghci_check_module suggestions |
 | Smoke-test parser robustness | ghci_fuzz_parser(parser="...") | Detect malformed-input crashes |
@@ -82,7 +88,7 @@ Lost? Not sure what to do next? → ghci_workflow(action="help") for contextual 
 ### Session close
 | When | Tool | Why |
 |------|------|-----|
-| After all modules pass | ghci_quickcheck_export(output_path="test/Spec.hs") | Generate the persistent test suite |
+| After all modules pass | ghci_quickcheck_export(output_path="test/Spec.hs") | Generate persistent test suite (auto-filters deprecated properties) |
 | After export | cabal_test | Validate exported tests actually run |
 | After tests | cabal_build | Verify full package compilation |
 
@@ -143,7 +149,9 @@ const CONVENTIONS_FALLBACK = `# Haskell Project Conventions
 - Use ghci_hole(module_path="...") to explore typed holes before implementing
 - Use ghci_trace when QuickCheck returns a counterexample
 - Use ghci_fuzz_parser(parser="...") for malformed-input parser checks
-- ghci_quickcheck_export validates with cabal_test by default
+- ghci_quickcheck_export validates with cabal_test by default and auto-filters deprecated properties
+- Use ghci_property_lifecycle to manage property lifecycle (list/remove/deprecate/replace)
+- Deprecate old properties instead of deleting to maintain audit trail
 
 ## MCP Maintenance
 - Every MCP code change should include unit, integration, and e2e coverage

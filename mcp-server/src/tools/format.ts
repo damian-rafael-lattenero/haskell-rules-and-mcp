@@ -11,10 +11,10 @@ import { getBundledToolStatus, resolveToolBinary, ensureTool, TOOL_PATH } from "
  * Returns the binary name, or null if neither is installed.
  * Now uses ensureTool to enable auto-download if needed.
  */
-async function detectFormatter(projectDir: string): Promise<string | null> {
+async function detectFormatter(): Promise<string | null | undefined> {
   for (const cmd of ["fourmolu", "ormolu"] as const) {
-    const resolved = await ensureTool(cmd, projectDir);
-    if (resolved) return resolved.binaryPath;
+    const resolved = await ensureTool(cmd);
+    if (resolved.available) return resolved.binaryPath ?? null;
   }
   return null;
 }
@@ -61,7 +61,7 @@ export async function handleFormat(
   projectDir: string,
   args: { module_path: string; write?: boolean }
 ): Promise<string> {
-  let formatter = await detectFormatter(projectDir);
+  let formatter = await detectFormatter();
   let formatterSource: "bundled" | "host" = "host";
   let formatterVersion: string | undefined;
 

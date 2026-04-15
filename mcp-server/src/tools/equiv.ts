@@ -74,7 +74,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
     {
       expr1: z.string().describe("First expression to evaluate"),
       expr2: z.string().describe("Second expression to evaluate"),
-      context: z.record(z.string()).optional().describe(
+      context: z.record(z.string(), z.string()).optional().describe(
         "Optional variable bindings as key-value pairs. " +
         "Example: {\"x\": \"5\", \"y\": \"10\"} sets x=5 and y=10 before evaluation."
       )
@@ -84,7 +84,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       const result = await checkEquivalence(session, expr1, expr2, context);
 
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }]
       };
     }
   );

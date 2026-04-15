@@ -64,6 +64,7 @@ import { register as registerHls } from "./tools/hls.js";
 import { register as registerWatch } from "./tools/watch.js";
 import { register as registerFuzzParser } from "./tools/fuzz-parser.js";
 import { register as registerEquiv } from "./tools/equiv.js";
+import { register as registerPropertyLifecycle } from "./tools/property-lifecycle.js";
 
 // Base directory: the project root (parent of mcp-server/)
 const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
@@ -177,6 +178,7 @@ registerHls(server, ctx);
 registerWatch(server, ctx);
 registerFuzzParser(server, ctx);
 registerEquiv(server, ctx);
+registerPropertyLifecycle(server, ctx);
 
 // --- Tool: ghci_fix_warning (inline) ---
 server.tool(

@@ -23,6 +23,14 @@ export interface PropertyRecord {
   law?: string;
   lastPassed: string; // ISO date
   passCount: number;
+  /** Property version for tracking replacements. Defaults to 1. */
+  version?: number;
+  /** Property ID that replaces this one (if deprecated). */
+  replaced_by?: string;
+  /** Whether this property is deprecated and should not be exported. */
+  deprecated?: boolean;
+  /** Reason for deprecation (if deprecated=true). */
+  deprecation_reason?: string;
 }
 
 export interface PropertyStore {
@@ -105,4 +113,68 @@ export async function getModuleProperties(
 export async function getAllProperties(projectDir: string): Promise<PropertyRecord[]> {
   const store = await loadStore(projectDir);
   return store.properties;
+}
+
+/**
+ * Remove a property from the store by exact match.
+ * Returns true if the property was found and removed.
+ */
+export async function removeProperty(
+  projectDir: string,
+  propertyText: string
+): Promise<boolean> {
+  const store = await loadStore(projectDir);
+  const initialLength = store.properties.length;
+  store.properties = store.properties.filter((p) => p.property !== propertyText);
+  const removed = store.properties.length < initialLength;
+  if (removed) {
+    await saveStore(projectDir, store);
+  }
+  return removed;
+}
+
+/**
+ * Deprecate a property by marking it as deprecated and optionally linking to a replacement.
+ * The property remains in the store but will be filtered out of exports.
+ */
+export async function deprecateProperty(
+  projectDir: string,
+  propertyText: string,
+  options?: {
+    replaced_by?: string;
+    reason?: string;
+  }
+): Promise<boolean> {
+  const store = await loadStore(projectDir);
+  const prop = store.properties.find((p) => p.property === propertyText);
+  if (!prop) return false;
+
+  prop.deprecated = true;
+  if (options?.replaced_by) prop.replaced_by = options.replaced_by;
+  if (options?.reason) prop.deprecation_reason = options.reason;
+
+  await saveStore(projectDir, store);
+  return true;
+}
+
+/**
+ * Get all active (non-deprecated) properties.
+ * Used by export-tests to filter out deprecated properties.
+ */
+export async function getActiveProperties(projectDir: string): Promise<PropertyRecord[]> {
+  const store = await loadStore(projectDir);
+  return store.properties.filter((p) => !p.deprecated);
+}
+
+/**
+ * Get all active properties for a specific module.
+ */
+export async function getActiveModuleProperties(
+  projectDir: string,
+  modulePath: string
+): Promise<PropertyRecord[]> {
+  const store = await loadStore(projectDir);
+  return store.properties.filter(
+    (p) => !p.deprecated && (p.tests_module ?? p.module) === modulePath
+  );
 }

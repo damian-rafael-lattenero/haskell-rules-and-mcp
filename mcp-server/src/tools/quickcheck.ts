@@ -172,6 +172,11 @@ export async function handleQuickCheck(
      * Used for regression filtering in properties.json.
      */
     tests_module?: string;
+    /**
+     * Roundtrip mode: automatically generates roundtrip property from pretty/parse functions.
+     * Format: "pretty_fn,parse_fn" or "pretty_fn,parse_fn,normalize_fn"
+     */
+    roundtrip?: string;
   },
   ctx?: { getWorkflowState?: () => { activeModule: string | null; modules: Map<string, unknown> }; updateModuleProgress?: (path: string, updates: Record<string, unknown>) => void; getModuleProgress?: (path: string) => { propertiesPassed: string[]; propertiesFailed: string[]; functionsImplemented: number; functionsTotal: number } | undefined },
   projectDir?: string
@@ -187,12 +192,31 @@ export async function handleQuickCheck(
     });
   }
 
-  const trimmed = args.property.trim();
+  // Roundtrip mode: generate property from pretty/parse functions
+  let actualProperty = args.property;
+  if (args.roundtrip) {
+    const parts = args.roundtrip.split(",").map((s) => s.trim());
+    if (parts.length < 2) {
+      return JSON.stringify({
+        success: false,
+        passed: 0,
+        error: "roundtrip parameter must be 'pretty_fn,parse_fn' or 'pretty_fn,parse_fn,normalize_fn'",
+      });
+    }
+    const [prettyFn, parseFn, normalizeFn] = parts;
+    if (normalizeFn) {
+      actualProperty = `\\e -> fmap ${normalizeFn} (${parseFn} (${prettyFn} e)) == Just (${normalizeFn} e)`;
+    } else {
+      actualProperty = `\\e -> ${parseFn} (${prettyFn} e) == Just e`;
+    }
+  }
+
+  const trimmed = actualProperty.trim();
   if (trimmed.startsWith(":")) {
     return JSON.stringify({
       success: false,
       passed: 0,
-      property: args.property,
+      property: actualProperty,
       error: "Property cannot start with ':' (looks like a GHCi command)",
     });
   }
@@ -200,7 +224,7 @@ export async function handleQuickCheck(
     return JSON.stringify({
       success: false,
       passed: 0,
-      property: args.property,
+      property: actualProperty,
       error: "Property too long (max 2000 characters)",
     });
   }
@@ -292,7 +316,7 @@ export async function handleQuickCheck(
   const checkFn = args.verbose ? "verboseCheckWith" : "quickCheckWith";
   // Normalize the property: ensure lambdas are wrapped in parentheses
   // to avoid GHCi parse errors with bare \x -> ... at top level.
-  let normalizedProp = args.property;
+  let normalizedProp = actualProperty;
   if (normalizedProp.startsWith("\\") && !normalizedProp.startsWith("(")) {
     normalizedProp = `(${normalizedProp})`;
   }
@@ -307,7 +331,7 @@ export async function handleQuickCheck(
   const loadAll = projectDir ? createLoadAllFromProjectDir(projectDir) : undefined;
   const { result, autoResolved } = await runPropertyWithAutoResolve(session, command, loadAll, preCommands);
   const evalParsed = parseEvalOutput(result.output);
-  let parsed = parseQuickCheckOutput(evalParsed.result, args.property);
+  let parsed = parseQuickCheckOutput(evalParsed.result, actualProperty);
 
   // If parsing failed and the output doesn't look like QC output at all,
   // retry once — the buffer may have had a stale entry from a previous command.
@@ -338,7 +362,7 @@ export async function handleQuickCheck(
     const activeMod = args.module_path ?? args.module ?? ctx?.getWorkflowState?.()?.activeModule ?? "unknown";
     try {
       await saveProperty(projectDir, {
-        property: args.property,
+        property: actualProperty, // Save the actual property (generated or original)
         module: activeMod,
         functionName: args.function_name,
         tests_module: args.tests_module,
@@ -367,17 +391,17 @@ export async function handleQuickCheck(
       const mod = ctx.getModuleProgress(activeMod);
       if (mod && ctx.updateModuleProgress) {
         if (parsed.success) {
-          if (!mod.propertiesPassed.includes(args.property)) {
+          if (!mod.propertiesPassed.includes(actualProperty)) {
             ctx.updateModuleProgress(activeMod, {
-              propertiesPassed: [...mod.propertiesPassed, args.property],
+              propertiesPassed: [...mod.propertiesPassed, actualProperty],
             });
           }
         } else if (!isCompilationError) {
           // Only track as failed if it's a genuine logic failure,
           // not a syntax/type error in the property expression
-          if (!mod.propertiesFailed.includes(args.property)) {
+          if (!mod.propertiesFailed.includes(actualProperty)) {
             ctx.updateModuleProgress(activeMod, {
-              propertiesFailed: [...mod.propertiesFailed, args.property],
+              propertiesFailed: [...mod.propertiesFailed, actualProperty],
             });
           }
         }
@@ -392,6 +416,7 @@ export async function handleQuickCheck(
       ...(isCompilationError ? { compilationError: true } : {}),
       ...(autoResolved ? { _autoResolved: true } : {}),
       ...(propertySaved ? { _propertySaved: true, _propertyStoreCount: propertyStoreCount } : {}),
+      ...(args.roundtrip ? { roundtrip: true, generated_property: actualProperty } : {}),
       incremental: true,
       hint: parsed.success
         ? "Incremental property passed. Continue implementing next function."
@@ -406,6 +431,7 @@ export async function handleQuickCheck(
     ...parsed,
     ...(autoResolved ? { _autoResolved: true } : {}),
     ...(propertySaved ? { _propertySaved: true, _propertyStoreCount: propertyStoreCount } : {}),
+    ...(args.roundtrip ? { roundtrip: true, generated_property: actualProperty } : {}),
     ...(!parsed.success && !isCompilationError
       ? {
           _guidance: [
@@ -421,8 +447,8 @@ export async function handleQuickCheck(
         ? "Property has a type/syntax error. Fix the property expression and retry."
         : "Property FAILED. Debug with ghci_trace or fix the implementation.",
     // Hint for roundtrip failures — common cause is normalization
-    ...(!parsed.success && !isCompilationError && isLikelyRoundtrip(args.property)
-      ? { _hint: "Roundtrip property failed. Common cause: normalization differences (e.g. Neg (Lit n) vs Lit (negate n)). Consider testing with a normalize function: normalize <$> parse (pretty e) == Just (normalize e)" }
+    ...(!parsed.success && !isCompilationError && (isLikelyRoundtrip(actualProperty) || args.roundtrip)
+      ? { _hint: "Roundtrip property failed. Common cause: normalization differences (e.g. Neg (Lit n) vs Lit (negate n)). Consider using roundtrip parameter with normalize function: roundtrip='pretty,parse,normalize'" }
       : {}),
   });
 }
@@ -567,12 +593,20 @@ export function register(server: McpServer, ctx: ToolContext): void {
           'Example: if Arbitrary lives in src/Expr/Syntax.hs but the property tests Expr.Eval, ' +
           'set module_path="src/Expr/Syntax.hs" and tests_module="src/Expr/Eval.hs".'
       ),
+      roundtrip: z.string().optional().describe(
+        'Roundtrip mode: auto-generates roundtrip property from pretty/parse functions. ' +
+          'Format: "pretty_fn,parse_fn" or "pretty_fn,parse_fn,normalize_fn". ' +
+          'Examples: roundtrip="pretty,parse" generates "\\e -> parse (pretty e) == Just e". ' +
+          'With normalize: roundtrip="pretty,parse,normalize" generates ' +
+          '"\\e -> fmap normalize (parse (pretty e)) == Just (normalize e)". ' +
+          'Useful for testing serialization/deserialization roundtrips.'
+      ),
     },
-    async ({ property, tests, verbose, incremental, function_name, module: mod, module_path, tests_module }) => {
+    async ({ property, tests, verbose, incremental, function_name, module: mod, module_path, tests_module, roundtrip }) => {
       const session = await ctx.getSession();
       const result = await handleQuickCheck(
         session,
-        { property, tests, verbose, incremental, function_name, module: mod, module_path, tests_module },
+        { property, tests, verbose, incremental, function_name, module: mod, module_path, tests_module, roundtrip },
         ctx,
         ctx.getProjectDir()
       );

@@ -231,7 +231,7 @@ export async function handleHls(
   args: { action: string; module_path?: string; line?: number; character?: number }
 ): Promise<string> {
   if (args.action === "available") {
-    const resolved = await ensureTool("hls", projectDir);
+    const resolved = await ensureTool("hls");
     const version = await hlsVersion(resolved?.binaryPath ?? "haskell-language-server-wrapper");
     if (version) {
       return JSON.stringify({
@@ -258,8 +258,8 @@ export async function handleHls(
     if (!args.module_path) {
       return JSON.stringify({ success: false, error: "module_path is required for action 'hover'" });
     }
-    const resolved = await ensureTool("hls", projectDir);
-    if (!resolved) {
+    const resolved = await ensureTool("hls");
+    if (!resolved.available) {
       return JSON.stringify({
         success: false,
         unavailable: true,

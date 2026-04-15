@@ -7,18 +7,19 @@ import { z } from "zod";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ToolContext } from "./registry.js";
-import { getAllProperties, getModuleProperties } from "../property-store.js";
+import { getActiveProperties, getActiveModuleProperties } from "../property-store.js";
 import { parseCabalModules } from "../parsers/cabal-parser.js";
 import { handleCabalTest } from "./test.js";
 import { handleValidateCabal } from "./validate-cabal.js";
 
 export async function handleExportTests(
   projectDir: string,
-  args: { output_path?: string; module?: string; validate_test_suite?: boolean }
+  args: { output_path?: string; module?: string; validate_test_suite?: boolean; only_passing?: boolean }
 ): Promise<string> {
+  // By default, only export active (non-deprecated) properties
   const properties = args.module
-    ? await getModuleProperties(projectDir, args.module)
-    : await getAllProperties(projectDir);
+    ? await getActiveModuleProperties(projectDir, args.module)
+    : await getActiveProperties(projectDir);
 
   if (properties.length === 0) {
     return JSON.stringify({
@@ -225,12 +226,17 @@ export function register(server: McpServer, ctx: ToolContext): void {
       validate_test_suite: z.boolean().optional().describe(
         "If true (default), run cabal_test after writing the exported test file and report the result."
       ),
+      only_passing: z.boolean().optional().describe(
+        "If true (default), only export active (non-deprecated) properties. " +
+        "Deprecated properties are automatically filtered out to prevent exporting obsolete tests."
+      ),
     },
-    async ({ output_path, module: mod, validate_test_suite }) => {
+    async ({ output_path, module: mod, validate_test_suite, only_passing }) => {
       const result = await handleExportTests(ctx.getProjectDir(), {
         output_path,
         module: mod,
         validate_test_suite,
+        only_passing,
       });
       return { content: [{ type: "text" as const, text: result }] };
     }
