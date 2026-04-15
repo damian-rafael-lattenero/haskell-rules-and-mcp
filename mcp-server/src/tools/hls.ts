@@ -16,7 +16,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ToolContext } from "./registry.js";
-import { resolveToolBinary, TOOL_PATH } from "./tool-installer.js";
+import { resolveToolBinary, ensureTool, TOOL_PATH } from "./tool-installer.js";
 
 // ─── LSP wire protocol helpers ────────────────────────────────────────────────
 
@@ -231,7 +231,7 @@ export async function handleHls(
   args: { action: string; module_path?: string; line?: number; character?: number }
 ): Promise<string> {
   if (args.action === "available") {
-    const resolved = await resolveToolBinary("hls");
+    const resolved = await ensureTool("hls", projectDir);
     const version = await hlsVersion(resolved?.binaryPath ?? "haskell-language-server-wrapper");
     if (version) {
       return JSON.stringify({
@@ -258,7 +258,7 @@ export async function handleHls(
     if (!args.module_path) {
       return JSON.stringify({ success: false, error: "module_path is required for action 'hover'" });
     }
-    const resolved = await resolveToolBinary("hls");
+    const resolved = await ensureTool("hls", projectDir);
     if (!resolved) {
       return JSON.stringify({
         success: false,

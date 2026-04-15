@@ -74,10 +74,26 @@
   then `ghci_session(restart)` to apply
 - Use `ghci_flags(action="list")` to see currently active language settings
 
+## Session Management Best Practices
+
+- Never use `:set +m` in .ghci files (breaks sentinel protocol)
+- Never use `:set prompt` or `:set prompt-cont` (overridden by MCP)
+- If session feels stuck, check health status (session auto-reports health)
+- Timeouts auto-trigger session restart on next tool call
+- Session health states: `healthy` (normal), `degraded` (slow), `corrupted` (needs restart)
+- After timeout error, next MCP tool call will auto-recover the session
+
+## Warning Management
+
+- Fix warnings immediately using `ghci_fix_warning` when available
+- Check `suggestedFixes` in `ghci_load` responses for auto-fixable warnings
+- Supported auto-fixes: unused-matches (GHC-40910), unused-imports (GHC-38417)
+- Preview fixes with `apply=false`, apply with `apply=true`
+
 ## HLS Integration
 - Run `ghci_hls(action="available")` to check if HLS is installed
 - Use `ghci_hls(action="hover", module_path="...", line=N, character=M)` for type info at position
-- HLS resolution is host-first, then bundled. MCP does not auto-install HLS.
+- HLS resolution is host-first, then bundled, then auto-download. MCP handles installation automatically.
 - If unavailable, provide the binary in host PATH or bundled toolchain and retry.
 - For all compilation diagnostics: prefer `ghci_load(diagnostics=true)` — it doesn't require HLS
 

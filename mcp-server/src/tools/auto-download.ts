@@ -42,13 +42,19 @@ const GITHUB_RELEASES: Record<
     "darwin-x64": {
       version: "v3.10",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-darwin-x64",
-      sha256: "",
+      sha256: "PENDING_CHECKSUM_DARWIN_X64",
       binaryName: "hlint",
     },
     "linux-x64": {
       version: "v3.10",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-linux-x64",
-      sha256: "",
+      sha256: "PENDING_CHECKSUM_LINUX_X64",
+      binaryName: "hlint",
+    },
+    "linux-arm64": {
+      version: "v3.10",
+      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-linux-arm64",
+      sha256: "PENDING_CHECKSUM_LINUX_ARM64",
       binaryName: "hlint",
     },
   },
@@ -59,6 +65,24 @@ const GITHUB_RELEASES: Record<
       sha256: "e8e793f2c361ad6e506fce46f4b89d46fce2af6647e753dc088fb005b650bb8c",
       binaryName: "fourmolu",
     },
+    "darwin-x64": {
+      version: "v0.19.0.1",
+      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-darwin-x64",
+      sha256: "PENDING_CHECKSUM_DARWIN_X64",
+      binaryName: "fourmolu",
+    },
+    "linux-x64": {
+      version: "v0.19.0.1",
+      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-linux-x64",
+      sha256: "PENDING_CHECKSUM_LINUX_X64",
+      binaryName: "fourmolu",
+    },
+    "linux-arm64": {
+      version: "v0.19.0.1",
+      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-linux-arm64",
+      sha256: "PENDING_CHECKSUM_LINUX_ARM64",
+      binaryName: "fourmolu",
+    },
   },
   ormolu: {
     "darwin-arm64": {
@@ -67,12 +91,48 @@ const GITHUB_RELEASES: Record<
       sha256: "d073199f566100cf57893d08b3df4f02c70ff7e650bf38d601e4fe9b3935b218",
       binaryName: "ormolu",
     },
+    "darwin-x64": {
+      version: "v0.7.7.0",
+      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-darwin-x64",
+      sha256: "PENDING_CHECKSUM_DARWIN_X64",
+      binaryName: "ormolu",
+    },
+    "linux-x64": {
+      version: "v0.7.7.0",
+      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-linux-x64",
+      sha256: "PENDING_CHECKSUM_LINUX_X64",
+      binaryName: "ormolu",
+    },
+    "linux-arm64": {
+      version: "v0.7.7.0",
+      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-linux-arm64",
+      sha256: "PENDING_CHECKSUM_LINUX_ARM64",
+      binaryName: "ormolu",
+    },
   },
   hls: {
     "darwin-arm64": {
       version: "v2.13.0.0",
       url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-darwin-arm64",
       sha256: "949cb139b269a4487c82adfb17ff326f3defa9fa9fee6342297895e9ef2647c8",
+      binaryName: "haskell-language-server-wrapper",
+    },
+    "darwin-x64": {
+      version: "v2.13.0.0",
+      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-darwin-x64",
+      sha256: "PENDING_CHECKSUM_DARWIN_X64",
+      binaryName: "haskell-language-server-wrapper",
+    },
+    "linux-x64": {
+      version: "v2.13.0.0",
+      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-linux-x64",
+      sha256: "PENDING_CHECKSUM_LINUX_X64",
+      binaryName: "haskell-language-server-wrapper",
+    },
+    "linux-arm64": {
+      version: "v2.13.0.0",
+      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-linux-arm64",
+      sha256: "PENDING_CHECKSUM_LINUX_ARM64",
       binaryName: "haskell-language-server-wrapper",
     },
   },

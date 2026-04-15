@@ -96,3 +96,30 @@ CI should verify:
 - No fake success responses
 - No blocking workflow step when tool is optional and unavailable
 - No manual user intervention required to choose host vs bundled in normal operation
+
+## Auto-Download Extension (Updated)
+
+The resolution order now includes auto-download capability:
+
+1. **Host tool** (preferred)
+2. **Bundled tool** (fallback from vendor-tools/)
+3. **Auto-download** (download from GitHub releases on first use)
+4. **Unavailable** (degraded behavior)
+
+### Supported Platforms for Auto-Download
+
+| Tool | darwin-arm64 | darwin-x64 | linux-x64 | linux-arm64 | Windows |
+|------|--------------|------------|-----------|-------------|---------|
+| hlint | ✅ | ✅ | ✅ | ✅ | Manual |
+| fourmolu | ✅ | ✅ | ✅ | ✅ | Manual |
+| ormolu | ✅ | ✅ | ✅ | ✅ | Manual |
+| hls | ✅ | ✅ | ✅ | ✅ | Manual |
+
+Windows users must install tools via ghcup or stack.
+
+### Auto-Download Behavior
+
+- Downloads occur on first use when tool is not in PATH and not bundled
+- Binaries are cached in `vendor-tools/` after download
+- SHA256 checksums are verified post-download
+- Failed downloads degrade gracefully to unavailable state

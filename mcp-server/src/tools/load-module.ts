@@ -12,6 +12,7 @@ import {
 import { parseHoleSummaries, HoleSummary } from "../parsers/hole-parser.js";
 import { parseBrowseOutput, inferModuleName } from "../parsers/browse-parser.js";
 import { derivePhase } from "../workflow-state.js";
+import { canAutoFix, getFixDescription } from "./fix-warning.js";
 
 export type { HoleSummary } from "../parsers/hole-parser.js";
 
@@ -371,6 +372,17 @@ function buildResponse(
   // Isolate GHCi session-specific noise (GHC-32850) from real output
   const { cleanRaw, ghciQuirks } = separateGhciQuirks(raw);
 
+  // Generate suggested fixes for auto-fixable warnings
+  const suggestedFixes = warnings
+    .filter(w => w.code && canAutoFix(w.code))
+    .map(w => ({
+      file: w.file,
+      line: w.line,
+      code: w.code!,
+      description: getFixDescription(w.code!),
+      command: `ghci_fix_warning(file="${w.file}", line=${w.line}, code="${w.code}")`
+    }));
+
   return JSON.stringify({
     success,
     errors,
@@ -382,6 +394,7 @@ function buildResponse(
       file: a.warning.file,
       line: a.warning.line,
     })),
+    ...(suggestedFixes.length > 0 ? { suggestedFixes } : {}),
     holes,
     ...(modules ? { modules } : {}),
     ...(modulesInScope ? { modulesInScope } : {}),

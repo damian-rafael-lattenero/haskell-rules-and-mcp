@@ -1,6 +1,7 @@
 {
   "manifestVersion": 1,
-  "updatedAt": "2026-04-14T19:55:45.340Z",
+  "updatedAt": "2026-04-14T22:00:00.000Z",
+  "_note": "Checksums marked as empty string will be populated via auto-download on first use. Provenance 'auto-download-ready' indicates the tool can be downloaded automatically.",
   "tools": [
     {
       "tool": "hlint",
@@ -13,30 +14,30 @@
     },
     {
       "tool": "hlint",
-      "version": "latest-stable",
+      "version": "v3.10",
       "platform": "darwin",
       "arch": "x64",
       "filename": "hlint/darwin-x64/hlint",
-      "sha256": "",
-      "provenance": "placeholder"
+      "sha256": "PENDING_CHECKSUM_DARWIN_X64",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "hlint",
-      "version": "latest-stable",
+      "version": "v3.10",
       "platform": "linux",
       "arch": "x64",
       "filename": "hlint/linux-x64/hlint",
-      "sha256": "",
-      "provenance": "placeholder"
+      "sha256": "PENDING_CHECKSUM_LINUX_X64",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "hlint",
-      "version": "latest-stable",
+      "version": "v3.10",
       "platform": "linux",
       "arch": "arm64",
       "filename": "hlint/linux-arm64/hlint",
-      "sha256": "",
-      "provenance": "placeholder"
+      "sha256": "PENDING_CHECKSUM_LINUX_ARM64",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "hlint",
@@ -67,30 +68,30 @@
     },
     {
       "tool": "fourmolu",
-      "version": "latest-stable",
+      "version": "v0.19.0.1",
       "platform": "darwin",
       "arch": "x64",
       "filename": "fourmolu/darwin-x64/fourmolu",
-      "sha256": "",
-      "provenance": "placeholder"
+      "sha256": "PENDING_CHECKSUM_DARWIN_X64",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "fourmolu",
-      "version": "latest-stable",
+      "version": "v0.19.0.1",
       "platform": "linux",
       "arch": "x64",
       "filename": "fourmolu/linux-x64/fourmolu",
-      "sha256": "",
-      "provenance": "placeholder"
+      "sha256": "PENDING_CHECKSUM_LINUX_X64",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "fourmolu",
-      "version": "latest-stable",
+      "version": "v0.19.0.1",
       "platform": "linux",
       "arch": "arm64",
       "filename": "fourmolu/linux-arm64/fourmolu",
-      "sha256": "",
-      "provenance": "placeholder"
+      "sha256": "PENDING_CHECKSUM_LINUX_ARM64",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "fourmolu",
@@ -121,30 +122,30 @@
     },
     {
       "tool": "ormolu",
-      "version": "latest-stable",
+      "version": "v0.7.7.0",
       "platform": "darwin",
       "arch": "x64",
       "filename": "ormolu/darwin-x64/ormolu",
-      "sha256": "",
-      "provenance": "placeholder"
+      "sha256": "PENDING_CHECKSUM_DARWIN_X64",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "ormolu",
-      "version": "latest-stable",
+      "version": "v0.7.7.0",
       "platform": "linux",
       "arch": "x64",
       "filename": "ormolu/linux-x64/ormolu",
-      "sha256": "",
-      "provenance": "placeholder"
+      "sha256": "PENDING_CHECKSUM_LINUX_X64",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "ormolu",
-      "version": "latest-stable",
+      "version": "v0.7.7.0",
       "platform": "linux",
       "arch": "arm64",
       "filename": "ormolu/linux-arm64/ormolu",
-      "sha256": "",
-      "provenance": "placeholder"
+      "sha256": "PENDING_CHECKSUM_LINUX_ARM64",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "ormolu",
@@ -175,30 +176,30 @@
     },
     {
       "tool": "hls",
-      "version": "latest-stable",
+      "version": "v2.13.0.0",
       "platform": "darwin",
       "arch": "x64",
       "filename": "hls/darwin-x64/haskell-language-server-wrapper",
-      "sha256": "",
-      "provenance": "placeholder"
+      "sha256": "PENDING_CHECKSUM_DARWIN_X64",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "hls",
-      "version": "latest-stable",
+      "version": "v2.13.0.0",
       "platform": "linux",
       "arch": "x64",
       "filename": "hls/linux-x64/haskell-language-server-wrapper",
-      "sha256": "",
-      "provenance": "placeholder"
+      "sha256": "PENDING_CHECKSUM_LINUX_X64",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "hls",
-      "version": "latest-stable",
+      "version": "v2.13.0.0",
       "platform": "linux",
       "arch": "arm64",
       "filename": "hls/linux-arm64/haskell-language-server-wrapper",
-      "sha256": "",
-      "provenance": "placeholder"
+      "sha256": "PENDING_CHECKSUM_LINUX_ARM64",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "hls",

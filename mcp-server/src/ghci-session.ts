@@ -12,6 +12,14 @@ export interface GhciResult {
   success: boolean;
 }
 
+export type SessionHealth = 'healthy' | 'degraded' | 'corrupted';
+
+export interface SessionHealthStatus {
+  status: SessionHealth;
+  lastCommand?: string;
+  bufferSize: number;
+}
+
 export class GhciSession extends EventEmitter {
   private process: ChildProcess | null = null;
   private buffer: string = "";
@@ -25,6 +33,10 @@ export class GhciSession extends EventEmitter {
   private ghcupBin: string;
   /** Tracked imports that persist across :r/:l reloads. */
   private persistentImports: Set<string> = new Set();
+  /** Session health status for monitoring and recovery. */
+  private sessionHealth: SessionHealth = 'healthy';
+  /** Last executed command for debugging. */
+  private lastExecutedCommand?: string;
 
   constructor(projectDir: string, libraryTarget?: string) {
     super();
@@ -292,6 +304,17 @@ export class GhciSession extends EventEmitter {
   }
 
   /**
+   * Get the current health status of the session.
+   */
+  getHealth(): SessionHealthStatus {
+    return {
+      status: this.sessionHealth,
+      lastCommand: this.lastExecutedCommand,
+      bufferSize: this.buffer.length
+    };
+  }
+
+  /**
    * Execute a GHCi command and return the output.
    * Concurrent calls are automatically serialized via an internal queue.
    */
@@ -303,9 +326,15 @@ export class GhciSession extends EventEmitter {
       throw new Error("GHCi session not running. Call start() first.");
     }
 
+    // Check session health before executing
+    if (this.sessionHealth === 'corrupted') {
+      throw new Error('GHCi session is corrupted. Call restart() to recover.');
+    }
+
     return new Promise<GhciResult>((outerResolve, outerReject) => {
       this.commandQueue = this.commandQueue.then(async () => {
         try {
+          this.lastExecutedCommand = command;
           const result = await this.executeInternal(command, timeoutMs);
           outerResolve(result);
         } catch (err) {
@@ -338,7 +367,15 @@ export class GhciSession extends EventEmitter {
       this.pendingReject = reject;
 
       this.pendingTimer = setTimeout(() => {
+        // Mark session as corrupted on timeout
+        this.sessionHealth = 'corrupted';
         this.clearPending();
+        
+        // Auto-kill the process to prevent zombie state
+        if (this.process) {
+          this.process.kill('SIGTERM');
+        }
+        
         reject(
           new Error(
             `GHCi command timed out after ${timeoutMs}ms: ${command}`
@@ -526,6 +563,13 @@ export class GhciSession extends EventEmitter {
     const results: GhciResult[] = [];
     const stopOnError = options?.stopOnError ?? false;
 
+    // Validate commands for dangerous patterns that break sentinel protocol
+    for (const cmd of commands) {
+      if (cmd.includes(':set +m') || cmd.includes(':set prompt')) {
+        throw new Error('Dangerous GHCi command in batch: ' + cmd);
+      }
+    }
+
     if (options?.reload) {
       await this.execute(":r");
     }
@@ -579,6 +623,9 @@ export class GhciSession extends EventEmitter {
    */
   async restart(): Promise<void> {
     await this.kill();
+    // Reset health status on restart
+    this.sessionHealth = 'healthy';
+    this.lastExecutedCommand = undefined;
     await this.start();
   }
 }

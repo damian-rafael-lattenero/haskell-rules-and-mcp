@@ -73,6 +73,13 @@ When triaging issues, always check `source` first to confirm execution path.
 | After switch | `ghci_load(load_all=true)` | Verify all modules compile |
 | Lost / unsure what to do | `ghci_workflow(action="help")` | Context-aware next steps with `suggested_tools` and `reasoning` |
 
+### Session Health
+| When | Tool | Why |
+|------|------|-----|
+| Session feels slow/stuck | Check session health | Session may be degraded |
+| After timeout error | Auto-recovery | Session auto-restarts on next tool call |
+| Suspicious behavior | Manual intervention | Restart if needed |
+
 ### New project / module
 | When | Tool | Why |
 |------|------|-----|
@@ -183,10 +190,15 @@ gates complete (checkModule, lint, format). Follow it to close the session prope
 
 ---
 
-## ERROR RESOLUTION
+## ERROR RESOLUTION (UPDATED)
 
 | Situation | Tool |
 |-----------|------|
+| Session timeout | Auto-recovery on next call |
+| Session corrupted | Session restarts automatically |
+| Unused-matches warning | `ghci_fix_warning` with code GHC-40910 |
+| Unused-import warning | `ghci_fix_warning` with code GHC-38417 |
+| Need semantic comparison | `ghci_equiv(e1, e2)` |
 | "Not in scope" | Check `importSuggestions` in load response, or `ghci_add_import("name")` |
 | Type mismatch | `ghci_type` on subexpressions |
 | "No instance" | `ghci_info("Type")` to see instances |

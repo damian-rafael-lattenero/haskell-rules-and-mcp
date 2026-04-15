@@ -4,15 +4,16 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { ToolContext } from "./registry.js";
-import { getBundledToolStatus, resolveToolBinary, TOOL_PATH } from "./tool-installer.js";
+import { getBundledToolStatus, resolveToolBinary, ensureTool, TOOL_PATH } from "./tool-installer.js";
 
 /**
  * Detect which formatter is available. Prefers fourmolu over ormolu.
  * Returns the binary name, or null if neither is installed.
+ * Now uses ensureTool to enable auto-download if needed.
  */
-async function detectFormatter(): Promise<string | null> {
+async function detectFormatter(projectDir: string): Promise<string | null> {
   for (const cmd of ["fourmolu", "ormolu"] as const) {
-    const resolved = await resolveToolBinary(cmd);
+    const resolved = await ensureTool(cmd, projectDir);
     if (resolved) return resolved.binaryPath;
   }
   return null;
@@ -60,7 +61,7 @@ export async function handleFormat(
   projectDir: string,
   args: { module_path: string; write?: boolean }
 ): Promise<string> {
-  let formatter = await detectFormatter();
+  let formatter = await detectFormatter(projectDir);
   let formatterSource: "bundled" | "host" = "host";
   let formatterVersion: string | undefined;
 

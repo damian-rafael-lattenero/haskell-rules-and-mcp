@@ -72,4 +72,43 @@ describe("autoDownloadTool", () => {
     // or attempt a real download if they don't. For true isolation,
     // we'd need to mock the filesystem and fetch.
   });
+
+  it("supports fourmolu auto-download", () => {
+    const originalPlatform = process.platform;
+    const originalArch = process.arch;
+    
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    Object.defineProperty(process, "arch", { value: "arm64" });
+    
+    expect(canAutoDownload("fourmolu")).toBe(true);
+    
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+    Object.defineProperty(process, "arch", { value: originalArch });
+  });
+
+  it("supports ormolu auto-download", () => {
+    const originalPlatform = process.platform;
+    const originalArch = process.arch;
+    
+    Object.defineProperty(process, "platform", { value: "linux" });
+    Object.defineProperty(process, "arch", { value: "x64" });
+    
+    expect(canAutoDownload("ormolu")).toBe(true);
+    
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+    Object.defineProperty(process, "arch", { value: originalArch });
+  });
+
+  it("supports hls auto-download", () => {
+    const originalPlatform = process.platform;
+    const originalArch = process.arch;
+    
+    Object.defineProperty(process, "platform", { value: "linux" });
+    Object.defineProperty(process, "arch", { value: "arm64" });
+    
+    expect(canAutoDownload("hls")).toBe(true);
+    
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+    Object.defineProperty(process, "arch", { value: originalArch });
+  });
 });

@@ -178,6 +178,15 @@ export const RULES_REGISTRY: RuleDefinition[] = [
     fileName: "haskell-project-conventions.md",
     embeddedContent: CONVENTIONS_FALLBACK,
   },
+  {
+    name: "session-management",
+    uri: "rules://haskell/session-management",
+    title: "GHCi Session Management",
+    description:
+      "GHCi session lifecycle, health monitoring, timeout behavior, and recovery strategies.",
+    fileName: "session-management.md",
+    embeddedContent: "# GHCi Session Management\n\nSee rules/session-management.md for full documentation.",
+  },
 ];
 
 /**

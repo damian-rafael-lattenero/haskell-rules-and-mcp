@@ -63,6 +63,7 @@ import { register as registerProfile } from "./tools/profile.js";
 import { register as registerHls } from "./tools/hls.js";
 import { register as registerWatch } from "./tools/watch.js";
 import { register as registerFuzzParser } from "./tools/fuzz-parser.js";
+import { register as registerEquiv } from "./tools/equiv.js";
 
 // Base directory: the project root (parent of mcp-server/)
 const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
@@ -89,7 +90,13 @@ const server = new McpServer(
 let ghciSession: GhciSession | null = null;
 
 async function getSession(): Promise<GhciSession> {
+  // Check if session is alive and healthy
   if (ghciSession?.isAlive()) {
+    const health = ghciSession.getHealth();
+    if (health.status === 'corrupted') {
+      // Auto-recovery: restart corrupted session
+      await ghciSession.restart();
+    }
     return ghciSession;
   }
   const session = new GhciSession(
@@ -169,6 +176,28 @@ registerProfile(server, ctx);
 registerHls(server, ctx);
 registerWatch(server, ctx);
 registerFuzzParser(server, ctx);
+registerEquiv(server, ctx);
+
+// --- Tool: ghci_fix_warning (inline) ---
+server.tool(
+  "ghci_fix_warning",
+  "Auto-fix common GHC warnings like unused-matches (GHC-40910), unused-imports (GHC-38417), etc. " +
+  "Can preview the fix (apply=false) or apply it directly (apply=true).",
+  {
+    file: z.string().describe("File path relative to project root"),
+    line: z.number().describe("Line number where the warning occurs"),
+    code: z.string().describe("GHC warning code (e.g. GHC-40910, GHC-38417)"),
+    apply: z.boolean().optional().describe("If true, apply fix; if false, return patch only (default: false)")
+  },
+  async ({ file, line, code, apply }) => {
+    const { fixWarning } = await import("./tools/fix-warning.js");
+    const result = await fixWarning(projectDir, file, line, code, apply ?? false);
+    
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+    };
+  }
+);
 
 // --- Tool: ghci_kind (inline, simple) ---
 server.tool(
