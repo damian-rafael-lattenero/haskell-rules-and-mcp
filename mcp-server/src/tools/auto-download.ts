@@ -2,6 +2,11 @@
  * Auto-download system for bundled tools from GitHub Releases.
  * Downloads tools on-demand the first time they're needed.
  * Subsequent calls use the cached binary in vendor-tools/.
+ *
+ * Source of truth for tool versions + release URLs is
+ * `vendor-tools/bundled-tools-manifest.json` (manifestVersion >= 2), accessed
+ * via `src/vendor-tools/manifest.ts`. This module used to hold the URL matrix
+ * inline; centralizing it prevents drift between manifest and runtime.
  */
 import { mkdir, writeFile, chmod, access, readFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
@@ -9,148 +14,29 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type {
+  PlatformTarget,
+  ReleaseEntry,
+  SupportedArch,
+  SupportedPlatform,
+  SupportedTool,
+} from "../vendor-tools/manifest.js";
+import {
+  enumerateConfiguredReleases,
+  getReleaseEntry,
+} from "../vendor-tools/manifest.js";
+
+export type { SupportedTool, SupportedPlatform, SupportedArch } from "../vendor-tools/manifest.js";
+
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const VENDOR_TOOLS_DIR = path.join(ROOT_DIR, "vendor-tools");
 
-type SupportedTool = "hlint" | "fourmolu" | "ormolu" | "hls";
-type SupportedPlatform = "darwin" | "linux" | "win32";
-type SupportedArch = "x64" | "arm64";
+const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 
-interface ToolRelease {
-  version: string;
-  /** Primary download URL (typically the repo's own GitHub Release asset). */
-  url: string;
-  /** SHA256 of the primary binary. When present, verified after download. */
-  sha256?: string;
-  /**
-   * Optional upstream fallback URL tried when the primary fails (404, network,
-   * or checksum mismatch on re-download). Same format as `url` — a bare binary
-   * the server can `chmod +x` and `execFile`. Tarball/zip formats are NOT
-   * supported (no extraction); fallbacks must be single-file downloads.
-   *
-   * Security: `fallbackSha256` is strongly recommended. If absent, the download
-   * succeeds without checksum verification and the response surfaces
-   * `checksumState: "missing"`, so the caller can still reason about trust.
-   */
-  fallbackUrl?: string;
-  fallbackSha256?: string;
-  binaryName: string;
+function hasVerifiableChecksum(entry: Pick<ReleaseEntry, "sha256">): boolean {
+  if (!entry.sha256) return false;
+  return SHA256_PATTERN.test(entry.sha256.trim());
 }
-
-/**
- * GitHub Release URLs for bundled tools.
- * These point to releases in the same repository.
- * Format: https://github.com/OWNER/REPO/releases/download/TAG/FILE
- */
-const GITHUB_RELEASES: Record<
-  SupportedTool,
-  Partial<Record<`${SupportedPlatform}-${SupportedArch}`, ToolRelease>>
-> = {
-  hlint: {
-    "darwin-arm64": {
-      version: "v3.10",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-darwin-arm64",
-      sha256: "660d5288ca1a2c6220f9549a64f190f3df749cf01ea8349f8e8ef35ceb169d63",
-      binaryName: "hlint",
-    },
-    "darwin-x64": {
-      version: "v3.10",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-darwin-x64",
-      sha256: undefined,
-      binaryName: "hlint",
-    },
-    "linux-x64": {
-      version: "v3.10",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-linux-x64",
-      sha256: undefined,
-      binaryName: "hlint",
-    },
-    "linux-arm64": {
-      version: "v3.10",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-linux-arm64",
-      sha256: undefined,
-      binaryName: "hlint",
-    },
-  },
-  fourmolu: {
-    "darwin-arm64": {
-      version: "v0.19.0.1",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-darwin-arm64",
-      sha256: "e8e793f2c361ad6e506fce46f4b89d46fce2af6647e753dc088fb005b650bb8c",
-      binaryName: "fourmolu",
-    },
-    "darwin-x64": {
-      version: "v0.19.0.1",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-darwin-x64",
-      sha256: undefined,
-      binaryName: "fourmolu",
-    },
-    "linux-x64": {
-      version: "v0.19.0.1",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-linux-x64",
-      sha256: undefined,
-      binaryName: "fourmolu",
-    },
-    "linux-arm64": {
-      version: "v0.19.0.1",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-linux-arm64",
-      sha256: undefined,
-      binaryName: "fourmolu",
-    },
-  },
-  ormolu: {
-    "darwin-arm64": {
-      version: "v0.7.7.0",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-darwin-arm64",
-      sha256: "d073199f566100cf57893d08b3df4f02c70ff7e650bf38d601e4fe9b3935b218",
-      binaryName: "ormolu",
-    },
-    "darwin-x64": {
-      version: "v0.7.7.0",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-darwin-x64",
-      sha256: undefined,
-      binaryName: "ormolu",
-    },
-    "linux-x64": {
-      version: "v0.7.7.0",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-linux-x64",
-      sha256: undefined,
-      binaryName: "ormolu",
-    },
-    "linux-arm64": {
-      version: "v0.7.7.0",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-linux-arm64",
-      sha256: undefined,
-      binaryName: "ormolu",
-    },
-  },
-  hls: {
-    "darwin-arm64": {
-      version: "v2.13.0.0",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-darwin-arm64",
-      sha256: "949cb139b269a4487c82adfb17ff326f3defa9fa9fee6342297895e9ef2647c8",
-      binaryName: "haskell-language-server-wrapper",
-    },
-    "darwin-x64": {
-      version: "v2.13.0.0",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-darwin-x64",
-      sha256: undefined,
-      binaryName: "haskell-language-server-wrapper",
-    },
-    "linux-x64": {
-      version: "v2.13.0.0",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-linux-x64",
-      sha256: undefined,
-      binaryName: "haskell-language-server-wrapper",
-    },
-    "linux-arm64": {
-      version: "v2.13.0.0",
-      url: "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-linux-arm64",
-      sha256: undefined,
-      binaryName: "haskell-language-server-wrapper",
-    },
-  },
-};
 
 async function computeSHA256(filePath: string): Promise<string> {
   const content = await readFile(filePath);
@@ -168,7 +54,7 @@ async function downloadFile(url: string, destPath: string): Promise<void> {
 
   await mkdir(path.dirname(destPath), { recursive: true });
   const fileStream = createWriteStream(destPath);
-  
+
   // Write response body to file
   const reader = response.body.getReader();
   while (true) {
@@ -176,10 +62,10 @@ async function downloadFile(url: string, destPath: string): Promise<void> {
     if (done) break;
     fileStream.write(value);
   }
-  
+
   return new Promise<void>((resolve, reject) => {
     fileStream.end(() => resolve());
-    fileStream.on('error', reject);
+    fileStream.on("error", reject);
   });
 }
 
@@ -195,13 +81,6 @@ export interface AutoDownloadResult {
   message: string;
 }
 
-const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
-
-function hasVerifiableChecksum(release: ToolRelease): boolean {
-  if (!release.sha256) return false;
-  return SHA256_PATTERN.test(release.sha256.trim());
-}
-
 /**
  * Auto-download a tool if not already present.
  * Returns the path to the binary (either cached or freshly downloaded).
@@ -209,21 +88,21 @@ function hasVerifiableChecksum(release: ToolRelease): boolean {
 export async function autoDownloadTool(tool: SupportedTool): Promise<AutoDownloadResult> {
   const platform = process.platform as SupportedPlatform;
   const arch = process.arch as SupportedArch;
-  const target = `${platform}-${arch}` as const;
+  const target = `${platform}-${arch}` as PlatformTarget;
 
-  // Check if we have a release for this platform
-  const release = GITHUB_RELEASES[tool]?.[target];
-  if (!release) {
+  const lookup = await getReleaseEntry(tool, target);
+  if (!lookup) {
     return {
       success: false,
       error: `No release available for ${tool} on ${platform}-${arch}`,
       message: `${tool} is not available for your platform (${platform}-${arch}). Please install manually.`,
     };
   }
+  const { entry: release, binaryName } = lookup;
 
   // Check if already downloaded
   const toolDir = path.join(VENDOR_TOOLS_DIR, tool, target);
-  const binaryPath = path.join(toolDir, release.binaryName);
+  const binaryPath = path.join(toolDir, binaryName);
 
   try {
     await access(binaryPath);
@@ -233,7 +112,7 @@ export async function autoDownloadTool(tool: SupportedTool): Promise<AutoDownloa
     } catch {
       // Already executable or can't change permissions
     }
-    
+
     const verifyCached = hasVerifiableChecksum(release);
     if (verifyCached) {
       const actualSHA = await computeSHA256(binaryPath);
@@ -330,25 +209,30 @@ export async function autoDownloadTool(tool: SupportedTool): Promise<AutoDownloa
 
 /**
  * Check if a tool can be auto-downloaded for the current platform.
+ * Async because it consults the cached manifest.
  */
-export function canAutoDownload(tool: SupportedTool): boolean {
+export async function canAutoDownload(tool: SupportedTool): Promise<boolean> {
   const platform = process.platform as SupportedPlatform;
   const arch = process.arch as SupportedArch;
-  const target = `${platform}-${arch}` as const;
-  return GITHUB_RELEASES[tool]?.[target] !== undefined;
+  const target = `${platform}-${arch}` as PlatformTarget;
+  return (await getReleaseEntry(tool, target)) !== undefined;
 }
 
 export interface ToolchainTupleStatus {
   tool: SupportedTool;
-  target: `${SupportedPlatform}-${SupportedArch}`;
+  target: PlatformTarget;
   autoDownloadConfigured: boolean;
   checksumConfigured: boolean;
   url?: string;
   version?: string;
 }
 
-export function getToolchainTupleMatrix(): ToolchainTupleStatus[] {
-  const targets: Array<`${SupportedPlatform}-${SupportedArch}`> = [
+/**
+ * Produce the full cross-platform diagnostic matrix (4 tools × 6 targets).
+ * Targets with no manifest entry appear as `autoDownloadConfigured: false`.
+ */
+export async function getToolchainTupleMatrix(): Promise<ToolchainTupleStatus[]> {
+  const targets: PlatformTarget[] = [
     "darwin-arm64",
     "darwin-x64",
     "linux-arm64",
@@ -358,16 +242,21 @@ export function getToolchainTupleMatrix(): ToolchainTupleStatus[] {
   ];
   const tools: SupportedTool[] = ["hlint", "fourmolu", "ormolu", "hls"];
   const rows: ToolchainTupleStatus[] = [];
+
+  const configured = await enumerateConfiguredReleases();
+  const index = new Map<string, (typeof configured)[number]>();
+  for (const c of configured) index.set(`${c.tool}:${c.target}`, c);
+
   for (const tool of tools) {
     for (const target of targets) {
-      const release = GITHUB_RELEASES[tool]?.[target];
+      const entry = index.get(`${tool}:${target}`);
       rows.push({
         tool,
         target,
-        autoDownloadConfigured: release !== undefined,
-        checksumConfigured: release ? hasVerifiableChecksum(release) : false,
-        url: release?.url,
-        version: release?.version,
+        autoDownloadConfigured: entry !== undefined,
+        checksumConfigured: entry ? hasVerifiableChecksum(entry.entry) : false,
+        url: entry?.entry.url,
+        version: entry?.entry.version,
       });
     }
   }

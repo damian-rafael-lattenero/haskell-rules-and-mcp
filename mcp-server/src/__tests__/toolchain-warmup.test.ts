@@ -1,10 +1,47 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   ensureToolchainWarmupStarted,
   awaitTool,
   _resetWarmupForTesting,
 } from "../tools/toolchain-warmup.js";
+import {
+  resetManifestCache,
+  setManifestPathForTests,
+} from "../vendor-tools/manifest.js";
 import type { ToolContext } from "../tools/registry.js";
+
+// These tests exercise the warmup orchestration, NOT the actual binary
+// download. We swap in a manifest with zero release entries so
+// `canAutoDownload` returns false and the chain degrades to "unavailable"
+// within milliseconds — otherwise a freshly-renamed real release URL would
+// trigger a genuine 136MB download per run.
+let emptyManifestDir: string;
+beforeAll(async () => {
+  emptyManifestDir = await mkdtemp(path.join(tmpdir(), "warmup-manifest-"));
+  const emptyManifest = {
+    manifestVersion: 2,
+    updatedAt: "test",
+    releases: {
+      hlint: { binaryName: "hlint", platforms: {} },
+      fourmolu: { binaryName: "fourmolu", platforms: {} },
+      ormolu: { binaryName: "ormolu", platforms: {} },
+      hls: { binaryName: "haskell-language-server-wrapper", platforms: {} },
+    },
+    tools: [],
+  };
+  const manifestFile = path.join(emptyManifestDir, "manifest.json");
+  await writeFile(manifestFile, JSON.stringify(emptyManifest), "utf-8");
+  setManifestPathForTests(manifestFile);
+  resetManifestCache();
+});
+afterAll(async () => {
+  setManifestPathForTests(null);
+  resetManifestCache();
+  await rm(emptyManifestDir, { recursive: true, force: true });
+});
 
 function makeStubCtx(): {
   ctx: ToolContext;

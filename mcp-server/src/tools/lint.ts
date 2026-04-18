@@ -138,7 +138,8 @@ export async function handleLintBasic(
         ? "No basic lint suggestions"
         : `${suggestions.length} basic suggestion(s)`,
     _hint:
-      "This is a fallback heuristic lint and does not satisfy the module-complete lint gate. Use ghci_lint with hlint when available.",
+      "This is a heuristic fallback applied ONLY when hlint is unavailable. It covers trailing whitespace, mixed indentation, and partial Prelude functions (head/tail/fromJust). " +
+      "All false-positive-prone style rules (redundant parens, redundant if-then-else, etc.) have been removed — install hlint for full coverage.",
   });
 }
 

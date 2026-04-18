@@ -513,9 +513,23 @@ export class GhciSession extends EventEmitter {
 
   /**
    * Load a single module and re-apply persistent imports.
+   *
+   * `mode`:
+   *   - "replace" (default) — uses `:l path` (standard GHCi semantics).
+   *     Any previously loaded module not referenced by this one is DROPPED
+   *     from scope. This is GHCi's native behavior; tools relying on a single
+   *     "active" module should keep this default.
+   *   - "additive" — uses `:add path`. Appends the module to the currently
+   *     loaded set, preserving scope from earlier loads. Use when writing
+   *     cross-module property tests (e.g. property in one module referencing
+   *     `eval` defined in another) without the ceremony of `load_all`.
    */
-  async loadModule(modulePath: string): Promise<GhciResult> {
-    const result = await this.execute(`:l ${modulePath}`);
+  async loadModule(
+    modulePath: string,
+    opts: { mode?: "replace" | "additive" } = {}
+  ): Promise<GhciResult> {
+    const command = opts.mode === "additive" ? ":add" : ":l";
+    const result = await this.execute(`${command} ${modulePath}`);
     if (this.persistentImports.size > 0) {
       await this.reapplyImports();
     }
@@ -525,14 +539,35 @@ export class GhciSession extends EventEmitter {
   /**
    * Load multiple modules at once and bring them all into scope.
    * moduleNames are in Haskell dotted form (e.g. "HM.Syntax").
+   *
+   * `mode` behaves identically to `loadModule`. In additive mode we iterate
+   * `:add` for each path (GHCi does not accept `:add a b c` with multiple
+   * args reliably across versions).
    */
   async loadModules(
     modulePaths: string[],
-    moduleNames: string[]
+    moduleNames: string[],
+    opts: { mode?: "replace" | "additive" } = {}
   ): Promise<GhciResult> {
-    const loadResult = await this.execute(`:l ${modulePaths.join(" ")}`);
-    if (!loadResult.success) {
-      return loadResult;
+    let loadResult: GhciResult;
+    if (opts.mode === "additive") {
+      // :add in a loop preserves existing scope; errors from later paths do
+      // not invalidate earlier successful adds.
+      loadResult = { success: true, output: "" };
+      for (const p of modulePaths) {
+        const r = await this.execute(`:add ${p}`);
+        if (!r.success) {
+          loadResult = r;
+          break;
+        }
+        loadResult = r;
+      }
+      if (!loadResult.success) return loadResult;
+    } else {
+      loadResult = await this.execute(`:l ${modulePaths.join(" ")}`);
+      if (!loadResult.success) {
+        return loadResult;
+      }
     }
     // Bring all modules into scope with full access (using * prefix)
     const starNames = moduleNames.map((n) => `*${n}`).join(" ");
@@ -553,7 +588,14 @@ export class GhciSession extends EventEmitter {
   }
 
   /**
-   * Re-apply all persistent imports. Called internally after :r/:l.
+   * Re-apply all persistent imports. Called internally after :r/:l/:add.
+   *
+   * Idempotency note: GHCi itself tolerates re-running identical `import`
+   * statements (subsequent ones are no-ops), but each one costs a round-trip.
+   * We deduplicate against `persistentImports` at call time — same Set, no
+   * duplicates possible — so this is idempotent by construction. This matters
+   * for additive-load flows where `loadModule` can be called many times in a
+   * single ghci_quickcheck recovery loop without doubling imports.
    */
   private async reapplyImports(): Promise<void> {
     for (const imp of this.persistentImports) {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { autoDownloadTool, canAutoDownload } from "../tools/auto-download.js";
 import { rm } from "node:fs/promises";
 import path from "node:path";
@@ -7,28 +7,28 @@ import { fileURLToPath } from "node:url";
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 describe("canAutoDownload", () => {
-  it("returns true for hlint on darwin-arm64", () => {
+  it("returns true for hlint on darwin-arm64", async () => {
     const originalPlatform = process.platform;
     const originalArch = process.arch;
-    
+
     Object.defineProperty(process, "platform", { value: "darwin" });
     Object.defineProperty(process, "arch", { value: "arm64" });
-    
-    expect(canAutoDownload("hlint")).toBe(true);
-    
+
+    expect(await canAutoDownload("hlint")).toBe(true);
+
     Object.defineProperty(process, "platform", { value: originalPlatform });
     Object.defineProperty(process, "arch", { value: originalArch });
   });
 
-  it("returns false for unsupported platform", () => {
+  it("returns false for unsupported platform", async () => {
     const originalPlatform = process.platform;
     const originalArch = process.arch;
-    
+
     Object.defineProperty(process, "platform", { value: "freebsd" });
     Object.defineProperty(process, "arch", { value: "arm64" });
-    
-    expect(canAutoDownload("hlint")).toBe(false);
-    
+
+    expect(await canAutoDownload("hlint")).toBe(false);
+
     Object.defineProperty(process, "platform", { value: originalPlatform });
     Object.defineProperty(process, "arch", { value: originalArch });
   });
@@ -49,22 +49,22 @@ describe("autoDownloadTool", () => {
   it("returns error for unsupported platform", async () => {
     const originalPlatform = process.platform;
     const originalArch = process.arch;
-    
+
     Object.defineProperty(process, "platform", { value: "freebsd" });
     Object.defineProperty(process, "arch", { value: "mips" });
-    
+
     const result = await autoDownloadTool("hlint");
-    
+
     expect(result.success).toBe(false);
     expect(result.error).toContain("No release available");
-    
+
     Object.defineProperty(process, "platform", { value: originalPlatform });
     Object.defineProperty(process, "arch", { value: originalArch });
   });
 
   it("returns cached result if binary already exists", async () => {
     // This test assumes the current platform has a release configured
-    if (!canAutoDownload("hlint")) {
+    if (!(await canAutoDownload("hlint"))) {
       return; // Skip on unsupported platforms
     }
 
@@ -73,41 +73,41 @@ describe("autoDownloadTool", () => {
     // we'd need to mock the filesystem and fetch.
   });
 
-  it("supports fourmolu auto-download", () => {
+  it("supports fourmolu auto-download", async () => {
     const originalPlatform = process.platform;
     const originalArch = process.arch;
-    
+
     Object.defineProperty(process, "platform", { value: "darwin" });
     Object.defineProperty(process, "arch", { value: "arm64" });
-    
-    expect(canAutoDownload("fourmolu")).toBe(true);
-    
+
+    expect(await canAutoDownload("fourmolu")).toBe(true);
+
     Object.defineProperty(process, "platform", { value: originalPlatform });
     Object.defineProperty(process, "arch", { value: originalArch });
   });
 
-  it("supports ormolu auto-download", () => {
+  it("supports ormolu auto-download", async () => {
     const originalPlatform = process.platform;
     const originalArch = process.arch;
-    
+
     Object.defineProperty(process, "platform", { value: "linux" });
     Object.defineProperty(process, "arch", { value: "x64" });
-    
-    expect(canAutoDownload("ormolu")).toBe(true);
-    
+
+    expect(await canAutoDownload("ormolu")).toBe(true);
+
     Object.defineProperty(process, "platform", { value: originalPlatform });
     Object.defineProperty(process, "arch", { value: originalArch });
   });
 
-  it("supports hls auto-download", () => {
+  it("supports hls auto-download", async () => {
     const originalPlatform = process.platform;
     const originalArch = process.arch;
-    
+
     Object.defineProperty(process, "platform", { value: "linux" });
     Object.defineProperty(process, "arch", { value: "arm64" });
-    
-    expect(canAutoDownload("hls")).toBe(true);
-    
+
+    expect(await canAutoDownload("hls")).toBe(true);
+
     Object.defineProperty(process, "platform", { value: originalPlatform });
     Object.defineProperty(process, "arch", { value: originalArch });
   });

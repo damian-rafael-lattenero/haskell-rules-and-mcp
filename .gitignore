@@ -20,3 +20,10 @@ playground/smoke-test/
 
 # Local MCP config (may contain personal paths/env). Copy from .mcp.example.json
 .mcp.json
+
+# Vendor tools (large binaries) — downloaded by auto-download at runtime.
+# Only the manifest and README are tracked.
+mcp-server/vendor-tools/hlint/
+mcp-server/vendor-tools/fourmolu/
+mcp-server/vendor-tools/ormolu/
+mcp-server/vendor-tools/hls/

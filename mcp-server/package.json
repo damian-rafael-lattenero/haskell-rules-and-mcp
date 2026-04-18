@@ -23,6 +23,7 @@
     "tools:update-manifest": "node dist/scripts/update-bundled-tools.js",
     "tools:download": "node dist/scripts/download-bundled-tools.js",
     "tools:validate": "node dist/scripts/validate-bundled-tools.js",
+    "tools:validate:urls": "node dist/scripts/validate-bundled-tools.js --check-urls",
     "tools:test": "node dist/scripts/test-bundled-tool.js",
     "tools:setup": "./scripts/setup-bundled-tools.sh"
   },

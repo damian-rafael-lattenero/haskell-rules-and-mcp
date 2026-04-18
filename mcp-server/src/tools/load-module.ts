@@ -21,21 +21,27 @@ export type { HoleSummary } from "../parsers/hole-parser.js";
 
 export async function handleLoadModule(
   session: GhciSession,
-  args: { module_path?: string; load_all?: boolean; diagnostics?: boolean },
+  args: {
+    module_path?: string;
+    load_all?: boolean;
+    diagnostics?: boolean;
+    mode?: "replace" | "additive";
+  },
   projectDir?: string
 ): Promise<string> {
   // Determine if diagnostics should run
   const runDiagnostics = args.diagnostics ?? !!(args.module_path || args.load_all);
+  const mode: "replace" | "additive" = args.mode ?? "replace";
 
   if (args.load_all && projectDir) {
-    return handleLoadAll(session, projectDir, runDiagnostics);
+    return handleLoadAll(session, projectDir, runDiagnostics, mode);
   }
 
   if (args.module_path) {
-    return handleLoadSingle(session, args.module_path, runDiagnostics);
+    return handleLoadSingle(session, args.module_path, runDiagnostics, mode);
   }
 
-  // Plain reload
+  // Plain reload — `mode` is not meaningful for `:r`
   return handleReload(session, runDiagnostics);
 }
 
@@ -156,7 +162,8 @@ async function handleReload(
 async function handleLoadSingle(
   session: GhciSession,
   modulePath: string,
-  runDiagnostics: boolean
+  runDiagnostics: boolean,
+  mode: "replace" | "additive" = "replace"
 ): Promise<string> {
   const filterOpts: CompileOptions = { filterMissingHomeModules: true };
 
@@ -164,10 +171,10 @@ async function handleLoadSingle(
   let uncategorized: GhcError[], holes: HoleSummary[], rawOutput: string;
 
   if (runDiagnostics) {
-    const dp = await dualPassCompile(session, () => session.loadModule(modulePath), filterOpts);
+    const dp = await dualPassCompile(session, () => session.loadModule(modulePath, { mode }), filterOpts);
     ({ errors, warnings, actions, uncategorized, holes, rawOutput } = dp);
   } else {
-    const result = await session.loadModule(modulePath);
+    const result = await session.loadModule(modulePath, { mode });
     const diags = singlePassDiagnostics(result.output, filterOpts);
     errors = diags.errors;
     warnings = diags.warnings;
@@ -202,7 +209,8 @@ async function handleLoadSingle(
 async function handleLoadAll(
   session: GhciSession,
   projectDir: string,
-  runDiagnostics: boolean
+  runDiagnostics: boolean,
+  mode: "replace" | "additive" = "replace"
 ): Promise<string> {
   const cabalModules = await parseCabalModules(projectDir);
   const srcDir = await getLibrarySrcDir(projectDir);
@@ -225,7 +233,7 @@ async function handleLoadAll(
 
   if (runDiagnostics) {
     const dp = await dualPassCompile(session, () =>
-      session.loadModules(paths, cabalModules.library)
+      session.loadModules(paths, cabalModules.library, { mode })
     );
     return buildResponse(
       dp.errors.length === 0, dp.errors, dp.warnings,
@@ -233,7 +241,7 @@ async function handleLoadAll(
     );
   }
 
-  const result = await session.loadModules(paths, cabalModules.library);
+  const result = await session.loadModules(paths, cabalModules.library, { mode });
   const { errors, warnings, actions, uncategorized } = singlePassDiagnostics(result.output);
   return buildResponse(
     errors.length === 0, errors, warnings, actions, uncategorized, [], result.output, paths
@@ -433,7 +441,9 @@ export function register(server: McpServer, ctx: ToolContext): void {
     "Load or reload Haskell modules in GHCi. Returns parsed compilation errors and warnings. " +
       "Without module_path: reloads current modules (:r). " +
       "With module_path: loads that specific module. " +
-      "With load_all=true: reads .cabal and loads ALL library modules at once (lighter than cabal_build).",
+      "With load_all=true: reads .cabal and loads ALL library modules at once (lighter than cabal_build). " +
+      "Scope semantics: default mode=\"replace\" uses `:l` (GHCi's native behavior — drops prior scope). " +
+      "Pass mode=\"additive\" to use `:add` instead, preserving scope from earlier loads (useful for cross-module properties).",
     {
       module_path: z.string().optional().describe(
         'Path to a module to load. If omitted, reloads current modules. Examples: "src/Lib.hs"'
@@ -445,10 +455,15 @@ export function register(server: McpServer, ctx: ToolContext): void {
         "If true, runs dual-pass compilation (strict errors + typed holes) and categorizes warnings with suggested fix actions. " +
           "Defaults to true for module_path/load_all, false for plain reload."
       ),
+      mode: z.enum(["replace", "additive"]).optional().describe(
+        '"replace" (default): GHCi `:l` — drops previously loaded modules from scope. ' +
+        '"additive": GHCi `:add` — append to the loaded set, preserving prior scope. ' +
+        "Useful when a property references symbols from multiple modules without going through load_all."
+      ),
     },
-    async ({ module_path, load_all, diagnostics }) => {
+    async ({ module_path, load_all, diagnostics, mode }) => {
       const session = await ctx.getSession();
-      const result = await handleLoadModule(session, { module_path, load_all, diagnostics }, ctx.getProjectDir());
+      const result = await handleLoadModule(session, { module_path, load_all, diagnostics, mode }, ctx.getProjectDir());
 
       // Update workflow state: set activeModule and track load results
       const parsed = JSON.parse(result);

@@ -137,7 +137,7 @@ export async function ensureTool(toolName: string): Promise<EnsureResult> {
   }
 
   // Step 3: Try auto-download if supported
-  if (canAutoDownload(toolName as "hlint" | "fourmolu" | "ormolu" | "hls")) {
+  if (await canAutoDownload(toolName as "hlint" | "fourmolu" | "ormolu" | "hls")) {
     const downloadResult = await autoDownloadTool(toolName as "hlint" | "fourmolu" | "ormolu" | "hls");
     if (downloadResult.success) {
       return {

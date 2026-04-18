@@ -63,7 +63,7 @@ export async function handleToolchainStatus(
     }
   }
 
-  const matrix = includeMatrix ? getToolchainTupleMatrix() : [];
+  const matrix = includeMatrix ? await getToolchainTupleMatrix() : [];
   const matrixSummary = includeMatrix
     ? {
         total: matrix.length,

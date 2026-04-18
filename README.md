@@ -223,8 +223,66 @@ haskell-rules-and-mcp/
 
 ---
 
+## Gotchas
+
+Agent-facing quirks surfaced during real usage. Reading these up front saves a
+debug loop.
+
+### GHC2024 + `` `elem` "literal" `` ambiguity
+```haskell
+-- ✗ Fails under GHC2024 with "Ambiguous type variable"
+digits <- munch1 (`elem` "0123456789")
+
+-- ✓ Use Data.Char.isDigit (or any monomorphic predicate)
+import Data.Char (isDigit)
+digits <- munch1 isDigit
+```
+Root cause: `elem :: Foldable t => a -> t a -> Bool`. GHC2024 enables
+extended defaulting that does NOT resolve `t ~ []` automatically, so the
+string literal's container type stays ambiguous. Use named predicates.
+
+### `ghci_load` scope semantics — `:l` vs `:add`
+By default `ghci_load(module_path="src/A.hs")` issues `:l A.hs`, which is
+GHCi's native **replace** semantics: any previously loaded module not
+transitively reachable from A is dropped from scope. If you need to keep
+prior scope (e.g. a property in module B references a function from module
+C), pass `mode="additive"`:
+```
+ghci_load(module_path="src/C.hs", mode="additive")  -- preserves prior scope
+```
+`load_all=true` is still preferred when you want the whole project in
+scope for a batch of properties.
+
+### Partial Prelude functions and `read`
+`read`, `head`, `tail`, `fromJust`, `(!!)` are partial — they throw on
+malformed input. The basic-lint fallback (active when hlint is unavailable)
+flags these as warnings. Prefer `readMaybe`, pattern matching, or
+`listToMaybe`.
+
+### Formatter and lint availability
+When `hlint`/`fourmolu`/`ormolu` are not on PATH and the bundled download
+fails, `ghci_lint` and `ghci_format` return degraded responses with
+`gateEligible: false`. The module-complete gate stays locked until a real
+formatter/linter runs — by design; never trust a degraded "clean" signal.
+
+---
+
 ## Changelog
 
+- **Fase 4 (hyper-stabilization)** — (a) centralized release manifest
+  `vendor-tools/bundled-tools-manifest.json` as single source of truth for
+  tool URLs/versions; `auto-download.ts` now reads from it. (b) `tools-v1.0`
+  GitHub release assets renamed to match platform-suffixed names expected by
+  the MCP. (c) `npm run tools:validate:urls` + CI gate (`.github/workflows/ci.yml`).
+  (d) `ghci_format` degraded fallback (trailing whitespace / CRLF / missing
+  newline / tabs) with `gateEligible: false`. (e) `basic-lint-rules` reduced
+  to lexically-safe rules; false positives removed. (f) `ghci_load(mode="additive")`
+  for cross-module property tests. (g) `LawEngine` interface + 3 new engines
+  (evaluator-preservation, constant-folding-soundness, functor-laws) exposed
+  via `ghci_suggest(analyze)`. (h) `label` field on `ghci_quickcheck`,
+  propagated to the exported `test/Spec.hs` with sanitization and dedup.
+  (i) `ghci_workflow(action="gate")` orchestrates regression + cabal_test +
+  cabal_build in a single consolidated call.
 - **Fase 3** — upstream fallback URLs for auto-download, opt-in local telemetry, operator runbook for `tools-v1.0`, `ghci_suggest(analyze)` cross-module browse fix, `cabal_coverage` HTML report parser as a third fallback, README refresh.
 - **Fase 2** — toolchain warmup (`toolchain-warmup.ts`), global strict Zod validation via `registerStrictTool`, mass migration of ~42 tools, removal of 8 peripheral tools (`init`, `scaffold`, `fuzz_parser`, `watch`, `profile`, `flags`, `equiv`, `trace`), `cabal_coverage` tix fallback, publish-release script.
 - **Fase 1** — tautology law removal in `function-laws`, `ghci_check_module` export-list awareness, `ghci_toolchain_status` state propagation, `ghci_create_project` + `ghci_add_modules` (replacing `ghci_init` + `ghci_scaffold`), `ghci_lint` degraded fallback (Plan B).

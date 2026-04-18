@@ -178,6 +178,11 @@ export async function handleQuickCheck(
      * Format: "pretty_fn,parse_fn" or "pretty_fn,parse_fn,normalize_fn"
      */
     roundtrip?: string;
+    /**
+     * Human-readable label propagated to the property store and used by the
+     * exporter as the Spec.hs test name (e.g. "addRightIdentity").
+     */
+    label?: string;
   },
   ctx?: { getWorkflowState?: () => { activeModule: string | null; modules: Map<string, unknown> }; updateModuleProgress?: (path: string, updates: Record<string, unknown>) => void; getModuleProgress?: (path: string) => { propertiesPassed: string[]; propertiesFailed: string[]; functionsImplemented: number; functionsTotal: number } | undefined },
   projectDir?: string
@@ -381,6 +386,7 @@ export async function handleQuickCheck(
         module: activeMod,
         functionName: args.function_name,
         tests_module: args.tests_module,
+        label: args.label,
       });
       propertySaved = true;
       const { getAllProperties } = await import("../property-store.js");
@@ -639,12 +645,17 @@ export function register(server: McpServer, ctx: ToolContext): void {
           '"\\e -> fmap normalize (parse (pretty e)) == Just (normalize e)". ' +
           'Useful for testing serialization/deserialization roundtrips.'
       ),
+      label: z.string().optional().describe(
+        'Human-friendly name for this property (e.g. "addRightIdentity", "evalRespectsSimplify"). ' +
+        'Used by ghci_quickcheck_export as the test suite label instead of the generic "property_N". ' +
+        'Sanitized automatically (no newlines/quotes); duplicates get a _2/_3 suffix at export time.'
+      ),
     },
-    async ({ property, tests, verbose, incremental, function_name, module: mod, module_path, tests_module, roundtrip }) => {
+    async ({ property, tests, verbose, incremental, function_name, module: mod, module_path, tests_module, roundtrip, label }) => {
       const session = await ctx.getSession();
       const result = await handleQuickCheck(
         session,
-        { property, tests, verbose, incremental, function_name, module: mod, module_path, tests_module, roundtrip },
+        { property, tests, verbose, incremental, function_name, module: mod, module_path, tests_module, roundtrip, label },
         ctx,
         ctx.getProjectDir()
       );

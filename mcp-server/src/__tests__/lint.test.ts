@@ -1,8 +1,41 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { handleLint, handleLintBasic } from "../tools/lint.js";
 import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  resetManifestCache,
+  setManifestPathForTests,
+} from "../vendor-tools/manifest.js";
+
+// Same rationale as format.test.ts: swap in an empty-releases manifest so
+// "hlint unavailable" returns fast instead of triggering a real ~136MB
+// download. The test suite has never had hlint on PATH, and now that the
+// release URL works we have to prevent the opportunistic download.
+let emptyManifestDir: string;
+beforeAll(async () => {
+  emptyManifestDir = await mkdtemp(path.join(tmpdir(), "lint-manifest-"));
+  const empty = {
+    manifestVersion: 2,
+    updatedAt: "test",
+    releases: {
+      hlint: { binaryName: "hlint", platforms: {} },
+      fourmolu: { binaryName: "fourmolu", platforms: {} },
+      ormolu: { binaryName: "ormolu", platforms: {} },
+      hls: { binaryName: "haskell-language-server-wrapper", platforms: {} },
+    },
+    tools: [],
+  };
+  const manifestFile = path.join(emptyManifestDir, "manifest.json");
+  await writeFile(manifestFile, JSON.stringify(empty), "utf-8");
+  setManifestPathForTests(manifestFile);
+  resetManifestCache();
+});
+afterAll(async () => {
+  setManifestPathForTests(null);
+  resetManifestCache();
+  await rm(emptyManifestDir, { recursive: true, force: true });
+});
 
 describe("handleLint", () => {
   it("returns unavailable when hlint is not available", async () => {
@@ -56,17 +89,66 @@ describe("ghci_lint fallback contract (Plan B)", () => {
 });
 
 describe("handleLintBasic", () => {
-  it("returns degraded=true and suggestions for basic anti-patterns", async () => {
+  it("returns degraded=true and suggestions for partial-function use", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "lint-basic-"));
     try {
       const file = path.join(dir, "src/Foo.hs");
       await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, "foo xs = if null xs then True else False\n", "utf8");
+      // `head xs` is one of the rules retained after the false-positive
+      // cleanup. Any remaining rule should trigger here.
+      await writeFile(file, "foo xs = head xs\n", "utf8");
       const result = JSON.parse(await handleLintBasic(dir, { module_path: "src/Foo.hs" }));
       expect(result.success).toBe(true);
       expect(result.degraded).toBe(true);
       expect(result.gateEligible).toBe(false);
       expect(result.count).toBeGreaterThan(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT flag legitimate patterns (module header, nested constructor apps)", async () => {
+    // Regression guard for the false positives observed in the expr-evaluator
+    // session (module header `module M (` and constructor application
+    // `Lit (sign n)` both used to trigger redundant-parentheses).
+    const dir = await mkdtemp(path.join(tmpdir(), "lint-basic-fp-"));
+    try {
+      const file = path.join(dir, "src/Expr/Pretty.hs");
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(
+        file,
+        [
+          "module Expr.Pretty",
+          "  ( pretty",
+          "  , parse",
+          "  ) where",
+          "",
+          "pretty = const \"\"",
+          "",
+          "litP = do",
+          "  sign <- pure id",
+          "  pure (Lit (sign 0))",
+          "",
+        ].join("\n"),
+        "utf8"
+      );
+      const result = JSON.parse(await handleLintBasic(dir, { module_path: "src/Expr/Pretty.hs" }));
+      expect(result.success).toBe(true);
+      // The suggestions list should be empty (no FP rules triggered).
+      expect(result.count).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("flags trailing whitespace (lexically safe rule)", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "lint-basic-ws-"));
+    try {
+      const file = path.join(dir, "src/Foo.hs");
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, "x = 1   \n", "utf8"); // trailing spaces
+      const result = JSON.parse(await handleLintBasic(dir, { module_path: "src/Foo.hs" }));
+      expect(result.suggestions.some((s: { hint: string }) => s.hint === "trailing-whitespace")).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

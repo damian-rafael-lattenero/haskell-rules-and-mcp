@@ -1,6 +1,41 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { handleToolchainStatus } from "../tools/toolchain-status.js";
 import type { ToolContext } from "../tools/registry.js";
+import {
+  resetManifestCache,
+  setManifestPathForTests,
+} from "../vendor-tools/manifest.js";
+
+// Avoid actual 100MB+ binary downloads when runtime probes kick in. With an
+// empty releases map, every ensureTool falls through to "unavailable" in
+// milliseconds — which is exactly what this test expects to validate.
+let emptyManifestDir: string;
+beforeAll(async () => {
+  emptyManifestDir = await mkdtemp(path.join(tmpdir(), "toolchain-manifest-"));
+  const empty = {
+    manifestVersion: 2,
+    updatedAt: "test",
+    releases: {
+      hlint: { binaryName: "hlint", platforms: {} },
+      fourmolu: { binaryName: "fourmolu", platforms: {} },
+      ormolu: { binaryName: "ormolu", platforms: {} },
+      hls: { binaryName: "haskell-language-server-wrapper", platforms: {} },
+    },
+    tools: [],
+  };
+  const manifestFile = path.join(emptyManifestDir, "manifest.json");
+  await writeFile(manifestFile, JSON.stringify(empty), "utf-8");
+  setManifestPathForTests(manifestFile);
+  resetManifestCache();
+});
+afterAll(async () => {
+  setManifestPathForTests(null);
+  resetManifestCache();
+  await rm(emptyManifestDir, { recursive: true, force: true });
+});
 
 describe("handleToolchainStatus", () => {
   it("returns release matrix diagnostics without runtime probes", async () => {

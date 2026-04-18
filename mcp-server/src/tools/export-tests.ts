@@ -13,6 +13,24 @@ import { handleCabalTest } from "./test.js";
 import { handleValidateCabal } from "./validate-cabal.js";
 import { validatePropertyText } from "../parsers/property-validator.js";
 
+/**
+ * Sanitize a user-provided label for safe injection into `putStr "..."` in
+ * Haskell source. Rules:
+ *   - strip CR/LF (would break the string literal)
+ *   - replace runs of whitespace with underscores (so "add right identity"
+ *     becomes "add_right_identity", keeping the label parsable as one token)
+ *   - keep alnum, underscore, and hyphen; replace everything else
+ *   - strip leading/trailing non-alnum
+ *   - fall back to "property" if the sanitized result is empty
+ */
+export function sanitizeLabel(raw: string): string {
+  const noLines = raw.replace(/[\r\n]+/g, " ");
+  const collapsed = noLines.replace(/\s+/g, "_");
+  const safe = collapsed.replace(/[^A-Za-z0-9_-]/g, "_");
+  const trimmed = safe.replace(/^[_-]+/, "").replace(/[_-]+$/, "");
+  return trimmed.length > 0 ? trimmed : "property";
+}
+
 export async function handleExportTests(
   projectDir: string,
   args: { output_path?: string; module?: string; validate_test_suite?: boolean; only_passing?: boolean }
@@ -90,10 +108,21 @@ export async function handleExportTests(
     ...qualifiedImports,
   ].join("\n");
 
-  // Generate test file
+  // Generate test file. Label resolution order (P2b):
+  //   1. explicit `label` from ghci_quickcheck(label=…)
+  //   2. `law` (e.g. "idempotence", "evaluator preservation")
+  //   3. `functionName`
+  //   4. positional fallback "property_N"
+  // Sanitize (strip newlines, escape quotes, replace whitespace → _) and
+  // de-duplicate by appending _2, _3 if two records produce the same label.
+  const labelCounts = new Map<string, number>();
   const propertyLines = nonTrivial.map((p, i) => {
-    const label = p.law ?? p.functionName ?? `property_${i + 1}`;
-    const safeLabel = label.replace(/"/g, '\\"');
+    const raw = p.label ?? p.law ?? p.functionName ?? `property_${i + 1}`;
+    const base = sanitizeLabel(raw);
+    const count = (labelCounts.get(base) ?? 0) + 1;
+    labelCounts.set(base, count);
+    const finalLabel = count === 1 ? base : `${base}_${count}`;
+    const safeLabel = finalLabel.replace(/"/g, '\\"');
     const normalizedProperty = normalizePropertyForExport(p.property);
     return `  putStr "${safeLabel}: " >> quickCheck (${normalizedProperty})`;
   }).join("\n");

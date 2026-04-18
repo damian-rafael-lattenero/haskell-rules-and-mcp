@@ -385,3 +385,42 @@ require HLS and is always available.
 Flags set with `ghci_flags(action="set", flags="...")` apply only to the current GHCi session.
 To persist an extension, add it to `default-extensions` in the `.cabal` file,
 then run `ghci_session(restart)` to pick it up.
+
+---
+
+## Agent gotchas (read these once, save a debug loop)
+
+### `ghci_load` scope semantics
+`ghci_load(module_path="src/A.hs")` issues GHCi's `:l` which **drops** previously
+loaded modules from scope. If a property in module B references symbols from
+module C, pass `mode="additive"` to use `:add` instead:
+```
+ghci_load(module_path="src/C.hs", mode="additive")
+```
+For a full project load prefer `load_all=true`.
+
+### GHC2024 defaulting ambiguity
+`(`elem` "0123456789")` fails under GHC2024 with an ambiguous `Foldable t`
+constraint. Use a monomorphic predicate like `Data.Char.isDigit` instead.
+
+### Partial Prelude functions
+`read`, `head`, `tail`, `fromJust`, `(!!)` throw on malformed input. Prefer
+`readMaybe`, pattern matching, or `listToMaybe`. The basic-lint fallback
+warns on these even when hlint is unavailable.
+
+### Degraded gates never unlock `module-complete`
+When `hlint`/`fourmolu`/`ormolu` are unavailable, the fallback responses
+carry `gateEligible: false`. The workflow state will NOT mark the format or
+lint gate as complete until a real tool runs — do not mistake a `success:true`
+fallback for a passed gate.
+
+### `ghci_workflow(action="gate")` single-shot finalizer
+When you think a module is done, run `ghci_workflow(action="gate")` — it
+orchestrates regression + cabal_test + cabal_build and returns a consolidated
+JSON. Saves three round-trips and guarantees you see every step's status.
+Use `skip_cabal_test` / `skip_cabal_build` for fast iteration.
+
+### `label` on `ghci_quickcheck`
+Pass `label="descriptiveName"` to get meaningful names in the exported
+`test/Spec.hs` instead of `property_1..N`. The exporter sanitizes and
+deduplicates labels automatically.

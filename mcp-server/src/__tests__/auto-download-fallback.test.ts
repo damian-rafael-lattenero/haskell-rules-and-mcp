@@ -7,15 +7,15 @@ import { describe, it, expect } from "vitest";
 import { getToolchainTupleMatrix } from "../tools/auto-download.js";
 
 describe("auto-download fallback infrastructure", () => {
-  it("every supported tool×target entry reports autoDownloadConfigured=true", () => {
-    const matrix = getToolchainTupleMatrix();
+  it("every supported tool×target entry reports autoDownloadConfigured=true", async () => {
+    const matrix = await getToolchainTupleMatrix();
     const configured = matrix.filter((r) => r.autoDownloadConfigured);
     // darwin + linux × arm64/x64 for each of 4 tools → at least 16 rows.
     expect(configured.length).toBeGreaterThanOrEqual(16);
   });
 
-  it("matrix exposes checksumConfigured per tuple so the operator runbook can audit coverage", () => {
-    const matrix = getToolchainTupleMatrix();
+  it("matrix exposes checksumConfigured per tuple so the operator runbook can audit coverage", async () => {
+    const matrix = await getToolchainTupleMatrix();
     // At minimum darwin-arm64 entries should have verifiable checksums (the
     // ones we already pinned). This pins the operator contract: when a
     // maintainer adds a new platform, they must also add the SHA256.

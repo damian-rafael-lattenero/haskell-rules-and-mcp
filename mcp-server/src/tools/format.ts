@@ -1,11 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { type ToolContext, registerStrictTool, zBool } from "./registry.js";
 import { getBundledToolStatus, TOOL_PATH } from "./tool-installer.js";
 import { awaitTool } from "./toolchain-warmup.js";
+import { analyzeBasicFormatRules } from "../parsers/basic-format-rules.js";
 
 /**
  * Detect which formatter is available. Prefers fourmolu over ormolu.
@@ -69,6 +70,66 @@ function runFormatter(
         });
       }
     );
+  });
+}
+
+/**
+ * Degraded formatter used when fourmolu/ormolu are unavailable. Applies
+ * lexically-safe fixes (trailing whitespace, CRLF → LF, missing final
+ * newline) and returns an envelope with `degraded: true, gateEligible:
+ * false` — it does NOT unlock the module-complete format gate, so callers
+ * always know when a real formatter ran vs. this fallback.
+ */
+export async function handleFormatBasic(
+  projectDir: string,
+  args: { module_path: string; write?: boolean }
+): Promise<string> {
+  const absPath = path.resolve(projectDir, args.module_path);
+  let original = "";
+  try {
+    original = await readFile(absPath, "utf-8");
+  } catch {
+    return JSON.stringify({
+      success: false,
+      format_tool: "basic-format-rules",
+      degraded: true,
+      gateEligible: false,
+      error: `File not found: ${args.module_path}`,
+    });
+  }
+
+  const analysis = analyzeBasicFormatRules(original);
+
+  if (args.write && analysis.changed) {
+    try {
+      await writeFile(absPath, analysis.fixed, "utf-8");
+    } catch (err) {
+      return JSON.stringify({
+        success: false,
+        format_tool: "basic-format-rules",
+        degraded: true,
+        gateEligible: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return JSON.stringify({
+    success: true,
+    format_tool: "basic-format-rules",
+    degraded: true,
+    gateEligible: false,
+    changed: analysis.changed,
+    issues: analysis.issues,
+    issueCount: analysis.issues.length,
+    written: !!(args.write && analysis.changed),
+    ...(args.write
+      ? {}
+      : analysis.changed
+        ? { formatted: analysis.fixed }
+        : { message: "No basic formatting issues" }),
+    _hint:
+      "This is a heuristic fallback applied ONLY when fourmolu/ormolu are unavailable. It covers trailing whitespace, CRLF line endings, tabs in indentation, and missing final newline. For full formatting (layout, alignment, module-header canonicalization), install fourmolu or ormolu.",
   });
 }
 
@@ -160,15 +221,35 @@ export function register(server: McpServer, ctx: ToolContext): void {
       write: zBool().optional().describe("If true, write formatted output to file. Default: false (dry-run)."),
     },
     async ({ module_path, write }) => {
-      const result = await handleFormat(ctx.getProjectDir(), { module_path, write });
+      const primary = await handleFormat(ctx.getProjectDir(), { module_path, write });
+      let parsed = JSON.parse(primary);
+
+      // When fourmolu/ormolu are unavailable, synthesize a degraded envelope
+      // from the basic-format-rules fallback so the caller always has
+      // something actionable (trailing whitespace / CRLF / missing newline)
+      // while keeping gateEligible:false so the module-complete format gate
+      // stays locked until a real formatter runs.
+      if (parsed.unavailable === true) {
+        ctx.setOptionalToolAvailability("format", "unavailable");
+        const basic = JSON.parse(await handleFormatBasic(ctx.getProjectDir(), { module_path, write }));
+        const merged = {
+          ...basic,
+          _warning:
+            "fourmolu/ormolu are unavailable. Falling back to basic-format-rules. " +
+            "This does NOT satisfy the module-complete format gate.",
+          _primary_failure: {
+            formatter: parsed.formatter,
+            reason: parsed.reason,
+            error: parsed.error,
+          },
+        };
+        return { content: [{ type: "text" as const, text: JSON.stringify(merged) }] };
+      }
+
       // Mark completion gate only when a real formatter ran (fourmolu/ormolu).
-      // The basic-style-checks fallback only fixes whitespace and tabs — it
-      // cannot be considered a full formatting pass and should not unlock the
-      // format gate, which would give a false "formatted" signal.
       try {
-        const parsed = JSON.parse(result);
-        ctx.setOptionalToolAvailability("format", parsed.unavailable ? "unavailable" : "available");
-        if (parsed.success && parsed.format_tool && !parsed.fallback) {
+        ctx.setOptionalToolAvailability("format", "available");
+        if (parsed.success && parsed.format_tool && !parsed.fallback && !parsed.degraded) {
           const activeModule = ctx.getWorkflowState().activeModule ?? module_path;
           const mod = ctx.getModuleProgress(activeModule);
           if (mod) {
@@ -178,7 +259,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           }
         }
       } catch { /* non-fatal */ }
-      return { content: [{ type: "text" as const, text: result }] };
+      return { content: [{ type: "text" as const, text: primary }] };
     }
   );
 }

@@ -22,6 +22,13 @@ export interface PropertyRecord {
   tests_module?: string;
   functionName?: string;
   law?: string;
+  /**
+   * Human-friendly identifier used by the exporter as the test suite label.
+   * When present, takes priority over `law`/`functionName`/positional index
+   * when generating `test/Spec.hs`. Sanitized before use (no quotes, no
+   * newlines); duplicates get a `_2`, `_3` suffix at export time.
+   */
+  label?: string;
   lastPassed: string; // ISO date
   passCount: number;
   /** Property version for tracking replacements. Defaults to 1. */
@@ -67,6 +74,8 @@ export async function saveProperty(
     law?: string;
     /** Semantic module being tested — used for regression filtering. */
     tests_module?: string;
+    /** Optional human-friendly label; used by the exporter for Spec.hs names. */
+    label?: string;
   }
 ): Promise<void> {
   const validation = validatePropertyText(record.property);
@@ -91,6 +100,12 @@ export async function saveProperty(
     // Update tests_module if we now have one and didn't before
     if (record.tests_module && !existing.tests_module) {
       existing.tests_module = record.tests_module;
+    }
+    // Promote label if previously absent. We prefer the first label we see
+    // over silent overwrite, so an explicit label on run #1 survives re-runs
+    // that forget to pass it.
+    if (record.label && !existing.label) {
+      existing.label = record.label;
     }
   } else {
     store.properties.push({

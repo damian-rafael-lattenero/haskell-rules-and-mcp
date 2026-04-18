@@ -1,8 +1,40 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
 import { handleFormat } from "../tools/format.js";
 import { writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import {
+  resetManifestCache,
+  setManifestPathForTests,
+} from "../vendor-tools/manifest.js";
+
+// Point the tool installer at an empty releases manifest so it never attempts
+// to auto-download the (now-working) 100MB+ formatter binaries. Each test
+// just needs to exercise the "unavailable" envelope.
+let emptyManifestDir: string;
+beforeAll(async () => {
+  emptyManifestDir = await mkdtemp(path.join(os.tmpdir(), "format-manifest-"));
+  const empty = {
+    manifestVersion: 2,
+    updatedAt: "test",
+    releases: {
+      hlint: { binaryName: "hlint", platforms: {} },
+      fourmolu: { binaryName: "fourmolu", platforms: {} },
+      ormolu: { binaryName: "ormolu", platforms: {} },
+      hls: { binaryName: "haskell-language-server-wrapper", platforms: {} },
+    },
+    tools: [],
+  };
+  const manifestFile = path.join(emptyManifestDir, "manifest.json");
+  await writeFile(manifestFile, JSON.stringify(empty), "utf-8");
+  setManifestPathForTests(manifestFile);
+  resetManifestCache();
+});
+afterAll(async () => {
+  setManifestPathForTests(null);
+  resetManifestCache();
+  await rm(emptyManifestDir, { recursive: true, force: true });
+});
 
 describe("handleFormat", () => {
   const tmpDirs: string[] = [];

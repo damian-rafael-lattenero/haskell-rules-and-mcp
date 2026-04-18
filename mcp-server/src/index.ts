@@ -749,18 +749,32 @@ registerStrictTool(server, ctx,
 registerStrictTool(server, ctx,
   "ghci_workflow",
   "Query the development workflow state: current flow/step, module progress, next action, or checklist. " +
-    "Use to understand where you are in the development process and what to do next.",
+    "Use to understand where you are in the development process and what to do next. " +
+    "With action='gate', orchestrates the full regression + cabal_test + cabal_build pass and reports a consolidated pass/fail.",
   {
-    action: z.enum(["status", "next", "progress", "checklist", "help"]).describe(
+    action: z.enum(["status", "next", "progress", "checklist", "help", "gate"]).describe(
       '"status": full workflow state summary. "next": what step to do next. ' +
       '"progress": per-module progress (functions, properties). "checklist": TODO list for active module. ' +
-      '"help": context-aware guidance with suggested_tools, reasoning, and steps.'
+      '"help": context-aware guidance with suggested_tools, reasoning, and steps. ' +
+      '"gate": run regression + cabal_test + cabal_build sequentially and return a consolidated report.'
     ),
     strict: zBool().optional().describe(
       "Optional strict-mode toggle. When true, unavailable lint/format tools remain blocking gates."
     ),
+    skip_regression: zBool().optional().describe(
+      "For action='gate': skip the regression step. Default: false."
+    ),
+    skip_cabal_test: zBool().optional().describe(
+      "For action='gate': skip cabal test. Default: false."
+    ),
+    skip_cabal_build: zBool().optional().describe(
+      "For action='gate': skip cabal build. Default: false."
+    ),
+    gate_module: z.string().optional().describe(
+      "For action='gate': forward to regression module filter. If omitted, runs all persisted properties."
+    ),
   },
-  async ({ action, strict }) => {
+  async ({ action, strict, skip_regression, skip_cabal_test, skip_cabal_build, gate_module }) => {
     if (strict !== undefined) {
       setStrictWorkflowMode(workflowState, strict);
     }
@@ -793,6 +807,17 @@ registerStrictTool(server, ctx,
       return {
         content: [{ type: "text", text: JSON.stringify(workflowHelp(workflowState)) }],
       };
+    }
+    if (action === "gate") {
+      const { handleWorkflowGate } = await import("./tools/workflow-gate.js");
+      const session = await ctx.getSession();
+      const report = await handleWorkflowGate(session, ctx.getProjectDir(), {
+        skip_regression,
+        skip_cabal_test,
+        skip_cabal_build,
+        module: gate_module,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(report) }] };
     }
     // checklist
     return {
