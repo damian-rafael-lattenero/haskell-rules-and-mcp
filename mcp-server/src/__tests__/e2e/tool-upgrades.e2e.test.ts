@@ -85,8 +85,6 @@ describe.runIf(GHC_AVAILABLE)("E2E Tool Upgrades", () => {
     expect(content).toContain("( foo");
   });
 
-  // `ghci_fuzz_parser` was removed from the public MCP surface in Fase 2.
-  it.skip("ghci_fuzz_parser reports crashes through MCP (tool removed)", async () => {});
 
   it("ghci_quickcheck_export validates the exported test suite", async () => {
     await rm(PROPERTY_STORE_DIR, { recursive: true, force: true });

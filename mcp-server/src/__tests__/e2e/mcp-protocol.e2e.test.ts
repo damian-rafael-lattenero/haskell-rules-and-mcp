@@ -363,11 +363,6 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     expect(typeof parsed.available).toBe("boolean");
   });
 
-  // --- ghci_profile / ghci_flags: tools removed from public MCP surface in Fase 2 ---
-  it.skip("ghci_profile appears in listTools() (tool removed)", async () => {});
-  it.skip("ghci_flags appears in listTools() (tool removed)", async () => {});
-  it.skip("ghci_flags list returns flags array (tool removed)", async () => {});
-  it.skip("ghci_flags set then eval uses extension (tool removed)", async () => {});
 
   // --- ghci_create_project (replaces ghci_init) ---
   it("ghci_create_project schema exposes expected params", async () => {

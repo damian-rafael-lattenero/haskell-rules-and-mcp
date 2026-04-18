@@ -98,29 +98,4 @@ describe("bundled tools e2e", () => {
     }
   });
 
-  // Tool `ghci_watch` was removed from the public MCP surface in Fase 2.
-  it.skip("ghci_watch start/status/stop lifecycle works (tool removed)", async () => {
-    const startResult = await client.callTool({
-      name: "ghci_watch",
-      arguments: { action: "start", paths: ["src"], auto_actions: ["load"] },
-    });
-    const startParsed = JSON.parse((startResult.content as Array<{ type: string; text: string }>)[0]!.text);
-    expect(startParsed.success).toBe(true);
-
-    const statusResult = await client.callTool({
-      name: "ghci_watch",
-      arguments: { action: "status" },
-    });
-    const statusParsed = JSON.parse((statusResult.content as Array<{ type: string; text: string }>)[0]!.text);
-    expect(statusParsed.success).toBe(true);
-    expect(statusParsed.active).toBeTypeOf("boolean");
-
-    const stopResult = await client.callTool({
-      name: "ghci_watch",
-      arguments: { action: "stop" },
-    });
-    const stopParsed = JSON.parse((stopResult.content as Array<{ type: string; text: string }>)[0]!.text);
-    expect(stopParsed.success).toBe(true);
-    expect(stopParsed.active).toBe(false);
-  });
 });
