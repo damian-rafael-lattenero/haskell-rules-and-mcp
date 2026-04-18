@@ -6,6 +6,11 @@ import { GhciSession } from "../ghci-session.js";
 import { parseTypedHoles } from "../parsers/hole-parser.js";
 import { parseGhcErrors } from "../parsers/error-parser.js";
 import { parseBrowseOutput, inferModuleName } from "../parsers/browse-parser.js";
+import {
+  parseCabalModules,
+  moduleToFilePath,
+  getLibrarySrcDir,
+} from "../parsers/cabal-parser.js";
 import { suggestFunctionProperties, type Sibling } from "../laws/function-laws.js";
 import { type ToolContext, registerStrictTool } from "./registry.js";
 
@@ -113,10 +118,35 @@ export async function handleSuggest(
     await session.execute(":set -fmax-valid-hole-fits=10");
 
     // Load modified module
-    const loadResult = await session.loadModule(args.module_path);
+    let loadResult = await session.loadModule(args.module_path);
+    let holes = parseTypedHoles(loadResult.output);
 
-    // Parse typed holes from output
-    const holes = parseTypedHoles(loadResult.output);
+    // Fase 4 fix: GHCi's `:l` replaces the loaded-module set. If an earlier
+    // `ghci_load(other.hs)` evicted the target's dependencies, the holes GHC
+    // reports may end up with `expectedType: "unknown"` because the types
+    // they reference aren't in scope. Detect this (no holes OR every hole
+    // has an unknown type) and retry once after loading ALL library modules
+    // from the cabal file — deterministic, cheap, and non-destructive
+    // (we still restore the source in `finally`).
+    const allUnknown =
+      holes.length > 0 &&
+      holes.every((h) => !h.expectedType || h.expectedType === "unknown");
+    if ((holes.length === 0 || allUnknown) && undefinedFns.length > 0) {
+      try {
+        const cabalModules = await parseCabalModules(projectDir);
+        const srcDir = await getLibrarySrcDir(projectDir);
+        const paths = cabalModules.library.map((mod) =>
+          moduleToFilePath(mod, srcDir)
+        );
+        if (paths.length > 0) {
+          await session.loadModules(paths, cabalModules.library);
+          loadResult = await session.loadModule(args.module_path);
+          holes = parseTypedHoles(loadResult.output);
+        }
+      } catch {
+        // Non-fatal — fall through to whatever holes we already have.
+      }
+    }
 
     // Map holes to function names by line number
     const suggestions: Suggestion[] = undefinedFns.map((fn) => {

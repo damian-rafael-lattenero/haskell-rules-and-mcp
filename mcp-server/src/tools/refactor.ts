@@ -12,7 +12,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { type ToolContext, registerStrictTool } from "./registry.js";
+import { type ToolContext, registerStrictTool, zArray, zBool, zNum } from "./registry.js";
 
 export async function handleRefactor(
   projectDir: string,
@@ -22,6 +22,7 @@ export async function handleRefactor(
     old_name?: string;
     new_name?: string;
     lines?: number[];
+    apply?: boolean;
   }
 ): Promise<string> {
   const { action } = args;
@@ -42,7 +43,7 @@ export async function handleRefactor(
 
 async function handleRenameLocal(
   projectDir: string,
-  args: { module_path?: string; old_name?: string; new_name?: string }
+  args: { module_path?: string; old_name?: string; new_name?: string; apply?: boolean }
 ): Promise<string> {
   if (!args.module_path) {
     return JSON.stringify({ success: false, error: "module_path is required for rename_local" });
@@ -80,9 +81,18 @@ async function handleRenameLocal(
     return newLine;
   });
 
-  if (changed > 0) {
+  // Fase 4 fix: previously `rename_local` mutated the file unconditionally —
+  // inconsistent with `ghci_rename` which defaults to preview. Align the
+  // contract: preview unless `apply: true`. Agents that expect the old
+  // always-apply behavior must now opt in explicitly.
+  const applied = args.apply === true;
+  if (changed > 0 && applied) {
     await writeFile(absPath, newLines.join("\n"), "utf-8");
   }
+
+  const notFoundMsg = `'${old_name}' not found in ${args.module_path}. No changes made.`;
+  const previewMsg = `Preview only: ${changed} location(s) would be renamed. Re-run with apply=true to write changes.`;
+  const appliedMsg = `Renamed '${old_name}' → '${new_name}' in ${changed} location(s). Run ghci_load to verify.`;
 
   return JSON.stringify({
     success: true,
@@ -91,10 +101,10 @@ async function handleRenameLocal(
     old_name,
     new_name,
     changed,
+    applied,
     diff,
-    message: changed > 0
-      ? `Renamed '${old_name}' → '${new_name}' in ${changed} location(s). Run ghci_load to verify.`
-      : `'${old_name}' not found in ${args.module_path}. No changes made.`,
+    message:
+      changed === 0 ? notFoundMsg : applied ? appliedMsg : previewMsg,
   });
 }
 
@@ -185,17 +195,22 @@ export function register(server: McpServer, ctx: ToolContext): void {
       new_name: z.string().optional().describe(
         'New name. Required for rename_local and extract_binding. Examples: "increment", "extracted"'
       ),
-      lines: z.array(z.number()).optional().describe(
+      lines: zArray(zNum()).optional().describe(
         'Line range [start, end] (1-indexed, inclusive). Required for extract_binding. Example: [5, 8]'
       ),
+      apply: zBool().optional().describe(
+        "For rename_local: if true, write the rename to disk. Default: false (preview only — " +
+        "returns the full diff without mutating the file). Aligns with ghci_rename's default."
+      ),
     },
-    async ({ action, module_path, old_name, new_name, lines }) => {
+    async ({ action, module_path, old_name, new_name, lines, apply }) => {
       const result = await handleRefactor(ctx.getProjectDir(), {
         action,
         module_path,
         old_name,
         new_name,
         lines,
+        apply,
       });
       return { content: [{ type: "text" as const, text: result }] };
     }

@@ -37,6 +37,118 @@ export interface ToolContext {
 
 export type RegisterFn = (server: McpServer, ctx: ToolContext) => void;
 
+// ─── Boundary-tolerant primitive coercers ────────────────────────────────────
+// The Claude Code → MCP SDK client currently serializes non-string JSON
+// primitives as strings ("true"/"false" for bools, "42" for numbers,
+// JSON-stringified arrays for arrays). These helpers let each tool accept
+// BOTH the canonical JSON type AND the stringified form without weakening
+// the `.strict()` rejection of *unknown keys* — they only relax the TYPE
+// side of validation, not the KEY set.
+//
+// Security: unknown-keys rejection (Fase 1) is unaffected. Accepting a
+// string-encoded boolean does not let a caller smuggle in new fields.
+
+/** Accepts `true`/`false` OR `"true"`/`"false"`/`"1"`/`"0"`. */
+export function zBool(): z.ZodType<boolean> {
+  return z.union([
+    z.boolean(),
+    z
+      .string()
+      .toLowerCase()
+      .transform((s, ctx) => {
+        if (s === "true" || s === "1") return true;
+        if (s === "false" || s === "0") return false;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Expected boolean or "true"/"false"/"1"/"0", got "${s}"`,
+        });
+        return z.NEVER;
+      }),
+  ]);
+}
+
+/** Accepts a JSON number OR a numeric string. Rejects NaN / non-finite values. */
+export function zNum(): z.ZodType<number> {
+  return z.union([
+    z.number().refine(Number.isFinite, "Must be finite"),
+    z
+      .string()
+      .transform((s, ctx) => {
+        const n = Number(s);
+        if (!Number.isFinite(n)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Expected number or numeric string, got "${s}"`,
+          });
+          return z.NEVER;
+        }
+        return n;
+      }),
+  ]);
+}
+
+/** Accepts `T[]` OR a JSON-stringified array which parses to `T[]`. */
+export function zArray<T extends z.ZodTypeAny>(item: T): z.ZodType<z.infer<T>[]> {
+  const arrSchema = z.array(item);
+  return z.union([
+    arrSchema,
+    z
+      .string()
+      .transform((s, ctx) => {
+        try {
+          const parsed = JSON.parse(s);
+          const result = arrSchema.safeParse(parsed);
+          if (!result.success) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Stringified array failed to parse against inner schema`,
+            });
+            return z.NEVER;
+          }
+          return result.data;
+        } catch {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Expected array or JSON-encoded array string`,
+          });
+          return z.NEVER;
+        }
+      }),
+  ]) as unknown as z.ZodType<z.infer<T>[]>;
+}
+
+/** Accepts `Record<string, T>` OR a JSON-stringified map. */
+export function zRecord<T extends z.ZodTypeAny>(
+  value: T
+): z.ZodType<Record<string, z.infer<T>>> {
+  const recSchema = z.record(z.string(), value);
+  return z.union([
+    recSchema,
+    z
+      .string()
+      .transform((s, ctx) => {
+        try {
+          const parsed = JSON.parse(s);
+          const result = recSchema.safeParse(parsed);
+          if (!result.success) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Stringified record failed to parse against inner schema`,
+            });
+            return z.NEVER;
+          }
+          return result.data as Record<string, z.infer<T>>;
+        } catch {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Expected record or JSON-encoded record string`,
+          });
+          return z.NEVER;
+        }
+      }),
+  ]) as unknown as z.ZodType<Record<string, z.infer<T>>>;
+}
+
 /**
  * Register a tool with a strict Zod schema — unknown keys are rejected.
  *

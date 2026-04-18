@@ -28,16 +28,18 @@ describe("handleRefactor — rename_local", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("renames all occurrences of a binding", async () => {
+  it("renames all occurrences of a binding (apply=true)", async () => {
     const result = JSON.parse(
       await handleRefactor(dir, {
         action: "rename_local",
         module_path: "Sample.hs",
         old_name: "helper",
         new_name: "increment",
+        apply: true,
       })
     );
     expect(result.success).toBe(true);
+    expect(result.applied).toBe(true);
     expect(result.changed).toBeGreaterThan(0);
 
     const content = await readFile(path.join(dir, "Sample.hs"), "utf-8");
@@ -57,9 +59,11 @@ describe("handleRefactor — rename_local", () => {
         module_path: "Sample.hs",
         old_name: "foo",
         new_name: "baz",
+        apply: true,
       })
     );
     expect(result.success).toBe(true);
+    expect(result.applied).toBe(true);
     const content = await readFile(path.join(dir, "Sample.hs"), "utf-8");
     expect(content).toContain("baz");
     // fooBar should NOT become bazBar

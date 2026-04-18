@@ -3,7 +3,7 @@ import { z } from "zod";
 import { execFile } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { type ToolContext, registerStrictTool } from "./registry.js";
+import { type ToolContext, registerStrictTool, zNum } from "./registry.js";
 
 export function parseCoverage(stdout: string): Array<{ metric: string; percent: number; fraction?: string }> {
   const rows: Array<{ metric: string; percent: number; fraction?: string }> = [];
@@ -273,8 +273,8 @@ export function register(server: McpServer, ctx: ToolContext): void {
     "cabal_coverage",
     "Run cabal test with HPC coverage enabled and return structured coverage percentages parsed from output.",
     {
-      min_percent: z.number().optional().describe("Optional minimum coverage threshold. If set, response includes meetsThreshold."),
-      timeout_ms: z.number().optional().describe("Optional timeout in milliseconds. Default: 180000."),
+      min_percent: zNum().optional().describe("Optional minimum coverage threshold. If set, response includes meetsThreshold."),
+      timeout_ms: zNum().optional().describe("Optional timeout in milliseconds. Default: 180000."),
     },
     async ({ min_percent, timeout_ms }) => {
       const result = await handleCoverage(ctx.getProjectDir(), { min_percent, timeout_ms });

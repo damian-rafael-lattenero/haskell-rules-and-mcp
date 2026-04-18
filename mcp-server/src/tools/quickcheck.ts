@@ -8,7 +8,7 @@ import {
   moduleToFilePath,
   getLibrarySrcDir,
 } from "../parsers/cabal-parser.js";
-import { type ToolContext, registerStrictTool } from "./registry.js";
+import { type ToolContext, registerStrictTool, zArray, zBool, zNum } from "./registry.js";
 import { suggestFunctionProperties } from "../laws/function-laws.js";
 import { saveProperty } from "../property-store.js";
 import { validatePropertyText } from "../parsers/property-validator.js";
@@ -606,9 +606,9 @@ export function register(server: McpServer, ctx: ToolContext): void {
         'QuickCheck property expression. Examples: "\\xs -> reverse (reverse xs) == (xs :: [Int])". ' +
           'Use "suggest" with function_name to get property suggestions.'
       ),
-      tests: z.number().optional().describe("Number of tests to run (default 100)"),
-      verbose: z.boolean().optional().describe("If true, print each test case (default false)"),
-      incremental: z.boolean().optional().describe(
+      tests: zNum().optional().describe("Number of tests to run (default 100)"),
+      verbose: zBool().optional().describe("If true, print each test case (default false)"),
+      incremental: zBool().optional().describe(
         "If true, this is an incremental check during implementation (FLOW 4 step 9). " +
           "Results are tracked in workflow state per-module."
       ),
@@ -717,17 +717,21 @@ export async function handleQuickCheckBatch(
 }
 
 export function registerBatch(server: McpServer, ctx: ToolContext): void {
-  registerStrictTool(server, ctx, 
+  registerStrictTool(server, ctx,
     "ghci_quickcheck_batch",
     "Run multiple QuickCheck properties in a single call. Loads all project modules first, " +
       "then runs each property sequentially. Returns an array of results. " +
-      "Use this to reduce round-trips when testing multiple properties.",
+      "Use this to reduce round-trips when testing multiple properties. " +
+      "When `properties` is omitted/empty, auto-collects all saved properties from the local store " +
+      "(optionally filtered by `module`/`module_path`) — equivalent to `ghci_regression(action='run')` " +
+      "but with full per-property results instead of just pass/fail counts.",
     {
-      properties: z.array(z.string()).describe(
-        "Array of QuickCheck property expressions to test."
+      properties: zArray(z.string()).optional().describe(
+        "Array of QuickCheck property expressions to test. " +
+        "Omit to auto-collect all saved properties (same effect as auto_collect=true)."
       ),
-      tests: z.number().optional().describe("Number of tests per property (default 100)"),
-      incremental: z.boolean().optional().describe(
+      tests: zNum().optional().describe("Number of tests per property (default 100)"),
+      incremental: zBool().optional().describe(
         "If true, track results in workflow state per-module."
       ),
       module: z.string().optional().describe(
@@ -742,23 +746,27 @@ export function registerBatch(server: McpServer, ctx: ToolContext): void {
           'Example: tests_module="src/Expr/Eval.hs" when testing Eval functions, ' +
           'even if module_path points to Syntax.hs where Arbitrary lives.'
       ),
-      auto_collect: z.boolean().optional().describe(
+      auto_collect: zBool().optional().describe(
         "If true and properties array is empty, auto-collects all saved properties from properties.json. " +
         "Use with module to filter by module."
       ),
     },
     async ({ properties, tests, incremental, module: mod, module_path, tests_module, auto_collect }) => {
       const resolvedMod = module_path ?? mod;
-      let propsToRun = properties;
-      // Auto-collect from property store if requested
-      if (auto_collect && (!properties || properties.length === 0)) {
+      let propsToRun = properties ?? [];
+      // Auto-collect from property store when requested OR when properties
+      // is omitted/empty (the zero-arg / "run all" case). Keeps the explicit
+      // `auto_collect: true` flag as a forward-compatible opt-in for callers
+      // that pass an empty array but want to be loud about it.
+      const shouldAutoCollect = auto_collect === true || propsToRun.length === 0;
+      if (shouldAutoCollect) {
         try {
           const { getAllProperties, getModuleProperties } = await import("../property-store.js");
           const stored = resolvedMod
             ? await getModuleProperties(ctx.getProjectDir(), resolvedMod)
             : await getAllProperties(ctx.getProjectDir());
           propsToRun = stored.map(p => p.property);
-        } catch { /* fallback to empty */ }
+        } catch { /* fallback to whatever was provided */ }
       }
       const session = await ctx.getSession();
       const result = await handleQuickCheckBatch(

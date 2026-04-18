@@ -3,7 +3,7 @@ import { z } from "zod";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { type ToolContext, registerStrictTool } from "./registry.js";
+import { type ToolContext, registerStrictTool, zBool } from "./registry.js";
 import { getBundledToolStatus, TOOL_PATH } from "./tool-installer.js";
 import { awaitTool } from "./toolchain-warmup.js";
 
@@ -157,7 +157,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       "Set write=true to format in place. Uses host formatter first, then bundled formatter. If unavailable, returns unavailable without fallback formatting.",
     {
       module_path: z.string().describe('Path to the module to format. Examples: "src/MyModule.hs"'),
-      write: z.boolean().optional().describe("If true, write formatted output to file. Default: false (dry-run)."),
+      write: zBool().optional().describe("If true, write formatted output to file. Default: false (dry-run)."),
     },
     async ({ module_path, write }) => {
       const result = await handleFormat(ctx.getProjectDir(), { module_path, write });

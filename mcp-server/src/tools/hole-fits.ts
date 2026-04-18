@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { GhciSession } from "../ghci-session.js";
 import { parseTypedHoles } from "../parsers/hole-parser.js";
-import { type ToolContext, registerStrictTool } from "./registry.js";
+import { type ToolContext, registerStrictTool, zNum } from "./registry.js";
 
 // Re-export types for consumers
 export type { HoleFit, RelevantBinding, TypedHole } from "../parsers/hole-parser.js";
@@ -48,7 +48,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       module_path: z.string().describe(
         'Path to a module containing typed holes. Examples: "src/HM/Infer.hs"'
       ),
-      max_fits: z.number().optional().describe(
+      max_fits: zNum().optional().describe(
         "Maximum number of valid hole fits to show per hole (default 10, GHC default is 6)"
       ),
     },

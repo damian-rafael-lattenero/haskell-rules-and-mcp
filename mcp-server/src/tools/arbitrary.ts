@@ -21,8 +21,21 @@ export interface ArbitraryResult {
  */
 export async function handleArbitrary(
   session: GhciSession,
-  args: { type_name: string }
+  args: { type_name: string; module_path?: string }
 ): Promise<string> {
+  // Fase 4 fix: GHCi's `:l` replaces the loaded-module set. If an earlier tool
+  // loaded a different module, the one that defines `type_name` may have
+  // been evicted from scope — `:i TypeName` then fails with "Not in scope".
+  // When module_path is provided, explicitly (re)load it first so the target
+  // type is in scope regardless of the session's prior state.
+  if (args.module_path) {
+    try {
+      await session.loadModule(args.module_path);
+    } catch {
+      // Non-fatal: if the load fails, `:i` below will produce a better error.
+    }
+  }
+
   const info = await session.infoOf(args.type_name);
 
   if (!info.success || info.output.includes("Not in scope")) {
@@ -360,15 +373,22 @@ export function register(server: McpServer, ctx: ToolContext): void {
     "ghci_arbitrary",
     "Generate a QuickCheck Arbitrary instance for a Haskell data type. " +
       "Uses GHCi :i to inspect the type, then generates an appropriate Arbitrary instance. " +
-      "Handles recursive types with 'sized' and non-recursive types with 'oneof'.",
+      "Handles recursive types with 'sized' and non-recursive types with 'oneof'. " +
+      "Pass `module_path` to force-load the module that defines the type — recommended " +
+      "whenever you aren't certain the type is currently in scope (GHCi's `:l` replaces " +
+      "rather than accumulates the loaded-module set).",
     {
       type_name: z.string().describe(
         'The type name to generate an Arbitrary instance for. Examples: "Lit", "Expr", "Maybe a"'
       ),
+      module_path: z.string().optional().describe(
+        "Optional source file that defines the type. When provided, the MCP loads it via " +
+        "`:l <module_path>` before running `:i <type_name>` to guarantee the type is in scope."
+      ),
     },
-    async ({ type_name }) => {
+    async ({ type_name, module_path }) => {
       const session = await ctx.getSession();
-      const result = await handleArbitrary(session, { type_name });
+      const result = await handleArbitrary(session, { type_name, module_path });
       // Mark that Arbitrary instances have been defined for the active module
       try {
         const parsed = JSON.parse(result);

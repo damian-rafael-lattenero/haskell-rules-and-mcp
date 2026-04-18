@@ -6,7 +6,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { type ToolContext, registerStrictTool } from "./registry.js";
+import { type ToolContext, registerStrictTool, zBool } from "./registry.js";
 import { getActiveProperties, getActiveModuleProperties } from "../property-store.js";
 import { parseCabalModules } from "../parsers/cabal-parser.js";
 import { handleCabalTest } from "./test.js";
@@ -245,10 +245,10 @@ export function register(server: McpServer, ctx: ToolContext): void {
       module: z.string().optional().describe(
         "Filter properties by module path. If omitted, exports all properties."
       ),
-      validate_test_suite: z.boolean().optional().describe(
+      validate_test_suite: zBool().optional().describe(
         "If true (default), run cabal_test after writing the exported test file and report the result."
       ),
-      only_passing: z.boolean().optional().describe(
+      only_passing: zBool().optional().describe(
         "If true (default), only export active (non-deprecated) properties. " +
         "Deprecated properties are automatically filtered out to prevent exporting obsolete tests."
       ),

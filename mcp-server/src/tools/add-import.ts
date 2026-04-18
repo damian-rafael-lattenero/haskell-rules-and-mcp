@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { handleHoogleSearch } from "./hoogle.js";
-import { type ToolContext, registerStrictTool } from "./registry.js";
+import { type ToolContext, registerStrictTool, zBool } from "./registry.js";
 
 interface ImportSuggestion {
   module: string;
@@ -126,7 +126,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       name: z.string().describe(
         'The identifier that is not in scope. Examples: "sort", "Map.fromList", "liftIO"'
       ),
-      qualified: z.boolean().optional().describe(
+      qualified: zBool().optional().describe(
         "If true, suggest a qualified import. Default: false (import with explicit name)."
       ),
     },

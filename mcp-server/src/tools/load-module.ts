@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { GhciSession, GhciResult } from "../ghci-session.js";
-import { type ToolContext, registerStrictTool } from "./registry.js";
+import { type ToolContext, registerStrictTool, zBool } from "./registry.js";
 import { parseGhcErrors, GhcError } from "../parsers/error-parser.js";
 import { categorizeWarnings, WarningAction } from "../parsers/warning-categorizer.js";
 import {
@@ -469,10 +469,10 @@ export function register(server: McpServer, ctx: ToolContext): void {
       module_path: z.string().optional().describe(
         'Path to a module to load. If omitted, reloads current modules. Examples: "src/Lib.hs"'
       ),
-      load_all: z.boolean().optional().describe(
+      load_all: zBool().optional().describe(
         "If true, reads the .cabal file and loads ALL library modules into GHCi at once."
       ),
-      diagnostics: z.boolean().optional().describe(
+      diagnostics: zBool().optional().describe(
         "If true, runs dual-pass compilation (strict errors + typed holes) and categorizes warnings with suggested fix actions. " +
           "Defaults to true for module_path/load_all, false for plain reload."
       ),

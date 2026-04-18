@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { type ToolContext, registerStrictTool } from "./registry.js";
+import { type ToolContext, registerStrictTool, zNum } from "./registry.js";
 
 export const hoogleSearchTool = {
   name: "hoogle_search",
@@ -83,7 +83,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       query: z.string().describe(
         'Search query: function name ("mapM") or type signature ("(a -> b) -> [a] -> [b]")'
       ),
-      count: z.number().optional().describe("Number of results (default 10, max 30)"),
+      count: zNum().optional().describe("Number of results (default 10, max 30)"),
     },
     async ({ query, count }) => {
       const result = await handleHoogleSearch({ query, count });

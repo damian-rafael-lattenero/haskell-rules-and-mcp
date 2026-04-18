@@ -15,7 +15,7 @@ import { execFile, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { type ToolContext, registerStrictTool } from "./registry.js";
+import { type ToolContext, registerStrictTool, zNum } from "./registry.js";
 import { resolveToolBinary, TOOL_PATH } from "./tool-installer.js";
 import { awaitTool } from "./toolchain-warmup.js";
 
@@ -322,10 +322,10 @@ export function register(server: McpServer, ctx: ToolContext): void {
       module_path: z.string().optional().describe(
         'Path to the module (required for hover). Example: "src/MyModule.hs"'
       ),
-      line: z.number().optional().describe(
+      line: zNum().optional().describe(
         "0-indexed line number for hover. Default: 0"
       ),
-      character: z.number().optional().describe(
+      character: zNum().optional().describe(
         "0-indexed character position for hover. Default: 0"
       ),
     },

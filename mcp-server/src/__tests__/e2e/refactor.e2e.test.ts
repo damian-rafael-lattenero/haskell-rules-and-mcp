@@ -87,17 +87,20 @@ useOldName n = oldName (oldName n)
     expect(names).toContain("ghci_refactor");
   });
 
-  it("rename_local renames binding and module still compiles", async () => {
-    // Rename oldName → increment
+  it("rename_local renames binding and module still compiles (apply=true)", async () => {
+    // Rename oldName → increment. Fase 4 changed the default to preview —
+    // callers must now opt in to mutation with apply=true.
     const refactorResult = parseResult(
       await callTool(client, "ghci_refactor", {
         action: "rename_local",
         module_path: "src/RefactorTest.hs",
         old_name: "oldName",
         new_name: "increment",
+        apply: true,
       })
     );
     expect(refactorResult.success).toBe(true);
+    expect(refactorResult.applied).toBe(true);
     expect(refactorResult.changed).toBeGreaterThan(0);
     expect(refactorResult.diff.length).toBeGreaterThan(0);
 

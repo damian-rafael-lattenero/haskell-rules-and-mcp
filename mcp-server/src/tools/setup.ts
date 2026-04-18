@@ -3,7 +3,7 @@ import { z } from "zod";
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import { RULES_REGISTRY, loadRule } from "../resources/rules.js";
-import { type ToolContext, registerStrictTool } from "./registry.js";
+import { type ToolContext, registerStrictTool, zBool } from "./registry.js";
 
 /**
  * Install or update Claude Code rules in the target project's .claude/rules/ directory.
@@ -109,7 +109,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       target_dir: z.string().optional().describe(
         "Project directory to install rules in. Defaults to the repository root."
       ),
-      force: z.boolean().optional().describe(
+      force: zBool().optional().describe(
         "If true, overwrite existing rules even if they haven't changed. Default: false."
       ),
     },

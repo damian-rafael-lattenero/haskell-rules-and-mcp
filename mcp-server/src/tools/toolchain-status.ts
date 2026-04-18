@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { type ToolContext, registerStrictTool } from "./registry.js";
+import { type ToolContext, registerStrictTool, zBool } from "./registry.js";
 import {
   ensureTool,
   getBundledToolStatus,
@@ -96,8 +96,8 @@ export function register(server: McpServer, ctx: ToolContext): void {
       "Shows current runtime resolution and a cross-platform release matrix including checksum readiness. " +
       "Propagates results to workflow state so _guidance reflects tool availability.",
     {
-      include_matrix: z.boolean().optional().describe("Include cross-platform release matrix diagnostics. Default: true."),
-      include_runtime: z.boolean().optional().describe("Include current runtime availability checks. Default: true."),
+      include_matrix: zBool().optional().describe("Include cross-platform release matrix diagnostics. Default: true."),
+      include_runtime: zBool().optional().describe("Include current runtime availability checks. Default: true."),
     },
     async ({ include_matrix, include_runtime }) => {
       const result = await handleToolchainStatus({ include_matrix, include_runtime }, ctx);

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { handleReferences } from "./references.js";
-import { type ToolContext, registerStrictTool } from "./registry.js";
+import { type ToolContext, registerStrictTool, zBool } from "./registry.js";
 
 export interface RenameChange {
   file: string;
@@ -116,7 +116,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
     {
       old_name: z.string().describe("The current name to rename"),
       new_name: z.string().describe("The new name to use"),
-      apply: z.boolean().optional().describe("If true, apply the rename directly to files. Default: false (preview only)."),
+      apply: zBool().optional().describe("If true, apply the rename directly to files. Default: false (preview only)."),
     },
     async ({ old_name, new_name, apply }) => {
       const result = await handleRename(ctx.getProjectDir(), {

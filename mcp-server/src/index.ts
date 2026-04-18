@@ -8,7 +8,15 @@ import { resetQuickCheckState } from "./tools/quickcheck.js";
 import { discoverProjects } from "./project-manager.js";
 import { RULES_REGISTRY, loadRule } from "./resources/rules.js";
 import { parseEvalOutput } from "./parsers/eval-output-parser.js";
-import { createRulesChecker, registerStrictTool, type ToolContext } from "./tools/registry.js";
+import {
+  createRulesChecker,
+  registerStrictTool,
+  zArray,
+  zBool,
+  zNum,
+  zRecord,
+  type ToolContext,
+} from "./tools/registry.js";
 import { parseCabalModules, moduleToFilePath, getLibrarySrcDir } from "./parsers/cabal-parser.js";
 import {
   createWorkflowState,
@@ -187,9 +195,9 @@ registerStrictTool(server, ctx,
   "Can preview the fix (apply=false) or apply it directly (apply=true).",
   {
     file: z.string().describe("File path relative to project root"),
-    line: z.number().describe("Line number where the warning occurs"),
+    line: zNum().describe("Line number where the warning occurs"),
     code: z.string().describe("GHC warning code (e.g. GHC-40910, GHC-38417)"),
-    apply: z.boolean().optional().describe("If true, apply fix; if false, return patch only (default: false)")
+    apply: zBool().optional().describe("If true, apply fix; if false, return patch only (default: false)")
   },
   async ({ file, line, code, apply }) => {
     const { fixWarning } = await import("./tools/fix-warning.js");
@@ -229,13 +237,13 @@ registerStrictTool(server, ctx,
     expression: z.string().describe(
       'The expression to evaluate. Examples: "map (+1) [1,2,3]", "show (Just 42)"'
     ),
-    statements: z.array(z.string()).optional().describe(
+    statements: zArray(z.string()).optional().describe(
       "Array of lines executed as a GHCi :{ :} block. " +
         "Both 'x = 42' and 'let x = 42' work for bindings (auto-prefixed with 'let' if needed). " +
         "The last line should be the expression to evaluate. " +
         "GHCi commands (starting with :) are NOT supported inside blocks."
     ),
-    timeout_ms: z.number().int().positive().optional().describe(
+    timeout_ms: zNum().optional().describe(
       "Optional timeout in milliseconds for evaluation. Default: 30000."
     ),
   },
@@ -425,7 +433,7 @@ const switchProjectShape = {
     "Optional: subdirectory to search for projects (relative to workspace root). " +
     "Default: workspace root (searches everywhere recursively up to depth 3)."
   ),
-  refresh: z.boolean().optional().describe(
+  refresh: zBool().optional().describe(
     "Optional: force refresh of project cache. Use after creating new projects with ghci_create_project."
   ),
 };
@@ -529,14 +537,14 @@ server.registerTool(
 
 // --- Tool: ghci_add_modules (add modules to the active project) ---
 const addModulesShape = {
-  modules: z.array(z.string()).min(1).describe(
+  modules: zArray(z.string()).describe(
     'Module names to add. Examples: ["Expr.Parse","Expr.Eval"].'
   ),
-  signatures: z.record(z.string(), z.array(z.string())).optional().describe(
+  signatures: zRecord(zArray(z.string())).optional().describe(
     'Optional typed stubs per module. Values are signature strings appended with `= undefined`. ' +
     'Example: { "Expr.Eval": ["eval :: Env -> Expr -> Either Error Int"] }.'
   ),
-  update_cabal: z.boolean().optional().describe(
+  update_cabal: zBool().optional().describe(
     "Default: true. When true, append the new module names to the library's exposed-modules in the .cabal file."
   ),
 };
@@ -579,17 +587,17 @@ const createProjectShape = {
     "Optional: absolute or workspace-relative directory where the project folder is created. " +
     "Default: workspace root. The new project lives at `<root_dir>/<name>/`."
   ),
-  modules: z.array(z.string()).optional().describe(
+  modules: zArray(z.string()).optional().describe(
     'Module names for `exposed-modules`. Default: [PascalCase(name)]. Examples: ["Expr.Syntax", "Expr.Eval"].'
   ),
-  deps: z.array(z.string()).optional().describe(
+  deps: zArray(z.string()).optional().describe(
     'Additional dependencies beyond base. Examples: ["containers", "mtl >= 2.2"].'
   ),
   language: z.enum(["GHC2024", "Haskell2010"]).optional().describe('Default: "GHC2024".'),
-  with_test_suite: z.boolean().optional().describe(
+  with_test_suite: zBool().optional().describe(
     "If true (default), scaffold a minimal `test/Spec.hs` and a test-suite stanza in the cabal file."
   ),
-  switch_to_it: z.boolean().optional().describe(
+  switch_to_it: zBool().optional().describe(
     "If true (default), kill the active GHCi session, point the server at the new project, and load its modules."
   ),
 };
@@ -703,9 +711,9 @@ registerStrictTool(server, ctx,
     "testing multiple expressions after an edit, or batch type-checking. " +
     "Optionally reloads modules first and stops on first error.",
   {
-    commands: z.array(z.string()).describe('List of GHCi commands to execute. Examples: [":t map", ":t foldr", "1 + 2"]'),
-    reload: z.boolean().optional().describe("If true, reload modules (:r) before executing commands"),
-    stop_on_error: z.boolean().optional().describe("If true, stop executing after the first failed command"),
+    commands: zArray(z.string()).describe('List of GHCi commands to execute. Examples: [":t map", ":t foldr", "1 + 2"]'),
+    reload: zBool().optional().describe("If true, reload modules (:r) before executing commands"),
+    stop_on_error: zBool().optional().describe("If true, stop executing after the first failed command"),
   },
   async ({ commands, reload, stop_on_error }) => {
     const session = await getSession();
@@ -745,7 +753,7 @@ registerStrictTool(server, ctx,
       '"progress": per-module progress (functions, properties). "checklist": TODO list for active module. ' +
       '"help": context-aware guidance with suggested_tools, reasoning, and steps.'
     ),
-    strict: z.boolean().optional().describe(
+    strict: zBool().optional().describe(
       "Optional strict-mode toggle. When true, unavailable lint/format tools remain blocking gates."
     ),
   },
