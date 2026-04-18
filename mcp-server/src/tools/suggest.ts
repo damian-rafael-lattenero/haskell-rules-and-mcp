@@ -190,6 +190,23 @@ export async function handleAnalyze(
   modulePath: string
 ): Promise<string> {
   const modName = inferModuleName(modulePath);
+
+  // GHCi's `:l` replaces the loaded module set rather than adding to it, so
+  // a target that was loaded earlier in the session may no longer be
+  // `:browse`-able after another `ghci_load(...)` replaced it. Explicitly
+  // reload the target here so analyze is idempotent regardless of which
+  // module was most recently loaded. Cheap — `:l` on an already-cached
+  // module is a no-op on disk-unchanged sources.
+  const loadResult = await session.loadModule(modulePath);
+  if (!loadResult.success) {
+    return JSON.stringify({
+      success: false,
+      mode: "analyze",
+      error: `Could not load ${modulePath} for analysis`,
+      loadOutput: loadResult.output.slice(0, 2_000),
+    });
+  }
+
   const browseResult = await session.execute(`:browse ${modName}`);
   // Safety guard: truncate if output is unexpectedly large
   if (browseResult.output.length > 50_000) {

@@ -18,8 +18,22 @@ type SupportedArch = "x64" | "arm64";
 
 interface ToolRelease {
   version: string;
+  /** Primary download URL (typically the repo's own GitHub Release asset). */
   url: string;
+  /** SHA256 of the primary binary. When present, verified after download. */
   sha256?: string;
+  /**
+   * Optional upstream fallback URL tried when the primary fails (404, network,
+   * or checksum mismatch on re-download). Same format as `url` — a bare binary
+   * the server can `chmod +x` and `execFile`. Tarball/zip formats are NOT
+   * supported (no extraction); fallbacks must be single-file downloads.
+   *
+   * Security: `fallbackSha256` is strongly recommended. If absent, the download
+   * succeeds without checksum verification and the response surfaces
+   * `checksumState: "missing"`, so the caller can still reason about trust.
+   */
+  fallbackUrl?: string;
+  fallbackSha256?: string;
   binaryName: string;
 }
 
@@ -245,47 +259,73 @@ export async function autoDownloadTool(tool: SupportedTool): Promise<AutoDownloa
     // Binary doesn't exist - download it
   }
 
-  // Download the binary
-  try {
-    await mkdir(toolDir, { recursive: true });
-    
-    const tempPath = `${binaryPath}.download`;
-    await downloadFile(release.url, tempPath);
-    
-    // Make executable
-    await chmod(tempPath, 0o755);
-    
-    // Verify checksum if provided and valid hex digest
-    const verifyDownloaded = hasVerifiableChecksum(release);
-    if (verifyDownloaded) {
-      const actualSHA = await computeSHA256(tempPath);
-      if (actualSHA !== release.sha256) {
-        throw new Error(`Checksum mismatch: expected ${release.sha256}, got ${actualSHA}`);
-      }
-    }
-    
-    // Move to final location
-    await writeFile(binaryPath, await readFile(tempPath));
-    await chmod(binaryPath, 0o755);
-    
-    return {
-      success: true,
-      binaryPath,
-      version: release.version,
-      downloaded: true,
-      checksumVerified: verifyDownloaded,
-      checksumState: verifyDownloaded ? "verified" : "missing",
-      message: verifyDownloaded
-        ? `Downloaded ${tool} ${release.version} (first time setup, checksum verified)`
-        : `Downloaded ${tool} ${release.version} (first time setup, checksum metadata missing)`,
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      message: `Failed to download ${tool}: ${error instanceof Error ? error.message : String(error)}`,
-    };
+  // Download the binary — tries the primary URL first, then falls back to
+  // an upstream URL if configured. Each attempt runs its own checksum check.
+  await mkdir(toolDir, { recursive: true });
+  const tempPath = `${binaryPath}.download`;
+
+  const attempts: Array<{
+    label: "primary" | "fallback";
+    url: string;
+    sha256: string | undefined;
+  }> = [{ label: "primary", url: release.url, sha256: release.sha256 }];
+  if (release.fallbackUrl) {
+    attempts.push({
+      label: "fallback",
+      url: release.fallbackUrl,
+      sha256: release.fallbackSha256,
+    });
   }
+
+  const attemptErrors: Array<{ label: string; url: string; error: string }> = [];
+
+  for (const attempt of attempts) {
+    try {
+      await downloadFile(attempt.url, tempPath);
+      await chmod(tempPath, 0o755);
+
+      const hasChecksum = !!(attempt.sha256 && SHA256_PATTERN.test(attempt.sha256.trim()));
+      if (hasChecksum) {
+        const actualSHA = await computeSHA256(tempPath);
+        if (actualSHA !== attempt.sha256!.trim()) {
+          throw new Error(
+            `Checksum mismatch (${attempt.label}): expected ${attempt.sha256}, got ${actualSHA}`
+          );
+        }
+      }
+
+      await writeFile(binaryPath, await readFile(tempPath));
+      await chmod(binaryPath, 0o755);
+
+      return {
+        success: true,
+        binaryPath,
+        version: release.version,
+        downloaded: true,
+        checksumVerified: hasChecksum,
+        checksumState: hasChecksum ? "verified" : "missing",
+        message: hasChecksum
+          ? `Downloaded ${tool} ${release.version} via ${attempt.label} (checksum verified)`
+          : `Downloaded ${tool} ${release.version} via ${attempt.label} (checksum metadata missing)`,
+      };
+    } catch (error) {
+      attemptErrors.push({
+        label: attempt.label,
+        url: attempt.url,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Continue to next attempt (or fall through to failure below)
+    }
+  }
+
+  const summary = attemptErrors
+    .map((e) => `${e.label}(${e.url}): ${e.error}`)
+    .join(" | ");
+  return {
+    success: false,
+    error: summary,
+    message: `Failed to download ${tool} — all ${attempts.length} attempt(s) failed: ${summary}`,
+  };
 }
 
 /**

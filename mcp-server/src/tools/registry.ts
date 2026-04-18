@@ -104,11 +104,37 @@ export function registerStrictTool<Shape extends z.ZodRawShape>(
   const strictSchema = z.object(shape).strict();
 
   const wrappedHandler = async (args: z.infer<z.ZodObject<Shape>>, extra: unknown) => {
-    // Lazy import to avoid a circular dep between registry.ts and
-    // toolchain-warmup.ts (warmup imports ToolContext from here).
+    // Lazy imports to avoid circular deps with tools that import from here.
     const { ensureToolchainWarmupStarted } = await import("./toolchain-warmup.js");
+    const { recordToolCall } = await import("../telemetry.js");
+
     ensureToolchainWarmupStarted(ctx);
-    return handler(args, extra);
+
+    let success = false;
+    try {
+      const result = await handler(args, extra);
+      // Best-effort inspection: if the handler returned a JSON body with
+      // `success: false` we still classify the call as a failure for
+      // telemetry purposes. Never throws — record ALL paths.
+      const text = result.content?.[0]?.text;
+      if (typeof text === "string") {
+        try {
+          const parsed = JSON.parse(text);
+          success = parsed?.success !== false;
+        } catch {
+          success = true; // non-JSON text body — treat as success
+        }
+      } else {
+        success = true;
+      }
+      return result;
+    } catch (err) {
+      success = false;
+      throw err;
+    } finally {
+      // Opt-in only — no-op + fast when HASKELL_FLOWS_TELEMETRY unset.
+      void recordToolCall(ctx.getProjectDir(), name, success);
+    }
   };
 
   // Use `registerTool` (not `server.tool`) because the latter's runtime

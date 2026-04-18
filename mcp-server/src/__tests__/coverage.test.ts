@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCoverage } from "../tools/coverage.js";
+import { parseCoverage, parseHpcIndexHtml } from "../tools/coverage.js";
 
 describe("parseCoverage", () => {
   it("parses percentage rows from cabal/hpc output", () => {
@@ -44,5 +44,40 @@ describe("parseCoverage", () => {
 
   it("ignores lines that look percentage-like but are not (e.g. '100' alone)", () => {
     expect(parseCoverage("100 is not a percent\nexpressions used\n")).toEqual([]);
+  });
+});
+
+describe("parseHpcIndexHtml", () => {
+  it("extracts percents + fractions from a typical hpc index", () => {
+    const html = `
+      <html><body>
+      <table>
+        <tr><th>Program Coverage Total</th></tr>
+        <tr><td>99%</td><td>123/124</td></tr>
+        <tr><td>100%</td><td>2/2</td></tr>
+        <tr><td>100%</td><td>1/1</td></tr>
+        <tr><td>0%</td><td>0/0</td></tr>
+        <tr><td>75%</td><td>3/4</td></tr>
+      </table>
+      </body></html>
+    `;
+    const rows = parseHpcIndexHtml(html);
+    expect(rows.length).toBeGreaterThanOrEqual(3);
+    // First row maps to "expressions" by convention
+    expect(rows[0]!.metric).toBe("expressions");
+    expect(rows[0]!.percent).toBe(99);
+    expect(rows[0]!.fraction).toBe("123/124");
+  });
+
+  it("returns [] for an empty or non-HTML input", () => {
+    expect(parseHpcIndexHtml("")).toEqual([]);
+    expect(parseHpcIndexHtml("<html></html>")).toEqual([]);
+  });
+
+  it("strips tags and is tolerant to &nbsp;", () => {
+    const html = "<td>&nbsp;42%&nbsp;</td><td>&nbsp;1/2&nbsp;</td>";
+    const rows = parseHpcIndexHtml(html);
+    expect(rows[0]?.percent).toBe(42);
+    expect(rows[0]?.fraction).toBe("1/2");
   });
 });
