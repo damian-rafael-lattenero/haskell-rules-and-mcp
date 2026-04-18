@@ -16,7 +16,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { type ToolContext, registerStrictTool, zNum } from "./registry.js";
-import { resolveToolBinary, TOOL_PATH } from "./tool-installer.js";
+import { TOOL_PATH } from "./tool-installer.js";
 import { awaitTool } from "./toolchain-warmup.js";
 
 // ─── LSP wire protocol helpers ────────────────────────────────────────────────

@@ -2,30 +2,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { type ToolContext, registerStrictTool, zNum } from "./registry.js";
 
-export const hoogleSearchTool = {
-  name: "hoogle_search",
-  description:
-    "Search Hoogle for Haskell functions by name or type signature. " +
-    "Hoogle is Haskell's type-aware search engine. " +
-    'You can search by type like "(a -> b) -> [a] -> [b]" to find "map", ' +
-    'or by name like "mapM" to find its type and module.',
-  inputSchema: {
-    type: "object" as const,
-    properties: {
-      query: {
-        type: "string",
-        description:
-          'Search query. Can be a function name ("mapM"), a type signature ("(a -> b) -> [a] -> [b]"), or a module-qualified name ("Data.Map.lookup").',
-      },
-      count: {
-        type: "number",
-        description: "Number of results to return. Default: 10, max: 30.",
-      },
-    },
-    required: ["query"],
-  },
-};
-
 interface HoogleResult {
   url: string;
   module: { name: string; url: string };

@@ -2,7 +2,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { execFile } from "node:child_process";
 import path from "node:path";
-import { GhciSession } from "../ghci-session.js";
 import { type ToolContext, registerStrictTool } from "./registry.js";
 
 export interface Reference {
@@ -77,7 +76,7 @@ async function findReferencesWithGrep(
               projectDir,
             ],
             { timeout: 10_000 },
-            (grepError, grepStdout) => {
+            (_grepError, grepStdout) => {
               resolve(parseGrepOutput(grepStdout ?? "", projectDir));
             }
           );

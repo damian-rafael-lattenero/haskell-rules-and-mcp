@@ -26,7 +26,6 @@ import {
   updateModuleProgress as updateModProgress,
   setOptionalToolAvailability,
   serializeState,
-  workflowHint,
   suggestNextStep,
   moduleChecklist,
   deriveGuidance,

@@ -16,39 +16,8 @@ import { canAutoFix, getFixDescription } from "./fix-warning.js";
 
 export type { HoleSummary } from "../parsers/hole-parser.js";
 
-export const loadModuleTool = {
-  name: "ghci_load",
-  description:
-    "Load or reload a Haskell module in GHCi. " +
-    "Without a module_path, reloads all currently loaded modules (:r). " +
-    "With a module_path, loads that specific module (:l). " +
-    "With load_all=true, reads the .cabal file and loads ALL library modules. " +
-    "With diagnostics=true, runs dual-pass compilation (strict errors + typed holes) and categorizes warnings with suggested actions. " +
-    "Returns parsed compilation errors, categorized warnings, and typed holes.",
-  inputSchema: {
-    type: "object" as const,
-    properties: {
-      module_path: {
-        type: "string",
-        description:
-          'Optional path to a module to load. If omitted, reloads current modules. Examples: "src/Lib.hs", "src/MyModule.hs"',
-      },
-      load_all: {
-        type: "boolean",
-        description:
-          "If true, reads the .cabal file and loads ALL library modules into GHCi at once.",
-      },
-      diagnostics: {
-        type: "boolean",
-        description:
-          "If true, runs dual-pass compilation (strict + deferred) to separate real errors from typed holes, " +
-          "and categorizes warnings with suggested fix actions. " +
-          "Defaults to true for module_path/load_all, false for plain reload.",
-      },
-    },
-    required: [],
-  },
-};
+// NOTE: `loadModuleTool` legacy descriptor was removed — tool registration
+// goes through `registerStrictTool` in the `register()` function below.
 
 export async function handleLoadModule(
   session: GhciSession,

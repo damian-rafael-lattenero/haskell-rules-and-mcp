@@ -51,7 +51,7 @@ export async function handleLint(
       hlintCmd,
       ["--json", absPath],
       { env: { ...process.env, PATH: TOOL_PATH }, timeout: 30_000 },
-      (error, stdout, stderr) => {
+      (_error, stdout, stderr) => {
         // hlint returns exit code 1 when it finds suggestions — that's normal
         const output = stdout || "[]";
         try {
