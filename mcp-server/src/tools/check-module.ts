@@ -1,12 +1,23 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { GhciSession } from "../ghci-session.js";
 import { parseGhcErrors } from "../parsers/error-parser.js";
 import { parseBrowseOutput, inferModuleName } from "../parsers/browse-parser.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 // Re-export for consumers
 export type { ModuleDefinition } from "../parsers/browse-parser.js";
+
+/**
+ * Detect whether a Haskell source has an explicit export list.
+ * Matches `module Name (exports) where`, allowing multiline lists.
+ */
+function hasExplicitExportList(source: string): boolean {
+  const stripped = source.replace(/--[^\n]*/g, "").replace(/\{-[\s\S]*?-\}/g, "");
+  return /^\s*module\s+\S+\s*\([\s\S]*?\)\s+where/m.test(stripped);
+}
 
 /**
  * Load a module and return a structured summary of its exports:
@@ -14,7 +25,8 @@ export type { ModuleDefinition } from "../parsers/browse-parser.js";
  */
 export async function handleCheckModule(
   session: GhciSession,
-  args: { module_path: string; module_name?: string }
+  args: { module_path: string; module_name?: string },
+  projectDir?: string
 ): Promise<string> {
   // Disable -fdefer-type-errors so real type errors show up
   await session.execute(":set -fno-defer-type-errors");
@@ -52,15 +64,27 @@ export async function handleCheckModule(
 
   await session.execute(":set -fdefer-type-errors");
 
-  // Suggest explicit export list if module exports everything
-  const exportNames = [
-    ...types.map(d => `${d.name}(..)`),
-    ...classes.map(d => `${d.name}(..)`),
-    ...functions.map(d => d.name),
-  ];
-  const suggestedExportList = exportNames.length > 0
-    ? `module ${moduleName}\n  ( ${exportNames.join("\n  , ")}\n  ) where`
-    : null;
+  let hasExports = false;
+  if (projectDir) {
+    try {
+      const source = await readFile(path.resolve(projectDir, args.module_path), "utf-8");
+      hasExports = hasExplicitExportList(source);
+    } catch {
+      // Unable to read source — fall through as if no explicit list detected.
+    }
+  }
+
+  let suggestedExportList: string | null = null;
+  if (!hasExports) {
+    const exportNames = [
+      ...types.map((d) => (d.kind === "data" ? `${d.name}(..)` : d.name)),
+      ...classes.map((d) => `${d.name}(..)`),
+      ...functions.map((d) => d.name),
+    ];
+    suggestedExportList = exportNames.length > 0
+      ? `module ${moduleName}\n  ( ${exportNames.join("\n  , ")}\n  ) where`
+      : null;
+  }
 
   return JSON.stringify({
     success: true,
@@ -76,15 +100,16 @@ export async function handleCheckModule(
       warnings: warnings.length,
     },
     module: moduleName,
+    hasExplicitExports: hasExports,
     ...(suggestedExportList ? { suggestedExportList } : {}),
-    _nextStep: suggestedExportList
-      ? "Consider adding an explicit export list to control the module's public API."
-      : undefined,
+    ...(suggestedExportList
+      ? { _nextStep: "Consider adding an explicit export list to control the module's public API." }
+      : {}),
   });
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_check_module",
     "Load a module and return a structured summary of all its exported definitions with types. " +
       "Shows: total definitions, functions with signatures, type aliases, data types, classes, " +
@@ -99,7 +124,11 @@ export function register(server: McpServer, ctx: ToolContext): void {
     },
     async ({ module_path, module_name }) => {
       const session = await ctx.getSession();
-      const result = await handleCheckModule(session, { module_path, module_name });
+      const result = await handleCheckModule(
+        session,
+        { module_path, module_name },
+        ctx.getProjectDir()
+      );
       // Mark completion gate
       try {
         const parsed = JSON.parse(result);

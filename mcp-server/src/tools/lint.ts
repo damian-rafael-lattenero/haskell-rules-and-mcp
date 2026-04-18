@@ -3,8 +3,9 @@ import { z } from "zod";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { ToolContext } from "./registry.js";
-import { ensureTool, TOOL_PATH } from "./tool-installer.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
+import { TOOL_PATH } from "./tool-installer.js";
+import { awaitTool } from "./toolchain-warmup.js";
 import { analyzeBasicLintRules } from "../parsers/basic-lint-rules.js";
 
 export interface LintSuggestion {
@@ -26,7 +27,7 @@ export async function handleLint(
   session?: unknown
 ): Promise<string> {
   void session;
-  const hlint = await ensureTool("hlint");
+  const hlint = await awaitTool("hlint");
   if (!hlint.available) {
     return JSON.stringify({
       success: false,
@@ -142,24 +143,46 @@ export async function handleLintBasic(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_lint",
     "Run hlint on a Haskell source file and return structured suggestions. " +
       "Each suggestion includes the hint, severity, original code, suggested replacement, and location. " +
-      "Uses host hlint first, then bundled hlint. If unavailable, returns unavailable without fallback execution.",
+      "Resolution order: host hlint → bundled hlint. " +
+      "When hlint is unavailable, automatically falls back to heuristic basic-lint-rules with `degraded: true` and `gateEligible: false`; " +
+      "the degraded fallback surfaces issues but does NOT satisfy the module-complete lint gate.",
     {
       module_path: z.string().describe('Path to the module to lint. Examples: "src/MyModule.hs"'),
     },
     async ({ module_path }) => {
       const session = await ctx.getSession();
       const result = await handleLint(ctx.getProjectDir(), { module_path }, session);
+      const parsed = JSON.parse(result);
+
+      // When hlint is unavailable, automatically fall back to the basic
+      // heuristic linter so the caller always has something actionable to look at.
+      if (parsed.unavailable === true) {
+        ctx.setOptionalToolAvailability("lint", "unavailable");
+        const basic = JSON.parse(await handleLintBasic(ctx.getProjectDir(), { module_path }));
+        const merged = {
+          ...basic,
+          _warning:
+            "hlint is unavailable. Falling back to basic-lint-rules. " +
+            "This does NOT satisfy the module-complete lint gate.",
+          _primary_failure: {
+            lint_tool: "hlint",
+            reason: parsed.reason,
+            error: parsed.error,
+          },
+        };
+        return { content: [{ type: "text" as const, text: JSON.stringify(merged) }] };
+      }
+
       // Mark completion gate only when a real linter ran (hlint), not the
       // GHC-warnings fallback.  The fallback is useful for surfacing issues but
       // cannot replace a full hlint analysis — marking it complete would give a
       // false "clean code" signal when hlint is not installed.
       try {
-        const parsed = JSON.parse(result);
-        ctx.setOptionalToolAvailability("lint", parsed.unavailable ? "unavailable" : "available");
+        ctx.setOptionalToolAvailability("lint", "available");
         if (parsed.success && parsed.lint_tool === "hlint") {
           const activeModule = ctx.getWorkflowState().activeModule ?? module_path;
           const mod = ctx.getModuleProgress(activeModule);
@@ -170,19 +193,6 @@ export function register(server: McpServer, ctx: ToolContext): void {
           }
         }
       } catch { /* non-fatal */ }
-      return { content: [{ type: "text" as const, text: result }] };
-    }
-  );
-
-  server.tool(
-    "ghci_lint_basic",
-    "Run lightweight heuristic lint checks when hlint is unavailable. " +
-      "Reports basic anti-patterns but does NOT satisfy the module-complete lint gate.",
-    {
-      module_path: z.string().describe('Path to the module to lint. Examples: "src/MyModule.hs"'),
-    },
-    async ({ module_path }) => {
-      const result = await handleLintBasic(ctx.getProjectDir(), { module_path });
       return { content: [{ type: "text" as const, text: result }] };
     }
   );

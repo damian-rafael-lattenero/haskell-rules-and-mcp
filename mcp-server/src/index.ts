@@ -8,7 +8,7 @@ import { resetQuickCheckState } from "./tools/quickcheck.js";
 import { discoverProjects } from "./project-manager.js";
 import { RULES_REGISTRY, loadRule } from "./resources/rules.js";
 import { parseEvalOutput } from "./parsers/eval-output-parser.js";
-import { createRulesChecker, type ToolContext } from "./tools/registry.js";
+import { createRulesChecker, registerStrictTool, type ToolContext } from "./tools/registry.js";
 import { parseCabalModules, moduleToFilePath, getLibrarySrcDir } from "./parsers/cabal-parser.js";
 import {
   createWorkflowState,
@@ -27,14 +27,23 @@ import {
   setStrictWorkflowMode,
 } from "./workflow-state.js";
 
-// Tool register functions
+// Tool register functions.
+// Peripheral tools intentionally NOT imported — their code stays in-tree for
+// future revival but is no longer exposed via the MCP:
+//   - fuzz-parser, watch    — low-signal for AI agents
+//   - profile, flags        — rarely used from an agent loop
+//   - equiv, trace          — covered by ghci_eval + hand-written properties
+//
+// Deprecated shims (init, scaffold) are still registered so existing e2e
+// flows keep working; their descriptions steer callers toward
+// `ghci_create_project` / `ghci_add_modules`. Remove in a follow-up PR that
+// also migrates the e2e tests.
 import { register as registerTypeCheck } from "./tools/type-check.js";
 import { register as registerTypeInfo } from "./tools/type-info.js";
 import { register as registerLoadModule } from "./tools/load-module.js";
 import { register as registerBuild } from "./tools/build.js";
 import { register as registerTest } from "./tools/test.js";
 import { register as registerHoogleSearch } from "./tools/hoogle.js";
-import { register as registerScaffold } from "./tools/scaffold.js";
 import { register as registerCheckModule } from "./tools/check-module.js";
 import { register as registerApplyExports } from "./tools/apply-exports.js";
 import { register as registerDiagnostics } from "./tools/diagnostics.js";
@@ -52,20 +61,13 @@ import { register as registerRename } from "./tools/rename.js";
 import { register as registerSetup } from "./tools/setup.js";
 import { register as registerSuggest } from "./tools/suggest.js";
 import { register as registerArbitrary } from "./tools/arbitrary.js";
-import { register as registerTrace } from "./tools/trace.js";
 import { register as registerRegression } from "./tools/regression.js";
-import { register as registerInit } from "./tools/init.js";
 import { register as registerExportTests } from "./tools/export-tests.js";
 import { register as registerDeps } from "./tools/deps.js";
 import { register as registerValidateCabal } from "./tools/validate-cabal.js";
 import { register as registerHole } from "./tools/hole.js";
 import { register as registerRefactor } from "./tools/refactor.js";
-import { register as registerFlags } from "./tools/flags.js";
-import { register as registerProfile } from "./tools/profile.js";
 import { register as registerHls } from "./tools/hls.js";
-import { register as registerWatch } from "./tools/watch.js";
-import { register as registerFuzzParser } from "./tools/fuzz-parser.js";
-import { register as registerEquiv } from "./tools/equiv.js";
 import { register as registerPropertyLifecycle } from "./tools/property-lifecycle.js";
 import { register as registerToolchainStatus } from "./tools/toolchain-status.js";
 import { register as registerCoverage } from "./tools/coverage.js";
@@ -149,7 +151,6 @@ registerLoadModule(server, ctx);
 registerBuild(server, ctx);
 registerTest(server, ctx);
 registerHoogleSearch(server, ctx);
-registerScaffold(server, ctx);
 registerCheckModule(server, ctx);
 registerApplyExports(server, ctx);
 registerDiagnostics(server, ctx);
@@ -168,26 +169,19 @@ registerRename(server, ctx);
 registerSetup(server, ctx);
 registerSuggest(server, ctx);
 registerArbitrary(server, ctx);
-registerTrace(server, ctx);
 registerRegression(server, ctx);
-registerInit(server, ctx);
 registerExportTests(server, ctx);
 registerDeps(server, ctx);
 registerValidateCabal(server, ctx);
 registerHole(server, ctx);
 registerRefactor(server, ctx);
-registerFlags(server, ctx);
-registerProfile(server, ctx);
 registerHls(server, ctx);
-registerWatch(server, ctx);
-registerFuzzParser(server, ctx);
-registerEquiv(server, ctx);
 registerPropertyLifecycle(server, ctx);
 registerToolchainStatus(server, ctx);
 registerCoverage(server, ctx);
 
 // --- Tool: ghci_fix_warning (inline) ---
-server.tool(
+registerStrictTool(server, ctx,
   "ghci_fix_warning",
   "Auto-fix common GHC warnings like unused-matches (GHC-40910), unused-imports (GHC-38417), etc. " +
   "Can preview the fix (apply=false) or apply it directly (apply=true).",
@@ -208,7 +202,7 @@ server.tool(
 );
 
 // --- Tool: ghci_kind (inline, simple) ---
-server.tool(
+registerStrictTool(server, ctx,
   "ghci_kind",
   "Get the kind of a Haskell type expression using GHCi :k. Useful for understanding higher-kinded types.",
   {
@@ -226,7 +220,7 @@ server.tool(
 );
 
 // --- Tool: ghci_eval (inline, uses parseEvalOutput) ---
-server.tool(
+registerStrictTool(server, ctx,
   "ghci_eval",
   "Evaluate a Haskell expression in GHCi and return the result. Useful for testing pure functions. " +
     "Supports multi-line evaluation: use the 'statements' parameter for sequential bindings, " +
@@ -330,7 +324,7 @@ server.tool(
 );
 
 // --- Tool: ghci_session ---
-server.tool(
+registerStrictTool(server, ctx,
   "ghci_session",
   "Manage the GHCi session: restart it or check its status. Use 'restart' after changing .cabal file or adding new modules.",
   {
@@ -393,7 +387,7 @@ server.tool(
 );
 
 // --- Tool: mcp_restart ---
-server.tool(
+registerStrictTool(server, ctx,
   "mcp_restart",
   "Restart the GHCi session. Use after .cabal changes, new modules, or dependency updates. " +
     "Kills the current GHCi process and starts a fresh one in the same project directory. " +
@@ -425,21 +419,26 @@ async function getProjects(searchDir: string, forceRefresh = false): Promise<Awa
 }
 
 // --- Tool: ghci_switch_project ---
-server.tool(
+const switchProjectShape = {
+  project: z.string().optional().describe("Project name to switch to. Omit to list available projects."),
+  search_dir: z.string().optional().describe(
+    "Optional: subdirectory to search for projects (relative to workspace root). " +
+    "Default: workspace root (searches everywhere recursively up to depth 3)."
+  ),
+  refresh: z.boolean().optional().describe(
+    "Optional: force refresh of project cache. Use after creating new projects with ghci_create_project."
+  ),
+};
+server.registerTool(
   "ghci_switch_project",
-  "List available Haskell projects or switch to a different one. " +
-    "Projects are discovered recursively from subdirectories containing .cabal files (max depth: 3). " +
-    "Omit the project parameter to list available projects. " +
-    "Use search_dir to search in a specific subdirectory.",
   {
-    project: z.string().optional().describe("Project name to switch to. Omit to list available projects."),
-    search_dir: z.string().optional().describe(
-      "Optional: subdirectory to search for projects (relative to workspace root). " +
-      "Default: workspace root (searches everywhere recursively up to depth 3)."
-    ),
-    refresh: z.boolean().optional().describe(
-      "Optional: force refresh of project cache. Use after creating new projects with ghci_init."
-    ),
+    description:
+      "List available Haskell projects or switch to a different one. " +
+      "Projects are discovered recursively from subdirectories containing .cabal files (max depth: 3). " +
+      "Omit the project parameter to list available projects. " +
+      "Use search_dir to search in a specific subdirectory. " +
+      "Unknown parameter names are rejected (use `project`, not `project_path`).",
+    inputSchema: z.object(switchProjectShape).strict() as unknown as typeof switchProjectShape,
   },
   async ({ project, search_dir, refresh }) => {
     const searchPath = search_dir ? path.join(BASE_DIR, search_dir) : BASE_DIR;
@@ -528,8 +527,175 @@ server.tool(
   }
 );
 
+// --- Tool: ghci_add_modules (add modules to the active project) ---
+const addModulesShape = {
+  modules: z.array(z.string()).min(1).describe(
+    'Module names to add. Examples: ["Expr.Parse","Expr.Eval"].'
+  ),
+  signatures: z.record(z.string(), z.array(z.string())).optional().describe(
+    'Optional typed stubs per module. Values are signature strings appended with `= undefined`. ' +
+    'Example: { "Expr.Eval": ["eval :: Env -> Expr -> Either Error Int"] }.'
+  ),
+  update_cabal: z.boolean().optional().describe(
+    "Default: true. When true, append the new module names to the library's exposed-modules in the .cabal file."
+  ),
+};
+server.registerTool(
+  "ghci_add_modules",
+  {
+    description:
+      "Add one or more modules to the ACTIVE Haskell project. " +
+      "Updates `.cabal` (`exposed-modules`) by default and scaffolds `src/<Module>.hs` stubs — " +
+      "with typed `= undefined` bodies when `signatures` is provided. " +
+      "Fails cleanly if the active project has no `.cabal` — use ghci_create_project first for a brand-new project.",
+    inputSchema: z.object(addModulesShape).strict() as unknown as typeof addModulesShape,
+  },
+  async ({ modules, signatures, update_cabal }) => {
+    const { handleAddModules } = await import("./tools/add-modules.js");
+    const result = await handleAddModules(projectDir, {
+      modules,
+      signatures,
+      update_cabal,
+    });
+
+    const parsed = JSON.parse(result);
+    if (parsed.success) {
+      try {
+        const session = await getSession();
+        await session.reload();
+      } catch {
+        // Non-fatal: caller can run ghci_session(restart) if needed.
+      }
+    }
+
+    return { content: [{ type: "text" as const, text: result }] };
+  }
+);
+
+// --- Tool: ghci_create_project (dead-simple scaffold + switch) ---
+const createProjectShape = {
+  name: z.string().describe('Project name (becomes `<name>.cabal`). Examples: "expr-eval", "parser-lib".'),
+  root_dir: z.string().optional().describe(
+    "Optional: absolute or workspace-relative directory where the project folder is created. " +
+    "Default: workspace root. The new project lives at `<root_dir>/<name>/`."
+  ),
+  modules: z.array(z.string()).optional().describe(
+    'Module names for `exposed-modules`. Default: [PascalCase(name)]. Examples: ["Expr.Syntax", "Expr.Eval"].'
+  ),
+  deps: z.array(z.string()).optional().describe(
+    'Additional dependencies beyond base. Examples: ["containers", "mtl >= 2.2"].'
+  ),
+  language: z.enum(["GHC2024", "Haskell2010"]).optional().describe('Default: "GHC2024".'),
+  with_test_suite: z.boolean().optional().describe(
+    "If true (default), scaffold a minimal `test/Spec.hs` and a test-suite stanza in the cabal file."
+  ),
+  switch_to_it: z.boolean().optional().describe(
+    "If true (default), kill the active GHCi session, point the server at the new project, and load its modules."
+  ),
+};
+server.registerTool(
+  "ghci_create_project",
+  {
+    description:
+      "Create a new Haskell project from scratch in a brand-new directory. " +
+      "Dead-simple: no preguntas, no smart resolution, no force flags. " +
+      "Generates exactly 4 files: <name>.cabal, cabal.project, src/<Module>.hs (one per module), test/Spec.hs. " +
+      "Fails cleanly if the target directory already contains a .cabal — use ghci_add_modules to extend an existing project. " +
+      "By default activates the MCP session on the newly created project.",
+    inputSchema: z.object(createProjectShape).strict() as unknown as typeof createProjectShape,
+  },
+  async ({ name, root_dir, modules, deps, language, with_test_suite, switch_to_it }) => {
+    const { handleCreateProject } = await import("./tools/create-project.js");
+    const rootDir = root_dir
+      ? (path.isAbsolute(root_dir) ? root_dir : path.resolve(BASE_DIR, root_dir))
+      : BASE_DIR;
+    const result = await handleCreateProject({
+      name,
+      rootDir,
+      modules,
+      deps,
+      language,
+      withTestSuite: with_test_suite ?? true,
+    });
+
+    if (!result.success) {
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    }
+
+    projectsCache = null;
+    const shouldSwitch = switch_to_it ?? true;
+    if (!shouldSwitch) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            success: true,
+            projectDir: result.projectDir,
+            created: result.created,
+            modules: result.modules,
+            switched: false,
+            _nextStep: `Run ghci_switch_project(project="${name}") to activate the new project.`,
+          }),
+        }],
+      };
+    }
+
+    resetQuickCheckState();
+    resetWorkflowState(workflowState);
+    if (ghciSession) { await ghciSession.kill(); ghciSession = null; }
+
+    const previousProjectDir = projectDir;
+    projectDir = result.projectDir;
+    rulesChecker.reset();
+
+    let session: GhciSession;
+    try {
+      session = await getSession();
+    } catch (err) {
+      projectDir = previousProjectDir;
+      rulesChecker.reset();
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          success: true,
+          projectDir: result.projectDir,
+          created: result.created,
+          modules: result.modules,
+          switched: false,
+          _warning: `Project files created but failed to start GHCi: ${msg}. Server still points at ${previousProjectDir}.`,
+        }) }],
+      };
+    }
+
+    let modulesLoaded: string[] = [];
+    try {
+      const cabalModules = await parseCabalModules(result.projectDir);
+      const srcDir = await getLibrarySrcDir(result.projectDir);
+      const paths = cabalModules.library.map((mod) => moduleToFilePath(mod, srcDir));
+      if (paths.length > 0) {
+        await session.loadModules(paths, cabalModules.library);
+        modulesLoaded = paths;
+      }
+    } catch {
+      // Non-fatal: modules can be loaded manually with ghci_load.
+    }
+
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify({
+        success: true,
+        projectDir: result.projectDir,
+        created: result.created,
+        modules: result.modules,
+        switched: true,
+        alive: session.isAlive(),
+        modulesLoaded: modulesLoaded.length,
+      }) }],
+    };
+  }
+);
+
 // --- Tool: ghci_batch ---
-server.tool(
+registerStrictTool(server, ctx,
   "ghci_batch",
   "Execute multiple GHCi commands in a single atomic call. Returns all results as a JSON array " +
     "with each result aligned to its command (no offset issues). " +
@@ -569,7 +735,7 @@ server.tool(
 );
 
 // --- Tool: ghci_workflow ---
-server.tool(
+registerStrictTool(server, ctx,
   "ghci_workflow",
   "Query the development workflow state: current flow/step, module progress, next action, or checklist. " +
     "Use to understand where you are in the development process and what to do next.",

@@ -12,7 +12,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 export async function handleRefactor(
   projectDir: string,
@@ -166,7 +166,7 @@ function escapeRegex(s: string): string {
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_refactor",
     "Text-based refactoring for Haskell source files. " +
       "Actions: 'rename_local' renames a binding everywhere in a module (word-boundary safe, no substring matches). " +

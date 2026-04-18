@@ -7,7 +7,7 @@ import { parseTypedHoles } from "../parsers/hole-parser.js";
 import { parseGhcErrors } from "../parsers/error-parser.js";
 import { parseBrowseOutput, inferModuleName } from "../parsers/browse-parser.js";
 import { suggestFunctionProperties, type Sibling } from "../laws/function-laws.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 interface UndefinedFunction {
   name: string;
@@ -251,7 +251,7 @@ export async function handleAnalyze(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_suggest",
     "Find `= undefined` functions and show typed-hole implementation suggestions. " +
       "Temporarily replaces each `= undefined` with a typed hole `= _`, loads the module " +

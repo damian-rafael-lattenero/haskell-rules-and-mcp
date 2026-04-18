@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { GhciSession } from "../ghci-session.js";
 import { parseTypedHoles } from "../parsers/hole-parser.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 // Re-export types for consumers
 export type { HoleFit, RelevantBinding, TypedHole } from "../parsers/hole-parser.js";
@@ -39,7 +39,7 @@ export async function handleHoleFits(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_hole_fits",
     "Load a module containing typed holes (_) and return structured analysis of each hole: " +
       "expected type, relevant bindings in scope, and valid hole fits that GHC suggests. " +

@@ -3,6 +3,7 @@ import type { GhciSession } from "../ghci-session.js";
 import type { WorkflowState, ModuleProgress } from "../workflow-state.js";
 import { access } from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 /**
  * Context passed to each tool's register function.
@@ -35,6 +36,93 @@ export interface ToolContext {
 }
 
 export type RegisterFn = (server: McpServer, ctx: ToolContext) => void;
+
+/**
+ * Register a tool with a strict Zod schema — unknown keys are rejected.
+ *
+ * The MCP SDK's default behavior is to strip unknown keys silently (Zod's
+ * `.object()` default). This wrapper wraps the shape in `.strict()` so the
+ * SDK's validator rejects unknown parameter names with a structured error
+ * instead of letting them flow through unnoticed.
+ *
+ * Use this for any tool where an unknown param name could silently change
+ * behavior (e.g. project-switch tools that behave differently when a param
+ * is absent vs present).
+ */
+export function registerStrict<Shape extends z.ZodRawShape>(
+  server: McpServer,
+  options: {
+    name: string;
+    description: string;
+    shape: Shape;
+  },
+  handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<{
+    content: Array<{ type: "text"; text: string }>;
+  }>
+): void {
+  const strictSchema = z.object(options.shape).strict();
+  // The SDK's registerTool accepts either a raw shape or a schema instance.
+  // Passing a strict ZodObject makes the SDK run `.strict()` validation.
+  server.registerTool(
+    options.name,
+    {
+      description: options.description,
+      inputSchema: strictSchema as unknown as Shape,
+    },
+    handler as unknown as Parameters<typeof server.registerTool>[2]
+  );
+}
+
+/**
+ * Drop-in replacement for `server.tool(name, description, shape, handler)`.
+ *
+ * Behaviors added on top of the plain SDK call:
+ *   1. Wraps `shape` in `z.object(shape).strict()` so the SDK rejects unknown
+ *      keys structurally (Bug 1 fix) instead of silently stripping them.
+ *   2. Lazily triggers `ensureToolchainWarmupStarted(ctx)` on each call. The
+ *      warmup is idempotent; only the first call actually kicks off downloads.
+ *      This makes optional binaries (hlint, fourmolu, hls) available in the
+ *      background without an explicit `ghci_toolchain_status` call.
+ *
+ * Security note: warmup never executes a downloaded binary — it only fetches
+ * via `ensureTool()`, which enforces SHA256 verification when the release
+ * manifest configures a checksum. Binaries run only when a concrete tool
+ * (e.g. `ghci_lint`) explicitly invokes them with `execFile`.
+ */
+export function registerStrictTool<Shape extends z.ZodRawShape>(
+  server: McpServer,
+  ctx: ToolContext,
+  name: string,
+  description: string,
+  shape: Shape,
+  // Handler type mirrors what the SDK's tool callback expects: the SDK has
+  // already parsed args against the inputSchema before invoking this handler.
+  handler: (args: z.infer<z.ZodObject<Shape>>, extra: unknown) => Promise<{
+    content: Array<{ type: "text"; text: string }>;
+  }>
+): void {
+  const strictSchema = z.object(shape).strict();
+
+  const wrappedHandler = async (args: z.infer<z.ZodObject<Shape>>, extra: unknown) => {
+    // Lazy import to avoid a circular dep between registry.ts and
+    // toolchain-warmup.ts (warmup imports ToolContext from here).
+    const { ensureToolchainWarmupStarted } = await import("./toolchain-warmup.js");
+    ensureToolchainWarmupStarted(ctx);
+    return handler(args, extra);
+  };
+
+  // Use `registerTool` (not `server.tool`) because the latter's runtime
+  // disambiguation treats a pre-built ZodObject as annotations — stripping
+  // all argument validation. `registerTool` explicitly accepts either a raw
+  // shape or an `AnySchema` in `inputSchema`, so passing a strict ZodObject
+  // keeps the Zod validator active and rejects unknown keys at the SDK layer.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (server.registerTool as any)(
+    name,
+    { description, inputSchema: strictSchema },
+    wrappedHandler
+  );
+}
 
 /**
  * Create a cached rules-check function.

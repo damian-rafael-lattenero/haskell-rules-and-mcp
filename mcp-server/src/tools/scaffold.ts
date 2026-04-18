@@ -1,5 +1,13 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+/**
+ * scaffold — internal helpers, no longer exposed as an MCP tool.
+ *
+ * `ghci_scaffold` was deprecated and removed from the public MCP surface in
+ * Fase 2. The `handleScaffold` function below is still used internally by:
+ *   - `ghci_add_modules` (the strict replacement for the old tool)
+ *   - `ghci_switch_project`'s auto-scaffold step
+ *
+ * This file intentionally no longer exports a `register` function.
+ */
 import { access, mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -8,7 +16,6 @@ import {
   getLibrarySrcDir,
   extractBuildDepends,
 } from "../parsers/cabal-parser.js";
-import type { ToolContext } from "./registry.js";
 
 export interface ScaffoldResult {
   created: string[];
@@ -313,30 +320,6 @@ function generateStub(
     })
     .join("\n\n");
   return `module ${moduleName} where\n${imports}\n${stubs}\n`;
-}
-
-export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
-    "ghci_scaffold",
-    "Read the .cabal file, find library modules that don't have source files yet, and create minimal stubs. " +
-      "Use after adding new modules to the .cabal file, before restarting GHCi. " +
-      "This prevents the 'can't find source for Module' error on GHCi startup. " +
-      "Pass `signatures` to generate typed stubs with `= undefined` bodies for ghci_suggest.",
-    {
-      signatures: z
-        .record(z.string(), z.array(z.string()))
-        .optional()
-        .describe(
-          'Optional: map of module name to type signatures. ' +
-            'Generates `= undefined` stubs for ghci_suggest. ' +
-            'Example: {"Parser.Core": ["satisfy :: String -> (Char -> Bool) -> Parser Char"]}'
-        ),
-    },
-    async ({ signatures }) => {
-      const result = await handleScaffold(ctx.getProjectDir(), signatures);
-      return { content: [{ type: "text" as const, text: result }] };
-    }
-  );
 }
 
 async function fileExists(filePath: string): Promise<boolean> {

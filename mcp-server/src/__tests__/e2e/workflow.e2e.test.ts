@@ -101,9 +101,14 @@ describe.runIf(GHC_AVAILABLE)("E2E Workflow: Development Loop", () => {
     try { await client.close(); } catch { /* ignore */ }
   });
 
-  // --- Step 1: Create a buggy module ---
-  it("step 1: scaffold creates stub for new module", async () => {
-    const result = parseResult(await callTool(client, "ghci_scaffold"));
+  // --- Step 1: Create a buggy module via ghci_add_modules (replaces the old ghci_scaffold) ---
+  it("step 1: ghci_add_modules creates stub for new module", async () => {
+    const result = parseResult(
+      await client.callTool({
+        name: "ghci_add_modules",
+        arguments: { modules: ["WorkflowTest"] },
+      })
+    );
     expect(result.success).toBe(true);
     expect(result.created).toContain("src/WorkflowTest.hs");
   });

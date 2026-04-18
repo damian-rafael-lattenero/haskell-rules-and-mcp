@@ -15,8 +15,9 @@ import { execFile, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ToolContext } from "./registry.js";
-import { resolveToolBinary, ensureTool, TOOL_PATH } from "./tool-installer.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
+import { resolveToolBinary, TOOL_PATH } from "./tool-installer.js";
+import { awaitTool } from "./toolchain-warmup.js";
 
 // ─── LSP wire protocol helpers ────────────────────────────────────────────────
 
@@ -231,7 +232,7 @@ export async function handleHls(
   args: { action: string; module_path?: string; line?: number; character?: number }
 ): Promise<string> {
   if (args.action === "available") {
-    const resolved = await ensureTool("hls");
+    const resolved = await awaitTool("hls");
     if (resolved.available) {
       const version = await hlsVersion(resolved.binaryPath ?? "haskell-language-server-wrapper");
       return JSON.stringify({
@@ -266,7 +267,7 @@ export async function handleHls(
     if (!args.module_path) {
       return JSON.stringify({ success: false, error: "module_path is required for action 'hover'" });
     }
-    const resolved = await ensureTool("hls");
+    const resolved = await awaitTool("hls");
     if (!resolved.available) {
       return JSON.stringify({
         success: false,
@@ -307,7 +308,7 @@ export async function handleHls(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_hls",
     "Haskell Language Server (HLS) integration. " +
       "Actions: 'available' to check if HLS is installed; " +

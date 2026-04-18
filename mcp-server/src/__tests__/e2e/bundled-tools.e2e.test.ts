@@ -98,7 +98,8 @@ describe("bundled tools e2e", () => {
     }
   });
 
-  it("ghci_watch start/status/stop lifecycle works", async () => {
+  // Tool `ghci_watch` was removed from the public MCP surface in Fase 2.
+  it.skip("ghci_watch start/status/stop lifecycle works (tool removed)", async () => {
     const startResult = await client.callTool({
       name: "ghci_watch",
       arguments: { action: "start", paths: ["src"], auto_actions: ["load"] },

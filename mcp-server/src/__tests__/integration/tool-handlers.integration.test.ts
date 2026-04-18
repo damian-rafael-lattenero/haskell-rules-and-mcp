@@ -16,7 +16,7 @@ import { handleImports } from "../../tools/imports.js";
 import { handleReferences } from "../../tools/references.js";
 import { handleRename } from "../../tools/rename.js";
 import { handleCabalTest } from "../../tools/test.js";
-import { handleFuzzParser } from "../../tools/fuzz-parser.js";
+// handleFuzzParser: removed in Fase 2 (tool dropped from public surface).
 import { handleExportTests } from "../../tools/export-tests.js";
 import { saveProperty } from "../../property-store.js";
 
@@ -315,15 +315,7 @@ describe.runIf(GHC_AVAILABLE)("Tool Handlers Integration", () => {
     });
   });
 
-  describe("handleFuzzParser", () => {
-    it("detects crashing parser expressions", async () => {
-      const result = JSON.parse(
-        await handleFuzzParser(session, { parser: "(\\s -> read s :: Int)", inputs: ["abc", "("] })
-      );
-      expect(result.success).toBe(false);
-      expect(result.crashes.length).toBeGreaterThan(0);
-    });
-  });
+  // handleFuzzParser removed in Fase 2 — tool was low-signal for AI agents.
 
   describe("handleExportTests", () => {
     it("writes the test file and validates it with cabal test", async () => {

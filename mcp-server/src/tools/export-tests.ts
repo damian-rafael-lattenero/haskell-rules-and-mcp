@@ -6,7 +6,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 import { getActiveProperties, getActiveModuleProperties } from "../property-store.js";
 import { parseCabalModules } from "../parsers/cabal-parser.js";
 import { handleCabalTest } from "./test.js";
@@ -233,7 +233,7 @@ export function detectQualifiedImports(properties: string[]): string[] {
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_quickcheck_export",
     "Export saved QuickCheck properties to a Haskell test file (.hs). " +
       "Reads properties.json and generates a runnable test suite. " +

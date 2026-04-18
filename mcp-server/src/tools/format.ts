@@ -3,8 +3,9 @@ import { z } from "zod";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { ToolContext } from "./registry.js";
-import { getBundledToolStatus, ensureTool, TOOL_PATH } from "./tool-installer.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
+import { getBundledToolStatus, TOOL_PATH } from "./tool-installer.js";
+import { awaitTool } from "./toolchain-warmup.js";
 
 /**
  * Detect which formatter is available. Prefers fourmolu over ormolu.
@@ -18,8 +19,10 @@ interface FormatterResolution {
 }
 
 async function detectFormatter(): Promise<FormatterResolution | null> {
+  // Uses `awaitTool` so warmup promises are shared when warmup has already
+  // started the download — avoids redundant fetches under concurrent tool calls.
   for (const cmd of ["fourmolu", "ormolu"] as const) {
-    const resolved = await ensureTool(cmd);
+    const resolved = await awaitTool(cmd);
     if (resolved.available && resolved.binaryPath) {
       return {
         binaryPath: resolved.binaryPath,
@@ -147,7 +150,7 @@ export async function handleFormat(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_format",
     "Format a Haskell source file using ormolu or fourmolu. " +
       "By default shows the formatted output without writing (dry-run). " +

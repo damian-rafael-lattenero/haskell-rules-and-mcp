@@ -3,7 +3,7 @@ import { z } from "zod";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { parseGhcErrors } from "../parsers/error-parser.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 export async function handleCabalTest(
   projectDir: string,
@@ -52,7 +52,7 @@ export function buildCabalTestArgs(component?: string): string[] {
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "cabal_test",
     "Run 'cabal test' to execute the package test-suite. Returns parsed GHC errors/warnings and raw test output.",
     {

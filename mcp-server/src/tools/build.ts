@@ -3,7 +3,7 @@ import { z } from "zod";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { parseGhcErrors } from "../parsers/error-parser.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 export const buildTool = {
   name: "cabal_build",
@@ -70,7 +70,7 @@ export async function handleBuild(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "cabal_build",
     "Run 'cabal build' to compile the project. Returns parsed GHC errors/warnings. Use for full compilation checks.",
     {

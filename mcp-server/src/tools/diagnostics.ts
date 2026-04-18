@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { GhciSession } from "../ghci-session.js";
 import { handleLoadModule } from "./load-module.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 /**
  * @deprecated Use ghci_load with diagnostics=true instead.
@@ -21,7 +21,7 @@ export async function handleDiagnostics(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_diagnostics",
     "Full diagnostic check for a Haskell module. Runs a strict compilation pass to find real type errors, " +
       "then a deferred pass to collect typed-hole information. Returns a unified report.",

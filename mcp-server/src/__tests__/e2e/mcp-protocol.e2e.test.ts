@@ -363,52 +363,23 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     expect(typeof parsed.available).toBe("boolean");
   });
 
-  // --- ghci_profile ---
-  it("ghci_profile appears in listTools()", async () => {
+  // --- ghci_profile / ghci_flags: tools removed from public MCP surface in Fase 2 ---
+  it.skip("ghci_profile appears in listTools() (tool removed)", async () => {});
+  it.skip("ghci_flags appears in listTools() (tool removed)", async () => {});
+  it.skip("ghci_flags list returns flags array (tool removed)", async () => {});
+  it.skip("ghci_flags set then eval uses extension (tool removed)", async () => {});
+
+  // --- ghci_create_project (replaces ghci_init) ---
+  it("ghci_create_project schema exposes expected params", async () => {
     const result = await client.listTools();
-    const names = result.tools.map((t) => t.name);
-    expect(names).toContain("ghci_profile");
-  });
-
-  // --- ghci_flags ---
-  it("ghci_flags appears in listTools()", async () => {
-    const result = await client.listTools();
-    const names = result.tools.map((t) => t.name);
-    expect(names).toContain("ghci_flags");
-  });
-
-  it("ghci_flags list returns flags array", async () => {
-    const result = await client.callTool({
-      name: "ghci_flags",
-      arguments: { action: "list" },
-    });
-    const parsed = JSON.parse((result.content as any)[0].text);
-    expect(parsed.success).toBe(true);
-    expect(Array.isArray(parsed.flags)).toBe(true);
-  });
-
-  it("ghci_flags set then eval uses extension", async () => {
-    await client.callTool({
-      name: "ghci_flags",
-      arguments: { action: "set", flags: "-XScopedTypeVariables" },
-    });
-    // ScopedTypeVariables is GHC2024 default but setting it explicitly should still work
-    const evalResult = await client.callTool({
-      name: "ghci_eval",
-      arguments: { expression: "(\\(x :: Int) -> x + 1) 41" },
-    });
-    const parsed = JSON.parse((evalResult.content as any)[0].text);
-    expect(parsed.success).toBe(true);
-    expect(parsed.output).toContain("42");
-  });
-
-  // --- ghci_init with build_tool:stack ---
-  it("ghci_init with build_tool:stack schema includes build_tool param", async () => {
-    const result = await client.listTools();
-    const initTool = result.tools.find((t) => t.name === "ghci_init");
-    expect(initTool).toBeDefined();
-    const paramNames = Object.keys(initTool?.inputSchema?.properties ?? {});
-    expect(paramNames).toContain("build_tool");
+    const tool = result.tools.find((t) => t.name === "ghci_create_project");
+    expect(tool).toBeDefined();
+    const paramNames = Object.keys(tool?.inputSchema?.properties ?? {});
+    expect(paramNames).toContain("name");
+    expect(paramNames).toContain("modules");
+    expect(paramNames).toContain("with_test_suite");
+    expect(paramNames).toContain("switch_to_it");
+    expect((tool?.inputSchema as { required?: string[] })?.required).toContain("name");
   });
 
   it("ghci_workflow help: suggested_tools are valid tool names in listTools()", async () => {
@@ -454,10 +425,11 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     expect(names).toContain("ghci_deps");
     expect(names).toContain("ghci_hole");
     expect(names).toContain("ghci_refactor");
-    expect(names).toContain("ghci_flags");
-    expect(names).toContain("ghci_profile");
+    // `ghci_flags` and `ghci_profile` were removed in Fase 2.
     expect(names).toContain("ghci_hls");
-    expect(names.length).toBeGreaterThanOrEqual(32); // 26 original + 6 new
+    expect(names).toContain("ghci_create_project");
+    expect(names).toContain("ghci_add_modules");
+    expect(names.length).toBeGreaterThanOrEqual(30);
   });
 
   // --- Resources ---
@@ -474,13 +446,13 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     expect(text).toContain("PRIME DIRECTIVE");
   });
 
-  // --- New: ghci_init has test_suite param in schema ---
-  it("ghci_init schema includes test_suite param", async () => {
+  // --- ghci_create_project schema includes with_test_suite (replaces old ghci_init test_suite) ---
+  it("ghci_create_project schema includes with_test_suite param", async () => {
     const result = await client.listTools();
-    const initTool = result.tools.find((t) => t.name === "ghci_init");
-    expect(initTool).toBeDefined();
-    const paramNames = Object.keys(initTool?.inputSchema?.properties ?? {});
-    expect(paramNames).toContain("test_suite");
+    const tool = result.tools.find((t) => t.name === "ghci_create_project");
+    expect(tool).toBeDefined();
+    const paramNames = Object.keys(tool?.inputSchema?.properties ?? {});
+    expect(paramNames).toContain("with_test_suite");
   });
 
   // --- New: ghci_quickcheck schema includes tests_module param ---

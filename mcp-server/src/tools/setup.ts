@@ -3,7 +3,7 @@ import { z } from "zod";
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import { RULES_REGISTRY, loadRule } from "../resources/rules.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 /**
  * Install or update Claude Code rules in the target project's .claude/rules/ directory.
@@ -99,7 +99,7 @@ export async function handleSetup(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_setup",
     "Install or update Haskell development rules in your project's .claude/rules/ directory. " +
       "These rules tell Claude Code how to use the MCP tools effectively: the automation loop, " +

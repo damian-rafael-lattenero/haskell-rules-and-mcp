@@ -3,7 +3,7 @@ import { z } from "zod";
 import { GhciSession } from "../ghci-session.js";
 import { parseInfoOutput } from "../parsers/type-parser.js";
 import { parseConstructors, type Constructor } from "../parsers/constructor-parser.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 export interface ArbitraryResult {
   success: boolean;
@@ -356,7 +356,7 @@ function selectFieldGenerator(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_arbitrary",
     "Generate a QuickCheck Arbitrary instance for a Haskell data type. " +
       "Uses GHCi :i to inspect the type, then generates an appropriate Arbitrary instance. " +

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildCabalTestArgs } from "../tools/test.js";
 import { replaceModuleHeaderWithExportList } from "../tools/apply-exports.js";
 import { detectGeneratorWarnings } from "../tools/arbitrary.js";
-import { buildFuzzCorpus, escapeHaskellString } from "../tools/fuzz-parser.js";
+// Fuzz-parser helpers were removed in Fase 2 (tool dropped).
 import {
   createWorkflowState,
   deriveGuidance,
@@ -37,17 +37,6 @@ describe("workflow upgrades", () => {
       false
     );
     expect(warnings.some((w) => w.includes("listOf"))).toBe(true);
-  });
-
-  it("escapeHaskellString preserves quotes and nul", () => {
-    expect(escapeHaskellString("a\"b\0c")).toBe("a\\\"b\\0c");
-  });
-
-  it("buildFuzzCorpus keeps user inputs and deterministic malformed seeds", () => {
-    const corpus = buildFuzzCorpus(["custom-input"], 4);
-    expect(corpus).toContain("custom-input");
-    expect(corpus).toContain("(");
-    expect(corpus.some((item) => item.includes("prefix"))).toBe(true);
   });
 
   it("deriveGuidance downgrades lint/format when tooling is unavailable", () => {

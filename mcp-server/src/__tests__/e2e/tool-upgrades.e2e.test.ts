@@ -85,16 +85,8 @@ describe.runIf(GHC_AVAILABLE)("E2E Tool Upgrades", () => {
     expect(content).toContain("( foo");
   });
 
-  it("ghci_fuzz_parser reports crashes through MCP", async () => {
-    const result = parseResult(
-      await client.callTool({
-        name: "ghci_fuzz_parser",
-        arguments: { parser: "(\\s -> read s :: Int)", inputs: ["abc", "("] },
-      })
-    );
-    expect(result.success).toBe(false);
-    expect(result.crashes.length).toBeGreaterThan(0);
-  });
+  // `ghci_fuzz_parser` was removed from the public MCP surface in Fase 2.
+  it.skip("ghci_fuzz_parser reports crashes through MCP (tool removed)", async () => {});
 
   it("ghci_quickcheck_export validates the exported test suite", async () => {
     await rm(PROPERTY_STORE_DIR, { recursive: true, force: true });
@@ -145,7 +137,13 @@ describe.runIf(GHC_AVAILABLE)("E2E Tool Upgrades", () => {
         arguments: { module_path: "src/TestLib.hs" },
       })
     );
-    expect(lint.unavailable).toBe(true);
+    // When hlint is unavailable, ghci_lint falls back to basic-lint-rules
+    // with `degraded: true` and `gateEligible: false`. It no longer returns
+    // `unavailable: true` at the top level — that's surfaced as `_primary_failure`.
+    expect(lint.degraded).toBe(true);
+    expect(lint.gateEligible).toBe(false);
+    expect(lint.lint_tool).toBe("basic-lint-rules");
+    expect(lint._primary_failure?.lint_tool).toBe("hlint");
 
     const evalResult = parseResult(
       await client.callTool({

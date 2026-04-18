@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { GhciSession } from "../ghci-session.js";
 import { parseInfoOutput } from "../parsers/type-parser.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 export const typeInfoTool = {
   name: "ghci_info",
@@ -51,7 +51,7 @@ export async function handleTypeInfo(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_info",
     "Get detailed info about a Haskell name (function, type, typeclass) using GHCi :i. Shows definition, instances, and module.",
     {

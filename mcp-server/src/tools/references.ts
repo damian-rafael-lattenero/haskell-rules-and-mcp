@@ -3,7 +3,7 @@ import { z } from "zod";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { GhciSession } from "../ghci-session.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 export interface Reference {
   file: string;
@@ -126,7 +126,7 @@ function parseGrepOutput(output: string, projectDir: string): Reference[] {
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_references",
     "Find all references to a Haskell name across the project's .hs files. " +
       "Uses word-boundary matching to avoid partial matches. " +

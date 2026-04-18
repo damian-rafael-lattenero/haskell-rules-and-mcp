@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { GhciSession } from "../ghci-session.js";
 import { parseTypeOutput } from "../parsers/type-parser.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 export const typeCheckTool = {
   name: "ghci_type",
@@ -60,7 +60,7 @@ export async function handleTypeCheck(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_type",
     "Get the type of a Haskell expression using GHCi :t. Use to verify types of subexpressions before composing them.",
     {

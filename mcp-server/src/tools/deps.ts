@@ -7,7 +7,7 @@ import { z } from "zod";
 import { readFile, writeFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { findCabalFile, getLibrarySrcDir } from "../parsers/cabal-parser.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 /** A dependency entry with name and optional version constraint. */
 export interface DepEntry {
@@ -423,7 +423,7 @@ export async function handleDeps(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_deps",
     "Manage project dependencies in the .cabal file without manual editing. " +
       "Actions: 'add' to add a package, 'remove' to remove one, 'list' to see current dependencies, " +

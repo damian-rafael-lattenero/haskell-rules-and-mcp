@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 interface ParsedImport {
   module: string;
@@ -166,7 +166,7 @@ export async function handleValidateCabal(projectDir: string): Promise<string> {
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_validate_cabal",
     "Validate Cabal test-suite dependencies against imports used by test/Spec.hs.",
     {},

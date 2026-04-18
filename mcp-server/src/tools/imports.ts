@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { GhciSession } from "../ghci-session.js";
 import { parseImportsOutput } from "../parsers/import-parser.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 export async function handleImports(
   session: GhciSession
@@ -20,7 +20,7 @@ export async function handleImports(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_imports",
     "Show all currently loaded imports in the GHCi session. Returns structured information about each import: " +
       "module name, whether it's qualified, alias, specific items imported, and whether it's implicit.",

@@ -10,7 +10,7 @@ import { z } from "zod";
 import type { GhciSession } from "../ghci-session.js";
 import { parseTypedHoles } from "../parsers/hole-parser.js";
 import type { TypedHole } from "../parsers/hole-parser.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 export async function handleHole(
   session: GhciSession,
@@ -77,7 +77,7 @@ export async function handleHole(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_hole",
     "Explore typed holes in a Haskell module interactively. " +
       "Loads the module with -fdefer-typed-holes enabled and returns structured information " +

@@ -1,20 +1,81 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { execFile } from "node:child_process";
-import type { ToolContext } from "./registry.js";
+import { readdir, stat } from "node:fs/promises";
+import path from "node:path";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
-export function parseCoverage(stdout: string): Array<{ metric: string; percent: number }> {
-  const rows: Array<{ metric: string; percent: number }> = [];
+export function parseCoverage(stdout: string): Array<{ metric: string; percent: number; fraction?: string }> {
+  const rows: Array<{ metric: string; percent: number; fraction?: string }> = [];
   const lines = stdout.split(/\r?\n/);
+  // Match both the cabal-embedded format and the explicit `hpc report` format.
+  // HPC lines look like:
+  //   " 100% expressions used (21/21)"
+  //   " 50 % boolean coverage (1/2)"
+  const hpcLine = /^\s*(\d+(?:\.\d+)?)\s*%\s+(.+?)(?:\s+\((\d+\/\d+)\))?\s*$/;
   for (const line of lines) {
-    const match = line.match(/(\d+(?:\.\d+)?)%\s+(.+)/);
-    if (!match) continue;
+    const m = line.match(hpcLine);
+    if (!m) continue;
+    const percent = Number(m[1]);
+    if (!Number.isFinite(percent)) continue;
     rows.push({
-      percent: Number(match[1]),
-      metric: match[2].trim(),
+      percent,
+      metric: m[2]!.trim(),
+      ...(m[3] ? { fraction: m[3] } : {}),
     });
   }
   return rows;
+}
+
+function execFileAsync(
+  cmd: string,
+  args: string[],
+  options: { cwd?: string; timeout?: number; env?: NodeJS.ProcessEnv }
+): Promise<{ code: number; stdout: string; stderr: string; error?: Error }> {
+  return new Promise((resolve) => {
+    execFile(cmd, args, options, (error, stdout, stderr) => {
+      resolve({
+        code: error?.code === undefined ? (error ? 1 : 0) : (typeof error.code === "number" ? error.code : 1),
+        stdout: stdout ?? "",
+        stderr: stderr ?? "",
+        error: error ?? undefined,
+      });
+    });
+  });
+}
+
+/**
+ * Recursively find all `.tix` files under a directory.
+ * Used to locate HPC coverage data produced by `cabal test --enable-coverage`.
+ * No symlink following (path stays inside the project).
+ */
+async function findTixFiles(dir: string, maxDepth = 10): Promise<string[]> {
+  const tix: string[] = [];
+  async function walk(current: string, depth: number): Promise<void> {
+    if (depth > maxDepth) return;
+    let entries: string[];
+    try {
+      entries = await readdir(current);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry);
+      let st;
+      try {
+        st = await stat(full);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        await walk(full, depth + 1);
+      } else if (st.isFile() && entry.endsWith(".tix")) {
+        tix.push(full);
+      }
+    }
+  }
+  await walk(dir, 0);
+  return tix;
 }
 
 export async function handleCoverage(
@@ -22,52 +83,82 @@ export async function handleCoverage(
   args: { min_percent?: number; timeout_ms?: number }
 ): Promise<string> {
   const timeout = args.timeout_ms ?? 180_000;
-  return new Promise((resolve) => {
-    execFile(
-      "cabal",
-      ["test", "--enable-coverage"],
-      { cwd: projectDir, timeout, env: process.env },
-      (error, stdout, stderr) => {
-        const output = `${stdout ?? ""}\n${stderr ?? ""}`.trim();
-        const metrics = parseCoverage(output);
-        const overall = metrics.length > 0 ? Math.min(...metrics.map((m) => m.percent)) : undefined;
-        const minPercent = args.min_percent;
-        const meetsThreshold = minPercent === undefined || (overall !== undefined && overall >= minPercent);
+  const testRun = await execFileAsync(
+    "cabal",
+    ["test", "--enable-coverage"],
+    { cwd: projectDir, timeout, env: process.env }
+  );
+  const cabalOutput = `${testRun.stdout}\n${testRun.stderr}`.trim();
 
-        if (error) {
-          resolve(
-            JSON.stringify({
-              success: false,
-              command: "cabal test --enable-coverage",
-              error: error.message,
-              output,
-              metrics,
-              ...(overall !== undefined ? { overallPercent: overall } : {}),
-            })
-          );
-          return;
-        }
+  // First pass: try to extract metrics from cabal's own output.
+  let metrics = parseCoverage(cabalOutput);
+  let reportSource: "cabal-test" | "hpc-report" = "cabal-test";
+  let hpcReport: string | undefined;
 
-        resolve(
-          JSON.stringify({
-            success: true,
-            command: "cabal test --enable-coverage",
-            metrics,
-            ...(overall !== undefined ? { overallPercent: overall } : {}),
-            ...(minPercent !== undefined ? { minPercent, meetsThreshold } : {}),
-            summary:
-              overall === undefined
-                ? "Coverage run completed but no parseable coverage percentages were found in output."
-                : `Coverage run completed. Lowest reported metric: ${overall.toFixed(2)}%.`,
-          })
-        );
+  // If cabal's output didn't contain a parseable summary, run `hpc report`
+  // explicitly against any .tix files generated by the test run.
+  if (metrics.length === 0 && testRun.code === 0) {
+    const distDir = path.join(projectDir, "dist-newstyle");
+    const tixFiles = await findTixFiles(distDir).catch(() => [] as string[]);
+    if (tixFiles.length > 0) {
+      // Use the most recently modified .tix for the summary.
+      const tixWithStats = await Promise.all(
+        tixFiles.map(async (t) => {
+          try {
+            const s = await stat(t);
+            return { path: t, mtime: s.mtimeMs };
+          } catch {
+            return { path: t, mtime: 0 };
+          }
+        })
+      );
+      tixWithStats.sort((a, b) => b.mtime - a.mtime);
+      const latestTix = tixWithStats[0]!.path;
+      const report = await execFileAsync(
+        "hpc",
+        ["report", latestTix],
+        { cwd: projectDir, timeout: 60_000, env: process.env }
+      );
+      if (report.code === 0) {
+        hpcReport = `${report.stdout}\n${report.stderr}`.trim();
+        metrics = parseCoverage(hpcReport);
+        reportSource = "hpc-report";
       }
-    );
+    }
+  }
+
+  const overall = metrics.length > 0 ? Math.min(...metrics.map((m) => m.percent)) : undefined;
+  const minPercent = args.min_percent;
+  const meetsThreshold = minPercent === undefined || (overall !== undefined && overall >= minPercent);
+
+  if (testRun.error) {
+    return JSON.stringify({
+      success: false,
+      command: "cabal test --enable-coverage",
+      error: testRun.error.message,
+      output: cabalOutput,
+      metrics,
+      ...(overall !== undefined ? { overallPercent: overall } : {}),
+    });
+  }
+
+  return JSON.stringify({
+    success: true,
+    command: "cabal test --enable-coverage",
+    reportSource,
+    metrics,
+    ...(overall !== undefined ? { overallPercent: overall } : {}),
+    ...(minPercent !== undefined ? { minPercent, meetsThreshold } : {}),
+    ...(hpcReport ? { hpcReport } : {}),
+    summary:
+      overall === undefined
+        ? "Coverage run completed but no parseable coverage percentages were found in cabal output nor in `hpc report` against the tix files under dist-newstyle/."
+        : `Coverage run completed. Lowest reported metric: ${overall.toFixed(2)}% (source: ${reportSource}).`,
   });
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "cabal_coverage",
     "Run cabal test with HPC coverage enabled and return structured coverage percentages parsed from output.",
     {

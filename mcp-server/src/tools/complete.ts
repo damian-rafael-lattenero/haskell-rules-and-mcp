@@ -3,7 +3,7 @@ import { z } from "zod";
 import { GhciSession } from "../ghci-session.js";
 import { parseCompletionOutput } from "../parsers/completion-parser.js";
 import { handleHoogleSearch } from "./hoogle.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 export async function handleComplete(
   session: GhciSession,
@@ -45,7 +45,7 @@ export async function handleComplete(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_complete",
     "Get completions for a Haskell identifier prefix. Returns all in-scope names matching the prefix. " +
       "Falls back to Hoogle search when no in-scope completions found. " +

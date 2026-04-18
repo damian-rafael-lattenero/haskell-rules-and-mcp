@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 import { handleCheckModule } from "./check-module.js";
 
 export function replaceModuleHeaderWithExportList(
@@ -67,7 +67,7 @@ export async function handleApplyExports(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_apply_exports",
     "Apply the suggested explicit export list for a module. " +
       "If suggested_export_list is omitted, the tool first runs ghci_check_module to compute it, " +

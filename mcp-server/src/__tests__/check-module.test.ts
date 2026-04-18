@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { handleCheckModule } from "../tools/check-module.js";
 import { createMockSession } from "./helpers/mock-session.js";
 import type { GhciResult } from "../ghci-session.js";
@@ -110,6 +113,76 @@ describe("handleCheckModule", () => {
     const result = JSON.parse(await handleCheckModule(session, { module_path: "src/S.hs", module_name: "S" }));
     expect(result.summary.classes).toBeGreaterThanOrEqual(1);
     expect(result.summary.functions).toBeGreaterThanOrEqual(1);
+  });
+
+  describe("export-list suggestion (Bug 4)", () => {
+    it("emits bare name for type synonyms (no Name(..))", async () => {
+      const browse = "type Env :: *\ntype Env = Map String Int";
+      const session = makeSession(browse);
+      const result = JSON.parse(
+        await handleCheckModule(session, { module_path: "src/Syntax.hs", module_name: "Syntax" })
+      );
+      expect(result.suggestedExportList).toBeDefined();
+      expect(result.suggestedExportList).toContain("Env");
+      expect(result.suggestedExportList).not.toContain("Env(..)");
+    });
+
+    it("emits Name(..) for data declarations", async () => {
+      const browse = "type Expr :: *\ndata Expr = Lit Int | Add Expr Expr";
+      const session = makeSession(browse);
+      const result = JSON.parse(
+        await handleCheckModule(session, { module_path: "src/Syntax.hs", module_name: "Syntax" })
+      );
+      expect(result.suggestedExportList).toBeDefined();
+      expect(result.suggestedExportList).toContain("Expr(..)");
+    });
+
+    it("does NOT emit suggestedExportList when module already has one", async () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), "check-module-"));
+      try {
+        mkdirSync(path.join(tmp, "src"), { recursive: true });
+        writeFileSync(
+          path.join(tmp, "src", "Syntax.hs"),
+          "module Syntax\n  ( Expr(..)\n  ) where\n\ndata Expr = Lit Int\n"
+        );
+        const browse = "type Expr :: *\ndata Expr = Lit Int";
+        const session = makeSession(browse);
+        const result = JSON.parse(
+          await handleCheckModule(
+            session,
+            { module_path: "src/Syntax.hs", module_name: "Syntax" },
+            tmp
+          )
+        );
+        expect(result.hasExplicitExports).toBe(true);
+        expect(result.suggestedExportList).toBeUndefined();
+        expect(result._nextStep).toBeUndefined();
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it("suggests export list when module is missing one (projectDir provided)", async () => {
+      const tmp = mkdtempSync(path.join(os.tmpdir(), "check-module-"));
+      try {
+        mkdirSync(path.join(tmp, "src"), { recursive: true });
+        writeFileSync(path.join(tmp, "src", "Syntax.hs"), "module Syntax where\n\ndata Expr = Lit Int\n");
+        const browse = "type Expr :: *\ndata Expr = Lit Int";
+        const session = makeSession(browse);
+        const result = JSON.parse(
+          await handleCheckModule(
+            session,
+            { module_path: "src/Syntax.hs", module_name: "Syntax" },
+            tmp
+          )
+        );
+        expect(result.hasExplicitExports).toBe(false);
+        expect(result.suggestedExportList).toBeDefined();
+        expect(result.suggestedExportList).toContain("Expr(..)");
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
   });
 
   // ─── Bug fix: GHC-32850 must not appear in warnings array ──────────────────

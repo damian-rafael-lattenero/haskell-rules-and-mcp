@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { GhciSession } from "../ghci-session.js";
 import { parseInfoOutput } from "../parsers/type-parser.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 /**
  * Extract definition location from :i output.
@@ -55,7 +55,7 @@ export async function handleGoto(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_goto",
     "Go to the definition of a Haskell name. Returns the file path, line, and column where the name is defined. " +
       "For local project definitions, returns the source file location. For library functions, returns the module name.",

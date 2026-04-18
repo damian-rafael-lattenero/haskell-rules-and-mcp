@@ -8,7 +8,7 @@ import {
   moduleToFilePath,
   getLibrarySrcDir,
 } from "../parsers/cabal-parser.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 import { suggestFunctionProperties } from "../laws/function-laws.js";
 import { saveProperty } from "../property-store.js";
 import { validatePropertyText } from "../parsers/property-validator.js";
@@ -592,18 +592,11 @@ function suggestNameBasedProperties(
     });
   }
 
-  if (n.includes("eval")) {
-    out.push({
-      law: "determinism",
-      property: `\\x -> ${funcName} x == ${funcName} x`,
-    });
-  }
-
   return out;
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_quickcheck",
     "Run a QuickCheck property in GHCi. The property should be a Haskell expression of type `Testable prop => prop`. " +
       "Returns structured results: pass/fail, test count, counterexample if any. " +
@@ -724,7 +717,7 @@ export async function handleQuickCheckBatch(
 }
 
 export function registerBatch(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_quickcheck_batch",
     "Run multiple QuickCheck properties in a single call. Loads all project modules first, " +
       "then runs each property sequentially. Returns an array of results. " +

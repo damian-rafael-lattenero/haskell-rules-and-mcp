@@ -3,7 +3,7 @@ import { z } from "zod";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { handleReferences } from "./references.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 export interface RenameChange {
   file: string;
@@ -108,7 +108,7 @@ export async function handleRename(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_rename",
     "Preview a rename operation for a Haskell identifier across the project. " +
       "Finds all references and shows which files and lines would change. " +

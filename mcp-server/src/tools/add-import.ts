@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { handleHoogleSearch } from "./hoogle.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 interface ImportSuggestion {
   module: string;
@@ -117,7 +117,7 @@ export async function lookupImportForName(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_add_import",
     "Suggest an import line for a Haskell name that is 'Not in scope'. " +
       "Uses Hoogle to find which module the name lives in, ranked by project dependencies. " +

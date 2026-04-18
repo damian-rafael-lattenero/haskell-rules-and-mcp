@@ -3,12 +3,12 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 import { getAllProperties, getModuleProperties } from "../property-store.js";
 import { handleQuickCheck } from "./quickcheck.js";
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_regression",
     "Re-run persisted QuickCheck properties as a regression suite. " +
       "Properties are saved automatically when they pass during development. " +

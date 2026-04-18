@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 export const hoogleSearchTool = {
   name: "hoogle_search",
@@ -75,8 +75,8 @@ export async function handleHoogleSearch(args: {
   }
 }
 
-export function register(server: McpServer, _ctx: ToolContext): void {
-  server.tool(
+export function register(server: McpServer, ctx: ToolContext): void {
+  registerStrictTool(server, ctx,
     "hoogle_search",
     'Search Hoogle for Haskell functions by name or type signature. Example: search "(a -> b) -> [a] -> [b]" to find "map".',
     {

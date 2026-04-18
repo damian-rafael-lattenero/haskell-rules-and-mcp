@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { GhciSession, GhciResult } from "../ghci-session.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 import { parseGhcErrors, GhcError } from "../parsers/error-parser.js";
 import { categorizeWarnings, WarningAction } from "../parsers/warning-categorizer.js";
 import {
@@ -459,7 +459,7 @@ export function extractGhcSuggestedFixes(errors: Array<{ message: string; file?:
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_load",
     "Load or reload Haskell modules in GHCi. Returns parsed compilation errors and warnings. " +
       "Without module_path: reloads current modules (:r). " +

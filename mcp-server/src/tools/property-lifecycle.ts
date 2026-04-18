@@ -4,7 +4,7 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 import {
   getAllProperties,
   getModuleProperties,
@@ -180,7 +180,7 @@ export async function handlePropertyLifecycle(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_property_lifecycle",
     "Manage QuickCheck property lifecycle: list, remove, deprecate, or replace properties. " +
       "Use this to clean up obsolete properties, mark properties as deprecated, or link old properties to replacements.",

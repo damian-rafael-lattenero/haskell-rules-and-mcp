@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { GhciSession } from "../ghci-session.js";
-import type { ToolContext } from "./registry.js";
+import { type ToolContext, registerStrictTool } from "./registry.js";
 
 export async function handleDoc(
   session: GhciSession,
@@ -36,7 +36,7 @@ export async function handleDoc(
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
-  server.tool(
+  registerStrictTool(server, ctx, 
     "ghci_doc",
     "Get the Haddock documentation for a Haskell name. Returns the documentation string if available. " +
       "Requires the package to have been built with documentation. Works best for base library functions.",
