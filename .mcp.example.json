@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "haskell-flows": {
+      "command": "node",
+      "args": ["./mcp-server/dist/index.js"],
+      "env": {
+        "HASKELL_PROJECT_DIR": "./playground/hindley-milner"
+      }
+    }
+  }
+}

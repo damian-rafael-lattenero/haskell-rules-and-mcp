@@ -94,29 +94,48 @@ cabal_test()
 
 ```bash
 git clone <repo-url>
-cd haskell-rules-and-mcp/mcp-server
+cd haskell-rules-and-mcp
+cp .mcp.example.json .mcp.json      # local, git-ignored — tweak if you need custom paths
+cd mcp-server
 npm install
-npm run build
+npm run build                        # produces dist/index.js (gitignored)
 ```
 
+After rebuilding the MCP (any `.ts` change under `mcp-server/src/`), restart the
+server from your MCP client so it picks up the new binary. In Claude Code:
+`/mcp` → restart `haskell-flows`.
+
 ### Configure Claude Code (`.mcp.json`)
+
+The repo ships a **portable template** at [`.mcp.example.json`](./.mcp.example.json):
 
 ```json
 {
   "mcpServers": {
     "haskell-flows": {
       "command": "node",
-      "args": ["mcp-server/dist/index.js"],
-      "cwd": "/path/to/haskell-rules-and-mcp",
+      "args": ["./mcp-server/dist/index.js"],
       "env": {
-        "HASKELL_PROJECT_DIR": "/path/to/haskell-rules-and-mcp/playground/hindley-milner",
-        "HASKELL_FLOWS_TELEMETRY": "0",
-        "PATH": "/opt/homebrew/bin:~/.ghcup/bin:~/.cabal/bin:/usr/local/bin:/usr/bin:/bin"
+        "HASKELL_PROJECT_DIR": "./playground/hindley-milner"
       }
     }
   }
 }
 ```
+
+Why relative paths:
+- Claude Code resolves relative `args` against the `.mcp.json` directory, so
+  **each worktree runs its own `dist/index.js`** (no cross-contamination).
+- `HASKELL_PROJECT_DIR` is resolved against the launching `cwd` (the config's
+  directory), so `"./playground/foo"` points at this worktree's playground.
+- No `PATH` baked in → inherits from your shell. If `ghc`/`cabal` are not on
+  PATH after login, add a minimal `PATH` override in your **local** `.mcp.json`
+  (not committed) rather than the example.
+
+**Why `.mcp.json` is gitignored:** it may drift with personal paths, env
+overrides, or (never) secrets. Keep the shared template in
+`.mcp.example.json`; put anything machine-specific in your local copy. Do NOT
+put tokens/credentials in either file — the template is committed.
 
 ### Environment variables
 

@@ -17,3 +17,6 @@ playground/smoke-test/
 
 # Property store (generated at runtime by ghci_quickcheck)
 **/.haskell-flows/
+
+# Local MCP config (may contain personal paths/env). Copy from .mcp.example.json
+.mcp.json

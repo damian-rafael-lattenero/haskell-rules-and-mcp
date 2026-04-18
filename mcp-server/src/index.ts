@@ -84,8 +84,12 @@ const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
 
 // Active project directory — mutable, can be switched at runtime.
 // Defaults to HASKELL_PROJECT_DIR env var, or the current working directory.
-let projectDir =
-  process.env.HASKELL_PROJECT_DIR ?? process.cwd();
+// Relative paths (e.g. "./playground/foo") are resolved against process.cwd()
+// so configs in .mcp.json can stay portable.
+let projectDir = (() => {
+  const raw = process.env.HASKELL_PROJECT_DIR ?? process.cwd();
+  return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
+})();
 
 // Load workflow instructions (single source of truth for Claude)
 const WORKFLOW_PATH = path.resolve(import.meta.dirname, "..", "rules", "haskell-mcp-workflow.md");
