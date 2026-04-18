@@ -1,14 +1,15 @@
 /**
  * Generic property suggestion engine based on function type signatures.
  *
- * Analyzes a function's type and suggests QuickCheck properties using heuristics.
- * Each suggestion is validated by the caller (type-checked with :t) before being presented.
+ * Only suggests properties with real semantic content. Tautologies
+ * (e.g. `f x == f x`) are never emitted — they trivially pass and mislead
+ * callers into believing a function is tested. Silence > wrong suggestion.
  *
  * Strategies:
- * 1. Type-shape heuristics (endomorphism, binary op, list endo, roundtrip)
- * 2. Return-type contracts (Either → Right/Left, Maybe → Just/Nothing, Bool → exists True/False)
- * 3. Multi-argument consistency (same-type args → test with equal args)
- * 4. Preservation properties (for functions taking and returning structured types)
+ * 1. Endomorphism (a -> a): idempotence, involution
+ * 2. Binary operator (a -> a -> a): associativity, commutativity
+ * 3. List endomorphism ([a] -> [a]): length preservation
+ * 4. Roundtrip: sibling with inverse type
  */
 
 export interface FunctionLaw {
@@ -36,11 +37,7 @@ export function suggestFunctionProperties(
 ): FunctionLaw[] {
   const suggestions: FunctionLaw[] = [];
   const cleaned = cleanTypeSignature(typeStr);
-  const arrows = splitTopLevelArrows(cleaned);
 
-  // --- Strategy 1: Type-shape heuristics ---
-
-  // Endomorphism: a -> a
   const endoMatch = matchEndomorphism(cleaned);
   if (endoMatch) {
     suggestions.push({
@@ -55,7 +52,6 @@ export function suggestFunctionProperties(
     });
   }
 
-  // Binary operator: a -> a -> a
   const binOpMatch = matchBinaryOp(cleaned);
   if (binOpMatch) {
     suggestions.push({
@@ -70,7 +66,6 @@ export function suggestFunctionProperties(
     });
   }
 
-  // List endomorphism: [a] -> [a]
   const listEndoMatch = matchListEndomorphism(cleaned);
   if (listEndoMatch) {
     suggestions.push({
@@ -80,7 +75,6 @@ export function suggestFunctionProperties(
     });
   }
 
-  // Roundtrip: look for sibling with inverse type
   if (siblings) {
     const roundtrips = findRoundtripPairs(funcName, cleaned, siblings);
     for (const rt of roundtrips) {
@@ -92,82 +86,7 @@ export function suggestFunctionProperties(
     }
   }
 
-  // --- Strategy 2: Safe return-type properties ---
-  // PRINCIPLE: Only suggest properties that are correct without domain knowledge.
-  // Determinism and totality are always safe. Reachability is NOT (the function
-  // may correctly reject arbitrary inputs). Silence > wrong suggestion.
-  if (arrows.length >= 2) {
-    const returnType = arrows[arrows.length - 1]!.trim();
-    const argTypes = arrows.slice(0, -1).map((a) => a.trim());
-
-    // Either return: determinism (safe) + reflexivity for same-type args (often correct)
-    if (returnType.startsWith("Either ")) {
-      // Determinism: same input always gives same output (always correct for pure functions)
-      suggestions.push({
-        law: "determinism",
-        property: buildNArgs(funcName, argTypes, `${funcName} ${buildArgApply(argTypes)} == ${funcName} ${buildArgApply(argTypes)}`, "determinism"),
-        confidence: "high",
-      });
-      // Reflexive: f x x should be consistent (often succeeds for well-behaved functions)
-      if (argTypes.length === 2 && argTypes[0] === argTypes[1]) {
-        suggestions.push({
-          law: "reflexivity (equal args consistent)",
-          property: `\\x -> ${funcName} x (x :: ${argTypes[0]}) == ${funcName} x x`,
-          confidence: "medium",
-        });
-      }
-    }
-
-    // --- Strategy 3: Same-type arguments → test with equal args ---
-    if (argTypes.length === 2 && argTypes[0] === argTypes[1] && !returnType.startsWith("Either ")) {
-      const t = argTypes[0]!;
-      suggestions.push({
-        law: "reflexive (equal args)",
-        property: `\\x -> ${funcName} x (x :: ${t}) == ${funcName} x x`,
-        confidence: "medium",
-      });
-    }
-
-    // --- Strategy 4: Multi-arg functions with Pos-like state threading ---
-    // f :: State -> Input -> State pattern (state threading)
-    if (argTypes.length === 2 && argTypes[0] === arrows[arrows.length - 1]!.trim()) {
-      const stateType = argTypes[0]!;
-      const inputType = argTypes[1]!;
-      // Applying twice should be consistent
-      suggestions.push({
-        law: "sequential application consistency",
-        property: `\\s i1 i2 -> ${funcName} (${funcName} (s :: ${stateType}) (i1 :: ${inputType})) i2 == ${funcName} (${funcName} s i1) i2`,
-        confidence: "medium",
-      });
-    }
-  }
-
   return suggestions;
-}
-
-// --- Helpers for building property expressions ---
-
-/**
- * Build a property with N quantified arguments matching the arg types.
- */
-function buildNArgs(
-  funcName: string,
-  argTypes: string[],
-  body: string,
-  _label: string
-): string {
-  const vars = argTypes.map((_, i) => `x${i}`);
-  const annotations = argTypes
-    .map((t, i) => `(${vars[i]} :: ${t})`)
-    .join(" ");
-  return `\\${annotations} -> ${body}`;
-}
-
-/**
- * Build the argument application part: "x0 x1 x2"
- */
-function buildArgApply(argTypes: string[]): string {
-  return argTypes.map((_, i) => `x${i}`).join(" ");
 }
 
 // --- Type signature helpers ---

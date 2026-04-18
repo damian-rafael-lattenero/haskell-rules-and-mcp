@@ -83,7 +83,7 @@ describe("handleQuickCheck — suggest mode", () => {
     )).toBe(true);
   });
 
-  it("suggests reflexivity for functions with Either return and same-type args", async () => {
+  it("does NOT suggest reflexivity tautology for Either with same-type args", async () => {
     const session = makeSuggestSession("unify :: Type -> Type -> Either TypeError Subst");
     const result = JSON.parse(
       await handleQuickCheck(session, {
@@ -91,13 +91,13 @@ describe("handleQuickCheck — suggest mode", () => {
         function_name: "unify",
       })
     );
-    expect(result.suggestedProperties.length).toBeGreaterThan(0);
-    expect(result.suggestedProperties.some(
-      (p: { law: string }) => p.law.includes("reflexivity")
-    )).toBe(true);
+    const laws = result.suggestedProperties.map((p: { law: string }) => p.law);
+    expect(laws).not.toContain("determinism");
+    expect(laws.some((l: string) => l.includes("reflexivity"))).toBe(false);
+    expect(laws.some((l: string) => l.includes("reflexive (equal args)"))).toBe(false);
   });
 
-  it("suggests state-threading for State -> Input -> State pattern", async () => {
+  it("does NOT suggest sequential-application tautology for State -> Input -> State", async () => {
     const session = makeSuggestSession("advancePos :: Pos -> Char -> Pos");
     const result = JSON.parse(
       await handleQuickCheck(session, {
@@ -105,9 +105,8 @@ describe("handleQuickCheck — suggest mode", () => {
         function_name: "advancePos",
       })
     );
-    expect(result.suggestedProperties.some(
-      (p: { law: string }) => p.law.includes("sequential")
-    )).toBe(true);
+    const laws = result.suggestedProperties.map((p: { law: string }) => p.law);
+    expect(laws.some((l: string) => l.includes("sequential"))).toBe(false);
   });
 
   it("returns empty suggestions for unknown function type", async () => {

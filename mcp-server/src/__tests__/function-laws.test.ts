@@ -86,21 +86,22 @@ describe("suggestFunctionProperties", () => {
     });
   });
 
-  describe("return-type contracts (safe properties only)", () => {
-    it("suggests determinism for Either return (not 'not always Left')", () => {
+  describe("no tautologies for return-type contracts", () => {
+    it("does NOT suggest determinism or universal Left/Right for Either", () => {
       const suggestions = suggestFunctionProperties("parse", "parse :: String -> Either String Int");
       const laws = suggestions.map((s) => s.law);
-      expect(laws).toContain("determinism");
-      // MUST NOT suggest universally wrong properties
+      expect(laws).not.toContain("determinism");
       expect(laws).not.toContain("not always Left");
       expect(laws).not.toContain("not always Nothing");
+      expect(laws).not.toContain("reflexivity (equal args consistent)");
     });
 
-    it("suggests reflexivity for Either with same-type args", () => {
+    it("does NOT suggest reflexivity tautology for Either with same-type args", () => {
       const suggestions = suggestFunctionProperties("unify", "unify :: Type -> Type -> Either Error Type");
-      const reflex = suggestions.find((s) => s.law.includes("reflexivity"));
-      expect(reflex).toBeDefined();
-      expect(reflex!.property).toContain("unify x (x :: Type)");
+      const laws = suggestions.map((s) => s.law);
+      expect(laws).not.toContain("determinism");
+      expect(laws).not.toContain("reflexivity (equal args consistent)");
+      expect(laws).not.toContain("reflexive (equal args)");
     });
 
     it("does NOT suggest universal Maybe/Bool properties", () => {
@@ -113,21 +114,25 @@ describe("suggestFunctionProperties", () => {
     });
   });
 
-  describe("same-type arguments", () => {
-    it("suggests reflexive test for equal args", () => {
+  describe("same-type arguments (non-binary-op)", () => {
+    it("does NOT suggest reflexive-equal-args tautology", () => {
+      // `merge :: ParseError -> ParseError -> ParseError` IS a binary op,
+      // so associativity/commutativity are suggested (real content).
+      // But `\x -> merge x x == merge x x` (a tautology) must NOT be emitted.
       const suggestions = suggestFunctionProperties("merge", "merge :: ParseError -> ParseError -> ParseError");
-      const reflex = suggestions.find((s) => s.law.includes("reflexive"));
-      expect(reflex).toBeDefined();
-      expect(reflex!.property).toContain("merge x (x :: ParseError)");
+      const laws = suggestions.map((s) => s.law);
+      expect(laws).not.toContain("reflexive (equal args)");
+      expect(laws).not.toContain("reflexivity (equal args consistent)");
     });
   });
 
-  describe("state-threading pattern", () => {
-    it("suggests consistency for State -> Input -> State", () => {
+  describe("state-threading pattern (must not tautology)", () => {
+    it("does NOT emit sequential-application tautology for State -> Input -> State", () => {
       const suggestions = suggestFunctionProperties("advancePos", "advancePos :: Pos -> Char -> Pos");
-      const consistency = suggestions.find((s) => s.law.includes("sequential"));
-      expect(consistency).toBeDefined();
-      expect(consistency!.property).toContain("advancePos (advancePos");
+      const laws = suggestions.map((s) => s.law);
+      expect(laws).not.toContain("sequential application consistency");
+      // Shape has no matching structural law → empty is correct.
+      expect(suggestions).toEqual([]);
     });
   });
 
