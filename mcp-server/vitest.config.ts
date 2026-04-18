@@ -10,9 +10,13 @@ export default defineConfig({
     ],
     globals: true,
     testTimeout: 30000,
-    // Run tests with limited concurrency to reduce dist-newstyle conflicts
-    maxConcurrency: 1,
-    fileParallelism: false,
+    // Unit tests are pure code (parsers, coercers, law engines). No GHCi,
+    // no dist-newstyle contention. Let vitest parallelize across all CPUs.
+    fileParallelism: true,
+    // `sequence.concurrent` lets tests inside a single file run in parallel
+    // when they are declared via `it.concurrent`. We leave the default off
+    // (=false) so existing sequential assumptions inside a file keep holding;
+    // the big win comes from file-level parallelism above.
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

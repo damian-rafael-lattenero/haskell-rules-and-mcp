@@ -1,14 +1,21 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from "vitest";
 import { GhciSession } from "../../ghci-session.js";
-import path from "node:path";
-
-const TEST_PROJECT = path.resolve(import.meta.dirname, "..", "fixtures", "test-project");
+import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
 describe("Timeout Recovery Integration", () => {
   let session: GhciSession;
+  let fixture: IsolatedFixture;
+
+  beforeAll(async () => {
+    fixture = await setupIsolatedFixture("test-project", "timeout-recovery");
+  });
+
+  afterAll(async () => {
+    await fixture.cleanup();
+  });
 
   beforeEach(async () => {
-    session = new GhciSession(TEST_PROJECT);
+    session = new GhciSession(fixture.dir);
     await session.start();
   });
 

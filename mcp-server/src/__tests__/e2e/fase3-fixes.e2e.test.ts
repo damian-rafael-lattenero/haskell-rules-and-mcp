@@ -11,8 +11,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
-const FIXTURE_DIR = path.resolve(import.meta.dirname, "../fixtures/test-project");
 const SERVER_SCRIPT = path.resolve(import.meta.dirname, "../../../dist/index.js");
 const GHCUP_BIN = path.join(process.env.HOME ?? "", ".ghcup", "bin");
 const TEST_PATH = `${GHCUP_BIN}:${process.env.PATH}`;
@@ -33,8 +33,12 @@ function parseResult(result: Awaited<ReturnType<Client["callTool"]>>): any {
 describe.runIf(GHC_AVAILABLE)("E2E: Fase 3 fixes", () => {
   let client: Client;
   let transport: StdioClientTransport;
+  let fixture: IsolatedFixture;
+  let FIXTURE_DIR: string;
 
   beforeAll(async () => {
+    fixture = await setupIsolatedFixture("test-project", "fase3-fixes");
+    FIXTURE_DIR = fixture.dir;
     transport = new StdioClientTransport({
       command: process.execPath,
       args: [SERVER_SCRIPT],
@@ -52,6 +56,7 @@ describe.runIf(GHC_AVAILABLE)("E2E: Fase 3 fixes", () => {
 
   afterAll(async () => {
     try { await client.close(); } catch { /* ignore */ }
+    await fixture.cleanup();
   });
 
   it("ghci_suggest(analyze) reloads the target, so repeated runs after intermediate loads still browse it", async () => {
@@ -103,9 +108,14 @@ describe.runIf(GHC_AVAILABLE)("E2E: Fase 3 fixes", () => {
 describe.runIf(GHC_AVAILABLE)("E2E: telemetry opt-in writes per-tool counts", () => {
   let client: Client;
   let transport: StdioClientTransport;
-  const telemetryFile = path.join(FIXTURE_DIR, ".haskell-flows", "telemetry.json");
+  let fixture: IsolatedFixture;
+  let FIXTURE_DIR: string;
+  let telemetryFile: string;
 
   beforeAll(async () => {
+    fixture = await setupIsolatedFixture("test-project", "fase3-telemetry");
+    FIXTURE_DIR = fixture.dir;
+    telemetryFile = path.join(FIXTURE_DIR, ".haskell-flows", "telemetry.json");
     // Ensure a clean slate.
     try {
       const { rmSync } = await import("node:fs");
@@ -132,6 +142,7 @@ describe.runIf(GHC_AVAILABLE)("E2E: telemetry opt-in writes per-tool counts", ()
       const { rmSync } = await import("node:fs");
       rmSync(telemetryFile, { force: true });
     } catch { /* ignore */ }
+    await fixture.cleanup();
   });
 
   it("records calls locally only (no network) and aggregates success/failure", async () => {

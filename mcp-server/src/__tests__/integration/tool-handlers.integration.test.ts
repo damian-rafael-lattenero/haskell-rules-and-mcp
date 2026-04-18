@@ -19,11 +19,8 @@ import { handleCabalTest } from "../../tools/test.js";
 // handleFuzzParser: removed in Fase 2 (tool dropped from public surface).
 import { handleExportTests } from "../../tools/export-tests.js";
 import { saveProperty } from "../../property-store.js";
+import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
-const FIXTURE_DIR = path.resolve(import.meta.dirname, "../fixtures/test-project");
-const TEMP_EXPORTS_MODULE = path.join(FIXTURE_DIR, "src", "TempExports.hs");
-const PROPERTY_STORE_DIR = path.join(FIXTURE_DIR, ".haskell-flows");
-const TEST_SPEC_FILE = path.join(FIXTURE_DIR, "test", "Spec.hs");
 const GHCUP_BIN = path.join(process.env.HOME ?? "", ".ghcup", "bin");
 const TEST_PATH = `${GHCUP_BIN}:${process.env.PATH}`;
 
@@ -37,8 +34,18 @@ const GHC_AVAILABLE = (() => {
 describe.runIf(GHC_AVAILABLE)("Tool Handlers Integration", () => {
   let session: GhciSession;
   let originalSpec = "";
+  let fixture: IsolatedFixture;
+  let FIXTURE_DIR: string;
+  let TEMP_EXPORTS_MODULE: string;
+  let PROPERTY_STORE_DIR: string;
+  let TEST_SPEC_FILE: string;
 
   beforeAll(async () => {
+    fixture = await setupIsolatedFixture("test-project", "tool-handlers");
+    FIXTURE_DIR = fixture.dir;
+    TEMP_EXPORTS_MODULE = path.join(FIXTURE_DIR, "src", "TempExports.hs");
+    PROPERTY_STORE_DIR = path.join(FIXTURE_DIR, ".haskell-flows");
+    TEST_SPEC_FILE = path.join(FIXTURE_DIR, "test", "Spec.hs");
     originalSpec = await readFile(TEST_SPEC_FILE, "utf8");
     session = new GhciSession(FIXTURE_DIR, "lib:test-project");
     await session.start();
@@ -49,6 +56,7 @@ describe.runIf(GHC_AVAILABLE)("Tool Handlers Integration", () => {
     await rm(TEMP_EXPORTS_MODULE, { force: true });
     await rm(PROPERTY_STORE_DIR, { recursive: true, force: true });
     await writeFile(TEST_SPEC_FILE, originalSpec, "utf8");
+    await fixture.cleanup();
   });
 
   // --- ghci_type ---

@@ -23,8 +23,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { execSync } from "node:child_process";
 import { writeFile, unlink, rm } from "node:fs/promises";
 import path from "node:path";
+import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
-const FIXTURE_DIR = path.resolve(import.meta.dirname, "../fixtures/parser-project");
 const SERVER_SCRIPT = path.resolve(import.meta.dirname, "../../../dist/index.js");
 const GHCUP_BIN = path.join(process.env.HOME ?? "", ".ghcup", "bin");
 const TEST_PATH = `${GHCUP_BIN}:${process.env.PATH}`;
@@ -185,8 +185,13 @@ describe.runIf(GHC_AVAILABLE)(
   () => {
     let client: Client;
     let transport: StdioClientTransport;
+    let fixture: IsolatedFixture;
+    let FIXTURE_DIR: string;
 
     beforeAll(async () => {
+      fixture = await setupIsolatedFixture("parser-project", "parser-e2e");
+      FIXTURE_DIR = fixture.dir;
+
       // Write source files
       for (const f of SOURCE_FILES) {
         await writeFile(path.join(FIXTURE_DIR, f.path), f.content, "utf-8");
@@ -224,6 +229,7 @@ describe.runIf(GHC_AVAILABLE)(
         await rm(path.join(FIXTURE_DIR, ".haskell-flows"), { recursive: true, force: true });
       } catch { /* ignore */ }
       try { await client.close(); } catch { /* ignore */ }
+      await fixture.cleanup();
     });
 
     // =========================================================

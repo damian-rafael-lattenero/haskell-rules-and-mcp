@@ -2,11 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { GhciSession } from "../../ghci-session.js";
-
-const FIXTURE_DIR = path.resolve(
-  import.meta.dirname,
-  "../fixtures/test-project"
-);
+import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
 // Extend PATH to include ghcup bin for GHC detection
 const GHCUP_BIN = path.join(process.env.HOME ?? "", ".ghcup", "bin");
@@ -23,8 +19,12 @@ const GHC_AVAILABLE = (() => {
 
 describe.runIf(GHC_AVAILABLE)("GHCi Session Integration", () => {
   let session: GhciSession;
+  let fixture: IsolatedFixture;
+  let FIXTURE_DIR: string;
 
   beforeAll(async () => {
+    fixture = await setupIsolatedFixture("test-project", "ghci-session");
+    FIXTURE_DIR = fixture.dir;
     session = new GhciSession(FIXTURE_DIR, "lib:test-project");
     await session.start();
   }, 60_000);
@@ -33,6 +33,7 @@ describe.runIf(GHC_AVAILABLE)("GHCi Session Integration", () => {
     if (session?.isAlive()) {
       await session.kill();
     }
+    await fixture.cleanup();
   });
 
   it("starts and reports alive", () => {

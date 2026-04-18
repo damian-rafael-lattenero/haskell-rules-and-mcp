@@ -9,10 +9,9 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { execSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
-const FIXTURE_DIR = path.resolve(import.meta.dirname, "../fixtures/test-project");
 const SERVER_SCRIPT = path.resolve(import.meta.dirname, "../../../dist/index.js");
-const CABAL_FILE = path.join(FIXTURE_DIR, "test-project.cabal");
 const GHCUP_BIN = path.join(process.env.HOME ?? "", ".ghcup", "bin");
 const TEST_PATH = `${GHCUP_BIN}:${process.env.PATH}`;
 
@@ -36,8 +35,14 @@ describe.runIf(GHC_AVAILABLE)("E2E: ghci_deps", () => {
   let client: Client;
   let transport: StdioClientTransport;
   let originalCabal: string;
+  let fixture: IsolatedFixture;
+  let FIXTURE_DIR: string;
+  let CABAL_FILE: string;
 
   beforeAll(async () => {
+    fixture = await setupIsolatedFixture("test-project", "deps-e2e");
+    FIXTURE_DIR = fixture.dir;
+    CABAL_FILE = path.join(FIXTURE_DIR, "test-project.cabal");
     originalCabal = await readFile(CABAL_FILE, "utf-8");
 
     transport = new StdioClientTransport({
@@ -58,6 +63,7 @@ describe.runIf(GHC_AVAILABLE)("E2E: ghci_deps", () => {
     // Restore original cabal file
     await writeFile(CABAL_FILE, originalCabal, "utf-8");
     try { await client.close(); } catch { /* ignore */ }
+    await fixture.cleanup();
   });
 
   it("ghci_deps appears in listTools()", async () => {

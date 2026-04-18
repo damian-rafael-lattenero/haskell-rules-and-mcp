@@ -2,14 +2,16 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { GhciSession } from "../../ghci-session.js";
 import { handleFormat } from "../../tools/format.js";
 import { handleHls } from "../../tools/hls.js";
-import path from "node:path";
-
-const TEST_PROJECT = path.resolve(import.meta.dirname, "..", "fixtures", "test-project");
+import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
 describe("Bundled Tools Complete Integration", () => {
   let session: GhciSession;
+  let fixture: IsolatedFixture;
+  let TEST_PROJECT: string;
 
   beforeAll(async () => {
+    fixture = await setupIsolatedFixture("test-project", "bundled-complete");
+    TEST_PROJECT = fixture.dir;
     session = new GhciSession(TEST_PROJECT);
     await session.start();
   });
@@ -18,6 +20,7 @@ describe("Bundled Tools Complete Integration", () => {
     if (session.isAlive()) {
       await session.kill();
     }
+    await fixture.cleanup();
   });
 
   it("format.ts uses ensureTool and handles auto-download", async () => {

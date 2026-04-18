@@ -10,6 +10,7 @@ const fixtureDir = path.resolve(import.meta.dirname, "../fixtures/test-project")
 import {
   TEST_PLATFORM,
   TEST_ARCH,
+  acquireBundledToolsLock,
   bundledToolPath,
   readManifestRaw,
   restoreManifest,
@@ -23,7 +24,12 @@ const hlsBin = bundledToolPath("hls");
 
 describe("bundled tools integration", () => {
   let manifestSnapshot = "";
+  // Cross-worker mutex: both this file and bundled-tools-complete write to the
+  // same shared `vendor-tools/` directory. Hold the lock for the entire
+  // lifecycle of this test file so parallel workers serialize here.
+  let releaseLock: (() => Promise<void>) | null = null;
   beforeAll(async () => {
+    releaseLock = await acquireBundledToolsLock();
     manifestSnapshot = await readManifestRaw();
     if (!["darwin", "linux", "win32"].includes(TEST_PLATFORM)) return;
     if (!["x64", "arm64"].includes(TEST_ARCH)) return;
@@ -58,6 +64,7 @@ describe("bundled tools integration", () => {
     await rm(hlsBin, { force: true });
     await restoreManifest(manifestSnapshot);
     resetBundledManifestCache();
+    if (releaseLock) await releaseLock();
   });
 
   it("ghci_lint uses bundled hlint when present", async () => {

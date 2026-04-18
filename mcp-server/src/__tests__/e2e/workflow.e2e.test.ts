@@ -19,21 +19,14 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { execSync } from "node:child_process";
 import { writeFile, unlink, readFile, access } from "node:fs/promises";
 import path from "node:path";
+import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
-const FIXTURE_DIR = path.resolve(
-  import.meta.dirname,
-  "../fixtures/test-project"
-);
 const SERVER_SCRIPT = path.resolve(
   import.meta.dirname,
   "../../../dist/index.js"
 );
 const GHCUP_BIN = path.join(process.env.HOME ?? "", ".ghcup", "bin");
 const TEST_PATH = `${GHCUP_BIN}:${process.env.PATH}`;
-
-const WORKFLOW_MODULE = path.join(FIXTURE_DIR, "src", "WorkflowTest.hs");
-const HOLE_MODULE = path.join(FIXTURE_DIR, "src", "HoleTest.hs");
-const CABAL_FILE = path.join(FIXTURE_DIR, "test-project.cabal");
 
 const GHC_AVAILABLE = (() => {
   try {
@@ -60,8 +53,19 @@ describe.runIf(GHC_AVAILABLE)("E2E Workflow: Development Loop", () => {
   let client: Client;
   let transport: StdioClientTransport;
   let originalCabal: string;
+  let fixture: IsolatedFixture;
+  let FIXTURE_DIR: string;
+  let WORKFLOW_MODULE: string;
+  let HOLE_MODULE: string;
+  let CABAL_FILE: string;
 
   beforeAll(async () => {
+    fixture = await setupIsolatedFixture("test-project", "workflow");
+    FIXTURE_DIR = fixture.dir;
+    WORKFLOW_MODULE = path.join(FIXTURE_DIR, "src", "WorkflowTest.hs");
+    HOLE_MODULE = path.join(FIXTURE_DIR, "src", "HoleTest.hs");
+    CABAL_FILE = path.join(FIXTURE_DIR, "test-project.cabal");
+
     // Save original cabal file
     originalCabal = await readFile(CABAL_FILE, "utf-8");
 
@@ -99,6 +103,7 @@ describe.runIf(GHC_AVAILABLE)("E2E Workflow: Development Loop", () => {
     try { await unlink(HOLE_MODULE); } catch { /* ignore */ }
     await writeFile(CABAL_FILE, originalCabal, "utf-8");
     try { await client.close(); } catch { /* ignore */ }
+    await fixture.cleanup();
   });
 
   // --- Step 1: Create a buggy module via ghci_add_modules (replaces the old ghci_scaffold) ---

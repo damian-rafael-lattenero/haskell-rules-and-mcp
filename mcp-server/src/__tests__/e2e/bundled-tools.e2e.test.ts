@@ -6,14 +6,15 @@ import path from "node:path";
 import { resetBundledManifestCache } from "../../tools/tool-installer.js";
 import {
   TEST_PLATFORM,
+  acquireBundledToolsLock,
   bundledToolPath,
   readManifestRaw,
   restoreManifest,
   updateRuntimeManifestEntry,
   writeExecutable,
 } from "../helpers/bundled-tools.js";
+import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
-const fixtureDir = path.resolve(import.meta.dirname, "../fixtures/test-project");
 const serverScript = path.resolve(import.meta.dirname, "../../../dist/index.js");
 const fmtBin = bundledToolPath("fourmolu");
 const hlsBin = bundledToolPath("hls");
@@ -22,8 +23,14 @@ describe("bundled tools e2e", () => {
   let client: Client;
   let transport: StdioClientTransport;
   let manifestSnapshot = "";
+  let fixture: IsolatedFixture;
+  // Cross-worker mutex for `vendor-tools/` writes — this file races with
+  // `bundled-tools.integration.test.ts` otherwise.
+  let releaseLock: (() => Promise<void>) | null = null;
 
   beforeAll(async () => {
+    releaseLock = await acquireBundledToolsLock();
+    fixture = await setupIsolatedFixture("test-project", "bundled-e2e");
     manifestSnapshot = await readManifestRaw();
     if (TEST_PLATFORM === "win32") {
       await writeExecutable(
@@ -50,7 +57,7 @@ describe("bundled tools e2e", () => {
       args: [serverScript],
       env: {
         ...process.env,
-        HASKELL_PROJECT_DIR: fixtureDir,
+        HASKELL_PROJECT_DIR: fixture.dir,
         HASKELL_LIBRARY_TARGET: "lib:test-project",
       },
     });
@@ -68,6 +75,8 @@ describe("bundled tools e2e", () => {
     await rm(hlsBin, { force: true });
     await restoreManifest(manifestSnapshot);
     resetBundledManifestCache();
+    await fixture.cleanup();
+    if (releaseLock) await releaseLock();
   });
 
   it("ghci_format reports bundled source through MCP", async () => {

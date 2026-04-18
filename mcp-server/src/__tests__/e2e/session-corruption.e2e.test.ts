@@ -2,20 +2,21 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import path from "node:path";
-
-const TEST_PROJECT = path.resolve(import.meta.dirname, "..", "fixtures", "test-project");
+import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
 describe("Session Corruption E2E", () => {
   let client: Client;
   let transport: StdioClientTransport;
+  let fixture: IsolatedFixture;
 
   beforeAll(async () => {
+    fixture = await setupIsolatedFixture("test-project", "session-corruption");
     transport = new StdioClientTransport({
       command: "node",
       args: [path.resolve(import.meta.dirname, "..", "..", "..", "dist", "index.js")],
       env: {
         ...process.env,
-        HASKELL_PROJECT_DIR: TEST_PROJECT,
+        HASKELL_PROJECT_DIR: fixture.dir,
       },
     });
 
@@ -29,6 +30,7 @@ describe("Session Corruption E2E", () => {
 
   afterAll(async () => {
     await client.close();
+    await fixture.cleanup();
   });
 
   async function callTool(name: string, args: Record<string, unknown>) {

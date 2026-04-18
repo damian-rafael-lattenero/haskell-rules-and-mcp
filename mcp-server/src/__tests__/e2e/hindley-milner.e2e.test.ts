@@ -12,19 +12,14 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { execSync } from "node:child_process";
 import { writeFile, unlink, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
-const FIXTURE_DIR = path.resolve(
-  import.meta.dirname,
-  "../fixtures/hm-project"
-);
 const SERVER_SCRIPT = path.resolve(
   import.meta.dirname,
   "../../../dist/index.js"
 );
 const GHCUP_BIN = path.join(process.env.HOME ?? "", ".ghcup", "bin");
 const TEST_PATH = `${GHCUP_BIN}:${process.env.PATH}`;
-
-const HM_MODULE = path.join(FIXTURE_DIR, "src", "HM.hs");
 
 const GHC_AVAILABLE = (() => {
   try {
@@ -246,8 +241,15 @@ describe.runIf(GHC_AVAILABLE)(
   () => {
     let client: Client;
     let transport: StdioClientTransport;
+    let fixture: IsolatedFixture;
+    let FIXTURE_DIR: string;
+    let HM_MODULE: string;
 
     beforeAll(async () => {
+      fixture = await setupIsolatedFixture("hm-project", "hm-e2e");
+      FIXTURE_DIR = fixture.dir;
+      HM_MODULE = path.join(FIXTURE_DIR, "src", "HM.hs");
+
       // Ensure src directory exists
       await mkdir(path.join(FIXTURE_DIR, "src"), { recursive: true });
 
@@ -275,6 +277,7 @@ describe.runIf(GHC_AVAILABLE)(
     afterAll(async () => {
       try { await unlink(HM_MODULE); } catch { /* ignore */ }
       try { await client.close(); } catch { /* ignore */ }
+      await fixture.cleanup();
     });
 
     // =================================================================

@@ -9,8 +9,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { execSync } from "node:child_process";
 import path from "node:path";
+import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
-const FIXTURE_DIR = path.resolve(import.meta.dirname, "../fixtures/test-project");
 const SERVER_SCRIPT = path.resolve(import.meta.dirname, "../../../dist/index.js");
 const GHCUP_BIN = path.join(process.env.HOME ?? "", ".ghcup", "bin");
 const TEST_PATH = `${GHCUP_BIN}:${process.env.PATH}`;
@@ -31,8 +31,12 @@ function parseResult(result: Awaited<ReturnType<Client["callTool"]>>): any {
 describe.runIf(GHC_AVAILABLE)("E2E: Fase 4 coercers via MCP protocol", () => {
   let client: Client;
   let transport: StdioClientTransport;
+  let fixture: IsolatedFixture;
+  let FIXTURE_DIR: string;
 
   beforeAll(async () => {
+    fixture = await setupIsolatedFixture("test-project", "fase4-coercers");
+    FIXTURE_DIR = fixture.dir;
     transport = new StdioClientTransport({
       command: process.execPath,
       args: [SERVER_SCRIPT],
@@ -49,6 +53,7 @@ describe.runIf(GHC_AVAILABLE)("E2E: Fase 4 coercers via MCP protocol", () => {
 
   afterAll(async () => {
     try { await client.close(); } catch { /* ignore */ }
+    await fixture.cleanup();
   });
 
   it('accepts a string-serialized boolean for `diagnostics` on ghci_load', async () => {

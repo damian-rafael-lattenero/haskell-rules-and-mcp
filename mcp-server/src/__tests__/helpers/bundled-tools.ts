@@ -1,8 +1,45 @@
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 
 export const TEST_ROOT_DIR = path.resolve(import.meta.dirname, "..", "..", "..");
+
+/**
+ * Inter-worker mutex for `vendor-tools/` mutations.
+ *
+ * Both `bundled-tools.integration.test.ts` and
+ * `bundled-tools-complete.integration.test.ts` mutate the shared
+ * `vendor-tools/bundled-tools-manifest.json` and related binaries. When
+ * vitest runs files in parallel (fileParallelism: true), these mutations
+ * race across workers. `mkdir` with a sentinel path is atomic at the
+ * filesystem layer (EEXIST if another worker holds the lock), so we use it
+ * as a portable cross-process mutex. Each caller must invoke the returned
+ * release function — we wrap it in try/finally at the call site.
+ */
+const LOCK_DIR = path.join(TEST_ROOT_DIR, "vendor-tools", ".test-bundled-lock");
+
+export async function acquireBundledToolsLock(
+  timeoutMs = 60_000,
+  pollMs = 100
+): Promise<() => Promise<void>> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      // `recursive: false` + "wx" style semantics: fails if the dir exists.
+      await mkdir(LOCK_DIR);
+      return async () => {
+        await rm(LOCK_DIR, { recursive: true, force: true });
+      };
+    } catch {
+      // Lock held by another worker — back off and retry.
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+  }
+  throw new Error(
+    `acquireBundledToolsLock: timed out after ${timeoutMs}ms waiting for ${LOCK_DIR}. ` +
+      "If a previous test crashed mid-lock, delete this directory manually."
+  );
+}
 export const TEST_PLATFORM = process.platform as "darwin" | "linux" | "win32";
 export const TEST_ARCH = process.arch as "x64" | "arm64";
 export const TEST_EXT = TEST_PLATFORM === "win32" ? ".exe" : "";

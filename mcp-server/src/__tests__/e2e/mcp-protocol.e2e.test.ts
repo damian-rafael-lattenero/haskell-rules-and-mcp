@@ -3,11 +3,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { execSync } from "node:child_process";
 import path from "node:path";
+import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
-const FIXTURE_DIR = path.resolve(
-  import.meta.dirname,
-  "../fixtures/test-project"
-);
 const SERVER_SCRIPT = path.resolve(
   import.meta.dirname,
   "../../../dist/index.js"
@@ -32,8 +29,12 @@ const GHC_AVAILABLE = (() => {
 describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
   let client: Client;
   let transport: StdioClientTransport;
+  let fixture: IsolatedFixture;
+  let FIXTURE_DIR: string;
 
   beforeAll(async () => {
+    fixture = await setupIsolatedFixture("test-project", "mcp-protocol");
+    FIXTURE_DIR = fixture.dir;
     transport = new StdioClientTransport({
       command: "node",
       args: [SERVER_SCRIPT],
@@ -57,6 +58,7 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     } catch {
       // Ignore close errors
     }
+    await fixture.cleanup();
   });
 
   it("lists available tools", async () => {

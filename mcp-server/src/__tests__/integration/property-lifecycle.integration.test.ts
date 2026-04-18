@@ -2,19 +2,20 @@
  * Integration tests for property lifecycle with export workflow.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { handlePropertyLifecycle } from "../../tools/property-lifecycle.js";
 import { handleExportTests } from "../../tools/export-tests.js";
 import { saveProperty } from "../../property-store.js";
 
-const TEST_PROJECT_DIR = path.resolve(
-  import.meta.dirname,
-  "../../../test-fixtures/property-lifecycle-integration"
-);
+// Per-test isolated tmpdir (fresh for every `beforeEach`). Multiple workers
+// running this file in parallel never collide because each gets its own
+// `mkdtemp` root.
+let TEST_PROJECT_DIR: string;
 
 beforeEach(async () => {
-  await mkdir(TEST_PROJECT_DIR, { recursive: true });
+  TEST_PROJECT_DIR = await mkdtemp(path.join(os.tmpdir(), "property-lifecycle-"));
   await mkdir(path.join(TEST_PROJECT_DIR, ".haskell-flows"), { recursive: true });
   await mkdir(path.join(TEST_PROJECT_DIR, "test"), { recursive: true });
   await mkdir(path.join(TEST_PROJECT_DIR, "src"), { recursive: true });

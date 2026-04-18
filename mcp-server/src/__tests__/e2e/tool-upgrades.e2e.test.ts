@@ -4,14 +4,11 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { execSync } from "node:child_process";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
-const FIXTURE_DIR = path.resolve(import.meta.dirname, "../fixtures/test-project");
 const SERVER_SCRIPT = path.resolve(import.meta.dirname, "../../../dist/index.js");
 const GHCUP_BIN = path.join(process.env.HOME ?? "", ".ghcup", "bin");
 const TEST_PATH = `${GHCUP_BIN}:${process.env.PATH}`;
-const TEMP_EXPORTS_MODULE = path.join(FIXTURE_DIR, "src", "TempExportsE2E.hs");
-const PROPERTY_STORE_DIR = path.join(FIXTURE_DIR, ".haskell-flows");
-const TEST_SPEC_FILE = path.join(FIXTURE_DIR, "test", "Spec.hs");
 
 const GHC_AVAILABLE = (() => {
   try {
@@ -31,8 +28,18 @@ describe.runIf(GHC_AVAILABLE)("E2E Tool Upgrades", () => {
   let client: Client;
   let transport: StdioClientTransport;
   let originalSpec = "";
+  let fixture: IsolatedFixture;
+  let FIXTURE_DIR: string;
+  let TEMP_EXPORTS_MODULE: string;
+  let PROPERTY_STORE_DIR: string;
+  let TEST_SPEC_FILE: string;
 
   beforeAll(async () => {
+    fixture = await setupIsolatedFixture("test-project", "tool-upgrades");
+    FIXTURE_DIR = fixture.dir;
+    TEMP_EXPORTS_MODULE = path.join(FIXTURE_DIR, "src", "TempExportsE2E.hs");
+    PROPERTY_STORE_DIR = path.join(FIXTURE_DIR, ".haskell-flows");
+    TEST_SPEC_FILE = path.join(FIXTURE_DIR, "test", "Spec.hs");
     originalSpec = await readFile(TEST_SPEC_FILE, "utf8");
     transport = new StdioClientTransport({
       command: "node",
@@ -57,6 +64,7 @@ describe.runIf(GHC_AVAILABLE)("E2E Tool Upgrades", () => {
     await rm(TEMP_EXPORTS_MODULE, { force: true });
     await rm(PROPERTY_STORE_DIR, { recursive: true, force: true });
     await writeFile(TEST_SPEC_FILE, originalSpec, "utf8");
+    await fixture.cleanup();
   });
 
   it("cabal_test succeeds through MCP", async () => {
