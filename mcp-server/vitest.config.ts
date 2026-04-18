@@ -13,6 +13,8 @@ export default defineConfig({
     // Unit tests are pure code (parsers, coercers, law engines). No GHCi,
     // no dist-newstyle contention. Let vitest parallelize across all CPUs.
     fileParallelism: true,
+    maxWorkers: 12,
+    minWorkers: 1,
     // `sequence.concurrent` lets tests inside a single file run in parallel
     // when they are declared via `it.concurrent`. We leave the default off
     // (=false) so existing sequential assumptions inside a file keep holding;

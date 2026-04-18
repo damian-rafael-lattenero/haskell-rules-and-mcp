@@ -14,7 +14,7 @@ export default defineConfig({
     // the parallelization plan) prevents cross-worker writes to the shared
     // test-project fixture.
     fileParallelism: true,
-    maxWorkers: 2,
+    maxWorkers: 6,
     minWorkers: 1,
   },
 });

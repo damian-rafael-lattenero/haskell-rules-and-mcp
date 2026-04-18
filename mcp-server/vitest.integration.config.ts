@@ -12,7 +12,7 @@ export default defineConfig({
     // cabal/GHCi processes contend for `dist-newstyle/`; 4 is the empirical
     // sweet spot on typical dev boxes (see plan-file benchmark notes).
     fileParallelism: true,
-    maxWorkers: 4,
+    maxWorkers: 10,
     minWorkers: 1,
   },
 });

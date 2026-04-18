@@ -21,7 +21,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { execSync } from "node:child_process";
-import { writeFile, unlink, rm } from "node:fs/promises";
+import { writeFile, unlink, rm, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { setupIsolatedFixture, type IsolatedFixture } from "../helpers/isolated-fixture.js";
 
@@ -192,9 +192,11 @@ describe.runIf(GHC_AVAILABLE)(
       fixture = await setupIsolatedFixture("parser-project", "parser-e2e");
       FIXTURE_DIR = fixture.dir;
 
-      // Write source files
+      // Write source files (ensure parent directories exist)
       for (const f of SOURCE_FILES) {
-        await writeFile(path.join(FIXTURE_DIR, f.path), f.content, "utf-8");
+        const full = path.join(FIXTURE_DIR, f.path);
+        await mkdir(path.dirname(full), { recursive: true });
+        await writeFile(full, f.content, "utf-8");
       }
 
       // Clean any previous property store

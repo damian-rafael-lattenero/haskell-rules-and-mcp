@@ -153,13 +153,18 @@ cd mcp-server
 
 ```bash
 cd mcp-server
-npm test                    # Unit tests (~830 tests, fast — no GHC required)
-npm run test:integration    # Integration (~90 tests, real GHCi session)
-npm run test:e2e            # E2E (~125 tests, full MCP protocol)
-npm run test:all
+npm install
+npm run build               # required before test:e2e (compiles dist/index.js)
+
+npm test                    # Unit (~855 tests, ~17s, pure TS — no GHC)
+npm run test:integration    # Integration (~89 tests, ~17s, real GHCi — forks, 4 workers)
+npm run test:e2e            # E2E (~130 tests, ~42s, full MCP + cabal — forks, 2 workers)
+npm run test:all            # sequential: unit → integration → e2e
 ```
 
-Integration / E2E skip gracefully if GHC is not available.
+- Integration / E2E skip gracefully if GHC is not available.
+- E2E requires `npm run build` first; a `pretest:e2e` hook enforces this.
+- Each worker gets its own isolated fixture copy (`setupIsolatedFixture()`), so suites are safe under parallel execution; worker caps (4 / 2) cover cabal-cache contention.
 
 ---
 
