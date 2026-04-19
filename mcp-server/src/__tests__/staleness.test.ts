@@ -1,5 +1,22 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { mkdtemp, writeFile, rm, utimes } from "node:fs/promises";
+
+/**
+ * Compare a computed "ms ahead" value against its expected nominal value with
+ * a filesystem-aware tolerance.
+ *
+ * On macOS APFS `fs.utimes(s, s)` preserves nanosecond precision, so the
+ * round-trip through `stat().mtimeMs` is exact. On Linux ext4 the granularity
+ * is microseconds, which means a nominal `600000` ms round-trip can come back
+ * as `599999.9990234375`. That <1 ms drift is FS behaviour, not a staleness
+ * detector bug — we absorb it with a 50 ms window, large enough to paper over
+ * any filesystem rounding and small enough that a genuine drift-of-minutes
+ * bug would still be loud.
+ */
+function expectCloseMs(actual: number | undefined, expected: number, toleranceMs = 50): void {
+  expect(actual).toBeDefined();
+  expect(Math.abs((actual as number) - expected)).toBeLessThan(toleranceMs);
+}
 import os from "node:os";
 import path from "node:path";
 import {
@@ -62,7 +79,7 @@ describe("staleness detector — pure", () => {
       bootTimeMs: () => bootTime,
     });
     expect(r.stale).toBe(false);
-    expect(r.bundleAheadByMs).toBe(60_000);
+    expectCloseMs(r.bundleAheadByMs, 60_000);
   });
 
   it("reports stale when bundle mtime exceeds threshold past boot", async () => {
@@ -76,7 +93,7 @@ describe("staleness detector — pure", () => {
       bootTimeMs: () => bootTime,
     });
     expect(r.stale).toBe(true);
-    expect(r.bundleAheadByMs).toBe(10 * 60_000);
+    expectCloseMs(r.bundleAheadByMs, 10 * 60_000);
     expect(stalenessMessage(r)).toMatch(/10 minute\(s\) newer/);
   });
 
@@ -103,7 +120,7 @@ describe("staleness detector — pure", () => {
       cacheTtlMs: 60_000,
     });
     expect(second.cached).toBe(true);
-    expect(second.bundleAheadByMs).toBe(first.bundleAheadByMs);
+    expectCloseMs(second.bundleAheadByMs, first.bundleAheadByMs ?? 0);
   });
 
   it("refreshes after TTL elapses", async () => {
@@ -126,7 +143,7 @@ describe("staleness detector — pure", () => {
       cacheTtlMs: 60_000,
     });
     expect(second.cached).toBe(false);
-    expect(second.bundleAheadByMs).toBe(30 * 60_000);
+    expectCloseMs(second.bundleAheadByMs, 30 * 60_000);
   });
 
   it("stalenessMessage returns null for non-stale result", () => {

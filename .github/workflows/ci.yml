@@ -160,6 +160,12 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     needs: [typecheck, unit, integration, e2e, audit, manifest]
+    # This job only reads `needs.*.result` — no source checkout, no
+    # mcp-server/ directory on disk. Override the repo-level default so
+    # bash doesn't try to cd into a path that doesn't exist.
+    defaults:
+      run:
+        working-directory: .
     steps:
       - name: Assert every dependency succeeded
         run: |
