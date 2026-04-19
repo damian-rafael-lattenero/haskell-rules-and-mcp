@@ -26,6 +26,11 @@ ghci_create_project  →  ghci_suggest(analyze)  →  ghci_quickcheck(label=…)
   →  ghci_lint  →  ghci_format  →  ghci_workflow(action="gate")
 ```
 
+Before pushing: run `scripts/ci-local.sh --fast` to replicate the CI
+gates locally (cabal build + test + recursive hlint). The full
+pipeline (add `haddock + cabal check + sdist`) takes ~5 min; drop
+`--fast` for the complete run that matches `Haskell CI` end-to-end.
+
 ---
 
 ## What it actually does (2-min scan)

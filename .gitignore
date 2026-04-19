@@ -5,6 +5,11 @@
 *.dyn_hi
 *.dyn_o
 
+# cabal-generated, always local-only. `cabal freeze` is used by CI as a
+# cache-key input; we don't commit the resulting plan.
+**/cabal.project.freeze
+**/cabal.project.local
+
 # MCP server build artifacts
 mcp-server/node_modules/
 mcp-server/dist/

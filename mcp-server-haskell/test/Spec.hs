@@ -577,7 +577,7 @@ testDefinedAtModule =
 
 testDefinedAtNone :: IO Bool
 testDefinedAtNone =
-  pure (parseDefinedAt "just some text" == Nothing)
+  pure (isNothing (parseDefinedAt "just some text"))
 
 --------------------------------------------------------------------------------
 -- Phase 8: Refactor engines
