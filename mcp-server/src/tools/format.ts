@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { execFile } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, access } from "node:fs/promises";
 import path from "node:path";
 import { type ToolContext, registerStrictTool, zBool } from "./registry.js";
 import { getBundledToolStatus, TOOL_PATH } from "./tool-installer.js";
@@ -164,6 +164,7 @@ export async function handleFormat(
   }
 
   const absPath = path.resolve(projectDir, args.module_path);
+  const configCheck = await detectFormatterConfig(projectDir, formatter);
 
   if (args.write) {
     const result = await runFormatter(formatter, ["--mode", "inplace", absPath], projectDir);
@@ -182,6 +183,9 @@ export async function handleFormat(
       binaryPath: formatter,
       written: true,
       message: `Formatted ${args.module_path} in place`,
+      configSource: configCheck.source,
+      ...(configCheck.configPath ? { configPath: configCheck.configPath } : {}),
+      ...(configCheck.hint ? { _hint: configCheck.hint } : {}),
     });
   }
 
@@ -206,8 +210,64 @@ export async function handleFormat(
     version: formatterVersion,
     binaryPath: formatter,
     changed,
+    configSource: configCheck.source,
+    ...(configCheck.configPath ? { configPath: configCheck.configPath } : {}),
+    ...(configCheck.hint ? { _hint: configCheck.hint } : {}),
     ...(changed ? { formatted } : { message: "Already formatted" }),
   });
+}
+
+/**
+ * Detect whether the project pins a fourmolu / ormolu config at the root.
+ *
+ * Both tools look upward from the file being formatted for a `fourmolu.yaml`
+ * (or `.fourmolu.yaml`) and fall back to their built-in defaults otherwise.
+ * The default style differs from "what an agent might expect" — for example
+ * fourmolu's default rewrites `-- | doc` haddock prefixes to `{- | -}`
+ * block form and reflows explicit export lists. Without opt-in that looks
+ * like the MCP arbitrarily changing personal style.
+ *
+ * This helper surfaces the config origin to the caller so the response
+ * carries a `configSource: "project" | "defaults"` field and, when
+ * defaults are in use, a `_hint` pointing at the one-liner to commit a
+ * pinned config: `fourmolu --print-default-config > fourmolu.yaml`.
+ */
+export interface FormatterConfigInfo {
+  source: "project" | "defaults";
+  configPath?: string;
+  hint?: string;
+}
+
+export async function detectFormatterConfig(
+  projectDir: string,
+  formatterPath: string
+): Promise<FormatterConfigInfo> {
+  const bin = path.basename(formatterPath);
+  // Both fourmolu and ormolu consult `fourmolu.yaml` / `.fourmolu.yaml` at
+  // or above the file being formatted. We check the project root as a
+  // sufficient proxy — a per-subdir config is unusual and would still
+  // report "defaults" here if the root doesn't have one.
+  const candidates = [
+    path.join(projectDir, "fourmolu.yaml"),
+    path.join(projectDir, ".fourmolu.yaml"),
+  ];
+  for (const p of candidates) {
+    try {
+      await access(p);
+      return { source: "project", configPath: p };
+    } catch {
+      // Next candidate.
+    }
+  }
+  return {
+    source: "defaults",
+    hint:
+      `No fourmolu.yaml found at project root. ${bin} is using its built-in ` +
+      "defaults — which may reflow exports, rewrite haddock prefixes, and " +
+      "apply opinionated alignment choices. To pin the style for the team, " +
+      "commit a project-level config: `" + bin + " --print-default-config > fourmolu.yaml`, " +
+      "then edit to taste.",
+  };
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
