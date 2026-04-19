@@ -47,12 +47,15 @@ library
                       HaskellFlows.Parser.Hole
                       HaskellFlows.Parser.QuickCheck
                       HaskellFlows.Parser.Type
+                      HaskellFlows.Tool.Arbitrary
                       HaskellFlows.Tool.Eval
                       HaskellFlows.Tool.Hole
+                      HaskellFlows.Tool.Hoogle
                       HaskellFlows.Tool.Info
                       HaskellFlows.Tool.Load
                       HaskellFlows.Tool.QuickCheck
                       HaskellFlows.Tool.Type
+                      HaskellFlows.Tool.Workflow
     build-depends:    base              >= 4.20 && < 5
                     , aeson             >= 2.2  && < 2.3
                     , async             >= 2.2  && < 2.3

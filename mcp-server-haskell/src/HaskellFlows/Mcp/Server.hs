@@ -14,8 +14,8 @@ module HaskellFlows.Mcp.Server
   , handleRequest
   ) where
 
-import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
-import Control.Exception (SomeException, try)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
+import Control.Exception (SomeException, fromException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, newIORef, readIORef)
@@ -28,12 +28,15 @@ import System.Environment (lookupEnv)
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Types (ProjectDir, mkProjectDir)
+import qualified HaskellFlows.Tool.Arbitrary  as ArbitraryTool
 import qualified HaskellFlows.Tool.Eval       as EvalTool
 import qualified HaskellFlows.Tool.Hole       as HoleTool
+import qualified HaskellFlows.Tool.Hoogle     as HoogleTool
 import qualified HaskellFlows.Tool.Info       as InfoTool
 import qualified HaskellFlows.Tool.Load       as Load
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.Type       as TypeTool
+import qualified HaskellFlows.Tool.Workflow   as WorkflowTool
 
 -- | All mutable server state.
 --
@@ -92,6 +95,9 @@ dispatch _ "tools/list" _ rid =
         , EvalTool.descriptor
         , QcTool.descriptor
         , HoleTool.descriptor
+        , ArbitraryTool.descriptor
+        , HoogleTool.descriptor
+        , WorkflowTool.descriptor
         ]
     ]
 dispatch srv "tools/call" (Just params) rid =
@@ -108,34 +114,65 @@ handleToolCall srv call rid = case tcName call of
   "ghci_load" -> do
     sess <- getOrStartSession srv
     pd   <- readIORef (srvProjectDir srv)
-    runTool rid (Load.handle sess pd (tcArguments call))
+    runTool srv rid (Load.handle sess pd (tcArguments call))
   "ghci_type" -> do
     sess <- getOrStartSession srv
-    runTool rid (TypeTool.handle sess (tcArguments call))
+    runTool srv rid (TypeTool.handle sess (tcArguments call))
   "ghci_info" -> do
     sess <- getOrStartSession srv
-    runTool rid (InfoTool.handle sess (tcArguments call))
+    runTool srv rid (InfoTool.handle sess (tcArguments call))
   "ghci_eval" -> do
     sess <- getOrStartSession srv
-    runTool rid (EvalTool.handle sess (tcArguments call))
+    runTool srv rid (EvalTool.handle sess (tcArguments call))
   "ghci_quickcheck" -> do
     sess <- getOrStartSession srv
-    runTool rid (QcTool.handle sess (tcArguments call))
+    runTool srv rid (QcTool.handle sess (tcArguments call))
   "ghci_hole" -> do
     sess <- getOrStartSession srv
     pd   <- readIORef (srvProjectDir srv)
-    runTool rid (HoleTool.handle sess pd (tcArguments call))
+    runTool srv rid (HoleTool.handle sess pd (tcArguments call))
+  "ghci_arbitrary" -> do
+    sess <- getOrStartSession srv
+    runTool srv rid (ArbitraryTool.handle sess (tcArguments call))
+  "hoogle_search" ->
+    -- No GHCi session needed: the tool shells out to the `hoogle`
+    -- binary directly. Still runs under the exception shield so the
+    -- server stays alive if hoogle is missing or crashes.
+    runTool srv rid (HoogleTool.handle (tcArguments call))
+  "ghci_workflow" ->
+    -- Read-only: uses the server state refs directly, no session boot.
+    runTool srv rid (WorkflowTool.handle (srvProjectDir srv)
+                                          (srvSession srv)
+                                          (tcArguments call))
   other -> pure (err_ rid (methodNotFoundErr ("tool " <> other)))
 
--- | Common exception shield for every tool handler. Prevents a handler
--- crash from taking down the server loop and surfaces it as a structured
--- tool-level error to the client.
-runTool :: RequestId -> IO ToolResult -> IO Response
-runTool rid action = do
+-- | Common exception shield for every tool handler.
+--
+-- Prevents a handler crash from taking down the server loop and surfaces
+-- it as a structured tool-level error to the client. On 'SessionExhausted'
+-- (buffer cap from the DoS guard in Session.hs), we additionally evict
+-- the dead session from the MVar so 'getOrStartSession' rebuilds it on
+-- the next call — otherwise every subsequent tool call would inherit the
+-- Overflowed status and fail identically.
+runTool :: Server -> RequestId -> IO ToolResult -> IO Response
+runTool srv rid action = do
   out <- try action :: IO (Either SomeException ToolResult)
   case out of
-    Left ex  -> pure (ok rid (toJSON (toolException (T.pack (show ex)))))
+    Left ex -> do
+      case fromException ex :: Maybe SessionExhausted of
+        Just _  -> evictSession srv
+        Nothing -> pure ()
+      pure (ok rid (toJSON (toolException (T.pack (show ex)))))
     Right tr -> pure (ok rid (toJSON tr))
+
+-- | Remove the current session from the MVar, killing it if present.
+-- The next 'getOrStartSession' will boot a fresh child process.
+evictSession :: Server -> IO ()
+evictSession srv = modifyMVar_ (srvSession srv) $ \case
+  Nothing -> pure Nothing
+  Just s  -> do
+    _ <- try (killSession s) :: IO (Either SomeException ())
+    pure Nothing
 
 getOrStartSession :: Server -> IO Session
 getOrStartSession srv = modifyMVar (srvSession srv) $ \case

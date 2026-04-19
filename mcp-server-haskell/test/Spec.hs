@@ -43,6 +43,15 @@ import HaskellFlows.Parser.Type
   , isOutOfScope
   , parseTypeOutput
   )
+import HaskellFlows.Tool.Arbitrary
+  ( Constructor (..)
+  , parseConstructors
+  , renderTemplate
+  )
+import HaskellFlows.Tool.Hoogle
+  ( HoogleHit (..)
+  , parseHoogleLine
+  )
 import HaskellFlows.Types
   ( PathError (..)
   , mkModulePath
@@ -77,6 +86,12 @@ main = do
       , test "parseQuickCheckOutput unparsed"      testQcUnparsed
       , test "parseTypedHoles extracts one hole"   testHoleOne
       , test "parseTypedHoles ignores non-holes"   testHoleIgnored
+      , test "parseConstructors inline form"       testCtorsInline
+      , test "parseConstructors multiline form"    testCtorsMultiline
+      , test "parseConstructors rejects synonym"   testCtorsSynonym
+      , test "renderTemplate 3 ctors"              testTemplate3
+      , test "parseHoogleLine normal hit"          testHoogleHit
+      , test "parseHoogleLine no-results line"    testHoogleEmpty
       ]
   if and results then exitSuccess else exitFailure
 
@@ -339,3 +354,69 @@ testHoleIgnored :: IO Bool
 testHoleIgnored =
   let raw = "src/Foo.hs:3:1: error: Not in scope: 'blah'"
   in pure (null (parseTypedHoles raw))
+
+--------------------------------------------------------------------------------
+-- Phase 5: Arbitrary + Hoogle parsers
+--------------------------------------------------------------------------------
+
+-- | Inline @data T = A | B Int | C Int String@ should produce three
+-- constructors with arities 0, 1, 2.
+testCtorsInline :: IO Bool
+testCtorsInline =
+  let raw = T.unlines
+        [ "data Foo = Bar | Baz Int | Qux Int String"
+        , "  \t-- Defined at src/Foo.hs:5:1"
+        ]
+  in pure $ case parseConstructors raw of
+       [a, b, c] -> cName a == "Bar" && null (cArgs a)
+                 && cName b == "Baz" && length (cArgs b) == 1
+                 && cName c == "Qux" && length (cArgs c) == 2
+       _         -> False
+
+-- | GHCi's multi-line form (one @|@ per line) must parse to the same
+-- three constructors.
+testCtorsMultiline :: IO Bool
+testCtorsMultiline =
+  let raw = T.unlines
+        [ "data Foo"
+        , "  = Bar"
+        , "  | Baz Int"
+        , "  | Qux Int String"
+        , "  \t-- Defined at src/Foo.hs:5:1"
+        ]
+  in pure $ case parseConstructors raw of
+       [a, b, c] -> cName a == "Bar" && cName b == "Baz" && cName c == "Qux"
+                 && length (cArgs c) == 2
+       _         -> False
+
+-- | Type synonyms have no @=@ constructor list; parser must return an
+-- empty list rather than invent ctors.
+testCtorsSynonym :: IO Bool
+testCtorsSynonym =
+  let raw = "type Alias = Int"
+  in pure (null (parseConstructors raw))
+
+testTemplate3 :: IO Bool
+testTemplate3 =
+  let ctors = [ Constructor "Bar" []
+              , Constructor "Baz" ["Int"]
+              , Constructor "Qux" ["Int", "String"]
+              ]
+      out   = renderTemplate "Foo" ctors
+  in pure $
+       "instance Arbitrary Foo where"              `T.isInfixOf` out
+    && "pure Bar"                                  `T.isInfixOf` out
+    && "Baz <$> arbitrary"                         `T.isInfixOf` out
+    && "Qux <$> arbitrary <*> arbitrary"           `T.isInfixOf` out
+
+testHoogleHit :: IO Bool
+testHoogleHit =
+  let line = "Prelude filter :: (a -> Bool) -> [a] -> [a]"
+  in pure $ case parseHoogleLine line of
+       Just h -> hhSignature h == "(a -> Bool) -> [a] -> [a]"
+              && hhModule h    == Just "Prelude"
+       _      -> False
+
+testHoogleEmpty :: IO Bool
+testHoogleEmpty =
+  pure (parseHoogleLine "No results found" == Nothing)

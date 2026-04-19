@@ -12,30 +12,20 @@
 --
 -- Phase 3 adds the dual-pass strict/deferred compile, bounded expression
 -- evaluation ('evaluate'), and public 'LoadMode'. Phase 4 layers
--- 'runProperty' on top for QuickCheck.
+-- 'runProperty' on top for QuickCheck. Phase 5 closes the DoS gap:
+-- 'drainHandle' now enforces 'maxBufferBytes' and flips the session to
+-- 'Overflowed' on cap — 'executeNoLock' then throws 'SessionExhausted'
+-- instead of blocking forever, and the Server layer evicts the dead
+-- session from its MVar so the next call rebuilds it.
 --
--- Known DoS surface (TODO / Phase 5): 'drainHandle' appends every byte
--- the GHCi child writes, unbounded, into the STM buffer. A deliberately
--- verbose expression — e.g. @print [1..]@ piped through 'evaluate' —
--- will grow the buffer until either the process is killed or the host
--- runs out of memory. 'evaluate' caps what it /returns/ to the client
--- ('maxEvalBytes'), but does not cap the in-flight buffer. Mitigations
--- considered:
---
---  1. Cap the buffer and truncate silently — breaks sentinel framing if
---     the sentinel lands past the cap.
---  2. Cap the buffer and, on overflow, kill and restart the session —
---     safe but destroys the agent's in-memory loaded-modules state.
---  3. Apply an OS-level rlimit on the child.
---
--- Deferred until we have load metrics from real agent traffic; for now
--- the maxEvalBytes return cap keeps the client-facing protocol bounded.
 -- Still pending from earlier phases: library target auto-detection from
 -- @.cabal@, and the full @drainAndSync@ handshake.
 module HaskellFlows.Ghci.Session
   ( Session
   , GhciResult (..)
   , CommandError (..)
+  , SessionStatus (..)
+  , SessionExhausted (..)
   , LoadMode (..)
   , EvalResult (..)
   , startSession
@@ -50,6 +40,7 @@ module HaskellFlows.Ghci.Session
   , runProperty
   , sanitizeExpression
   , maxEvalBytes
+  , maxBufferBytes
   ) where
 
 import Control.Concurrent.Async (Async, async, cancel)
@@ -66,7 +57,7 @@ import Control.Concurrent.STM
   , takeTMVar
   , writeTVar
   )
-import Control.Exception (bracket_, finally)
+import Control.Exception (Exception, bracket_, finally, throwIO)
 import Control.Monad (forM_, unless, void)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
@@ -105,8 +96,38 @@ data Session = Session
   , sBuffer  :: !(TVar Text)
   , sLock    :: !(TMVar ())
   , sReader  :: !(Async ())
+  , sStatus  :: !(TVar SessionStatus)
   , sDebug   :: !Bool
   }
+
+-- | Lifecycle state of a 'Session' as seen by the command protocol.
+--
+-- 'Alive' is the steady state. 'Overflowed' means the GHCi child wrote
+-- more than 'maxBufferBytes' to stdout+stderr before emitting a sentinel
+-- — the reader stopped appending, and any in-flight 'executeNoLock' must
+-- abort because it can no longer trust the framing. Recovery is
+-- caller-driven: 'Server.getOrStartSession' replaces the MVar on the next
+-- request.
+data SessionStatus = Alive | Overflowed
+  deriving stock (Eq, Show)
+
+-- | Thrown by 'executeNoLock' when the session buffer overflowed before
+-- a sentinel arrived. The Server layer catches this, kills the session,
+-- and restarts on the next tool call.
+data SessionExhausted = SessionExhausted
+  deriving stock (Show)
+
+instance Exception SessionExhausted
+
+-- | Hard cap on the aggregate bytes the reader threads buffer between
+-- sentinel deliveries. An agent asking for @print [1..]@ (or any
+-- expression with unbounded output) will cause the GHCi child to pipe
+-- forever; with this cap, the reader stops at 16 MiB, flips the status
+-- to 'Overflowed', and every outstanding STM-blocked 'executeNoLock'
+-- wakes up and throws 'SessionExhausted'. Without the cap, the server
+-- process would grow until the OS killed it.
+maxBufferBytes :: Int
+maxBufferBytes = 16 * 1024 * 1024
 
 -- | Start a persistent @cabal repl@ child in the given project directory,
 -- perform the init handshake, and return a ready session.
@@ -124,13 +145,16 @@ startSession pd = do
   (Just hIn, Just hOut, Just hErr, ph) <- createProcess cp
   traverse_ (`hSetBuffering` LineBuffering) [hIn, hOut, hErr]
 
-  buf  <- newTVarIO T.empty
-  lock <- newTMVarIO ()
+  buf    <- newTVarIO T.empty
+  lock   <- newTMVarIO ()
+  status <- newTVarIO Alive
 
   -- One reader per stream merges into a single buffer. Errors/warnings
   -- typically arrive on stderr so both must be captured for 'parseGhcErrors'.
-  readerOut <- async (drainHandle buf hOut)
-  readerErr <- async (drainHandle buf hErr)
+  -- Both share the same status TVar: whichever stream overflows first
+  -- flips it, and both readers stop appending.
+  readerOut <- async (drainHandle buf status hOut)
+  readerErr <- async (drainHandle buf status hErr)
   let reader = readerOut  -- we only need one handle to cancel; hErr will
                           -- die when the process does.
   _ <- async (cancel readerErr `seq` pure ())  -- keep-alive ref suppressed
@@ -141,6 +165,7 @@ startSession pd = do
         , sBuffer = buf
         , sLock   = lock
         , sReader = reader
+        , sStatus = status
         , sDebug  = False
         }
 
@@ -312,31 +337,62 @@ withLock s =
     (atomically (putTMVar (sLock s) ()))
 
 -- | Internal variant used during startup, before the lock is meaningful.
+--
+-- Throws 'SessionExhausted' if the session status flipped to
+-- 'Overflowed' while we were waiting for a sentinel. The STM wakeup is
+-- automatic: any write to 'sStatus' retries all blocked readers.
 executeNoLock :: Session -> Text -> Int -> IO GhciResult
 executeNoLock s cmd _timeoutMicros = do
   TIO.hPutStrLn (sStdin s) cmd
   hFlush (sStdin s)
   collected <- atomically $ do
-    b <- readTVar (sBuffer s)
-    case T.breakOn sentinel b of
-      (_, rest) | T.null rest -> retry
-      (pre, rest) -> do
-        let rest' = T.drop (T.length sentinel) rest
-        writeTVar (sBuffer s) rest'
-        pure pre
-  let output  = T.strip collected
-      success = not (T.isInfixOf "error:" (T.toLower output))
-  pure (GhciResult output success)
+    st <- readTVar (sStatus s)
+    case st of
+      Overflowed -> pure (Left SessionExhausted)
+      Alive -> do
+        b <- readTVar (sBuffer s)
+        case T.breakOn sentinel b of
+          (_, rest) | T.null rest -> retry
+          (pre, rest) -> do
+            let rest' = T.drop (T.length sentinel) rest
+            writeTVar (sBuffer s) rest'
+            pure (Right pre)
+  case collected of
+    Left e -> throwIO e
+    Right pre ->
+      let output  = T.strip pre
+          success = not (T.isInfixOf "error:" (T.toLower output))
+      in pure (GhciResult output success)
 
-drainHandle :: TVar Text -> Handle -> IO ()
-drainHandle buf h = loop
+-- | Reader loop. Each iteration tries to append a chunk; if doing so
+-- would exceed 'maxBufferBytes', we flip the status to 'Overflowed' and
+-- stop looping. We keep the GHCi pipe open (drained-but-discarded) so
+-- the child process doesn't deadlock on a full-stdout write — it's
+-- about to be killed by the Server layer anyway, but until then we
+-- don't want to stall it.
+drainHandle :: TVar Text -> TVar SessionStatus -> Handle -> IO ()
+drainHandle buf status h = loop
   where
     loop = do
       chunk <- BS.hGetSome h 4096
       unless (BS.null chunk) $ do
         let txt = decodeUtf8Lenient chunk
-        atomically (modifyTVar' buf (<> txt))
-        loop
+        overflowed <- atomically $ do
+          st <- readTVar status
+          case st of
+            Overflowed -> pure True
+            Alive -> do
+              b <- readTVar buf
+              if T.length b + T.length txt > maxBufferBytes
+                then do writeTVar status Overflowed; pure True
+                else do modifyTVar' buf (<> txt); pure False
+        if overflowed
+          then drainAndDiscard h   -- keep reading so GHCi doesn't block
+          else loop
+
+    drainAndDiscard hh = do
+      c <- BS.hGetSome hh 4096
+      unless (BS.null c) (drainAndDiscard hh)
 
 -- UTF-8 decoding that cannot throw. Anything invalid becomes U+FFFD.
 decodeUtf8Lenient :: BS.ByteString -> Text
