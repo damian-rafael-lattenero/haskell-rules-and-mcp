@@ -217,24 +217,61 @@ export async function handleSuggest(
  */
 export async function handleAnalyze(
   session: GhciSession,
-  modulePath: string
+  modulePath: string,
+  projectDir: string
 ): Promise<string> {
   const modName = inferModuleName(modulePath);
 
-  // GHCi's `:l` replaces the loaded module set rather than adding to it, so
-  // a target that was loaded earlier in the session may no longer be
-  // `:browse`-able after another `ghci_load(...)` replaced it. Explicitly
-  // reload the target here so analyze is idempotent regardless of which
-  // module was most recently loaded. Cheap — `:l` on an already-cached
-  // module is a no-op on disk-unchanged sources.
-  const loadResult = await session.loadModule(modulePath);
-  if (!loadResult.success) {
-    return JSON.stringify({
-      success: false,
-      mode: "analyze",
-      error: `Could not load ${modulePath} for analysis`,
-      loadOutput: loadResult.output.slice(0, 2_000),
-    });
+  // Load the whole project (not just the target module) so cross-module
+  // engines like evaluator-preservation can see siblings. Before Phase 5
+  // this used `:l` on a single module which replaced the loaded set,
+  // leaving `:show modules` returning just the target and `:browse` on
+  // other modules failing — so `evaluatorPreservationEngine` could never
+  // match because it never got the interpreter sibling.
+  //
+  // We first try load_all (reads the .cabal for library modules). If
+  // that succeeds, every module in the project is in scope. Fallback:
+  // if load_all fails (non-cabal file, standalone script, etc.) load
+  // only the target module.
+  try {
+    const cabalMods = await parseCabalModules(projectDir);
+    const srcDir = await getLibrarySrcDir(projectDir);
+    const paths = cabalMods.library.map((mod) =>
+      moduleToFilePath(mod, srcDir)
+    );
+    if (paths.length > 0) {
+      const loaded = await session.loadModules(paths, cabalMods.library);
+      if (!loaded.success) {
+        return JSON.stringify({
+          success: false,
+          mode: "analyze",
+          error: `Could not load project modules for cross-module analysis`,
+          loadOutput: loaded.output.slice(0, 2_000),
+        });
+      }
+    } else {
+      // Fallback to single-module load for non-standard layouts.
+      const loadResult = await session.loadModule(modulePath);
+      if (!loadResult.success) {
+        return JSON.stringify({
+          success: false,
+          mode: "analyze",
+          error: `Could not load ${modulePath} for analysis`,
+          loadOutput: loadResult.output.slice(0, 2_000),
+        });
+      }
+    }
+  } catch {
+    // No cabal, or cabal parse failed — single-module fallback.
+    const loadResult = await session.loadModule(modulePath);
+    if (!loadResult.success) {
+      return JSON.stringify({
+        success: false,
+        mode: "analyze",
+        error: `Could not load ${modulePath} for analysis`,
+        loadOutput: loadResult.output.slice(0, 2_000),
+      });
+    }
   }
 
   const browseResult = await session.execute(`:browse ${modName}`);
@@ -359,7 +396,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
       // If mode is explicitly "analyze", skip the undefined-stub scan entirely
       if (mode === "analyze") {
-        const result = await handleAnalyze(session, module_path);
+        const result = await handleAnalyze(session, module_path, ctx.getProjectDir());
         ctx.logToolExecution("ghci_suggest", true);
         return { content: [{ type: "text" as const, text: result }] };
       }

@@ -255,7 +255,7 @@ describe("handleSuggest", () => {
       loadModule: { output: "Ok, one module loaded.", success: true },
     });
 
-    const result = JSON.parse(await handleAnalyze(session, "src/A.hs"));
+    const result = JSON.parse(await handleAnalyze(session, "src/A.hs", "/tmp"));
     expect(result.success).toBe(true);
     expect(result.mode).toBe("analyze");
 
@@ -276,7 +276,7 @@ describe("handleSuggest", () => {
       loadModule: { output: "Ok, one module loaded.", success: true },
     });
 
-    const result = JSON.parse(await handleAnalyze(session, "src/Impl.hs"));
+    const result = JSON.parse(await handleAnalyze(session, "src/Impl.hs", "/tmp"));
     expect(result.success).toBe(true);
     expect(result.mode).toBe("analyze");
     expect(result.functions).toBeDefined();

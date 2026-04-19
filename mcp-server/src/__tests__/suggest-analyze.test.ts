@@ -29,7 +29,7 @@ describe("handleAnalyze (Fase 3 fix)", () => {
     });
 
     const result = JSON.parse(
-      await handleAnalyze(session, "src/Expr/Eval.hs")
+      await handleAnalyze(session, "src/Expr/Eval.hs", "/tmp")
     );
     expect(result.success).toBe(true);
     expect(result.mode).toBe("analyze");
@@ -46,7 +46,7 @@ describe("handleAnalyze (Fase 3 fix)", () => {
       execute: async () => ({ output: "", success: true }),
     });
     const result = JSON.parse(
-      await handleAnalyze(session, "src/Bad.hs")
+      await handleAnalyze(session, "src/Bad.hs", "/tmp")
     );
     expect(result.success).toBe(false);
     expect(result.mode).toBe("analyze");

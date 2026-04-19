@@ -331,13 +331,31 @@ export async function handleQuickCheck(
     typeCheckOutput.includes("couldn't match") ||
     typeCheckOutput.includes("parse error")
   ) {
+    // Pre-flight typecheck is where the ambiguity error lands FIRST (before
+    // the property body ever runs). Phase 5 added `_ambiguityHint` at the
+    // post-run branch, but in practice it never fired because execution
+    // never reached that branch — this early return intercepted it. Fix:
+    // attach the hint HERE so the helpful annotation hint is visible at
+    // the exact moment the user hit the error.
+    const ambiguity = parseAmbiguousTypeVariable(typeCheckResult.output);
     return JSON.stringify({
       success: false,
       passed: 0,
       property: actualProperty,
       error: "Property failed type-check validation before execution.",
       typecheckOutput: typeCheckResult.output,
-      _nextStep: "Fix the property expression (types/scope/ambiguity), then re-run ghci_quickcheck.",
+      ...(ambiguity ? { _ambiguityHint: ambiguity.suggestion } : {}),
+      ...(args.incremental ? { incremental: true } : {}),
+      _nextStep: ambiguity
+        ? `Property has an ambiguous return type. ${ambiguity.suggestion}`
+        : "Fix the property expression (types/scope/ambiguity), then re-run ghci_quickcheck.",
+      ...(args.incremental
+        ? {
+            hint: ambiguity
+              ? `Incremental property has an ambiguous return type. ${ambiguity.suggestion}`
+              : "Incremental property FAILED (type-check validation). Fix before continuing.",
+          }
+        : {}),
     });
   }
 
@@ -431,6 +449,15 @@ export async function handleQuickCheck(
     }
   }
 
+  // Detect the "Ambiguous type variable" compilation error specifically
+  // (OBS #3): when a property body compares two calls whose return type
+  // cannot be defaulted under -fdefer-type-errors. We surface a clear,
+  // actionable hint instead of letting the agent wade through the noisy
+  // raw GHC error. Emitted on BOTH incremental and non-incremental paths —
+  // the incremental hint matters most because that's where an agent is
+  // actively debugging and benefits most from a one-line fix.
+  const ambiguity = parseAmbiguousTypeVariable(result.output);
+
   if (args.incremental) {
     return JSON.stringify({
       ...parsed,
@@ -438,22 +465,20 @@ export async function handleQuickCheck(
       ...(autoResolved ? { _autoResolved: true } : {}),
       ...(propertySaved ? { _propertySaved: true, _propertyStoreCount: propertyStoreCount } : {}),
       ...(args.roundtrip ? { roundtrip: true, generated_property: actualProperty } : {}),
+      ...(ambiguity ? { _ambiguityHint: ambiguity.suggestion } : {}),
       incremental: true,
       hint: parsed.success
         ? "Incremental property passed. Continue implementing next function."
-        : "Incremental property FAILED. Fix before continuing.",
+        : ambiguity
+          ? `Incremental property has an ambiguous return type. ${ambiguity.suggestion}`
+          : "Incremental property FAILED. Fix before continuing.",
       _nextStep: parsed.success
         ? "Incremental property passed. Continue implementing the next function."
-        : "Incremental property FAILED. Fix the implementation before continuing.",
+        : ambiguity
+          ? `Property has an ambiguous return type. ${ambiguity.suggestion}`
+          : "Incremental property FAILED. Fix the implementation before continuing.",
     });
   }
-
-  // Detect the "Ambiguous type variable" compilation error specifically
-  // (OBS #3): when a property body compares two calls whose return type
-  // cannot be defaulted under -fdefer-type-errors. We surface a clear,
-  // actionable hint instead of letting the agent wade through the noisy
-  // raw GHC error.
-  const ambiguity = parseAmbiguousTypeVariable(result.output);
 
   return JSON.stringify({
     ...parsed,
