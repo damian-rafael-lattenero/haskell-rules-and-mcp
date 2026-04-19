@@ -1,10 +1,11 @@
 {
+  "_comment": "Example MCP client configuration. Copy to `.mcp.json` and adjust paths. See docs/install.md for setup instructions.",
   "mcpServers": {
     "haskell-flows": {
-      "command": "node",
-      "args": ["./mcp-server/dist/index.js"],
+      "_comment": "Default: resolves haskell-flows-mcp on PATH (installed via `cabal install` or a release binary). Replace with the absolute path if PATH resolution isn't available in your MCP client's environment.",
+      "command": "haskell-flows-mcp",
       "env": {
-        "HASKELL_PROJECT_DIR": "./playground/hindley-milner"
+        "HASKELL_PROJECT_DIR": "./"
       }
     }
   }

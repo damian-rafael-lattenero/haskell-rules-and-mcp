@@ -38,8 +38,19 @@ import HaskellFlows.Parser.Hole
   , parseTypedHoles
   , extractValidFits
   )
+import HaskellFlows.Parser.TypeSignature
+  ( ParsedSig (..)
+  , SigType (..)
+  , parseSignature
+  , isSameTypeThroughout
+  )
+import HaskellFlows.Suggest.Rules
+  ( Suggestion (..)
+  , applyRules
+  )
 import HaskellFlows.Tool.CheckProject (parseExposedModules)
-import HaskellFlows.Tool.Lint (Suggestion (..), parseHlintJson)
+import HaskellFlows.Tool.Lint (parseHlintJson)
+import qualified HaskellFlows.Tool.Lint as LintTool
 import qualified HaskellFlows.Tool.ValidateCabal as VC
 import HaskellFlows.Parser.QuickCheck
   ( QuickCheckResult (..)
@@ -157,6 +168,12 @@ main = do
       , test "validateCabal flags missing synopsis" testMissingSynopsis
       , test "parseExposedModules reads modules"   testParseModules
       , test "extractValidFits parses fits"        testValidFits
+      , test "parseSignature simple a -> a"         testSigSimple
+      , test "parseSignature with constraint"       testSigConstraint
+      , test "parseSignature list"                  testSigList
+      , test "suggest matches involutive on a->a"   testSuggestInvolutive
+      , test "suggest matches associative on a->a->a" testSuggestAssoc
+      , test "suggest skips unmatched shapes"       testSuggestNoMatch
       ]
   if and results then exitSuccess else exitFailure
 
@@ -698,9 +715,9 @@ testHlintJson =
         \\"file\":\"src/Foo.hs\",\"startLine\":10,\"startColumn\":5,\
         \\"from\":\"x == Nothing\",\"to\":\"isNothing x\"}]"
   in pure $ case parseHlintJson raw of
-       [s] -> sSeverity s == "Warning"
-           && sHint s     == "Use isNothing"
-           && sStartLine s == 10
+       [s] -> LintTool.sSeverity s == "Warning"
+           && LintTool.sHint s     == "Use isNothing"
+           && LintTool.sStartLine s == 10
        _ -> False
 
 testDuplicateDeps :: IO Bool
@@ -746,6 +763,60 @@ testValidFits =
               && hfName b == "negate"
               && "Num a" `T.isInfixOf` hfType b
        _      -> False
+
+--------------------------------------------------------------------------------
+-- Phase 10b: TypeSignature parser + rules catalog
+--------------------------------------------------------------------------------
+
+testSigSimple :: IO Bool
+testSigSimple = pure $ case parseSignature "a -> a" of
+  Just sig -> argCountOf sig == 1
+           && isSameTypeThroughout sig
+           && null (psConstraints sig)
+  _        -> False
+  where argCountOf = length . psArgs
+
+testSigConstraint :: IO Bool
+testSigConstraint =
+  pure $ case parseSignature "Eq a => a -> a -> Bool" of
+    Just sig -> psConstraints sig == ["Eq a"]
+             && length (psArgs sig) == 2
+             && psReturn sig == TyCon "Bool"
+    _ -> False
+
+testSigList :: IO Bool
+testSigList =
+  pure $ case parseSignature "[a] -> [a]" of
+    Just sig -> psArgs sig == [TyList (TyVar "a")]
+             && psReturn sig == TyList (TyVar "a")
+             && isSameTypeThroughout sig
+    _ -> False
+
+testSuggestInvolutive :: IO Bool
+testSuggestInvolutive =
+  case parseSignature "a -> a" of
+    Nothing  -> pure False
+    Just sig ->
+      let suggestions = applyRules "foo" sig
+      in pure (any ((== "Involutive") . sLaw) suggestions
+             && any ((== "Idempotent") . sLaw) suggestions)
+
+testSuggestAssoc :: IO Bool
+testSuggestAssoc =
+  case parseSignature "a -> a -> a" of
+    Nothing  -> pure False
+    Just sig ->
+      let suggestions = applyRules "op" sig
+      in pure (any ((== "Associative") . sLaw) suggestions
+             && any ((== "Commutative") . sLaw) suggestions)
+
+testSuggestNoMatch :: IO Bool
+testSuggestNoMatch =
+  case parseSignature "Int -> String" of
+    Nothing  -> pure False
+    Just sig ->
+      let suggestions = applyRules "foo" sig
+      in pure (null suggestions)
 
 -- | Helper: create a fresh temp directory and delete it after the test.
 -- Passes a validated 'ProjectDir' (absolute + normalised) to the body.

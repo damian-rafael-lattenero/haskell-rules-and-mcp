@@ -7,8 +7,8 @@
 [![Haskell CI](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/haskell-ci.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/haskell-ci.yml)
 [![Nix flake](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/nix-flake.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/nix-flake.yml)
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
-[![Haskell tests](https://img.shields.io/badge/Haskell%20tests-57%20passing-brightgreen)](mcp-server-haskell/test)
-[![Haskell MCP tools](https://img.shields.io/badge/Haskell%20tools-26-blue)](mcp-server-haskell/src/HaskellFlows/Tool)
+[![Haskell tests](https://img.shields.io/badge/Haskell%20tests-63%20passing-brightgreen)](mcp-server-haskell/test)
+[![Haskell MCP tools](https://img.shields.io/badge/Haskell%20tools-27-blue)](mcp-server-haskell/src/HaskellFlows/Tool)
 [![GHC](https://img.shields.io/badge/GHC-9.10%20%7C%209.12-8a5aa0)](https://www.haskell.org/ghc/)
 
 </div>
@@ -29,6 +29,14 @@ ghci_create_project  →  ghci_suggest(analyze)  →  ghci_quickcheck(label=…)
 See [`docs/flows.md`](docs/flows.md) for rendered Mermaid diagrams of
 the four central flows: property-first dev loop, project bootstrap,
 refactor snapshot-and-compile, and GHCi session lifecycle.
+
+**Install:** [`docs/install.md`](docs/install.md) — three methods (release
+binary / Hackage / source), plus MCP client wiring for Claude Code,
+Cursor, etc.
+
+**Migrating from the TypeScript MCP?** [`docs/migration-from-ts.md`](docs/migration-from-ts.md)
+has the full tool-name map and flags three bugs fixed by design in the
+Haskell port.
 
 Before pushing: run `scripts/ci-local.sh --fast` to replicate the CI
 gates locally (cabal build + test + recursive hlint). The full

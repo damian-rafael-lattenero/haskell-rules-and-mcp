@@ -18,6 +18,7 @@ on:
     paths:
       - "mcp-server-haskell/**"
       - ".github/workflows/haskell-ci.yml"
+    tags: ["v*.*.*"]      # triggers the release job
   pull_request:
     branches: [master]
     paths:
@@ -184,7 +185,7 @@ jobs:
   required:
     name: Haskell CI required
     runs-on: ubuntu-latest
-    if: always()
+    if: always() && github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/')
     needs: [build-and-test, hlint]
     defaults:
       run:
@@ -198,3 +199,73 @@ jobs:
             exit 1
           fi
           echo "All required Haskell checks green."
+
+  # -------------------------------------------------------------------------
+  #  Release — fires only on `v*.*.*` tag push. Builds the sdist tarball
+  #  (Hackage-compatible) + an installed binary per OS, attaches every
+  #  artefact to the GitHub release for this tag.
+  #
+  #  Deliberate non-goals:
+  #
+  #  * Static binaries. Would require musl on Linux and a separate
+  #    toolchain. Keep the dynamic-link builds for now; users who want
+  #    static can build from source with --enable-executable-static.
+  #  * Windows. The MCP hasn't been tested there. Linux + macOS cover
+  #    every platform Claude Code officially supports today.
+  # -------------------------------------------------------------------------
+  release:
+    name: Release — ${{ matrix.os }}
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write     # needed to upload release assets
+    defaults:
+      run:
+        working-directory: mcp-server-haskell
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version:    "9.12.2"
+          cabal-version:  "3.12.1.0"
+          cabal-update:   true
+
+      - name: Build installable binary
+        run: |
+          cabal install exe:haskell-flows-mcp \
+            --install-method=copy \
+            --installdir=./_release \
+            --overwrite-policy=always
+
+      - name: Stage release assets
+        run: |
+          # Name artefacts with OS + arch so the release page is
+          # self-documenting: haskell-flows-mcp-linux-x86_64,
+          # haskell-flows-mcp-macos-aarch64, etc.
+          mkdir -p _release_assets
+          os_tag=$(uname -s | tr '[:upper:]' '[:lower:]')
+          arch_tag=$(uname -m)
+          bin=_release/haskell-flows-mcp
+          asset="haskell-flows-mcp-${os_tag}-${arch_tag}"
+          cp "$bin" "_release_assets/$asset"
+          # Also produce a .tar.gz for platforms that prefer one.
+          tar -czf "_release_assets/${asset}.tar.gz" -C _release haskell-flows-mcp
+
+      - name: Build sdist (Hackage-ready)
+        # Only run on Linux — sdist is OS-independent, no point in
+        # uploading two copies.
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cabal sdist --output-dir=_release_assets
+
+      - name: Attach assets to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: mcp-server-haskell/_release_assets/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

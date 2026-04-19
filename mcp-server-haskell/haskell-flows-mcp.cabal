@@ -49,8 +49,10 @@ library
                       HaskellFlows.Parser.Hole
                       HaskellFlows.Parser.QuickCheck
                       HaskellFlows.Parser.Type
+                      HaskellFlows.Parser.TypeSignature
                       HaskellFlows.Refactor.Extract
                       HaskellFlows.Refactor.Rename
+                      HaskellFlows.Suggest.Rules
                       HaskellFlows.Tool.Arbitrary
                       HaskellFlows.Tool.Batch
                       HaskellFlows.Tool.CheckModule
@@ -71,6 +73,7 @@ library
                       HaskellFlows.Tool.QuickCheck
                       HaskellFlows.Tool.Refactor
                       HaskellFlows.Tool.Regression
+                      HaskellFlows.Tool.Suggest
                       HaskellFlows.Tool.ToolchainStatus
                       HaskellFlows.Tool.Type
                       HaskellFlows.Tool.ValidateCabal

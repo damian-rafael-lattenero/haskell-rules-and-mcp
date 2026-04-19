@@ -51,6 +51,7 @@ import qualified HaskellFlows.Tool.Load            as Load
 import qualified HaskellFlows.Tool.QuickCheck      as QcTool
 import qualified HaskellFlows.Tool.Refactor        as RefactorTool
 import qualified HaskellFlows.Tool.Regression      as RegressionTool
+import qualified HaskellFlows.Tool.Suggest         as SuggestTool
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
 import qualified HaskellFlows.Tool.Type            as TypeTool
 import qualified HaskellFlows.Tool.ValidateCabal   as ValidateCabalTool
@@ -136,6 +137,7 @@ dispatch _ "tools/list" _ rid =
         , ToolchainStatusTool.descriptor
         , ValidateCabalTool.descriptor
         , CheckProjectTool.descriptor
+        , SuggestTool.descriptor
         ]
     ]
 dispatch srv "tools/call" (Just params) rid =
@@ -237,6 +239,9 @@ dispatchTool srv call = case tcName call of
     sess <- getOrStartSession srv
     pd   <- readIORef (srvProjectDir srv)
     CheckProjectTool.handle sess (srvStore srv) pd (tcArguments call)
+  "ghci_suggest" -> do
+    sess <- getOrStartSession srv
+    SuggestTool.handle sess (tcArguments call)
   other ->
     pure ToolResult
       { trContent = [ TextContent ("Unknown tool: " <> other) ]
