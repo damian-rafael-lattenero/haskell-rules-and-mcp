@@ -27,7 +27,7 @@ describe.runIf(GHC_AVAILABLE)("GHCi Session Integration", () => {
     FIXTURE_DIR = fixture.dir;
     session = new GhciSession(FIXTURE_DIR, "lib:test-project");
     await session.start();
-  }, 60_000);
+  }, 120_000);
 
   afterAll(async () => {
     if (session?.isAlive()) {

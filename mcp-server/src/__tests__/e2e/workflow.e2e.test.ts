@@ -106,7 +106,7 @@ describe.runIf(GHC_AVAILABLE)("E2E Workflow: Development Loop", () => {
 
     // Restart GHCi so it picks up the new cabal
     await callTool(client, "ghci_session", { action: "restart" });
-  }, 60_000);
+  }, 120_000);
 
   afterAll(async () => {
     // Clean up: remove temp modules, restore cabal

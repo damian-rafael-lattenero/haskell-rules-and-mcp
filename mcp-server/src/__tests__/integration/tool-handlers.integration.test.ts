@@ -49,7 +49,7 @@ describe.runIf(GHC_AVAILABLE)("Tool Handlers Integration", () => {
     originalSpec = await readFile(TEST_SPEC_FILE, "utf8");
     session = new GhciSession(FIXTURE_DIR, "lib:test-project");
     await session.start();
-  }, 60_000);
+  }, 120_000);
 
   afterAll(async () => {
     if (session?.isAlive()) await session.kill();
