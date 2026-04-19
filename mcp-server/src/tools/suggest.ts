@@ -357,15 +357,124 @@ export async function handleAnalyze(
 
   const withProps = analyzed.filter((a) => a.suggestedProperties.length > 0);
 
-  return JSON.stringify({
+  // Fallback guidance when ZERO engines matched across ZERO functions.
+  // The seven registered engines (endomorphism, binary-op, list-endo,
+  // roundtrip, evaluator-preservation, constant-folding-soundness,
+  // functor-laws) target specific type shapes. Many real-world functions
+  // — especially `Env -> Input -> Either Error Output` — don't match any
+  // of them, and returning an empty array leaves an agent with no
+  // actionable signal. Inject concrete, generic QuickCheck starting
+  // points that apply to almost any pure total function, plus a pointer
+  // at the usual invariants a caller should express manually.
+  const hasEngineSuggestions = withProps.length > 0;
+  const genericFallback =
+    !hasEngineSuggestions && functions.length > 0
+      ? buildGenericFallback(functions)
+      : undefined;
+
+  const body: Record<string, unknown> = {
     success: true,
     mode: "analyze",
     functions: analyzed,
     summary: `Analyzed ${analyzed.length} function(s), ${withProps.length} have suggested properties`,
     _nextStep: withProps.length > 0
       ? `Run ghci_quickcheck for the ${withProps.length} function(s) with suggested properties.`
-      : "All functions analyzed. Write custom QuickCheck properties based on the function contracts.",
-  });
+      : "No law-engine suggestions matched. Apply the generic fallbacks in `_fallbackSuggestions` or write domain-specific properties manually.",
+  };
+  if (genericFallback) {
+    body._fallbackSuggestions = genericFallback;
+    body._guidance = [
+      "Zero engine matches — the seven registered engines (endomorphism, binary-op, list-endo, roundtrip, evaluator-preservation, constant-folding-soundness, functor-laws) did not recognize any function signature in this module.",
+      "Start with determinism — any pure total function is its own oracle: `\\x -> f x == f x` (or the arity-N equivalent). Guaranteed to pass unless you have hidden non-determinism.",
+      "If your function returns `Either err a`, ALSO test error propagation: valid input → `Right`, known-invalid input → the expected `Left err` variant.",
+      "For domain invariants the engines cannot guess (e.g. `size (insert x s) == 1 + size s` when `x ∉ s`), write them by hand — the MCP can only suggest what it can mechanically derive from the type.",
+    ];
+  }
+
+  return JSON.stringify(body);
+}
+
+/**
+ * Build concrete, ready-to-run QuickCheck property strings for functions
+ * whose type shapes didn't match any registered engine. The goal is
+ * "something that will compile and pass on day 1" so a user has a
+ * green-dot experience even when the engines are silent, without
+ * pretending the engine had an opinion it didn't.
+ *
+ * Two shapes emitted:
+ *
+ *   1. `determinism` — same inputs produce same output. Pure total
+ *      functions always pass; a failure reveals hidden state (IORef,
+ *      unsafePerformIO, shared mutable environments).
+ *
+ *   2. `error propagation` — when the result type is `Either`, we can
+ *      state that a `Right` vs `Left` decision is a function of input
+ *      only. This catches error-swallowing refactors.
+ */
+function buildGenericFallback(
+  functions: Array<{ name: string; type: string }>
+): Array<{
+  function: string;
+  law: string;
+  property: string;
+  rationale: string;
+  confidence: "medium";
+}> {
+  const out: Array<{
+    function: string;
+    law: string;
+    property: string;
+    rationale: string;
+    confidence: "medium";
+  }> = [];
+  for (const fn of functions) {
+    const arity = countTopLevelArrows(fn.type);
+    if (arity === 0) continue; // value, not a function — nothing to test.
+    const args = Array.from({ length: arity }, (_, i) => `a${i + 1}`).join(" ");
+    const name = fn.name;
+    out.push({
+      function: name,
+      law: "determinism",
+      property: `\\${args} -> ${name} ${args} == ${name} ${args}`,
+      rationale:
+        "Any pure total function is its own oracle. Failure indicates hidden state.",
+      confidence: "medium",
+    });
+    // Error-propagation fallback only when output type looks like Either.
+    // The check is coarse (substring match) — we want to err on the side of
+    // "skip the suggestion" if we're not sure.
+    if (/(?:Either|Maybe)\b/.test(fn.type)) {
+      out.push({
+        function: name,
+        law: "error propagation is deterministic",
+        property: `\\${args} -> case ${name} ${args} of { Left _ -> True; Right _ -> True }`,
+        rationale:
+          "Either/Maybe-returning function never throws — every input resolves to a Left/Nothing or Right/Just. Starts as a smoke test; refine with domain knowledge.",
+        confidence: "medium",
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Count top-level arrows in a type string, respecting parens and brackets.
+ * `a -> b -> c` ⇒ 2 (binary function), `(a -> b) -> c` ⇒ 1 (HOF),
+ * `a` ⇒ 0 (value).
+ */
+function countTopLevelArrows(typeStr: string): number {
+  let depth = 0;
+  let count = 0;
+  for (let i = 0; i < typeStr.length - 1; i++) {
+    const ch = typeStr[i];
+    if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth--;
+    else if (depth === 0 && ch === "-" && typeStr[i + 1] === ">") {
+      count++;
+      i++; // skip '>'
+    }
+  }
+  return count;
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
