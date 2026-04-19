@@ -18,8 +18,10 @@
 module HaskellFlows.Parser.Hole
   ( TypedHole (..)
   , RelevantBinding (..)
+  , HoleFit (..)
   , parseTypedHoles
   , splitDiagnosticBlocks
+  , extractValidFits
   ) where
 
 import Data.Char (isDigit)
@@ -34,12 +36,33 @@ data RelevantBinding = RelevantBinding
   deriving stock (Eq, Show)
 
 data TypedHole = TypedHole
-  { thHole            :: !Text           -- ^ @_@ or @_name@
-  , thExpectedType    :: !Text
-  , thFile            :: !Text
-  , thLine            :: !Int
-  , thColumn          :: !Int
+  { thHole             :: !Text           -- ^ @_@ or @_name@
+  , thExpectedType     :: !Text
+  , thFile             :: !Text
+  , thLine             :: !Int
+  , thColumn           :: !Int
   , thRelevantBindings :: ![RelevantBinding]
+  , thValidFits        :: ![HoleFit]      -- ^ parsed from "Valid hole fits include:"
+  }
+  deriving stock (Eq, Show)
+
+-- | One candidate from a @Valid hole fits include:@ section.
+--
+-- Format we observe from GHC:
+--
+-- > Valid hole fits include
+-- >   foo :: Int -> Int (bound at src/Foo.hs:12:1)
+-- >   bar :: Int -> Int
+-- >     with bar @Int
+-- >     (imported from 'Foo')
+--
+-- We keep this as flat as possible — the tool layer gets @name@,
+-- @type@, and an optional @source@ block (everything after the type
+-- up to the next fit).
+data HoleFit = HoleFit
+  { hfName   :: !Text
+  , hfType   :: !Text
+  , hfSource :: !(Maybe Text)
   }
   deriving stock (Eq, Show)
 
@@ -98,7 +121,8 @@ parseHoleBlock block = do
   hdr           <- headMay ls
   (f, l, c)     <- parseHeader hdr
   (holeId, ty)  <- extractHoleAndType ls
-  let bindings = extractBindings ls
+  let bindings  = extractBindings ls
+      fits      = extractValidFits ls
   pure TypedHole
     { thHole             = holeId
     , thExpectedType     = ty
@@ -106,6 +130,7 @@ parseHoleBlock block = do
     , thLine             = l
     , thColumn           = c
     , thRelevantBindings = bindings
+    , thValidFits        = fits
     }
 
 parseHeader :: Text -> Maybe (Text, Int, Int)
@@ -141,6 +166,83 @@ extractBindings ls =
     isBindingLine l =
       let s = T.strip l
       in "::" `T.isInfixOf` s && not ("•" `T.isPrefixOf` s)
+
+-- | Extract the @Valid hole fits include:@ section. The header line
+-- opens the block; each candidate lives on a line indented to
+-- exactly two levels below the header. Continuation lines (three or
+-- more levels) are sub-details (with clauses, import annotations)
+-- and attached to the preceding fit's @source@ field.
+extractValidFits :: [Text] -> [HoleFit]
+extractValidFits ls =
+  let rest = dropWhile (not . ("Valid hole fits include" `T.isInfixOf`)) ls
+  in case rest of
+       []     -> []
+       (_:rs) -> collapseFits (takeWhile isFitRegion rs)
+  where
+    isFitRegion l =
+      let s = T.strip l
+      in not (T.null s)
+         && not ("•" `T.isPrefixOf` s)   -- next GHC bullet breaks the section
+
+-- | Merge continuation lines (deeper indent than the candidate head)
+-- into the preceding fit's @source@ field.
+collapseFits :: [Text] -> [HoleFit]
+collapseFits = go Nothing []
+  where
+    go mCurrent acc [] =
+      reverse (maybeCons mCurrent acc)
+    go mCurrent acc (l:ls')
+      | T.null (T.strip l) = go mCurrent acc ls'
+      | isContinuationFitLine l, Just cur <- mCurrent =
+          let extra = T.strip l
+              newSource = case hfSource cur of
+                Nothing -> Just extra
+                Just s  -> Just (s <> " " <> extra)
+              updated = cur { hfSource = newSource }
+          in go (Just updated) acc ls'
+      | otherwise =
+          let updatedAcc = maybeCons mCurrent acc
+          in case parseFitLine l of
+               Just fit -> go (Just fit) updatedAcc ls'
+               Nothing  -> go Nothing updatedAcc ls'
+
+    maybeCons Nothing  acc = acc
+    maybeCons (Just x) acc = x : acc
+
+-- | A continuation line within a fit is indented more than a fresh
+-- candidate would be. GHC uses 4 or 6 spaces for candidates, 6+ for
+-- continuations. We use \">= 6 leading spaces + starts with \"with\",
+-- \"(imported\", etc.\" as the heuristic — anything starting at 4
+-- spaces is a new candidate.
+isContinuationFitLine :: Text -> Bool
+isContinuationFitLine l =
+  let indent = T.length (T.takeWhile (== ' ') l)
+      stripped = T.stripStart l
+  in indent >= 6 &&
+     (  "with "     `T.isPrefixOf` stripped
+     || "("         `T.isPrefixOf` stripped
+     || "or "       `T.isPrefixOf` stripped
+     || "("         `T.isSuffixOf` T.stripEnd stripped )
+
+parseFitLine :: Text -> Maybe HoleFit
+parseFitLine l =
+  let stripped = T.strip l
+  in case T.breakOn "::" stripped of
+       (_, rest) | T.null rest -> Nothing
+       (nm, rest) ->
+         let tyFull = T.strip (T.drop 2 rest)
+             -- Any "(bound at" / "(imported from" annotation on the
+             -- same line is kept as source; the type half is
+             -- everything before that.
+             (ty, srcRaw) = T.breakOn "(" tyFull
+             src = if T.null srcRaw then Nothing else Just (T.strip srcRaw)
+         in if T.null (T.strip nm) || T.null (T.strip ty)
+              then Nothing
+              else Just HoleFit
+                     { hfName   = T.strip nm
+                     , hfType   = T.strip ty
+                     , hfSource = src
+                     }
 
 bindingLine :: Text -> Maybe RelevantBinding
 bindingLine raw =

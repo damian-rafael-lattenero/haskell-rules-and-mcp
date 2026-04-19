@@ -52,7 +52,9 @@ library
                       HaskellFlows.Refactor.Extract
                       HaskellFlows.Refactor.Rename
                       HaskellFlows.Tool.Arbitrary
+                      HaskellFlows.Tool.Batch
                       HaskellFlows.Tool.CheckModule
+                      HaskellFlows.Tool.CheckProject
                       HaskellFlows.Tool.Complete
                       HaskellFlows.Tool.Coverage
                       HaskellFlows.Tool.CreateProject
@@ -64,11 +66,14 @@ library
                       HaskellFlows.Tool.Hole
                       HaskellFlows.Tool.Hoogle
                       HaskellFlows.Tool.Info
+                      HaskellFlows.Tool.Lint
                       HaskellFlows.Tool.Load
                       HaskellFlows.Tool.QuickCheck
                       HaskellFlows.Tool.Refactor
                       HaskellFlows.Tool.Regression
+                      HaskellFlows.Tool.ToolchainStatus
                       HaskellFlows.Tool.Type
+                      HaskellFlows.Tool.ValidateCabal
                       HaskellFlows.Tool.Workflow
     build-depends:    base              >= 4.20 && < 5
                     , aeson             >= 2.2  && < 2.3

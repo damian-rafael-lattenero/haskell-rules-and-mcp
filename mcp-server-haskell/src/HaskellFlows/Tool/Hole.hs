@@ -23,6 +23,11 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Parser.Hole
+  ( HoleFit (..)
+  , TypedHole (..)
+  , parseTypedHoles
+  , RelevantBinding (..)
+  )
 import HaskellFlows.Types
 
 descriptor :: ToolDescriptor
@@ -112,12 +117,19 @@ renderHole h =
         , "column" .= thColumn h
         ]
     , "relevantBindings"  .= map renderBinding (thRelevantBindings h)
+    , "validFits"         .= map renderFit (thValidFits h)
     ]
   where
     renderBinding rb =
       object
         [ "name" .= rbName rb
         , "type" .= rbType rb
+        ]
+    renderFit hf =
+      object
+        [ "name"   .= hfName hf
+        , "type"   .= hfType hf
+        , "source" .= hfSource hf
         ]
 
 errorResult :: Text -> ToolResult

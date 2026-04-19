@@ -33,9 +33,14 @@ import HaskellFlows.Ghci.Session
   )
 import HaskellFlows.Parser.Error (parseGhcErrors, Severity (..), GhcError (..))
 import HaskellFlows.Parser.Hole
-  ( TypedHole (..)
+  ( HoleFit (..)
+  , TypedHole (..)
   , parseTypedHoles
+  , extractValidFits
   )
+import HaskellFlows.Tool.CheckProject (parseExposedModules)
+import HaskellFlows.Tool.Lint (Suggestion (..), parseHlintJson)
+import qualified HaskellFlows.Tool.ValidateCabal as VC
 import HaskellFlows.Parser.QuickCheck
   ( QuickCheckResult (..)
   , parseQuickCheckOutput
@@ -147,6 +152,11 @@ main = do
       , test "validateIdentifier rejects upper"    testIdentifierUpper
       , test "extractBinding wraps block"          testExtractBinding
       , test "extractBinding rejects empty range"  testExtractEmpty
+      , test "parseHlintJson parses list"          testHlintJson
+      , test "validateCabal flags duplicate deps"  testDuplicateDeps
+      , test "validateCabal flags missing synopsis" testMissingSynopsis
+      , test "parseExposedModules reads modules"   testParseModules
+      , test "extractValidFits parses fits"        testValidFits
       ]
   if and results then exitSuccess else exitFailure
 
@@ -676,6 +686,66 @@ testExtractEmpty =
   pure $ case extractBinding "foo" 5 4 "body" of
     Left _ -> True
     _      -> False
+
+--------------------------------------------------------------------------------
+-- Phase 9: Lint parser + Cabal validator + check_project + hole fits
+--------------------------------------------------------------------------------
+
+testHlintJson :: IO Bool
+testHlintJson =
+  let raw = T.pack
+        "[{\"severity\":\"Warning\",\"hint\":\"Use isNothing\",\
+        \\"file\":\"src/Foo.hs\",\"startLine\":10,\"startColumn\":5,\
+        \\"from\":\"x == Nothing\",\"to\":\"isNothing x\"}]"
+  in pure $ case parseHlintJson raw of
+       [s] -> sSeverity s == "Warning"
+           && sHint s     == "Use isNothing"
+           && sStartLine s == 10
+       _ -> False
+
+testDuplicateDeps :: IO Bool
+testDuplicateDeps =
+  let cabalBody = T.unlines
+        [ "library"
+        , "    build-depends: base, text, base"
+        ]
+  in pure $ any (("duplicate-dep" ==) . VC.iKind) (VC.scanCabalText cabalBody)
+
+testMissingSynopsis :: IO Bool
+testMissingSynopsis =
+  let cabalBody = "cabal-version: 3.0\nname: foo\nversion: 0.1.0.0"
+      issues    = VC.scanCabalText cabalBody
+  in pure $ any (("missing-synopsis" ==) . VC.iKind) issues
+         && any ((VC.CabalSevWarn ==) . VC.iSeverity) issues
+
+testParseModules :: IO Bool
+testParseModules =
+  let cabalBody = T.unlines
+        [ "library"
+        , "  exposed-modules:  Foo.Bar"
+        , "                    Foo.Baz"
+        , "  other-modules:    Foo.Internal"
+        , "  build-depends:    base"
+        ]
+      mods = parseExposedModules cabalBody
+  in pure $ "Foo.Bar"      `elem` mods
+         && "Foo.Baz"      `elem` mods
+         && "Foo.Internal" `elem` mods
+
+testValidFits :: IO Bool
+testValidFits =
+  let block = T.lines $ T.unlines
+        [ "src/Foo.hs:5:5: warning: [GHC-88464]"
+        , "    • Found hole: _ :: Int -> Int"
+        , "    • Valid hole fits include"
+        , "        id :: forall a. a -> a"
+        , "        negate :: forall a. Num a => a -> a"
+        ]
+  in pure $ case extractValidFits block of
+       [a, b] -> hfName a == "id"
+              && hfName b == "negate"
+              && "Num a" `T.isInfixOf` hfType b
+       _      -> False
 
 -- | Helper: create a fresh temp directory and delete it after the test.
 -- Passes a validated 'ProjectDir' (absolute + normalised) to the body.

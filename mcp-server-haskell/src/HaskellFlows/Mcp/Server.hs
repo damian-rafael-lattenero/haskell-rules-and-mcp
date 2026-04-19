@@ -12,6 +12,8 @@ module HaskellFlows.Mcp.Server
   ( Server
   , defaultServer
   , handleRequest
+    -- * Dispatch (re-exported so ghci_batch can recurse)
+  , dispatchTool
   ) where
 
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
@@ -29,25 +31,30 @@ import HaskellFlows.Data.PropertyStore (Store, openStore)
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Types (ProjectDir, mkProjectDir)
-import qualified HaskellFlows.Tool.Arbitrary     as ArbitraryTool
-import qualified HaskellFlows.Tool.CheckModule   as CheckModuleTool
-import qualified HaskellFlows.Tool.Complete      as CompleteTool
-import qualified HaskellFlows.Tool.Coverage      as CoverageTool
-import qualified HaskellFlows.Tool.CreateProject as CreateProjectTool
-import qualified HaskellFlows.Tool.Deps          as DepsTool
-import qualified HaskellFlows.Tool.Doc           as DocTool
-import qualified HaskellFlows.Tool.Eval          as EvalTool
-import qualified HaskellFlows.Tool.Format        as FormatTool
-import qualified HaskellFlows.Tool.Goto          as GotoTool
-import qualified HaskellFlows.Tool.Hole          as HoleTool
-import qualified HaskellFlows.Tool.Hoogle        as HoogleTool
-import qualified HaskellFlows.Tool.Info          as InfoTool
-import qualified HaskellFlows.Tool.Load          as Load
-import qualified HaskellFlows.Tool.QuickCheck    as QcTool
-import qualified HaskellFlows.Tool.Refactor      as RefactorTool
-import qualified HaskellFlows.Tool.Regression    as RegressionTool
-import qualified HaskellFlows.Tool.Type          as TypeTool
-import qualified HaskellFlows.Tool.Workflow      as WorkflowTool
+import qualified HaskellFlows.Tool.Arbitrary       as ArbitraryTool
+import qualified HaskellFlows.Tool.Batch           as BatchTool
+import qualified HaskellFlows.Tool.CheckModule     as CheckModuleTool
+import qualified HaskellFlows.Tool.CheckProject    as CheckProjectTool
+import qualified HaskellFlows.Tool.Complete        as CompleteTool
+import qualified HaskellFlows.Tool.Coverage        as CoverageTool
+import qualified HaskellFlows.Tool.CreateProject   as CreateProjectTool
+import qualified HaskellFlows.Tool.Deps            as DepsTool
+import qualified HaskellFlows.Tool.Doc             as DocTool
+import qualified HaskellFlows.Tool.Eval            as EvalTool
+import qualified HaskellFlows.Tool.Format          as FormatTool
+import qualified HaskellFlows.Tool.Goto            as GotoTool
+import qualified HaskellFlows.Tool.Hole            as HoleTool
+import qualified HaskellFlows.Tool.Hoogle          as HoogleTool
+import qualified HaskellFlows.Tool.Info            as InfoTool
+import qualified HaskellFlows.Tool.Lint            as LintTool
+import qualified HaskellFlows.Tool.Load            as Load
+import qualified HaskellFlows.Tool.QuickCheck      as QcTool
+import qualified HaskellFlows.Tool.Refactor        as RefactorTool
+import qualified HaskellFlows.Tool.Regression      as RegressionTool
+import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
+import qualified HaskellFlows.Tool.Type            as TypeTool
+import qualified HaskellFlows.Tool.ValidateCabal   as ValidateCabalTool
+import qualified HaskellFlows.Tool.Workflow        as WorkflowTool
 
 -- | All mutable server state.
 --
@@ -124,6 +131,11 @@ dispatch _ "tools/list" _ rid =
         , DocTool.descriptor
         , GotoTool.descriptor
         , RefactorTool.descriptor
+        , BatchTool.descriptor
+        , LintTool.descriptor
+        , ToolchainStatusTool.descriptor
+        , ValidateCabalTool.descriptor
+        , CheckProjectTool.descriptor
         ]
     ]
 dispatch srv "tools/call" (Just params) rid =
@@ -137,72 +149,99 @@ dispatch _ m _ rid =
 
 handleToolCall :: Server -> ToolCall -> RequestId -> IO Response
 handleToolCall srv call rid = case tcName call of
+  "ghci_batch" ->
+    -- Special case: batch has to be routed here (not inside
+    -- dispatchTool) because it needs the dispatcher as a callback
+    -- and dispatchTool would recurse with no termination on
+    -- ghci_batch-in-ghci_batch. The batch tool itself refuses
+    -- nesting but we also keep the top-level routing explicit.
+    runTool srv rid (BatchTool.handle (dispatchTool srv) (tcArguments call))
+  _ ->
+    runTool srv rid (dispatchTool srv call)
+
+-- | Pure (non-response-wrapping) tool dispatcher. Exposed so
+-- 'HaskellFlows.Tool.Batch' can recurse without pulling Server's
+-- Response envelope. Unknown tool names return a structured error
+-- 'ToolResult' rather than raising — that way a ghci_batch run with
+-- one bad action still completes the remaining good ones.
+dispatchTool :: Server -> ToolCall -> IO ToolResult
+dispatchTool srv call = case tcName call of
   "ghci_load" -> do
     sess <- getOrStartSession srv
     pd   <- readIORef (srvProjectDir srv)
-    runTool srv rid (Load.handle sess pd (tcArguments call))
+    Load.handle sess pd (tcArguments call)
   "ghci_type" -> do
     sess <- getOrStartSession srv
-    runTool srv rid (TypeTool.handle sess (tcArguments call))
+    TypeTool.handle sess (tcArguments call)
   "ghci_info" -> do
     sess <- getOrStartSession srv
-    runTool srv rid (InfoTool.handle sess (tcArguments call))
+    InfoTool.handle sess (tcArguments call)
   "ghci_eval" -> do
     sess <- getOrStartSession srv
-    runTool srv rid (EvalTool.handle sess (tcArguments call))
+    EvalTool.handle sess (tcArguments call)
   "ghci_quickcheck" -> do
     sess <- getOrStartSession srv
-    runTool srv rid (QcTool.handle (srvStore srv) sess (tcArguments call))
+    QcTool.handle (srvStore srv) sess (tcArguments call)
   "ghci_hole" -> do
     sess <- getOrStartSession srv
     pd   <- readIORef (srvProjectDir srv)
-    runTool srv rid (HoleTool.handle sess pd (tcArguments call))
+    HoleTool.handle sess pd (tcArguments call)
   "ghci_arbitrary" -> do
     sess <- getOrStartSession srv
-    runTool srv rid (ArbitraryTool.handle sess (tcArguments call))
+    ArbitraryTool.handle sess (tcArguments call)
   "hoogle_search" ->
-    -- No GHCi session needed: the tool shells out to the `hoogle`
-    -- binary directly. Still runs under the exception shield so the
-    -- server stays alive if hoogle is missing or crashes.
-    runTool srv rid (HoogleTool.handle (tcArguments call))
+    HoogleTool.handle (tcArguments call)
   "ghci_workflow" ->
-    -- Read-only: uses the server state refs directly, no session boot.
-    runTool srv rid (WorkflowTool.handle (srvProjectDir srv)
-                                          (srvSession srv)
-                                          (tcArguments call))
+    WorkflowTool.handle (srvProjectDir srv) (srvSession srv) (tcArguments call)
   "ghci_regression" -> do
     sess <- getOrStartSession srv
-    runTool srv rid (RegressionTool.handle (srvStore srv) sess (tcArguments call))
+    RegressionTool.handle (srvStore srv) sess (tcArguments call)
   "ghci_check_module" -> do
     sess <- getOrStartSession srv
     pd   <- readIORef (srvProjectDir srv)
-    runTool srv rid (CheckModuleTool.handle sess (srvStore srv) pd (tcArguments call))
+    CheckModuleTool.handle sess (srvStore srv) pd (tcArguments call)
   "ghci_coverage" -> do
     pd <- readIORef (srvProjectDir srv)
-    runTool srv rid (CoverageTool.handle pd (tcArguments call))
+    CoverageTool.handle pd (tcArguments call)
   "ghci_complete" -> do
     sess <- getOrStartSession srv
-    runTool srv rid (CompleteTool.handle sess (tcArguments call))
+    CompleteTool.handle sess (tcArguments call)
   "ghci_format" -> do
     pd <- readIORef (srvProjectDir srv)
-    runTool srv rid (FormatTool.handle pd (tcArguments call))
+    FormatTool.handle pd (tcArguments call)
   "ghci_deps" -> do
     pd <- readIORef (srvProjectDir srv)
-    runTool srv rid (DepsTool.handle pd (tcArguments call))
+    DepsTool.handle pd (tcArguments call)
   "ghci_create_project" -> do
     pd <- readIORef (srvProjectDir srv)
-    runTool srv rid (CreateProjectTool.handle pd (tcArguments call))
+    CreateProjectTool.handle pd (tcArguments call)
   "ghci_doc" -> do
     sess <- getOrStartSession srv
-    runTool srv rid (DocTool.handle sess (tcArguments call))
+    DocTool.handle sess (tcArguments call)
   "ghci_goto" -> do
     sess <- getOrStartSession srv
-    runTool srv rid (GotoTool.handle sess (tcArguments call))
+    GotoTool.handle sess (tcArguments call)
   "ghci_refactor" -> do
     sess <- getOrStartSession srv
     pd   <- readIORef (srvProjectDir srv)
-    runTool srv rid (RefactorTool.handle sess pd (tcArguments call))
-  other -> pure (err_ rid (methodNotFoundErr ("tool " <> other)))
+    RefactorTool.handle sess pd (tcArguments call)
+  "ghci_lint" -> do
+    pd <- readIORef (srvProjectDir srv)
+    LintTool.handle pd (tcArguments call)
+  "ghci_toolchain_status" ->
+    ToolchainStatusTool.handle (tcArguments call)
+  "ghci_validate_cabal" -> do
+    pd <- readIORef (srvProjectDir srv)
+    ValidateCabalTool.handle pd (tcArguments call)
+  "ghci_check_project" -> do
+    sess <- getOrStartSession srv
+    pd   <- readIORef (srvProjectDir srv)
+    CheckProjectTool.handle sess (srvStore srv) pd (tcArguments call)
+  other ->
+    pure ToolResult
+      { trContent = [ TextContent ("Unknown tool: " <> other) ]
+      , trIsError = True
+      }
 
 -- | Common exception shield for every tool handler.
 --
