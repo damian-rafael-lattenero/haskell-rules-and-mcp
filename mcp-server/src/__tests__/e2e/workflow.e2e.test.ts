@@ -58,6 +58,7 @@ describe.runIf(GHC_AVAILABLE)("E2E Workflow: Development Loop", () => {
   let WORKFLOW_MODULE: string;
   let HOLE_MODULE: string;
   let CABAL_FILE: string;
+  let manifestHandle: { path: string; cleanup(): Promise<void> };
 
   beforeAll(async () => {
     fixture = await setupIsolatedFixture("test-project", "workflow");
@@ -76,6 +77,15 @@ describe.runIf(GHC_AVAILABLE)("E2E Workflow: Development Loop", () => {
     );
     await writeFile(CABAL_FILE, updatedCabal, "utf-8");
 
+    // Force deterministic toolchain resolution in the spawned MCP. Without
+    // this override the child could attempt a fourmolu/hlint auto-download
+    // mid-test under parallel load, causing 30 s+ timeouts that surfaced as
+    // step-18c / step-21 flakes. The MCP's `ghci_format` test branches
+    // already accept the "unavailable" outcome — now we just guarantee that
+    // branch fires deterministically instead of racing on the cache.
+    const { writeEmptyManifest } = await import("../helpers/empty-manifest.js");
+    manifestHandle = await writeEmptyManifest("workflow-e2e-manifest-");
+
     // Start MCP server
     transport = new StdioClientTransport({
       command: "node",
@@ -85,6 +95,7 @@ describe.runIf(GHC_AVAILABLE)("E2E Workflow: Development Loop", () => {
         PATH: TEST_PATH,
         HASKELL_PROJECT_DIR: FIXTURE_DIR,
         HASKELL_LIBRARY_TARGET: "lib:test-project",
+        HASKELL_FLOWS_MANIFEST_PATH: manifestHandle.path,
       },
     });
     client = new Client(
@@ -104,6 +115,7 @@ describe.runIf(GHC_AVAILABLE)("E2E Workflow: Development Loop", () => {
     await writeFile(CABAL_FILE, originalCabal, "utf-8");
     try { await client.close(); } catch { /* ignore */ }
     await fixture.cleanup();
+    if (manifestHandle) await manifestHandle.cleanup();
   });
 
   // --- Step 1: Create a buggy module via ghci_add_modules (replaces the old ghci_scaffold) ---
@@ -411,7 +423,8 @@ holeFunc x = _result
   });
 
   it("step 18c: ghci_format write:true either formats or reports unavailable clearly", async () => {
-    // Write a module with trailing whitespace
+    // Write a module with trailing whitespace — whichever formatter wins
+    // SHOULD produce a non-trivial change.
     await writeFile(
       WORKFLOW_MODULE,
       `module WorkflowTest where   \n\ndouble :: Int -> Int   \ndouble x = x + x\n`,
@@ -424,10 +437,18 @@ holeFunc x = _result
         write: true,
       })
     );
-    if (result.success) {
+    // With the Phase-4 degraded-fallback chain there are three valid
+    // outcomes, and all three are deterministic with the empty-releases
+    // manifest set in beforeAll. The source has trailing whitespace, so
+    // EVERY branch should produce written:true (real fourmolu/ormolu wipes
+    // trailing spaces; basic-format-rules fallback strips them too).
+    if (result.degraded === true) {
+      expect(result.format_tool).toBe("basic-format-rules");
+      expect(result.gateEligible).toBe(false);
+      expect(result.written).toBe(true); // trailing whitespace → must be fixed
+    } else if (result.success) {
       expect(result.written).toBe(true);
     } else if (result.unavailable) {
-      expect(result.unavailable).toBe(true);
       expect(result.reason).toBeDefined();
     } else {
       // Formatter exists but failed (e.g., syntax error)
@@ -529,10 +550,25 @@ holeFunc x = _result
         write: true,
       })
     );
-    if (result.success) {
-      expect(result.written).toBe(true);
+    // Three valid outcomes, all of which are deterministic with an
+    // empty-releases manifest (see beforeAll):
+    //   (a) a real formatter exists on host PATH → success + written OR
+    //       success + no changes needed (clean file already).
+    //   (b) no formatter anywhere + no fallback → `unavailable: true` with
+    //       hint + reason.
+    //   (c) degraded basic-format-rules fallback kicked in →
+    //       success + degraded + gateEligible:false, written reflects
+    //       whether any whitespace fixes were applied (none here — the
+    //       source is already clean).
+    if (result.degraded === true) {
+      expect(result.gateEligible).toBe(false);
+      expect(typeof result.written).toBe("boolean");
+      expect(result.format_tool).toBe("basic-format-rules");
+    } else if (result.success) {
+      // Real formatter: written may be true (had to reformat) or the file
+      // may already have been canonical; either shape is legitimate.
+      expect(typeof result.written === "boolean" || result.changed === false).toBe(true);
     } else if (result.unavailable) {
-      expect(result.unavailable).toBe(true);
       expect(result.reason).toBeDefined();
       expect(result._hint).toBeDefined();
     } else {

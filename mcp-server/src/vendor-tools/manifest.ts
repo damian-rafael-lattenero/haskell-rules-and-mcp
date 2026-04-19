@@ -84,8 +84,19 @@ export function setManifestPathForTests(p: string | null): void {
   cached = null;
 }
 
+/**
+ * Resolution priority:
+ *   1. `setManifestPathForTests(p)` — unit tests that want to override in-process
+ *   2. `HASKELL_FLOWS_MANIFEST_PATH` env var — e2e tests that spawn the MCP
+ *      as a subprocess and cannot use the in-process setter. Also useful for
+ *      operators who want to pin a known-good manifest in CI.
+ *   3. Default co-located `vendor-tools/bundled-tools-manifest.json`.
+ */
 function activeManifestPath(): string {
-  return manifestPathOverride ?? MANIFEST_PATH;
+  if (manifestPathOverride) return manifestPathOverride;
+  const envOverride = process.env.HASKELL_FLOWS_MANIFEST_PATH;
+  if (envOverride && envOverride.trim().length > 0) return envOverride;
+  return MANIFEST_PATH;
 }
 
 const SUPPORTED_TOOLS: readonly SupportedTool[] = [

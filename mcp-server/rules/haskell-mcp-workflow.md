@@ -424,3 +424,19 @@ Use `skip_cabal_test` / `skip_cabal_build` for fast iteration.
 Pass `label="descriptiveName"` to get meaningful names in the exported
 `test/Spec.hs` instead of `property_1..N`. The exporter sanitizes and
 deduplicates labels automatically.
+
+### Hot-reload after editing the MCP itself (`mcp_reload_code`)
+If you edited a TypeScript file under `mcp-server/src/` and ran
+`npm run build`, the running MCP process still holds the OLD bundle in
+memory. `mcp_restart` only restarts GHCi — not the Node process. To pick
+up your edits WITHOUT exiting Claude Desktop:
+
+```
+mcp_reload_code()             # dry-run: check if a restart would help
+mcp_reload_code(confirm=true)  # actually reload
+```
+
+The tool is staleness-gated (refuses to exit if dist/index.js isn't newer
+than the running process) and rate-limited (one per 10s). On success the
+client respawns the child automatically. GHCi session and workflow state
+are reset by design; property store survives on disk.

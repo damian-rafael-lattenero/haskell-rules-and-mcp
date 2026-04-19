@@ -79,6 +79,7 @@ import { register as registerHls } from "./tools/hls.js";
 import { register as registerPropertyLifecycle } from "./tools/property-lifecycle.js";
 import { register as registerToolchainStatus } from "./tools/toolchain-status.js";
 import { register as registerCoverage } from "./tools/coverage.js";
+import { register as registerMcpReloadCode } from "./tools/mcp-reload-code.js";
 
 // Base directory: the project root (parent of mcp-server/)
 const BASE_DIR = path.resolve(import.meta.dirname, "..", "..");
@@ -191,6 +192,7 @@ registerHls(server, ctx);
 registerPropertyLifecycle(server, ctx);
 registerToolchainStatus(server, ctx);
 registerCoverage(server, ctx);
+registerMcpReloadCode(server, ctx);
 
 // --- Tool: ghci_fix_warning (inline) ---
 registerStrictTool(server, ctx,

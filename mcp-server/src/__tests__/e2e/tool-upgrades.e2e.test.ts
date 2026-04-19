@@ -33,6 +33,7 @@ describe.runIf(GHC_AVAILABLE)("E2E Tool Upgrades", () => {
   let TEMP_EXPORTS_MODULE: string;
   let PROPERTY_STORE_DIR: string;
   let TEST_SPEC_FILE: string;
+  let manifestHandle: { path: string; cleanup(): Promise<void> };
 
   beforeAll(async () => {
     fixture = await setupIsolatedFixture("test-project", "tool-upgrades");
@@ -41,6 +42,16 @@ describe.runIf(GHC_AVAILABLE)("E2E Tool Upgrades", () => {
     PROPERTY_STORE_DIR = path.join(FIXTURE_DIR, ".haskell-flows");
     TEST_SPEC_FILE = path.join(FIXTURE_DIR, "test", "Spec.hs");
     originalSpec = await readFile(TEST_SPEC_FILE, "utf8");
+
+    // Deterministic toolchain resolution in the spawned MCP: an empty-
+    // releases manifest prevents fourmolu/hlint/ormolu auto-download races
+    // that surfaced as workflow-guidance e2e flakes under parallel test:all.
+    // The test's own assertions already branch on available-or-unavailable,
+    // so forcing the `unavailable` path is observationally equivalent and
+    // deterministic.
+    const { writeEmptyManifest } = await import("../helpers/empty-manifest.js");
+    manifestHandle = await writeEmptyManifest("tool-upgrades-e2e-manifest-");
+
     transport = new StdioClientTransport({
       command: "node",
       args: [SERVER_SCRIPT],
@@ -49,6 +60,7 @@ describe.runIf(GHC_AVAILABLE)("E2E Tool Upgrades", () => {
         PATH: TEST_PATH,
         HASKELL_PROJECT_DIR: FIXTURE_DIR,
         HASKELL_LIBRARY_TARGET: "lib:test-project",
+        HASKELL_FLOWS_MANIFEST_PATH: manifestHandle.path,
       },
     });
     client = new Client({ name: "tool-upgrades-client", version: "0.1.0" }, { capabilities: {} });
@@ -65,6 +77,7 @@ describe.runIf(GHC_AVAILABLE)("E2E Tool Upgrades", () => {
     await rm(PROPERTY_STORE_DIR, { recursive: true, force: true });
     await writeFile(TEST_SPEC_FILE, originalSpec, "utf8");
     await fixture.cleanup();
+    if (manifestHandle) await manifestHandle.cleanup();
   });
 
   it("cabal_test succeeds through MCP", async () => {

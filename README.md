@@ -59,7 +59,8 @@ The server is designed to be **consumed by agents, not humans directly**. Every 
 | `ghci_hls` | HLS integration: `available`, `hover`, `diagnostics`. |
 | `hoogle_search` | Search Hoogle by name or type. |
 | `ghci_doc` | Haddock docs for a name. |
-| `ghci_session` / `mcp_restart` | Session lifecycle (restart GHCi — `mcp_restart` does NOT restart the Node process; TS code changes require a new Claude Code session). |
+| `ghci_session` / `mcp_restart` | Session lifecycle (restart GHCi). `mcp_restart` does NOT restart the Node process. |
+| `mcp_reload_code` | **Phase 6**: schedule a graceful MCP Node-process restart so fresh TS builds take effect **without exiting Claude Desktop**. Dry-run by default; pass `confirm=true` to exit. Rate-limited + staleness-gated. |
 | `ghci_setup` | Install development rules into `.claude/rules/`. |
 | `ghci_validate_cabal` / `ghci_deps` | Cabal file validation and dependency management. |
 | `ghci_complete` | Completion candidates for a prefix. |
@@ -265,10 +266,54 @@ fails, `ghci_lint` and `ghci_format` return degraded responses with
 `gateEligible: false`. The module-complete gate stays locked until a real
 formatter/linter runs — by design; never trust a degraded "clean" signal.
 
+### Hot-reload the MCP after a TS edit
+`mcp_restart` only restarts GHCi. To pick up a `dist/index.js` rebuild
+without exiting Claude Desktop, use:
+
+```
+mcp_reload_code()                     # dry-run: reports staleness
+mcp_reload_code(confirm=true)          # actually reload
+```
+
+The tool schedules `process.exit(0)` after flushing the response; the MCP
+client respawns the child automatically. Safeguards:
+
+- **Staleness gate** — refuses to exit if `dist/index.js` mtime is not
+  newer than this process's boot time (prevents no-op restarts).
+- **Rate limit** — rejects consecutive `confirm=true` calls inside a 10s
+  window (prevents accidental restart loops).
+- **In-memory state is lost** by design: GHCi session, workflow tracker,
+  tool history. Persisted state (`.haskell-flows/properties.json`) survives.
+
+`ghci_session(status)` reports `dist.buildTime` + `ageMinutes` so agents
+can detect staleness without needing to call the reload tool at all.
+
 ---
 
 ## Changelog
 
+- **Fase 6 (hot-reload)** — (a) new `mcp_reload_code` tool schedules a
+  graceful MCP Node-process restart so TypeScript edits take effect without
+  exiting Claude Desktop. Dry-run by default; `confirm=true` gates the
+  actual exit. (b) CWE-400 guardrails: staleness check against
+  `dist/index.js` mtime vs. process boot time, rate-limit window, no
+  secrets retained across restart. (c) 9 unit + 4 e2e tests cover every
+  branch without actually killing the process (injected dependencies).
+  Closes OBS-2 at the workflow layer — agents editing the MCP itself now
+  iterate inside a single Claude session.
+- **Fase 5.1** — (a) `handleAnalyze` now loads the whole project via
+  `loadModules(paths, names)` before the cross-module sibling probe,
+  fixing a runtime gap where `evaluator-preservation` engine never fired
+  because `:l` replace dropped all other modules from scope. (b)
+  `_ambiguityHint` now attached at the pre-flight typecheck early return
+  (the branch where `Ambiguous type variable` actually lands first). +9
+  unit tests.
+- **Fase 5** — 5 robustness bugs (auto-download orphan cleanup, fetch
+  timeout, concurrent download lock, property-store corruption recovery,
+  ghci-session health detection) + 3 ergonomic observations (Arbitrary
+  auto-detect, dist.buildTime in status, quickcheck ambiguity hint) + 2
+  refactors (`resolveModulePath` path-traversal guard, central `config.ts`
+  for timeouts + paths). +24 unit tests.
 - **Fase 4 (hyper-stabilization)** — (a) centralized release manifest
   `vendor-tools/bundled-tools-manifest.json` as single source of truth for
   tool URLs/versions; `auto-download.ts` now reads from it. (b) `tools-v1.0`

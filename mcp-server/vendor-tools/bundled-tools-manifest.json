@@ -1,6 +1,6 @@
 {
   "manifestVersion": 2,
-  "updatedAt": "2026-04-18T22:00:00.000Z",
+  "updatedAt": "2026-04-19T02:54:56.023Z",
   "_note": "manifestVersion 2 unifies bundled files and release URLs into a single source of truth. v1 only had `tools[]` (bundled); v2 adds `releases{}` read by auto-download.ts. Checksums marked empty/placeholder are populated as platforms get published.",
   "releases": {
     "hlint": {
@@ -149,12 +149,12 @@
     },
     {
       "tool": "fourmolu",
-      "version": "v0.19.0.1",
+      "version": "test-bundled-1.0.0",
       "platform": "darwin",
       "arch": "arm64",
       "filename": "fourmolu/darwin-arm64/fourmolu",
-      "sha256": "e8e793f2c361ad6e506fce46f4b89d46fce2af6647e753dc088fb005b650bb8c",
-      "provenance": "auto-download-ready"
+      "sha256": "ebc4cba1c75e8dedc0f8e56bc85829c5fe6c73d2028787b2c4c2b07a9bd835e1",
+      "provenance": "test://bundled-tools"
     },
     {
       "tool": "fourmolu",
@@ -257,12 +257,12 @@
     },
     {
       "tool": "hls",
-      "version": "v2.13.0.0",
+      "version": "test-bundled-1.0.0",
       "platform": "darwin",
       "arch": "arm64",
       "filename": "hls/darwin-arm64/haskell-language-server-wrapper",
-      "sha256": "949cb139b269a4487c82adfb17ff326f3defa9fa9fee6342297895e9ef2647c8",
-      "provenance": "auto-download-ready"
+      "sha256": "70840883b0b739419e671eba999af348e1e0b500367e70dbd9ebc1fcbae745cf",
+      "provenance": "test://bundled-tools"
     },
     {
       "tool": "hls",
