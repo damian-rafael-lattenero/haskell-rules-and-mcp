@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { GhciSession } from "../ghci-session.js";
+import { GhciSession } from "../../ghci-session.js";
 import path from "node:path";
 import { rm } from "node:fs/promises";
 
-const TEST_PROJECT = path.resolve(import.meta.dirname, "fixtures", "test-project");
+// Moved from src/__tests__/ to src/__tests__/integration/ so the unit-tests
+// CI job (which does NOT install GHC) stops spawning a real cabal repl.
+// `fixtures/test-project` lives at the original tier, so we walk up one
+// extra directory to keep the same fixture usage.
+const TEST_PROJECT = path.resolve(import.meta.dirname, "..", "fixtures", "test-project");
 
 describe.sequential("GhciSession Health Monitoring", () => {
   let session: GhciSession;
