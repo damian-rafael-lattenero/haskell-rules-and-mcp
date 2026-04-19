@@ -33,7 +33,7 @@ jobs:
     name: Flake evaluate + smoke-build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Nix (flakes + commands enabled)
         uses: cachix/install-nix-action@v27
