@@ -6,6 +6,19 @@ The server is designed to be **consumed by agents, not humans directly**. Every 
 
 ---
 
+## Status & development model
+
+This project was iterated intensively with **[Claude Code](https://www.anthropic.com/claude-code)** (agent-in-the-loop) over six hyper-stabilization phases and four end-to-end debug-inspection sessions. It follows the spirit of the Haskell community's [Compact for Responsible Use of AI Tools](https://discourse.haskell.org/t/a-compact-for-responsible-use-of-ai-tools/13923):
+
+- The maintainer understands every line and could reproduce the architecture without AI assistance. AI accelerated mechanical work (TypeScript boilerplate, Zod schemas, test scaffolding), not design decisions.
+- **1157 tests** (unit / integration / e2e) pin the observable behavior across three consecutive deterministic `test:all` runs. Every behavioral change in the codebase is gated by a test that would have caught the regression.
+- Commits that are primarily AI-generated carry `Co-Authored-By: Claude` trailers — the authorship story is on the record, not hidden.
+- The repo is tagged [`vibecoded`](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp) to make provenance discoverable.
+
+**Current status:** `v0.1.0` — **experimental but test-covered**. Genuinely useful for agent-driven workflows on macOS ARM today; see [Known limitations](#known-limitations) for what is NOT yet production-ready.
+
+---
+
 ## Tool surface
 
 ### Scaffolding (dead-simple, strict, single-call)
@@ -290,44 +303,44 @@ can detect staleness without needing to call the reload tool at all.
 
 ---
 
+## Platform support
+
+Honesty first: this project is developed on macOS ARM and that is the only
+platform verified end-to-end today. The auto-download matrix below reflects
+what actually works, not what the server theoretically supports.
+
+| Platform      | Status                       | Notes                                                                                   |
+|---------------|------------------------------|-----------------------------------------------------------------------------------------|
+| `darwin-arm64`| ✅ **Supported**              | Primary dev target. All bundled binaries verified with SHA256 pinned in the manifest.   |
+| `darwin-x64`  | ⚠️ Use host tools             | No bundled binaries yet — install `hlint` / `fourmolu` / `hls` via `ghcup` or `brew`.   |
+| `linux-x64`   | ⚠️ Use host tools             | Same. `ghcup install hlint` etc.                                                        |
+| `linux-arm64` | ⚠️ Use host tools             | Same.                                                                                   |
+| `win32-*`     | ❌ Untested                   | Not on the short-term roadmap.                                                          |
+
+The MCP's resolution chain (host PATH → bundled → auto-download → `unavailable`) means users on unsupported platforms can still get the tools by installing them via their regular Haskell toolchain. The `ghci_lint` / `ghci_format` / `ghci_hls` responses will report `source: "host"` in that case.
+
+---
+
+## Known limitations
+
+This section is deliberately blunt. An agent or maintainer adopting this project deserves to know the failure modes before they hit them.
+
+- **Bus factor of 1.** Single maintainer. No SLA, no backup. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to help.
+- **Platform reality ≠ manifest ambition.** Only `darwin-arm64` has bundled tool binaries verified end-to-end; see [Platform support](#platform-support).
+- **Binaries served from a personal GitHub release** (`damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/`). These are mirrors of upstream (`ndmitchell/hlint`, `fourmolu/fourmolu`, `tweag/ormolu`, `haskell/haskell-language-server`) — every mirror asset carries a SHA256 pinned in the manifest. Migration to primary-upstream-first resolution is tracked on the [Phase D roadmap](docs/haskell-flows-mcp.pdf) and [CHANGELOG](CHANGELOG.md).
+- **Suggest engines detect type shapes by regex**, not with a real Haskell type-level parser. Advanced types (higher-rank polymorphism, type families, GADTs) silently produce zero suggestions — there is no fallback "I don't know" signal yet.
+- **Experimental**, per the `0.x` semver. Breaking changes between minors are possible; the `CHANGELOG.md` documents them.
+- **Not a replacement for HLS.** `ghci_hls` is a thin bridge for `hover` / `diagnostics`; navigation and code actions are not reimplemented. Use your native LSP client in parallel.
+
+---
+
 ## Changelog
 
-- **Fase 6 (hot-reload)** — (a) new `mcp_reload_code` tool schedules a
-  graceful MCP Node-process restart so TypeScript edits take effect without
-  exiting Claude Desktop. Dry-run by default; `confirm=true` gates the
-  actual exit. (b) CWE-400 guardrails: staleness check against
-  `dist/index.js` mtime vs. process boot time, rate-limit window, no
-  secrets retained across restart. (c) 9 unit + 4 e2e tests cover every
-  branch without actually killing the process (injected dependencies).
-  Closes OBS-2 at the workflow layer — agents editing the MCP itself now
-  iterate inside a single Claude session.
-- **Fase 5.1** — (a) `handleAnalyze` now loads the whole project via
-  `loadModules(paths, names)` before the cross-module sibling probe,
-  fixing a runtime gap where `evaluator-preservation` engine never fired
-  because `:l` replace dropped all other modules from scope. (b)
-  `_ambiguityHint` now attached at the pre-flight typecheck early return
-  (the branch where `Ambiguous type variable` actually lands first). +9
-  unit tests.
-- **Fase 5** — 5 robustness bugs (auto-download orphan cleanup, fetch
-  timeout, concurrent download lock, property-store corruption recovery,
-  ghci-session health detection) + 3 ergonomic observations (Arbitrary
-  auto-detect, dist.buildTime in status, quickcheck ambiguity hint) + 2
-  refactors (`resolveModulePath` path-traversal guard, central `config.ts`
-  for timeouts + paths). +24 unit tests.
-- **Fase 4 (hyper-stabilization)** — (a) centralized release manifest
-  `vendor-tools/bundled-tools-manifest.json` as single source of truth for
-  tool URLs/versions; `auto-download.ts` now reads from it. (b) `tools-v1.0`
-  GitHub release assets renamed to match platform-suffixed names expected by
-  the MCP. (c) `npm run tools:validate:urls` + CI gate (`.github/workflows/ci.yml`).
-  (d) `ghci_format` degraded fallback (trailing whitespace / CRLF / missing
-  newline / tabs) with `gateEligible: false`. (e) `basic-lint-rules` reduced
-  to lexically-safe rules; false positives removed. (f) `ghci_load(mode="additive")`
-  for cross-module property tests. (g) `LawEngine` interface + 3 new engines
-  (evaluator-preservation, constant-folding-soundness, functor-laws) exposed
-  via `ghci_suggest(analyze)`. (h) `label` field on `ghci_quickcheck`,
-  propagated to the exported `test/Spec.hs` with sanitization and dedup.
-  (i) `ghci_workflow(action="gate")` orchestrates regression + cabal_test +
-  cabal_build in a single consolidated call.
-- **Fase 3** — upstream fallback URLs for auto-download, opt-in local telemetry, operator runbook for `tools-v1.0`, `ghci_suggest(analyze)` cross-module browse fix, `cabal_coverage` HTML report parser as a third fallback, README refresh.
-- **Fase 2** — toolchain warmup (`toolchain-warmup.ts`), global strict Zod validation via `registerStrictTool`, mass migration of ~42 tools, removal of 8 peripheral tools (`init`, `scaffold`, `fuzz_parser`, `watch`, `profile`, `flags`, `equiv`, `trace`), `cabal_coverage` tix fallback, publish-release script.
-- **Fase 1** — tautology law removal in `function-laws`, `ghci_check_module` export-list awareness, `ghci_toolchain_status` state propagation, `ghci_create_project` + `ghci_add_modules` (replacing `ghci_init` + `ghci_scaffold`), `ghci_lint` degraded fallback (Plan B).
+Full version history lives in [**CHANGELOG.md**](CHANGELOG.md). Highlights of
+the latest release (`v0.1.0`): seven property-suggestion engines, hot-reload
+via `mcp_reload_code`, path-traversal guard, manifest consistency invariant
+test, and deterministic test pipeline across unit / integration / e2e.
+
+## License
+
+[BSD-3-Clause](LICENSE). Copyright (c) 2026 Damián Rafael Lattenero.

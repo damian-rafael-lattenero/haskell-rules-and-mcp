@@ -2,6 +2,14 @@
   "name": "haskell-ghci-mcp",
   "version": "0.1.0",
   "description": "MCP server providing persistent GHCi session for incremental Haskell type-checking",
+  "license": "BSD-3-Clause",
+  "author": "Damián Rafael Lattenero",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp"
+  },
+  "homepage": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp#readme",
+  "bugs": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues",
   "type": "module",
   "main": "dist/index.js",
   "files": [

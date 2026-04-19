@@ -136,4 +136,42 @@ describe("bundled-tools-manifest consistency", () => {
     }
     expect(mismatches).toEqual([]);
   });
+
+  it("releases[].platforms only lists configured targets (no placeholder sha256)", async () => {
+    // Post-Phase-6.2 (platform-honesty) invariant: the releases section must
+    // never advertise a target whose sha256 is missing or a PENDING_CHECKSUM_*
+    // sentinel. Unsupported platforms should be ABSENT from releases, not
+    // present-with-empty-hash, so `ghci_toolchain_status` returns an honest
+    // "not configured" rather than pretending a binary exists.
+    const m = await loadManifest();
+    const offenders: string[] = [];
+    for (const [tool, spec] of Object.entries(m.releases)) {
+      for (const [target, entry] of Object.entries(spec.platforms)) {
+        const sha = (entry.sha256 ?? "").trim();
+        if (sha === "" || sha.includes("PENDING")) {
+          offenders.push(`${tool} ${target} → sha256=${sha || "<empty>"}`);
+        }
+      }
+    }
+    if (offenders.length > 0) {
+      throw new Error(
+        "releases[].platforms contains placeholder entries. Remove them " +
+          "entirely rather than leaving empty/PENDING sha256:\n  " +
+          offenders.join("\n  ") +
+          "\n\nUnsupported platforms should be absent from releases[] — the " +
+          "MCP falls back to host PATH, which is the honest answer."
+      );
+    }
+  });
+
+  it("at least one platform is configured for each declared release tool", async () => {
+    // Counterpart to the previous invariant: if a tool appears in releases,
+    // at least one platform must be configured with a real sha256. An
+    // empty platforms map would be dead configuration.
+    const m = await loadManifest();
+    for (const [tool, spec] of Object.entries(m.releases)) {
+      const count = Object.keys(spec.platforms).length;
+      expect(count, `${tool} has 0 configured platforms`).toBeGreaterThan(0);
+    }
+  });
 });

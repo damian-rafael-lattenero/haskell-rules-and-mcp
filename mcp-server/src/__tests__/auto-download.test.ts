@@ -86,12 +86,12 @@ describe("autoDownloadTool", () => {
     Object.defineProperty(process, "arch", { value: originalArch });
   });
 
-  it("supports ormolu auto-download", async () => {
+  it("supports ormolu auto-download on darwin-arm64 (primary target)", async () => {
     const originalPlatform = process.platform;
     const originalArch = process.arch;
 
-    Object.defineProperty(process, "platform", { value: "linux" });
-    Object.defineProperty(process, "arch", { value: "x64" });
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    Object.defineProperty(process, "arch", { value: "arm64" });
 
     expect(await canAutoDownload("ormolu")).toBe(true);
 
@@ -99,16 +99,36 @@ describe("autoDownloadTool", () => {
     Object.defineProperty(process, "arch", { value: originalArch });
   });
 
-  it("supports hls auto-download", async () => {
+  it("supports hls auto-download on darwin-arm64 (primary target)", async () => {
     const originalPlatform = process.platform;
     const originalArch = process.arch;
 
-    Object.defineProperty(process, "platform", { value: "linux" });
+    Object.defineProperty(process, "platform", { value: "darwin" });
     Object.defineProperty(process, "arch", { value: "arm64" });
 
     expect(await canAutoDownload("hls")).toBe(true);
 
     Object.defineProperty(process, "platform", { value: originalPlatform });
     Object.defineProperty(process, "arch", { value: originalArch });
+  });
+
+  it("returns false for unsupported platforms (honest 'not configured')", async () => {
+    // Post-Phase-6.2 platform-honesty cleanup: darwin-x64 / linux-* / win32-*
+    // are NOT configured for auto-download. `canAutoDownload` must return
+    // false so the MCP falls through to host PATH rather than attempting a
+    // download with a placeholder URL.
+    const originalPlatform = process.platform;
+    const originalArch = process.arch;
+    try {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      Object.defineProperty(process, "arch", { value: "x64" });
+      expect(await canAutoDownload("hlint")).toBe(false);
+      expect(await canAutoDownload("fourmolu")).toBe(false);
+      expect(await canAutoDownload("ormolu")).toBe(false);
+      expect(await canAutoDownload("hls")).toBe(false);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+      Object.defineProperty(process, "arch", { value: originalArch });
+    }
   });
 });

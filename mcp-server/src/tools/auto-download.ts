@@ -290,11 +290,19 @@ export interface ToolchainTupleStatus {
   checksumConfigured: boolean;
   url?: string;
   version?: string;
+  /**
+   * Agent-readable explanation when the target is not configured. Present
+   * only when `autoDownloadConfigured: false`. Tells the caller exactly
+   * what fallback the MCP will use and how to get the tool manually.
+   */
+  note?: string;
 }
 
 /**
  * Produce the full cross-platform diagnostic matrix (4 tools × 6 targets).
- * Targets with no manifest entry appear as `autoDownloadConfigured: false`.
+ * Targets with no manifest entry appear as `autoDownloadConfigured: false`
+ * with a `note` explaining the fallback path, so callers don't have to
+ * guess whether a missing entry is a bug or an honest "not supported yet".
  */
 export async function getToolchainTupleMatrix(): Promise<ToolchainTupleStatus[]> {
   const targets: PlatformTarget[] = [
@@ -315,14 +323,24 @@ export async function getToolchainTupleMatrix(): Promise<ToolchainTupleStatus[]>
   for (const tool of tools) {
     for (const target of targets) {
       const entry = index.get(`${tool}:${target}`);
-      rows.push({
+      const row: ToolchainTupleStatus = {
         tool,
         target,
         autoDownloadConfigured: entry !== undefined,
         checksumConfigured: entry ? hasVerifiableChecksum(entry.entry) : false,
         url: entry?.entry.url,
         version: entry?.entry.version,
-      });
+      };
+      if (!row.autoDownloadConfigured) {
+        // Agents reading this diagnostic need to know the fallback story.
+        // `darwin-arm64` is the primary dev target so anything missing there
+        // is a real bug; other targets genuinely aren't built yet.
+        row.note =
+          target === "darwin-arm64"
+            ? `Unexpected: ${tool} has no manifest entry for the primary dev target. File an issue.`
+            : `Not yet built for ${target}. ${tool} is resolved from host PATH on this platform — install via ghcup/brew/apt.`;
+      }
+      rows.push(row);
     }
   }
   return rows;

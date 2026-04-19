@@ -10,18 +10,6 @@
           "version": "v3.10",
           "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-darwin-arm64",
           "sha256": "660d5288ca1a2c6220f9549a64f190f3df749cf01ea8349f8e8ef35ceb169d63"
-        },
-        "darwin-x64": {
-          "version": "v3.10",
-          "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-darwin-x64"
-        },
-        "linux-x64": {
-          "version": "v3.10",
-          "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-linux-x64"
-        },
-        "linux-arm64": {
-          "version": "v3.10",
-          "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-linux-arm64"
         }
       }
     },
@@ -32,18 +20,6 @@
           "version": "v0.19.0.1",
           "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-darwin-arm64",
           "sha256": "e8e793f2c361ad6e506fce46f4b89d46fce2af6647e753dc088fb005b650bb8c"
-        },
-        "darwin-x64": {
-          "version": "v0.19.0.1",
-          "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-darwin-x64"
-        },
-        "linux-x64": {
-          "version": "v0.19.0.1",
-          "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-linux-x64"
-        },
-        "linux-arm64": {
-          "version": "v0.19.0.1",
-          "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-linux-arm64"
         }
       }
     },
@@ -54,18 +30,6 @@
           "version": "v0.7.7.0",
           "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-darwin-arm64",
           "sha256": "d073199f566100cf57893d08b3df4f02c70ff7e650bf38d601e4fe9b3935b218"
-        },
-        "darwin-x64": {
-          "version": "v0.7.7.0",
-          "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-darwin-x64"
-        },
-        "linux-x64": {
-          "version": "v0.7.7.0",
-          "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-linux-x64"
-        },
-        "linux-arm64": {
-          "version": "v0.7.7.0",
-          "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-linux-arm64"
         }
       }
     },
@@ -76,18 +40,6 @@
           "version": "v2.13.0.0",
           "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-darwin-arm64",
           "sha256": "949cb139b269a4487c82adfb17ff326f3defa9fa9fee6342297895e9ef2647c8"
-        },
-        "darwin-x64": {
-          "version": "v2.13.0.0",
-          "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-darwin-x64"
-        },
-        "linux-x64": {
-          "version": "v2.13.0.0",
-          "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-linux-x64"
-        },
-        "linux-arm64": {
-          "version": "v2.13.0.0",
-          "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-linux-arm64"
         }
       }
     }
@@ -149,12 +101,12 @@
     },
     {
       "tool": "fourmolu",
-      "version": "test-bundled-1.0.0",
+      "version": "v0.19.0.1",
       "platform": "darwin",
       "arch": "arm64",
       "filename": "fourmolu/darwin-arm64/fourmolu",
-      "sha256": "ebc4cba1c75e8dedc0f8e56bc85829c5fe6c73d2028787b2c4c2b07a9bd835e1",
-      "provenance": "test://bundled-tools"
+      "sha256": "e8e793f2c361ad6e506fce46f4b89d46fce2af6647e753dc088fb005b650bb8c",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "fourmolu",
@@ -257,12 +209,12 @@
     },
     {
       "tool": "hls",
-      "version": "test-bundled-1.0.0",
+      "version": "v2.13.0.0",
       "platform": "darwin",
       "arch": "arm64",
       "filename": "hls/darwin-arm64/haskell-language-server-wrapper",
-      "sha256": "70840883b0b739419e671eba999af348e1e0b500367e70dbd9ebc1fcbae745cf",
-      "provenance": "test://bundled-tools"
+      "sha256": "949cb139b269a4487c82adfb17ff326f3defa9fa9fee6342297895e9ef2647c8",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "hls",
