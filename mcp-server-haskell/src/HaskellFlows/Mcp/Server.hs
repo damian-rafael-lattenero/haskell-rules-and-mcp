@@ -44,6 +44,7 @@ import qualified HaskellFlows.Tool.Hoogle        as HoogleTool
 import qualified HaskellFlows.Tool.Info          as InfoTool
 import qualified HaskellFlows.Tool.Load          as Load
 import qualified HaskellFlows.Tool.QuickCheck    as QcTool
+import qualified HaskellFlows.Tool.Refactor      as RefactorTool
 import qualified HaskellFlows.Tool.Regression    as RegressionTool
 import qualified HaskellFlows.Tool.Type          as TypeTool
 import qualified HaskellFlows.Tool.Workflow      as WorkflowTool
@@ -122,6 +123,7 @@ dispatch _ "tools/list" _ rid =
         , CreateProjectTool.descriptor
         , DocTool.descriptor
         , GotoTool.descriptor
+        , RefactorTool.descriptor
         ]
     ]
 dispatch srv "tools/call" (Just params) rid =
@@ -196,6 +198,10 @@ handleToolCall srv call rid = case tcName call of
   "ghci_goto" -> do
     sess <- getOrStartSession srv
     runTool srv rid (GotoTool.handle sess (tcArguments call))
+  "ghci_refactor" -> do
+    sess <- getOrStartSession srv
+    pd   <- readIORef (srvProjectDir srv)
+    runTool srv rid (RefactorTool.handle sess pd (tcArguments call))
   other -> pure (err_ rid (methodNotFoundErr ("tool " <> other)))
 
 -- | Common exception shield for every tool handler.

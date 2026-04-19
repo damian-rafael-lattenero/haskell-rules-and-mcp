@@ -49,6 +49,8 @@ library
                       HaskellFlows.Parser.Hole
                       HaskellFlows.Parser.QuickCheck
                       HaskellFlows.Parser.Type
+                      HaskellFlows.Refactor.Extract
+                      HaskellFlows.Refactor.Rename
                       HaskellFlows.Tool.Arbitrary
                       HaskellFlows.Tool.CheckModule
                       HaskellFlows.Tool.Complete
@@ -64,6 +66,7 @@ library
                       HaskellFlows.Tool.Info
                       HaskellFlows.Tool.Load
                       HaskellFlows.Tool.QuickCheck
+                      HaskellFlows.Tool.Refactor
                       HaskellFlows.Tool.Regression
                       HaskellFlows.Tool.Type
                       HaskellFlows.Tool.Workflow
@@ -71,6 +74,7 @@ library
                     , aeson             >= 2.2  && < 2.3
                     , async             >= 2.2  && < 2.3
                     , bytestring        >= 0.11 && < 0.13
+                    , containers        >= 0.6  && < 0.8
                     , directory         >= 1.3  && < 1.4
                     , filepath          >= 1.4  && < 1.6
                     , process           >= 1.6  && < 1.7

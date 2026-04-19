@@ -65,6 +65,15 @@ import HaskellFlows.Tool.Deps
   ( validatePackageName
   , validateVersionConstraint
   )
+import HaskellFlows.Refactor.Extract
+  ( ExtractResult (..)
+  , extractBinding
+  )
+import HaskellFlows.Refactor.Rename
+  ( RenameResult (..)
+  , renameInScope
+  , validateIdentifier
+  )
 import HaskellFlows.Tool.Goto
   ( Location (..)
   , parseDefinedAt
@@ -128,6 +137,16 @@ main = do
       , test "parseDefinedAt file location"        testDefinedAtFile
       , test "parseDefinedAt module location"      testDefinedAtModule
       , test "parseDefinedAt ignores noise"        testDefinedAtNone
+      , test "rename respects word boundaries"     testRenameWordBoundary
+      , test "rename ignores line comments"        testRenameIgnoresComments
+      , test "rename ignores string literals"      testRenameIgnoresStrings
+      , test "rename scoped to line range"         testRenameScoped
+      , test "rename same name is rejected"        testRenameSameName
+      , test "validateIdentifier rejects keyword"  testIdentifierKeyword
+      , test "validateIdentifier rejects symbol"   testIdentifierSymbol
+      , test "validateIdentifier rejects upper"    testIdentifierUpper
+      , test "extractBinding wraps block"          testExtractBinding
+      , test "extractBinding rejects empty range"  testExtractEmpty
       ]
   if and results then exitSuccess else exitFailure
 
@@ -559,6 +578,104 @@ testDefinedAtModule =
 testDefinedAtNone :: IO Bool
 testDefinedAtNone =
   pure (parseDefinedAt "just some text" == Nothing)
+
+--------------------------------------------------------------------------------
+-- Phase 8: Refactor engines
+--------------------------------------------------------------------------------
+
+-- | The rename must rewrite @foo@ as a whole token, not substrings
+-- inside @foobar@ or @myfoo@.
+testRenameWordBoundary :: IO Bool
+testRenameWordBoundary =
+  let src = T.unlines
+        [ "foo x = x + 1"
+        , "foobar y = y"
+        , "baz foo = foo + myfoo"
+        ]
+  in case renameInScope "foo" "quux" 1 10 src of
+       Right rr ->
+         pure $ rrOccurrences rr == 3   -- foo on lines 1, 3, 3
+             && "foobar" `T.isInfixOf` rrNewContent rr   -- untouched
+             && "myfoo"  `T.isInfixOf` rrNewContent rr   -- untouched
+             && "quux"   `T.isInfixOf` rrNewContent rr
+       _ -> pure False
+
+testRenameIgnoresComments :: IO Bool
+testRenameIgnoresComments =
+  let src = T.unlines
+        [ "-- here is foo in a comment"
+        , "foo = 1"
+        ]
+  in case renameInScope "foo" "bar" 1 10 src of
+       Right rr ->
+         pure $ rrOccurrences rr == 1   -- only the binding
+             && "foo in a comment" `T.isInfixOf` rrNewContent rr
+       _ -> pure False
+
+testRenameIgnoresStrings :: IO Bool
+testRenameIgnoresStrings =
+  let src = T.unlines
+        [ "msg = \"the foo is here\""
+        , "foo = 1"
+        ]
+  in case renameInScope "foo" "bar" 1 10 src of
+       Right rr ->
+         pure $ rrOccurrences rr == 1
+             && "\"the foo is here\"" `T.isInfixOf` rrNewContent rr
+       _ -> pure False
+
+testRenameScoped :: IO Bool
+testRenameScoped =
+  let src = T.unlines
+        [ "foo = 1"    -- line 1 — outside scope
+        , "foo = 2"    -- line 2 — inside scope
+        , "foo = 3"    -- line 3 — outside scope
+        ]
+  in case renameInScope "foo" "bar" 2 2 src of
+       Right rr ->
+         pure $ rrOccurrences rr == 1
+             && rrTouchedLines rr == [2]
+       _ -> pure False
+
+testRenameSameName :: IO Bool
+testRenameSameName =
+  pure $ case renameInScope "foo" "foo" 1 10 "foo = 1" of
+    Left _ -> True
+    _      -> False
+
+testIdentifierKeyword :: IO Bool
+testIdentifierKeyword = pure $ case validateIdentifier "where" of
+  Left _ -> True
+  _      -> False
+
+testIdentifierSymbol :: IO Bool
+testIdentifierSymbol = pure $ case validateIdentifier "foo; rm" of
+  Left _ -> True
+  _      -> False
+
+testIdentifierUpper :: IO Bool
+testIdentifierUpper = pure $ case validateIdentifier "Foo" of
+  Left _ -> True
+  _      -> False
+
+testExtractBinding :: IO Bool
+testExtractBinding =
+  let src = T.unlines
+        [ "main = do"
+        , "  let x = 1 + 2 + 3"
+        , "  print x"
+        ]
+  in case extractBinding "sumSmall" 2 2 src of
+       Right er ->
+         pure $ "sumSmall" `T.isInfixOf` erNewContent er
+             && "sumSmall =" `T.isInfixOf` erBindingTxt er
+       _ -> pure False
+
+testExtractEmpty :: IO Bool
+testExtractEmpty =
+  pure $ case extractBinding "foo" 5 4 "body" of
+    Left _ -> True
+    _      -> False
 
 -- | Helper: create a fresh temp directory and delete it after the test.
 -- Passes a validated 'ProjectDir' (absolute + normalised) to the body.

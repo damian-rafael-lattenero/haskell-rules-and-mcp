@@ -1,0 +1,395 @@
+-- | @ghci_refactor@ — small-scope refactors with snapshot-and-compile
+-- semantics.
+--
+-- Actions:
+--
+-- * @rename_local@ — rewrite @old_name@ → @new_name@ inside
+--   @[scope_line_start, scope_line_end]@.
+-- * @extract_binding@ — replace a line range with a call to
+--   @new_name@ and append a top-level binding of the original body.
+--
+-- Safety contract:
+--
+-- * We snapshot the current file contents before any edit.
+-- * We write the rewrite to disk.
+-- * We call @ghci_load@ (strict mode) against the rewritten file.
+-- * If GHCi surfaces any @error:@, we restore the snapshot verbatim
+--   and return the compile errors to the agent.
+-- * If compilation succeeds (or only has non-blocking warnings), the
+--   edit stays committed.
+--
+-- @dry_run: true@ short-circuits before the disk write — the rewrite
+-- is computed, the diff returned, nothing touches the filesystem or
+-- GHCi. Useful for a preview before committing.
+--
+-- This is textual, not AST-aware. The compile step is the correctness
+-- oracle — we never have to reason about Haskell syntax ourselves.
+module HaskellFlows.Tool.Refactor
+  ( descriptor
+  , handle
+  , RefactorArgs (..)
+  , Action (..)
+  ) where
+
+import Control.Exception (SomeException, try)
+import Data.Aeson
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Aeson.Types (parseEither)
+import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
+
+import HaskellFlows.Ghci.Session
+  ( Session
+  , GhciResult (..)
+  , LoadMode (..)
+  , loadModuleWith
+  )
+import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Parser.Error
+  ( GhcError (..)
+  , Severity (..)
+  , parseGhcErrors
+  )
+import HaskellFlows.Refactor.Extract
+  ( ExtractResult (..)
+  , extractBinding
+  )
+import HaskellFlows.Refactor.Rename
+  ( RenameResult (..)
+  , renameInScope
+  , validateIdentifier
+  )
+import HaskellFlows.Types
+  ( ModulePath
+  , PathError (..)
+  , ProjectDir
+  , mkModulePath
+  , unModulePath
+  )
+
+descriptor :: ToolDescriptor
+descriptor =
+  ToolDescriptor
+    { tdName        = "ghci_refactor"
+    , tdDescription =
+        "Small-scope refactors with snapshot-and-compile safety. "
+          <> "Actions: 'rename_local' (scoped identifier rename), "
+          <> "'extract_binding' (lift a line range to a named top-level "
+          <> "binding). If GHCi reports a compile error on the rewrite, "
+          <> "the file is restored from snapshot — the refactor is "
+          <> "atomic from the agent's perspective."
+    , tdInputSchema = schema
+    }
+
+schema :: Value
+schema = object
+  [ "type"       .= ("object" :: Text)
+  , "properties" .= object
+      [ "action" .= object
+          [ "type" .= ("string" :: Text)
+          , "enum" .= (["rename_local", "extract_binding"] :: [Text])
+          ]
+      , "module_path" .= object
+          [ "type"        .= ("string" :: Text)
+          , "description" .= ("Relative module path." :: Text)
+          ]
+      , "old_name" .= object
+          [ "type"        .= ("string" :: Text)
+          , "description" .=
+              ("Identifier to replace. Required for rename_local."
+               :: Text)
+          ]
+      , "new_name" .= object
+          [ "type"        .= ("string" :: Text)
+          , "description" .=
+              ("Replacement (rename_local) or new binding name \
+               \(extract_binding)." :: Text)
+          ]
+      , "scope_line_start" .= object
+          [ "type"        .= ("integer" :: Text)
+          , "description" .= ("Inclusive 1-based start line." :: Text)
+          ]
+      , "scope_line_end" .= object
+          [ "type"        .= ("integer" :: Text)
+          , "description" .= ("Inclusive 1-based end line." :: Text)
+          ]
+      , "dry_run" .= object
+          [ "type"        .= ("boolean" :: Text)
+          , "description" .=
+              ("If true, compute the rewrite and return without \
+               \touching disk. Default: false." :: Text)
+          ]
+      ]
+  , "required"             .= (["action", "module_path", "new_name"] :: [Text])
+  , "additionalProperties" .= False
+  ]
+
+data Action = ActRename | ActExtract
+  deriving stock (Eq, Show)
+
+data RefactorArgs = RefactorArgs
+  { raAction         :: !Action
+  , raModulePath     :: !Text
+  , raOldName        :: !(Maybe Text)
+  , raNewName        :: !Text
+  , raScopeLineStart :: !(Maybe Int)
+  , raScopeLineEnd   :: !(Maybe Int)
+  , raDryRun         :: !Bool
+  }
+  deriving stock (Show)
+
+instance FromJSON RefactorArgs where
+  parseJSON = withObject "RefactorArgs" $ \o -> do
+    a   <- o .:  "action"
+    mp  <- o .:  "module_path"
+    old <- o .:? "old_name"
+    new <- o .:  "new_name"
+    ls  <- o .:? "scope_line_start"
+    le  <- o .:? "scope_line_end"
+    dr  <- o .:? "dry_run" .!= False
+    act <- case (a :: Text) of
+      "rename_local"    -> pure ActRename
+      "extract_binding" -> pure ActExtract
+      other             -> fail ("unknown action: " <> T.unpack other)
+    pure RefactorArgs
+      { raAction         = act
+      , raModulePath     = mp
+      , raOldName        = old
+      , raNewName        = new
+      , raScopeLineStart = ls
+      , raScopeLineEnd   = le
+      , raDryRun         = dr
+      }
+
+handle :: Session -> ProjectDir -> Value -> IO ToolResult
+handle sess pd rawArgs = case parseEither parseJSON rawArgs of
+  Left parseError ->
+    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+  Right args -> case mkModulePath pd (T.unpack (raModulePath args)) of
+    Left e   -> pure (errorResult (formatPathError e))
+    Right mp -> handleAction sess mp args
+
+handleAction :: Session -> ModulePath -> RefactorArgs -> IO ToolResult
+handleAction sess mp args = case raAction args of
+  ActRename  -> handleRename  sess mp args
+  ActExtract -> handleExtract sess mp args
+
+--------------------------------------------------------------------------------
+-- rename_local
+--------------------------------------------------------------------------------
+
+handleRename :: Session -> ModulePath -> RefactorArgs -> IO ToolResult
+handleRename sess mp args = case raOldName args of
+  Nothing  -> pure (errorResult "'old_name' is required for rename_local")
+  Just old -> case validateIdentifier old of
+    Left err -> pure (errorResult err)
+    Right safeOld -> case validateIdentifier (raNewName args) of
+      Left err -> pure (errorResult err)
+      Right safeNew -> case (raScopeLineStart args, raScopeLineEnd args) of
+        (Nothing, _) -> pure (errorResult "'scope_line_start' is required for rename_local")
+        (_, Nothing) -> pure (errorResult "'scope_line_end' is required for rename_local")
+        (Just ls, Just le) -> withSnapshot sess mp (raDryRun args) $ \orig ->
+          case renameInScope safeOld safeNew ls le orig of
+            Left err -> pure (Left err)
+            Right rr ->
+              if rrOccurrences rr == 0
+                then pure (Left ( "no occurrences of '" <> safeOld
+                               <> "' in lines " <> tshow ls <> "-" <> tshow le ))
+                else pure (Right (rrNewContent rr, renameSuccess safeOld safeNew rr))
+
+renameSuccess :: Text -> Text -> RenameResult -> Value
+renameSuccess old new rr =
+  object
+    [ "action"         .= ("rename_local" :: Text)
+    , "old_name"       .= old
+    , "new_name"       .= new
+    , "occurrences"    .= rrOccurrences rr
+    , "touched_lines"  .= rrTouchedLines rr
+    ]
+
+--------------------------------------------------------------------------------
+-- extract_binding
+--------------------------------------------------------------------------------
+
+handleExtract :: Session -> ModulePath -> RefactorArgs -> IO ToolResult
+handleExtract sess mp args = case validateIdentifier (raNewName args) of
+  Left err -> pure (errorResult err)
+  Right safeNew -> case (raScopeLineStart args, raScopeLineEnd args) of
+    (Nothing, _) -> pure (errorResult "'scope_line_start' is required for extract_binding")
+    (_, Nothing) -> pure (errorResult "'scope_line_end' is required for extract_binding")
+    (Just ls, Just le) -> withSnapshot sess mp (raDryRun args) $ \orig ->
+      case extractBinding safeNew ls le orig of
+        Left err -> pure (Left err)
+        Right er -> pure (Right (erNewContent er, extractSuccess safeNew er ls le))
+
+extractSuccess :: Text -> ExtractResult -> Int -> Int -> Value
+extractSuccess newName er ls le =
+  object
+    [ "action"        .= ("extract_binding" :: Text)
+    , "new_name"      .= newName
+    , "line_start"    .= ls
+    , "line_end"      .= le
+    , "indent"        .= erIndent er
+    , "appended"      .= erBindingTxt er
+    , "hint"          .=
+        ( "The extracted binding was appended as a top-level definition. \
+          \If you meant a local `where`/`let` inside a single function, \
+          \undo (revert) and re-run with that scope narrower." :: Text )
+    ]
+
+--------------------------------------------------------------------------------
+-- snapshot / compile / restore
+--------------------------------------------------------------------------------
+
+-- | Read the target file, call @rewrite@, and if it returns a new
+-- content: stage it, compile, commit on success, restore on error.
+-- The callback returns @Left errTxt@ to abort cleanly or
+-- @Right (newContent, successPayload)@ to attempt the rewrite.
+withSnapshot
+  :: Session
+  -> ModulePath
+  -> Bool                                    -- ^ dry_run
+  -> (Text -> IO (Either Text (Text, Value)))
+  -> IO ToolResult
+withSnapshot sess mp dryRun cont = do
+  readRes <- try (TIO.readFile (unModulePath mp))
+             :: IO (Either SomeException Text)
+  case readRes of
+    Left e -> pure (errorResult (T.pack ("Could not read module: " <> show e)))
+    Right orig -> do
+      outcome <- cont orig
+      case outcome of
+        Left reason -> pure (errorResult reason)
+        Right (newContent, baseSuccess) ->
+          if dryRun
+            then pure (dryRunResult baseSuccess newContent)
+            else commitWithVerify sess mp orig newContent baseSuccess
+
+commitWithVerify
+  :: Session
+  -> ModulePath
+  -> Text           -- original file content (snapshot)
+  -> Text           -- rewritten content
+  -> Value          -- base success payload (augmented with compile info)
+  -> IO ToolResult
+commitWithVerify sess mp orig newContent baseSuccess = do
+  writeRes <- try (TIO.writeFile (unModulePath mp) newContent)
+              :: IO (Either SomeException ())
+  case writeRes of
+    Left e -> pure (errorResult (T.pack ("Could not write module: " <> show e)))
+    Right _ -> do
+      gr    <- loadModuleWith sess mp Strict
+      let diags = parseGhcErrors (grOutput gr)
+          errs  = filter ((== SevError) . geSeverity) diags
+      if not (null errs) || not (grSuccess gr)
+        then do
+          -- Restore snapshot. If the restore itself fails we surface
+          -- that as a separate error — the agent needs to know the
+          -- file is in an undefined state.
+          restored <- try (TIO.writeFile (unModulePath mp) orig)
+                      :: IO (Either SomeException ())
+          let restoreMsg = case restored of
+                Left _  -> " — AND snapshot restore ALSO failed, file is dirty"
+                Right _ -> " — snapshot restored"
+          pure (compileFailResult errs (grOutput gr) restoreMsg)
+        else pure (commitResult baseSuccess)
+
+--------------------------------------------------------------------------------
+-- response shaping
+--------------------------------------------------------------------------------
+
+dryRunResult :: Value -> Text -> ToolResult
+dryRunResult base preview =
+  case base of
+    Object o ->
+      let extended = foldr (uncurry insertKV) o dryRunKVs
+          dryRunKVs =
+            [ ("success" :: Text, toJSON True)
+            , ("dry_run",         toJSON True)
+            , ("preview",         toJSON preview)
+            ]
+      in ToolResult
+           { trContent = [ TextContent (encodeUtf8Text (Object extended)) ]
+           , trIsError = False
+           }
+    _ ->
+      ToolResult
+        { trContent = [ TextContent (encodeUtf8Text
+            (object [ "success" .= True
+                    , "dry_run" .= True
+                    , "preview" .= preview
+                    , "summary" .= base
+                    ])) ]
+        , trIsError = False
+        }
+
+commitResult :: Value -> ToolResult
+commitResult base =
+  case base of
+    Object o ->
+      let extended = foldr (uncurry insertKV) o
+            [ ("success" :: Text, toJSON True)
+            , ("dry_run",         toJSON False)
+            , ("compile",         toJSON ("ok" :: Text))
+            ]
+      in ToolResult
+           { trContent = [ TextContent (encodeUtf8Text (Object extended)) ]
+           , trIsError = False
+           }
+    _ ->
+      ToolResult
+        { trContent = [ TextContent (encodeUtf8Text
+            (object [ "success" .= True
+                    , "summary" .= base
+                    , "compile" .= ("ok" :: Text)
+                    ])) ]
+        , trIsError = False
+        }
+
+-- | Aeson 2.x 'Object' is a 'KeyMap.KeyMap' — we go through 'Key.fromText'
+-- so callers stay in 'Text' land and never touch the @Key@ newtype
+-- directly.
+insertKV :: Text -> Value -> Object -> Object
+insertKV k = KeyMap.insert (Key.fromText k)
+
+compileFailResult :: [GhcError] -> Text -> Text -> ToolResult
+compileFailResult errs raw restoreMsg =
+  let payload =
+        object
+          [ "success"      .= False
+          , "dry_run"      .= False
+          , "compile"      .= ("failed" :: Text)
+          , "errors"       .= errs
+          , "raw"          .= raw
+          , "note"         .= ("Rewrite did not type-check" <> restoreMsg)
+          ]
+  in ToolResult
+       { trContent = [ TextContent (encodeUtf8Text payload) ]
+       , trIsError = True
+       }
+
+errorResult :: Text -> ToolResult
+errorResult msg =
+  ToolResult
+    { trContent = [ TextContent (encodeUtf8Text (object
+        [ "success" .= False
+        , "error"   .= msg
+        ]))
+      ]
+    , trIsError = True
+    }
+
+formatPathError :: PathError -> Text
+formatPathError = \case
+  PathNotAbsolute p        -> "Project directory is not absolute: " <> p
+  PathEscapesProject a p _ -> "module_path '" <> a <> "' escapes project directory " <> p
+
+tshow :: Show a => a -> Text
+tshow = T.pack . show
+
+encodeUtf8Text :: Value -> Text
+encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

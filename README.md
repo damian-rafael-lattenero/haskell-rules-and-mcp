@@ -7,8 +7,8 @@
 [![Haskell CI](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/haskell-ci.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/haskell-ci.yml)
 [![Nix flake](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/nix-flake.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/nix-flake.yml)
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
-[![Haskell tests](https://img.shields.io/badge/Haskell%20tests-42%20passing-brightgreen)](mcp-server-haskell/test)
-[![Haskell MCP tools](https://img.shields.io/badge/Haskell%20tools-19-blue)](mcp-server-haskell/src/HaskellFlows/Tool)
+[![Haskell tests](https://img.shields.io/badge/Haskell%20tests-52%20passing-brightgreen)](mcp-server-haskell/test)
+[![Haskell MCP tools](https://img.shields.io/badge/Haskell%20tools-20-blue)](mcp-server-haskell/src/HaskellFlows/Tool)
 [![GHC](https://img.shields.io/badge/GHC-9.10%20%7C%209.12-8a5aa0)](https://www.haskell.org/ghc/)
 
 </div>
