@@ -6,66 +6,170 @@ on:
   pull_request:
     branches: [master]
 
+# Newer pushes cancel in-flight runs on the same ref — keeps CI cheap on
+# rapid-fire commits. Release runs are exempt (they live under a tag ref).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Default permissions: read-only. Jobs that need more ask explicitly.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: mcp-server
+
 jobs:
-  build-and-test:
+  # -------------------------------------------------------------------------
+  #  Type-check + lint of the TypeScript source. Fast (no GHC) — runs first
+  #  and fails the rest of the matrix fast when the types are wrong.
+  # -------------------------------------------------------------------------
+  typecheck:
+    name: Type-check TS
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: mcp-server
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "npm"
           cache-dependency-path: mcp-server/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
 
-      - name: Install
-        run: npm ci
+  # -------------------------------------------------------------------------
+  #  Unit tests: pure TypeScript, no GHC, high parallelism (12 workers).
+  #  Matrix across Node LTS versions — catches breakage on older runtimes.
+  # -------------------------------------------------------------------------
+  unit:
+    name: Unit tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: "npm"
+          cache-dependency-path: mcp-server/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
 
-      - name: Build
-        run: npm run build
-
-      - name: Unit tests
-        run: npm test
-
-      # Integration and e2e tests require GHC. They're skip-gracefully without
-      # it via `describe.runIf(GHC_AVAILABLE)`, but we still run to catch any
-      # test that shouldn't have that guard.
-      - name: Setup GHC (optional, for integration/e2e)
-        uses: haskell-actions/setup@v2
+  # -------------------------------------------------------------------------
+  #  Integration tests: exercise a real GHCi child process. Require GHC +
+  #  cabal on the runner. Node 22 only (we're testing GHCi interaction,
+  #  not the TS runtime).
+  # -------------------------------------------------------------------------
+  integration:
+    name: Integration tests (GHCi)
+    runs-on: ubuntu-latest
+    needs: [typecheck]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: mcp-server/package-lock.json
+      - uses: haskell-actions/setup@v2
         with:
           ghc-version: "9.12"
           cabal-version: "3.12"
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:integration
+        env:
+          # Empty manifest → deterministic test behavior (no network races).
+          # See mcp-server/src/__tests__/helpers/empty-manifest.ts.
+          CI: "true"
 
-      - name: Integration tests
-        run: npm run test:integration
-
-      - name: E2E tests
-        run: npm run test:e2e
-
-  validate-tool-urls:
+  # -------------------------------------------------------------------------
+  #  E2E tests: spawn the full MCP via StdioClientTransport. Slowest tier;
+  #  lives behind `needs: unit` so we don't burn minutes on a typecheck
+  #  regression.
+  # -------------------------------------------------------------------------
+  e2e:
+    name: E2E tests (MCP protocol)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: mcp-server
+    needs: [unit]
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "npm"
           cache-dependency-path: mcp-server/package-lock.json
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.12"
+          cabal-version: "3.12"
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:e2e
 
-      - name: Install
-        run: npm ci
+  # -------------------------------------------------------------------------
+  #  npm audit on production deps. We explicitly skip devDependencies (high
+  #  noise) and fail only on HIGH or CRITICAL advisories.
+  # -------------------------------------------------------------------------
+  audit:
+    name: npm audit (prod deps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: mcp-server/package-lock.json
+      - run: npm ci
+      - name: Audit prod dependencies (HIGH+ advisories fail)
+        run: npm audit --omit=dev --audit-level=high
 
-      - name: Build
-        run: npm run build
-
-      - name: Validate release URLs
-        # HEAD each URL declared in vendor-tools/bundled-tools-manifest.json
-        # and fail if any 404s or returns an HTML 200 (CDN-style "not found").
+  # -------------------------------------------------------------------------
+  #  Manifest integrity: URL freshness + SHA256 consistency between
+  #  `releases[]` and `tools[]`. The unit-tier `manifest-consistency` test
+  #  covers the JSON invariants; this job also HEAD-checks every URL in
+  #  `releases[]` so a 404 on a CDN mirror fails CI immediately.
+  # -------------------------------------------------------------------------
+  manifest:
+    name: Manifest + URL validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: mcp-server/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: HEAD every URL in releases[]
         run: npm run tools:validate:urls
+
+  # -------------------------------------------------------------------------
+  #  Summary job: blocks the branch-protection merge until every required
+  #  check above has passed. GitHub's "require status checks" points here.
+  # -------------------------------------------------------------------------
+  required:
+    name: CI required (branch-protection gate)
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [typecheck, unit, integration, e2e, audit, manifest]
+    steps:
+      - name: Assert every dependency succeeded
+        run: |
+          if [[ "${{ needs.typecheck.result }}" != "success" ]] \
+          || [[ "${{ needs.unit.result }}" != "success" ]] \
+          || [[ "${{ needs.integration.result }}" != "success" ]] \
+          || [[ "${{ needs.e2e.result }}" != "success" ]] \
+          || [[ "${{ needs.audit.result }}" != "success" ]] \
+          || [[ "${{ needs.manifest.result }}" != "success" ]]; then
+            echo "One or more required jobs failed."
+            exit 1
+          fi
+          echo "All required checks green."

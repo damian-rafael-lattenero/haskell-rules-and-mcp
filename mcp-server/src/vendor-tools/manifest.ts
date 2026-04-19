@@ -31,9 +31,44 @@ export interface ReleaseEntry {
   fallbackSha256?: string;
 }
 
+/**
+ * Upstream trust-anchor metadata. Documents WHERE the canonical tool
+ * releases come from, so users can verify the mirror binaries are
+ * byte-equivalent to what the upstream project publishes.
+ *
+ * When `distributionShape === "directBinary"` and an upstream platform
+ * entry with a sha256 is present, `auto-download.ts` will try the upstream
+ * URL as PRIMARY (with the mirror as fallback); both are verified by
+ * sha256. For other shapes (tarball, zip) the mirror stays primary —
+ * extraction infrastructure is out of scope — but the releasesPageUrl is
+ * still surfaced to agents via `ghci_toolchain_status` so they can point
+ * users at the canonical source.
+ */
+export type UpstreamDistributionShape =
+  | "directBinary"
+  | "tarball"
+  | "zip"
+  | "source";
+
+export interface UpstreamPlatformEntry {
+  url: string;
+  sha256: string;
+}
+
+export interface UpstreamMeta {
+  releasesPageUrl: string;
+  recommendedInstall: string;
+  distributionShape: UpstreamDistributionShape;
+  /** Per-platform direct URLs (only set when `distributionShape === "directBinary"`). */
+  platforms?: Partial<Record<PlatformTarget, UpstreamPlatformEntry>>;
+  note?: string;
+}
+
 export interface ReleaseToolSpec {
   binaryName: string;
   platforms: Partial<Record<PlatformTarget, ReleaseEntry>>;
+  /** Phase-D trust-anchor metadata. Optional for back-compat with manifestVersion < 2.1. */
+  upstream?: UpstreamMeta;
 }
 
 export interface BundledEntry {
@@ -97,6 +132,40 @@ function activeManifestPath(): string {
   const envOverride = process.env.HASKELL_FLOWS_MANIFEST_PATH;
   if (envOverride && envOverride.trim().length > 0) return envOverride;
   return MANIFEST_PATH;
+}
+
+/**
+ * Resolve the upstream direct-binary URL for a given tool × target, when
+ * the project publishes one and our manifest declares it. Returns `null`
+ * for tools whose upstream distribution requires extraction (tarball /
+ * zip / ghcup build-from-source) — those still rely on the mirror as the
+ * auto-download source.
+ */
+export async function getUpstreamDirectBinary(
+  tool: SupportedTool,
+  target: PlatformTarget
+): Promise<UpstreamPlatformEntry | null> {
+  const manifest = await loadManifest();
+  if (!manifest) return null;
+  const spec = manifest.releases[tool];
+  if (!spec?.upstream) return null;
+  if (spec.upstream.distributionShape !== "directBinary") return null;
+  const entry = spec.upstream.platforms?.[target];
+  if (!entry || !entry.url || !entry.sha256) return null;
+  return entry;
+}
+
+/**
+ * Surface the upstream metadata (releases page URL + recommended install
+ * command + distribution shape + optional note) for a tool. Used by
+ * `ghci_toolchain_status` so agents and users can see where the canonical
+ * source lives without reading the manifest directly.
+ */
+export async function getUpstreamMeta(tool: SupportedTool): Promise<UpstreamMeta | null> {
+  const manifest = await loadManifest();
+  if (!manifest) return null;
+  const spec = manifest.releases[tool];
+  return spec?.upstream ?? null;
 }
 
 const SUPPORTED_TOOLS: readonly SupportedTool[] = [

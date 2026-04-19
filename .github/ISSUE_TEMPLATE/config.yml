@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/security/advisories/new
+    about: For security-sensitive reports, use a GitHub private security advisory instead of a public issue.
+  - name: Question or discussion
+    url: https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/discussions
+    about: Open-ended questions, ideas, and design discussions go in Discussions rather than issues.

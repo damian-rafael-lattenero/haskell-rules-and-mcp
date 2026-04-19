@@ -1,0 +1,56 @@
+name: Feature request
+description: Propose a new MCP tool, law engine, or workflow.
+title: "[feat] "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: |
+        The MCP is agent-first and test-first. Every new tool or engine
+        should answer: "what is an agent trying to do that is painful
+        today?"
+      placeholder: |
+        When I ask the MCP to X, I currently have to chain N tool calls
+        because ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed shape
+      description: Tool name, params, expected response JSON. Or law engine name + type shape it detects + proposed property text.
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: testability
+    attributes:
+      label: How will this be tested?
+      description: |
+        Every tool gets at least one unit test per branch. Law engines
+        get 4+ cases (happy + edge + negative + border). Describe what
+        you plan to cover.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Is there a sequence of existing tools that already does this?
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This is NOT a general-purpose Haskell feature (those belong in hlint/HLS)
+          required: true
+        - label: This IS specifically something an MCP agent benefits from
+          required: true
+        - label: I'm willing to help test / review the PR if someone picks it up
+          required: false

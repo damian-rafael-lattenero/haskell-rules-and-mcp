@@ -1,0 +1,62 @@
+name: Nix flake
+
+# Canary: confirms the flake evaluates and the dev-shell resolves on
+# GitHub's Ubuntu runners. A passing run here is a stronger promise than
+# "works on my Mac" — any Haskell dev with Nix can reproduce our env.
+#
+# We intentionally skip `nix develop --command npm test` for now: that
+# would pull the entire GHC + HLS closure (~3GB) every run. The eval +
+# `nix flake check` + `nix build .#fourmolu` smoke test gives us flake
+# validity and tool-set reproducibility at a tenth the cost.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+  pull_request:
+    branches: [master]
+    paths:
+      - "flake.nix"
+      - "flake.lock"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  evaluate:
+    name: Flake evaluate + smoke-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix (flakes + commands enabled)
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-24.05
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Generate flake.lock if missing
+        # On first run after adding the flake, there is no lockfile. Let
+        # Nix materialize one so `flake check` has something deterministic.
+        run: |
+          if [ ! -f flake.lock ]; then
+            nix flake lock
+            echo "flake.lock generated; commit it to pin the inputs."
+          fi
+
+      - name: nix flake check
+        run: nix flake check --no-build
+
+      - name: nix build .#fourmolu (smoke)
+        # Building one small tool gives us end-to-end confidence the flake
+        # evaluates AND the overlay resolves against nixpkgs. Cheap: fourmolu
+        # builds in ~20 min on fresh runners and caches after.
+        run: nix build '.#fourmolu' --print-build-logs

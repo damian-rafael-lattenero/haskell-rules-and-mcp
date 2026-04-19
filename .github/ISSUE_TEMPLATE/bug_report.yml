@@ -1,0 +1,94 @@
+name: Bug report
+description: Report a crash, wrong behavior, or unexpected response from the MCP.
+title: "[bug] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this! Please fill in as much as
+        you can — the more context, the faster we can reproduce.
+
+  - type: input
+    id: version
+    attributes:
+      label: MCP version
+      description: Output of `git describe --tags --always` in the repo, or the release tag you're running.
+      placeholder: "v0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS ARM (darwin-arm64) — primary
+        - macOS Intel (darwin-x64)
+        - Linux x64
+        - Linux ARM
+        - Windows (untested)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: MCP client
+      options:
+        - Claude Code
+        - Claude Desktop
+        - Cursor
+        - Other MCP-compliant client
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: One paragraph — what did you expect, what actually happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal sequence of tool calls or commands.
+      placeholder: |
+        1. `ghci_create_project(name="x", modules=[...])`
+        2. ...
+        3. Observe: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: session-status
+    attributes:
+      label: Output of `ghci_session(status)`
+      description: This includes `dist.buildTime` and runtime toolchain state — very useful for triage.
+      render: json
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I checked CHANGELOG.md to confirm this isn't a known/fixed issue
+          required: true
+        - label: I included version + platform + client above
+          required: true
+        - label: If this is a security issue, I used SECURITY.md instead of this template
+          required: true

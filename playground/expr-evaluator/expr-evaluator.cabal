@@ -1,0 +1,30 @@
+cabal-version:      2.4
+name:               expr-evaluator
+version:            0.1.0.0
+build-type:         Simple
+
+library
+  exposed-modules:
+    Expr.Syntax
+    Expr.Eval
+    Expr.Simplify
+    Expr.Pretty
+  build-depends:
+    base >= 4.20 && < 5,
+    containers,
+    QuickCheck
+  hs-source-dirs:   src
+  default-language: GHC2024
+  ghc-options:      -Wall
+
+test-suite expr-evaluator-test
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Spec.hs
+  build-depends:
+    base >= 4.20 && < 5,
+    expr-evaluator,
+    containers,
+    QuickCheck
+  default-language: GHC2024
+  ghc-options:      -Wall

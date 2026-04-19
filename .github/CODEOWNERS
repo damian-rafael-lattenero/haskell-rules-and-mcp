@@ -1,0 +1,17 @@
+# Code owners. Each PR automatically requests review from these accounts
+# for the matching paths. Single-maintainer project today — listed here
+# so future collaborators can extend it cleanly.
+
+# Default owner — everything not otherwise matched.
+*                                            @damian-rafael-lattenero
+
+# Security-sensitive surface — keep ownership sticky even if ownership of
+# sibling areas gets delegated later.
+/SECURITY.md                                 @damian-rafael-lattenero
+/.github/workflows/                          @damian-rafael-lattenero
+/mcp-server/vendor-tools/                    @damian-rafael-lattenero
+/mcp-server/src/tools/auto-download.ts       @damian-rafael-lattenero
+/mcp-server/src/tools/tool-installer.ts      @damian-rafael-lattenero
+/mcp-server/src/vendor-tools/                @damian-rafael-lattenero
+/mcp-server/src/helpers/paths.ts             @damian-rafael-lattenero
+/mcp-server/src/tools/mcp-reload-code.ts     @damian-rafael-lattenero

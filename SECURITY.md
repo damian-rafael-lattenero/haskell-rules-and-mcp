@@ -65,13 +65,27 @@ Response expectations (best-effort, single maintainer):
 Declared explicitly because the project depends on three external trust
 decisions:
 
-1. **Bundled tool binaries** are currently mirrored on the maintainer's
-   personal GitHub release (`damian-rafael-lattenero/.../tools-v1.0/`).
-   Every mirror asset has a SHA256 pinned in
-   `vendor-tools/bundled-tools-manifest.json` and verified on download.
-   Migration to upstream-primary resolution (`ndmitchell/hlint`,
-   `fourmolu/fourmolu`, `tweag/ormolu`, `haskell/haskell-language-server`)
-   is tracked on the Phase-D roadmap.
+1. **Bundled tool binaries** — the trust ordering is:
+   - **Preferred, user-driven**: install via `ghcup install <tool>` (the
+     `recommendedInstall` field the manifest surfaces for every tool).
+     `ghcup` is the canonical Haskell toolchain manager and carries its
+     own integrity guarantees.
+   - **Upstream direct-binary**: when the project publishes a direct
+     executable binary (currently: `fourmolu` on `darwin-arm64`), the MCP
+     tries the **upstream URL first** (from `fourmolu/fourmolu` releases),
+     verified by SHA256. Only fourmolu meets this bar today because
+     upstream ships bare binaries; hlint / ormolu / hls upstream ship
+     tarballs or zips that would require extraction infrastructure.
+   - **Personal mirror** — for tools without a direct-binary upstream, the
+     MCP falls through to a mirror on the maintainer's GitHub release
+     (`damian-rafael-lattenero/.../tools-v1.0/`). Every mirror asset has a
+     SHA256 pinned in `vendor-tools/bundled-tools-manifest.json`. The
+     mirror's binaries were extracted from the canonical upstream
+     tarballs; the hashes in the manifest let auditors verify the
+     byte-equivalence themselves.
+   - `ghci_toolchain_status` surfaces `upstreamReleasesPageUrl` +
+     `upstreamRecommendedInstall` on every response so agents and users
+     can inspect the chain of trust at runtime.
 2. **GHCi itself** is executed as a local subprocess; any untrusted Haskell
    expression you pass through `ghci_eval` is evaluated with the same
    privileges as your shell. This is documented in the tool's description;

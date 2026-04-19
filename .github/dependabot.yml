@@ -1,0 +1,43 @@
+version: 2
+updates:
+  # NPM deps for the MCP server. Weekly so we don't spam; groups of
+  # related updates (dev-only vs prod) get folded into a single PR.
+  - package-ecosystem: "npm"
+    directory: "/mcp-server"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "npm"]
+    groups:
+      test-runners:
+        patterns:
+          - "vitest"
+          - "@types/*"
+      mcp-sdk:
+        patterns:
+          - "@modelcontextprotocol/*"
+      types:
+        patterns:
+          - "@types/*"
+        dependency-type: "development"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+
+  # GitHub Actions themselves — a pinned-SHA policy for third-party actions
+  # is the safest option. Dependabot handles the refresh cadence.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:15"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"

@@ -11,6 +11,12 @@
           "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/hlint-darwin-arm64",
           "sha256": "660d5288ca1a2c6220f9549a64f190f3df749cf01ea8349f8e8ef35ceb169d63"
         }
+      },
+      "upstream": {
+        "releasesPageUrl": "https://github.com/ndmitchell/hlint/releases",
+        "recommendedInstall": "ghcup install hlint",
+        "distributionShape": "tarball",
+        "note": "Upstream ships `hlint-<ver>-x86_64-osx.tar.gz` only; no native darwin-arm64 binary is published. The mirror binary for darwin-arm64 is a ghcup build reshipped for convenience."
       }
     },
     "fourmolu": {
@@ -21,6 +27,18 @@
           "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/fourmolu-darwin-arm64",
           "sha256": "e8e793f2c361ad6e506fce46f4b89d46fce2af6647e753dc088fb005b650bb8c"
         }
+      },
+      "upstream": {
+        "releasesPageUrl": "https://github.com/fourmolu/fourmolu/releases",
+        "recommendedInstall": "ghcup install fourmolu",
+        "distributionShape": "directBinary",
+        "platforms": {
+          "darwin-arm64": {
+            "url": "https://github.com/fourmolu/fourmolu/releases/download/v0.19.0.1/fourmolu-0.19.0.1-osx-arm64",
+            "sha256": "e8e793f2c361ad6e506fce46f4b89d46fce2af6647e753dc088fb005b650bb8c"
+          }
+        },
+        "note": "Upstream publishes direct-executable binaries. The mirror is byte-identical to upstream for darwin-arm64 (same SHA256)."
       }
     },
     "ormolu": {
@@ -31,6 +49,12 @@
           "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/ormolu-darwin-arm64",
           "sha256": "d073199f566100cf57893d08b3df4f02c70ff7e650bf38d601e4fe9b3935b218"
         }
+      },
+      "upstream": {
+        "releasesPageUrl": "https://github.com/tweag/ormolu/releases",
+        "recommendedInstall": "ghcup install ormolu",
+        "distributionShape": "zip",
+        "note": "Upstream ships a `.zip` containing the binary; the mirror has the extracted binary for convenience."
       }
     },
     "hls": {
@@ -41,6 +65,12 @@
           "url": "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/haskell-language-server-wrapper-darwin-arm64",
           "sha256": "949cb139b269a4487c82adfb17ff326f3defa9fa9fee6342297895e9ef2647c8"
         }
+      },
+      "upstream": {
+        "releasesPageUrl": "https://github.com/haskell/haskell-language-server/releases",
+        "recommendedInstall": "ghcup install hls",
+        "distributionShape": "tarball",
+        "note": "Upstream ships `.tar.xz` bundles (~220MB) containing the wrapper + GHC-specific server binaries. Extracted wrapper binary is served via mirror."
       }
     }
   },

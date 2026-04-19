@@ -1,346 +1,154 @@
-# haskell-flows MCP Server
+<div align="center">
 
-A Model Context Protocol (MCP) server that gives AI coding agents (Claude Code, Cursor, any MCP-capable client) a persistent, strict, test-first workflow for Haskell development: GHCi session, QuickCheck with property persistence, arbitrary generator synthesis, typed-hole suggestions, cabal orchestration, and a "dead-simple" project scaffolding flow.
+# haskell-flows
 
-The server is designed to be **consumed by agents, not humans directly**. Every design decision optimizes for agent reliability: strict Zod schemas reject typoed parameters instead of silently ignoring them, suggestions that would emit tautologies are removed rather than downgraded to low-confidence, and optional toolchain gates degrade explicitly rather than block.
+**An agent-first MCP server for property-driven Haskell development.**
+
+[![CI](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/codeql.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/damian-rafael-lattenero/haskell-rules-and-mcp?label=release)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/latest)
+[![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-1166%20passing-brightgreen)](mcp-server/src/__tests__)
+[![vibecoded](https://img.shields.io/badge/vibecoded-yes-ff69b4)](https://discourse.haskell.org/t/a-compact-for-responsible-use-of-ai-tools/13923)
+
+</div>
 
 ---
 
-## Status & development model
+## TL;DR (30 seconds)
 
-This project was iterated intensively with **[Claude Code](https://www.anthropic.com/claude-code)** (agent-in-the-loop) over six hyper-stabilization phases and four end-to-end debug-inspection sessions. It follows the spirit of the Haskell community's [Compact for Responsible Use of AI Tools](https://discourse.haskell.org/t/a-compact-for-responsible-use-of-ai-tools/13923):
+`haskell-flows` is an MCP server that lets **AI agents** (Claude Code, Cursor, any MCP client) drive a **property-first Haskell workflow** end-to-end: scaffold a project, synthesize `Arbitrary` instances, suggest QuickCheck laws from the module's type shape, persist passing properties into a regression suite, run hlint/fourmolu as real gates, and collapse pre-commit checks into a single call.
 
-- The maintainer understands every line and could reproduce the architecture without AI assistance. AI accelerated mechanical work (TypeScript boilerplate, Zod schemas, test scaffolding), not design decisions.
-- **1157 tests** (unit / integration / e2e) pin the observable behavior across three consecutive deterministic `test:all` runs. Every behavioral change in the codebase is gated by a test that would have caught the regression.
-- Commits that are primarily AI-generated carry `Co-Authored-By: Claude` trailers — the authorship story is on the record, not hidden.
-- The repo is tagged [`vibecoded`](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp) to make provenance discoverable.
+It solves the fundamental gap between "LLMs generate Haskell" and "LLMs generate **correct** Haskell": every step is compiler-verified, every property persists, every gate is honest.
 
-**Current status:** `v0.1.0` — **experimental but test-covered**. Genuinely useful for agent-driven workflows on macOS ARM today; see [Known limitations](#known-limitations) for what is NOT yet production-ready.
+```text
+ghci_create_project  →  ghci_suggest(analyze)  →  ghci_quickcheck(label=…)
+  →  ghci_lint  →  ghci_format  →  ghci_workflow(action="gate")
+```
+
+---
+
+## What it actually does (2-min scan)
+
+### 1 · Scaffold
+One call creates a cabal project: `<name>.cabal`, `cabal.project`, `src/<Module>.hs` per module, `test/Spec.hs`. GHCi session starts automatically.
+
+### 2 · Suggest properties from type signatures
+When you load a module with `simplify :: Expr -> Expr` **next to** `eval :: Env -> Expr -> r`, `ghci_suggest(analyze)` proposes:
+
+```haskell
+-- constant-folding soundness · confidence: high
+\p1 x -> eval p1 (simplify x) == eval p1 (x :: Expr)
+```
+
+with rationale and confidence. **Seven engines** detect shapes: endomorphism, binary-op, list-endomorphism, roundtrip, evaluator-preservation, constant-folding-soundness, functor-laws.
+
+### 3 · Run + persist
+`ghci_quickcheck` runs the property, auto-saves passing ones to `.haskell-flows/properties.json`, accepts a `label=` so `test/Spec.hs` comes out with `addRightIdentity:` not `property_1:`.
+
+### 4 · Quality gates that don't lie
+`ghci_lint` (real hlint) and `ghci_format` (real fourmolu/ormolu) run with a layered resolution chain (host PATH → bundled → auto-download). If no real linter is available, the fallback returns `gateEligible: false` so **a degraded pass can never unlock a module-complete gate**.
+
+### 5 · One-call finalizer
+```text
+ghci_workflow(action="gate")
+  → regression · cabal test · cabal build · consolidated JSON
+```
+
+Three round-trips collapsed into one, with per-step durations and partial-success semantics.
+
+### 6 · Agents can hot-reload the MCP itself
+Edited TypeScript? `mcp_reload_code(confirm=true)` schedules a graceful restart so Claude Desktop respawns the child with the fresh bundle — no session exit. Staleness-gated + rate-limited (10 s).
+
+---
+
+## Install + run
+
+```bash
+git clone https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp
+cd haskell-rules-and-mcp
+
+# Option A — Nix (recommended, reproducible)
+nix develop
+
+# Option B — host toolchain (ghcup + node 22)
+cd mcp-server
+npm install
+npm run build
+
+# Point your MCP client at the server
+cp ../.mcp.example.json ../.mcp.json
+```
+
+`.mcp.example.json` is the template; drop it into your Claude Code / Cursor config. See [`.mcp.example.json`](.mcp.example.json) for the exact shape.
 
 ---
 
 ## Tool surface
 
-### Scaffolding (dead-simple, strict, single-call)
+30+ MCP tools grouped by workflow phase. The five that carry the weight:
+
 | Tool | What it does |
 |---|---|
-| `ghci_create_project` | Create a brand-new project in a fresh directory: writes `<name>.cabal` + `cabal.project` + `src/<Module>.hs` per module + minimal `test/Spec.hs`, then activates the GHCi session on it. Fails cleanly if a `.cabal` already exists at the target — no `force` flag, no prompts. |
-| `ghci_add_modules` | Extend the **active** project with new modules: appends to `exposed-modules` (preserving indentation) and scaffolds stubs, optionally with typed `= undefined` signatures for `ghci_suggest` hole-fit mode. Fails if no active `.cabal`. |
-| `ghci_switch_project` | List projects or switch to an existing one. Unknown parameter names are rejected at the SDK layer (`unrecognized_keys` error). |
+| **`ghci_create_project`** | Scaffold a cabal project atomically — one call, no prompts. |
+| **`ghci_suggest(analyze)`** | Seven engines propose QuickCheck laws with confidence + rationale. |
+| **`ghci_quickcheck`** | Run a property, auto-persist on pass, auto-resolve scope errors. |
+| **`ghci_workflow(gate)`** | Regression + `cabal test` + `cabal build` in a single call. |
+| **`mcp_reload_code`** | Graceful process restart so TS edits take effect without exiting the client. |
 
-### Editing / inspection
-| Tool | What it does |
-|---|---|
-| `ghci_load` | Load or reload a module with structured diagnostics: errors, categorized warnings with suggested actions, typed holes. |
-| `ghci_type` / `ghci_info` / `ghci_kind` | Type, info, kind of an expression (`:t`, `:i`, `:k`). |
-| `ghci_eval` | Evaluate a Haskell expression; supports multi-line `:{ :}` blocks via `statements`. |
-| `ghci_imports` / `ghci_add_import` | Inspect and add imports persistently across reloads. |
-| `ghci_hole` / `ghci_hole_fits` | Typed-hole analysis with fits and relevant bindings. |
-| `ghci_goto` / `ghci_references` / `ghci_rename` | Navigation and safe rename. |
-| `ghci_refactor` | Small refactorings (extract, rename-local). |
-| `ghci_batch` | Run multiple GHCi commands atomically. |
-| `ghci_check_module` | `:browse` with header-aware suggestion of an export list — **only when one does not already exist** — and `kind`-aware discrimination between `Name(..)` for data/newtype and bare `Name` for type synonyms. |
-
-### Testing / QuickCheck
-| Tool | What it does |
-|---|---|
-| `ghci_arbitrary` | Synthesize an `Arbitrary` instance for a type, with `sized` generators and per-constructor `resize` for recursive shapes. |
-| `ghci_suggest` | `mode="suggest"`: find `= undefined` stubs and show typed-hole fits. `mode="analyze"`: suggest QuickCheck properties based on type shape (endomorphism, binary op, list endo, roundtrip). **Never emits tautologies** (`f x == f x` was removed in Fase 1). |
-| `ghci_quickcheck` / `ghci_quickcheck_batch` | Run a property (or many), with automatic scope-error recovery (`_autoResolved: true`). Passing properties are persisted to `.haskell-flows/properties.json` with a `passCount`. |
-| `ghci_quickcheck_export` | Materialize all saved passing properties into a runnable `test/Spec.hs` and auto-run `cabal test`. |
-| `ghci_regression` | Re-run all saved properties — cheap guard at session start or before a commit. |
-| `ghci_property_lifecycle` | Deprecate / replace / audit stored properties. |
-
-### Quality gates
-| Tool | What it does |
-|---|---|
-| `ghci_lint` | Run hlint. When hlint is unavailable (missing + auto-download failed), **automatically falls back** to `basic-lint-rules` heuristics with `degraded: true`, `gateEligible: false`, and a `_primary_failure` block pointing at the root cause. The degraded response surfaces issues but does NOT unlock the module-complete lint gate. |
-| `ghci_format` | Run fourmolu / ormolu. Returns `unavailable: true` with an actionable hint when neither is present. No false "formatted" signal. |
-| `ghci_fix_warning` | Auto-fix common GHC warnings (`-Wunused-imports`, `-Wmissing-signatures`, etc.) with preview or apply. |
-
-### Build / test / coverage
-| Tool | What it does |
-|---|---|
-| `cabal_build` / `cabal_test` | Thin JSON-structured wrappers. |
-| `cabal_coverage` | `cabal test --enable-coverage`, with an `hpc report` fallback against the latest `.tix` AND an HTML-report parser for `hpc_index.html` as a third fallback. Reports `reportSource: "cabal-test" \| "hpc-report" \| "hpc-html"`. When no source works, returns an actionable hint suggesting `-fhpc` in the test-suite's ghc-options. |
-
-### Toolchain / workflow
-| Tool | What it does |
-|---|---|
-| `ghci_toolchain_status` | Runtime availability + cross-platform release matrix. Propagates availability to workflow state so `_guidance` reflects reality. |
-| `ghci_workflow` | Flow state (`status` / `help` / `checklist` / `next` / `progress`) — tells the agent what to do next given the actual state of loaded modules, warnings, tested properties, and gate completion. |
-| `ghci_hls` | HLS integration: `available`, `hover`, `diagnostics`. |
-| `hoogle_search` | Search Hoogle by name or type. |
-| `ghci_doc` | Haddock docs for a name. |
-| `ghci_session` / `mcp_restart` | Session lifecycle (restart GHCi). `mcp_restart` does NOT restart the Node process. |
-| `mcp_reload_code` | **Phase 6**: schedule a graceful MCP Node-process restart so fresh TS builds take effect **without exiting Claude Desktop**. Dry-run by default; pass `confirm=true` to exit. Rate-limited + staleness-gated. |
-| `ghci_setup` | Install development rules into `.claude/rules/`. |
-| `ghci_validate_cabal` / `ghci_deps` | Cabal file validation and dependency management. |
-| `ghci_complete` | Completion candidates for a prefix. |
+Full catalog with "what problem each one solved" → [**docs/haskell-flows-mcp.pdf**](docs/haskell-flows-mcp.pdf).
 
 ---
 
-## Typical pipeline (new project, agent-driven)
+## Status & development model
 
-```
-ghci_create_project({name: "expr-eval", modules: ["Expr.Syntax", "Expr.Eval"]})
-ghci_load({module_path: "src/Expr/Syntax.hs"})
-ghci_arbitrary({type_name: "Expr"})                                        # paste into source
-ghci_load({module_path: "src/Expr/Syntax.hs"})                             # reload
-ghci_load({module_path: "src/Expr/Eval.hs"})                               # after implementing
-ghci_quickcheck({property: "\\e -> eval empty (simplify e) == eval empty e", module_path: "src/Expr/Eval.hs"})
-# ... more properties
-ghci_check_module({module_path: "src/Expr/Eval.hs"})                       # export audit
-ghci_lint({module_path: "src/Expr/Eval.hs"})                               # auto-degrades if hlint absent
-ghci_quickcheck_export()                                                    # writes test/Spec.hs + runs cabal test
-cabal_test()
-```
-
----
-
-## Quick start
-
-### Prerequisites
-- GHC 9.12+ and Cabal 3.12+ (via [GHCup](https://www.haskell.org/ghcup/))
-- Node.js 22+
-
-### Setup
-
-```bash
-git clone <repo-url>
-cd haskell-rules-and-mcp
-cp .mcp.example.json .mcp.json      # local, git-ignored — tweak if you need custom paths
-cd mcp-server
-npm install
-npm run build                        # produces dist/index.js (gitignored)
-```
-
-After rebuilding the MCP (any `.ts` change under `mcp-server/src/`), restart the
-server from your MCP client so it picks up the new binary. In Claude Code:
-`/mcp` → restart `haskell-flows`.
-
-### Configure Claude Code (`.mcp.json`)
-
-The repo ships a **portable template** at [`.mcp.example.json`](./.mcp.example.json):
-
-```json
-{
-  "mcpServers": {
-    "haskell-flows": {
-      "command": "node",
-      "args": ["./mcp-server/dist/index.js"],
-      "env": {
-        "HASKELL_PROJECT_DIR": "./playground/hindley-milner"
-      }
-    }
-  }
-}
-```
-
-Why relative paths:
-- Claude Code resolves relative `args` against the `.mcp.json` directory, so
-  **each worktree runs its own `dist/index.js`** (no cross-contamination).
-- `HASKELL_PROJECT_DIR` is resolved against the launching `cwd` (the config's
-  directory), so `"./playground/foo"` points at this worktree's playground.
-- No `PATH` baked in → inherits from your shell. If `ghc`/`cabal` are not on
-  PATH after login, add a minimal `PATH` override in your **local** `.mcp.json`
-  (not committed) rather than the example.
-
-**Why `.mcp.json` is gitignored:** it may drift with personal paths, env
-overrides, or (never) secrets. Keep the shared template in
-`.mcp.example.json`; put anything machine-specific in your local copy. Do NOT
-put tokens/credentials in either file — the template is committed.
-
-### Environment variables
-
-| Variable | Description | Default |
-|---|---|---|
-| `HASKELL_PROJECT_DIR` | Path to the Haskell project to load on startup | `process.cwd()` |
-| `HASKELL_LIBRARY_TARGET` | Cabal library target override | auto-detected |
-| `HASKELL_FLOWS_TELEMETRY` | Set to `1` to opt into **local-only** tool-usage telemetry (written to `.haskell-flows/telemetry.json` in the active project — never sent over the network). | `0` (off) |
-
----
-
-## Toolchain auto-download
-
-On the first tool call of any kind, the server kicks off background downloads of `hlint`, `fourmolu`, `hls` through a **host PATH → bundled → GitHub release → upstream fallback** pipeline. In-flight promises are cached per tool so concurrent callers share the same download. Every fetched binary is verified against the SHA256 declared in `src/tools/auto-download.ts` when present.
-
-Tools that need a binary (e.g. `ghci_lint` needs `hlint`) call `awaitTool("hlint")` which either awaits the in-flight warmup or starts a fresh `ensureTool()` if none is pending.
-
-**Security:** downloads only happen through the pre-configured resolution ladder. The server never executes a downloaded binary for lookup — it runs them only when a concrete tool (`ghci_lint`, `ghci_format`, `ghci_hls`) explicitly invokes them with `execFile`. The opt-in telemetry writes to a local file only — no network calls.
-
----
-
-## Publishing toolchain assets
-
-The repo's GitHub release `tools-v1.0` hosts the pre-verified binaries consumed by `auto-download.ts`. See [docs/PUBLISH_ASSETS.md](docs/PUBLISH_ASSETS.md) for the full operator runbook. TL;DR:
-
-```bash
-cd mcp-server
-./scripts/publish-release-assets.sh hlint darwin-arm64 ./downloads/hlint
-```
-
----
-
-## Testing
-
-```bash
-cd mcp-server
-npm install
-npm run build               # required before test:e2e (compiles dist/index.js)
-
-npm test                    # Unit (~855 tests, ~17s, pure TS — no GHC)
-npm run test:integration    # Integration (~89 tests, ~17s, real GHCi — forks, 4 workers)
-npm run test:e2e            # E2E (~130 tests, ~42s, full MCP + cabal — forks, 2 workers)
-npm run test:all            # sequential: unit → integration → e2e
-```
-
-- Integration / E2E skip gracefully if GHC is not available.
-- E2E requires `npm run build` first; a `pretest:e2e` hook enforces this.
-- Each worker gets its own isolated fixture copy (`setupIsolatedFixture()`), so suites are safe under parallel execution; worker caps (4 / 2) cover cabal-cache contention.
-
----
-
-## Project structure
-
-```
-haskell-rules-and-mcp/
-├── .claude/rules/          # Project-specific Claude rules
-├── .mcp.json               # MCP server configuration
-├── docs/PUBLISH_ASSETS.md  # Operator runbook for tools-v1.0 release
-├── mcp-server/
-│   ├── src/
-│   │   ├── index.ts                 # MCP entry, tool registration
-│   │   ├── ghci-session.ts          # GHCi child process management
-│   │   ├── workflow-state.ts        # State + contextual _guidance
-│   │   ├── property-store.ts        # .haskell-flows/properties.json
-│   │   ├── project-manager.ts       # Project discovery
-│   │   ├── telemetry.ts             # Opt-in local tool-usage counters
-│   │   ├── parsers/                 # GHC/HPC/browse parsers
-│   │   ├── tools/                   # One file per MCP tool
-│   │   │   ├── registry.ts          # registerStrictTool wrapper (+ warmup hook)
-│   │   │   ├── toolchain-warmup.ts  # Background download coordinator
-│   │   │   ├── create-project.ts    # ghci_create_project
-│   │   │   ├── add-modules.ts       # ghci_add_modules
-│   │   │   └── ...
-│   │   ├── laws/                    # Property-suggestion engines
-│   │   ├── resources/               # MCP resource handlers
-│   │   └── __tests__/               # Unit / integration / e2e
-│   ├── rules/                       # Markdown rule files served as resources
-│   ├── scripts/
-│   │   └── publish-release-assets.sh
-│   ├── vendor-tools/                # Bundled binaries (+ manifest with SHA256)
-│   └── dist/                        # Compiled JavaScript
-└── playground/
-    └── hindley-milner/              # Example project
-```
-
----
-
-## Gotchas
-
-Agent-facing quirks surfaced during real usage. Reading these up front saves a
-debug loop.
-
-### GHC2024 + `` `elem` "literal" `` ambiguity
-```haskell
--- ✗ Fails under GHC2024 with "Ambiguous type variable"
-digits <- munch1 (`elem` "0123456789")
-
--- ✓ Use Data.Char.isDigit (or any monomorphic predicate)
-import Data.Char (isDigit)
-digits <- munch1 isDigit
-```
-Root cause: `elem :: Foldable t => a -> t a -> Bool`. GHC2024 enables
-extended defaulting that does NOT resolve `t ~ []` automatically, so the
-string literal's container type stays ambiguous. Use named predicates.
-
-### `ghci_load` scope semantics — `:l` vs `:add`
-By default `ghci_load(module_path="src/A.hs")` issues `:l A.hs`, which is
-GHCi's native **replace** semantics: any previously loaded module not
-transitively reachable from A is dropped from scope. If you need to keep
-prior scope (e.g. a property in module B references a function from module
-C), pass `mode="additive"`:
-```
-ghci_load(module_path="src/C.hs", mode="additive")  -- preserves prior scope
-```
-`load_all=true` is still preferred when you want the whole project in
-scope for a batch of properties.
-
-### Partial Prelude functions and `read`
-`read`, `head`, `tail`, `fromJust`, `(!!)` are partial — they throw on
-malformed input. The basic-lint fallback (active when hlint is unavailable)
-flags these as warnings. Prefer `readMaybe`, pattern matching, or
-`listToMaybe`.
-
-### Formatter and lint availability
-When `hlint`/`fourmolu`/`ormolu` are not on PATH and the bundled download
-fails, `ghci_lint` and `ghci_format` return degraded responses with
-`gateEligible: false`. The module-complete gate stays locked until a real
-formatter/linter runs — by design; never trust a degraded "clean" signal.
-
-### Hot-reload the MCP after a TS edit
-`mcp_restart` only restarts GHCi. To pick up a `dist/index.js` rebuild
-without exiting Claude Desktop, use:
-
-```
-mcp_reload_code()                     # dry-run: reports staleness
-mcp_reload_code(confirm=true)          # actually reload
-```
-
-The tool schedules `process.exit(0)` after flushing the response; the MCP
-client respawns the child automatically. Safeguards:
-
-- **Staleness gate** — refuses to exit if `dist/index.js` mtime is not
-  newer than this process's boot time (prevents no-op restarts).
-- **Rate limit** — rejects consecutive `confirm=true` calls inside a 10s
-  window (prevents accidental restart loops).
-- **In-memory state is lost** by design: GHCi session, workflow tracker,
-  tool history. Persisted state (`.haskell-flows/properties.json`) survives.
-
-`ghci_session(status)` reports `dist.buildTime` + `ageMinutes` so agents
-can detect staleness without needing to call the reload tool at all.
-
----
+- **`v0.1.0`** — first tagged release, **experimental** but test-covered (1166 passing across unit / integration / e2e, deterministic across 3 consecutive runs).
+- Iterated with **[Claude Code](https://www.anthropic.com/claude-code)** following the spirit of the Haskell [Compact for Responsible Use of AI Tools](https://discourse.haskell.org/t/a-compact-for-responsible-use-of-ai-tools/13923). Maintainer accountability via tests; commits with substantive AI-generated code carry `Co-Authored-By: Claude` trailers.
+- Tagged [`vibecoded`](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp) — provenance is on the record, not hidden.
 
 ## Platform support
 
-Honesty first: this project is developed on macOS ARM and that is the only
-platform verified end-to-end today. The auto-download matrix below reflects
-what actually works, not what the server theoretically supports.
+| Platform | Status | Notes |
+|---|---|---|
+| `darwin-arm64` | ✅ **Supported** | Primary dev target, bundled binaries pinned by SHA256 |
+| `darwin-x64` · `linux-*` | ⚠️ Use host tools | Install via `ghcup install hlint fourmolu ormolu hls` |
+| `win32-*` | ❌ Untested | Not on short-term roadmap |
 
-| Platform      | Status                       | Notes                                                                                   |
-|---------------|------------------------------|-----------------------------------------------------------------------------------------|
-| `darwin-arm64`| ✅ **Supported**              | Primary dev target. All bundled binaries verified with SHA256 pinned in the manifest.   |
-| `darwin-x64`  | ⚠️ Use host tools             | No bundled binaries yet — install `hlint` / `fourmolu` / `hls` via `ghcup` or `brew`.   |
-| `linux-x64`   | ⚠️ Use host tools             | Same. `ghcup install hlint` etc.                                                        |
-| `linux-arm64` | ⚠️ Use host tools             | Same.                                                                                   |
-| `win32-*`     | ❌ Untested                   | Not on the short-term roadmap.                                                          |
-
-The MCP's resolution chain (host PATH → bundled → auto-download → `unavailable`) means users on unsupported platforms can still get the tools by installing them via their regular Haskell toolchain. The `ghci_lint` / `ghci_format` / `ghci_hls` responses will report `source: "host"` in that case.
-
----
+Resolution chain: `host PATH → bundled → auto-download → unavailable`. Unsupported platforms fall through cleanly.
 
 ## Known limitations
 
-This section is deliberately blunt. An agent or maintainer adopting this project deserves to know the failure modes before they hit them.
-
-- **Bus factor of 1.** Single maintainer. No SLA, no backup. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to help.
-- **Platform reality ≠ manifest ambition.** Only `darwin-arm64` has bundled tool binaries verified end-to-end; see [Platform support](#platform-support).
-- **Binaries served from a personal GitHub release** (`damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/tools-v1.0/`). These are mirrors of upstream (`ndmitchell/hlint`, `fourmolu/fourmolu`, `tweag/ormolu`, `haskell/haskell-language-server`) — every mirror asset carries a SHA256 pinned in the manifest. Migration to primary-upstream-first resolution is tracked on the [Phase D roadmap](docs/haskell-flows-mcp.pdf) and [CHANGELOG](CHANGELOG.md).
-- **Suggest engines detect type shapes by regex**, not with a real Haskell type-level parser. Advanced types (higher-rank polymorphism, type families, GADTs) silently produce zero suggestions — there is no fallback "I don't know" signal yet.
-- **Experimental**, per the `0.x` semver. Breaking changes between minors are possible; the `CHANGELOG.md` documents them.
-- **Not a replacement for HLS.** `ghci_hls` is a thin bridge for `hover` / `diagnostics`; navigation and code actions are not reimplemented. Use your native LSP client in parallel.
+- **Bus factor of 1** — single maintainer, no SLA. See [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Suggestion engines use regex** on type strings — advanced types (higher-rank, type families, GADTs) silently return zero suggestions.
+- **Not an HLS replacement** — `ghci_hls` is a thin bridge; keep your native LSP client running in parallel.
 
 ---
 
-## Changelog
+## Trust model
 
-Full version history lives in [**CHANGELOG.md**](CHANGELOG.md). Highlights of
-the latest release (`v0.1.0`): seven property-suggestion engines, hot-reload
-via `mcp_reload_code`, path-traversal guard, manifest consistency invariant
-test, and deterministic test pipeline across unit / integration / e2e.
+Every bundled tool binary carries a SHA256 pinned in [`vendor-tools/bundled-tools-manifest.json`](mcp-server/vendor-tools/bundled-tools-manifest.json) with an **invariant test** that fails CI on any future drift. The trust ordering:
+
+1. **`ghcup install <tool>`** — the recommended path; canonical Haskell toolchain.
+2. **Upstream direct binaries** — when available (e.g. `fourmolu/fourmolu` on darwin-arm64), `auto-download.ts` tries upstream first.
+3. **Personal mirror** — extracted binaries from upstream tarballs, SHA256-pinned, used only when upstream doesn't publish direct executables.
+
+See [SECURITY.md](SECURITY.md) for full disclosure channels and trust-boundary notes.
+
+---
+
+## Resources
+
+| | |
+|---|---|
+| 📘 Tool reference PDF | [**docs/haskell-flows-mcp.pdf**](docs/haskell-flows-mcp.pdf) |
+| 📝 Changelog | [**CHANGELOG.md**](CHANGELOG.md) |
+| 🤝 Contributing | [**CONTRIBUTING.md**](CONTRIBUTING.md) |
+| 🛡️ Security | [**SECURITY.md**](SECURITY.md) |
+| 📜 Code of Conduct | [**CODE_OF_CONDUCT.md**](CODE_OF_CONDUCT.md) |
+| 🗂 Agent workflow rules | [`mcp-server/rules/`](mcp-server/rules/) — surfaced as MCP resources |
+
+---
 
 ## License
 
-[BSD-3-Clause](LICENSE). Copyright (c) 2026 Damián Rafael Lattenero.
+[BSD-3-Clause](LICENSE). Copyright © 2026 Damián Rafael Lattenero.

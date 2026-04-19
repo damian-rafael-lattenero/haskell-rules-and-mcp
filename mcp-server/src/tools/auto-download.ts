@@ -24,7 +24,15 @@ import type {
 import {
   enumerateConfiguredReleases,
   getReleaseEntry,
+  getUpstreamDirectBinary,
 } from "../vendor-tools/manifest.js";
+
+async function findUpstreamDirectBinary(
+  tool: SupportedTool,
+  target: PlatformTarget
+): Promise<{ url: string; sha256: string } | null> {
+  return getUpstreamDirectBinary(tool, target);
+}
 
 export type { SupportedTool, SupportedPlatform, SupportedArch } from "../vendor-tools/manifest.js";
 
@@ -199,11 +207,28 @@ export async function autoDownloadTool(tool: SupportedTool): Promise<AutoDownloa
   await mkdir(toolDir, { recursive: true });
   const tempPath = `${binaryPath}.download`;
 
+  // Phase-D trust ordering: when the tool publishes a direct-executable
+  // binary upstream, try the UPSTREAM URL first — the mirror becomes a
+  // fallback. Both are verified by sha256. This moves the default trust
+  // anchor from the maintainer's personal GitHub account to the canonical
+  // upstream (fourmolu/fourmolu, ndmitchell/hlint, tweag/ormolu,
+  // haskell/haskell-language-server).
   const attempts: Array<{
-    label: "primary" | "fallback";
+    label: "upstream" | "mirror" | "fallback";
     url: string;
     sha256: string | undefined;
-  }> = [{ label: "primary", url: release.url, sha256: release.sha256 }];
+  }> = [];
+
+  const upstreamBinary = await findUpstreamDirectBinary(tool, target);
+  if (upstreamBinary) {
+    attempts.push({
+      label: "upstream",
+      url: upstreamBinary.url,
+      sha256: upstreamBinary.sha256,
+    });
+  }
+
+  attempts.push({ label: "mirror", url: release.url, sha256: release.sha256 });
   if (release.fallbackUrl) {
     attempts.push({
       label: "fallback",
@@ -296,6 +321,17 @@ export interface ToolchainTupleStatus {
    * what fallback the MCP will use and how to get the tool manually.
    */
   note?: string;
+  /**
+   * Phase-D trust metadata: present when the manifest declares where the
+   * tool's canonical releases live and how users should preferably install.
+   * `upstreamDirectBinary` is only set when the upstream project ships a
+   * direct-executable binary for this specific target — in that case
+   * auto-download prefers upstream over the mirror.
+   */
+  upstreamReleasesPageUrl?: string;
+  upstreamRecommendedInstall?: string;
+  upstreamDistributionShape?: "directBinary" | "tarball" | "zip" | "source";
+  upstreamDirectBinaryUrl?: string;
 }
 
 /**
@@ -320,9 +356,19 @@ export async function getToolchainTupleMatrix(): Promise<ToolchainTupleStatus[]>
   const index = new Map<string, (typeof configured)[number]>();
   for (const c of configured) index.set(`${c.tool}:${c.target}`, c);
 
+  // Phase-D: surface the upstream trust-anchor metadata alongside each row.
+  // Pre-fetch once per tool to avoid re-reading the manifest inside the
+  // double loop.
+  const { getUpstreamMeta } = await import("../vendor-tools/manifest.js");
+  const upstreamByTool: Record<string, Awaited<ReturnType<typeof getUpstreamMeta>>> = {};
+  for (const tool of tools) {
+    upstreamByTool[tool] = await getUpstreamMeta(tool);
+  }
+
   for (const tool of tools) {
     for (const target of targets) {
       const entry = index.get(`${tool}:${target}`);
+      const upstream = upstreamByTool[tool];
       const row: ToolchainTupleStatus = {
         tool,
         target,
@@ -331,6 +377,15 @@ export async function getToolchainTupleMatrix(): Promise<ToolchainTupleStatus[]>
         url: entry?.entry.url,
         version: entry?.entry.version,
       };
+      if (upstream) {
+        row.upstreamReleasesPageUrl = upstream.releasesPageUrl;
+        row.upstreamRecommendedInstall = upstream.recommendedInstall;
+        row.upstreamDistributionShape = upstream.distributionShape;
+        const directBinary = upstream.platforms?.[target];
+        if (directBinary?.url) {
+          row.upstreamDirectBinaryUrl = directBinary.url;
+        }
+      }
       if (!row.autoDownloadConfigured) {
         // Agents reading this diagnostic need to know the fallback story.
         // `darwin-arm64` is the primary dev target so anything missing there

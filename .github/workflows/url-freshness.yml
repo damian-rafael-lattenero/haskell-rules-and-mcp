@@ -1,0 +1,72 @@
+name: URL freshness
+
+# Cross-checks every URL declared in bundled-tools-manifest.json against
+# the live network. Runs on a schedule AND on manual dispatch so the
+# maintainer can re-verify after a tool release moves under upstream
+# reorganization.
+on:
+  schedule:
+    # Monday 04:17 UTC — quiet hour, and far from other CI jobs.
+    - cron: "17 4 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write # needed to open a tracking issue if a URL 404s
+
+concurrency:
+  group: url-freshness
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: HEAD check every manifest URL
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: mcp-server/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: HEAD every URL
+        id: head
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          npm run tools:validate:urls 2>&1 | tee /tmp/url-check.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: File tracking issue on regression
+        if: steps.head.outputs.exit_code != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          TITLE="🔴 URL freshness check failed on $(date -u '+%Y-%m-%d')"
+          BODY=$(cat <<EOF
+          The scheduled URL-freshness job flagged one or more release URLs in
+          \`mcp-server/vendor-tools/bundled-tools-manifest.json\` as no longer
+          reachable.
+
+          \`\`\`
+          $(tail -100 /tmp/url-check.log)
+          \`\`\`
+
+          Run \`cd mcp-server && npm run tools:validate:urls\` locally to reproduce
+          and update the manifest.
+          EOF
+          )
+          # De-duplicate: only one open issue with this title at a time.
+          if ! gh issue list --state open --search "$TITLE" --json title --jq '.[].title' | grep -qF "$TITLE"; then
+            gh issue create --title "$TITLE" --body "$BODY" --label "bug,supply-chain"
+          fi
+          exit 1
