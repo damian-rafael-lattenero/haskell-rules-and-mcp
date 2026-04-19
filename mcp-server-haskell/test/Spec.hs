@@ -10,6 +10,7 @@
 module Main where
 
 import qualified Data.Text as T
+import Data.Maybe (isNothing)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (exitFailure, exitSuccess)
 import qualified Test.QuickCheck as QC
@@ -438,7 +439,7 @@ testHoogleHit =
 
 testHoogleEmpty :: IO Bool
 testHoogleEmpty =
-  pure (parseHoogleLine "No results found" == Nothing)
+  pure (isNothing (parseHoogleLine "No results found"))
 
 --------------------------------------------------------------------------------
 -- Phase 6: Coverage parser + PropertyStore roundtrip

@@ -13,7 +13,6 @@
 [![Haskell tests](https://img.shields.io/badge/Haskell%20tests-34%20passing-brightgreen)](mcp-server-haskell/test)
 [![Haskell MCP tools](https://img.shields.io/badge/Haskell%20tools-15-blue)](mcp-server-haskell/src/HaskellFlows/Tool)
 [![GHC](https://img.shields.io/badge/GHC-9.10%20%7C%209.12-8a5aa0)](https://www.haskell.org/ghc/)
-[![vibecoded](https://img.shields.io/badge/vibecoded-yes-ff69b4)](https://discourse.haskell.org/t/a-compact-for-responsible-use-of-ai-tools/13923)
 
 </div>
 
