@@ -27,3 +27,4 @@ mcp-server/vendor-tools/hlint/
 mcp-server/vendor-tools/fourmolu/
 mcp-server/vendor-tools/ormolu/
 mcp-server/vendor-tools/hls/
+playground/expr-evaluator/
