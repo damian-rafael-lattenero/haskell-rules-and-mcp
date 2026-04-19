@@ -29,6 +29,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
+import HaskellFlows.Data.PropertyStore (Store, save)
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Parser.QuickCheck
@@ -53,30 +54,50 @@ descriptor =
                        \\"\\\\(xs :: [Int]) -> reverse (reverse xs) == xs\", \
                        \\"prop_idempotent\"" :: Text)
                   ]
+              , "module" .= object
+                  [ "type"        .= ("string" :: Text)
+                  , "description" .=
+                      ("Optional: module path to associate with the property \
+                       \in the regression store. Lets ghci_regression reload \
+                       \the right scope before re-running. Example: \
+                       \\"src/Foo.hs\"." :: Text)
+                  ]
               ]
           , "required"             .= ["property" :: Text]
           , "additionalProperties" .= False
           ]
     }
 
-newtype QuickCheckArgs = QuickCheckArgs
-  { qaProperty :: Text
+data QuickCheckArgs = QuickCheckArgs
+  { qaProperty :: !Text
+  , qaModule   :: !(Maybe Text)
   }
   deriving stock (Show)
 
 instance FromJSON QuickCheckArgs where
-  parseJSON = withObject "QuickCheckArgs" $ \o ->
-    QuickCheckArgs <$> o .: "property"
+  parseJSON = withObject "QuickCheckArgs" $ \o -> do
+    prop <- o .: "property"
+    md   <- o .:? "module"
+    pure QuickCheckArgs { qaProperty = prop, qaModule = md }
 
-handle :: Session -> Value -> IO ToolResult
-handle sess rawArgs = case parseEither parseJSON rawArgs of
+-- | Run a property. On success the property text + module are written
+-- to the 'Store' so 'ghci_regression' can replay it later. Failures are
+-- not persisted — only properties that have passed at least once count
+-- as trusted baseline.
+handle :: Store -> Session -> Value -> IO ToolResult
+handle store sess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
-  Right (QuickCheckArgs prop) -> do
+  Right (QuickCheckArgs prop md) -> do
     res <- runProperty sess prop
     case res of
       Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
-      Right gr    -> pure (renderResult (parseQuickCheckOutput prop (grOutput gr)))
+      Right gr    -> do
+        let qr = parseQuickCheckOutput prop (grOutput gr)
+        case qr of
+          QcPassed _ _ -> save store prop md
+          _            -> pure ()
+        pure (renderResult qr)
 
 --------------------------------------------------------------------------------
 -- response shaping

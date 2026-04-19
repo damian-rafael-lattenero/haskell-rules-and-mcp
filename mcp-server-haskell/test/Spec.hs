@@ -10,6 +10,7 @@
 module Main where
 
 import qualified Data.Text as T
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (exitFailure, exitSuccess)
 import qualified Test.QuickCheck as QC
 import Test.QuickCheck
@@ -48,12 +49,26 @@ import HaskellFlows.Tool.Arbitrary
   , parseConstructors
   , renderTemplate
   )
+import HaskellFlows.Data.PropertyStore
+  ( StoredProperty (..)
+  , loadAll
+  , openStore
+  , save
+  )
+import HaskellFlows.Parser.Coverage
+  ( CoverageReport (..)
+  , Metric (..)
+  , parseCoverage
+  )
 import HaskellFlows.Tool.Hoogle
   ( HoogleHit (..)
   , parseHoogleLine
   )
+import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
+import System.FilePath ((</>))
 import HaskellFlows.Types
   ( PathError (..)
+  , ProjectDir
   , mkModulePath
   , mkProjectDir
   )
@@ -92,6 +107,10 @@ main = do
       , test "renderTemplate 3 ctors"              testTemplate3
       , test "parseHoogleLine normal hit"          testHoogleHit
       , test "parseHoogleLine no-results line"    testHoogleEmpty
+      , test "parseCoverage full report"           testCoverageFull
+      , test "parseCoverage ignores banner"        testCoverageBanner
+      , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
+      , test "PropertyStore increments pass count" testStoreIncrement
       ]
   if and results then exitSuccess else exitFailure
 
@@ -420,3 +439,75 @@ testHoogleHit =
 testHoogleEmpty :: IO Bool
 testHoogleEmpty =
   pure (parseHoogleLine "No results found" == Nothing)
+
+--------------------------------------------------------------------------------
+-- Phase 6: Coverage parser + PropertyStore roundtrip
+--------------------------------------------------------------------------------
+
+testCoverageFull :: IO Bool
+testCoverageFull =
+  let raw = T.unlines
+        [ "100% expressions used (12/12)"
+        , " 66% alternatives used (2/3)"
+        , " 75% local declarations used (3/4)"
+        , "100% top-level declarations used (5/5)"
+        ]
+  in pure $ case crMetrics (parseCoverage raw) of
+       [a, b, c, d] ->
+            mPercent a == 100 && mTotal a == 12
+         && mPercent b == 66  && mCovered b == 2 && mTotal b == 3
+         && mPercent c == 75
+         && mPercent d == 100 && mLabel d == "top-level declarations used"
+       _ -> False
+
+testCoverageBanner :: IO Bool
+testCoverageBanner =
+  let raw = T.unlines
+        [ "Cabal version 3.12 — banner without fraction"
+        , "100% expressions used (1/1)"
+        , ""
+        ]
+  in pure (length (crMetrics (parseCoverage raw)) == 1)
+
+-- | Round-trip a property through the on-disk store. Uses a unique
+-- temp project dir to keep repeated test runs independent.
+testStoreRoundtrip :: IO Bool
+testStoreRoundtrip = withTempProject $ \pd -> do
+  store <- openStore pd
+  save store "\\(xs :: [Int]) -> reverse (reverse xs) == xs" (Just "src/Foo.hs")
+  props <- loadAll store
+  pure $ case props of
+    [p] -> spExpression p == "\\(xs :: [Int]) -> reverse (reverse xs) == xs"
+        && spModule p == Just "src/Foo.hs"
+        && spPassed p == 1
+    _   -> False
+
+testStoreIncrement :: IO Bool
+testStoreIncrement = withTempProject $ \pd -> do
+  store <- openStore pd
+  save store "prop_foo" Nothing
+  save store "prop_foo" Nothing
+  save store "prop_foo" Nothing
+  props <- loadAll store
+  pure $ case props of
+    [p] -> spPassed p == 3
+    _   -> False
+
+-- | Helper: create a fresh temp directory and delete it after the test.
+-- Passes a validated 'ProjectDir' (absolute + normalised) to the body.
+withTempProject :: (ProjectDir -> IO Bool) -> IO Bool
+withTempProject k = do
+  tmp <- getTemporaryDirectory
+  ts  <- show <$> getTestTimestamp
+  let dir = tmp </> ("haskell-flows-test-" <> ts)
+  createDirectoryIfMissing True dir
+  res <- case mkProjectDir dir of
+    Left _   -> pure False
+    Right pd -> k pd
+  removePathForcibly dir
+  pure res
+
+getTestTimestamp :: IO Int
+getTestTimestamp = do
+  t <- getPOSIXTime
+  pure (floor (t * 1_000_000))

@@ -25,18 +25,24 @@ import qualified Data.Text as T
 import System.Directory (getCurrentDirectory)
 import System.Environment (lookupEnv)
 
+import HaskellFlows.Data.PropertyStore (Store, openStore)
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Types (ProjectDir, mkProjectDir)
-import qualified HaskellFlows.Tool.Arbitrary  as ArbitraryTool
-import qualified HaskellFlows.Tool.Eval       as EvalTool
-import qualified HaskellFlows.Tool.Hole       as HoleTool
-import qualified HaskellFlows.Tool.Hoogle     as HoogleTool
-import qualified HaskellFlows.Tool.Info       as InfoTool
-import qualified HaskellFlows.Tool.Load       as Load
-import qualified HaskellFlows.Tool.QuickCheck as QcTool
-import qualified HaskellFlows.Tool.Type       as TypeTool
-import qualified HaskellFlows.Tool.Workflow   as WorkflowTool
+import qualified HaskellFlows.Tool.Arbitrary   as ArbitraryTool
+import qualified HaskellFlows.Tool.CheckModule as CheckModuleTool
+import qualified HaskellFlows.Tool.Complete    as CompleteTool
+import qualified HaskellFlows.Tool.Coverage    as CoverageTool
+import qualified HaskellFlows.Tool.Eval        as EvalTool
+import qualified HaskellFlows.Tool.Format      as FormatTool
+import qualified HaskellFlows.Tool.Hole        as HoleTool
+import qualified HaskellFlows.Tool.Hoogle      as HoogleTool
+import qualified HaskellFlows.Tool.Info        as InfoTool
+import qualified HaskellFlows.Tool.Load        as Load
+import qualified HaskellFlows.Tool.QuickCheck  as QcTool
+import qualified HaskellFlows.Tool.Regression  as RegressionTool
+import qualified HaskellFlows.Tool.Type        as TypeTool
+import qualified HaskellFlows.Tool.Workflow    as WorkflowTool
 
 -- | All mutable server state.
 --
@@ -49,6 +55,7 @@ import qualified HaskellFlows.Tool.Workflow   as WorkflowTool
 data Server = Server
   { srvProjectDir :: !(IORef ProjectDir)
   , srvSession    :: !(MVar (Maybe Session))
+  , srvStore      :: !Store
   }
 
 -- | Build a server whose project directory is sourced from
@@ -61,7 +68,11 @@ defaultServer = do
   let raw = fromMaybe cwd envVal
   case mkProjectDir raw of
     Left err -> error ("Could not build ProjectDir: " <> show err)
-    Right pd -> Server <$> newIORef pd <*> newMVar Nothing
+    Right pd -> do
+      pdRef <- newIORef pd
+      sess  <- newMVar Nothing
+      store <- openStore pd
+      pure Server { srvProjectDir = pdRef, srvSession = sess, srvStore = store }
 
 -- | Dispatch a single parsed request. 'Nothing' means the input was a
 -- notification (e.g. @initialized@) and the caller should not write a
@@ -98,6 +109,11 @@ dispatch _ "tools/list" _ rid =
         , ArbitraryTool.descriptor
         , HoogleTool.descriptor
         , WorkflowTool.descriptor
+        , RegressionTool.descriptor
+        , CheckModuleTool.descriptor
+        , CoverageTool.descriptor
+        , CompleteTool.descriptor
+        , FormatTool.descriptor
         ]
     ]
 dispatch srv "tools/call" (Just params) rid =
@@ -126,7 +142,7 @@ handleToolCall srv call rid = case tcName call of
     runTool srv rid (EvalTool.handle sess (tcArguments call))
   "ghci_quickcheck" -> do
     sess <- getOrStartSession srv
-    runTool srv rid (QcTool.handle sess (tcArguments call))
+    runTool srv rid (QcTool.handle (srvStore srv) sess (tcArguments call))
   "ghci_hole" -> do
     sess <- getOrStartSession srv
     pd   <- readIORef (srvProjectDir srv)
@@ -144,6 +160,22 @@ handleToolCall srv call rid = case tcName call of
     runTool srv rid (WorkflowTool.handle (srvProjectDir srv)
                                           (srvSession srv)
                                           (tcArguments call))
+  "ghci_regression" -> do
+    sess <- getOrStartSession srv
+    runTool srv rid (RegressionTool.handle (srvStore srv) sess (tcArguments call))
+  "ghci_check_module" -> do
+    sess <- getOrStartSession srv
+    pd   <- readIORef (srvProjectDir srv)
+    runTool srv rid (CheckModuleTool.handle sess (srvStore srv) pd (tcArguments call))
+  "ghci_coverage" -> do
+    pd <- readIORef (srvProjectDir srv)
+    runTool srv rid (CoverageTool.handle pd (tcArguments call))
+  "ghci_complete" -> do
+    sess <- getOrStartSession srv
+    runTool srv rid (CompleteTool.handle sess (tcArguments call))
+  "ghci_format" -> do
+    pd <- readIORef (srvProjectDir srv)
+    runTool srv rid (FormatTool.handle pd (tcArguments call))
   other -> pure (err_ rid (methodNotFoundErr ("tool " <> other)))
 
 -- | Common exception shield for every tool handler.
