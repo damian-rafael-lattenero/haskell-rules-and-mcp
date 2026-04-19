@@ -4,12 +4,9 @@
 
 **An agent-first MCP server for property-driven Haskell development.**
 
-[![CI](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/ci.yml)
 [![Haskell CI](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/haskell-ci.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/haskell-ci.yml)
-[![CodeQL](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/codeql.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/codeql.yml)
-[![Release](https://img.shields.io/github/v/release/damian-rafael-lattenero/haskell-rules-and-mcp?label=release)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/latest)
+[![Nix flake](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/nix-flake.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/nix-flake.yml)
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
-[![TS tests](https://img.shields.io/badge/TS%20tests-1166%20passing-brightgreen)](mcp-server/src/__tests__)
 [![Haskell tests](https://img.shields.io/badge/Haskell%20tests-34%20passing-brightgreen)](mcp-server-haskell/test)
 [![Haskell MCP tools](https://img.shields.io/badge/Haskell%20tools-15-blue)](mcp-server-haskell/src/HaskellFlows/Tool)
 [![GHC](https://img.shields.io/badge/GHC-9.10%20%7C%209.12-8a5aa0)](https://www.haskell.org/ghc/)

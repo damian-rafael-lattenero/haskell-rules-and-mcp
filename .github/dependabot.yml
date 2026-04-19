@@ -1,34 +1,10 @@
 version: 2
 updates:
-  # NPM deps for the MCP server. Weekly so we don't spam; groups of
-  # related updates (dev-only vs prod) get folded into a single PR.
-  - package-ecosystem: "npm"
-    directory: "/mcp-server"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "05:00"
-      timezone: "Etc/UTC"
-    open-pull-requests-limit: 5
-    labels: ["dependencies", "npm"]
-    groups:
-      test-runners:
-        patterns:
-          - "vitest"
-          - "@types/*"
-      mcp-sdk:
-        patterns:
-          - "@modelcontextprotocol/*"
-      types:
-        patterns:
-          - "@types/*"
-        dependency-type: "development"
-    commit-message:
-      prefix: "chore(deps)"
-      include: "scope"
-
-  # GitHub Actions themselves — a pinned-SHA policy for third-party actions
-  # is the safest option. Dependabot handles the refresh cadence.
+  # GitHub Actions themselves — pinning by major-version tag is what the
+  # existing Haskell CI uses; Dependabot handles the refresh cadence so
+  # a compromised action upstream doesn't linger. No Hackage ecosystem
+  # (Dependabot doesn't support it yet); the `outdated` advisory job in
+  # haskell-ci.yml covers drift on the Haskell side.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
