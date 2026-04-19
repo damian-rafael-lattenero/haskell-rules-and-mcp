@@ -295,20 +295,33 @@ in the port.
 
 ## Issue tracker cross-reference
 
-Every actionable item above is mirrored into a GitHub issue so
-progress (or wontfix decisions) are trackable. Labels used:
+Every actionable item above is mirrored into a GitHub issue. Filter
+by label: <https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues?q=label%3Aretrospective>
 
-- **`bug`** — B1, B2, B3
-- **`enhancement`** — G1-G5, A1-A6
-- **`cleanup`** — R1, R2, R3
-- **`retrospective`** — every issue spawned by this document
+| Item | Issue | Label | Priority |
+|------|-------|-------|----------|
+| B1. `ghci_deps` wipes build-depends | [#6](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/6) | bug | high |
+| B2. Session silent re-routing | [#7](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/7) | bug | medium |
+| B3. `ghci_lint` per-file vs CI recursive | [#8](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/8) | bug | medium |
+| G1 / A1. `ghci_batch` | [#9](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/9) | enhancement | high |
+| G2. `ghci_check_project` | [#10](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/10) | enhancement | medium |
+| G3. `ghci_arbitrary(module_path)` | [#11](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/11) | enhancement | low |
+| G4. `ghci_find_references` | [#12](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/12) | enhancement | high |
+| G5. `ghci_apply_edit` primitive | [#13](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/13) | enhancement | medium |
+| R1. `_guidance` noise | [#14](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/14) | cleanup | low |
+| R2. Hide `ghci_hls` when absent | [#15](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/15) | cleanup | low |
+| R3. Refuse auto-download in CI | [#16](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/16) | cleanup | medium |
+| A2. `ghci_pipeline(stage)` | [#17](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/17) | enhancement | medium |
+| A3. `ghci_watch` subscription | [#18](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/18) | enhancement | medium |
+| A4. `ghci_rename_symbol` via HLS | [#19](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/19) | enhancement | medium |
+| A5. `ghci_explain_error` | [#20](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/20) | enhancement | low |
+| A6. Workspace routing in `.mcp.json` | [#21](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/21) | enhancement | medium |
 
-The issue list is at:
-<https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues?q=label%3Aretrospective>
+Note: A1 (`ghci_batch` as game-changing addition) folds into G1 — it's
+the same tool in two frames. Tracked as a single issue.
 
-Each issue links back to the relevant section here with a stable
-anchor (`#b1-ghci_deps`, `#g4-no-ghci_find_references`, etc.) so the
-retrospective and the tracker stay in lockstep.
+High-priority starting set: #6 (destructive bug), #9 (batch — biggest
+UX win), #12 (find_references, enabling safer refactor).
 
 ---
 
