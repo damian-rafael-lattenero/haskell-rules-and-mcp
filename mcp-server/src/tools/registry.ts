@@ -4,6 +4,14 @@ import type { WorkflowState, ModuleProgress } from "../workflow-state.js";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import {
+  computeStaleness,
+  stalenessMessage,
+  defaultBundlePath,
+  activeBundlePath,
+  bootTimeMs,
+  type StalenessResult,
+} from "../staleness.js";
 
 /**
  * Context passed to each tool's register function.
@@ -201,6 +209,60 @@ export function registerStrict<Shape extends z.ZodRawShape>(
  * manifest configures a checksum. Binaries run only when a concrete tool
  * (e.g. `ghci_lint`) explicitly invokes them with `execFile`.
  */
+/**
+ * Inject a `_warning` field into a tool response body when the MCP bundle
+ * is detected as stale vs the running process. Conservative: ONLY modifies
+ * responses whose first content text parses as a plain JSON object. Arrays,
+ * non-JSON, and nested-content responses pass through untouched.
+ *
+ * Returns the response verbatim on any error — middleware must never make
+ * things worse than not running at all.
+ *
+ * Exported for direct unit testing.
+ */
+export function injectStalenessWarning(
+  result: { content: Array<{ type: "text"; text: string }> },
+  staleness: StalenessResult
+): { content: Array<{ type: "text"; text: string }> } {
+  const warning = stalenessMessage(staleness);
+  if (!warning) return result;
+  const first = result.content?.[0];
+  if (!first || first.type !== "text" || typeof first.text !== "string") {
+    return result;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(first.text);
+  } catch {
+    return result;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return result;
+  }
+  // Preserve any pre-existing `_warning` (tool authors can set their own).
+  // If the field already exists and is a string, we APPEND; if it's an
+  // array, we PUSH; otherwise we leave it alone.
+  const obj = parsed as Record<string, unknown>;
+  const existing = obj._warning;
+  if (existing === undefined) {
+    obj._warning = warning;
+  } else if (typeof existing === "string") {
+    // Avoid duplicating if the tool already emitted our exact message.
+    if (!existing.includes("MCP bundle on disk is")) {
+      obj._warning = `${existing} | ${warning}`;
+    }
+  } else if (Array.isArray(existing)) {
+    if (!existing.some((x) => typeof x === "string" && x.includes("MCP bundle on disk is"))) {
+      existing.push(warning);
+    }
+  }
+  const newText = JSON.stringify(obj);
+  const rest = result.content.slice(1);
+  return {
+    content: [{ type: "text", text: newText }, ...rest] as Array<{ type: "text"; text: string }>,
+  };
+}
+
 export function registerStrictTool<Shape extends z.ZodRawShape>(
   server: McpServer,
   ctx: ToolContext,
@@ -238,6 +300,24 @@ export function registerStrictTool<Shape extends z.ZodRawShape>(
         }
       } else {
         success = true;
+      }
+
+      // Middleware: surface a staleness warning when the MCP bundle on
+      // disk is newer than the running process. Opt-out via env. Failure
+      // to probe is non-fatal — we return the original result untouched.
+      if (process.env.HASKELL_FLOWS_STALENESS_WARN !== "0") {
+        try {
+          const staleness = await computeStaleness({
+            bundlePath: activeBundlePath(defaultBundlePath(import.meta.url)),
+            nowMs: () => Date.now(),
+            bootTimeMs: () => bootTimeMs(),
+          });
+          return injectStalenessWarning(result, staleness);
+        } catch {
+          // Pass-through on any probe error — middleware MUST NOT poison
+          // the pipeline with an exception under any circumstance.
+          return result;
+        }
       }
       return result;
     } catch (err) {

@@ -69,7 +69,9 @@ describe.runIf(GHC_AVAILABLE)("MCP Protocol E2E", () => {
     expect(names).toContain("ghci_quickcheck");
     expect(names).toContain("ghci_session");
     expect(names).toContain("ghci_switch_project");
-    expect(names).toContain("mcp_restart");
+    // mcp_restart was removed in favor of ghci_session(action="restart").
+    // Keep this negative assertion so a future accidental re-add is caught.
+    expect(names).not.toContain("mcp_restart");
     expect(names.length).toBeGreaterThanOrEqual(15);
   });
 

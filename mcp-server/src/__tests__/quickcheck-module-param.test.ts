@@ -213,6 +213,59 @@ describe("ghci_quickcheck module parameter", () => {
     expect(store.properties[0]!.tests_module).toBe("src/Expr/Eval.hs");
   });
 
+  it("workflow state attribution uses tests_module when provided (semantic target)", async () => {
+    // Regression for the "11 properties attributed to Syntax, 0 to Eval" bug:
+    // when a caller passes tests_module, the workflow tracker should reflect
+    // the semantic target — not the load context under module_path.
+    const session = createMockSession("+++ OK, passed 100 tests.");
+    const updateModuleProgress = vi.fn();
+    const evalProgress = {
+      propertiesPassed: [] as string[],
+      propertiesFailed: [] as string[],
+      functionsImplemented: 1,
+      functionsTotal: 1,
+    };
+    const syntaxProgress = {
+      propertiesPassed: [] as string[],
+      propertiesFailed: [] as string[],
+      functionsImplemented: 3,
+      functionsTotal: 3,
+    };
+
+    const ctx = {
+      getWorkflowState: () => ({
+        activeModule: "src/Expr/Eval.hs",
+        modules: new Map<string, unknown>([
+          ["src/Expr/Syntax.hs", syntaxProgress],
+          ["src/Expr/Eval.hs", evalProgress],
+        ]),
+      }),
+      // Return the progress for the module the code asks about so we can
+      // observe which one it selects.
+      getModuleProgress: (p: string) =>
+        p === "src/Expr/Eval.hs" ? evalProgress :
+        p === "src/Expr/Syntax.hs" ? syntaxProgress : undefined,
+      updateModuleProgress,
+    };
+
+    await handleQuickCheck(
+      session,
+      {
+        property: "\\n -> eval emptyEnv (Lit n) == Right (n :: Int)",
+        module_path: "src/Expr/Syntax.hs", // load context (Arbitrary lives here)
+        tests_module: "src/Expr/Eval.hs",  // semantic target
+      },
+      ctx,
+      tmpDir
+    );
+
+    expect(updateModuleProgress).toHaveBeenCalled();
+    const callArgs = updateModuleProgress.mock.calls[0];
+    // Key assertion: attribution goes to tests_module, NOT module_path.
+    expect(callArgs[0]).toBe("src/Expr/Eval.hs");
+    expect(callArgs[1]).toHaveProperty("propertiesPassed");
+  });
+
   it("workflow state propertiesPassed updated even without incremental=true", async () => {
     const session = createMockSession("+++ OK, passed 100 tests.");
     const updateModuleProgress = vi.fn();

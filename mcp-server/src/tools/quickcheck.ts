@@ -179,6 +179,13 @@ export async function handleQuickCheck(
      */
     roundtrip?: string;
     /**
+     * Optional unwrap function when a newtype wrapper holds the restricted
+     * Arbitrary generator. Example: for `newtype PrettyableExpr = PrettyableExpr { unPrettyable :: Expr }`
+     * pass `roundtrip_wrapper: "unPrettyable"`. Generated property binds
+     * `w :: PrettyableExpr` (GHC infers) and unwraps via the function.
+     */
+    roundtrip_wrapper?: string;
+    /**
      * Human-readable label propagated to the property store and used by the
      * exporter as the Spec.hs test name (e.g. "addRightIdentity").
      */
@@ -198,7 +205,26 @@ export async function handleQuickCheck(
     });
   }
 
-  // Roundtrip mode: generate property from pretty/parse functions
+  // Roundtrip mode: generate property from pretty/parse functions.
+  //
+  // Default shape (`\e -> parse (pretty e) == Just e`) uses whatever
+  // Arbitrary instance GHC infers for `e`. When the default Arbitrary of
+  // the target type produces values outside the printer's grammar (e.g.
+  // `Arbitrary String` generates unicode/empty strings), the roundtrip
+  // fails for reasons unrelated to the printer/parser. To scope the
+  // generator to a friendly subset, callers can pass `roundtrip_wrapper`:
+  //
+  //   roundtrip="pretty,parse" + roundtrip_wrapper="unPrettyable"
+  //     ⇒  \w -> let e = unPrettyable w in parse (pretty e) == Just e
+  //
+  // With `normalizeFn`:
+  //     ⇒  \w -> let e = unPrettyable w in
+  //              fmap normalize (parse (pretty e)) == Just (normalize e)
+  //
+  // The generated lambda binds `w` (wrapper) and unwraps to `e` (plain
+  // type) via the caller-supplied unwrap function. GHC infers
+  // `w :: PrettyableExpr` from usage, which selects the restricted
+  // Arbitrary. No explicit type annotation required.
   let actualProperty = args.property;
   if (args.roundtrip) {
     const parts = args.roundtrip.split(",").map((s) => s.trim());
@@ -210,7 +236,14 @@ export async function handleQuickCheck(
       });
     }
     const [prettyFn, parseFn, normalizeFn] = parts;
-    if (normalizeFn) {
+    const unwrap = args.roundtrip_wrapper?.trim();
+    if (unwrap) {
+      if (normalizeFn) {
+        actualProperty = `\\w -> let e = ${unwrap} w in fmap ${normalizeFn} (${parseFn} (${prettyFn} e)) == Just (${normalizeFn} e)`;
+      } else {
+        actualProperty = `\\w -> let e = ${unwrap} w in ${parseFn} (${prettyFn} e) == Just e`;
+      }
+    } else if (normalizeFn) {
       actualProperty = `\\e -> fmap ${normalizeFn} (${parseFn} (${prettyFn} e)) == Just (${normalizeFn} e)`;
     } else {
       actualProperty = `\\e -> ${parseFn} (${prettyFn} e) == Just e`;
@@ -414,9 +447,15 @@ export async function handleQuickCheck(
     }
   }
 
-  // Track in workflow state (always, not just when incremental=true, so guidance is accurate)
+  // Track in workflow state (always, not just when incremental=true, so guidance is accurate).
+  //
+  // Attribution priority: tests_module > module_path > module > active.
+  // Rationale: when a caller passes `tests_module` they're declaring the SEMANTIC
+  // target (e.g. properties for Expr.Eval loaded via Expr.Syntax where Arbitrary
+  // lives). Guidance/progress should reflect that target, not the load context.
+  // The property store uses the same precedence for filtering (property-store.ts).
   if (ctx?.getWorkflowState && ctx?.getModuleProgress) {
-    let activeMod = args.module_path ?? args.module ?? ctx.getWorkflowState().activeModule;
+    let activeMod = args.tests_module ?? args.module_path ?? args.module ?? ctx.getWorkflowState().activeModule;
 
     if (!activeMod) {
       const state = ctx.getWorkflowState();
@@ -678,7 +717,16 @@ export function register(server: McpServer, ctx: ToolContext): void {
           'Examples: roundtrip="pretty,parse" generates "\\e -> parse (pretty e) == Just e". ' +
           'With normalize: roundtrip="pretty,parse,normalize" generates ' +
           '"\\e -> fmap normalize (parse (pretty e)) == Just (normalize e)". ' +
-          'Useful for testing serialization/deserialization roundtrips.'
+          'Useful for testing serialization/deserialization roundtrips. ' +
+          'Pair with roundtrip_wrapper when the default Arbitrary of the target type ' +
+          'is too broad (e.g. Arbitrary String produces unicode).'
+      ),
+      roundtrip_wrapper: z.string().optional().describe(
+        'Unwrap function name for a newtype wrapper that has a restricted Arbitrary instance. ' +
+          'Example: for `newtype PrettyableExpr = PrettyableExpr { unPrettyable :: Expr }` ' +
+          'pass roundtrip_wrapper="unPrettyable". The generated lambda binds `w :: PrettyableExpr` ' +
+          '(GHC infers from usage) and unwraps via the function, so Arbitrary flows from the ' +
+          'restricted newtype instead of the default Expr Arbitrary.'
       ),
       label: z.string().optional().describe(
         'Human-friendly name for this property (e.g. "addRightIdentity", "evalRespectsSimplify"). ' +
@@ -686,11 +734,11 @@ export function register(server: McpServer, ctx: ToolContext): void {
         'Sanitized automatically (no newlines/quotes); duplicates get a _2/_3 suffix at export time.'
       ),
     },
-    async ({ property, tests, verbose, incremental, function_name, module: mod, module_path, tests_module, roundtrip, label }) => {
+    async ({ property, tests, verbose, incremental, function_name, module: mod, module_path, tests_module, roundtrip, roundtrip_wrapper, label }) => {
       const session = await ctx.getSession();
       const result = await handleQuickCheck(
         session,
-        { property, tests, verbose, incremental, function_name, module: mod, module_path, tests_module, roundtrip, label },
+        { property, tests, verbose, incremental, function_name, module: mod, module_path, tests_module, roundtrip, roundtrip_wrapper, label },
         ctx,
         ctx.getProjectDir()
       );
@@ -705,7 +753,29 @@ export function register(server: McpServer, ctx: ToolContext): void {
  */
 export async function handleQuickCheckBatch(
   session: GhciSession,
-  args: { properties: string[]; tests?: number; incremental?: boolean; module?: string; module_path?: string; tests_module?: string },
+  args: {
+    properties: string[];
+    tests?: number;
+    incremental?: boolean;
+    module?: string;
+    module_path?: string;
+    tests_module?: string;
+    /**
+     * Shared function name applied to every property in the batch. Used
+     * by the property-store.saveProperty for export-time labelling — a
+     * batch exercising `eval` across commutativity, associativity, etc.
+     * becomes `eval_commut`, `eval_assoc`, … in Spec.hs instead of the
+     * positional fallback `property_2`, `property_3`.
+     */
+    function_name?: string;
+    /**
+     * Per-item label array. When provided, `labels[i]` is attached to
+     * `properties[i]`. Missing / empty entries fall back to
+     * `function_name` (if set), else the positional default.
+     * Arrays shorter than `properties` are padded with undefined.
+     */
+    labels?: string[];
+  },
   ctx?: { getWorkflowState?: () => { activeModule: string | null; modules: Map<string, unknown> }; updateModuleProgress?: (path: string, updates: Record<string, unknown>) => void; getModuleProgress?: (path: string) => { propertiesPassed: string[]; propertiesFailed: string[]; functionsImplemented: number; functionsTotal: number } | undefined },
   projectDir?: string
 ): Promise<string> {
@@ -737,10 +807,26 @@ export async function handleQuickCheckBatch(
   const results: Array<{ property: string; success: boolean; passed: number; error?: string; counterexample?: string }> = [];
   let allPassed = true;
 
-  for (const property of args.properties) {
+  for (let i = 0; i < args.properties.length; i++) {
+    const property = args.properties[i]!;
+    // Prefer per-item label, then batch-level function_name. Empty strings
+    // are treated as "not provided" so an agent passing `labels: []` or
+    // a short array doesn't overwrite the fallback.
+    const perItemLabel = args.labels?.[i]?.trim();
+    const label = perItemLabel || undefined;
+
     const singleResult = await handleQuickCheck(
       session,
-      { property, tests: args.tests, incremental: args.incremental, module: args.module, module_path: args.module_path, tests_module: args.tests_module },
+      {
+        property,
+        tests: args.tests,
+        incremental: args.incremental,
+        module: args.module,
+        module_path: args.module_path,
+        tests_module: args.tests_module,
+        function_name: args.function_name,
+        label,
+      },
       ctx,
       projectDir
     );
@@ -796,8 +882,18 @@ export function registerBatch(server: McpServer, ctx: ToolContext): void {
         "If true and properties array is empty, auto-collects all saved properties from properties.json. " +
         "Use with module to filter by module."
       ),
+      function_name: z.string().optional().describe(
+        'Optional shared function name applied to every property in the batch. ' +
+        'Propagated to saveProperty so the export labels each test as e.g. "eval_1", "eval_2" ' +
+        'instead of the positional fallback. Per-item labels (labels[i]) still take precedence.'
+      ),
+      labels: zArray(z.string()).optional().describe(
+        'Optional per-item label array. labels[i] is attached to properties[i]. ' +
+        'Missing or empty entries fall through to function_name, then the positional default. ' +
+        'Arrays shorter than properties are padded with undefined.'
+      ),
     },
-    async ({ properties, tests, incremental, module: mod, module_path, tests_module, auto_collect }) => {
+    async ({ properties, tests, incremental, module: mod, module_path, tests_module, auto_collect, function_name, labels }) => {
       const resolvedMod = module_path ?? mod;
       let propsToRun = properties ?? [];
       // Auto-collect from property store when requested OR when properties
@@ -817,7 +913,7 @@ export function registerBatch(server: McpServer, ctx: ToolContext): void {
       const session = await ctx.getSession();
       const result = await handleQuickCheckBatch(
         session,
-        { properties: propsToRun, tests, incremental, module: mod, module_path, tests_module },
+        { properties: propsToRun, tests, incremental, module: mod, module_path, tests_module, function_name, labels },
         ctx,
         ctx.getProjectDir()
       );

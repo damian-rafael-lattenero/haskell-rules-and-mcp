@@ -363,7 +363,7 @@ registerStrictTool(server, ctx,
           ageMinutes: Math.round((Date.now() - stats.mtimeMs) / 60_000),
           hint:
             "If you just edited TypeScript, restart Claude Code to reload the compiled bundle — " +
-            "mcp_restart only restarts GHCi, not the MCP process.",
+            "ghci_session(action=\"restart\") only restarts GHCi, not the MCP process.",
         };
       } catch {
         // Non-fatal.
@@ -416,24 +416,6 @@ registerStrictTool(server, ctx,
     const session = await getSession();
     return {
       content: [{ type: "text", text: JSON.stringify({ success: true, message: "GHCi session restarted", alive: session.isAlive() }) }],
-    };
-  }
-);
-
-// --- Tool: mcp_restart ---
-registerStrictTool(server, ctx,
-  "mcp_restart",
-  "Restart the GHCi session. Use after .cabal changes, new modules, or dependency updates. " +
-    "Kills the current GHCi process and starts a fresh one in the same project directory. " +
-    "For TypeScript code changes (after 'cd mcp-server && npx tsc'), the user must start a new Claude Code session — " +
-    "do NOT use process.exit() as it permanently disconnects tools from the conversation.",
-  {},
-  async () => {
-    resetQuickCheckState();
-    if (ghciSession) { await ghciSession.kill(); ghciSession = null; }
-    const session = await getSession();
-    return {
-      content: [{ type: "text", text: JSON.stringify({ success: true, message: "GHCi session restarted. MCP server still running.", alive: session.isAlive() }) }],
     };
   }
 );

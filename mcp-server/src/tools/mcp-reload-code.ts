@@ -7,10 +7,10 @@
  *
  * The MCP process caches `dist/index.js` at startup. Any TS edit → rebuild
  * cycle produces a newer `dist/` on disk, but the running process is
- * unaware until it is killed and respawned. `mcp_restart` only restarts the
- * GHCi child; it does not reload the Node bundle. This gap (OBS-2 in the
- * Phase-5 debug-inspection) blocks agents from iterating on the MCP itself
- * within a single Claude session.
+ * unaware until it is killed and respawned. `ghci_session(action="restart")`
+ * only restarts the GHCi child; it does not reload the Node bundle. This
+ * gap (OBS-2 in the Phase-5 debug-inspection) blocks agents from iterating
+ * on the MCP itself within a single Claude session.
  *
  * # Design
  *
@@ -238,7 +238,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
     "Schedule a graceful restart of the MCP Node process so fresh TypeScript edits take effect. " +
       "Dry-run by default: returns whether the compiled bundle (dist/index.js) is newer than the " +
       "running process. Pass confirm=true to actually exit — the MCP client will respawn the child " +
-      "automatically. mcp_restart, by contrast, only restarts GHCi; this one reloads the MCP bundle.",
+      "automatically. ghci_session(action=\"restart\"), by contrast, only restarts GHCi; this one reloads the MCP bundle.",
     {
       confirm: zBool()
         .optional()
