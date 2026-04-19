@@ -9,7 +9,10 @@
 [![CodeQL](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/codeql.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/codeql.yml)
 [![Release](https://img.shields.io/github/v/release/damian-rafael-lattenero/haskell-rules-and-mcp?label=release)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/latest)
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1166%20passing-brightgreen)](mcp-server/src/__tests__)
+[![TS tests](https://img.shields.io/badge/TS%20tests-1166%20passing-brightgreen)](mcp-server/src/__tests__)
+[![Haskell tests](https://img.shields.io/badge/Haskell%20tests-30%20passing-brightgreen)](mcp-server-haskell/test)
+[![Haskell MCP tools](https://img.shields.io/badge/Haskell%20tools-9-blue)](mcp-server-haskell/src/HaskellFlows/Tool)
+[![GHC](https://img.shields.io/badge/GHC-9.10%20%7C%209.12-8a5aa0)](https://www.haskell.org/ghc/)
 [![vibecoded](https://img.shields.io/badge/vibecoded-yes-ff69b4)](https://discourse.haskell.org/t/a-compact-for-responsible-use-of-ai-tools/13923)
 
 </div>
