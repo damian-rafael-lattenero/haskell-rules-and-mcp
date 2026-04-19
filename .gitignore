@@ -9,6 +9,7 @@
 # cache-key input; we don't commit the resulting plan.
 **/cabal.project.freeze
 **/cabal.project.local
+**/cabal.project.local~
 
 # MCP server build artifacts
 mcp-server/node_modules/
