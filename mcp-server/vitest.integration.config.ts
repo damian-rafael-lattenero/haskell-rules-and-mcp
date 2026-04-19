@@ -3,8 +3,13 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["src/__tests__/integration/**/*.test.ts"],
-    testTimeout: 30_000,
-    hookTimeout: 60_000,
+    // First `cabal repl` on a cold GitHub runner has to resolve + compile
+    // base, containers, QuickCheck from scratch — regularly hits 60-90s
+    // before GHCi emits its first prompt. Locally on macOS this is 2s
+    // because `~/.cabal/store` is warm. Bumped to match the e2e ceiling
+    // so `beforeEach` GHCi spawns don't time out on cold CI.
+    testTimeout: 90_000,
+    hookTimeout: 120_000,
     // `forks` gives each test file its own process → safe for GHCi sessions
     // and isolated workflow-state mutations.
     pool: "forks",
