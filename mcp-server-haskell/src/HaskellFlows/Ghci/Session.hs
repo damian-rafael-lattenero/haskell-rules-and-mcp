@@ -10,21 +10,27 @@
 -- * The process is spawned with 'proc' (argv form). There is no shell
 --   interpolation path at all.
 --
--- What is deliberately not ported yet (Phase 1 scope):
---
--- * The dual-pass strict/deferred compile dance. We run a plain @:l@.
--- * The library-target auto-detection from the .cabal file. We let
---   @cabal repl@ pick its default target.
--- * The @drainAndSync@ handshake. Startup readiness is detected by
---   waiting for the first sentinel after init.
+-- Phase 3 adds the dual-pass strict/deferred compile, bounded expression
+-- evaluation ('evaluate'), and public 'LoadMode'. Still pending: library
+-- target auto-detection from @.cabal@, and the full @drainAndSync@
+-- handshake (startup readiness still relies on the first sentinel).
 module HaskellFlows.Ghci.Session
   ( Session
   , GhciResult (..)
+  , CommandError (..)
+  , LoadMode (..)
+  , EvalResult (..)
   , startSession
   , killSession
   , execute
   , loadModule
+  , loadModuleWith
   , reload
+  , typeOf
+  , infoOf
+  , evaluate
+  , sanitizeExpression
+  , maxEvalBytes
   ) where
 
 import Control.Concurrent.Async (Async, async, cancel)
@@ -138,14 +144,125 @@ killSession s =
 execute :: Session -> Text -> IO GhciResult
 execute s cmd = withLock s (executeNoLock s cmd 30_000000)
 
--- | Load a specific module. Wraps @:l \<path\>@.
+-- | Which compilation mode GHCi should use for a load.
+--
+-- * 'Strict' — the default. Errors are errors; GHCi stops at the first
+--   one per module. Used to answer \"does this compile?\".
+-- * 'Deferred' — enables @-fdefer-type-errors@ and
+--   @-fdefer-typed-holes@, promoting errors to warnings. The module still
+--   loads so subsequent queries (holes, info) can run. Used to answer
+--   \"what holes / type issues exist?\" without blocking on the first one.
+data LoadMode = Strict | Deferred
+  deriving stock (Eq, Show)
+
+-- | Load a specific module in 'Strict' mode. Back-compat shim for Phase-1
+-- callers; new code should use 'loadModuleWith'.
 loadModule :: Session -> ModulePath -> IO GhciResult
-loadModule s mp =
+loadModule s mp = loadModuleWith s mp Strict
+
+-- | Load a specific module under the requested 'LoadMode'.
+--
+-- The deferred pass wraps the load with flag set/unset so session-wide
+-- state isn't polluted — after returning, subsequent 'typeOf'/'infoOf' see
+-- the same flags as before the call.
+loadModuleWith :: Session -> ModulePath -> LoadMode -> IO GhciResult
+loadModuleWith s mp Strict =
   execute s (T.pack (":l " <> unModulePath mp))
+loadModuleWith s mp Deferred = withLock s $ do
+  _ <- executeNoLock s ":set -fdefer-type-errors -fdefer-typed-holes" 30_000000
+  out <- executeNoLock s (T.pack (":l " <> unModulePath mp)) 30_000000
+  _ <- executeNoLock s ":unset -fdefer-type-errors -fdefer-typed-holes" 30_000000
+  pure out
 
 -- | Re-load all currently-loaded modules. Wraps @:r@.
 reload :: Session -> IO GhciResult
 reload s = execute s ":r"
+
+-- | Query the type of an expression. Wraps @:t \<expr\>@.
+--
+-- The expression is sanitised first: newlines and the framing sentinel are
+-- rejected, because either would desynchronise the single-sentinel response
+-- protocol. This is the only boundary-level sanitisation we need here —
+-- GHCi itself decides what is a valid expression, so we don't attempt to
+-- parse/validate Haskell syntax.
+typeOf :: Session -> Text -> IO (Either CommandError GhciResult)
+typeOf s expr = case sanitizeExpression expr of
+  Left e     -> pure (Left e)
+  Right safe -> Right <$> execute s (":t " <> safe)
+
+-- | Query detailed info about a name. Wraps @:i \<name\>@.
+infoOf :: Session -> Text -> IO (Either CommandError GhciResult)
+infoOf s name = case sanitizeExpression name of
+  Left e     -> pure (Left e)
+  Right safe -> Right <$> execute s (":i " <> safe)
+
+-- | Result of evaluating an arbitrary expression.
+--
+-- 'erOutput' is post-truncation. 'erTruncated' lets the client know the
+-- real output was larger than 'maxEvalBytes' (in bytes of the UTF-8
+-- encoding measured lazily as Text length — good enough since GHCi output
+-- is almost always ASCII).
+data EvalResult = EvalResult
+  { erOutput    :: !Text
+  , erSuccess   :: !Bool
+  , erTruncated :: !Bool
+  }
+  deriving stock (Eq, Show)
+
+-- | Upper bound on bytes returned from a single 'evaluate' call.
+--
+-- The goal is defence-in-depth against an agent requesting something like
+-- @print [1..]@: the GHCi child will still consume memory producing the
+-- output up until we call 'terminateProcess', but the MCP server itself
+-- never hands more than this number of characters to its client. Tuned to
+-- 64 KiB — enough for a full module's @show@ output, small enough not to
+-- balloon a JSON-RPC response.
+maxEvalBytes :: Int
+maxEvalBytes = 64 * 1024
+
+-- | Evaluate an arbitrary expression. Output is capped at 'maxEvalBytes'
+-- characters and 'erTruncated' is set if truncation happened.
+--
+-- The expression goes through 'sanitizeExpression' just like @:t@/@:i@,
+-- so newlines and the sentinel are rejected at the boundary.
+evaluate :: Session -> Text -> IO (Either CommandError EvalResult)
+evaluate s expr = case sanitizeExpression expr of
+  Left e     -> pure (Left e)
+  Right safe -> do
+    gr <- execute s safe
+    let raw       = grOutput gr
+        truncated = T.length raw > maxEvalBytes
+        capped    = if truncated
+                      then T.take maxEvalBytes raw <> "\n… [output truncated]"
+                      else raw
+    pure $ Right EvalResult
+      { erOutput    = capped
+      , erSuccess   = grSuccess gr
+      , erTruncated = truncated
+      }
+
+-- | Reasons a GHCi command argument was rejected at the boundary.
+data CommandError
+  = ContainsNewline
+    -- ^ Input contained @\\n@ or @\\r@. Would split into two GHCi
+    -- commands and emit two sentinels, desyncing framing.
+  | ContainsSentinel
+    -- ^ Input literally contains the framing sentinel. Would make the
+    -- reader think the response ended inside the echoed prompt.
+  | EmptyInput
+    -- ^ After stripping, nothing remained. GHCi would prompt-loop.
+  deriving stock (Eq, Show)
+
+-- | Boundary check for anything sent to GHCi as part of a single-line
+-- command. Exported so property tests can hit it directly.
+sanitizeExpression :: Text -> Either CommandError Text
+sanitizeExpression raw
+  | T.null stripped                          = Left EmptyInput
+  | T.any (`elem` ("\n\r" :: String)) raw    = Left ContainsNewline
+  | sentinel `T.isInfixOf` raw               = Left ContainsSentinel
+  | otherwise                                = Right stripped
+  where
+    stripped = T.strip raw
 
 --------------------------------------------------------------------------------
 -- internals

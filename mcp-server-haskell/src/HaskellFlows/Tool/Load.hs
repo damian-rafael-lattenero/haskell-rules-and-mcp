@@ -18,22 +18,30 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
 
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Parser.Error
 import HaskellFlows.Types
 
--- | The schema surfaced to clients via @tools/list@. Deliberately tiny
--- for Phase 1 — future phases will add @diagnostics@, @mode@, @load_all@.
+-- | The schema surfaced to clients via @tools/list@.
+--
+-- Phase 3 adds the optional @diagnostics@ flag. When true the tool runs a
+-- second deferred pass to surface holes and deferred-type-error warnings
+-- on top of the strict diagnostics. Agents that just want a compile gate
+-- should leave it off; agents driving property-first development should
+-- turn it on.
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
     { tdName        = "ghci_load"
     , tdDescription =
         "Load or reload Haskell modules in GHCi. Returns parsed compilation "
-          <> "errors and warnings. Phase-1 port of the TypeScript tool; "
-          <> "currently supports single-module load and plain reload."
+          <> "errors and warnings. Pass diagnostics=true to additionally run "
+          <> "a deferred pass (-fdefer-type-errors -fdefer-typed-holes) and "
+          <> "surface typed holes discovered that way."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -44,39 +52,56 @@ descriptor =
                       ("Path to a module to load, relative to the project \
                        \directory. Omit to reload current modules." :: Text)
                   ]
+              , "diagnostics" .= object
+                  [ "type"        .= ("boolean" :: Text)
+                  , "description" .=
+                      ("When true, runs a second deferred pass to extract \
+                       \typed holes and deferred-type-error warnings. \
+                       \Default: false." :: Text)
+                  ]
               ]
           , "additionalProperties" .= False
           ]
     }
 
-newtype LoadArgs = LoadArgs
-  { laModulePath :: Maybe Text
+data LoadArgs = LoadArgs
+  { laModulePath  :: !(Maybe Text)
+  , laDiagnostics :: !Bool
   }
   deriving stock (Show)
 
 instance FromJSON LoadArgs where
-  parseJSON = withObject "LoadArgs" $ \o ->
-    LoadArgs <$> o .:? "module_path"
+  parseJSON = withObject "LoadArgs" $ \o -> do
+    mp <- o .:? "module_path"
+    dx <- o .:? "diagnostics" .!= False
+    pure LoadArgs { laModulePath = mp, laDiagnostics = dx }
 
 -- | Handle a @tools/call@ for @ghci_load@.
 --
--- The returned 'ToolResult' carries a text content block whose payload is a
--- JSON string — this is the MCP convention and what the TS server does
--- today. Once all tools are ported we can revisit whether structured
--- content blocks are better.
+-- When @diagnostics@ is enabled and a concrete @module_path@ was given,
+-- run the load twice: first strict (authoritative errors), then deferred
+-- (holes + relaxed warnings). The strict pass is the source of truth for
+-- @success@; the deferred pass contributes extra warnings that weren't
+-- visible under strict compilation.
 handle :: Session -> ProjectDir -> Value -> IO ToolResult
 handle sess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
-  Right (LoadArgs Nothing) -> do
+  Right (LoadArgs Nothing _) -> do
     result <- reload sess
     pure (okResult result [])
-  Right (LoadArgs (Just p)) -> case mkModulePath pd (T.unpack p) of
+  Right (LoadArgs (Just p) dx) -> case mkModulePath pd (T.unpack p) of
     Left err -> pure (errorResult (formatPathError err))
     Right mp -> do
-      result <- loadModule sess mp
-      let diags = parseGhcErrors (grOutput result)
-      pure (okResult result diags)
+      strict <- loadModuleWith sess mp Strict
+      let strictDiags = parseGhcErrors (grOutput strict)
+      if dx
+        then do
+          deferred <- loadModuleWith sess mp Deferred
+          let extraDiags = parseGhcErrors (grOutput deferred)
+              merged     = mergeDiags strictDiags extraDiags
+          pure (okResult strict merged)
+        else pure (okResult strict strictDiags)
 
 --------------------------------------------------------------------------------
 -- response shaping
@@ -106,6 +131,20 @@ errorResult msg =
     , trIsError = True
     }
 
+-- | Combine diagnostics from the strict and deferred passes.
+--
+-- Strict errors are always kept (they're the compile-gate truth). The
+-- deferred pass contributes anything the strict pass didn't already
+-- report, deduplicated by source position + message so the agent doesn't
+-- see the same warning twice in the merged view.
+mergeDiags :: [GhcError] -> [GhcError] -> [GhcError]
+mergeDiags strictDiags deferredDiags =
+  strictDiags <> filter (not . alreadyReported) deferredDiags
+  where
+    seen = map posKey strictDiags
+    alreadyReported d = posKey d `elem` seen
+    posKey d = (geFile d, geLine d, geColumn d, geMessage d)
+
 summarise :: Bool -> [GhcError] -> [GhcError] -> Text
 summarise ok errs warns
   | not (null errs) = T.pack (show (length errs)) <> " error(s)"
@@ -113,12 +152,10 @@ summarise ok errs warns
   | ok = "Compiled OK. " <> T.pack (show (length warns)) <> " warning(s)."
   | otherwise = "Compilation produced no errors but GHCi reported failure."
 
+-- | UTF-8-safe JSON → Text. Avoids the @T.pack . show . encode@ path that
+-- would render non-ASCII as escaped Haskell string literals on the wire.
 encodeText :: Value -> Text
-encodeText = T.pack . show . encode
-  -- show on Data.ByteString.Lazy.Char8 produces a string literal that
-  -- would be quoted; we instead want the raw utf-8. Use explicit decode
-  -- when we add Data.Text.Lazy.Encoding to the dependency closure. For
-  -- now this keeps the wire shape deterministic and deps minimal.
+encodeText = TL.toStrict . TLE.decodeUtf8 . encode
 
 formatPathError :: PathError -> Text
 formatPathError = \case

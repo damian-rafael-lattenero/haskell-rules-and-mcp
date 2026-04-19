@@ -5,6 +5,7 @@
 **An agent-first MCP server for property-driven Haskell development.**
 
 [![CI](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/ci.yml)
+[![Haskell CI](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/haskell-ci.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/haskell-ci.yml)
 [![CodeQL](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/codeql.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/codeql.yml)
 [![Release](https://img.shields.io/github/v/release/damian-rafael-lattenero/haskell-rules-and-mcp?label=release)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/latest)
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)

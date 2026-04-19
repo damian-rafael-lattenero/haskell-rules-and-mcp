@@ -1,0 +1,200 @@
+name: Haskell CI
+
+# ---------------------------------------------------------------------------
+#  Continuous integration for the `mcp-server-haskell/` package — the
+#  Haskell rewrite of the MCP server. Modelled on conventions used by
+#  haskell/cabal, jgm/pandoc, and well-typed/generics-sop: matrix across
+#  supported GHC/OS pairs, cabal-store cache keyed on the freeze file,
+#  haddock/cabal-check/sdist gates, and separate hlint + fourmolu linters.
+#
+#  A single ``required`` job at the bottom folds every gate's result into
+#  one status check that branch protection can enforce — see GitHub
+#  Settings → Branches → "Require status checks" and point at it.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "mcp-server-haskell/**"
+      - ".github/workflows/haskell-ci.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "mcp-server-haskell/**"
+      - ".github/workflows/haskell-ci.yml"
+  workflow_dispatch: {}
+
+# Newer pushes cancel in-flight PR runs on the same ref. Master runs are
+# not cancellable so we always get a green/red signal per commit on the
+# protected branch.
+concurrency:
+  group: haskell-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least-privilege by default. Individual jobs ask for extras explicitly.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: mcp-server-haskell
+
+jobs:
+  # -------------------------------------------------------------------------
+  #  Full build + test + haddock + cabal-check + sdist across a small GHC
+  #  matrix. Two compiler versions on two OSes is the sweet spot for a
+  #  library this size: catches portability bugs without burning an hour
+  #  per PR. Extend the matrix once Phase 4 stabilises.
+  # -------------------------------------------------------------------------
+  build-and-test:
+    name: Build & test — GHC ${{ matrix.ghc }} / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        ghc: ["9.10.1", "9.12.2"]
+        cabal: ["3.12.1.0"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: setup
+        name: Set up GHC ${{ matrix.ghc }} / cabal ${{ matrix.cabal }}
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: ${{ matrix.ghc }}
+          cabal-version: ${{ matrix.cabal }}
+          cabal-update: true
+
+      # Freeze BEFORE cache so the key reflects the exact dependency plan.
+      # This is what haskell/cabal and pandoc do — hashing cabal.project
+      # alone under-invalidates when Hackage index advances.
+      - name: Configure + freeze
+        run: |
+          cabal configure --enable-tests --enable-benchmarks --disable-documentation
+          cabal freeze
+
+      - name: Restore cabal store cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.setup.outputs.cabal-store }}
+            dist-newstyle
+          key: ${{ runner.os }}-ghc-${{ matrix.ghc }}-cabal-${{ matrix.cabal }}-${{ hashFiles('mcp-server-haskell/cabal.project.freeze') }}
+          restore-keys: |
+            ${{ runner.os }}-ghc-${{ matrix.ghc }}-cabal-${{ matrix.cabal }}-
+
+      - name: Build dependencies
+        run: cabal build all --only-dependencies
+
+      - name: Build project
+        run: cabal build all
+
+      - name: Run tests
+        run: cabal test all --test-show-details=direct --test-options="--color"
+
+      # Haddock with `--haddock-all` spots broken @<https://...>@ links,
+      # dangling @-refs, and modules missing from the package description.
+      - name: Build haddocks
+        run: cabal haddock all --haddock-all
+
+      - name: Cabal check (package metadata sanity)
+        run: cabal check
+
+      # Proves the package can be published to Hackage. Round-tripping the
+      # tarball catches missing extra-source-files and bad file globs.
+      - name: SDist round-trip
+        run: |
+          cabal sdist all --output-dir /tmp/haskell-flows-mcp-sdist
+          ls -la /tmp/haskell-flows-mcp-sdist
+
+  # -------------------------------------------------------------------------
+  #  HLint with inline PR annotations. Fails on any 'suggestion' severity or
+  #  above — matches the zero-tolerance stance locked in during Phase 2-3.
+  # -------------------------------------------------------------------------
+  hlint:
+    name: HLint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up HLint
+        uses: haskell-actions/hlint-setup@v2
+        with:
+          version: "3.8"
+
+      - name: Run HLint
+        uses: haskell-actions/hlint-run@v2
+        with:
+          path: >-
+            ["mcp-server-haskell/src/", "mcp-server-haskell/test/",
+             "mcp-server-haskell/app/"]
+          fail-on: suggestion
+
+  # -------------------------------------------------------------------------
+  #  Fourmolu format check — advisory for now. Uses the project's
+  #  `fourmolu.yaml`. Kept non-blocking until the codebase is ran through
+  #  `fourmolu --mode inplace` once; at that point promote the gate by
+  #  (a) removing `continue-on-error` and (b) adding `fourmolu` to the
+  #  `needs` list of the `required` job.
+  # -------------------------------------------------------------------------
+  fourmolu:
+    name: Fourmolu format check (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run fourmolu
+        uses: haskell-actions/run-fourmolu@v11
+        with:
+          version: "0.16.2.0"
+          pattern: |
+            mcp-server-haskell/src/**/*.hs
+            mcp-server-haskell/test/**/*.hs
+            mcp-server-haskell/app/**/*.hs
+
+  # -------------------------------------------------------------------------
+  #  Advisory scan for stale dependency bounds. Runs on every push but is
+  #  allowed to fail without blocking the merge — the goal is to surface
+  #  drift, not to chase every Hackage bump on the critical path.
+  # -------------------------------------------------------------------------
+  outdated:
+    name: Outdated dependencies (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.12.2"
+          cabal-version: "3.12.1.0"
+          cabal-update: true
+
+      - name: Report outdated bounds
+        run: cabal outdated --exit-code
+
+  # -------------------------------------------------------------------------
+  #  Single aggregation job. Branch protection should require *only* this
+  #  check — the matrix jobs change shape as we add GHC versions, and this
+  #  keeps the branch-protection config stable.
+  # -------------------------------------------------------------------------
+  required:
+    name: Haskell CI required
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [build-and-test, hlint]
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Assert every required dependency succeeded
+        run: |
+          if [[ "${{ needs.build-and-test.result }}" != "success" ]] \
+          || [[ "${{ needs.hlint.result }}"          != "success" ]]; then
+            echo "One or more required Haskell CI jobs failed."
+            exit 1
+          fi
+          echo "All required Haskell checks green."

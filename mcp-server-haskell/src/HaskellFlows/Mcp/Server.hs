@@ -28,7 +28,10 @@ import System.Environment (lookupEnv)
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Types (ProjectDir, mkProjectDir)
+import qualified HaskellFlows.Tool.Eval as EvalTool
+import qualified HaskellFlows.Tool.Info as InfoTool
 import qualified HaskellFlows.Tool.Load as Load
+import qualified HaskellFlows.Tool.Type as TypeTool
 
 -- | All mutable server state.
 --
@@ -79,7 +82,14 @@ dispatch _ "initialize" _ rid =
             }
       }
 dispatch _ "tools/list" _ rid =
-  pure $ ok rid $ object [ "tools" .= [ Load.descriptor ] ]
+  pure $ ok rid $ object
+    [ "tools" .=
+        [ Load.descriptor
+        , TypeTool.descriptor
+        , InfoTool.descriptor
+        , EvalTool.descriptor
+        ]
+    ]
 dispatch srv "tools/call" (Just params) rid =
   case parseEither parseJSON params of
     Left err -> pure (err_ rid (invalidParamsErr (T.pack err)))
@@ -94,12 +104,27 @@ handleToolCall srv call rid = case tcName call of
   "ghci_load" -> do
     sess <- getOrStartSession srv
     pd   <- readIORef (srvProjectDir srv)
-    out  <- try (Load.handle sess pd (tcArguments call))
-              :: IO (Either SomeException ToolResult)
-    case out of
-      Left ex  -> pure (ok rid (toJSON (toolException (T.pack (show ex)))))
-      Right tr -> pure (ok rid (toJSON tr))
+    runTool rid (Load.handle sess pd (tcArguments call))
+  "ghci_type" -> do
+    sess <- getOrStartSession srv
+    runTool rid (TypeTool.handle sess (tcArguments call))
+  "ghci_info" -> do
+    sess <- getOrStartSession srv
+    runTool rid (InfoTool.handle sess (tcArguments call))
+  "ghci_eval" -> do
+    sess <- getOrStartSession srv
+    runTool rid (EvalTool.handle sess (tcArguments call))
   other -> pure (err_ rid (methodNotFoundErr ("tool " <> other)))
+
+-- | Common exception shield for every tool handler. Prevents a handler
+-- crash from taking down the server loop and surfaces it as a structured
+-- tool-level error to the client.
+runTool :: RequestId -> IO ToolResult -> IO Response
+runTool rid action = do
+  out <- try action :: IO (Either SomeException ToolResult)
+  case out of
+    Left ex  -> pure (ok rid (toJSON (toolException (T.pack (show ex)))))
+    Right tr -> pure (ok rid (toJSON tr))
 
 getOrStartSession :: Server -> IO Session
 getOrStartSession srv = modifyMVar (srvSession srv) $ \case

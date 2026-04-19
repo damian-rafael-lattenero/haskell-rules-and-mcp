@@ -44,7 +44,11 @@ library
                       HaskellFlows.Ghci.Sentinel
                       HaskellFlows.Ghci.Session
                       HaskellFlows.Parser.Error
+                      HaskellFlows.Parser.Type
                       HaskellFlows.Tool.Load
+                      HaskellFlows.Tool.Type
+                      HaskellFlows.Tool.Info
+                      HaskellFlows.Tool.Eval
     build-depends:    base              >= 4.20 && < 5
                     , aeson             >= 2.2  && < 2.3
                     , async             >= 2.2  && < 2.3
@@ -72,3 +76,4 @@ test-suite haskell-flows-mcp-test
     build-depends:    base              >= 4.20 && < 5
                     , haskell-flows-mcp
                     , text
+                    , QuickCheck        >= 2.14

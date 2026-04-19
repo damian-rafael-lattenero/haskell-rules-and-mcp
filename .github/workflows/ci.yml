@@ -1,10 +1,20 @@
 name: CI
 
+# Scoped to the TypeScript MCP under `mcp-server/`. Haskell-only changes
+# (see `mcp-server-haskell/`) are covered by `haskell-ci.yml` — keeping
+# them separate means a Haskell-only PR doesn't burn a full TS matrix,
+# and vice versa.
 on:
   push:
     branches: [master]
+    paths:
+      - "mcp-server/**"
+      - ".github/workflows/ci.yml"
   pull_request:
     branches: [master]
+    paths:
+      - "mcp-server/**"
+      - ".github/workflows/ci.yml"
 
 # Newer pushes cancel in-flight runs on the same ref — keeps CI cheap on
 # rapid-fire commits. Release runs are exempt (they live under a tag ref).
