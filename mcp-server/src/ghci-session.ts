@@ -180,6 +180,12 @@ export class GhciSession extends EventEmitter {
     this.process.on("exit", (code) => {
       this.ready = false;
       this.process = null;
+      // Mark health as corrupted on any unexpected exit so subsequent
+      // execute() calls fail fast with an actionable message instead of
+      // hanging on "GHCi not running". restart() is the documented recovery.
+      if (code !== 0 || this.pendingReject !== null) {
+        this.sessionHealth = 'corrupted';
+      }
       if (this.pendingReject) {
         this.pendingReject(new Error(`GHCi exited unexpectedly with code ${code}`));
         this.clearPending();

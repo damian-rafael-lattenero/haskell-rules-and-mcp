@@ -8,7 +8,7 @@
  * via `src/vendor-tools/manifest.ts`. This module used to hold the URL matrix
  * inline; centralizing it prevents drift between manifest and runtime.
  */
-import { mkdir, writeFile, chmod, access, readFile } from "node:fs/promises";
+import { mkdir, writeFile, chmod, access, readFile, unlink } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -33,6 +33,22 @@ const VENDOR_TOOLS_DIR = path.join(ROOT_DIR, "vendor-tools");
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 
+/**
+ * Maximum time a single download attempt may take. Tuned for the largest
+ * asset we ship (HLS, ~180MB) on a typical developer connection. Much
+ * shorter than the agent-side MCP timeout so failures are local and
+ * cancellable instead of bubbling up as opaque hangs.
+ */
+const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Per-URL concurrency guard: we remember in-flight downloads (keyed by the
+ * final `binaryPath`) and make concurrent callers await the same promise
+ * instead of racing to write the same file. Replaces what would otherwise
+ * be corrupted partial binaries under parallel tool calls.
+ */
+const IN_FLIGHT: Map<string, Promise<void>> = new Map();
+
 function hasVerifiableChecksum(entry: Pick<ReleaseEntry, "sha256">): boolean {
   if (!entry.sha256) return false;
   return SHA256_PATTERN.test(entry.sha256.trim());
@@ -44,29 +60,69 @@ async function computeSHA256(filePath: string): Promise<string> {
 }
 
 async function downloadFile(url: string, destPath: string): Promise<void> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-  }
-  if (!response.body) {
-    throw new Error("Response body is null");
-  }
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
 
-  await mkdir(path.dirname(destPath), { recursive: true });
-  const fileStream = createWriteStream(destPath);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+    }
+    if (!response.body) {
+      throw new Error("Response body is null");
+    }
 
-  // Write response body to file
-  const reader = response.body.getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    fileStream.write(value);
+    await mkdir(path.dirname(destPath), { recursive: true });
+    const fileStream = createWriteStream(destPath);
+
+    try {
+      const reader = response.body.getReader();
+      // Reading respects controller.signal — an abort will surface as an
+      // error thrown from reader.read(), which we translate to a clear
+      // timeout message below.
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        fileStream.write(value);
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        fileStream.end(() => resolve());
+        fileStream.on("error", reject);
+      });
+    } catch (streamErr) {
+      // Ensure the file descriptor is released before bubbling the error.
+      fileStream.destroy();
+      throw streamErr;
+    }
+  } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      throw new Error(
+        `Download timed out after ${DOWNLOAD_TIMEOUT_MS / 1000}s: ${url}`
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutHandle);
   }
+}
 
-  return new Promise<void>((resolve, reject) => {
-    fileStream.end(() => resolve());
-    fileStream.on("error", reject);
+/**
+ * Serializes `downloadFile` calls against the same destination path. Two
+ * callers racing on the same binary see the same underlying promise; once
+ * it resolves (or rejects), the slot is freed so later retries behave as
+ * fresh downloads.
+ */
+async function downloadFileExclusive(url: string, destPath: string): Promise<void> {
+  const inFlight = IN_FLIGHT.get(destPath);
+  if (inFlight) {
+    return inFlight;
+  }
+  const promise = downloadFile(url, destPath).finally(() => {
+    IN_FLIGHT.delete(destPath);
   });
+  IN_FLIGHT.set(destPath, promise);
+  return promise;
 }
 
 export interface AutoDownloadResult {
@@ -160,7 +216,7 @@ export async function autoDownloadTool(tool: SupportedTool): Promise<AutoDownloa
 
   for (const attempt of attempts) {
     try {
-      await downloadFile(attempt.url, tempPath);
+      await downloadFileExclusive(attempt.url, tempPath);
       await chmod(tempPath, 0o755);
 
       const hasChecksum = !!(attempt.sha256 && SHA256_PATTERN.test(attempt.sha256.trim()));
@@ -193,9 +249,18 @@ export async function autoDownloadTool(tool: SupportedTool): Promise<AutoDownloa
         url: attempt.url,
         error: error instanceof Error ? error.message : String(error),
       });
-      // Continue to next attempt (or fall through to failure below)
+      // Clean up the partial .download so the next attempt (or a retry in a
+      // future session) sees a clean slate instead of reusing a potentially
+      // corrupt file. Swallow unlink errors — if the file is already gone we
+      // are happy; if unlink fails we still want to record the download
+      // error that triggered this branch.
+      try { await unlink(tempPath); } catch { /* no-op */ }
     }
   }
+
+  // Defensive: if all attempts fell through without returning, also make
+  // sure the tempPath is gone before we propagate the error up.
+  try { await unlink(tempPath); } catch { /* no-op */ }
 
   const summary = attemptErrors
     .map((e) => `${e.label}(${e.url}): ${e.error}`)

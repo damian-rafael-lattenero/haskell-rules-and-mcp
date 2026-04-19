@@ -112,3 +112,40 @@ export function parseScopeError(output: string): ScopeError | null {
 
   return null;
 }
+
+/**
+ * Heuristic detector for the GHC "Ambiguous type variable" error surfaced
+ * by QuickCheck when the property body contains `==` between two calls
+ * whose return type cannot be inferred by defaulting under
+ * -fdefer-type-errors.
+ *
+ * Typical pattern:
+ *   <interactive>:65:50: error: [GHC-39999]
+ *     • Ambiguous type variable ‘a0’ arising from a use of ‘==’
+ *
+ * Returns the suggested remediation: a concrete type annotation hint that
+ * matches the shape `\x -> expr == expr'` → wrap one side with `:: Type`.
+ *
+ * Does NOT auto-retry — an automatic fix would require probing GHCi with
+ * `:t` on one side of the comparison, which is expensive and error-prone.
+ * Instead we surface a clear, actionable hint the agent can apply.
+ */
+export interface AmbiguousTypeHint {
+  ambiguousVar: string;
+  suggestion: string;
+}
+
+export function parseAmbiguousTypeVariable(output: string): AmbiguousTypeHint | null {
+  const match = output.match(
+    /Ambiguous type variable\s+['\u2018](\w+)['\u2019]\s+arising from a use of\s+['\u2018](\S+?)['\u2019]/
+  );
+  if (!match) return null;
+  const [, varName, op] = match;
+  return {
+    ambiguousVar: varName!,
+    suggestion:
+      `The expression's return type cannot be inferred (ambiguous '${varName}' arising from '${op}'). ` +
+      "Add an explicit type annotation on one side, e.g. `(lhs :: Either Error Int) == rhs`. " +
+      "Common fix for evaluator laws: `(eval env e :: Either Error Int) == eval env e'`.",
+  };
+}

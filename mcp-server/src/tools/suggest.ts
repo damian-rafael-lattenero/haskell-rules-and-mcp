@@ -263,11 +263,44 @@ export async function handleAnalyze(
     });
   }
 
-  // Build sibling list for roundtrip detection
-  const siblings: Sibling[] = functions.map((f) => ({
-    name: f.name,
-    type: `${f.name} :: ${f.type}`,
-  }));
+  // Build sibling list from ALL currently-loaded modules, not just the
+  // target module. This is necessary for cross-module engines (e.g.
+  // evaluator-preservation) to fire: when analyzing `simplify :: Expr -> Expr`
+  // in Simplify.hs, we want `eval :: Env -> Expr -> r` from Eval.hs to appear
+  // as a sibling. `:show modules` lists everything in the GHCi scope; we
+  // `:browse` each and union the function definitions.
+  const siblings: Sibling[] = [];
+  const seen = new Set<string>();
+  for (const f of functions) {
+    siblings.push({ name: f.name, type: `${f.name} :: ${f.type}` });
+    seen.add(f.name);
+  }
+  try {
+    const showMods = await session.execute(":show modules");
+    const otherModules = showMods.output
+      .split("\n")
+      .map((line) => line.match(/^(\S+)\s+\(/)?.[1])
+      .filter((n): n is string => !!n && n !== modName);
+
+    for (const m of otherModules) {
+      const result = await session.execute(`:browse ${m}`);
+      if (!result.success) continue;
+      const otherDefs = parseBrowseOutput(
+        result.output.length > 50_000
+          ? result.output.slice(0, 50_000)
+          : result.output
+      );
+      for (const d of otherDefs) {
+        if (d.kind !== "function") continue;
+        if (seen.has(d.name)) continue; // target-module functions win
+        siblings.push({ name: d.name, type: `${d.name} :: ${d.type}` });
+        seen.add(d.name);
+      }
+    }
+  } catch {
+    // Non-fatal: cross-module siblings are best-effort. If browse fails for
+    // one module we still have the target-module siblings.
+  }
 
   // Get type and suggest properties for each function
   const analyzed = functions.map((fn) => {
@@ -280,6 +313,7 @@ export async function handleAnalyze(
         law: p.law,
         property: p.property,
         confidence: p.confidence,
+        ...(p.rationale ? { rationale: p.rationale } : {}),
       })),
     };
   });

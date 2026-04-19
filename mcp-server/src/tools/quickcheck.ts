@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { GhciSession, type GhciResult } from "../ghci-session.js";
-import { parseQuickCheckOutput, parseScopeError } from "../parsers/quickcheck-parser.js";
+import { parseQuickCheckOutput, parseScopeError, parseAmbiguousTypeVariable } from "../parsers/quickcheck-parser.js";
 import { parseEvalOutput } from "../parsers/eval-output-parser.js";
 import {
   parseCabalModules,
@@ -448,11 +448,19 @@ export async function handleQuickCheck(
     });
   }
 
+  // Detect the "Ambiguous type variable" compilation error specifically
+  // (OBS #3): when a property body compares two calls whose return type
+  // cannot be defaulted under -fdefer-type-errors. We surface a clear,
+  // actionable hint instead of letting the agent wade through the noisy
+  // raw GHC error.
+  const ambiguity = parseAmbiguousTypeVariable(result.output);
+
   return JSON.stringify({
     ...parsed,
     ...(autoResolved ? { _autoResolved: true } : {}),
     ...(propertySaved ? { _propertySaved: true, _propertyStoreCount: propertyStoreCount } : {}),
     ...(args.roundtrip ? { roundtrip: true, generated_property: actualProperty } : {}),
+    ...(ambiguity ? { _ambiguityHint: ambiguity.suggestion } : {}),
     ...(!parsed.success && !isCompilationError
       ? {
           _guidance: [
@@ -464,9 +472,11 @@ export async function handleQuickCheck(
       : {}),
     _nextStep: parsed.success
       ? "Property passed. Test more properties or move to the next function."
-      : isCompilationError
-        ? "Property has a type/syntax error. Fix the property expression and retry."
-        : "Property FAILED. Debug with ghci_trace or fix the implementation.",
+      : ambiguity
+        ? `Property has an ambiguous return type. ${ambiguity.suggestion}`
+        : isCompilationError
+          ? "Property has a type/syntax error. Fix the property expression and retry."
+          : "Property FAILED. Debug with ghci_trace or fix the implementation.",
     // Hint for roundtrip failures — common cause is normalization
     ...(!parsed.success && !isCompilationError && (isLikelyRoundtrip(actualProperty) || args.roundtrip)
       ? { _hint: "Roundtrip property failed. Common cause: normalization differences (e.g. Neg (Lit n) vs Lit (negate n)). Consider using roundtrip parameter with normalize function: roundtrip='pretty,parse,normalize'" }

@@ -50,11 +50,53 @@ function storePath(projectDir: string): string {
   return path.join(projectDir, ".haskell-flows", "properties.json");
 }
 
+/**
+ * Load the property store. Distinguishes three cases:
+ *   1. File does not exist (ENOENT) → fresh empty store.
+ *   2. File exists but is not valid JSON → back up the corrupt file with a
+ *      `.corrupt-<timestamp>` suffix and return an empty store.  This is
+ *      a **deliberate non-destructive recovery** — we never silently drop
+ *      a user's saved properties without leaving forensic evidence on disk.
+ *   3. File is valid JSON but does not match the expected shape → treated
+ *      like (2): back up, start fresh.
+ *
+ * Historical bug: previous implementation caught every error as "file not
+ * present" and silently returned an empty store, losing every saved
+ * property on a single malformed byte. Fixed in Fase 5.
+ */
 export async function loadStore(projectDir: string): Promise<PropertyStore> {
+  const file = storePath(projectDir);
+  let data: string;
   try {
-    const data = await readFile(storePath(projectDir), "utf-8");
-    return JSON.parse(data) as PropertyStore;
-  } catch {
+    data = await readFile(file, "utf-8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") {
+      return { version: 1, properties: [] };
+    }
+    throw err; // permission / IO error — let the caller see it
+  }
+
+  try {
+    const parsed = JSON.parse(data) as unknown;
+    if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { properties?: unknown }).properties)) {
+      throw new Error("property-store: JSON parsed but schema mismatch (missing/invalid 'properties' array)");
+    }
+    return parsed as PropertyStore;
+  } catch (parseErr) {
+    // Preserve the corrupt file — never silently drop saved state.
+    const backup = `${file}.corrupt-${Date.now()}`;
+    try {
+      await writeFile(backup, data, "utf-8");
+    } catch {
+      // If we can't even write the backup, continue anyway — the corrupt
+      // content is still on disk at `file`, untouched.
+    }
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[property-store] Could not parse ${file} (${(parseErr as Error).message}). ` +
+      `Backed up to ${backup}. Starting with an empty store.`
+    );
     return { version: 1, properties: [] };
   }
 }

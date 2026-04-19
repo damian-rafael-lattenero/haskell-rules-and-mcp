@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { GhciSession } from "./ghci-session.js";
 import { resetQuickCheckState } from "./tools/quickcheck.js";
@@ -346,6 +347,26 @@ registerStrictTool(server, ctx,
       const alive = ghciSession?.isAlive() ?? false;
       const notice = await ctx.getRulesNotice();
       const response: Record<string, unknown> = { alive, projectDir };
+
+      // Surface dist build metadata so an agent editing the MCP itself can
+      // detect when its own changes haven't taken effect yet. The Node process
+      // caches the bundle at startup and does not re-read dist/ between
+      // calls; only a full Claude Code session restart picks up TS edits.
+      // Comparing these timestamps against `Date.now()` makes the lag visible.
+      try {
+        const bootstrapPath = fileURLToPath(import.meta.url);
+        const stats = await stat(bootstrapPath);
+        response.dist = {
+          buildTime: stats.mtime.toISOString(),
+          ageMinutes: Math.round((Date.now() - stats.mtimeMs) / 60_000),
+          hint:
+            "If you just edited TypeScript, restart Claude Code to reload the compiled bundle — " +
+            "mcp_restart only restarts GHCi, not the MCP process.",
+        };
+      } catch {
+        // Non-fatal.
+      }
+
       if (notice) response._info = notice;
       // When no active session, surface available projects so the LLM can switch
       if (!alive) {

@@ -531,6 +531,30 @@ export function register(server: McpServer, ctx: ToolContext): void {
           } catch {
             // Non-fatal: function tracking is informational
           }
+
+          // Detect Arbitrary instances that were written by hand (no
+          // `ghci_arbitrary` call required). Fixes the false-negative
+          // `_guidance` message "No Arbitrary instances in any module" that
+          // used to fire even when the module file clearly declared
+          // `instance Arbitrary …`. `:info Arbitrary` in GHCi enumerates
+          // every Arbitrary instance currently in scope; we match any line
+          // whose instance head mentions a type name we can attribute to
+          // a loaded module.
+          try {
+            const arbInfo = await session.execute(":info Arbitrary");
+            if (arbInfo.success && /instance\s+[^\n]*\bArbitrary\b/.test(arbInfo.output)) {
+              // GHCi's `:info Arbitrary` prints one `instance … Arbitrary <T>`
+              // line per known instance. Distinguishing which module the
+              // type lives in requires a separate :info on the type, which is
+              // expensive. Good enough heuristic: if any Arbitrary instance
+              // exists, attribute it to the currently-loaded module. The
+              // guidance only needs "at least one module has Arbitrary",
+              // not per-module attribution.
+              ctx.updateModuleProgress(module_path, { arbitraryInstancesDefined: true });
+            }
+          } catch {
+            // Non-fatal: guidance falls back to prior behaviour.
+          }
         }
       }
 

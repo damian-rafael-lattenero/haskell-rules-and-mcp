@@ -95,12 +95,12 @@
   "tools": [
     {
       "tool": "hlint",
-      "version": "3.10-shim",
+      "version": "v3.10",
       "platform": "darwin",
       "arch": "arm64",
       "filename": "hlint/darwin-arm64/hlint",
-      "sha256": "c09fc6a4cc3fa619f5d99b68f1d0d5f660650b20167b25c2b53c510a0ba0f786",
-      "provenance": "local-shim"
+      "sha256": "660d5288ca1a2c6220f9549a64f190f3df749cf01ea8349f8e8ef35ceb169d63",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "hlint",
@@ -149,12 +149,12 @@
     },
     {
       "tool": "fourmolu",
-      "version": "0.19.0.1-shim",
+      "version": "v0.19.0.1",
       "platform": "darwin",
       "arch": "arm64",
       "filename": "fourmolu/darwin-arm64/fourmolu",
-      "sha256": "7e1bd29fd0dbd77689e8cdc07ba070c58db16fd7f332b29a3217e2a3c661013f",
-      "provenance": "local-shim"
+      "sha256": "e8e793f2c361ad6e506fce46f4b89d46fce2af6647e753dc088fb005b650bb8c",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "fourmolu",
@@ -203,12 +203,12 @@
     },
     {
       "tool": "ormolu",
-      "version": "0.7.7.0-shim",
+      "version": "v0.7.7.0",
       "platform": "darwin",
       "arch": "arm64",
       "filename": "ormolu/darwin-arm64/ormolu",
-      "sha256": "c863b44162ce08c506530ff167ac78c6082be3c2038252324d66d41b0d11eeaf",
-      "provenance": "local-shim"
+      "sha256": "d073199f566100cf57893d08b3df4f02c70ff7e650bf38d601e4fe9b3935b218",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "ormolu",
@@ -257,12 +257,12 @@
     },
     {
       "tool": "hls",
-      "version": "2.13.0.0-shim",
+      "version": "v2.13.0.0",
       "platform": "darwin",
       "arch": "arm64",
       "filename": "hls/darwin-arm64/haskell-language-server-wrapper",
-      "sha256": "3e365b98f9b3104e5d80ac3bcc94b3e5e5bb05aa6c6d5ca937922d7ea101b3c4",
-      "provenance": "local-shim"
+      "sha256": "949cb139b269a4487c82adfb17ff326f3defa9fa9fee6342297895e9ef2647c8",
+      "provenance": "auto-download-ready"
     },
     {
       "tool": "hls",
