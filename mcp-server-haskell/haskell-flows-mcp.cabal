@@ -44,11 +44,15 @@ library
                       HaskellFlows.Ghci.Sentinel
                       HaskellFlows.Ghci.Session
                       HaskellFlows.Parser.Error
+                      HaskellFlows.Parser.Hole
+                      HaskellFlows.Parser.QuickCheck
                       HaskellFlows.Parser.Type
-                      HaskellFlows.Tool.Load
-                      HaskellFlows.Tool.Type
-                      HaskellFlows.Tool.Info
                       HaskellFlows.Tool.Eval
+                      HaskellFlows.Tool.Hole
+                      HaskellFlows.Tool.Info
+                      HaskellFlows.Tool.Load
+                      HaskellFlows.Tool.QuickCheck
+                      HaskellFlows.Tool.Type
     build-depends:    base              >= 4.20 && < 5
                     , aeson             >= 2.2  && < 2.3
                     , async             >= 2.2  && < 2.3

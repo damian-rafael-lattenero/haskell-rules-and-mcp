@@ -28,10 +28,12 @@ import System.Environment (lookupEnv)
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Types (ProjectDir, mkProjectDir)
-import qualified HaskellFlows.Tool.Eval as EvalTool
-import qualified HaskellFlows.Tool.Info as InfoTool
-import qualified HaskellFlows.Tool.Load as Load
-import qualified HaskellFlows.Tool.Type as TypeTool
+import qualified HaskellFlows.Tool.Eval       as EvalTool
+import qualified HaskellFlows.Tool.Hole       as HoleTool
+import qualified HaskellFlows.Tool.Info       as InfoTool
+import qualified HaskellFlows.Tool.Load       as Load
+import qualified HaskellFlows.Tool.QuickCheck as QcTool
+import qualified HaskellFlows.Tool.Type       as TypeTool
 
 -- | All mutable server state.
 --
@@ -88,6 +90,8 @@ dispatch _ "tools/list" _ rid =
         , TypeTool.descriptor
         , InfoTool.descriptor
         , EvalTool.descriptor
+        , QcTool.descriptor
+        , HoleTool.descriptor
         ]
     ]
 dispatch srv "tools/call" (Just params) rid =
@@ -114,6 +118,13 @@ handleToolCall srv call rid = case tcName call of
   "ghci_eval" -> do
     sess <- getOrStartSession srv
     runTool rid (EvalTool.handle sess (tcArguments call))
+  "ghci_quickcheck" -> do
+    sess <- getOrStartSession srv
+    runTool rid (QcTool.handle sess (tcArguments call))
+  "ghci_hole" -> do
+    sess <- getOrStartSession srv
+    pd   <- readIORef (srvProjectDir srv)
+    runTool rid (HoleTool.handle sess pd (tcArguments call))
   other -> pure (err_ rid (methodNotFoundErr ("tool " <> other)))
 
 -- | Common exception shield for every tool handler. Prevents a handler

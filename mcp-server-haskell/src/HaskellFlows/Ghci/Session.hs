@@ -11,9 +11,27 @@
 --   interpolation path at all.
 --
 -- Phase 3 adds the dual-pass strict/deferred compile, bounded expression
--- evaluation ('evaluate'), and public 'LoadMode'. Still pending: library
--- target auto-detection from @.cabal@, and the full @drainAndSync@
--- handshake (startup readiness still relies on the first sentinel).
+-- evaluation ('evaluate'), and public 'LoadMode'. Phase 4 layers
+-- 'runProperty' on top for QuickCheck.
+--
+-- Known DoS surface (TODO / Phase 5): 'drainHandle' appends every byte
+-- the GHCi child writes, unbounded, into the STM buffer. A deliberately
+-- verbose expression — e.g. @print [1..]@ piped through 'evaluate' —
+-- will grow the buffer until either the process is killed or the host
+-- runs out of memory. 'evaluate' caps what it /returns/ to the client
+-- ('maxEvalBytes'), but does not cap the in-flight buffer. Mitigations
+-- considered:
+--
+--  1. Cap the buffer and truncate silently — breaks sentinel framing if
+--     the sentinel lands past the cap.
+--  2. Cap the buffer and, on overflow, kill and restart the session —
+--     safe but destroys the agent's in-memory loaded-modules state.
+--  3. Apply an OS-level rlimit on the child.
+--
+-- Deferred until we have load metrics from real agent traffic; for now
+-- the maxEvalBytes return cap keeps the client-facing protocol bounded.
+-- Still pending from earlier phases: library target auto-detection from
+-- @.cabal@, and the full @drainAndSync@ handshake.
 module HaskellFlows.Ghci.Session
   ( Session
   , GhciResult (..)
@@ -29,6 +47,7 @@ module HaskellFlows.Ghci.Session
   , typeOf
   , infoOf
   , evaluate
+  , runProperty
   , sanitizeExpression
   , maxEvalBytes
   ) where
@@ -219,6 +238,24 @@ data EvalResult = EvalResult
 -- balloon a JSON-RPC response.
 maxEvalBytes :: Int
 maxEvalBytes = 64 * 1024
+
+-- | Run a QuickCheck property.
+--
+-- Ensures @Test.QuickCheck@ is in scope (the redundant import is a no-op
+-- in GHCi after the first call, so we pay the roundtrip cost once per
+-- 'runProperty' call — acceptable for a tool that an agent invokes at
+-- human speed), then evaluates @quickCheck (\<propertyExpr\>)@. The
+-- expression is sanitised at the boundary just like 'evaluate'.
+--
+-- Both @import@ and @quickCheck@ run under a single lock so a concurrent
+-- 'typeOf' can't slip between them and see @Test.QuickCheck@ in scope
+-- briefly, which could mask genuine import failures in the session.
+runProperty :: Session -> Text -> IO (Either CommandError GhciResult)
+runProperty s propertyExpr = case sanitizeExpression propertyExpr of
+  Left e     -> pure (Left e)
+  Right safe -> fmap Right $ withLock s $ do
+    _ <- executeNoLock s "import Test.QuickCheck" 30_000000
+    executeNoLock s ("quickCheck (" <> safe <> ")") 30_000000
 
 -- | Evaluate an arbitrary expression. Output is capped at 'maxEvalBytes'
 -- characters and 'erTruncated' is set if truncation happened.

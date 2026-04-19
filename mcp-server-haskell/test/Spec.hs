@@ -30,6 +30,14 @@ import HaskellFlows.Ghci.Session
   , sanitizeExpression
   )
 import HaskellFlows.Parser.Error (parseGhcErrors, Severity (..), GhcError (..))
+import HaskellFlows.Parser.Hole
+  ( TypedHole (..)
+  , parseTypedHoles
+  )
+import HaskellFlows.Parser.QuickCheck
+  ( QuickCheckResult (..)
+  , parseQuickCheckOutput
+  )
 import HaskellFlows.Parser.Type
   ( ParsedType (..)
   , isOutOfScope
@@ -62,6 +70,13 @@ main = do
       , quickTest "prop_sanitize_clean_roundtrip"     prop_sanitize_clean_roundtrip
       , quickTest "prop_modulePath_rejects_dotdot"    prop_modulePath_rejects_dotdot
       , quickTest "prop_modulePath_accepts_inTree"    prop_modulePath_accepts_inTree
+      , test "parseQuickCheckOutput passed"        testQcPassed
+      , test "parseQuickCheckOutput failed"        testQcFailed
+      , test "parseQuickCheckOutput gave up"       testQcGaveUp
+      , test "parseQuickCheckOutput exception"     testQcException
+      , test "parseQuickCheckOutput unparsed"      testQcUnparsed
+      , test "parseTypedHoles extracts one hole"   testHoleOne
+      , test "parseTypedHoles ignores non-holes"   testHoleIgnored
       ]
   if and results then exitSuccess else exitFailure
 
@@ -252,3 +267,75 @@ instance QC.Arbitrary SafeSegment where
   arbitrary = SafeSegment <$> QC.listOf1 (QC.elements alphaNum)
     where
       alphaNum = ['a'..'z'] <> ['A'..'Z'] <> ['0'..'9'] <> "_-"
+
+--------------------------------------------------------------------------------
+-- Phase 4: QuickCheck output + typed-hole parsers
+--------------------------------------------------------------------------------
+
+testQcPassed :: IO Bool
+testQcPassed =
+  let raw = "+++ OK, passed 100 tests."
+  in pure $ case parseQuickCheckOutput "prop" raw of
+       QcPassed _ 100 -> True
+       _              -> False
+
+testQcFailed :: IO Bool
+testQcFailed =
+  let raw = T.unlines
+        [ "*** Failed! Falsifiable (after 3 tests and 2 shrinks):"
+        , "[1,2,3]"
+        , ""
+        ]
+  in pure $ case parseQuickCheckOutput "prop" raw of
+       QcFailed _ 2 2 cex -> cex == "[1,2,3]"
+       _                  -> False
+
+testQcGaveUp :: IO Bool
+testQcGaveUp =
+  let raw = "*** Gave up! Passed only 12 tests; 88 discarded."
+  in pure $ case parseQuickCheckOutput "prop" raw of
+       QcGaveUp _ 12 88 -> True
+       _                -> False
+
+testQcException :: IO Bool
+testQcException =
+  let raw = "*** Failed! Exception: 'divide by zero' (after 1 test):"
+  in pure $ case parseQuickCheckOutput "prop" raw of
+       QcException _ exn -> "divide by zero" `T.isInfixOf` exn
+       _                 -> False
+
+testQcUnparsed :: IO Bool
+testQcUnparsed =
+  let raw = "something completely unexpected"
+  in pure $ case parseQuickCheckOutput "prop" raw of
+       QcUnparsed {} -> True
+       _             -> False
+
+-- | A canonical GHC-88464 block. The whitespace before the indented
+-- continuation lines is significant — GHC uses 4 spaces + bullet.
+holeSampleOutput :: T.Text
+holeSampleOutput = T.unlines
+  [ "src/Foo.hs:12:5: warning: [GHC-88464] [-Wtyped-holes]"
+  , "    \x2022 Found hole: _ :: Int -> Int"
+  , "    \x2022 In the expression: _"
+  , "      In an equation for 'bar': bar = _"
+  , "    \x2022 Relevant bindings include"
+  , "        x :: Int (bound at src/Foo.hs:12:1)"
+  , "        bar :: Int -> Int (bound at src/Foo.hs:12:1)"
+  ]
+
+testHoleOne :: IO Bool
+testHoleOne =
+  pure $ case parseTypedHoles holeSampleOutput of
+    [h] -> thHole h == "_"
+        && thExpectedType h == "Int -> Int"
+        && thFile h == "src/Foo.hs"
+        && thLine h == 12
+        && thColumn h == 5
+        && length (thRelevantBindings h) == 2
+    _   -> False
+
+testHoleIgnored :: IO Bool
+testHoleIgnored =
+  let raw = "src/Foo.hs:3:1: error: Not in scope: 'blah'"
+  in pure (null (parseTypedHoles raw))
