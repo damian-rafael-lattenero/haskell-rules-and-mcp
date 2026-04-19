@@ -225,7 +225,20 @@ export async function handleCoverage(
     }
   }
 
+  // `overall` keeps the historical "lowest metric" semantics so that any
+  // agent comparing the old field gets the same answer. `weightedOverall`
+  // is the NEW, more representative number: sum of numerators ÷ sum of
+  // denominators across all metrics with parseable `a/b` fractions.
+  //
+  // Example: a 221-element pool at 96% and a 20-element pool at 70% has
+  //   overall          = 70  (misleading — 6% of code brought down the report)
+  //   weightedOverall  = 94  (honest — most code is actually well-covered)
+  //
+  // The threshold check still uses `overall` (the conservative floor) so
+  // a single under-tested metric still flags non-trivial coverage gaps.
+  // Raising a separate threshold on weightedOverall would be additive.
   const overall = metrics.length > 0 ? Math.min(...metrics.map((m) => m.percent)) : undefined;
+  const weightedOverall = computeWeightedOverall(metrics);
   const minPercent = args.min_percent;
   const meetsThreshold = minPercent === undefined || (overall !== undefined && overall >= minPercent);
 
@@ -237,6 +250,7 @@ export async function handleCoverage(
       output: cabalOutput,
       metrics,
       ...(overall !== undefined ? { overallPercent: overall } : {}),
+      ...(weightedOverall !== undefined ? { weightedOverall } : {}),
     });
   }
 
@@ -256,15 +270,51 @@ export async function handleCoverage(
     reportSource,
     metrics,
     ...(overall !== undefined ? { overallPercent: overall } : {}),
+    ...(weightedOverall !== undefined ? { weightedOverall } : {}),
     ...(minPercent !== undefined ? { minPercent, meetsThreshold } : {}),
     ...(hpcReport ? { hpcReport } : {}),
     ...(htmlIndexPath ? { htmlIndexPath } : {}),
     summary:
       overall === undefined
         ? "Coverage run completed but no parseable coverage percentages were found."
-        : `Coverage run completed. Lowest reported metric: ${overall.toFixed(2)}% (source: ${reportSource}).`,
+        : weightedOverall !== undefined && weightedOverall !== overall
+          ? `Coverage run completed. Lowest metric: ${overall.toFixed(2)}% · weighted overall: ${weightedOverall.toFixed(2)}% (source: ${reportSource}).`
+          : `Coverage run completed. Lowest reported metric: ${overall.toFixed(2)}% (source: ${reportSource}).`,
     ...(overall === undefined ? { _hint: noMetricsHint } : {}),
   });
+}
+
+/**
+ * Weight-the-average-by-fraction-denominator coverage summary.
+ *
+ * `overallPercent` (the existing field) reports the LOWEST metric, which
+ * is useful as a conservative floor but misleading when one metric has
+ * a tiny denominator (6 untested "if" conditions pulling the overall
+ * down from 96% to 70%). The weighted overall treats every "decision
+ * point" — each entry in a fraction's denominator — as one unit and
+ * divides total-hit by total-possible.
+ *
+ * Returns undefined when NO metric carries a parseable `a/b` fraction.
+ * Metrics without fractions are silently skipped — they contribute
+ * neither numerator nor denominator, so they don't distort the result.
+ */
+export function computeWeightedOverall(
+  metrics: ReadonlyArray<{ metric: string; percent: number; fraction?: string }>
+): number | undefined {
+  let numerator = 0;
+  let denominator = 0;
+  for (const m of metrics) {
+    if (!m.fraction) continue;
+    const match = /^(\d+)\s*\/\s*(\d+)$/.exec(m.fraction.trim());
+    if (!match) continue;
+    const n = Number(match[1]);
+    const d = Number(match[2]);
+    if (!Number.isFinite(n) || !Number.isFinite(d) || d === 0) continue;
+    numerator += n;
+    denominator += d;
+  }
+  if (denominator === 0) return undefined;
+  return Math.round((numerator / denominator) * 10000) / 100; // 2 decimals
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
