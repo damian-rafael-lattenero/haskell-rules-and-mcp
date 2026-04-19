@@ -130,10 +130,13 @@ jobs:
 
       - name: Run HLint
         uses: haskell-actions/hlint-run@v2
+        # Single-path form. Earlier I tried the JSON-array form via YAML
+        # folded scalar (`>-`) which the action's parser rejected with
+        # `SyntaxError: Unexpected end of JSON input`; letting hlint
+        # recurse through the package root is simpler and covers
+        # src/, test/, and app/ in one pass.
         with:
-          path: >-
-            ["mcp-server-haskell/src/", "mcp-server-haskell/test/",
-             "mcp-server-haskell/app/"]
+          path: mcp-server-haskell/
           # 'warning' (not 'suggestion') is the pragmatic threshold: we
           # already block on hints locally via ghci_lint, and CI HLint
           # version drift can surface stylistic suggestions that don't
