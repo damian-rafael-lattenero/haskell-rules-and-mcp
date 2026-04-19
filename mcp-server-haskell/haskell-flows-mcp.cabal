@@ -53,8 +53,12 @@ library
                       HaskellFlows.Tool.CheckModule
                       HaskellFlows.Tool.Complete
                       HaskellFlows.Tool.Coverage
+                      HaskellFlows.Tool.CreateProject
+                      HaskellFlows.Tool.Deps
+                      HaskellFlows.Tool.Doc
                       HaskellFlows.Tool.Eval
                       HaskellFlows.Tool.Format
+                      HaskellFlows.Tool.Goto
                       HaskellFlows.Tool.Hole
                       HaskellFlows.Tool.Hoogle
                       HaskellFlows.Tool.Info

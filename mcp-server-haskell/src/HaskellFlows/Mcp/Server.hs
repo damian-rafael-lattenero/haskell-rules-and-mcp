@@ -29,20 +29,24 @@ import HaskellFlows.Data.PropertyStore (Store, openStore)
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Types (ProjectDir, mkProjectDir)
-import qualified HaskellFlows.Tool.Arbitrary   as ArbitraryTool
-import qualified HaskellFlows.Tool.CheckModule as CheckModuleTool
-import qualified HaskellFlows.Tool.Complete    as CompleteTool
-import qualified HaskellFlows.Tool.Coverage    as CoverageTool
-import qualified HaskellFlows.Tool.Eval        as EvalTool
-import qualified HaskellFlows.Tool.Format      as FormatTool
-import qualified HaskellFlows.Tool.Hole        as HoleTool
-import qualified HaskellFlows.Tool.Hoogle      as HoogleTool
-import qualified HaskellFlows.Tool.Info        as InfoTool
-import qualified HaskellFlows.Tool.Load        as Load
-import qualified HaskellFlows.Tool.QuickCheck  as QcTool
-import qualified HaskellFlows.Tool.Regression  as RegressionTool
-import qualified HaskellFlows.Tool.Type        as TypeTool
-import qualified HaskellFlows.Tool.Workflow    as WorkflowTool
+import qualified HaskellFlows.Tool.Arbitrary     as ArbitraryTool
+import qualified HaskellFlows.Tool.CheckModule   as CheckModuleTool
+import qualified HaskellFlows.Tool.Complete      as CompleteTool
+import qualified HaskellFlows.Tool.Coverage      as CoverageTool
+import qualified HaskellFlows.Tool.CreateProject as CreateProjectTool
+import qualified HaskellFlows.Tool.Deps          as DepsTool
+import qualified HaskellFlows.Tool.Doc           as DocTool
+import qualified HaskellFlows.Tool.Eval          as EvalTool
+import qualified HaskellFlows.Tool.Format        as FormatTool
+import qualified HaskellFlows.Tool.Goto          as GotoTool
+import qualified HaskellFlows.Tool.Hole          as HoleTool
+import qualified HaskellFlows.Tool.Hoogle        as HoogleTool
+import qualified HaskellFlows.Tool.Info          as InfoTool
+import qualified HaskellFlows.Tool.Load          as Load
+import qualified HaskellFlows.Tool.QuickCheck    as QcTool
+import qualified HaskellFlows.Tool.Regression    as RegressionTool
+import qualified HaskellFlows.Tool.Type          as TypeTool
+import qualified HaskellFlows.Tool.Workflow      as WorkflowTool
 
 -- | All mutable server state.
 --
@@ -114,6 +118,10 @@ dispatch _ "tools/list" _ rid =
         , CoverageTool.descriptor
         , CompleteTool.descriptor
         , FormatTool.descriptor
+        , DepsTool.descriptor
+        , CreateProjectTool.descriptor
+        , DocTool.descriptor
+        , GotoTool.descriptor
         ]
     ]
 dispatch srv "tools/call" (Just params) rid =
@@ -176,6 +184,18 @@ handleToolCall srv call rid = case tcName call of
   "ghci_format" -> do
     pd <- readIORef (srvProjectDir srv)
     runTool srv rid (FormatTool.handle pd (tcArguments call))
+  "ghci_deps" -> do
+    pd <- readIORef (srvProjectDir srv)
+    runTool srv rid (DepsTool.handle pd (tcArguments call))
+  "ghci_create_project" -> do
+    pd <- readIORef (srvProjectDir srv)
+    runTool srv rid (CreateProjectTool.handle pd (tcArguments call))
+  "ghci_doc" -> do
+    sess <- getOrStartSession srv
+    runTool srv rid (DocTool.handle sess (tcArguments call))
+  "ghci_goto" -> do
+    sess <- getOrStartSession srv
+    runTool srv rid (GotoTool.handle sess (tcArguments call))
   other -> pure (err_ rid (methodNotFoundErr ("tool " <> other)))
 
 -- | Common exception shield for every tool handler.

@@ -61,6 +61,14 @@ import HaskellFlows.Parser.Coverage
   , Metric (..)
   , parseCoverage
   )
+import HaskellFlows.Tool.Deps
+  ( validatePackageName
+  , validateVersionConstraint
+  )
+import HaskellFlows.Tool.Goto
+  ( Location (..)
+  , parseDefinedAt
+  )
 import HaskellFlows.Tool.Hoogle
   ( HoogleHit (..)
   , parseHoogleLine
@@ -112,6 +120,14 @@ main = do
       , test "parseCoverage ignores banner"        testCoverageBanner
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
+      , test "validatePackageName accepts normal"  testPkgAccepts
+      , test "validatePackageName rejects symbol"  testPkgRejectsSymbol
+      , test "validatePackageName rejects empty"   testPkgRejectsEmpty
+      , test "validateVersionConstraint accepts"   testVerAccepts
+      , test "validateVersionConstraint rejects"   testVerRejects
+      , test "parseDefinedAt file location"        testDefinedAtFile
+      , test "parseDefinedAt module location"      testDefinedAtModule
+      , test "parseDefinedAt ignores noise"        testDefinedAtNone
       ]
   if and results then exitSuccess else exitFailure
 
@@ -493,6 +509,56 @@ testStoreIncrement = withTempProject $ \pd -> do
   pure $ case props of
     [p] -> spPassed p == 3
     _   -> False
+
+--------------------------------------------------------------------------------
+-- Phase 7: Deps validators + Goto parser
+--------------------------------------------------------------------------------
+
+testPkgAccepts :: IO Bool
+testPkgAccepts = pure $ case validatePackageName "haskell-flows-mcp" of
+  Right _ -> True
+  _       -> False
+
+testPkgRejectsSymbol :: IO Bool
+testPkgRejectsSymbol = pure $ case validatePackageName "foo; rm -rf /" of
+  Left _ -> True
+  _      -> False
+
+testPkgRejectsEmpty :: IO Bool
+testPkgRejectsEmpty = pure $ case validatePackageName "" of
+  Left _ -> True
+  _      -> False
+
+testVerAccepts :: IO Bool
+testVerAccepts = pure $ case validateVersionConstraint ">= 2.14 && < 2.16" of
+  Right _ -> True
+  _       -> False
+
+testVerRejects :: IO Bool
+testVerRejects = pure $ case validateVersionConstraint "; rm -rf" of
+  Left _ -> True
+  _      -> False
+
+testDefinedAtFile :: IO Bool
+testDefinedAtFile =
+  let raw = T.unlines
+        [ "foo :: Int -> Int"
+        , "  \t-- Defined at src/Foo.hs:12:5"
+        ]
+  in pure $ case parseDefinedAt raw of
+       Just (InFile f l c) -> f == "src/Foo.hs" && l == 12 && c == 5
+       _                   -> False
+
+testDefinedAtModule :: IO Bool
+testDefinedAtModule =
+  let raw = "map :: (a -> b) -> [a] -> [b]\n  \t-- Defined in \x2018Prelude\x2019\n"
+  in pure $ case parseDefinedAt raw of
+       Just (InModule m) -> m == "Prelude"
+       _                 -> False
+
+testDefinedAtNone :: IO Bool
+testDefinedAtNone =
+  pure (parseDefinedAt "just some text" == Nothing)
 
 -- | Helper: create a fresh temp directory and delete it after the test.
 -- Passes a validated 'ProjectDir' (absolute + normalised) to the body.
