@@ -20,6 +20,9 @@ module HaskellFlows.Tool.Regression
   , handle
   , RegressionArgs (..)
   , Action (..)
+    -- * Reusable runners for other tools (e.g. Tool.Gate)
+  , Replay (..)
+  , runOne
   ) where
 
 import Data.Aeson

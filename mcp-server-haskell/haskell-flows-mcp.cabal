@@ -65,6 +65,7 @@ library
                       HaskellFlows.Tool.Doc
                       HaskellFlows.Tool.Eval
                       HaskellFlows.Tool.Format
+                      HaskellFlows.Tool.Gate
                       HaskellFlows.Tool.Goto
                       HaskellFlows.Tool.Hole
                       HaskellFlows.Tool.Hoogle

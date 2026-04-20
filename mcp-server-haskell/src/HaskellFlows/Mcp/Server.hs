@@ -51,6 +51,7 @@ import qualified HaskellFlows.Tool.Deps            as DepsTool
 import qualified HaskellFlows.Tool.Doc             as DocTool
 import qualified HaskellFlows.Tool.Eval            as EvalTool
 import qualified HaskellFlows.Tool.Format          as FormatTool
+import qualified HaskellFlows.Tool.Gate            as GateTool
 import qualified HaskellFlows.Tool.Goto            as GotoTool
 import qualified HaskellFlows.Tool.Hole            as HoleTool
 import qualified HaskellFlows.Tool.Hoogle          as HoogleTool
@@ -235,6 +236,10 @@ dispatchTool srv call = case tcName call of
   "ghci_suggest" -> do
     sess <- getOrStartSession srv
     SuggestTool.handle sess (tcArguments call)
+  "ghci_gate" -> do
+    sess <- getOrStartSession srv
+    pd   <- readIORef (srvProjectDir srv)
+    GateTool.handle (srvStore srv) sess pd (tcArguments call)
   other ->
     pure ToolResult
       { trContent = [ TextContent ("Unknown tool: " <> other) ]
@@ -263,6 +268,7 @@ allToolDescriptors =
   , CoverageTool.descriptor
   , CompleteTool.descriptor
   , FormatTool.descriptor
+  , GateTool.descriptor
   , DepsTool.descriptor
   , CreateProjectTool.descriptor
   , DocTool.descriptor

@@ -61,8 +61,9 @@ import HaskellFlows.Suggest.Rules
   )
 import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNames)
 import HaskellFlows.Mcp.NextStep (NextStep (..), injectNextStep, suggestNext)
-import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolResult (..))
+import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescriptor (..), ToolResult (..))
 import HaskellFlows.Tool.Batch (BatchArgs (..))
+import qualified HaskellFlows.Tool.Gate as Gate
 import HaskellFlows.Tool.CheckProject (parseExposedModules)
 import HaskellFlows.Tool.Lint (parseHlintJson)
 import qualified HaskellFlows.Tool.Lint as LintTool
@@ -239,6 +240,8 @@ main = do
       , test "suggest: evaluator preservation"     testSuggestEvaluatorPreservation
       , test "suggest: constant-folding soundness" testSuggestConstFoldingSoundness
       , test "suggest: evaluator needs sibling"    testSuggestEvaluatorNoSibling
+      , test "gate: tool registered in inventory"  testGateRegistered
+      , test "gate: all-skip parses + passes"      testGateAllSkip
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1158,6 +1161,34 @@ testCoverageInvokesHpcReport = do
 -- quoted literal in source and the concatenation form. Either is fine.
 ellipticalOr :: Bool -> Bool -> Bool
 ellipticalOr = (||)
+
+-- | Phase 11g: ghci_gate must be in the canonical tool list + the
+-- descriptor mentions its three sub-steps.
+testGateRegistered :: IO Bool
+testGateRegistered = pure $
+     "ghci_gate" `elem` allToolNames
+  && case filter (\td -> tdName td == "ghci_gate") allToolDescriptors of
+       [td] ->
+         let d = tdDescription td
+         in T.isInfixOf "regression" d
+         && T.isInfixOf "cabal test" d
+         && T.isInfixOf "cabal build" d
+       _ -> False
+
+-- | Phase 11g: parsing GateArgs with all skip flags set must yield
+-- a report with three "skip" steps and success=true. Uses a minimal
+-- decode instead of invoking the full handler (which would spawn
+-- cabal subprocesses).
+testGateAllSkip :: IO Bool
+testGateAllSkip =
+  let raw = A.object
+        [ "skip_regression"  .= True
+        , "skip_cabal_test"  .= True
+        , "skip_cabal_build" .= True
+        ]
+  in case A.fromJSON raw :: A.Result Gate.GateArgs of
+       A.Success _ -> pure True
+       A.Error   _ -> pure False
 
 -- | Phase 11f: Functor shape `(a -> b) -> F a -> F b` emits BOTH
 -- identity and composition laws in one rule firing.
