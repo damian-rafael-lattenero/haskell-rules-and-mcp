@@ -121,7 +121,22 @@ tryRewriteCabal file mods = do
 -- | Strip any exposed-modules entry whose stripped name is in
 -- the remove-set. Preserves every other line verbatim. Returns
 -- the updated body + the list of names that were actually
--- removed (i.e. that were present in the cabal).
+-- removed.
+--
+-- The scaffolded cabal often places the FIRST module on the
+-- header line itself:
+--
+-- @
+--     exposed-modules:  ExprEvaluator
+--                       Expr.Syntax
+-- @
+--
+-- so 'splitContinuation' alone misses it. We extract whatever
+-- name lives after @exposed-modules:@ on the header line, treat
+-- it as an additional candidate, and splice it back if it was
+-- not a victim. If every module is gone we emit a bare
+-- @exposed-modules:@ header — cabal accepts that and
+-- 'ghci_add_modules' re-populates it on the next call.
 removeModulesFromBody :: Text -> [Text] -> (Text, [Text])
 removeModulesFromBody body mods =
   let lns              = T.lines body
@@ -129,11 +144,48 @@ removeModulesFromBody body mods =
   in case hAndRest of
        [] -> (body, [])
        (h : rest) ->
-         let (cont, tailLns) = break isNewField rest
-             (kept, removed) = splitContinuation mods cont
-             newBody         = T.unlines (pre <> (h : kept) <> tailLns)
+         let (cont, tailLns)    = break isNewField rest
+             (keptCont, remCont) = splitContinuation mods cont
+             (headerLeft, headerName) = splitHeaderLine h
+             (newHeader, remHead) = case headerName of
+               Just n | n `elem` mods ->
+                 -- Victim on the header line. Drop it — leave the
+                 -- bare "   exposed-modules:" so later adds can
+                 -- re-seed the block. If there's at least one kept
+                 -- continuation, promote the first to the header
+                 -- line so the block keeps a module on each line.
+                 case keptCont of
+                   (firstKept : _) ->
+                     (headerLeft <> T.stripStart firstKept, [n])
+                   [] -> (headerLeft, [n])
+               _ -> (h, [])
+             -- Continuation lines to emit AFTER the rewritten
+             -- header. If we promoted the first kept line into
+             -- the header, drop it from the continuation list.
+             newCont = case (headerName, keptCont) of
+               (Just n, _ : rest2) | n `elem` mods -> rest2
+               _                                    -> keptCont
+             removed  = remHead <> remCont
+             newBody  = T.unlines (pre <> (newHeader : newCont) <> tailLns)
          in if null removed then (body, [])
                             else (newBody, removed)
+
+-- | Split an @exposed-modules:@ header line into the
+-- @"  exposed-modules:  "@ prefix (preserving leading whitespace
+-- and the colon + trailing spaces) and the possibly-empty first
+-- module name on the same line. Whitespace-only tails yield
+-- 'Nothing' for the name.
+splitHeaderLine :: Text -> (Text, Maybe Text)
+splitHeaderLine h =
+  let (beforeColon, afterColon) = T.breakOn ":" h
+  in case T.uncons afterColon of
+       Just (':', rest) ->
+         let leadingWs = T.takeWhile (\c -> c == ' ' || c == '\t') rest
+             name      = T.strip rest
+             headerLeft = beforeColon <> ":" <> leadingWs
+         in if T.null name then (headerLeft, Nothing)
+                           else (headerLeft, Just name)
+       _ -> (h, Nothing)
 
 -- | Partition the continuation lines into (kept, removed-names).
 -- A continuation line usually contains exactly one module name

@@ -101,17 +101,21 @@ parseDefinedAt :: Text -> Maybe Location
 parseDefinedAt raw = firstJust tryLine (T.lines raw)
   where
     tryLine ln
-      | Just rest <- stripMarker "-- Defined at "  ln = parseFileLoc rest
-      | Just rest <- stripMarker "-- Defined at\t" ln = parseFileLoc rest
-      | Just rest <- stripMarker "-- Defined in "  ln = parseModuleLoc rest
-      | Just rest <- stripMarker "-- Defined in\t" ln = parseModuleLoc rest
+      -- GHC 9.x commonly prints ':info' output like:
+      --   simplify :: Expr -> Expr \t-- Defined at src/X.hs:9:1
+      -- i.e. the marker lives AFTER the signature on the same
+      -- line, not on a dedicated line. Previous code only
+      -- stripped from line start; this 'splitAt ' search finds
+      -- the marker anywhere.
+      | Just rest <- findMarker "-- Defined at " ln = parseFileLoc rest
+      | Just rest <- findMarker "-- Defined in " ln = parseModuleLoc rest
       | otherwise = Nothing
 
-    stripMarker marker ln =
-      let stripped = T.stripStart ln
-      in if marker `T.isPrefixOf` stripped
-           then Just (T.drop (T.length marker) stripped)
-           else Nothing
+    findMarker marker ln =
+      let (_, after) = T.breakOn marker ln
+      in if T.null after
+           then Nothing
+           else Just (T.drop (T.length marker) after)
 
 parseFileLoc :: Text -> Maybe Location
 parseFileLoc t =

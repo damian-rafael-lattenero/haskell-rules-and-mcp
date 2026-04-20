@@ -255,39 +255,95 @@ encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
 --------------------------------------------------------------------------------
 
 -- | Discover the top-level bindings that live next to the focal
--- function in the same module, pair each with its parsed
--- signature, and return them as the @rcSiblings@ input to
+-- function and return them as the @rcSiblings@ input to
 -- 'applyRulesCtx'.
+--
+-- Two sources are walked and merged:
+--
+--   (a) The focal function's HOME module — where the name is
+--       defined. Standard sibling: @simplify@ co-defined with
+--       @simpNeg@ / @simpAdd@ in @Expr.Simplify@.
+--   (b) The CURRENTLY-FOCUSED module — flagged with @*@ in
+--       @:show modules@. When a project has a harness module
+--       that re-exports several source modules (e.g. a
+--       test/Gen module re-exporting @simplify@ + @eval@ +
+--       @pretty@ for QuickCheck), loading it makes those
+--       re-exports visible as siblings of the focal.
 --
 -- Flow:
 --
--- 1. @:info \<focalName\>@ — the trailing @-- Defined at <path>@
---    line tells us the focal function's source file.
--- 2. @:show modules@ — canonical GHC mapping from module name to
---    source file (one line per loaded module).
--- 3. Reverse the mapping on the focal file to discover the
---    module name.
--- 4. @:browse \<module\>@ — one @name :: type@ line per
---    top-level binding.
--- 5. Parse each line; keep only (a) lower-case identifiers (value
---    bindings, not types or classes), (b) whose type parses into
---    a 'ParsedSig', (c) that are NOT the focal function itself.
+-- 1. @:info \<focalName\>@ → "Defined at <path>" → focal file.
+-- 2. @:show modules@ → [(ModuleName, FilePath)] + the
+--    @*@-focused module.
+-- 3. Browse both the focal's home module and the focused one
+--    (if distinct). De-duplicate names.
+-- 4. @:browse \<module\>@ → @name :: type@ per binding.
+-- 5. Parse each line; keep lower-case value bindings whose
+--    type parses; drop the focal itself.
 --
--- Any step failing (GHCi error, parse failure, missing marker)
--- produces @[]@ so the engines still fire with their classical
--- (no-sibling) branches — degradation, never crash.
+-- Any step failing produces @[]@ so the non-sibling rules
+-- still fire — degradation, never crash.
 gatherSiblings :: Session -> Text -> IO [(Text, ParsedSig)]
 gatherSiblings sess focalName = do
-  infoRes   <- execute sess (":info " <> focalName)
-  case focalFileFromInfo (grOutput infoRes) of
-    Nothing        -> pure []
-    Just focalFile -> do
-      showRes <- execute sess ":show modules"
-      case moduleForFile focalFile (parseShowModules (grOutput showRes)) of
-        Nothing -> pure []
-        Just m  -> do
-          browseRes <- execute sess (":browse " <> m)
-          pure (siblingsFromBrowse focalName (grOutput browseRes))
+  showRes <- execute sess ":show modules"
+  let showLines = parseShowModulesLines (grOutput showRes)
+      -- Browse EVERY loaded module. Previous attempts that
+      -- narrowed to just the focal's home module miss the common
+      -- pattern where the project splits one concept across
+      -- several modules (Expr.Simplify + Expr.Eval + …) and a
+      -- harness module re-exports them. The rule engine's
+      -- 'interpreterSiblings' filters by type anyway, so an
+      -- irrelevant sibling just doesn't match. ~5–10 modules
+      -- per project; each @:browse@ is sub-100ms, so total
+      -- cost stays under half a second.
+      targets   = map (\(_, n, _) -> n) showLines
+  browsed <- mapM (\m -> execute sess (":browse " <> m)) targets
+  let siblings =
+        nubByName
+          [ s
+          | gr <- browsed
+          , s  <- siblingsFromBrowse focalName (grOutput gr)
+          ]
+  pure siblings
+
+-- | Dedup a list of @(Text, a)@ by the first projection,
+-- keeping the first occurrence.
+nubByName :: [(Text, a)] -> [(Text, a)]
+nubByName = go []
+  where
+    go _    []                 = []
+    go seen ((n, s) : rest)
+      | n `elem` seen          = go seen rest
+      | otherwise              = (n, s) : go (n : seen) rest
+
+nubText :: [Text] -> [Text]
+nubText = go []
+  where
+    go _    []         = []
+    go seen (x : xs)
+      | x `elem` seen  = go seen xs
+      | otherwise      = x : go (x : seen) xs
+
+catMaybesT :: [Maybe Text] -> [Text]
+catMaybesT = foldr (\m acc -> maybe acc (: acc) m) []
+
+-- | Identify the currently-focused module (marked with leading
+-- @*@ in GHCi's @:show modules@). GHCi marks exactly one module
+-- as focused when the caller used @:load@ with an explicit
+-- target; omit otherwise.
+focusedModule :: [(Bool, Text, FilePath)] -> Maybe Text
+focusedModule = firstJust (\(starred, name, _) -> if starred then Just name else Nothing)
+  where
+    firstJust _ []     = Nothing
+    firstJust f (x:xs) = case f x of
+      Just y  -> Just y
+      Nothing -> firstJust f xs
+
+-- | Discard the star-flag from a parsed @:show modules@ output
+-- so the existing 'moduleForFile' helper can do an ordinary
+-- reverse lookup.
+stripStarMap :: [(Bool, Text, FilePath)] -> [(Text, FilePath)]
+stripStarMap = map (\(_, n, p) -> (n, p))
 
 -- | Extract the source file path from a @:info@ response.
 focalFileFromInfo :: Text -> Maybe FilePath
@@ -300,21 +356,34 @@ focalFileFromInfo txt = case parseDefinedAt txt of
 --
 -- > Expr.Simplify    ( src/Expr/Simplify.hs, interpreted )
 --
--- A leading asterisk marks the @*@-focused module — we drop it.
+-- A leading asterisk marks the @*@-focused module — this variant
+-- drops it; use 'parseShowModulesLines' if you need to know
+-- which module is focused.
 parseShowModules :: Text -> [(Text, FilePath)]
-parseShowModules = mapMaybe parseShowLine . T.lines
+parseShowModules =
+  map (\(_, n, p) -> (n, p)) . parseShowModulesLines
+
+-- | Parse GHCi's @:show modules@ output while preserving the
+-- @*@-focus flag per row. Used by 'gatherSiblings' to also
+-- browse the currently-focused module when it differs from the
+-- focal function's home (e.g. a test harness module that
+-- re-exports several source modules).
+parseShowModulesLines :: Text -> [(Bool, Text, FilePath)]
+parseShowModulesLines = mapMaybe parseShowLine . T.lines
   where
     parseShowLine raw =
-      let s0        = T.strip raw
-          s         = if "* " `T.isPrefixOf` s0 then T.drop 2 s0 else s0
+      let s0           = T.strip raw
+          (starred, s) =
+            if "* " `T.isPrefixOf` s0 then (True, T.drop 2 s0)
+                                      else (False, s0)
           (name, rest) = T.breakOn "(" s
-          name'     = T.strip name
-          inside    = T.drop 1 rest
-          (file, _) = T.breakOn "," inside
-          file'     = T.strip file
+          name'        = T.strip name
+          inside       = T.drop 1 rest
+          (file, _)    = T.breakOn "," inside
+          file'        = T.strip file
       in if T.null name' || T.null file' || T.null rest
            then Nothing
-           else Just (name', T.unpack file')
+           else Just (starred, name', T.unpack file')
 
 -- | Reverse-lookup: given a focal source file and the output of
 -- @:show modules@, return the module whose file matches. An exact
