@@ -17,7 +17,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.Maybe (fromMaybe, isNothing)
-import qualified Data.Maybe
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (exitFailure, exitSuccess)
 import qualified Test.QuickCheck as QC
@@ -54,8 +53,11 @@ import HaskellFlows.Parser.TypeSignature
   )
 import HaskellFlows.Suggest.Rules
   ( Confidence (..)
+  , RuleContext (..)
   , Suggestion (..)
   , applyRules
+  , applyRulesCtx
+  , mkRuleContext
   )
 import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNames)
 import HaskellFlows.Mcp.NextStep (NextStep (..), injectNextStep, suggestNext)
@@ -233,6 +235,10 @@ main = do
       , test "nextStep: exploratory -> no suggestion" testNextStepExploratoryNothing
       , test "injectNextStep splices into payload" testInjectSplices
       , test "injectNextStep no-op on non-JSON"    testInjectSkipsNonJson
+      , test "suggest: functor fmap two laws"      testSuggestFunctorFmap
+      , test "suggest: evaluator preservation"     testSuggestEvaluatorPreservation
+      , test "suggest: constant-folding soundness" testSuggestConstFoldingSoundness
+      , test "suggest: evaluator needs sibling"    testSuggestEvaluatorNoSibling
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1152,6 +1158,63 @@ testCoverageInvokesHpcReport = do
 -- quoted literal in source and the concatenation form. Either is fine.
 ellipticalOr :: Bool -> Bool -> Bool
 ellipticalOr = (||)
+
+-- | Phase 11f: Functor shape `(a -> b) -> F a -> F b` emits BOTH
+-- identity and composition laws in one rule firing.
+testSuggestFunctorFmap :: IO Bool
+testSuggestFunctorFmap =
+  case parseSignature "(a -> b) -> [a] -> [b]" of
+    Nothing  -> pure False
+    Just sig ->
+      let laws = map sLaw (applyRules "myMap" sig)
+      in pure $ "Functor identity" `elem` laws
+             && "Functor composition" `elem` laws
+
+-- | Phase 11f: transform @simplify :: Expr -> Expr@ with sibling
+-- interpreter @eval :: Env -> Expr -> Int@ → emits evaluator
+-- preservation law.
+testSuggestEvaluatorPreservation :: IO Bool
+testSuggestEvaluatorPreservation =
+  case (parseSignature "Expr -> Expr", parseSignature "Env -> Expr -> Int") of
+    (Just simplifySig, Just evalSig) ->
+      let ctx = RuleContext
+            { rcName     = "transform"  -- deliberately non-optimization name
+            , rcSig      = simplifySig
+            , rcSiblings = [("eval", evalSig)]
+            }
+          laws = map sLaw (applyRulesCtx ctx)
+      in pure ("Evaluator preservation" `elem` laws)
+    _ -> pure False
+
+-- | Phase 11f: same sibling pair BUT the focal name is
+-- "simplify" → triggers ConstantFoldingSoundness AT High on top of
+-- the generic EvaluatorPreservation.
+testSuggestConstFoldingSoundness :: IO Bool
+testSuggestConstFoldingSoundness =
+  case (parseSignature "Expr -> Expr", parseSignature "Env -> Expr -> Int") of
+    (Just simplifySig, Just evalSig) ->
+      let ctx = RuleContext
+            { rcName     = "simplify"
+            , rcSig      = simplifySig
+            , rcSiblings = [("eval", evalSig)]
+            }
+          suggs = applyRulesCtx ctx
+      in pure $ any
+           (\s -> sLaw s == "Constant-folding soundness"
+               && sConfidence s == High)
+           suggs
+    _ -> pure False
+
+-- | Phase 11f: evaluator laws require at least one interpreter
+-- sibling. With no siblings, nothing fires.
+testSuggestEvaluatorNoSibling :: IO Bool
+testSuggestEvaluatorNoSibling =
+  case parseSignature "Expr -> Expr" of
+    Nothing  -> pure False
+    Just sig ->
+      let laws = map sLaw (applyRulesCtx (mkRuleContext "simplify" sig))
+      in pure $ "Evaluator preservation"     `notElem` laws
+             && "Constant-folding soundness" `notElem` laws
 
 -- | Phase 11c F-12 root cause — 'SessionStatus' used to be
 -- @Alive | Overflowed@ only. When the GHCi child process exited,

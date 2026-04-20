@@ -12,9 +12,12 @@
 -- category at call time.
 module HaskellFlows.Suggest.Rules
   ( Rule (..)
+  , RuleContext (..)
+  , mkRuleContext
   , Confidence (..)
   , allRules
   , applyRules
+  , applyRulesCtx
   , Suggestion (..)
   ) where
 
@@ -42,19 +45,62 @@ data Confidence = High | Medium | Low
 
 -- | One rule in the catalog.
 --
--- @rMatches@ returns @Just suggestion@ when the signature fits the
+-- @rMatches@ returns @Just suggestion@ when the context fits the
 -- law. Returning @Nothing@ is how a rule opts out; the tool layer
 -- then skips it silently.
+--
+-- The context carries the function under analysis AND its
+-- module-level siblings (other top-level names + their parsed
+-- signatures). Most rules look only at the focal signature;
+-- sibling-aware rules (evaluator-preservation, constant-folding-
+-- soundness) use the list to pair functions that form a
+-- transform+interpreter shape.
 data Rule = Rule
-  { rId         :: !Text   -- ^ stable identifier for filtering
-  , rMatches    :: Text -> ParsedSig -> Maybe Suggestion
-                           --   ^ function name -> sig -> maybe a suggestion
+  { rId      :: !Text
+  , rMatches :: RuleContext -> [Suggestion]
+    -- ^ multiple-Suggestion return so engines can emit two laws
+    -- from one match (Functor identity + composition) or one law
+    -- per matched sibling (evaluator-preservation over every
+    -- interpreter sibling). Single-law rules return an 0/1 list
+    -- via the 'legacy' wrapper.
   }
 
+-- | The input to every rule. Built by the caller (see
+-- 'mkRuleContext' for the single-signature case).
+data RuleContext = RuleContext
+  { rcName     :: !Text
+  , rcSig      :: !ParsedSig
+  , rcSiblings :: ![(Text, ParsedSig)]
+    -- ^ module-level peers the focal function can be paired against.
+    -- Empty list is valid — non-sibling-aware rules still work.
+  }
+  deriving stock (Show)
+
+-- | Build a context with no sibling information — the common path
+-- for callers that only have the focal signature (e.g. a bare
+-- @:t@ against Prelude).
+mkRuleContext :: Text -> ParsedSig -> RuleContext
+mkRuleContext nm sig =
+  RuleContext { rcName = nm, rcSig = sig, rcSiblings = [] }
+
 -- | Run every rule in the catalog; concat the suggestions.
+applyRulesCtx :: RuleContext -> [Suggestion]
+applyRulesCtx ctx = concatMap (`rMatches` ctx) allRules
+
+-- | Back-compat single-signature entrypoint (no siblings). Kept so
+-- older callers + tests that predate sibling-aware rules keep
+-- working unchanged.
 applyRules :: Text -> ParsedSig -> [Suggestion]
-applyRules fnName sig =
-  [ s | r <- allRules, Just s <- [rMatches r fnName sig] ]
+applyRules nm sig = applyRulesCtx (mkRuleContext nm sig)
+
+-- | Lift a plain @name -> sig -> Maybe Suggestion@ rule body into the
+-- sibling-aware 'RuleContext' interface. The 8 pre-Phase-11f rules
+-- never needed siblings, so each of them reuses this wrapper and
+-- keeps its body unchanged — one-line change per rule, zero
+-- semantic drift.
+legacy :: (Text -> ParsedSig -> Maybe Suggestion)
+       -> (RuleContext -> [Suggestion])
+legacy f ctx = maybe [] pure (f (rcName ctx) (rcSig ctx))
 
 --------------------------------------------------------------------------------
 -- the catalog
@@ -70,6 +116,9 @@ allRules =
   , ruleListRoundtrip
   , ruleReturnsBool
   , ruleMonoidIdentity
+  , ruleFunctor
+  , ruleEvaluatorPreservation
+  , ruleConstantFoldingSoundness
   ]
 
 -- | @f :: a -> a@ ⇒ check @f (f x) == f x@.
@@ -85,7 +134,7 @@ allRules =
 ruleIdempotent :: Rule
 ruleIdempotent = Rule
   { rId = "idempotent"
-  , rMatches = \nm sig ->
+  , rMatches = legacy $ \nm sig ->
       if argCount sig == 1 && isSameTypeThroughout sig
         then
           let conf = idempotentConfidence nm sig
@@ -138,7 +187,7 @@ nameHintsCanonicalisation nm =
 ruleInvolutive :: Rule
 ruleInvolutive = Rule
   { rId = "involutive"
-  , rMatches = \nm sig ->
+  , rMatches = legacy $ \nm sig ->
       if argCount sig == 1 && isSameTypeThroughout sig
         then Just Suggestion
           { sLaw        = "Involutive"
@@ -155,7 +204,7 @@ ruleInvolutive = Rule
 ruleAssociative :: Rule
 ruleAssociative = Rule
   { rId = "associative"
-  , rMatches = \nm sig ->
+  , rMatches = legacy $ \nm sig ->
       if argCount sig == 2 && isSameTypeThroughout sig
         then Just Suggestion
           { sLaw        = "Associative"
@@ -174,7 +223,7 @@ ruleAssociative = Rule
 ruleCommutative :: Rule
 ruleCommutative = Rule
   { rId = "commutative"
-  , rMatches = \nm sig ->
+  , rMatches = legacy $ \nm sig ->
       if argCount sig == 2 && isSameTypeThroughout sig
         then Just Suggestion
           { sLaw        = "Commutative"
@@ -199,7 +248,7 @@ ruleCommutative = Rule
 ruleListLengthPreserving :: Rule
 ruleListLengthPreserving = Rule
   { rId = "list-length-preserving"
-  , rMatches = \nm sig -> case (psArgs sig, psReturn sig) of
+  , rMatches = legacy $ \nm sig -> case (psArgs sig, psReturn sig) of
       ([TyList argInner], TyList retInner)
         | argInner == retInner -> Just Suggestion
           { sLaw        = "Length preserving / non-extending"
@@ -222,7 +271,7 @@ ruleListLengthPreserving = Rule
 ruleListRoundtrip :: Rule
 ruleListRoundtrip = Rule
   { rId = "list-roundtrip"
-  , rMatches = \nm sig -> case (psArgs sig, psReturn sig) of
+  , rMatches = legacy $ \nm sig -> case (psArgs sig, psReturn sig) of
       ([TyList argInner], TyList retInner)
         | argInner == retInner -> Just Suggestion
           { sLaw        = "Self-inverse on lists"
@@ -243,7 +292,7 @@ ruleListRoundtrip = Rule
 ruleReturnsBool :: Rule
 ruleReturnsBool = Rule
   { rId = "returns-bool"
-  , rMatches = \nm sig -> case psReturn sig of
+  , rMatches = legacy $ \nm sig -> case psReturn sig of
       TyCon "Bool" | argCount sig >= 1 -> Just Suggestion
         { sLaw        = "Predicate not constant"
         , sProperty   = "\\x -> " <> nm <> " x || not (" <> nm <> " x)"
@@ -261,7 +310,7 @@ ruleReturnsBool = Rule
 ruleMonoidIdentity :: Rule
 ruleMonoidIdentity = Rule
   { rId = "monoid-identity"
-  , rMatches = \nm sig ->
+  , rMatches = legacy $ \nm sig ->
       let hasMonoidContext =
             any (\c -> "Monoid " `T.isPrefixOf` c) (psConstraints sig)
       in if hasMonoidContext && argCount sig == 2 && isSameTypeThroughout sig
@@ -276,6 +325,195 @@ ruleMonoidIdentity = Rule
              }
            else Nothing
   }
+
+--------------------------------------------------------------------------------
+-- Phase 11f sibling-aware engines
+--------------------------------------------------------------------------------
+
+-- | Match a type of shape @F a@ (user-defined single-param
+-- constructor applied to one argument) OR @[a]@ (list sugar).
+-- Returns @(containerName, innerType)@.
+asSingleParamContainer :: SigType -> Maybe (Text, SigType)
+asSingleParamContainer (TyApp (TyCon f) [t]) = Just (f, t)
+asSingleParamContainer (TyApp (TyVar f) [t]) = Just (f, t)
+asSingleParamContainer (TyList t)            = Just ("[]", t)
+asSingleParamContainer _                     = Nothing
+
+-- | Is this name's first word in a known canonicalisation lexicon?
+-- Used by 'ruleConstantFoldingSoundness' to decide when to bump
+-- the evaluator-preservation law's confidence to High.
+nameHintsOptimization :: Text -> Bool
+nameHintsOptimization nm =
+  let lc = T.toLower nm
+      hints =
+        [ "simplify", "normalize", "normalise", "canonicalize"
+        , "canonicalise", "canon", "fold", "optimize", "optimise"
+        , "reduce", "rewrite"
+        ]
+  in any (`T.isInfixOf` lc) hints
+
+-- | Functor identity law: @fmap id == id@.
+-- Functor composition law: @fmap (f . g) == fmap f . fmap g@.
+--
+-- Matches any function whose type is @(a -> b) -> F a -> F b@ for
+-- some single-parameter constructor @F@. Confidence High — any
+-- real Functor instance must satisfy both; failure means a bug.
+ruleFunctor :: Rule
+ruleFunctor = Rule
+  { rId = "functor-laws"
+  , rMatches = \ctx ->
+      let nm  = rcName ctx
+          sig = rcSig ctx
+      in case (psArgs sig, psReturn sig) of
+           ([TyArrow arrIn arrOut, arg2], ret)
+             | Just (f1, a) <- asSingleParamContainer arg2
+             , Just (f2, b) <- asSingleParamContainer ret
+             , f1 == f2
+             , arrIn  == a
+             , arrOut == b
+               -> [ Suggestion
+                    { sLaw        = "Functor identity"
+                    , sProperty   =
+                        "\\(xs :: " <> containerHint f1 <> ") -> "
+                        <> nm <> " id xs == xs"
+                    , sRationale  =
+                        "Shape is `(a -> b) -> F a -> F b` (F = "
+                        <> f1 <> "). `fmap id = id` is the first \
+                        \functor law; a failure means the instance is \
+                        \broken."
+                    , sConfidence = High
+                    , sCategory   = "functor"
+                    }
+                  , Suggestion
+                    { sLaw        = "Functor composition"
+                    , sProperty   =
+                        "\\(xs :: " <> containerHint f1 <> ") -> "
+                        <> nm <> " (even . (+1)) xs == "
+                        <> nm <> " even (" <> nm <> " (+1) xs)"
+                    , sRationale  =
+                        "Second functor law: mapping `f . g` equals \
+                        \mapping g then mapping f. Example uses concrete \
+                        \Int→Int→Bool functions so QuickCheck can \
+                        \instantiate without help."
+                    , sConfidence = High
+                    , sCategory   = "functor"
+                    }
+                  ]
+           _ -> []
+  }
+
+-- | Emit a concrete test-able container hint for the functor
+-- lambda. @[]@ becomes @[Int]@; @Maybe@ becomes @Maybe Int@;
+-- other user constructors default to @F Int@.
+containerHint :: Text -> Text
+containerHint "[]" = "[Int]"
+containerHint f    = f <> " Int"
+
+-- | Evaluator preservation: when the focal function has shape
+-- @X -> X@ and a sibling has shape @... -> X -> Y@ (where Y /= X)
+-- or just @X -> Y@, propose @eval ... (f x) == eval ... x@.
+--
+-- This is the canonical optimization-soundness law:
+--   eval . simplify    ≡ eval
+--   interp . normalize ≡ interp
+--   run . rewrite      ≡ run
+--
+-- Confidence Medium by default — the pairing is structural and the
+-- law is usually intended but not always; specialization is the
+-- job of 'ruleConstantFoldingSoundness'.
+ruleEvaluatorPreservation :: Rule
+ruleEvaluatorPreservation = Rule
+  { rId = "evaluator-preservation"
+  , rMatches = \ctx ->
+      let nm  = rcName ctx
+          sig = rcSig ctx
+      in case (psArgs sig, psReturn sig) of
+           ([x1], x2) | x1 == x2 ->
+             [ mkEvalLaw nm interp Medium
+             | interp <- interpreterSiblings x1 (rcSiblings ctx)
+             ]
+           _ -> []
+  }
+
+-- | Specialisation of 'ruleEvaluatorPreservation' that bumps
+-- confidence to High when the focal function's name is a clear
+-- "this is an optimisation" signal (simplify, normalize, canon,
+-- fold, optimize, reduce, rewrite).
+ruleConstantFoldingSoundness :: Rule
+ruleConstantFoldingSoundness = Rule
+  { rId = "constant-folding-soundness"
+  , rMatches = \ctx ->
+      let nm  = rcName ctx
+          sig = rcSig ctx
+      in if not (nameHintsOptimization nm)
+           then []
+           else case (psArgs sig, psReturn sig) of
+             ([x1], x2) | x1 == x2 ->
+               [ (mkEvalLaw nm interp High)
+                   { sLaw = "Constant-folding soundness"
+                   , sCategory = "evaluator"
+                   , sRationale =
+                       "Name \"" <> nm <> "\" is an optimisation hint \
+                       \(simplify/normalize/canonicalize/fold/etc). \
+                       \The canonical correctness invariant is that the \
+                       \transform must preserve observable behaviour \
+                       \through every interpreter in the module."
+                   }
+               | interp <- interpreterSiblings x1 (rcSiblings ctx)
+               ]
+             _ -> []
+  }
+
+-- | Data about a sibling that looks like an interpreter for the
+-- focal function's input type.
+data Interpreter = Interpreter
+  { iName    :: !Text
+  , iArity   :: !Int  -- total number of arguments (context + focal arg)
+  }
+  deriving stock (Show)
+
+-- | Find siblings whose FINAL argument type matches the focal
+-- function's input type and whose return type differs. Extra
+-- leading arguments are treated as "context" (env, store, config).
+interpreterSiblings :: SigType -> [(Text, ParsedSig)] -> [Interpreter]
+interpreterSiblings targetType sibs =
+  [ Interpreter { iName = nm, iArity = length (psArgs sig) }
+  | (nm, sig) <- sibs
+  , case reverse (psArgs sig) of
+      (lastArg : _) -> lastArg == targetType && psReturn sig /= targetType
+      []            -> False
+  ]
+
+-- | Render the preservation law for one interpreter sibling.
+-- Builds a lambda with N parameters (one per context arg + the
+-- focal arg) + @eval … (simplify x) == eval … x@.
+mkEvalLaw :: Text -> Interpreter -> Confidence -> Suggestion
+mkEvalLaw transformName interp conf =
+  let arity     = iArity interp
+      ctxArgs   = [ "p" <> T.pack (show i) | i <- [1 .. arity - 1] ]
+      focalArg  = "x"
+      allArgs   = T.unwords (ctxArgs <> [focalArg])
+      leftCall  =
+        T.unwords
+          ( [iName interp] <> ctxArgs <>
+            [ "(" <> transformName <> " " <> focalArg <> ")" ]
+          )
+      rightCall =
+        T.unwords ([iName interp] <> ctxArgs <> [focalArg])
+  in Suggestion
+       { sLaw        = "Evaluator preservation"
+       , sProperty   =
+           "\\" <> allArgs <> " -> "
+           <> leftCall <> " == " <> rightCall
+       , sRationale  =
+           "Paired sibling `" <> iName interp <> "` looks like an \
+           \interpreter (last arg matches the transform's input type, \
+           \return type differs). A transform that is supposed to be \
+           \semantics-preserving must not change the interpreter's \
+           \result."
+       , sConfidence = conf
+       , sCategory   = "evaluator"
+       }
 
 --------------------------------------------------------------------------------
 -- tiny formatter
