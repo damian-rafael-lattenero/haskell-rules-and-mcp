@@ -31,12 +31,14 @@ import qualified Scenarios.FlowBootstrap        as FlowBoot
 import qualified Scenarios.FlowCoverage         as FlowCov
 import qualified Scenarios.FlowExploratory      as FlowE
 import qualified Scenarios.FlowFixWarning       as FlowFW
+import qualified Scenarios.FlowGracefulMiss      as FlowGM
 import qualified Scenarios.FlowInjectionGuard   as FlowIG
 import qualified Scenarios.FlowMutation          as FlowMut
 import qualified Scenarios.FlowPropertyLifecycle as FlowPL
 import qualified Scenarios.FlowQualityGates     as FlowQG
 import qualified Scenarios.FlowRefactor         as FlowR
 import qualified Scenarios.FlowRefactorOutOfScope as FlowROS
+import qualified Scenarios.FlowSessionRobustness as FlowSR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
 import qualified Scenarios.FlowToolchain        as FlowTC
@@ -90,6 +92,10 @@ scenarios =
     , FlowTB.runFlow )
   , ( "Flow: Injection guard (newline / sentinel / path traversal)"
     , FlowIG.runFlow )
+  , ( "Flow: Graceful miss (deps remove / hole-free / non-predicate QC)"
+    , FlowGM.runFlow )
+  , ( "Flow: Session robustness (user throws don't kill GHCi)"
+    , FlowSR.runFlow )
   ]
 
 main :: IO ()
