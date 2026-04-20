@@ -184,12 +184,41 @@ nameHintsCanonicalisation nm =
 
 -- | @f :: a -> a@ ⇒ check @f (f x) == x@ (stronger than idempotent —
 -- applies to @reverse@, @negate@, @complement@).
+--
+-- BUG-18: functions whose name hints at normalisation /
+-- optimisation (simplify, normalize, canonicalize, fold, reduce,
+-- rewrite, optimize) are by definition /idempotent/, not
+-- /involutive/ — @simplify (simplify x) == simplify x@ holds,
+-- @simplify (simplify x) == x@ virtually never does (it fails as
+-- soon as the input has ANY non-canonical form). Keep the
+-- suggestion so an agent that genuinely wants the involution
+-- check still gets it, but drop the confidence to 'Low' and
+-- rewrite the rationale so the agent doesn't spend tokens running
+-- it as if it were likely to pass.
 ruleInvolutive :: Rule
 ruleInvolutive = Rule
   { rId = "involutive"
   , rMatches = legacy $ \nm sig ->
       if argCount sig == 1 && isSameTypeThroughout sig
-        then Just Suggestion
+        then Just (mkInvolutive nm)
+        else Nothing
+  }
+  where
+    mkInvolutive nm
+      | nameHintsOptimization nm = Suggestion
+          { sLaw        = "Involutive"
+          , sProperty   = "\\x -> " <> nm <> " (" <> nm <> " x) == x"
+          , sRationale  = "Type is `a -> a` but the name hints at a \
+                          \normaliser (simplify / normalize / canon / fold / \
+                          \reduce / rewrite). Normalisers are idempotent, \
+                          \not involutive — running this almost certainly \
+                          \fails on the first non-canonical input. \
+                          \Consider the idempotent or evaluator-preservation \
+                          \law instead."
+          , sConfidence = Low
+          , sCategory   = "algebraic"
+          }
+      | otherwise = Suggestion
           { sLaw        = "Involutive"
           , sProperty   = "\\x -> " <> nm <> " (" <> nm <> " x) == x"
           , sRationale  = "Type is `a -> a`; involutive functions are their \
@@ -197,8 +226,6 @@ ruleInvolutive = Rule
           , sConfidence = Medium
           , sCategory   = "algebraic"
           }
-        else Nothing
-  }
 
 -- | @op :: a -> a -> a@ ⇒ check @(x `op` y) `op` z == x `op` (y `op` z)@.
 ruleAssociative :: Rule

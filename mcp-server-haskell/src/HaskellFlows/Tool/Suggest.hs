@@ -23,6 +23,7 @@ module HaskellFlows.Tool.Suggest
   ( descriptor
   , handle
   , SuggestArgs (..)
+  , outOfScopeResult
   ) where
 
 import Data.Aeson
@@ -34,7 +35,7 @@ import qualified Data.Text.Lazy.Encoding as TLE
 
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Parser.Type (parseTypeOutput, ParsedType (..))
+import HaskellFlows.Parser.Type (parseTypeOutput, ParsedType (..), isOutOfScope)
 import HaskellFlows.Parser.TypeSignature (parseSignature)
 import HaskellFlows.Suggest.Rules
   ( Confidence (..)
@@ -99,6 +100,15 @@ handle sess rawArgs = case parseEither parseJSON rawArgs of
         Left cmdErr ->
           pure (errorResult (formatCommandError cmdErr))
         Right gr
+          -- BUG-15: surface GHC's "not in scope" diagnostic as a
+          -- structured, actionable hint instead of the raw GHC
+          -- error message. The most common cause is that the
+          -- caller asked for laws on a function whose module
+          -- hasn't been loaded in this GHCi session — the fix is
+          -- to @ghci_load@ the module first, not to rephrase the
+          -- function name.
+          | isOutOfScope (grOutput gr) ->
+              pure (outOfScopeResult safe (grOutput gr))
           | not (grSuccess gr) ->
               pure (errorResult (grOutput gr))
           | otherwise -> do
@@ -171,6 +181,36 @@ errorResult msg =
     { trContent = [ TextContent (encodeUtf8Text (object
         [ "success" .= False
         , "error"   .= msg
+        ]))
+      ]
+    , trIsError = True
+    }
+
+-- | BUG-15: a structured response for the "function not in scope"
+-- case. The raw GHC error (@<interactive>:1:1: error: [GHC-88464]
+-- Variable not in scope: foo@) is passed back as @ghcError@ for
+-- drill-in, but the top-level keys speak the agent's language:
+-- @reason@ names the class of failure and @hint@ tells the agent
+-- exactly which tool to call next. 'success: false' is preserved
+-- so the MCP treats this as an error for metrics, but the
+-- @nextStep@ push in @Server.runTool@ still runs — steering the
+-- agent straight at @ghci_load@ instead of letting it guess.
+outOfScopeResult :: Text -> Text -> ToolResult
+outOfScopeResult fn ghcOutput =
+  ToolResult
+    { trContent = [ TextContent (encodeUtf8Text (object
+        [ "success"  .= False
+        , "reason"   .= ("function_not_in_scope" :: Text)
+        , "function" .= fn
+        , "hint"     .=
+            ( "`" <> fn <> "` is not in scope in the current GHCi \
+              \session. Load the module that defines it first via \
+              \ghci_load(module_path=\"<path>\"), or pass a fully \
+              \qualified name (e.g. \"Data.List.sort\") if the \
+              \definition lives in an already-loaded module under \
+              \a qualified import."
+              :: Text )
+        , "ghcError" .= ghcOutput
         ]))
       ]
     , trIsError = True

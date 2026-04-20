@@ -72,6 +72,7 @@ import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescripto
 import HaskellFlows.Tool.Batch (BatchArgs (..))
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
+import qualified HaskellFlows.Tool.Suggest as SuggestTool
 import qualified HaskellFlows.Tool.AddImport as AddImport
 import qualified HaskellFlows.Tool.AddModules as AddModules
 import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
@@ -296,6 +297,9 @@ main = do
       , test "propstore: save auto-creates dir"     testPropStoreCreatesDir
       , test "propstore: save after rm -rf dir"     testPropStoreResurrectsDir
       , test "propstore: concurrent saves no loss"  testPropStoreConcurrentSaves
+      , test "suggest: involutive Low for normalizer" testInvolutiveLowForNormalizer
+      , test "suggest: involutive Medium for reverse" testInvolutiveMediumForReverse
+      , test "suggest: scope error -> structured hint" testSuggestScopeStructuredHint
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1439,6 +1443,67 @@ testPropStoreConcurrentSaves = withTempProject $ \pd -> do
 -- it inline here so we can stat / rm under the validated root.
 unProjectDirRaw :: ProjectDir -> FilePath
 unProjectDirRaw = HaskellFlows.Types.unProjectDir
+
+--------------------------------------------------------------------------------
+-- BUG-18 — Involutive confidence is 'Low' for normalizers
+--------------------------------------------------------------------------------
+
+-- | BUG-18 core: a function named 'simplify :: Expr -> Expr' used
+-- to get the generic Involutive suggestion at 'Medium' confidence.
+-- Normalisers are idempotent, not involutive — the law almost
+-- always fails. Pin that the downgrade to 'Low' + the new
+-- rationale fires for every name in 'nameHintsOptimization'.
+testInvolutiveLowForNormalizer :: IO Bool
+testInvolutiveLowForNormalizer =
+  case parseSignature "Expr -> Expr" of
+    Nothing  -> pure False
+    Just sig -> pure $
+      let names = ["simplify", "normalize", "canonicalize"
+                  , "fold", "optimize", "reduce", "rewrite"]
+          row nm =
+            [ s | s <- applyRules nm sig, sLaw s == "Involutive" ]
+          low  = Low
+      in all (\nm ->
+                case row nm of
+                  [s] -> sConfidence s == low
+                         && "normaliser" `T.isInfixOf` sRationale s
+                  _   -> False)
+              names
+
+-- | Symmetric: 'reverse :: [a] -> [a]' is a genuine involution,
+-- so the suggestion stays 'Medium' + the classical rationale.
+testInvolutiveMediumForReverse :: IO Bool
+testInvolutiveMediumForReverse =
+  case parseSignature "[a] -> [a]" of
+    Nothing  -> pure False
+    Just sig -> pure $
+      let row =
+            [ s | s <- applyRules "reverse" sig, sLaw s == "Involutive" ]
+      in case row of
+           [s] -> sConfidence s == Medium
+                  && "involutive" `T.isInfixOf` T.toLower (sRationale s)
+                  && not ("normaliser" `T.isInfixOf` sRationale s)
+           _   -> False
+
+--------------------------------------------------------------------------------
+-- BUG-15 — ghci_suggest scope-error goes through a structured hint
+--------------------------------------------------------------------------------
+
+-- | BUG-15: the 'outOfScopeResult' helper returns a structured
+-- payload with an actionable @hint@ instead of the raw GHC
+-- "Variable not in scope" blob. Pin its shape.
+testSuggestScopeStructuredHint :: IO Bool
+testSuggestScopeStructuredHint =
+  let ghcOut = "<interactive>:1:1: error: [GHC-88464] Variable not in scope: simplify"
+      tr     = SuggestTool.outOfScopeResult "simplify" ghcOut
+      body   = case trContent tr of
+        (TextContent t : _) -> t
+        _                   -> ""
+  in pure $ trIsError tr
+         && T.isInfixOf "\"reason\":\"function_not_in_scope\"" body
+         && T.isInfixOf "\"function\":\"simplify\""            body
+         && T.isInfixOf "ghci_load"                             body
+         && T.isInfixOf "not in scope" body
 
 -- | Phase 11k: WorkflowState tracker starts at zero counters + empty history.
 testWorkflowStateInitial :: IO Bool
