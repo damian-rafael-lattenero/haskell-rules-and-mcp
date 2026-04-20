@@ -31,10 +31,13 @@ import qualified Scenarios.FlowBootstrap        as FlowBoot
 import qualified Scenarios.FlowCoverage         as FlowCov
 import qualified Scenarios.FlowExploratory      as FlowE
 import qualified Scenarios.FlowFixWarning       as FlowFW
+import qualified Scenarios.FlowInjectionGuard   as FlowIG
 import qualified Scenarios.FlowMutation          as FlowMut
 import qualified Scenarios.FlowPropertyLifecycle as FlowPL
 import qualified Scenarios.FlowQualityGates     as FlowQG
 import qualified Scenarios.FlowRefactor         as FlowR
+import qualified Scenarios.FlowRefactorOutOfScope as FlowROS
+import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
 import qualified Scenarios.FlowToolchain        as FlowTC
 import qualified Scenarios.FlowTypedHoles       as FlowH
@@ -81,6 +84,12 @@ scenarios =
     , FlowCov.runFlow )
   , ( "Flow: Mutation testing (bug-finding oracle for regression)"
     , FlowMut.runFlow )
+  , ( "Flow: Refactor out-of-scope (refuse silent no-op)"
+    , FlowROS.runFlow )
+  , ( "Flow: Type breakage (check_module must flag type mismatch)"
+    , FlowTB.runFlow )
+  , ( "Flow: Injection guard (newline / sentinel / path traversal)"
+    , FlowIG.runFlow )
   ]
 
 main :: IO ()
