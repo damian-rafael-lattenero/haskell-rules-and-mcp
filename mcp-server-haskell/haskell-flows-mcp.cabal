@@ -62,12 +62,14 @@ library
                       HaskellFlows.Tool.ApplyExports
                       HaskellFlows.Tool.Arbitrary
                       HaskellFlows.Tool.Batch
+                      HaskellFlows.Tool.Browse
                       HaskellFlows.Tool.CheckModule
                       HaskellFlows.Tool.CheckProject
                       HaskellFlows.Tool.Complete
                       HaskellFlows.Tool.Coverage
                       HaskellFlows.Tool.CreateProject
                       HaskellFlows.Tool.Deps
+                      HaskellFlows.Tool.Determinism
                       HaskellFlows.Tool.Doc
                       HaskellFlows.Tool.Eval
                       HaskellFlows.Tool.FixWarning
@@ -79,6 +81,7 @@ library
                       HaskellFlows.Tool.Imports
                       HaskellFlows.Tool.Info
                       HaskellFlows.Tool.Lint
+                      HaskellFlows.Tool.PropertyLifecycle
                       HaskellFlows.Tool.Load
                       HaskellFlows.Tool.QuickCheck
                       HaskellFlows.Tool.QuickCheckExport
@@ -86,6 +89,7 @@ library
                       HaskellFlows.Tool.Regression
                       HaskellFlows.Tool.Suggest
                       HaskellFlows.Tool.ToolchainStatus
+                      HaskellFlows.Tool.ToolchainWarmup
                       HaskellFlows.Tool.Type
                       HaskellFlows.Tool.ValidateCabal
                       HaskellFlows.Tool.Workflow

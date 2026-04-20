@@ -54,6 +54,10 @@ import qualified HaskellFlows.Tool.AddModules      as AddModulesTool
 import qualified HaskellFlows.Tool.ApplyExports    as ApplyExportsTool
 import qualified HaskellFlows.Tool.Arbitrary       as ArbitraryTool
 import qualified HaskellFlows.Tool.Batch           as BatchTool
+import qualified HaskellFlows.Tool.Browse          as BrowseTool
+import qualified HaskellFlows.Tool.Determinism     as DeterminismTool
+import qualified HaskellFlows.Tool.PropertyLifecycle as PropertyLifecycleTool
+import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmupTool
 import qualified HaskellFlows.Tool.CheckModule     as CheckModuleTool
 import qualified HaskellFlows.Tool.CheckProject    as CheckProjectTool
 import qualified HaskellFlows.Tool.Complete        as CompleteTool
@@ -302,6 +306,16 @@ dispatchTool srv call = case tcName call of
   "ghci_imports" -> do
     sess <- getOrStartSession srv
     ImportsTool.handle sess (tcArguments call)
+  "ghci_browse" -> do
+    sess <- getOrStartSession srv
+    BrowseTool.handle sess (tcArguments call)
+  "ghci_determinism" -> do
+    sess <- getOrStartSession srv
+    DeterminismTool.handle sess (tcArguments call)
+  "ghci_property_lifecycle" ->
+    PropertyLifecycleTool.handle (srvStore srv) (tcArguments call)
+  "ghci_toolchain_warmup" ->
+    ToolchainWarmupTool.handle (tcArguments call)
   other ->
     pure ToolResult
       { trContent = [ TextContent ("Unknown tool: " <> other) ]
@@ -348,6 +362,10 @@ allToolDescriptors =
   , ApplyExportsTool.descriptor
   , FixWarningTool.descriptor
   , ImportsTool.descriptor
+  , BrowseTool.descriptor
+  , DeterminismTool.descriptor
+  , PropertyLifecycleTool.descriptor
+  , ToolchainWarmupTool.descriptor
   ]
 
 allToolNames :: [Text]

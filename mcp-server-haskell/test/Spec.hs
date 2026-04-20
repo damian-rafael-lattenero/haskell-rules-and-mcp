@@ -274,6 +274,7 @@ main = do
       , test "resources: rules workflow URI resolves" testResourcesRulesRead
       , test "resources: unknown URI returns Nothing" testResourcesUnknown
       , test "staleness: threshold constant"         testStalenessThreshold
+      , test "baja bundle: 4 tools registered"      testBajaRegistered
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1193,6 +1194,16 @@ testCoverageInvokesHpcReport = do
 -- quoted literal in source and the concatenation form. Either is fine.
 ellipticalOr :: Bool -> Bool -> Bool
 ellipticalOr = (||)
+
+-- | Phase 11n: 4 BAJA bundle tools registered in the inventory.
+testBajaRegistered :: IO Bool
+testBajaRegistered = pure $
+  all (`elem` allToolNames)
+    [ "ghci_browse"
+    , "ghci_determinism"
+    , "ghci_property_lifecycle"
+    , "ghci_toolchain_warmup"
+    ]
 
 -- | Phase 11l: resources/read for the rules URI returns the
 -- embedded markdown; unknown URIs return Nothing.
