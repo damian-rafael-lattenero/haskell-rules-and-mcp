@@ -159,10 +159,18 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.ExprSources
                       Scenarios.FlowArbitrary
                       Scenarios.FlowBatch
+                      Scenarios.FlowBootstrap
+                      Scenarios.FlowCoverage
                       Scenarios.FlowExploratory
+                      Scenarios.FlowFixWarning
+                      Scenarios.FlowPropertyLifecycle
+                      Scenarios.FlowQualityGates
                       Scenarios.FlowRefactor
                       Scenarios.FlowScopeMgmt
+                      Scenarios.FlowToolchain
                       Scenarios.FlowTypedHoles
+                      Scenarios.FlowValidateCabal
+                      Scenarios.FlowWorkflowHelp
     build-tool-depends: haskell-flows-mcp:haskell-flows-mcp
     build-depends:    base              >= 4.20 && < 5
                     , aeson             >= 2.2  && < 2.3

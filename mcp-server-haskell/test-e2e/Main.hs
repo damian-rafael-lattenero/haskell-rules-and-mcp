@@ -24,13 +24,21 @@ import System.IO (BufferMode (..), hSetBuffering, stderr, stdout)
 import qualified E2E.Assert as Assert
 import qualified E2E.Client as Client
 import qualified E2E.Smoke  as Smoke
-import qualified Scenarios.ExprEvaluator   as Expr
-import qualified Scenarios.FlowArbitrary   as FlowA
-import qualified Scenarios.FlowBatch       as FlowB
-import qualified Scenarios.FlowExploratory as FlowE
-import qualified Scenarios.FlowRefactor    as FlowR
-import qualified Scenarios.FlowScopeMgmt   as FlowS
-import qualified Scenarios.FlowTypedHoles  as FlowH
+import qualified Scenarios.ExprEvaluator        as Expr
+import qualified Scenarios.FlowArbitrary        as FlowA
+import qualified Scenarios.FlowBatch            as FlowB
+import qualified Scenarios.FlowBootstrap        as FlowBoot
+import qualified Scenarios.FlowCoverage         as FlowCov
+import qualified Scenarios.FlowExploratory      as FlowE
+import qualified Scenarios.FlowFixWarning       as FlowFW
+import qualified Scenarios.FlowPropertyLifecycle as FlowPL
+import qualified Scenarios.FlowQualityGates     as FlowQG
+import qualified Scenarios.FlowRefactor         as FlowR
+import qualified Scenarios.FlowScopeMgmt        as FlowS
+import qualified Scenarios.FlowToolchain        as FlowTC
+import qualified Scenarios.FlowTypedHoles       as FlowH
+import qualified Scenarios.FlowValidateCabal    as FlowVC
+import qualified Scenarios.FlowWorkflowHelp     as FlowWH
 
 -- | Every scenario exposes the same shape:
 --
@@ -46,7 +54,7 @@ scenarios =
     , FlowE.runFlow )
   , ( "Flow: Typed holes (hole → patch → clean)"
     , FlowH.runFlow )
-  , ( "Flow: Refactor (rename happy + rollback + extract)"
+  , ( "Flow: Refactor (rename happy + rollback + keyword-reject)"
     , FlowR.runFlow )
   , ( "Flow: Arbitrary templates (flat / sized / polymorphic)"
     , FlowA.runFlow )
@@ -54,6 +62,22 @@ scenarios =
     , FlowS.runFlow )
   , ( "Flow: Batch composition (happy + fail_fast)"
     , FlowB.runFlow )
+  , ( "Flow: Toolchain probes (status + warmup)"
+    , FlowTC.runFlow )
+  , ( "Flow: Bootstrap host rules (preview + write + 3 hosts)"
+    , FlowBoot.runFlow )
+  , ( "Flow: Validate cabal (clean + duplicate deps)"
+    , FlowVC.runFlow )
+  , ( "Flow: Property lifecycle (store inspection)"
+    , FlowPL.runFlow )
+  , ( "Flow: Workflow help/next (phase + state hints)"
+    , FlowWH.runFlow )
+  , ( "Flow: Quality gates (lint / format / check_module / check_project)"
+    , FlowQG.runFlow )
+  , ( "Flow: Fix warning (unused-import patch preview)"
+    , FlowFW.runFlow )
+  , ( "Flow: Coverage (cabal test --enable-coverage + HPC)"
+    , FlowCov.runFlow )
   ]
 
 main :: IO ()
