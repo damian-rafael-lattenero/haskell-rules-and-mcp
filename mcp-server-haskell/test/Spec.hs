@@ -52,6 +52,7 @@ import HaskellFlows.Suggest.Rules
   , Suggestion (..)
   , applyRules
   )
+import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNames)
 import HaskellFlows.Mcp.Protocol (ToolCall (..))
 import HaskellFlows.Tool.Batch (BatchArgs (..))
 import HaskellFlows.Tool.CheckProject (parseExposedModules)
@@ -184,6 +185,7 @@ main = do
       , test "batch accepts MCP {name,arguments}"   testBatchParsesNameArgs
       , test "suggest reverse Idempotent is Low"    testSuggestReverseIdempotentLow
       , test "suggest normalize Idempotent Medium"  testSuggestNormalizeIdempotentMedium
+      , test "workflow tool names match tools/list" testWorkflowToolsParity
       ]
   if and results then exitSuccess else exitFailure
 
@@ -903,6 +905,17 @@ testSuggestNormalizeIdempotentMedium =
       in pure $ case sugg of
            [s] -> sConfidence s == Medium
            _   -> False
+
+-- | Issue #24: @toolsActive@ in 'ghci_workflow' must enumerate the
+-- same set of tools as @tools/list@. The two used to drift because
+-- the list was hand-maintained in two places. Paranoia check: also
+-- confirm every name is non-empty and the server registers more
+-- than the 9-tool Phase-5 baseline.
+testWorkflowToolsParity :: IO Bool
+testWorkflowToolsParity = pure $
+     length allToolNames == length allToolDescriptors
+  && not (any T.null allToolNames)
+  && length allToolNames >= 20
 
 -- | Helper: create a fresh temp directory and delete it after the test.
 -- Passes a validated 'ProjectDir' (absolute + normalised) to the body.

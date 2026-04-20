@@ -75,17 +75,23 @@ instance FromJSON WorkflowArgs where
       Just other     -> fail ("unknown action: " <> T.unpack other)
     pure (WorkflowArgs a)
 
+-- | The @toolNames@ argument is the canonical tool list provided by
+-- 'HaskellFlows.Mcp.Server' — the same list that feeds @tools/list@.
+-- Passing it in keeps this module free of a dependency on Server
+-- (no import cycle) while guaranteeing the @toolsActive@ view can
+-- never drift from the @tools/list@ surface again.
 handle
   :: IORef ProjectDir
   -> MVar (Maybe Session)
+  -> [Text]
   -> Value
   -> IO ToolResult
-handle pdRef sessMVar rawArgs = case parseEither parseJSON rawArgs of
+handle pdRef sessMVar toolNames rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
   Right (WorkflowArgs a) -> do
     pd       <- readIORef pdRef
     sessAlive <- isAlive sessMVar
-    pure (render a pd sessAlive)
+    pure (render a pd sessAlive toolNames)
 
 isAlive :: MVar (Maybe Session) -> IO Bool
 isAlive sessMVar = do
@@ -98,10 +104,10 @@ isAlive sessMVar = do
 
 -- | Render the workflow view. The three branches share the same
 -- top-level shape so agents can treat the tool's output polymorphically.
-render :: Action -> ProjectDir -> Bool -> ToolResult
-render a pd alive =
+render :: Action -> ProjectDir -> Bool -> [Text] -> ToolResult
+render a pd alive toolNames =
   let payload = case a of
-        ActStatus -> statusPayload pd alive
+        ActStatus -> statusPayload pd alive toolNames
         ActHelp   -> helpPayload pd alive
         ActNext   -> nextPayload pd alive
   in ToolResult
@@ -109,18 +115,13 @@ render a pd alive =
        , trIsError = False
        }
 
-statusPayload :: ProjectDir -> Bool -> Value
-statusPayload pd alive =
+statusPayload :: ProjectDir -> Bool -> [Text] -> Value
+statusPayload pd alive toolNames =
   object
     [ "view"        .= ("status" :: Text)
     , "projectDir"  .= T.pack (unProjectDir pd)
     , "ghciAlive"   .= alive
-    , "toolsActive" .=
-        ( [ "ghci_load", "ghci_type", "ghci_info", "ghci_eval"
-          , "ghci_quickcheck", "ghci_hole", "ghci_arbitrary"
-          , "hoogle_search", "ghci_workflow"
-          ] :: [Text]
-        )
+    , "toolsActive" .= toolNames
     ]
 
 helpPayload :: ProjectDir -> Bool -> Value

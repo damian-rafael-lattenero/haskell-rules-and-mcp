@@ -14,6 +14,9 @@ module HaskellFlows.Mcp.Server
   , handleRequest
     -- * Dispatch (re-exported so ghci_batch can recurse)
   , dispatchTool
+    -- * Canonical tool registry (shared with ghci_workflow's status view)
+  , allToolDescriptors
+  , allToolNames
   ) where
 
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
@@ -111,35 +114,7 @@ dispatch _ "initialize" _ rid =
             }
       }
 dispatch _ "tools/list" _ rid =
-  pure $ ok rid $ object
-    [ "tools" .=
-        [ Load.descriptor
-        , TypeTool.descriptor
-        , InfoTool.descriptor
-        , EvalTool.descriptor
-        , QcTool.descriptor
-        , HoleTool.descriptor
-        , ArbitraryTool.descriptor
-        , HoogleTool.descriptor
-        , WorkflowTool.descriptor
-        , RegressionTool.descriptor
-        , CheckModuleTool.descriptor
-        , CoverageTool.descriptor
-        , CompleteTool.descriptor
-        , FormatTool.descriptor
-        , DepsTool.descriptor
-        , CreateProjectTool.descriptor
-        , DocTool.descriptor
-        , GotoTool.descriptor
-        , RefactorTool.descriptor
-        , BatchTool.descriptor
-        , LintTool.descriptor
-        , ToolchainStatusTool.descriptor
-        , ValidateCabalTool.descriptor
-        , CheckProjectTool.descriptor
-        , SuggestTool.descriptor
-        ]
-    ]
+  pure $ ok rid $ object [ "tools" .= allToolDescriptors ]
 dispatch srv "tools/call" (Just params) rid =
   case parseEither parseJSON params of
     Left err -> pure (err_ rid (invalidParamsErr (T.pack err)))
@@ -194,7 +169,11 @@ dispatchTool srv call = case tcName call of
   "hoogle_search" ->
     HoogleTool.handle (tcArguments call)
   "ghci_workflow" ->
-    WorkflowTool.handle (srvProjectDir srv) (srvSession srv) (tcArguments call)
+    WorkflowTool.handle
+      (srvProjectDir srv)
+      (srvSession srv)
+      allToolNames
+      (tcArguments call)
   "ghci_regression" -> do
     sess <- getOrStartSession srv
     RegressionTool.handle (srvStore srv) sess (tcArguments call)
@@ -247,6 +226,44 @@ dispatchTool srv call = case tcName call of
       { trContent = [ TextContent ("Unknown tool: " <> other) ]
       , trIsError = True
       }
+
+--------------------------------------------------------------------------------
+-- tool registry — single source of truth for both tools/list and
+-- ghci_workflow's status view. Keep additions in sync with the
+-- dispatcher branch in 'dispatchTool'.
+--------------------------------------------------------------------------------
+
+allToolDescriptors :: [ToolDescriptor]
+allToolDescriptors =
+  [ Load.descriptor
+  , TypeTool.descriptor
+  , InfoTool.descriptor
+  , EvalTool.descriptor
+  , QcTool.descriptor
+  , HoleTool.descriptor
+  , ArbitraryTool.descriptor
+  , HoogleTool.descriptor
+  , WorkflowTool.descriptor
+  , RegressionTool.descriptor
+  , CheckModuleTool.descriptor
+  , CoverageTool.descriptor
+  , CompleteTool.descriptor
+  , FormatTool.descriptor
+  , DepsTool.descriptor
+  , CreateProjectTool.descriptor
+  , DocTool.descriptor
+  , GotoTool.descriptor
+  , RefactorTool.descriptor
+  , BatchTool.descriptor
+  , LintTool.descriptor
+  , ToolchainStatusTool.descriptor
+  , ValidateCabalTool.descriptor
+  , CheckProjectTool.descriptor
+  , SuggestTool.descriptor
+  ]
+
+allToolNames :: [Text]
+allToolNames = map tdName allToolDescriptors
 
 -- | Common exception shield for every tool handler.
 --
