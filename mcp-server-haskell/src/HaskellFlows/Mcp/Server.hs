@@ -25,6 +25,7 @@ import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 import Control.Exception (SomeException, fromException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString.Lazy as BL
 import Data.IORef (IORef, newIORef, readIORef)
 import Data.Maybe (fromMaybe)
@@ -39,6 +40,7 @@ import HaskellFlows.Data.PropertyStore (Store, openStore)
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Resources (allResources, readResource)
 import HaskellFlows.Mcp.WorkflowState
   ( WorkflowStateRef
   , newWorkflowStateRef
@@ -143,6 +145,26 @@ dispatch _ "initialize" _ rid =
       }
 dispatch _ "tools/list" _ rid =
   pure $ ok rid $ object [ "tools" .= allToolDescriptors ]
+dispatch _ "resources/list" _ rid =
+  pure $ ok rid $ object [ "resources" .= allResources ]
+dispatch _ "resources/read" (Just params) rid =
+  case parseEither parseJSON params :: Either String Value of
+    Left err -> pure (err_ rid (invalidParamsErr (T.pack err)))
+    Right v  -> case v of
+      Object o -> case KeyMap.lookup "uri" o of
+        Just (String u) -> case readResource u of
+          Just contents -> pure $ ok rid $ object
+            [ "contents" .= [ object
+                [ "uri"      .= u
+                , "mimeType" .= ("text/markdown" :: Text)
+                , "text"     .= contents
+                ] ]
+            ]
+          Nothing -> pure (err_ rid (invalidParamsErr ("unknown resource uri: " <> u)))
+        _ -> pure (err_ rid (invalidParamsErr "resources/read requires a `uri` string"))
+      _ -> pure (err_ rid (invalidParamsErr "resources/read params must be an object"))
+dispatch _ "resources/read" Nothing rid =
+  pure (err_ rid (invalidParamsErr "resources/read requires params"))
 dispatch srv "tools/call" (Just params) rid =
   case parseEither parseJSON params of
     Left err -> pure (err_ rid (invalidParamsErr (T.pack err)))

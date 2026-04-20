@@ -77,6 +77,8 @@ import qualified HaskellFlows.Tool.AddModules as AddModules
 import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
 import qualified HaskellFlows.Mcp.WorkflowState as WS
+import qualified HaskellFlows.Mcp.Resources as Resources
+import qualified HaskellFlows.Mcp.Staleness as Staleness
 import HaskellFlows.Tool.CheckProject (parseExposedModules)
 import HaskellFlows.Tool.Lint (parseHlintJson)
 import qualified HaskellFlows.Tool.Lint as LintTool
@@ -269,6 +271,9 @@ main = do
       , test "workflow-state: initial empty"       testWorkflowStateInitial
       , test "workflow-state: tracks load + edits" testWorkflowStateTracks
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
+      , test "resources: rules workflow URI resolves" testResourcesRulesRead
+      , test "resources: unknown URI returns Nothing" testResourcesUnknown
+      , test "staleness: threshold constant"         testStalenessThreshold
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1188,6 +1193,27 @@ testCoverageInvokesHpcReport = do
 -- quoted literal in source and the concatenation form. Either is fine.
 ellipticalOr :: Bool -> Bool -> Bool
 ellipticalOr = (||)
+
+-- | Phase 11l: resources/read for the rules URI returns the
+-- embedded markdown; unknown URIs return Nothing.
+testResourcesRulesRead :: IO Bool
+testResourcesRulesRead = pure $
+  case Resources.readResource "haskell-flows://rules/workflow" of
+    Just txt -> T.isInfixOf "haskell-flows" txt
+             && T.isInfixOf "situation" (T.toLower txt)
+    Nothing -> False
+
+testResourcesUnknown :: IO Bool
+testResourcesUnknown = pure $
+  case Resources.readResource "haskell-flows://nonexistent" of
+    Nothing -> True
+    Just _  -> False
+
+-- | Phase 11m: staleness threshold is the documented 1-minute
+-- default. Changing it is a flags-level change; pin it so we
+-- notice.
+testStalenessThreshold :: IO Bool
+testStalenessThreshold = pure (Staleness.thresholdMinutes == 1.0)
 
 -- | Phase 11k: WorkflowState tracker starts at zero counters + empty history.
 testWorkflowStateInitial :: IO Bool

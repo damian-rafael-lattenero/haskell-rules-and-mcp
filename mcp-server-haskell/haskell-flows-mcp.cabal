@@ -40,6 +40,8 @@ library
                       HaskellFlows.Types
                       HaskellFlows.Mcp.NextStep
                       HaskellFlows.Mcp.Protocol
+                      HaskellFlows.Mcp.Resources
+                      HaskellFlows.Mcp.Staleness
                       HaskellFlows.Mcp.WorkflowState
                       HaskellFlows.Mcp.Transport
                       HaskellFlows.Mcp.Server
