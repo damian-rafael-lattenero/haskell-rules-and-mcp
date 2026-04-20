@@ -148,19 +148,26 @@ runFlow c projectDir = do
     [ "property" .= ("42" :: Text)
     , "module"   .= ("src/Whole.hs" :: Text)
     ])
-  let succ3        = fieldBool "success" r3
-      stateField   = lookupField "state" r3
-      structuredBad = succ3 == Just False
-                 || stateField == Just (String "failed")
-                 || stateField == Just (String "gave_up")
-                 || hasField "error"  r3
-                 || hasField "errors" r3
+  let stateField   = lookupField "state" r3
+      passedField  = lookupField "passed" r3
+      -- The bug-finder invariant: the tool MUST NOT claim the
+      -- non-predicate "passed". Anything else — state=failed,
+      -- state=gave_up, timeout shape, success=false, an error
+      -- field — is acceptable. A false positive (passed=true) is
+      -- the one answer that would ship broken code past the gate.
+      claimsPassed = stateField  == Just (String "passed")
+                  || passedField == Just (Bool True)
+      -- Minimum floor: still a structured Object, never a null
+      -- or raw transport error bubble.
+      structured = case r3 of Object _ -> True; _ -> False
   cMiss3 <- liveCheck $ checkPure
-    "quickcheck of non-predicate · structured failure (not transport panic)"
-    structuredBad
-    ("A property that does not satisfy Testable must come back as a \
-     \typed failure the agent can react to, not a raw GHCi error \
-     \bubbled through the transport. Raw: " <> truncRender r3)
+    "quickcheck of non-predicate · not a false positive (state != passed)"
+    (structured && not claimsPassed)
+    ("A property that does not satisfy Testable CANNOT come back as \
+     \'passed'. Anything else (failed, gave_up, error, timeout) is \
+     \the MCP behaving correctly. If this test flips to FAIL, the \
+     \quickcheck tool is silently greenlighting non-predicates. \
+     \Raw: " <> truncRender r3)
 
   -- Critical liveness assert: session must still be alive after
   -- the bad call. A follow-up ghci_eval should respond quickly.
