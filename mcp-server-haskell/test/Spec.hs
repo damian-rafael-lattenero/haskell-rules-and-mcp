@@ -34,6 +34,7 @@ import Test.QuickCheck
 import HaskellFlows.Ghci.Session
   ( CommandError (..)
   , sanitizeExpression
+  , sessionCabalArgs
   )
 import HaskellFlows.Parser.Error (parseGhcErrors, Severity (..), GhcError (..))
 import HaskellFlows.Parser.Hole
@@ -198,6 +199,7 @@ main = do
       , test "suggest [a]->[Run a] skips list rules" testSuggestEncodeShapeSkipsListRules
       , test "parseCtors record strict w/ kind header" testCtorsRecordStrictWithKindHeader
       , test "parseCtors inline record 2 fields"    testCtorsInlineRecord2Fields
+      , test "session spawns with QuickCheck dep"   testSessionIncludesQuickCheck
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1094,6 +1096,19 @@ testParseStanzaRejects = pure $
     rejects raw = case parseStanzaSelector raw of
       Left  _ -> True
       Right _ -> False
+
+-- | Phase 11b F-06: @cabal repl@ was spawned with no extra deps so
+-- the GHCi session never had @Test.QuickCheck@ on its load path.
+-- Calling @ghci_quickcheck@ against a scratch project that only
+-- listed QuickCheck as a test-suite dep therefore failed with
+-- \"Variable not in scope: quickCheck\". Fix attaches QuickCheck
+-- via @--build-depends@ at session spawn time so the tool called
+-- @ghci_quickcheck@ can actually… quickCheck. Pin the argv shape.
+testSessionIncludesQuickCheck :: IO Bool
+testSessionIncludesQuickCheck = pure $
+     "repl"             `elem` sessionCabalArgs
+  && "--build-depends"  `elem` sessionCabalArgs
+  && "QuickCheck"       `elem` sessionCabalArgs
 
 -- | Phase 11b F-04 part A: GHC 9.x emits a kind-signature line
 -- (@type Run :: * -> *@) BEFORE the data decl in @:i@ output.

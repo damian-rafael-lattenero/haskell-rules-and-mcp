@@ -41,6 +41,7 @@ module HaskellFlows.Ghci.Session
   , sanitizeExpression
   , maxEvalBytes
   , maxBufferBytes
+  , sessionCabalArgs
   ) where
 
 import Control.Concurrent.Async (Async, async, cancel)
@@ -134,9 +135,22 @@ maxBufferBytes = 16 * 1024 * 1024
 --
 -- The session installs the sentinel prompt and common extensions so the
 -- semantics match the TS server before handing back.
+-- | Arguments passed to @cabal repl@ when we spawn the persistent
+-- GHCi session. We attach @QuickCheck@ via @--build-depends@ so
+-- 'ghci_quickcheck' can always call 'Test.QuickCheck.quickCheck'
+-- regardless of whether the surrounding project happens to list it
+-- as a library dependency (it usually won't — QuickCheck is almost
+-- always a test-suite-only dep). Adding it as a session-only
+-- build-depends does not modify the project's .cabal.
+--
+-- Exposed so tests and callers can reason about the exact argv
+-- without needing to spawn cabal.
+sessionCabalArgs :: [String]
+sessionCabalArgs = ["repl", "--build-depends", "QuickCheck"]
+
 startSession :: ProjectDir -> IO Session
 startSession pd = do
-  let cp = (proc "cabal" ["repl"])
+  let cp = (proc "cabal" sessionCabalArgs)
              { cwd     = Just (unProjectDir pd)
              , std_in  = CreatePipe
              , std_out = CreatePipe
