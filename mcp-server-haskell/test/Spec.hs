@@ -13,6 +13,7 @@ import qualified Data.Aeson as A
 import Data.Aeson (object, (.=))
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import Data.Maybe (fromMaybe, isNothing)
 import qualified Data.Maybe
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -200,6 +201,7 @@ main = do
       , test "parseCtors record strict w/ kind header" testCtorsRecordStrictWithKindHeader
       , test "parseCtors inline record 2 fields"    testCtorsInlineRecord2Fields
       , test "session spawns with QuickCheck dep"   testSessionIncludesQuickCheck
+      , test "loadModule Strict uses -fno-defer-*" testLoadStrictClearsDeferred
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1096,6 +1098,43 @@ testParseStanzaRejects = pure $
     rejects raw = case parseStanzaSelector raw of
       Left  _ -> True
       Right _ -> False
+
+-- | Phase 11b F-08 (critical): the old @loadModuleWith Deferred@ used
+-- @:unset -fdefer-type-errors -fdefer-typed-holes@, but GHCi's
+-- @:unset@ is only for GHCi-level options (@+s@, @+t@, …) — NOT GHC
+-- flags. So the flags leaked across calls and every subsequent
+-- compile-check silently deferred its errors. This voided the
+-- snapshot-and-compile-verify invariant of @ghci_refactor@: renames
+-- that left the module broken would still report compile=ok.
+--
+-- We can't spawn a real GHCi in a unit test, but we can pin the
+-- static shape of the commands the session sends. The fix requires
+-- (a) @Strict@ mode sending @-fno-defer-type-errors@ /
+-- @-fno-defer-typed-holes@, and (b) the tail of the @Deferred@ path
+-- using the same @-fno-@ form (not @:unset@). Grepping the module
+-- source is the narrowest regression check that survives without
+-- a live GHCi.
+testLoadStrictClearsDeferred :: IO Bool
+testLoadStrictClearsDeferred = do
+  src <- TIO.readFile "src/HaskellFlows/Ghci/Session.hs"
+  -- Drop docstrings so the doc mentions of the old buggy form don't
+  -- trip us up.
+  let codeLines = filter (not . isDocLine) (T.lines src)
+      code      = T.unlines codeLines
+      setLineCount pat = length
+        [ () | ln <- codeLines, T.isInfixOf pat ln, T.isInfixOf ":set" ln ]
+      unsetLineCount pat = length
+        [ () | ln <- codeLines, T.isInfixOf pat ln, T.isInfixOf ":unset" ln ]
+  pure $ T.isInfixOf "-fno-defer-type-errors" code
+      && T.isInfixOf "-fno-defer-typed-holes" code
+      && setLineCount "-fno-defer-type-errors" >= 1
+      && setLineCount "-fno-defer-typed-holes" >= 1
+      && unsetLineCount "-fdefer-type-errors" == 0
+      && unsetLineCount "-fdefer-typed-holes" == 0
+  where
+    isDocLine ln =
+      let s = T.stripStart ln
+      in "--" `T.isPrefixOf` s || "|" `T.isPrefixOf` s
 
 -- | Phase 11b F-06: @cabal repl@ was spawned with no extra deps so
 -- the GHCi session never had @Test.QuickCheck@ on its load path.

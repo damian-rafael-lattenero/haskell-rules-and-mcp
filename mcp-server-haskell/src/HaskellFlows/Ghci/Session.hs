@@ -221,15 +221,30 @@ loadModule s mp = loadModuleWith s mp Strict
 -- | Load a specific module under the requested 'LoadMode'.
 --
 -- The deferred pass wraps the load with flag set/unset so session-wide
--- state isn't polluted — after returning, subsequent 'typeOf'/'infoOf' see
--- the same flags as before the call.
+-- state isn't polluted — after returning, subsequent 'typeOf'/'infoOf'
+-- / 'ghci_refactor' compile-checks see strict flags again.
+--
+-- Important: the un-set path uses @:set -fno-defer-type-errors@ — NOT
+-- @:unset -fdefer-type-errors@. GHCi's @:unset@ only handles
+-- GHCi-level options (@+s@, @+t@, editor, etc.); GHC flags toggled
+-- via @:set -f<flag>@ are disabled with the explicit @-fno-<flag>@
+-- form. Using @:unset@ silently leaves the flag enabled, which was
+-- F-08 from the Phase-11b dogfood — compile-checks in 'ghci_refactor'
+-- would always return OK even when the edit left the module broken,
+-- because 'mkRun not in scope' was being deferred to runtime.
+--
+-- 'Strict' mode now also eagerly clears the deferred flags at the
+-- start of the load. This is belt-and-suspenders: a future caller
+-- that sets the flags by other means (or a prior bug that leaked
+-- them) cannot poison subsequent strict loads.
 loadModuleWith :: Session -> ModulePath -> LoadMode -> IO GhciResult
-loadModuleWith s mp Strict =
-  execute s (T.pack (":l " <> unModulePath mp))
+loadModuleWith s mp Strict = withLock s $ do
+  _   <- executeNoLock s ":set -fno-defer-type-errors -fno-defer-typed-holes" 30_000000
+  executeNoLock s (T.pack (":l " <> unModulePath mp)) 30_000000
 loadModuleWith s mp Deferred = withLock s $ do
-  _ <- executeNoLock s ":set -fdefer-type-errors -fdefer-typed-holes" 30_000000
-  out <- executeNoLock s (T.pack (":l " <> unModulePath mp)) 30_000000
-  _ <- executeNoLock s ":unset -fdefer-type-errors -fdefer-typed-holes" 30_000000
+  _   <- executeNoLock s ":set -fdefer-type-errors -fdefer-typed-holes"      30_000000
+  out <- executeNoLock s (T.pack (":l " <> unModulePath mp))                  30_000000
+  _   <- executeNoLock s ":set -fno-defer-type-errors -fno-defer-typed-holes" 30_000000
   pure out
 
 -- | Re-load all currently-loaded modules. Wraps @:r@.
