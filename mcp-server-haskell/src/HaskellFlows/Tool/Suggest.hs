@@ -24,10 +24,16 @@ module HaskellFlows.Tool.Suggest
   , handle
   , SuggestArgs (..)
   , outOfScopeResult
+    -- * Sibling-aware helpers (BUG-03)
+  , gatherSiblings
+  , parseShowModules
+  , parseBrowseBindings
   ) where
 
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Data.Char (isAsciiLower)
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
@@ -36,12 +42,14 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Parser.Type (parseTypeOutput, ParsedType (..), isOutOfScope)
-import HaskellFlows.Parser.TypeSignature (parseSignature)
+import HaskellFlows.Parser.TypeSignature (ParsedSig, parseSignature)
 import HaskellFlows.Suggest.Rules
   ( Confidence (..)
+  , RuleContext (..)
   , Suggestion (..)
-  , applyRules
+  , applyRulesCtx
   )
+import HaskellFlows.Tool.Goto (Location (..), parseDefinedAt)
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -121,7 +129,24 @@ handle sess rawArgs = case parseEither parseJSON rawArgs of
                   Nothing -> pure (errorResult
                     ( "Could not parse signature: " <> ptType pt ))
                   Just sig -> do
-                    let matches = applyRules safe sig
+                    -- BUG-03: discover the focal function's home
+                    -- module and collect its OTHER top-level
+                    -- bindings as siblings. The sibling list is
+                    -- what enables 'ruleEvaluatorPreservation' and
+                    -- 'ruleConstantFoldingSoundness' to fire — the
+                    -- engines match on "this function is @a -> a@
+                    -- and there is a sibling whose last argument is
+                    -- @a@ and whose return type is different". Pre
+                    -- BUG-03 the siblings list was hard-wired to
+                    -- @[]@ via 'applyRules' (back-compat single-sig
+                    -- entrypoint) and the engines never fired.
+                    siblings <- gatherSiblings sess safe
+                    let ctx = RuleContext
+                          { rcName     = safe
+                          , rcSig      = sig
+                          , rcSiblings = siblings
+                          }
+                        matches  = applyRulesCtx ctx
                         filtered = case saCategory args of
                           Nothing -> matches
                           Just c  -> filter ((c ==) . sCategory) matches
@@ -224,3 +249,113 @@ formatCommandError = \case
 
 encodeUtf8Text :: Value -> Text
 encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+
+--------------------------------------------------------------------------------
+-- BUG-03: sibling discovery
+--------------------------------------------------------------------------------
+
+-- | Discover the top-level bindings that live next to the focal
+-- function in the same module, pair each with its parsed
+-- signature, and return them as the @rcSiblings@ input to
+-- 'applyRulesCtx'.
+--
+-- Flow:
+--
+-- 1. @:info \<focalName\>@ — the trailing @-- Defined at <path>@
+--    line tells us the focal function's source file.
+-- 2. @:show modules@ — canonical GHC mapping from module name to
+--    source file (one line per loaded module).
+-- 3. Reverse the mapping on the focal file to discover the
+--    module name.
+-- 4. @:browse \<module\>@ — one @name :: type@ line per
+--    top-level binding.
+-- 5. Parse each line; keep only (a) lower-case identifiers (value
+--    bindings, not types or classes), (b) whose type parses into
+--    a 'ParsedSig', (c) that are NOT the focal function itself.
+--
+-- Any step failing (GHCi error, parse failure, missing marker)
+-- produces @[]@ so the engines still fire with their classical
+-- (no-sibling) branches — degradation, never crash.
+gatherSiblings :: Session -> Text -> IO [(Text, ParsedSig)]
+gatherSiblings sess focalName = do
+  infoRes   <- execute sess (":info " <> focalName)
+  case focalFileFromInfo (grOutput infoRes) of
+    Nothing        -> pure []
+    Just focalFile -> do
+      showRes <- execute sess ":show modules"
+      case moduleForFile focalFile (parseShowModules (grOutput showRes)) of
+        Nothing -> pure []
+        Just m  -> do
+          browseRes <- execute sess (":browse " <> m)
+          pure (siblingsFromBrowse focalName (grOutput browseRes))
+
+-- | Extract the source file path from a @:info@ response.
+focalFileFromInfo :: Text -> Maybe FilePath
+focalFileFromInfo txt = case parseDefinedAt txt of
+  Just (InFile f _ _) -> Just (T.unpack f)
+  _                   -> Nothing
+
+-- | Parse GHCi's @:show modules@ output into @(ModuleName, FilePath)@
+-- tuples. Typical line (stripped):
+--
+-- > Expr.Simplify    ( src/Expr/Simplify.hs, interpreted )
+--
+-- A leading asterisk marks the @*@-focused module — we drop it.
+parseShowModules :: Text -> [(Text, FilePath)]
+parseShowModules = mapMaybe parseShowLine . T.lines
+  where
+    parseShowLine raw =
+      let s0        = T.strip raw
+          s         = if "* " `T.isPrefixOf` s0 then T.drop 2 s0 else s0
+          (name, rest) = T.breakOn "(" s
+          name'     = T.strip name
+          inside    = T.drop 1 rest
+          (file, _) = T.breakOn "," inside
+          file'     = T.strip file
+      in if T.null name' || T.null file' || T.null rest
+           then Nothing
+           else Just (name', T.unpack file')
+
+-- | Reverse-lookup: given a focal source file and the output of
+-- @:show modules@, return the module whose file matches. An exact
+-- string compare on the GHCi-reported path is all we need — GHCi
+-- always reports the project-relative form.
+moduleForFile :: FilePath -> [(Text, FilePath)] -> Maybe Text
+moduleForFile focal = lookup focal . map swap
+  where
+    swap (a, b) = (b, a)
+
+-- | Extract top-level value bindings from @:browse@ output as
+-- @(name, type)@ tuples. Skips type/class declarations (names
+-- that don't start with a lowercase letter or underscore) and
+-- ignores lines without a top-level @::@.
+parseBrowseBindings :: Text -> [(Text, Text)]
+parseBrowseBindings = mapMaybe parseOne . T.lines
+  where
+    parseOne raw =
+      let s = T.strip raw
+      in if T.null s || indented raw
+           then Nothing       -- indented continuation lines belong to a prior entry
+           else do
+             let (before, after) = T.breakOn "::" s
+                 name = T.strip before
+                 ty   = T.strip (T.drop 2 after)
+             if T.null before || T.null after || T.null name || T.null ty
+               then Nothing
+               else case T.uncons name of
+                      Just (c, _) | isAsciiLower c || c == '_' -> Just (name, ty)
+                      _                                        -> Nothing
+
+    indented raw = case T.uncons raw of
+      Just (c, _) -> c == ' ' || c == '\t'
+      Nothing     -> False
+
+-- | Combine 'parseBrowseBindings' + 'parseSignature', drop the
+-- focal function itself, and yield rule siblings.
+siblingsFromBrowse :: Text -> Text -> [(Text, ParsedSig)]
+siblingsFromBrowse focalName browseOut =
+  [ (nm, sig)
+  | (nm, ty) <- parseBrowseBindings browseOut
+  , nm /= focalName
+  , Just sig <- [parseSignature ty]
+  ]

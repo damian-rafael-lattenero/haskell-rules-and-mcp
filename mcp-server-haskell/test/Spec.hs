@@ -300,6 +300,12 @@ main = do
       , test "suggest: involutive Low for normalizer" testInvolutiveLowForNormalizer
       , test "suggest: involutive Medium for reverse" testInvolutiveMediumForReverse
       , test "suggest: scope error -> structured hint" testSuggestScopeStructuredHint
+      , test "suggest: parseShowModules simple"     testParseShowModulesSimple
+      , test "suggest: parseShowModules with star"  testParseShowModulesStar
+      , test "suggest: parseBrowseBindings filters types" testParseBrowseBindings
+      , test "suggest: parseBrowseBindings skips continuations" testParseBrowseContinuation
+      , test "suggest: siblings enable preservation" testSuggestSiblingsEnablePreservation
+      , test "suggest: siblings enable soundness"   testSuggestSiblingsEnableSoundness
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1504,6 +1510,110 @@ testSuggestScopeStructuredHint =
          && T.isInfixOf "\"function\":\"simplify\""            body
          && T.isInfixOf "ghci_load"                             body
          && T.isInfixOf "not in scope" body
+
+--------------------------------------------------------------------------------
+-- BUG-03 — sibling-aware suggest pipeline
+--------------------------------------------------------------------------------
+
+-- | Typical @:show modules@ output: one line per loaded module
+-- with the file path in parens.
+testParseShowModulesSimple :: IO Bool
+testParseShowModulesSimple =
+  let raw = T.unlines
+        [ "Expr.Syntax    ( src/Expr/Syntax.hs, interpreted )"
+        , "Expr.Simplify  ( src/Expr/Simplify.hs, interpreted )"
+        , "Expr.Eval      ( src/Expr/Eval.hs, interpreted )"
+        ]
+      parsed = SuggestTool.parseShowModules raw
+  in pure $ ("Expr.Syntax",   "src/Expr/Syntax.hs")   `elem` parsed
+         && ("Expr.Simplify", "src/Expr/Simplify.hs") `elem` parsed
+         && ("Expr.Eval",     "src/Expr/Eval.hs")     `elem` parsed
+
+-- | @:show modules@ prefixes the currently-focused module with
+-- @*@. The parser must strip it before picking up the name.
+testParseShowModulesStar :: IO Bool
+testParseShowModulesStar =
+  let raw = T.unlines
+        [ "* Expr.Simplify  ( src/Expr/Simplify.hs, interpreted )"
+        , "  Expr.Syntax    ( src/Expr/Syntax.hs, interpreted )"
+        ]
+      parsed = SuggestTool.parseShowModules raw
+  in pure $ ("Expr.Simplify", "src/Expr/Simplify.hs") `elem` parsed
+         && ("Expr.Syntax",   "src/Expr/Syntax.hs")   `elem` parsed
+
+-- | @:browse@ output mixes value bindings (lower-case head) with
+-- type / class declarations (upper-case head). The parser keeps
+-- only the value bindings with a top-level @::@.
+testParseBrowseBindings :: IO Bool
+testParseBrowseBindings =
+  let raw = T.unlines
+        [ "data Expr = Lit Int | Add Expr Expr"
+        , "simplify :: Expr -> Expr"
+        , "eval :: Env -> Expr -> Either Error Int"
+        , "type Env = [(String, Int)]"
+        , "class Monad m where"
+        ]
+      parsed = SuggestTool.parseBrowseBindings raw
+  in pure $ ("simplify", "Expr -> Expr") `elem` parsed
+         && ("eval",     "Env -> Expr -> Either Error Int") `elem` parsed
+         && not (any (\(n, _) -> n `elem` ["Expr", "Env", "Monad"]) parsed)
+
+-- | @:browse@ may break long types across lines with indentation.
+-- The parser must skip indented continuation lines rather than
+-- treat them as new bindings.
+testParseBrowseContinuation :: IO Bool
+testParseBrowseContinuation =
+  let raw = T.unlines
+        [ "prettyWithOptions :: Options"
+        , "                  -> Expr"
+        , "                  -> String"
+        , "simplify :: Expr -> Expr"
+        ]
+      parsed = SuggestTool.parseBrowseBindings raw
+  in pure $ any (\(n, _) -> n == "simplify") parsed
+
+-- | BUG-03 core: when the focal function is @simplify :: Expr -> Expr@
+-- and a sibling @eval :: Env -> Expr -> r@ is present (re-export
+-- shape that the MCP will discover via @:browse@), the Evaluator
+-- Preservation engine MUST fire. Pre-fix it never did because the
+-- tool called 'applyRules' (no siblings) instead of 'applyRulesCtx'.
+--
+-- This test drives 'applyRulesCtx' directly with the sibling set
+-- that 'gatherSiblings' would produce — the tool's end-to-end path
+-- needs a live GHCi session that the unit test runner doesn't boot.
+testSuggestSiblingsEnablePreservation :: IO Bool
+testSuggestSiblingsEnablePreservation =
+  case (parseSignature "Expr -> Expr", parseSignature "Env -> Expr -> Either Error Int") of
+    (Just simpSig, Just evalSig) -> pure $
+      let ctx = RuleContext
+            { rcName     = "simplify"
+            , rcSig      = simpSig
+            , rcSiblings = [("eval", evalSig)]
+            }
+          laws = map sLaw (applyRulesCtx ctx)
+      in "Constant-folding soundness" `elem` laws
+         || "Evaluator preservation"   `elem` laws
+    _ -> pure False
+
+-- | Stricter version: the @simplify@ name hints at optimisation, so
+-- 'ruleConstantFoldingSoundness' must fire at High confidence (that's
+-- the whole point of the name-based bump). No sibling → no law.
+testSuggestSiblingsEnableSoundness :: IO Bool
+testSuggestSiblingsEnableSoundness =
+  case (parseSignature "Expr -> Expr", parseSignature "Env -> Expr -> Either Error Int") of
+    (Just simpSig, Just evalSig) -> pure $
+      let withSib = RuleContext
+            { rcName     = "simplify"
+            , rcSig      = simpSig
+            , rcSiblings = [("eval", evalSig)]
+            }
+          noSib   = withSib { rcSiblings = [] }
+          hits s  = [ x | x <- applyRulesCtx s
+                        , sLaw x == "Constant-folding soundness" ]
+      in case hits withSib of
+           (s:_) -> sConfidence s == High && null (hits noSib)
+           []    -> False
+    _ -> pure False
 
 -- | Phase 11k: WorkflowState tracker starts at zero counters + empty history.
 testWorkflowStateInitial :: IO Bool
