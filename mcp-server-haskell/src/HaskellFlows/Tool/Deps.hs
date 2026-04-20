@@ -26,6 +26,9 @@ module HaskellFlows.Tool.Deps
   , Action (..)
   , validatePackageName
   , validateVersionConstraint
+  , parseStanzaSelector
+  , addDep
+  , removeDep
   ) where
 
 import Control.Exception (SomeException, try)
@@ -74,6 +77,20 @@ descriptor =
                        \\">= 2.14\", \"^>= 1.4\". Only used on 'add'."
                        :: Text)
                   ]
+              , "stanza" .= object
+                  [ "type"        .= ("string" :: Text)
+                  , "description" .=
+                      ("Optional stanza selector. Restrict the edit to a \
+                       \specific stanza of the .cabal file. Accepted: \
+                       \\"library\" (main library), \"test-suite\" (first \
+                       \occurrence), \"test-suite:NAME\", \"executable\" / \
+                       \\"executable:NAME\", \"benchmark\" / \
+                       \\"benchmark:NAME\", \"foreign-library\" / \
+                       \\"foreign-library:NAME\". Omit to target the first \
+                       \build-depends block in the file \
+                       \(backwards-compatible default)."
+                       :: Text)
+                  ]
               ]
           , "required"             .= ["action" :: Text]
           , "additionalProperties" .= False
@@ -87,6 +104,7 @@ data DepsArgs = DepsArgs
   { daAction  :: !Action
   , daPackage :: !(Maybe Text)
   , daVersion :: !(Maybe Text)
+  , daStanza  :: !(Maybe Text)
   }
   deriving stock (Show)
 
@@ -95,12 +113,18 @@ instance FromJSON DepsArgs where
     a <- o .:  "action"
     p <- o .:? "package"
     v <- o .:? "version"
+    s <- o .:? "stanza"
     act <- case (a :: Text) of
       "list"   -> pure ActList
       "add"    -> pure ActAdd
       "remove" -> pure ActRemove
       other    -> fail ("unknown action: " <> T.unpack other)
-    pure DepsArgs { daAction = act, daPackage = p, daVersion = v }
+    pure DepsArgs
+      { daAction  = act
+      , daPackage = p
+      , daVersion = v
+      , daStanza  = s
+      }
 
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
@@ -119,39 +143,91 @@ handleAction file args = case daAction args of
     res <- try (TIO.readFile file) :: IO (Either SomeException Text)
     case res of
       Left e     -> pure (errorResult (T.pack ("Could not read cabal file: " <> show e)))
-      Right body -> pure (listResult file (parseBuildDepends body))
+      Right body -> case resolveStanza (daStanza args) body of
+        Left err    -> pure (errorResult err)
+        Right scope -> pure (listResult file (parseBuildDepends scope))
   ActAdd -> case daPackage args of
     Nothing  -> pure (errorResult "'package' is required for add")
     Just pkg -> case validatePackageName pkg of
       Left err -> pure (errorResult err)
       Right safePkg -> case traverse validateVersionConstraint (daVersion args) of
         Left err -> pure (errorResult err)
-        Right safeVer -> runEdit file safePkg (addDep safeVer) "added"
+        Right safeVer -> case traverse parseStanzaSelector (daStanza args) of
+          Left err   -> pure (errorResult err)
+          Right mSel -> runEdit file safePkg mSel (addDep safeVer) "added"
   ActRemove -> case daPackage args of
     Nothing  -> pure (errorResult "'package' is required for remove")
     Just pkg -> case validatePackageName pkg of
       Left err       -> pure (errorResult err)
-      Right safePkg  -> runEdit file safePkg removeDep "removed"
+      Right safePkg  -> case traverse parseStanzaSelector (daStanza args) of
+        Left err   -> pure (errorResult err)
+        Right mSel -> runEdit file safePkg mSel removeDep "removed"
+
+-- | Resolve a stanza selector at @list@ time by scoping the body to
+-- that stanza's lines. Errors (unknown selector / stanza not found)
+-- surface as structured error results to the agent.
+resolveStanza :: Maybe Text -> Text -> Either Text Text
+resolveStanza Nothing body    = Right body
+resolveStanza (Just raw) body = do
+  sel <- parseStanzaSelector raw
+  case sliceStanza sel (T.lines body) of
+    Nothing -> Left ("stanza not found: " <> raw)
+    Just (_, stanzaLns, _) -> Right (T.unlines stanzaLns)
 
 runEdit
   :: FilePath
-  -> Text                              -- validated package name
-  -> (Text -> Text -> Text)            -- (pkg -> body -> newBody)
-  -> Text                              -- verb for the success message
+  -> Text                                    -- validated package name
+  -> Maybe (Text, Maybe Text)                -- parsed stanza selector, if any
+  -> (Text -> Text -> Text)                  -- (pkg -> body -> newBody)
+  -> Text                                    -- verb for the success message
   -> IO ToolResult
-runEdit file pkg f verb = do
+runEdit file pkg mStanza f verb = do
   res <- try (TIO.readFile file) :: IO (Either SomeException Text)
   case res of
     Left e -> pure (errorResult (T.pack ("Could not read cabal file: " <> show e)))
-    Right body -> do
-      let newBody = f pkg body
-      if newBody == body
-        then pure (errorResult ("No change: '" <> pkg <> "' not found or already at desired state."))
-        else do
-          wres <- try (TIO.writeFile file newBody) :: IO (Either SomeException ())
-          case wres of
-            Left e  -> pure (errorResult (T.pack ("Could not write cabal file: " <> show e)))
-            Right _ -> pure (editResult file pkg verb)
+    Right body -> case applyWithinStanza mStanza (f pkg) body of
+      Left err -> pure (errorResult err)
+      Right newBody
+        | newBody == body ->
+            pure (errorResult ("No change: '" <> pkg
+                              <> "' not found or already at desired state."))
+        | not (editAgreesWithVerb verb pkg mStanza newBody) ->
+            -- Post-edit structural check: if the requested verb says
+            -- \"added\" but the re-parsed body doesn't list the package
+            -- in the targeted scope (or \"removed\" but it still is),
+            -- the edit got confused — refuse to persist. Prevents
+            -- regressing to the F-01 class of bugs where success=true
+            -- was reported but the .cabal file ended up in a broken
+            -- state that cabal could not parse.
+            pure (errorResult ("Refusing to write: post-edit parse check \
+                              \disagreed with the requested operation \
+                              \for '" <> pkg <> "'. No changes written."))
+        | otherwise -> do
+            wres <- try (TIO.writeFile file newBody) :: IO (Either SomeException ())
+            case wres of
+              Left e  -> pure (errorResult (T.pack ("Could not write cabal file: " <> show e)))
+              Right _ -> pure (editResult file pkg verb)
+
+-- | Structural self-check run on the in-memory newBody before it hits
+-- disk. Uses the same line-oriented parser the tool ships with — if
+-- its own parser can't agree with the verb, the edit is refused.
+editAgreesWithVerb
+  :: Text                           -- verb (\"added\" / \"removed\")
+  -> Text                           -- package name
+  -> Maybe (Text, Maybe Text)       -- stanza selector
+  -> Text                           -- newBody
+  -> Bool
+editAgreesWithVerb verb pkg mStanza newBody =
+  let scope = case mStanza of
+        Nothing  -> newBody
+        Just sel -> case sliceStanza sel (T.lines newBody) of
+          Nothing            -> newBody   -- can't slice ⇒ fall back to \"no regression on unknown\"
+          Just (_, lns, _)   -> T.unlines lns
+      present = pkg `elem` parseBuildDepends scope
+  in case verb of
+       "added"   -> present
+       "removed" -> not present
+       _         -> True
 
 --------------------------------------------------------------------------------
 -- cabal file discovery
@@ -323,15 +399,174 @@ removeDep pkg body
 
 -- | Append @, <entry>@ to the end of the library's build-depends
 -- continuation. If no existing block is found we append a new line.
+--
+-- Indent derivation (fix for F-01/F-02):
+--
+-- * If @last pre@ is the @build-depends:@ header itself (no prior
+--   continuation), align the new @, @ so the dep starts at the same
+--   column as the value that is already on the header line. Using the
+--   header's plain leading-whitespace (old behaviour) produced a
+--   continuation at the same column as the field name, which cabal
+--   3.0 rejects as @unexpected operator ","@.
+-- * If @last pre@ is already a continuation line (a previous dep),
+--   reuse its leading whitespace verbatim so the style is consistent
+--   with what the author — or a previous call — put there.
 insertAfterBuildDepends :: Text -> Text -> Text
 insertAfterBuildDepends entry body =
   let lns = T.lines body
   in case splitAtBuildDependsEnd lns of
        Just (pre, post) ->
-         T.unlines (pre <> [indentLike (last pre) <> ", " <> entry] <> post)
+         T.unlines (pre <> [computeContinuationIndent (last pre) <> ", " <> entry] <> post)
        Nothing -> body <> "\n-- build-depends: " <> entry <> "\n"
+
+-- | Compute the indent prefix for a new continuation line.
+--
+-- * Header line (contains @build-depends:@): indent so the inserted
+--   dependency aligns with the value already on the header. Concretely:
+--   leading-ws + len(\"build-depends:\") + spaces-to-value - 2 (the
+--   @\", \"@ prefix we add later).
+--
+--   We also guarantee the result strictly exceeds the header's leading
+--   whitespace (cabal 3.0 treats @col <= fieldCol@ as a new field).
+--
+-- * Continuation line (previous dep): reuse its leading whitespace
+--   verbatim so a block stays visually consistent.
+computeContinuationIndent :: Text -> Text
+computeContinuationIndent ln
+  | isBuildDependsHeader ln =
+      let leading    = T.takeWhile isSpace ln
+          afterLead  = T.drop (T.length leading) ln
+          afterField = T.drop (T.length ("build-depends:" :: Text)) afterLead
+          spacesBeforeValue = T.takeWhile isSpace afterField
+          prefixCols =
+            T.length leading
+            + T.length ("build-depends:" :: Text)
+            + T.length spacesBeforeValue
+            - T.length (", " :: Text)
+          -- cabal 3.0: continuation column must strictly exceed field's
+          -- leading-ws column. Enforce that invariant as a lower bound.
+          safeCols   = max prefixCols (T.length leading + 4)
+      in T.replicate safeCols " "
+  | otherwise = T.takeWhile isSpace ln
+
+--------------------------------------------------------------------------------
+-- stanza scoping (F-03 fix)
+--------------------------------------------------------------------------------
+
+-- | Parse a stanza selector from the agent into @(kind, maybe-name)@.
+--
+-- Accepted shapes:
+--
+-- * @library@
+-- * @test-suite@            — first occurrence
+-- * @test-suite:NAME@
+-- * @executable@ / @executable:NAME@
+-- * @benchmark@ / @benchmark:NAME@
+-- * @foreign-library@ / @foreign-library:NAME@
+--
+-- Validation is strict: only alphanumerics, @-@, @_@, @:@ pass. Shell
+-- metacharacters, path separators, whitespace are all rejected — the
+-- string never reaches a shell (no spawns here) but defence in depth
+-- is cheap.
+parseStanzaSelector :: Text -> Either Text (Text, Maybe Text)
+parseStanzaSelector raw
+  | T.null stripped            = Left "stanza is empty"
+  | T.any (not . okChar) stripped =
+      Left ("invalid character in stanza selector: " <> raw)
+  | otherwise = case T.splitOn ":" stripped of
+      [kind]
+        | kind `elem` allowedKinds -> Right (kind, Nothing)
+        | otherwise                -> Left ("unknown stanza kind: " <> kind)
+      [kind, name]
+        | kind `elem` allowedKinds
+        , not (T.null name)
+        , T.all isIdChar name
+        , isIdFirst (T.head name)
+            -> Right (kind, Just name)
+        | otherwise -> Left ("invalid stanza: " <> raw)
+      _   -> Left ("invalid stanza format: " <> raw)
   where
-    indentLike = T.takeWhile isSpace
+    stripped     = T.strip raw
+    allowedKinds =
+      [ "library", "test-suite", "executable"
+      , "benchmark", "foreign-library"
+      ]
+    okChar c   = isAlphaNum c || c == '-' || c == '_' || c == ':'
+    isIdChar c = isAlphaNum c || c == '-' || c == '_'
+    isIdFirst c = isAlphaNum c && not (isDigit c)
+
+-- | Slice a list of lines into @(before, stanzaBody, after)@ based on
+-- the selector. Returns 'Nothing' if no matching stanza header is
+-- found.
+sliceStanza
+  :: (Text, Maybe Text)
+  -> [Text]
+  -> Maybe ([Text], [Text], [Text])
+sliceStanza (kind, mName) lns =
+  case break (matchesHeader kind mName) lns of
+    (_,   [])     -> Nothing
+    (pre, h : tl) ->
+      let (body, post) = break isTopLevelStanzaHeader tl
+      in Just (pre, h : body, post)
+
+-- | Does @ln@ open the stanza described by @(kind, mName)@?
+matchesHeader :: Text -> Maybe Text -> Text -> Bool
+matchesHeader kind mName ln
+  | not (T.null leading) = False   -- must be at column 0
+  | otherwise =
+      firstW == kind
+      && case mName of
+           Nothing
+             | kind == "library" -> T.null rest   -- main library, no name
+             | otherwise         -> True          -- first occurrence of kind
+           Just name -> rest == name
+  where
+    leading  = T.takeWhile isSpace ln
+    stripped = T.strip ln
+    firstW   = T.takeWhile (not . isSpace) stripped
+    rest     = T.strip (T.dropWhile (not . isSpace) stripped)
+
+-- | True when @ln@ opens a new top-level stanza (library / executable
+-- / test-suite / benchmark / foreign-library / common / flag /
+-- source-repository). Used to determine where the previous stanza
+-- body ends.
+isTopLevelStanzaHeader :: Text -> Bool
+isTopLevelStanzaHeader ln
+  | not (T.null leading) = False
+  | T.null stripped      = False
+  | ":" `T.isInfixOf` stripped = False   -- top-level field, not stanza
+  | otherwise = firstW `elem` kinds
+  where
+    leading  = T.takeWhile isSpace ln
+    stripped = T.strip ln
+    firstW   = T.takeWhile (not . isSpace) stripped
+    kinds =
+      [ "library", "executable", "test-suite", "benchmark"
+      , "foreign-library", "common", "flag", "source-repository"
+      ]
+
+-- | Run a body-editor inside the selected stanza's slice and splice
+-- the result back. When no selector is given, the editor runs on the
+-- whole body (preserves legacy behaviour).
+applyWithinStanza
+  :: Maybe (Text, Maybe Text)
+  -> (Text -> Text)
+  -> Text
+  -> Either Text Text
+applyWithinStanza Nothing f body = Right (f body)
+applyWithinStanza (Just sel) f body =
+  let lns = T.lines body
+  in case sliceStanza sel lns of
+       Nothing -> Left ("stanza not found: " <> renderSelector sel)
+       Just (pre, stanzaLns, post) ->
+         let stanzaBody    = T.unlines stanzaLns
+             newStanzaBody = f stanzaBody
+             newStanzaLns  = T.lines newStanzaBody
+         in Right (T.unlines (pre <> newStanzaLns <> post))
+
+renderSelector :: (Text, Maybe Text) -> Text
+renderSelector (k, Nothing)   = k
+renderSelector (k, Just name) = k <> ":" <> name
 
 -- | Split the source at the boundary between the end of the
 -- build-depends block and whatever follows. Returns @Nothing@ if no
