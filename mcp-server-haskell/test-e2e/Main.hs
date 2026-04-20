@@ -30,6 +30,7 @@ import qualified Scenarios.FlowBatch            as FlowB
 import qualified Scenarios.FlowBootstrap        as FlowBoot
 import qualified Scenarios.FlowCorpusTransport  as FlowCT
 import qualified Scenarios.FlowCoverage         as FlowCov
+import qualified Scenarios.FlowCrossValidation  as FlowXV
 import qualified Scenarios.FlowExploratory      as FlowE
 import qualified Scenarios.FlowFixWarning       as FlowFW
 import qualified Scenarios.FlowGracefulMiss      as FlowGM
@@ -99,6 +100,8 @@ scenarios =
     , FlowSR.runFlow )
   , ( "Flow: Corpus transport (hostile JSON-RPC lines · subprocess)"
     , FlowCT.runFlow )
+  , ( "Flow: Cross-validation (MCP check_project vs cabal build)"
+    , FlowXV.runFlow )
   ]
 
 main :: IO ()
