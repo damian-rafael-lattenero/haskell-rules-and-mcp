@@ -73,21 +73,65 @@ allRules =
   ]
 
 -- | @f :: a -> a@ ⇒ check @f (f x) == f x@.
+--
+-- Confidence is dampened for list-shaped functions (@[a] -> [a]@)
+-- unless the name hints at canonicalisation (sort / normalise /
+-- dedupe / canon / unique / clean). Rationale: many common list
+-- functions share the shape @[a] -> [a]@ but are not idempotent —
+-- 'reverse', 'take', 'drop', 'rotate'. Emitting the Idempotent law
+-- at 'Medium' on those would mislead an agent into running the
+-- property via 'ghci_quickcheck' and watching it fail, burning
+-- trust in the suggestion engine.
 ruleIdempotent :: Rule
 ruleIdempotent = Rule
   { rId = "idempotent"
   , rMatches = \nm sig ->
       if argCount sig == 1 && isSameTypeThroughout sig
-        then Just Suggestion
-          { sLaw        = "Idempotent"
-          , sProperty   = "\\x -> " <> nm <> " (" <> nm <> " x) == " <> nm <> " x"
-          , sRationale  = "Type is `a -> a`; idempotence is worth checking \
-                          \for normalisers, sorts, and canonicalisers."
-          , sConfidence = Medium
-          , sCategory   = "algebraic"
-          }
+        then
+          let conf = idempotentConfidence nm sig
+          in Just Suggestion
+            { sLaw        = "Idempotent"
+            , sProperty   =
+                "\\x -> " <> nm <> " (" <> nm <> " x) == " <> nm <> " x"
+            , sRationale  = case conf of
+                Medium ->
+                  "Type is `a -> a`; idempotence is worth checking \
+                  \for normalisers, sorts, and canonicalisers."
+                _ ->
+                  "Type is `[a] -> [a]` but the name has no \
+                  \canonicalisation hint — many list functions with \
+                  \this shape (reverse, drop, rotate) are not \
+                  \idempotent, so confidence is low."
+            , sConfidence = conf
+            , sCategory   = "algebraic"
+            }
         else Nothing
   }
+
+-- | Heuristic confidence for 'ruleIdempotent'. Plain @a -> a@ keeps
+-- 'Medium'; list-shaped @[a] -> [a]@ drops to 'Low' unless the name
+-- suggests canonicalisation.
+idempotentConfidence :: Text -> ParsedSig -> Confidence
+idempotentConfidence nm sig =
+  case (psArgs sig, psReturn sig) of
+    ([TyList _], TyList _)
+      | nameHintsCanonicalisation nm -> Medium
+      | otherwise                    -> Low
+    _ -> Medium
+
+-- | Does the function name contain a token that typically implies a
+-- canonicalising / normalising operation? Checked case-insensitively
+-- against a small, hand-picked set — deliberately not a full English
+-- dictionary. Keep this list boring: only add tokens whose presence
+-- is strong evidence the function idempotently reaches a canonical
+-- form.
+nameHintsCanonicalisation :: Text -> Bool
+nameHintsCanonicalisation nm =
+  let lc    = T.toLower nm
+      hints = [ "sort", "normalize", "normalise", "canon"
+              , "dedup", "dedupe", "unique", "clean"
+              ]
+  in any (`T.isInfixOf` lc) hints
 
 -- | @f :: a -> a@ ⇒ check @f (f x) == x@ (stronger than idempotent —
 -- applies to @reverse@, @negate@, @complement@).

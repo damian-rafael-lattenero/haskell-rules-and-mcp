@@ -48,7 +48,8 @@ import HaskellFlows.Parser.TypeSignature
   , isSameTypeThroughout
   )
 import HaskellFlows.Suggest.Rules
-  ( Suggestion (..)
+  ( Confidence (..)
+  , Suggestion (..)
   , applyRules
   )
 import HaskellFlows.Mcp.Protocol (ToolCall (..))
@@ -181,6 +182,8 @@ main = do
       , test "suggest skips unmatched shapes"       testSuggestNoMatch
       , test "batch parses documented {tool,args}"  testBatchParsesToolArgs
       , test "batch accepts MCP {name,arguments}"   testBatchParsesNameArgs
+      , test "suggest reverse Idempotent is Low"    testSuggestReverseIdempotentLow
+      , test "suggest normalize Idempotent Medium"  testSuggestNormalizeIdempotentMedium
       ]
   if and results then exitSuccess else exitFailure
 
@@ -872,6 +875,34 @@ testBatchParsesNameArgs =
          [tc] -> pure (tcName tc == "ghci_eval")
          _    -> pure False
        A.Error _ -> pure False
+
+-- | Issue #23: @reverse :: [a] -> [a]@ fits the @a -> a@ shape that
+-- 'ruleIdempotent' used to blindly promote to 'Medium'. Dampened
+-- heuristic should either skip it or mark it 'Low' for a name with
+-- no canonicalisation hint. Must never emit 'Medium' or 'High'.
+testSuggestReverseIdempotentLow :: IO Bool
+testSuggestReverseIdempotentLow =
+  case parseSignature "[a] -> [a]" of
+    Nothing  -> pure False
+    Just sig ->
+      let sugg = [ s | s <- applyRules "reverse" sig, sLaw s == "Idempotent" ]
+      in pure $ case sugg of
+           []  -> True
+           [s] -> sConfidence s == Low
+           _   -> False
+
+-- | Issue #23: a name like @normalize@ — a strong canonicalisation
+-- hint — should still surface Idempotent at 'Medium' even when
+-- the shape is @[a] -> [a]@.
+testSuggestNormalizeIdempotentMedium :: IO Bool
+testSuggestNormalizeIdempotentMedium =
+  case parseSignature "[a] -> [a]" of
+    Nothing  -> pure False
+    Just sig ->
+      let sugg = [ s | s <- applyRules "normalize" sig, sLaw s == "Idempotent" ]
+      in pure $ case sugg of
+           [s] -> sConfidence s == Medium
+           _   -> False
 
 -- | Helper: create a fresh temp directory and delete it after the test.
 -- Passes a validated 'ProjectDir' (absolute + normalised) to the body.
