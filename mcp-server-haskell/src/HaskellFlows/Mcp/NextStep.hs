@@ -326,6 +326,19 @@ dispatch name payload = case name of
     , step "ghci_check_project" (object [])
     ])
 
+  -- Modules de-registered — reload + project-wide gate so any
+  -- downstream import left dangling surfaces immediately.
+  "ghci_remove_modules" -> Just (chained "ghci_check_project"
+    "Modules were de-registered from exposed-modules. Run \
+    \ghci_check_project to surface any remaining import of the \
+    \removed surface; chained ghci_load follows to reload the \
+    \resulting layout."
+    Nothing
+    [ step "ghci_check_project" (object [])
+    , step "ghci_load" (object
+        [ "module_path" .= ("<your entry module>" :: Text) ])
+    ])
+
   -- Applied an export list — reload confirms nothing external broke.
   "ghci_apply_exports" -> Just (simple "ghci_load"
     "Module export list was rewritten. Reload to confirm the new \

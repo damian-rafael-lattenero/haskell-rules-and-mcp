@@ -77,6 +77,7 @@ import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescripto
 import HaskellFlows.Tool.Batch (BatchArgs (..))
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
+import qualified HaskellFlows.Tool.RemoveModules as RM
 import qualified HaskellFlows.Tool.Suggest as SuggestTool
 import qualified HaskellFlows.Tool.AddImport as AddImport
 import qualified HaskellFlows.Tool.AddModules as AddModules
@@ -341,6 +342,11 @@ main = do
       , test "arbitrary: Tree polymorphic sized"      testArbitraryTreeSized
       , test "arbitrary: Status flat template"        testArbitraryFlatTemplate
       , test "arbitrary: recursion detection tokens"  testArbitraryRecursionTokens
+      , test "remove_modules: tool registered"        testRemoveModulesRegistered
+      , test "remove_modules: strips exposed entry"   testRemoveModulesStripsCabal
+      , test "remove_modules: idempotent no-op"       testRemoveModulesIdempotent
+      , test "remove_modules: preserves other fields" testRemoveModulesPreservesFields
+      , test "nextStep: remove_modules -> check+load" testNextStepRemoveModules
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1933,6 +1939,86 @@ testArbitraryRecursionTokens = pure $
   && not (isRecursiveArg "Tree" "TreeLike a")   -- different identifier
   && not (isRecursiveArg "Tree" "Int")
   && not (isRecursiveArg "Tree" "String")
+
+--------------------------------------------------------------------------------
+-- BUG-16 — ghci_remove_modules symmetric to ghci_add_modules
+--------------------------------------------------------------------------------
+
+-- | Tool is registered in the canonical registry. If this
+-- fails, the tool exists as dead code (not dispatchable).
+testRemoveModulesRegistered :: IO Bool
+testRemoveModulesRegistered = pure $
+  "ghci_remove_modules" `elem` allToolNames
+
+-- | Core behaviour: the exposed-modules entry for the named
+-- module disappears; the rest of the block survives.
+testRemoveModulesStripsCabal :: IO Bool
+testRemoveModulesStripsCabal =
+  let cabal = T.unlines
+        [ "library"
+        , "  exposed-modules:  Expr.Syntax"
+        , "                    Expr.Old"
+        , "                    Expr.Eval"
+        , "  build-depends:    base"
+        ]
+      (newCabal, removed) = RM.removeModulesFromBody cabal ["Expr.Old"]
+  in pure $ removed == ["Expr.Old"]
+         && T.isInfixOf "Expr.Syntax" newCabal
+         && T.isInfixOf "Expr.Eval"   newCabal
+         && not ("Expr.Old" `T.isInfixOf` newCabal)
+
+-- | Removing a module that is not registered is a silent no-op:
+-- no write, empty removed-list, body unchanged.
+testRemoveModulesIdempotent :: IO Bool
+testRemoveModulesIdempotent =
+  let cabal = T.unlines
+        [ "library"
+        , "  exposed-modules:  Expr.Syntax"
+        , "  build-depends:    base"
+        ]
+      (newCabal, removed) =
+        RM.removeModulesFromBody cabal ["Expr.NeverExisted"]
+  in pure (null removed && newCabal == cabal)
+
+-- | Removing must not disturb other fields (build-depends,
+-- test-suite stanza, etc). Full-file regression guard.
+testRemoveModulesPreservesFields :: IO Bool
+testRemoveModulesPreservesFields =
+  let cabal = T.unlines
+        [ "library"
+        , "  exposed-modules:  Keep.This"
+        , "                    Drop.This"
+        , "  build-depends:    base"
+        , ""
+        , "test-suite expr-test"
+        , "  main-is:    Spec.hs"
+        , "  build-depends: base, QuickCheck"
+        ]
+      (newCabal, _) = RM.removeModulesFromBody cabal ["Drop.This"]
+  in pure $ T.isInfixOf "library"                newCabal
+         && T.isInfixOf "Keep.This"              newCabal
+         && T.isInfixOf "build-depends:    base" newCabal
+         && T.isInfixOf "test-suite expr-test"   newCabal
+         && T.isInfixOf "QuickCheck"             newCabal
+
+-- | BUG-06 nextStep coverage for the new tool: 'ghci_remove_modules'
+-- on success suggests project-wide check + reload chain so any
+-- dangling import surfaces immediately.
+testNextStepRemoveModules :: IO Bool
+testNextStepRemoveModules =
+  let payload = A.object
+        [ "success"      .= True
+        , "cabal_removed".= (["Foo.Old"] :: [Text])
+        ]
+  in case suggestNext "ghci_remove_modules" True payload of
+       Just ns ->
+         pure $ nsTool ns == "ghci_check_project"
+             && case nsChain ns of
+                  Just steps ->
+                       any ((== "ghci_check_project") . csTool) steps
+                    && any ((== "ghci_load")          . csTool) steps
+                  Nothing -> False
+       Nothing -> pure False
 
 -- | BUG-06 "full coverage" invariant: every registered tool must
 -- either produce a nextStep on success OR be explicitly whitelisted
