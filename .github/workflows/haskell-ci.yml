@@ -58,7 +58,7 @@ jobs:
         cabal: ["3.12.1.0"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - id: setup
         name: Set up GHC ${{ matrix.ghc }} / cabal ${{ matrix.cabal }}
@@ -131,7 +131,7 @@ jobs:
     name: HLint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up HLint
         uses: haskell-actions/hlint-setup@v2
@@ -179,7 +179,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: haskell-actions/setup@v2
         with:
@@ -240,7 +240,7 @@ jobs:
       run:
         working-directory: mcp-server-haskell
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: haskell-actions/setup@v2
         with:
