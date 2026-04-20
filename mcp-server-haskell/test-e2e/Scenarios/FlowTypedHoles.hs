@@ -179,10 +179,6 @@ arrayNonEmpty :: Value -> Bool
 arrayNonEmpty (Array a) = not (V.null a)
 arrayNonEmpty _         = False
 
-numberAtLeast :: Int -> Value -> Bool
-numberAtLeast n (Number x) = n <= (round x :: Int)
-numberAtLeast _ _          = False
-
 containsStr :: Text -> Value -> Bool
 containsStr needle (String s) = needle `T.isInfixOf` s
 containsStr _      _          = False

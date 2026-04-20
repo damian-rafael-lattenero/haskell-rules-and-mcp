@@ -24,9 +24,12 @@ import System.IO (BufferMode (..), hSetBuffering, stderr, stdout)
 import qualified E2E.Assert as Assert
 import qualified E2E.Client as Client
 import qualified E2E.Smoke  as Smoke
-import qualified Scenarios.ExprEvaluator  as Expr
+import qualified Scenarios.ExprEvaluator   as Expr
+import qualified Scenarios.FlowArbitrary   as FlowA
+import qualified Scenarios.FlowBatch       as FlowB
 import qualified Scenarios.FlowExploratory as FlowE
 import qualified Scenarios.FlowRefactor    as FlowR
+import qualified Scenarios.FlowScopeMgmt   as FlowS
 import qualified Scenarios.FlowTypedHoles  as FlowH
 
 -- | Every scenario exposes the same shape:
@@ -45,6 +48,12 @@ scenarios =
     , FlowH.runFlow )
   , ( "Flow: Refactor (rename happy + rollback + extract)"
     , FlowR.runFlow )
+  , ( "Flow: Arbitrary templates (flat / sized / polymorphic)"
+    , FlowA.runFlow )
+  , ( "Flow: Scope mgmt (browse / imports / apply_exports / add_import)"
+    , FlowS.runFlow )
+  , ( "Flow: Batch composition (happy + fail_fast)"
+    , FlowB.runFlow )
   ]
 
 main :: IO ()

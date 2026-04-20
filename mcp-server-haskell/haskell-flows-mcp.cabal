@@ -157,8 +157,11 @@ test-suite haskell-flows-mcp-e2e
                       E2E.Smoke
                       Scenarios.ExprEvaluator
                       Scenarios.ExprSources
+                      Scenarios.FlowArbitrary
+                      Scenarios.FlowBatch
                       Scenarios.FlowExploratory
                       Scenarios.FlowRefactor
+                      Scenarios.FlowScopeMgmt
                       Scenarios.FlowTypedHoles
     build-tool-depends: haskell-flows-mcp:haskell-flows-mcp
     build-depends:    base              >= 4.20 && < 5

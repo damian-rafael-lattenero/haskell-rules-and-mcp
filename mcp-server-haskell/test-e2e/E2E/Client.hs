@@ -48,13 +48,12 @@ import System.IO (hFlush, hPutStrLn, stdout)
 import System.Process (readProcessWithExitCode)
 import qualified Data.Vector as V
 
-import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
 import HaskellFlows.Mcp.Protocol
-  ( ToolCall (..)
+  ( Request (..)
+  , Response (..)
   , ToolContent (..)
-  , ToolResult (..)
   )
-import HaskellFlows.Mcp.Server (Server, defaultServer, dispatchTool)
+import HaskellFlows.Mcp.Server (Server, defaultServer, handleRequest)
 
 -- | Minimal client handle. Holds a live 'Server' plus the
 -- previous value of @HASKELL_PROJECT_DIR@ so 'close' can
@@ -90,52 +89,79 @@ close c = case mcPrevDir c of
 -- if a call blocks (unlikely now but possible for e.g.
 -- 'ghci_gate' spawning cabal), you still see which one.
 --
--- Replicates the @Server.runTool@ envelope:
---   * calls 'dispatchTool';
---   * peeks at the tool's JSON payload;
---   * runs 'suggestNext' + 'injectNextStep' so the returned
---     payload carries the same @nextStep@ the real JSON-RPC
---     transport would attach.
+-- Routes through 'handleRequest' (NOT 'dispatchTool' directly):
+-- that's the FULL dispatcher the stdio transport uses, so every
+-- tool that has special-case handling at the 'handleToolCall'
+-- layer — notably 'ghci_batch' which recurses into the
+-- dispatcher via a callback — works end-to-end. Our earlier
+-- 'dispatchTool'-only path silently mapped 'ghci_batch' to the
+-- "Unknown tool" fallback (it's not in the case-list there).
 callTool :: McpClient -> Text -> Value -> IO Value
 callTool c name args = do
   putStrLn ("    [mcp] → " <> show name <> " …")
   hFlush stdout
   t0 <- getPOSIXTime
-  let call = ToolCall { tcName = name, tcArguments = args }
-  eRes <- try (dispatchTool (mcServer c) call) :: IO (Either SomeException ToolResult)
+  let req = Request
+        { reqJsonrpc = "2.0"
+        , reqMethod  = "tools/call"
+        , reqParams  = Just (object
+            [ "name"      .= name
+            , "arguments" .= args
+            ])
+        , reqId      = Just (Number 0)
+        }
+  eRes <- try (handleRequest (mcServer c) req)
+            :: IO (Either SomeException (Maybe Response))
   t1 <- getPOSIXTime
   let ms = round ((realToFrac (t1 - t0) :: Double) * 1000) :: Int
   case eRes of
     Left ex -> do
       putStrLn ("    [mcp] ✘ " <> show name <> "  EXCEPTION: " <> show ex)
       hFlush stdout
-      -- Surface as a synthetic error payload so the scenario's
-      -- checks can still run without the runner collapsing.
       pure (object
         [ "success" .= False
         , "error"   .= ("exception: " <> show ex)
         ])
-    Right tr -> do
+    Right Nothing -> do
+      putStrLn ("    [mcp] ✘ " <> show name <> "  no response (notification path)")
+      hFlush stdout
+      pure Null
+    Right (Just resp) -> do
       putStrLn ("    [mcp] ← " <> show name <> "  (" <> show ms <> " ms)")
       hFlush stdout
-      let payload = firstJsonContent tr
-          enriched = case suggestNext name (not (trIsError tr)) payload of
-            Just ns -> injectNextStep ns tr
-            Nothing -> tr
-          final = firstJsonContent enriched
-      pure final
+      case respPayload resp of
+        Left rpcErr ->
+          pure (object
+            [ "success" .= False
+            , "error"   .= ("rpc error: " <> show rpcErr)
+            ])
+        Right resultValue ->
+          -- The tool's content lives at result.content[0].text.
+          -- Decode that nested JSON so scenarios see the tool's
+          -- own payload shape, same as the transport layer.
+          pure (unwrapResult resultValue)
 
 --------------------------------------------------------------------------------
 -- helpers
 --------------------------------------------------------------------------------
 
--- | Peek at the first 'TextContent' block's JSON-decoded body.
--- Mirrors the private 'Server.firstJsonContent' helper.
-firstJsonContent :: ToolResult -> Value
-firstJsonContent tr = case trContent tr of
-  (TextContent t : _) ->
-    fromMaybe Null (A.decode (BL.fromStrict (TE.encodeUtf8 t)))
-  _ -> Null
+-- | Unwrap a @tools/call@ result value into the tool's own
+-- JSON payload. The MCP envelope is
+-- @{ "content": [ { "type": "text", "text": "<json>" } ], ... }@;
+-- we peel both layers so scenarios see the tool-specific shape
+-- (with its @nextStep@ already injected by Server.runTool).
+unwrapResult :: Value -> Value
+unwrapResult v = case v of
+  Object o -> case KeyMap.lookup "content" o of
+    Just (Array arr) | not (V.null arr) ->
+      case V.head arr of
+        Object inner -> case KeyMap.lookup "text" inner of
+          Just (String t) ->
+            fromMaybe v (A.decode (BL.fromStrict (TE.encodeUtf8 t)))
+          _ -> v
+        _ -> v
+    _ -> v
+  _ -> v
 
 -- Silence unused warnings when building.
 _unused :: KeyMap.KeyMap Value -> V.Vector Value
