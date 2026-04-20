@@ -91,7 +91,6 @@ import HaskellFlows.Parser.Coverage
 import HaskellFlows.Tool.Deps
   ( addDep
   , parseStanzaSelector
-  , removeDep
   , validatePackageName
   , validateVersionConstraint
   )
@@ -211,6 +210,9 @@ main = do
       , test "parseTypeParams empty for monotype"   testTypeParamsNone
       , test "renderTemplate wraps polymorphic T a" testTemplatePolymorphic
       , test "renderTemplate multi-param context"   testTemplateMultiParam
+      , test "session Dead status + EOF flip"       testSessionDeadOnEOF
+      , test "session honors command timeout"       testSessionHonoursTimeout
+      , test "server wraps runTool in timeout"      testServerOuterTimeout
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1130,6 +1132,66 @@ testCoverageInvokesHpcReport = do
 -- quoted literal in source and the concatenation form. Either is fine.
 ellipticalOr :: Bool -> Bool -> Bool
 ellipticalOr = (||)
+
+-- | Phase 11c F-12 root cause — 'SessionStatus' used to be
+-- @Alive | Overflowed@ only. When the GHCi child process exited,
+-- 'drainHandle' would see EOF and return silently; 'executeNoLock'
+-- would then STM-@retry@ forever waiting for a sentinel that could
+-- never arrive, and the MCP main loop blocked behind it. Even
+-- read-only tools like 'ghci_workflow' froze. Static source check
+-- pins the three guardrails the fix added:
+--   1. 'Dead' is a constructor of 'SessionStatus'.
+--   2. 'drainHandle' flips the status to 'Dead' on EOF.
+--   3. 'executeNoLock' recognises 'Dead' and aborts.
+testSessionDeadOnEOF :: IO Bool
+testSessionDeadOnEOF = do
+  src <- TIO.readFile "src/HaskellFlows/Ghci/Session.hs"
+  let codeLines = filter (not . isDocLine) (T.lines src)
+      code      = T.unlines codeLines
+  pure $ T.isInfixOf "Alive | Overflowed | Dead" code
+      && T.isInfixOf "writeTVar status Dead"     code
+      && T.isInfixOf "Dead       -> pure FExhausted"  code
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- | Phase 11c F-12 — the 'timeoutMicros' parameter of
+-- 'executeNoLock' used to be silently ignored (the identifier was
+-- prefixed @_timeoutMicros@). Without it, no per-command cap
+-- existed: a GHCi that stopped emitting output but kept the pipe
+-- open would stall the STM retry indefinitely. Fix wires the
+-- param through 'registerDelay' + STM @readTVar@ of the delay
+-- var so the transaction wakes either when the sentinel arrives
+-- or the budget expires. Static source check pins both.
+testSessionHonoursTimeout :: IO Bool
+testSessionHonoursTimeout = do
+  src <- TIO.readFile "src/HaskellFlows/Ghci/Session.hs"
+  let codeLines = filter (not . isDocLine) (T.lines src)
+      code      = T.unlines codeLines
+  pure $ T.isInfixOf "registerDelay timeoutMicros" code
+      && T.isInfixOf "readTVar delayVar"           code
+      && T.isInfixOf "FTimedOut"                   code
+      -- and the old "silently ignored" shape is gone:
+      && not (T.isInfixOf "_timeoutMicros" code)
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- | Phase 11c F-12 — defence-in-depth. Even if the Session.hs
+-- fixes above miss a pathological code path, the server's outer
+-- envelope must not freeze. Pin that @runTool@ is wrapped in
+-- @System.Timeout.timeout@ with a generous but finite budget.
+testServerOuterTimeout :: IO Bool
+testServerOuterTimeout = do
+  src <- TIO.readFile "src/HaskellFlows/Mcp/Server.hs"
+  let codeLines = filter (not . isDocLine) (T.lines src)
+      code      = T.unlines codeLines
+  pure $ T.isInfixOf "import System.Timeout" code
+      && T.isInfixOf "timeout toolTimeoutMicros action"   code
+      && T.isInfixOf "toolTimeoutMicros :: Int"           code
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
 
 -- | Phase 11c F-10: 'ghci_arbitrary' used to render
 -- @instance Arbitrary Run where@ for polymorphic types like

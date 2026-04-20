@@ -17,6 +17,8 @@ module HaskellFlows.Mcp.Server
     -- * Canonical tool registry (shared with ghci_workflow's status view)
   , allToolDescriptors
   , allToolNames
+    -- * Per-tool timeout envelope (F-12 defence)
+  , toolTimeoutMicros
   ) where
 
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
@@ -29,6 +31,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import System.Directory (getCurrentDirectory)
 import System.Environment (lookupEnv)
+import System.Timeout (timeout)
 
 import HaskellFlows.Data.PropertyStore (Store, openStore)
 import HaskellFlows.Ghci.Session
@@ -132,9 +135,16 @@ handleToolCall srv call rid = case tcName call of
     -- and dispatchTool would recurse with no termination on
     -- ghci_batch-in-ghci_batch. The batch tool itself refuses
     -- nesting but we also keep the top-level routing explicit.
-    runTool srv rid (BatchTool.handle (dispatchTool srv) (tcArguments call))
+    --
+    -- Batch owns the slowest envelope: it's a bag of N tool calls,
+    -- each of which already has its own per-call budget via
+    -- 'dispatchTool' -> 'runTool'. A global 6-minute bound here is
+    -- the defence of last resort against a pathological batch, not
+    -- the per-action cap.
+    runTool srv (tcName call) rid
+      (BatchTool.handle (dispatchTool srv) (tcArguments call))
   _ ->
-    runTool srv rid (dispatchTool srv call)
+    runTool srv (tcName call) rid (dispatchTool srv call)
 
 -- | Pure (non-response-wrapping) tool dispatcher. Exposed so
 -- 'HaskellFlows.Tool.Batch' can recurse without pulling Server's
@@ -265,6 +275,23 @@ allToolDescriptors =
 allToolNames :: [Text]
 allToolNames = map tdName allToolDescriptors
 
+-- | Last-resort hard ceiling for any tool. This is intentionally
+-- generous — 10 minutes — and is NOT meant to be the primary time
+-- control for a tool call. Each tool already has its own domain
+-- timeouts (e.g. @executeNoLock@'s STM-bound budget, @cabal test --
+-- enable-coverage@'s 5-minute cap). This envelope exists only so
+-- that a completely pathological handler (an unreachable STM retry,
+-- a foreign-code infinite loop, a non-interruptible syscall) cannot
+-- hold the main loop hostage indefinitely.
+--
+-- Picking a tight per-tool value here would be a guessing game that
+-- falsely fails legitimate long-running work (a 70s compile on a
+-- large module, a slow hoogle, a coverage run that needs 4 minutes);
+-- the fix for F-12's hang lives at the root in 'Session.hs'
+-- (terminal 'Dead' status + honoured command budget).
+toolTimeoutMicros :: Int
+toolTimeoutMicros = 10 * 60 * 1_000_000
+
 -- | Common exception shield for every tool handler.
 --
 -- Prevents a handler crash from taking down the server loop and surfaces
@@ -273,16 +300,37 @@ allToolNames = map tdName allToolDescriptors
 -- the dead session from the MVar so 'getOrStartSession' rebuilds it on
 -- the next call — otherwise every subsequent tool call would inherit the
 -- Overflowed status and fail identically.
-runTool :: Server -> RequestId -> IO ToolResult -> IO Response
-runTool srv rid action = do
-  out <- try action :: IO (Either SomeException ToolResult)
+--
+-- Additionally (F-12 defence-in-depth): wraps the action in a single
+-- generous 'System.Timeout.timeout'. If the handler doesn't finish
+-- inside the universal ceiling, we evict the GHCi session (so the
+-- next call starts fresh) and return a structured timeout error.
+-- The primary F-12 fix lives in 'Session.hs'; this envelope catches
+-- whatever that fix misses.
+runTool :: Server -> Text -> RequestId -> IO ToolResult -> IO Response
+runTool srv toolName rid action = do
+  out <- try (timeout toolTimeoutMicros action)
+           :: IO (Either SomeException (Maybe ToolResult))
   case out of
     Left ex -> do
       case fromException ex :: Maybe SessionExhausted of
         Just _  -> evictSession srv
         Nothing -> pure ()
       pure (ok rid (toJSON (toolException (T.pack (show ex)))))
-    Right tr -> pure (ok rid (toJSON tr))
+    Right Nothing -> do
+      evictSession srv
+      pure (ok rid (toJSON (toolException (timeoutMsg toolName))))
+    Right (Just tr) -> pure (ok rid (toJSON tr))
+
+-- | Human-readable timeout error message for agents.
+timeoutMsg :: Text -> Text
+timeoutMsg tool =
+  "Tool '" <> tool <> "' exceeded the server's 10-minute hard \
+  \ceiling. The GHCi session has been evicted; the next call will \
+  \spawn a fresh one. This is a defence-in-depth trip, not the \
+  \normal timeout surface — most tools have tighter internal \
+  \budgets. If this fires, there is probably a deadlock below this \
+  \layer."
 
 -- | Remove the current session from the MVar, killing it if present.
 -- The next 'getOrStartSession' will boot a fresh child process.

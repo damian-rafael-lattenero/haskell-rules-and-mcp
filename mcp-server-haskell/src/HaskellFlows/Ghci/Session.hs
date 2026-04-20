@@ -54,6 +54,7 @@ import Control.Concurrent.STM
   , newTVarIO
   , putTMVar
   , readTVar
+  , registerDelay
   , retry
   , takeTMVar
   , writeTVar
@@ -103,13 +104,24 @@ data Session = Session
 
 -- | Lifecycle state of a 'Session' as seen by the command protocol.
 --
--- 'Alive' is the steady state. 'Overflowed' means the GHCi child wrote
--- more than 'maxBufferBytes' to stdout+stderr before emitting a sentinel
--- — the reader stopped appending, and any in-flight 'executeNoLock' must
--- abort because it can no longer trust the framing. Recovery is
--- caller-driven: 'Server.getOrStartSession' replaces the MVar on the next
--- request.
-data SessionStatus = Alive | Overflowed
+-- * 'Alive' — steady state, reader threads happily appending.
+-- * 'Overflowed' — the GHCi child wrote more than 'maxBufferBytes'
+--   to stdout+stderr before emitting a sentinel. The reader stopped
+--   appending and any in-flight 'executeNoLock' must abort because
+--   it can no longer trust the framing.
+-- * 'Dead' — GHCi's stdout/stderr hit EOF (the child process
+--   exited or its pipe was closed). Without this state,
+--   'executeNoLock'\'s STM @retry@ would wait forever for a
+--   sentinel that cannot arrive — the bug that surfaced as F-12
+--   in the Phase-11c dogfood (a 'ghci_refactor' snapshot-restore
+--   path cascaded into a GHCi death, and subsequent calls to the
+--   read-only 'ghci_workflow' hung because the main loop was still
+--   blocked on the previous executeNoLock).
+--
+-- Recovery is caller-driven: 'Server.getOrStartSession' replaces
+-- the MVar on the next request when it sees 'SessionExhausted'
+-- thrown out.
+data SessionStatus = Alive | Overflowed | Dead
   deriving stock (Eq, Show)
 
 -- | Thrown by 'executeNoLock' when the session buffer overflowed before
@@ -367,31 +379,52 @@ withLock s =
 
 -- | Internal variant used during startup, before the lock is meaningful.
 --
--- Throws 'SessionExhausted' if the session status flipped to
--- 'Overflowed' while we were waiting for a sentinel. The STM wakeup is
--- automatic: any write to 'sStatus' retries all blocked readers.
+-- Throws 'SessionExhausted' on any of:
+--   * status is 'Overflowed' (buffer cap tripped);
+--   * status is 'Dead' (GHCi child exited / pipe at EOF);
+--   * the per-call @timeoutMicros@ elapsed before a sentinel arrived.
+--
+-- All three paths surface via the same exception; 'Server.runTool'
+-- evicts the session and the next call rebuilds it from scratch.
+--
+-- Uses 'registerDelay' so the STM retry is woken by either a
+-- buffer/status change OR the delay expiring — without it, the
+-- 'retry' would block indefinitely if the GHCi pipe gave up without
+-- flipping status (the F-12 root cause before 'Dead' was added).
 executeNoLock :: Session -> Text -> Int -> IO GhciResult
-executeNoLock s cmd _timeoutMicros = do
+executeNoLock s cmd timeoutMicros = do
   TIO.hPutStrLn (sStdin s) cmd
   hFlush (sStdin s)
-  collected <- atomically $ do
-    st <- readTVar (sStatus s)
-    case st of
-      Overflowed -> pure (Left SessionExhausted)
-      Alive -> do
-        b <- readTVar (sBuffer s)
-        case T.breakOn sentinel b of
-          (_, rest) | T.null rest -> retry
-          (pre, rest) -> do
-            let rest' = T.drop (T.length sentinel) rest
-            writeTVar (sBuffer s) rest'
-            pure (Right pre)
-  case collected of
-    Left e -> throwIO e
-    Right pre ->
+  delayVar <- registerDelay timeoutMicros
+  outcome <- atomically $ do
+    timedOut <- readTVar delayVar
+    if timedOut
+      then pure FTimedOut
+      else do
+        st <- readTVar (sStatus s)
+        case st of
+          Overflowed -> pure FExhausted
+          Dead       -> pure FExhausted
+          Alive -> do
+            b <- readTVar (sBuffer s)
+            case T.breakOn sentinel b of
+              (_, rest) | T.null rest -> retry
+              (pre, rest) -> do
+                let rest' = T.drop (T.length sentinel) rest
+                writeTVar (sBuffer s) rest'
+                pure (FOk pre)
+  case outcome of
+    FExhausted -> throwIO SessionExhausted
+    FTimedOut  -> throwIO SessionExhausted
+    FOk pre ->
       let output  = T.strip pre
           success = not (T.isInfixOf "error:" (T.toLower output))
       in pure (GhciResult output success)
+
+-- | Single-shot outcome of one @executeNoLock@ STM transaction.
+-- Kept local to the module — the public signal is 'SessionExhausted'
+-- for all failure branches.
+data Finish = FOk !Text | FExhausted | FTimedOut
 
 -- | Reader loop. Each iteration tries to append a chunk; if doing so
 -- would exceed 'maxBufferBytes', we flip the status to 'Overflowed' and
@@ -404,20 +437,34 @@ drainHandle buf status h = loop
   where
     loop = do
       chunk <- BS.hGetSome h 4096
-      unless (BS.null chunk) $ do
-        let txt = decodeUtf8Lenient chunk
-        overflowed <- atomically $ do
-          st <- readTVar status
-          case st of
-            Overflowed -> pure True
-            Alive -> do
-              b <- readTVar buf
-              if T.length b + T.length txt > maxBufferBytes
-                then do writeTVar status Overflowed; pure True
-                else do modifyTVar' buf (<> txt); pure False
-        if overflowed
-          then drainAndDiscard h   -- keep reading so GHCi doesn't block
-          else loop
+      if BS.null chunk
+        then
+          -- EOF on GHCi's stdout/stderr. Flip to 'Dead' so any
+          -- STM-blocked 'executeNoLock' wakes, aborts, and throws
+          -- SessionExhausted. Preserve 'Overflowed' (terminal for
+          -- its own reason). Idempotent against a second reader
+          -- thread arriving at the same conclusion.
+          atomically $ do
+            st <- readTVar status
+            case st of
+              Overflowed -> pure ()
+              Dead       -> pure ()
+              Alive      -> writeTVar status Dead
+        else do
+          let txt = decodeUtf8Lenient chunk
+          overflowed <- atomically $ do
+            st <- readTVar status
+            case st of
+              Overflowed -> pure True
+              Dead       -> pure True
+              Alive -> do
+                b <- readTVar buf
+                if T.length b + T.length txt > maxBufferBytes
+                  then do writeTVar status Overflowed; pure True
+                  else do modifyTVar' buf (<> txt); pure False
+          if overflowed
+            then drainAndDiscard h   -- keep reading so GHCi doesn't block
+            else loop
 
     drainAndDiscard hh = do
       c <- BS.hGetSome hh 4096
