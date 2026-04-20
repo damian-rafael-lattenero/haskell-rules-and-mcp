@@ -165,6 +165,37 @@ report it. It is no longer the expected degenerate mode.
 
 ---
 
+## Every tool response carries `nextStep`
+
+Every successful tool call returns a `nextStep` object inside its
+payload:
+
+```json
+{
+  "success": true,
+  "files_written": ["…"],
+  "nextStep": {
+    "tool":  "ghci_deps",
+    "why":   "Your scaffold has only `base`. Add deps before wiring up modules.",
+    "example": { "action": "add", "package": "QuickCheck", "stanza": "test-suite" }
+  }
+}
+```
+
+`nextStep.tool` is the MCP's push about what's most likely useful
+next, `nextStep.why` explains the rationale, `nextStep.example` —
+when present — is a canonical arguments object you can use
+verbatim.
+
+The hint is informational. Follow it when it fits; ignore it and
+pick your own path when it doesn't. It replaces the need to call
+`ghci_workflow(action="next")` after every successful tool.
+
+Errors suppress the hint — when `success: false`, read the error
+and decide, don't look for a nextStep that is not there.
+
+---
+
 ## Decision tree for common situations
 
 ```

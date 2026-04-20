@@ -25,16 +25,19 @@ import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
 import Control.Exception (SomeException, fromException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import qualified Data.ByteString.Lazy as BL
 import Data.IORef (IORef, newIORef, readIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import System.Directory (getCurrentDirectory)
 import System.Environment (lookupEnv)
 import System.Timeout (timeout)
 
 import HaskellFlows.Data.PropertyStore (Store, openStore)
 import HaskellFlows.Ghci.Session
+import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Types (ProjectDir, mkProjectDir)
 import qualified HaskellFlows.Tool.Arbitrary       as ArbitraryTool
@@ -307,6 +310,13 @@ sessionInstructions = T.unlines
   , "  full gate before push -> ghci_check_project() + scripts/ci-local.sh --fast"
   , "  what next?            -> ghci_workflow(action=\"help\")"
   , ""
+  , "Every successful tool response carries a `nextStep` field with"
+  , "{tool, why, example?} — a direct push from the server about the"
+  , "most probable next call. Treat it as an anchor: if it fits what"
+  , "you are trying to do, follow it; if not, ignore it and pick your"
+  , "own path. It replaces the need to ping ghci_workflow(next) after"
+  , "every single call."
+  , ""
   , "NEVER edit .cabal by hand for deps — use ghci_deps (post-edit"
   , "parse invariant refuses to persist a broken file)."
   , ""
@@ -373,7 +383,31 @@ runTool srv toolName rid action = do
     Right Nothing -> do
       evictSession srv
       pure (ok rid (toJSON (toolException (timeoutMsg toolName))))
-    Right (Just tr) -> pure (ok rid (toJSON tr))
+    Right (Just tr) -> pure (ok rid (toJSON (enrichWithNextStep toolName tr)))
+
+-- | Attempt to inject a 'NextStep' hint into the tool's payload.
+-- The decision is read-only: we peek at the top text-content block
+-- of the result as JSON, pass (toolName, success, payload) to
+-- 'suggestNext', and — if it returns 'Just' — splice the
+-- @nextStep@ object in. On any shape mismatch (non-JSON payload,
+-- missing success flag, etc.) the result is returned unchanged.
+enrichWithNextStep :: Text -> ToolResult -> ToolResult
+enrichWithNextStep toolName tr =
+  let payload = firstJsonContent tr
+      isOk    = not (trIsError tr)
+  in case suggestNext toolName isOk payload of
+       Just ns -> injectNextStep ns tr
+       Nothing -> tr
+
+-- | Peek at the first TextContent block and decode it as JSON. If
+-- the first block is not valid JSON we return 'Null' so the
+-- 'suggestNext' decision table has a well-typed default to match
+-- against.
+firstJsonContent :: ToolResult -> Value
+firstJsonContent tr = case trContent tr of
+  (TextContent t : _) ->
+    fromMaybe Null (decode (BL.fromStrict (TE.encodeUtf8 t)))
+  _ -> Null
 
 -- | Human-readable timeout error message for agents.
 timeoutMsg :: Text -> Text

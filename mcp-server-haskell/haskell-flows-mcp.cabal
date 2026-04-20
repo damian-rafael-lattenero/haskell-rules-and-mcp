@@ -38,6 +38,7 @@ library
     hs-source-dirs:   src
     exposed-modules:  HaskellFlows
                       HaskellFlows.Types
+                      HaskellFlows.Mcp.NextStep
                       HaskellFlows.Mcp.Protocol
                       HaskellFlows.Mcp.Transport
                       HaskellFlows.Mcp.Server
