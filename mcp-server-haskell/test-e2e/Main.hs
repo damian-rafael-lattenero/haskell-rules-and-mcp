@@ -31,6 +31,7 @@ import qualified Scenarios.FlowBootstrap        as FlowBoot
 import qualified Scenarios.FlowCoverage         as FlowCov
 import qualified Scenarios.FlowExploratory      as FlowE
 import qualified Scenarios.FlowFixWarning       as FlowFW
+import qualified Scenarios.FlowMutation          as FlowMut
 import qualified Scenarios.FlowPropertyLifecycle as FlowPL
 import qualified Scenarios.FlowQualityGates     as FlowQG
 import qualified Scenarios.FlowRefactor         as FlowR
@@ -78,6 +79,8 @@ scenarios =
     , FlowFW.runFlow )
   , ( "Flow: Coverage (cabal test --enable-coverage + HPC)"
     , FlowCov.runFlow )
+  , ( "Flow: Mutation testing (bug-finding oracle for regression)"
+    , FlowMut.runFlow )
   ]
 
 main :: IO ()
