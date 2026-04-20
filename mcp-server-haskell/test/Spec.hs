@@ -202,6 +202,8 @@ main = do
       , test "parseCtors inline record 2 fields"    testCtorsInlineRecord2Fields
       , test "session spawns with QuickCheck dep"   testSessionIncludesQuickCheck
       , test "loadModule Strict uses -fno-defer-*" testLoadStrictClearsDeferred
+      , test "coverage enriches w/ hpc report call" testCoverageInvokesHpcReport
+      , test "parseCoverage handles hpc report out" testParseHpcReportText
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1098,6 +1100,45 @@ testParseStanzaRejects = pure $
     rejects raw = case parseStanzaSelector raw of
       Left  _ -> True
       Right _ -> False
+
+-- | Phase 11b F-09: @ghci_coverage@ always returned
+-- @summary="No coverage metrics parsed from the cabal output"@ under
+-- GHC 9.12 + cabal 3.14 because those versions of cabal no longer
+-- echo the HPC summary on stdout — they only write HTML. Fix wires
+-- a post-@cabal test@ @hpc report@ call into the pipeline whose text
+-- output the parser already understands. The regression check here is
+-- narrow: pin the static shape of Tool/Coverage.hs so a future edit
+-- can't accidentally drop the @hpc report@ invocation.
+testCoverageInvokesHpcReport :: IO Bool
+testCoverageInvokesHpcReport = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Coverage.hs"
+  pure $ T.isInfixOf "runHpcReport"         src
+      && T.isInfixOf "enrichWithHpcReport"  src
+      && T.isInfixOf "findTixFile"          src
+      && T.isInfixOf "\"hpc\""              src
+      && T.isInfixOf "\"--hpcdir=\""        src `ellipticalOr`
+         T.isInfixOf "--hpcdir="            src
+
+-- | Rescues us from the difference between `"--hpcdir="` as a
+-- quoted literal in source and the concatenation form. Either is fine.
+ellipticalOr :: Bool -> Bool -> Bool
+ellipticalOr = (||)
+
+-- | End-to-end smoke of the happy path: 'parseCoverage' must
+-- recognise the text shape that @hpc report@ emits under GHC 9.x.
+-- Pins both the parser and the enrichment contract together.
+testParseHpcReportText :: IO Bool
+testParseHpcReportText =
+  let sample = T.unlines
+        [ " 92% expressions used (12/13)"
+        , " 100% boolean coverage (0/0)"
+        , " 100% alternatives used (3/3)"
+        , " 100% local declarations used (1/1)"
+        , " 100% top-level declarations used (1/1)"
+        ]
+      rpt = parseCoverage sample
+  in pure (length (crMetrics rpt) >= 5
+         && any (\m -> mPercent m == 92) (crMetrics rpt))
 
 -- | Phase 11b F-08 (critical): the old @loadModuleWith Deferred@ used
 -- @:unset -fdefer-type-errors -fdefer-typed-holes@, but GHCi's

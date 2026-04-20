@@ -13,6 +13,7 @@ module HaskellFlows.Tool.Coverage
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Control.Monad (void)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -21,6 +22,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (findExecutable)
 import System.Exit (ExitCode (..))
+import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose, hGetContents)
 import System.Process
   ( CreateProcess (..)
@@ -112,10 +114,79 @@ runCoverage pd = do
       pure CovTimeout
     Just ExitSuccess -> do
       o <- takeMVar outVar
-      pure (CovSuccess (T.pack o))
+      -- Modern cabal + HPC only write HTML to disk; the stdout that
+      -- used to carry the "NN% expressions used (X/Y)" summary lines
+      -- is now just a list of "Writing: …html" paths. Post-process by
+      -- locating the .tix and mix dir produced by the coverage run
+      -- and asking `hpc report` for the text summary. If anything in
+      -- the post-processing chain fails we fall back to the raw
+      -- cabal output — the parser will just emit "no metrics" as
+      -- before, with no regression risk.
+      enriched <- enrichWithHpcReport pd (T.pack o)
+      pure (CovSuccess enriched)
     Just (ExitFailure code) -> do
       e <- takeMVar errVar
       pure (CovFailure code (T.pack e))
+
+-- | Look for the .tix file cabal produced, then ask `hpc report` for
+-- the text summary. Append the result to the cabal stdout so
+-- downstream 'parseCoverage' can pick up the metrics without needing
+-- to understand cabal's HTML-only output shape.
+enrichWithHpcReport :: ProjectDir -> Text -> IO Text
+enrichWithHpcReport pd cabalOut = do
+  let distDir = unProjectDir pd </> "dist-newstyle"
+  mTix <- findTixFile distDir
+  case mTix of
+    Nothing  -> pure cabalOut
+    Just tix -> do
+      -- Cabal lays out the coverage artefacts predictably:
+      --   .../hpc/vanilla/tix/<name>/<name>.tix
+      --   .../hpc/vanilla/mix
+      -- So the mix dir is three parent levels up from the tix file
+      -- plus the sibling `mix` directory.
+      let hpcVanilla = takeDirectory (takeDirectory (takeDirectory tix))
+          mixDir     = hpcVanilla </> "mix"
+      mReport <- runHpcReport mixDir tix
+      case mReport of
+        Nothing  -> pure cabalOut
+        Just rpt -> pure (cabalOut <> "\n" <> rpt)
+
+-- | Locate the first @.tix@ file under @root@. Uses @find@ via argv
+-- so no shell interpolation path is open; empty output means no file.
+findTixFile :: FilePath -> IO (Maybe FilePath)
+findTixFile root = do
+  let cp = (proc "find" [root, "-name", "*.tix"])
+             { std_out = CreatePipe
+             , std_err = NoStream
+             }
+  (_, Just hOut, _, ph) <- createProcess cp
+  out <- hGetContents hOut
+  _   <- waitForProcess ph
+  case filter (not . null) (lines out) of
+    (p:_) -> pure (Just p)
+    []    -> pure Nothing
+
+-- | Invoke @hpc report --hpcdir=<mix> <tix>@ and return its stdout on
+-- success. Any failure (hpc not on PATH, nonzero exit, missing
+-- paths) collapses to 'Nothing' so the caller can fall back to the
+-- cabal stdout untouched.
+runHpcReport :: FilePath -> FilePath -> IO (Maybe Text)
+runHpcReport mixDir tix = do
+  mHpc <- findExecutable "hpc"
+  case mHpc of
+    Nothing -> pure Nothing
+    Just _  -> do
+      let cp = (proc "hpc" ["report", "--hpcdir=" <> mixDir, tix])
+                 { std_out = CreatePipe
+                 , std_err = CreatePipe
+                 }
+      (_, Just hOut, Just hErr, ph) <- createProcess cp
+      out <- hGetContents hOut
+      _   <- forkIO (void (hGetContents hErr))
+      ec  <- waitForProcess ph
+      case ec of
+        ExitSuccess -> pure (Just (T.pack out))
+        _           -> pure Nothing
 
 --------------------------------------------------------------------------------
 -- response shaping
