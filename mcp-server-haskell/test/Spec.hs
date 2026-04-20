@@ -9,6 +9,9 @@
 -- QuickCheck arrives in Phase 2 along with the property-lifecycle tool.
 module Main where
 
+import qualified Data.Aeson as A
+import Data.Aeson (object, (.=))
+import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Maybe (isNothing)
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -48,6 +51,8 @@ import HaskellFlows.Suggest.Rules
   ( Suggestion (..)
   , applyRules
   )
+import HaskellFlows.Mcp.Protocol (ToolCall (..))
+import HaskellFlows.Tool.Batch (BatchArgs (..))
 import HaskellFlows.Tool.CheckProject (parseExposedModules)
 import HaskellFlows.Tool.Lint (parseHlintJson)
 import qualified HaskellFlows.Tool.Lint as LintTool
@@ -174,6 +179,8 @@ main = do
       , test "suggest matches involutive on a->a"   testSuggestInvolutive
       , test "suggest matches associative on a->a->a" testSuggestAssoc
       , test "suggest skips unmatched shapes"       testSuggestNoMatch
+      , test "batch parses documented {tool,args}"  testBatchParsesToolArgs
+      , test "batch accepts MCP {name,arguments}"   testBatchParsesNameArgs
       ]
   if and results then exitSuccess else exitFailure
 
@@ -817,6 +824,54 @@ testSuggestNoMatch =
     Just sig ->
       let suggestions = applyRules "foo" sig
       in pure (null suggestions)
+
+--------------------------------------------------------------------------------
+-- Phase 12 regression tests: dogfood findings #22 / #23 / #24
+--------------------------------------------------------------------------------
+
+-- | Issue #22: @ghci_batch@ advertises @{tool, args}@ via its
+-- @inputSchema@ — parsing must accept that shape. This pins the
+-- documented contract; a future regression flips this red instead
+-- of silently misleading agents following the tool's own schema.
+testBatchParsesToolArgs :: IO Bool
+testBatchParsesToolArgs =
+  let raw = object
+        [ "actions" .=
+            [ object
+                [ "tool" .= ("ghci_type" :: Text)
+                , "args" .= object [ "expression" .= ("reverse" :: Text) ]
+                ]
+            ]
+        ]
+  in case A.fromJSON raw :: A.Result BatchArgs of
+       A.Success ba -> case baActions ba of
+         [tc] -> pure
+           ( tcName tc == "ghci_type"
+           && tcArguments tc
+                == object [ "expression" .= ("reverse" :: Text) ]
+           )
+         _ -> pure False
+       A.Error _ -> pure False
+
+-- | Issue #22 continued: clients that were relying on the MCP-native
+-- shape @{name, arguments}@ (what @tools/call@ uses) keep working.
+-- Accepting both shapes costs nothing — each routes through the
+-- same dispatcher and per-tool validator downstream.
+testBatchParsesNameArgs :: IO Bool
+testBatchParsesNameArgs =
+  let raw = object
+        [ "actions" .=
+            [ object
+                [ "name"      .= ("ghci_eval" :: Text)
+                , "arguments" .= object [ "expression" .= ("1+1" :: Text) ]
+                ]
+            ]
+        ]
+  in case A.fromJSON raw :: A.Result BatchArgs of
+       A.Success ba -> case baActions ba of
+         [tc] -> pure (tcName tc == "ghci_eval")
+         _    -> pure False
+       A.Error _ -> pure False
 
 -- | Helper: create a fresh temp directory and delete it after the test.
 -- Passes a validated 'ProjectDir' (absolute + normalised) to the body.

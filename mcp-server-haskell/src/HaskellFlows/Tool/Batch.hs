@@ -32,8 +32,10 @@ module HaskellFlows.Tool.Batch
   ( descriptor
   , handle
   , BatchArgs (..)
+  , BatchAction (..)
   ) where
 
+import Control.Applicative ((<|>))
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
@@ -89,11 +91,33 @@ data BatchArgs = BatchArgs
   }
   deriving stock (Show)
 
+-- | Decodes a single element of the @actions@ array.
+--
+-- The documented schema (see 'descriptor' above) is @{tool, args}@,
+-- matching the exposed @inputSchema@. For robustness we also accept
+-- the MCP @tools/call@-native shape @{name, arguments}@ so clients
+-- that were working around the earlier parser bug keep working. Both
+-- shapes produce the same 'ToolCall' and converge on the exact same
+-- dispatcher — no new trust boundary is introduced; per-tool
+-- validators (sanitizeExpression, mkModulePath, argv-form for proc
+-- spawns) run downstream identically in either case.
+newtype BatchAction = BatchAction { unBatchAction :: ToolCall }
+  deriving stock (Show)
+
+instance FromJSON BatchAction where
+  parseJSON = withObject "BatchAction" $ \o -> do
+    nm    <- o .:  "tool" <|> o .:  "name"
+    mArgs <- o .:? "args"
+    as    <- case mArgs of
+      Just v  -> pure v
+      Nothing -> o .:? "arguments" .!= object []
+    pure (BatchAction (ToolCall nm as))
+
 instance FromJSON BatchArgs where
   parseJSON = withObject "BatchArgs" $ \o -> do
     acts <- o .:  "actions"
     ff   <- o .:? "fail_fast" .!= True
-    pure BatchArgs { baActions = acts, baFailFast = ff }
+    pure BatchArgs { baActions = map unBatchAction acts, baFailFast = ff }
 
 -- | The dispatcher is passed as a parameter so this module doesn't
 -- depend on 'HaskellFlows.Mcp.Server' directly — clean DAG, easy to
