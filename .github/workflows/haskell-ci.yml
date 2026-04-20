@@ -92,6 +92,19 @@ jobs:
       - name: Build project
         run: cabal build all
 
+      # HLint must be on PATH before `cabal test all`. The MCP's own
+      # `ghci_toolchain_status` and `ghci_lint` tools probe for hlint
+      # at runtime via `findExecutable`; absent it they report
+      # `available=false` and `success=false`, which the FlowToolchain
+      # + FlowQualityGates e2e scenarios legitimately flag as a red
+      # toolchain. `haskell-actions/setup@v2` installs cabal + ghc but
+      # not hlint, so we stage hlint separately here. Keep this step
+      # right BEFORE `Run tests` so cache hits above don't skip it.
+      - name: Install HLint (for ghci_toolchain_status + lint e2e)
+        uses: haskell-actions/hlint-setup@v2
+        with:
+          version: "latest"
+
       - name: Run tests
         run: cabal test all --test-show-details=direct --test-options="--color"
 
