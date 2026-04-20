@@ -115,6 +115,7 @@ dispatch _ "initialize" _ rid =
             { siName    = "haskell-flows"
             , siVersion = "0.1.0-haskell"
             }
+      , irInstructions    = Just sessionInstructions
       }
 dispatch _ "tools/list" _ rid =
   pure $ ok rid $ object [ "tools" .= allToolDescriptors ]
@@ -274,6 +275,58 @@ allToolDescriptors =
 
 allToolNames :: [Text]
 allToolNames = map tdName allToolDescriptors
+
+--------------------------------------------------------------------------------
+-- MCP initialize.instructions — surfaced to the LLM at session start
+--------------------------------------------------------------------------------
+
+-- | The guidance surfaced at session start. Kept deliberately
+-- compact — the MCP client shows this inline to the LLM, and a wall
+-- of text eats context budget. Detailed tool signatures live in each
+-- tool's @tdDescription@; this text just tells the agent which tool
+-- to reach for in which situation, and which invariants it can rely
+-- on (so it does not waste a call re-learning them).
+sessionInstructions :: Text
+sessionInstructions = T.unlines
+  [ "haskell-flows MCP — 25 tools for Haskell dev. Use this MCP for ALL"
+  , "Haskell work; do not shell out to cabal/ghc/ghci/hlint directly."
+  , ""
+  , "Start-of-session handshake:"
+  , "  ghci_workflow(action=\"status\")         — confirm alive + 25 tools"
+  , "  ghci_toolchain_status()                 — cabal/ghc/hlint gates"
+  , ""
+  , "Situation -> tool:"
+  , "  new data T            -> ghci_arbitrary(type_name=\"T\")"
+  , "  hole / empty stub     -> ghci_hole(module_path=\"src/X.hs\")"
+  , "  want properties       -> ghci_suggest(function_name=\"f\")"
+  , "  check a law           -> ghci_quickcheck(property=\"...\", module_path=\"src/X.hs\")"
+  , "  rename local          -> ghci_refactor(action=\"rename_local\", scope_line_start=, scope_line_end=)"
+  , "  add dep               -> ghci_deps(action=\"add\", package=\"...\", stanza=\"library\"|\"test-suite\"|...)"
+  , "  coverage              -> ghci_coverage()  -- 8 HPC metrics"
+  , "  module gate           -> ghci_check_module(module_path=\"src/X.hs\")"
+  , "  full gate before push -> ghci_check_project() + scripts/ci-local.sh --fast"
+  , "  what next?            -> ghci_workflow(action=\"help\")"
+  , ""
+  , "NEVER edit .cabal by hand for deps — use ghci_deps (post-edit"
+  , "parse invariant refuses to persist a broken file)."
+  , ""
+  , "NEVER sed/awk across .hs files — use ghci_refactor"
+  , "(snapshot-and-compile-verify rolls back on failure)."
+  , ""
+  , "Liveness guarantees (post-Phase 11c):"
+  , "  * SessionStatus has a Dead terminal state; GHCi death wakes"
+  , "    every STM-blocked executeNoLock via a status-TVar write."
+  , "  * executeNoLock honours its timeoutMicros via registerDelay."
+  , "  * Server.runTool wraps each handler in a 10-min outer timeout"
+  , "    as defence in depth. A tool that hangs > 10 min is a real"
+  , "    regression, report it."
+  , ""
+  , "If a tool returns a wrong result or hangs: fix the MCP source at"
+  , "mcp-server-haskell/src/HaskellFlows/, add a regression test at"
+  , "test/Spec.hs, run scripts/ci-local.sh --fast, commit+push. Keep"
+  , "working with the stale running binary — the fix lands on next"
+  , "natural reinstall. This is the established dogfood-fix flow."
+  ]
 
 -- | Last-resort hard ceiling for any tool. This is intentionally
 -- generous — 10 minutes — and is NOT meant to be the primary time

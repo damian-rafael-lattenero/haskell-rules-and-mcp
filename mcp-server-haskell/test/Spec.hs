@@ -213,6 +213,8 @@ main = do
       , test "session Dead status + EOF flip"       testSessionDeadOnEOF
       , test "session honors command timeout"       testSessionHonoursTimeout
       , test "server wraps runTool in timeout"      testServerOuterTimeout
+      , test "initialize emits instructions field"  testInitializeEmitsInstructions
+      , test "instructions mention key tools+flows" testInstructionsMentionCore
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1176,6 +1178,50 @@ testSessionHonoursTimeout = do
   where
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- | Phase 11d F-13: the MCP used to leave the @instructions@ field
+-- of 'InitializeResult' empty, so Claude Desktop (and any other
+-- MCP client) surfaced nothing at session start. The repo-level
+-- @.claude/rules/use-haskell-flows-mcp.md@ partially filled the gap
+-- but was itself stale — referencing tools that never existed in
+-- the Haskell port (@ghci_session@, @ghci_trace@, @ghci_flags@,
+-- @ghci_init@, …). Fix wires a non-empty @instructions@ string
+-- into the initialize response so the LLM always gets accurate
+-- tool guidance, even without the project file.
+--
+-- Pin two invariants with static source checks:
+--   1. 'InitializeResult' has an 'irInstructions' field.
+--   2. The content is non-empty and mentions the tools / flows an
+--      agent has to reach for every session.
+testInitializeEmitsInstructions :: IO Bool
+testInitializeEmitsInstructions = do
+  src <- TIO.readFile "src/HaskellFlows/Mcp/Protocol.hs"
+  let codeLines = filter (not . isDocLine) (T.lines src)
+      code      = T.unlines codeLines
+  pure $ T.isInfixOf "irInstructions"           code
+      && T.isInfixOf "\"instructions\" .="      code
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+testInstructionsMentionCore :: IO Bool
+testInstructionsMentionCore = do
+  src <- TIO.readFile "src/HaskellFlows/Mcp/Server.hs"
+  -- The text lives inside a literal block; read the whole file and
+  -- look for the key markers. If any one is missing, the
+  -- instructions are drifting away from the real tool surface.
+  let markers =
+        [ "ghci_workflow"    , "ghci_toolchain_status"
+        , "ghci_arbitrary"   , "ghci_hole"
+        , "ghci_suggest"     , "ghci_quickcheck"
+        , "ghci_refactor"    , "ghci_deps"
+        , "ghci_coverage"    , "ghci_check_project"
+        , "ci-local.sh"
+        , "SessionStatus"    , "Dead"
+        , "registerDelay"    , "10-min"
+        , "dogfood"
+        ]
+  pure (all (`T.isInfixOf` src) markers)
 
 -- | Phase 11c F-12 — defence-in-depth. Even if the Session.hs
 -- fixes above miss a pathological code path, the server's outer

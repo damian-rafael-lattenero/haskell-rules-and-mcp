@@ -89,16 +89,25 @@ internalErr      msg = RpcError (-32603) msg Nothing
 data InitializeResult = InitializeResult
   { irProtocolVersion :: !Text
   , irServerInfo      :: !ServerInfo
+  , irInstructions    :: !(Maybe Text)
+    -- ^ Optional free-form guidance the client surfaces to the LLM at
+    -- session start. MCP spec: @InitializeResult.instructions: string?@.
+    -- Populated here with the tool-tier / dogfood-fix / liveness
+    -- guarantee summary so an agent that only reads the MCP handshake
+    -- (no project-level CLAUDE.md) still knows what tools exist, which
+    -- situation picks which tool, and that the session layer is
+    -- liveness-safe.
   }
   deriving stock (Show)
 
 instance ToJSON InitializeResult where
   toJSON ir =
-    object
+    object $
       [ "protocolVersion" .= irProtocolVersion ir
       , "capabilities"    .= object [ "tools" .= object [] ]
       , "serverInfo"      .= irServerInfo ir
       ]
+      <> maybe [] (\t -> ["instructions" .= t]) (irInstructions ir)
 
 data ServerInfo = ServerInfo
   { siName    :: !Text
