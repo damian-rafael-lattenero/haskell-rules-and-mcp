@@ -163,6 +163,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowCoverage
                       Scenarios.FlowExploratory
                       Scenarios.FlowFixWarning
+                      Scenarios.FlowMutation
                       Scenarios.FlowPropertyLifecycle
                       Scenarios.FlowQualityGates
                       Scenarios.FlowRefactor
