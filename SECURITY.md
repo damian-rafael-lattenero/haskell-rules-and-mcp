@@ -42,66 +42,63 @@ Response expectations (best-effort, single maintainer):
 
 **In scope** — vulnerabilities in:
 
-- The MCP server TypeScript code (`mcp-server/src/`).
-- The vendored tool distribution pipeline (`vendor-tools/`,
-  `src/tools/auto-download.ts`, `src/tools/tool-installer.ts`,
-  `scripts/validate-bundled-tools.ts`).
-- SHA256 verification of downloaded binaries.
-- Path-traversal guards (`src/helpers/paths.ts`).
-- Process lifecycle management (`mcp_reload_code`, `ghci_session`).
+- The Haskell MCP server source (`mcp-server-haskell/`).
+- Boundary validation surfaces:
+  - `mkModulePath` — path-traversal guard over every file-path
+    argument the MCP accepts.
+  - `sanitizeExpression` — rejects newlines + the GHCi framing
+    sentinel from any expression sent to `ghci_eval` / `ghci_type` /
+    `ghci_info` / `ghci_quickcheck`.
+  - `validatePackageName`, `validateVersionConstraint`,
+    `parseStanzaSelector` in `HaskellFlows.Tool.Deps` — strict
+    identifier checks for every `.cabal` edit.
+- GHCi subprocess management:
+  - Argv-form spawns (`System.Process.proc "cmd" [args]`), never
+    shell strings. No interpolation path for agent input.
+  - `maxBufferBytes` (16 MiB) DoS cap in `drainHandle`.
+  - `SessionStatus` terminal-state detection (`Dead` on EOF) so a
+    crashed GHCi cannot hold the server loop.
+- `ghci_refactor` snapshot-and-compile-verify — refactors must be
+  atomic from the agent's perspective, rolling back on compile
+  failure.
+- `ghci_deps` post-edit invariant check — refuses to persist a
+  `.cabal` edit when the re-parsed result disagrees with the
+  requested verb (prevents silent `success=true` with broken file).
 
 **Out of scope** — not security concerns of this project:
 
-- Vulnerabilities in `hlint`, `fourmolu`, `ormolu`, `haskell-language-server`
+- Vulnerabilities in `hlint`, `fourmolu`, `ormolu`,
+  `haskell-language-server`, `hpc`, `cabal`, `ghc`, `hoogle`
   themselves. Report those upstream.
-- Vulnerabilities in `@modelcontextprotocol/sdk` or Node.js core.
-- Vulnerabilities in the Haskell code the MCP generates or tests. The MCP
-  runs untrusted Haskell input locally in GHCi, same as any developer
-  would — the sandbox is whatever GHCi provides.
+- Vulnerabilities in the Haskell code the MCP generates or tests.
+  The MCP runs untrusted Haskell input locally in GHCi, same as any
+  developer would — the sandbox is whatever GHCi provides.
 - Issues that require physical access to the developer's machine.
 
 ## Known trust boundaries
 
-Declared explicitly because the project depends on three external trust
-decisions:
+Two external trust decisions are explicit:
 
-1. **Bundled tool binaries** — the trust ordering is:
-   - **Preferred, user-driven**: install via `ghcup install <tool>` (the
-     `recommendedInstall` field the manifest surfaces for every tool).
-     `ghcup` is the canonical Haskell toolchain manager and carries its
-     own integrity guarantees.
-   - **Upstream direct-binary**: when the project publishes a direct
-     executable binary (currently: `fourmolu` on `darwin-arm64`), the MCP
-     tries the **upstream URL first** (from `fourmolu/fourmolu` releases),
-     verified by SHA256. Only fourmolu meets this bar today because
-     upstream ships bare binaries; hlint / ormolu / hls upstream ship
-     tarballs or zips that would require extraction infrastructure.
-   - **Personal mirror** — for tools without a direct-binary upstream, the
-     MCP falls through to a mirror on the maintainer's GitHub release
-     (`damian-rafael-lattenero/.../tools-v1.0/`). Every mirror asset has a
-     SHA256 pinned in `vendor-tools/bundled-tools-manifest.json`. The
-     mirror's binaries were extracted from the canonical upstream
-     tarballs; the hashes in the manifest let auditors verify the
-     byte-equivalence themselves.
-   - `ghci_toolchain_status` surfaces `upstreamReleasesPageUrl` +
-     `upstreamRecommendedInstall` on every response so agents and users
-     can inspect the chain of trust at runtime.
-2. **GHCi itself** is executed as a local subprocess; any untrusted Haskell
-   expression you pass through `ghci_eval` is evaluated with the same
-   privileges as your shell. This is documented in the tool's description;
-   treat `ghci_eval` like you treat `eval` in any scripting language.
-3. **`mcp_reload_code`** deliberately terminates the Node process via
-   `process.exit(0)`. It is staleness-gated (won't exit into stale code) and
-   rate-limited (one call per 10 seconds) so it cannot be weaponized into a
-   restart-loop DoS, but a caller holding the MCP connection can
-   legitimately trigger a restart — that's the point of the tool.
+1. **Toolchain binaries (`cabal`, `ghc`, `hlint`, `hpc`, `fourmolu`,
+   `ormolu`, `hoogle`, `hls`)** are resolved from the user's `$PATH`
+   at runtime. The MCP never downloads binaries. The recommended
+   install path is [`ghcup`](https://www.haskell.org/ghcup/), the
+   canonical Haskell toolchain manager, which carries its own
+   integrity guarantees (signed metadata + per-release checksums).
+   `ghci_toolchain_status` surfaces the resolved path + version of
+   every tool so auditors can inspect the chain of trust at runtime.
+2. **GHCi** runs as a local subprocess via `cabal repl
+   --build-depends QuickCheck`. Any untrusted Haskell expression you
+   pass through `ghci_eval` is evaluated with the same privileges as
+   your shell. This is documented in the tool's description; treat
+   `ghci_eval` like you treat `eval` in any scripting language.
 
 ## Disclosure philosophy
 
 Coordinated disclosure preferred. I will:
 
-- Credit the reporter in the fix commit and in the release notes, unless
-  they ask to remain anonymous.
+- Credit the reporter in the fix commit and in the release notes,
+  unless they ask to remain anonymous.
 - Publish the advisory and the fix together, not on a schedule that
   rewards embargo length for its own sake.
 - Not retaliate against responsible reporting — this project is

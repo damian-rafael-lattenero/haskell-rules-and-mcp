@@ -32,14 +32,9 @@ feedback cycle is closed. What `0.1.0` contains:
 - **Consolidated gate** — `ghci_workflow(action="gate")` orchestrates
   regression + cabal_test + cabal_build in a single call with per-step
   durations and partial-success semantics.
-- **Hot-reload** — `mcp_reload_code` schedules a graceful Node-process
-  exit so agents editing the MCP itself can pick up fresh TypeScript
-  without exiting Claude Desktop. Staleness-gated + rate-limited.
-- **`ghci_session(status)` dist metadata** — surfaces `buildTime` +
-  `ageMinutes` so agents detect stale bundles without extra tool calls.
-- **Path-traversal guard** — `helpers/paths.ts` centralizes
-  `resolveModulePath` + `PathTraversalError`; rejects `../etc/passwd` and
-  symlink escapes.
+- **Path-traversal guard** — `HaskellFlows.Types.mkModulePath` smart
+  constructor centralises the traversal check; rejects `../etc/passwd`
+  and symlink escapes.
 - **Manifest consistency invariant** — new unit test refuses any diff that
   lets `releases[].sha256` and `tools[].sha256` drift for the same binary.
 

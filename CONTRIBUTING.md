@@ -11,8 +11,10 @@ effort — every external PR is genuinely valuable and will get careful review.
 2. **Open an issue first** for anything larger than a typo or a one-line
    fix. Alignment is cheaper than rework.
 3. **Every new tool or behavior needs a test** at the appropriate tier
-   (unit for logic, integration for GHCi interaction, e2e for full MCP
-   protocol). See `mcp-server/src/__tests__/` for patterns.
+   (pure-logic tests for parsers/validators, integration tests for GHCi
+   interaction). See `mcp-server-haskell/test/Spec.hs` for the existing
+   pattern — flat `IO Bool` runners + QuickCheck properties for
+   boundary invariants (path traversal, command sanitisation).
 
 ---
 
@@ -20,41 +22,38 @@ effort — every external PR is genuinely valuable and will get careful review.
 
 ```bash
 # Prerequisites
-#   - Node.js 22+
 #   - GHC 9.12+ and Cabal 3.12+ (via ghcup)
-#   - macOS ARM verified; other platforms: use host tools (see README)
+#   - macOS ARM verified; other platforms should work with host tools
+#     (hlint, fourmolu/ormolu, hpc) on PATH
 
-cd mcp-server
-npm install
-npm run build      # mandatory before test:e2e
-npm run test:all   # unit + integration + e2e
+cd mcp-server-haskell
+cabal build all
+cabal test all --test-show-details=direct
 ```
 
-A Nix flake is on the [Phase E roadmap](docs/community-launch/); until then
-install the Haskell toolchain via `ghcup` as usual.
+Before pushing, run the CI mirror from the repo root:
+
+```bash
+scripts/ci-local.sh --fast      # build + test + hlint, ~30s
+scripts/ci-local.sh              # + haddock + cabal check + sdist, ~5 min
+```
+
+`--fast` matches the inner loop; the full run matches the `Haskell CI`
+workflow end-to-end.
 
 ---
 
 ## Test expectations
 
-Every change must leave `npm run test:all` green across three consecutive
-runs (determinism is a core property of this project). 1157 tests currently
-pass on `master`; your PR should add or adjust tests rather than lower
+Every change must leave `cabal test all` green. Current baseline: 89
+tests on `master`; your PR should add or adjust tests rather than lower
 coverage.
 
-```bash
-# Verify determinism locally
-for i in 1 2 3; do npm run test:all || exit 1; done
-```
-
-For Haskell-side changes in `playground/` examples, run the MCP's own
-aggregator:
-
-```text
-ghci_workflow(action="gate")
-```
-
-which orchestrates regression + `cabal test` + `cabal build` in one call.
+Dogfooding against a fresh scratch project is the highest-signal way to
+validate a new tool or a non-trivial behaviour change. See
+[`docs/dogfood-2026-04-19.md`](docs/dogfood-2026-04-19.md) and
+[`docs/dogfood-2026-04-19-rle.md`](docs/dogfood-2026-04-19-rle.md) for
+the log format (F-## findings, W-## wins as anti-regression markers).
 
 ---
 
@@ -94,11 +93,15 @@ be reverted and the contributor asked to redo the PR with the trailer.
 
 ## Code style
 
-- TypeScript: let `tsc --strict` catch type errors. No `any` without a
-  comment explaining why.
+- Warnings-as-docs: every `-W*` flag in the `common shared` stanza of
+  `haskell-flows-mcp.cabal` is active. A clean build under
+  `-Wunused-packages` and friends is the baseline.
+- HLint has no hints on `master`. New hints must be fixed or suppressed
+  inline with a rationale.
 - Commit messages and code comments in English.
-- Error envelopes follow the pattern: `{ success, error?, _hint?, _guidance?, _nextStep? }`.
-- Tools register via `registerStrictTool` (Zod strict) — never bypass.
+- Every boundary validator (path, expression, package name, version
+  constraint, stanza selector) returns `Either Text Text` — structured
+  errors, never `String` exceptions.
 
 ---
 
@@ -107,17 +110,17 @@ be reverted and the contributor asked to redo the PR with the trailer.
 If you want to contribute but don't have a specific idea, these are the
 areas I'd most like help with:
 
-- **Cross-platform support**: build + ship bundled tool binaries for
-  `darwin-x64`, `linux-x64`, `linux-arm64`. The manifest + CI already
-  accept them; the bottleneck is a clean build on those platforms.
-- **Nix flake** (Phase E on the roadmap): declarative dev shell pinned
-  to the tool versions the MCP expects.
-- **Upstream-first tool resolution** (Phase D): prefer `ndmitchell/hlint`,
-  `fourmolu/fourmolu`, `tweag/ormolu`, `haskell/haskell-language-server`
-  releases over the personal mirror.
+- **Cross-platform verification**: the MCP targets darwin-arm64 primarily.
+  Linux + Windows + darwin-x64 need smoke tests against real projects.
+- **Nix flake**: declarative dev shell pinned to the tool versions the
+  MCP expects (`flake.nix` is scaffolded but untested).
 - **More law-suggestion engines**: Monoid laws, Applicative laws,
-  Traversable laws. Single `src/laws/engines/*.ts` module per engine
-  plus one unit test file per engine.
+  Traversable laws. Add a new `Rule` to
+  `HaskellFlows.Suggest.Rules.allRules` with a unit test covering the
+  match shape and a false-positive counter-example.
+- **HLS integration**: `ghci_hls` is a stub. A real hover / goto /
+  rename implementation via the LSP protocol would close a
+  significant gap against `cross-module precision`.
 
 ---
 

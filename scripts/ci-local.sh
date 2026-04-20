@@ -83,15 +83,8 @@ step "[9/9] hlint (recursive, matches CI)"
 if command -v hlint > /dev/null; then
   hlint mcp-server-haskell/
 else
-  # Fall back to the bundled hlint that ghci_lint uses — same version
-  # as the `latest` tag that CI resolves to.
-  BUNDLED="mcp-server/vendor-tools/hlint/darwin-arm64/hlint"
-  if [ -x "$BUNDLED" ]; then
-    "$BUNDLED" mcp-server-haskell/
-  else
-    echo "No hlint on PATH and no bundled hlint at $BUNDLED — install one." >&2
-    exit 1
-  fi
+  echo "No hlint on PATH — install it via 'cabal install hlint' or 'ghcup install hlint'." >&2
+  exit 1
 fi
 
 printf '\n\033[1;32mAll CI-local gates green\033[0m\n'

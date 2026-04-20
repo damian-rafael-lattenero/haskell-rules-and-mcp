@@ -34,10 +34,6 @@ refactor snapshot-and-compile, and GHCi session lifecycle.
 binary / Hackage / source), plus MCP client wiring for Claude Code,
 Cursor, etc.
 
-**Migrating from the TypeScript MCP?** [`docs/migration-from-ts.md`](docs/migration-from-ts.md)
-has the full tool-name map and flags three bugs fixed by design in the
-Haskell port.
-
 Before pushing: run `scripts/ci-local.sh --fast` to replicate the CI
 gates locally (cabal build + test + recursive hlint). The full
 pipeline (add `haddock + cabal check + sdist`) takes ~5 min; drop
@@ -74,8 +70,8 @@ ghci_workflow(action="gate")
 
 Three round-trips collapsed into one, with per-step durations and partial-success semantics.
 
-### 6 · Agents can hot-reload the MCP itself
-Edited TypeScript? `mcp_reload_code(confirm=true)` schedules a graceful restart so Claude Desktop respawns the child with the fresh bundle — no session exit. Staleness-gated + rate-limited (10 s).
+### 6 · Agents know when a session died
+The GHCi child is watched by the session layer. If the process exits or its pipes hit EOF, the `SessionStatus` flips to `Dead`, every in-flight command aborts with `SessionExhausted`, and the next call respawns a fresh child. No indefinite hangs, no zombies held behind a lock.
 
 ---
 
@@ -143,13 +139,23 @@ Resolution chain: `host PATH → bundled → auto-download → unavailable`. Uns
 
 ## Trust model
 
-Every bundled tool binary carries a SHA256 pinned in [`vendor-tools/bundled-tools-manifest.json`](mcp-server/vendor-tools/bundled-tools-manifest.json) with an **invariant test** that fails CI on any future drift. The trust ordering:
+All tools the MCP shells out to (`cabal`, `ghc`, `hlint`, `hpc`,
+`fourmolu`/`ormolu`, `hoogle`, `hls`) are resolved from the user's
+own `$PATH`. The recommended install path is
+[`ghcup`](https://www.haskell.org/ghcup/) — canonical Haskell
+toolchain, signature-verified upstream. The MCP never downloads
+binaries on behalf of the user.
 
-1. **`ghcup install <tool>`** — the recommended path; canonical Haskell toolchain.
-2. **Upstream direct binaries** — when available (e.g. `fourmolu/fourmolu` on darwin-arm64), `auto-download.ts` tries upstream first.
-3. **Personal mirror** — extracted binaries from upstream tarballs, SHA256-pinned, used only when upstream doesn't publish direct executables.
+Every external invocation uses argv-form
+(`System.Process.proc "cmd" ["arg1", "arg2"]`), never a shell
+string — no interpolation path is ever open for agent-supplied
+input. Boundary validators (`mkModulePath`, `sanitizeExpression`,
+`validatePackageName`, `validateVersionConstraint`,
+`parseStanzaSelector`) reject malformed input before it reaches any
+subprocess.
 
-See [SECURITY.md](SECURITY.md) for full disclosure channels and trust-boundary notes.
+See [SECURITY.md](SECURITY.md) for full disclosure channels and
+trust-boundary notes.
 
 ---
 
@@ -162,7 +168,7 @@ See [SECURITY.md](SECURITY.md) for full disclosure channels and trust-boundary n
 | 🤝 Contributing | [**CONTRIBUTING.md**](CONTRIBUTING.md) |
 | 🛡️ Security | [**SECURITY.md**](SECURITY.md) |
 | 📜 Code of Conduct | [**CODE_OF_CONDUCT.md**](CODE_OF_CONDUCT.md) |
-| 🗂 Agent workflow rules | [`mcp-server/rules/`](mcp-server/rules/) — surfaced as MCP resources |
+| 🗂 Agent workflow dogfood | [`docs/dogfood-2026-04-19.md`](docs/dogfood-2026-04-19.md) + [`docs/dogfood-2026-04-19-rle.md`](docs/dogfood-2026-04-19-rle.md) — findings from end-to-end sessions |
 
 ---
 

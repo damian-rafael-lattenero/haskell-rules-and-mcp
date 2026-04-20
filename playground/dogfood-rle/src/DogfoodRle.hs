@@ -27,9 +27,9 @@ data Run a = Run
 --
 -- @encode "aaabbc" = [Run 3 'a', Run 2 'b', Run 1 'c']@
 encode :: Eq a => [a] -> [Run a]
-encode = map toRun . group
+encode = map mkRun . group
   where
-    toRun g = Run (length g) (head g)
+    mkRun g = Run (length g) (head g)
 
 -- | Inverse of 'encode'. Replays each run as a flat list.
 decode :: [Run a] -> [a]
