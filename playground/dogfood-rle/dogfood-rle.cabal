@@ -1,0 +1,34 @@
+cabal-version:      3.0
+name:               dogfood-rle
+version:            0.1.0.0
+synopsis:           Run-length encoding — Phase 11b dogfood scratch project
+license:            BSD-3-Clause
+build-type:         Simple
+
+common shared
+    default-language:   GHC2024
+    ghc-options:        -Wall -Wcompat -Widentities
+                        -Wincomplete-record-updates
+                        -Wincomplete-uni-patterns
+                        -Wpartial-fields
+                        -Wredundant-constraints
+                        -Wunused-packages
+    default-extensions: OverloadedStrings
+                        DerivingStrategies
+                        LambdaCase
+
+library
+    import:           shared
+    hs-source-dirs:   src
+    exposed-modules:  DogfoodRle
+    build-depends:    base        >= 4.20 && < 5
+                    , containers  >= 0.6  && < 0.9
+
+test-suite dogfood-rle-test
+    import:           shared
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Spec.hs
+    build-depends:    base        >= 4.20 && < 5
+                    , dogfood-rle
+                    , QuickCheck  >= 2.14  && < 2.16
