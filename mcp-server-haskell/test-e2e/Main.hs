@@ -28,6 +28,7 @@ import qualified Scenarios.ExprEvaluator        as Expr
 import qualified Scenarios.FlowArbitrary        as FlowA
 import qualified Scenarios.FlowBatch            as FlowB
 import qualified Scenarios.FlowBootstrap        as FlowBoot
+import qualified Scenarios.FlowCorpusTransport  as FlowCT
 import qualified Scenarios.FlowCoverage         as FlowCov
 import qualified Scenarios.FlowExploratory      as FlowE
 import qualified Scenarios.FlowFixWarning       as FlowFW
@@ -96,6 +97,8 @@ scenarios =
     , FlowGM.runFlow )
   , ( "Flow: Session robustness (user throws don't kill GHCi)"
     , FlowSR.runFlow )
+  , ( "Flow: Corpus transport (hostile JSON-RPC lines · subprocess)"
+    , FlowCT.runFlow )
   ]
 
 main :: IO ()
