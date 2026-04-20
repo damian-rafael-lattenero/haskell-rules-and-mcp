@@ -84,14 +84,15 @@ handle
   :: IORef ProjectDir
   -> MVar (Maybe Session)
   -> [Text]
+  -> [Text]       -- ^ state-aware help hints (from WorkflowState.renderHelp)
   -> Value
   -> IO ToolResult
-handle pdRef sessMVar toolNames rawArgs = case parseEither parseJSON rawArgs of
+handle pdRef sessMVar toolNames stateHints rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
   Right (WorkflowArgs a) -> do
     pd       <- readIORef pdRef
     sessAlive <- isAlive sessMVar
-    pure (render a pd sessAlive toolNames)
+    pure (render a pd sessAlive toolNames stateHints)
 
 isAlive :: MVar (Maybe Session) -> IO Bool
 isAlive sessMVar = do
@@ -104,11 +105,11 @@ isAlive sessMVar = do
 
 -- | Render the workflow view. The three branches share the same
 -- top-level shape so agents can treat the tool's output polymorphically.
-render :: Action -> ProjectDir -> Bool -> [Text] -> ToolResult
-render a pd alive toolNames =
+render :: Action -> ProjectDir -> Bool -> [Text] -> [Text] -> ToolResult
+render a pd alive toolNames stateHints =
   let payload = case a of
         ActStatus -> statusPayload pd alive toolNames
-        ActHelp   -> helpPayload pd alive
+        ActHelp   -> helpPayload pd alive stateHints
         ActNext   -> nextPayload pd alive
   in ToolResult
        { trContent = [ TextContent (encodeUtf8Text payload) ]
@@ -124,14 +125,15 @@ statusPayload pd alive toolNames =
     , "toolsActive" .= toolNames
     ]
 
-helpPayload :: ProjectDir -> Bool -> Value
-helpPayload _pd alive =
-  object
-    [ "view"     .= ("help" :: Text)
-    , "ghciAlive".= alive
-    , "steps"    .= steps
-    , "reasoning".= reasoning
+helpPayload :: ProjectDir -> Bool -> [Text] -> Value
+helpPayload _pd alive stateHints =
+  object $
+    [ "view"      .= ("help" :: Text)
+    , "ghciAlive" .= alive
+    , "steps"     .= steps
+    , "reasoning" .= reasoning
     ]
+    <> [ "stateHints" .= stateHints | not (null stateHints) ]
   where
     steps :: [Text]
     steps

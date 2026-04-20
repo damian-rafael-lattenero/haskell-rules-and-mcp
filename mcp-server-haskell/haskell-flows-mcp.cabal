@@ -40,6 +40,7 @@ library
                       HaskellFlows.Types
                       HaskellFlows.Mcp.NextStep
                       HaskellFlows.Mcp.Protocol
+                      HaskellFlows.Mcp.WorkflowState
                       HaskellFlows.Mcp.Transport
                       HaskellFlows.Mcp.Server
                       HaskellFlows.Ghci.Sentinel

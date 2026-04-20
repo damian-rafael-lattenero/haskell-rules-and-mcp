@@ -76,6 +76,7 @@ import qualified HaskellFlows.Tool.AddImport as AddImport
 import qualified HaskellFlows.Tool.AddModules as AddModules
 import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
+import qualified HaskellFlows.Mcp.WorkflowState as WS
 import HaskellFlows.Tool.CheckProject (parseExposedModules)
 import HaskellFlows.Tool.Lint (parseHlintJson)
 import qualified HaskellFlows.Tool.Lint as LintTool
@@ -265,6 +266,9 @@ main = do
       , test "apply_exports: rewriteHeader idempotent" testApplyExportsIdempotent
       , test "apply_exports: injects exports"      testApplyExportsInjects
       , test "fix_warning: plan for unused imports" testFixWarningUnusedImports
+      , test "workflow-state: initial empty"       testWorkflowStateInitial
+      , test "workflow-state: tracks load + edits" testWorkflowStateTracks
+      , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1184,6 +1188,42 @@ testCoverageInvokesHpcReport = do
 -- quoted literal in source and the concatenation form. Either is fine.
 ellipticalOr :: Bool -> Bool -> Bool
 ellipticalOr = (||)
+
+-- | Phase 11k: WorkflowState tracker starts at zero counters + empty history.
+testWorkflowStateInitial :: IO Bool
+testWorkflowStateInitial = do
+  ref <- WS.newWorkflowStateRef
+  s <- WS.readState ref
+  pure $ WS.wsToolCalls s == 0
+      && WS.wsEditsSinceLastLoad s == 0
+      && null (WS.wsToolHistory s)
+
+-- | Phase 11k: ghci_load resets edit counter; ghci_refactor increments it.
+testWorkflowStateTracks :: IO Bool
+testWorkflowStateTracks = do
+  ref <- WS.newWorkflowStateRef
+  let okLoad = A.object [ "success" .= True, "errors" .= ([] :: [Text])
+                        , "warnings" .= ([] :: [Text]) ]
+      okRef  = A.object [ "success" .= True, "compile" .= ("ok" :: Text) ]
+  WS.trackTool ref "ghci_refactor" True okRef
+  WS.trackTool ref "ghci_refactor" True okRef
+  s1 <- WS.readState ref
+  WS.trackTool ref "ghci_load"     True okLoad
+  s2 <- WS.readState ref
+  pure $ WS.wsEditsSinceLastLoad s1 == 2
+      && WS.wsEditsSinceLastLoad s2 == 0
+      && WS.wsLastLoadSuccess s2 == Just True
+
+-- | Phase 11k: renderHelp surfaces the recompile nudge only when
+-- editsSinceLastLoad crosses the 3-edit threshold.
+testWorkflowStateHelp :: IO Bool
+testWorkflowStateHelp =
+  let lowEdits  = WS.WorkflowState 0 2 Nothing 0 0 []
+      highEdits = WS.WorkflowState 0 5 Nothing 0 0 []
+      nudgeLow  = WS.renderHelp lowEdits
+      nudgeHigh = WS.renderHelp highEdits
+  in pure $ null nudgeLow
+         && any (T.isInfixOf "edits since the last ghci_load") nudgeHigh
 
 -- | Phase 11j: all 5 Code tools registered in the inventory.
 testCodeToolsRegistered :: IO Bool

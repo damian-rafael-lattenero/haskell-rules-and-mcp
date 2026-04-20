@@ -39,6 +39,13 @@ import HaskellFlows.Data.PropertyStore (Store, openStore)
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.WorkflowState
+  ( WorkflowStateRef
+  , newWorkflowStateRef
+  , readState
+  , renderHelp
+  , trackTool
+  )
 import HaskellFlows.Types (ProjectDir, mkProjectDir)
 import qualified HaskellFlows.Tool.AddImport       as AddImportTool
 import qualified HaskellFlows.Tool.AddModules      as AddModulesTool
@@ -82,9 +89,10 @@ import qualified HaskellFlows.Tool.Workflow        as WorkflowTool
 -- 'srvSession' is held behind an 'MVar' so concurrent handlers cannot race
 -- on startup: the first caller wins, everyone else waits on the mutex.
 data Server = Server
-  { srvProjectDir :: !(IORef ProjectDir)
-  , srvSession    :: !(MVar (Maybe Session))
-  , srvStore      :: !Store
+  { srvProjectDir    :: !(IORef ProjectDir)
+  , srvSession       :: !(MVar (Maybe Session))
+  , srvStore         :: !Store
+  , srvWorkflowState :: !WorkflowStateRef
   }
 
 -- | Build a server whose project directory is sourced from
@@ -101,7 +109,13 @@ defaultServer = do
       pdRef <- newIORef pd
       sess  <- newMVar Nothing
       store <- openStore pd
-      pure Server { srvProjectDir = pdRef, srvSession = sess, srvStore = store }
+      ws    <- newWorkflowStateRef
+      pure Server
+        { srvProjectDir    = pdRef
+        , srvSession       = sess
+        , srvStore         = store
+        , srvWorkflowState = ws
+        }
 
 -- | Dispatch a single parsed request. 'Nothing' means the input was a
 -- notification (e.g. @initialized@) and the caller should not write a
@@ -189,11 +203,14 @@ dispatchTool srv call = case tcName call of
     ArbitraryTool.handle sess (tcArguments call)
   "hoogle_search" ->
     HoogleTool.handle (tcArguments call)
-  "ghci_workflow" ->
+  "ghci_workflow" -> do
+    ws <- readState (srvWorkflowState srv)
+    let stateHelp = renderHelp ws
     WorkflowTool.handle
       (srvProjectDir srv)
       (srvSession srv)
       allToolNames
+      stateHelp
       (tcArguments call)
   "ghci_regression" -> do
     sess <- getOrStartSession srv
@@ -418,7 +435,10 @@ runTool srv toolName rid action = do
     Right Nothing -> do
       evictSession srv
       pure (ok rid (toJSON (toolException (timeoutMsg toolName))))
-    Right (Just tr) -> pure (ok rid (toJSON (enrichWithNextStep toolName tr)))
+    Right (Just tr) -> do
+      let payload = firstJsonContent tr
+      trackTool (srvWorkflowState srv) toolName (not (trIsError tr)) payload
+      pure (ok rid (toJSON (enrichWithNextStep toolName tr)))
 
 -- | Attempt to inject a 'NextStep' hint into the tool's payload.
 -- The decision is read-only: we peek at the top text-content block
