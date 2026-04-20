@@ -22,6 +22,7 @@ module HaskellFlows.Tool.Arbitrary
   , ArbitraryArgs (..)
   , renderTemplate
   , parseConstructors
+  , parseTypeParams
   , Constructor (..)
   ) where
 
@@ -44,8 +45,10 @@ descriptor =
     , tdDescription =
         "Generate a QuickCheck Arbitrary instance template for a user-defined "
           <> "data type. Returns the instance text for the agent to paste — does "
-          <> "not modify files. Complex types (GADTs, existentials, constrained "
-          <> "constructors) may need hand-editing after paste."
+          <> "not modify files. Polymorphic types are handled: the template "
+          <> "includes an Arbitrary constraint for every type variable. Complex "
+          <> "types (GADTs, existentials, constrained constructors) may still "
+          <> "need hand-editing after paste."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -82,13 +85,16 @@ handle sess rawArgs = case parseEither parseJSON rawArgs of
       Right gr
         | not (grSuccess gr)         -> pure (errorResult (grOutput gr))
         | isOutOfScope (grOutput gr) -> pure (errorResult (grOutput gr))
-        | otherwise ->
-            case parseConstructors (grOutput gr) of
+        | otherwise -> do
+            let raw    = grOutput gr
+                params = parseTypeParams raw
+            case parseConstructors raw of
               []    -> pure (errorResult
                         ( "No constructors parsed for '" <> tname
                         <> "'. It may be a GADT, typeclass, or type synonym — "
                         <> "those need a hand-written Arbitrary." ))
-              ctors -> pure (successResult tname ctors (renderTemplate tname ctors))
+              ctors -> pure (successResult tname ctors
+                              (renderTemplate tname params ctors))
 
 --------------------------------------------------------------------------------
 -- constructor parsing
@@ -248,27 +254,70 @@ splitTopLevelCommas = go 0 []
 -- template rendering
 --------------------------------------------------------------------------------
 
+-- | Extract the type parameters from the declaration line of a
+-- @data@/@newtype@ in GHCi @:i@ output.
+--
+-- * @data Run a = Run {…}@           → @[\"a\"]@
+-- * @data Map k v = Empty | Bin …@    → @[\"k\", \"v\"]@
+-- * @data Foo = MkFoo Int@            → @[]@
+-- * @newtype Wrap a = Wrap a@         → @[\"a\"]@
+--
+-- Anything we cannot parse yields @[]@; callers then render the
+-- no-parameter template and the caller can add parameters by hand
+-- (still better than producing a broken @instance Arbitrary T where@
+-- for a polymorphic T, which was F-10).
+parseTypeParams :: Text -> [Text]
+parseTypeParams out =
+  let allLns  = T.lines out
+      declLns = dropWhile (not . isDataDeclLine) allLns
+  in case declLns of
+       []    -> []
+       (h:_) ->
+         let afterKw = stripKw (T.stripStart h)
+             -- Take up to "=" or "where" (GADT syntax).
+             headPart = T.takeWhile (/= '=') afterKw
+             tokens   = T.words (T.strip headPart)
+         in case tokens of
+              []          -> []
+              (_name:ps)  -> filter (not . T.null) ps
+  where
+    stripKw t
+      | "data "    `T.isPrefixOf` t = T.drop 5 t
+      | "newtype " `T.isPrefixOf` t = T.drop 8 t
+      | otherwise                   = t
+
 -- | Produce a compilable @instance Arbitrary T where arbitrary = oneof [...]@
 -- snippet. Uses 'pure' for nullary constructors and an @<$> … <*> …@
 -- chain for the rest. Does not emit @shrink@ — the default is fine and
 -- the agent can extend by hand if needed.
 --
--- Known limitations (surfaced in the tool description so the agent sees
--- them upfront):
+-- Polymorphic types are handled by wrapping the type expression and
+-- emitting the right 'Arbitrary' constraints:
+--
+-- * @[]@      ⇒ @instance Arbitrary T where …@
+-- * @[\"a\"]@   ⇒ @instance Arbitrary a => Arbitrary (T a) where …@
+-- * @[\"a\",\"b\"]@ ⇒ @instance (Arbitrary a, Arbitrary b) => Arbitrary (T a b) where …@
+--
+-- Known limitations:
 --
 -- * Does not look at argument types — everything is @arbitrary@,
 --   leaning on type inference to pick the right instance.
--- * Does not handle polymorphic types @T a b@; the generated instance
---   will need an explicit @instance (Arbitrary a, Arbitrary b) => @
---   context that the agent adds.
-renderTemplate :: Text -> [Constructor] -> Text
-renderTemplate typeName ctors =
-  T.unlines $
-    [ "instance Arbitrary " <> typeName <> " where"
-    , "  arbitrary = oneof"
-    ]
-    <> zipWith renderBranch [0 :: Int ..] ctors
-    <> [ "    ]" ]
+renderTemplate :: Text -> [Text] -> [Constructor] -> Text
+renderTemplate typeName params ctors =
+  let typeExpr = case params of
+        [] -> typeName
+        ps -> "(" <> typeName <> " " <> T.unwords ps <> ")"
+      context = case params of
+        []  -> ""
+        [p] -> "Arbitrary " <> p <> " => "
+        ps  -> "(" <> T.intercalate ", " [ "Arbitrary " <> p | p <- ps ]
+            <> ") => "
+  in T.unlines $
+       [ "instance " <> context <> "Arbitrary " <> typeExpr <> " where"
+       , "  arbitrary = oneof"
+       ]
+       <> zipWith renderBranch [0 :: Int ..] ctors
+       <> [ "    ]" ]
   where
     renderBranch i c =
       let prefix = if i == 0 then "    [ " else "    , "

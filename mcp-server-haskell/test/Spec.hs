@@ -74,6 +74,7 @@ import HaskellFlows.Parser.Type
 import HaskellFlows.Tool.Arbitrary
   ( Constructor (..)
   , parseConstructors
+  , parseTypeParams
   , renderTemplate
   )
 import HaskellFlows.Data.PropertyStore
@@ -205,6 +206,11 @@ main = do
       , test "coverage enriches w/ hpc report call" testCoverageInvokesHpcReport
       , test "parseCoverage handles hpc report out" testParseHpcReportText
       , test "coverage passes multiple --hpcdir"    testCoveragePassesAllMixDirs
+      , test "parseTypeParams extracts one tyvar"   testTypeParamsOne
+      , test "parseTypeParams extracts two tyvars"  testTypeParamsTwo
+      , test "parseTypeParams empty for monotype"   testTypeParamsNone
+      , test "renderTemplate wraps polymorphic T a" testTemplatePolymorphic
+      , test "renderTemplate multi-param context"   testTemplateMultiParam
       ]
   if and results then exitSuccess else exitFailure
 
@@ -515,7 +521,7 @@ testTemplate3 =
               , Constructor "Baz" ["Int"]
               , Constructor "Qux" ["Int", "String"]
               ]
-      out   = renderTemplate "Foo" ctors
+      out   = renderTemplate "Foo" [] ctors
   in pure $
        "instance Arbitrary Foo where"              `T.isInfixOf` out
     && "pure Bar"                                  `T.isInfixOf` out
@@ -1124,6 +1130,58 @@ testCoverageInvokesHpcReport = do
 -- quoted literal in source and the concatenation form. Either is fine.
 ellipticalOr :: Bool -> Bool -> Bool
 ellipticalOr = (||)
+
+-- | Phase 11c F-10: 'ghci_arbitrary' used to render
+-- @instance Arbitrary Run where@ for polymorphic types like
+-- @data Run a@. The template then refused to compile because the
+-- type expression @Run@ has kind @* -> *@ and Haskell needs the
+-- saturating tyvar (and an @Arbitrary a =>@ context on top). The
+-- fix extracts the type parameters from the @:i@ declaration line
+-- and emits the right header shape. These tests pin the parser
+-- and the template separately.
+testTypeParamsOne :: IO Bool
+testTypeParamsOne =
+  let raw = T.unlines
+        [ "type Run :: * -> *"
+        , "data Run a = Run {runLen :: !Int, runVal :: !a}"
+        ]
+  in pure (parseTypeParams raw == ["a"])
+
+testTypeParamsTwo :: IO Bool
+testTypeParamsTwo =
+  let raw = T.unlines
+        [ "type Map :: * -> * -> *"
+        , "data Map k v = Empty | Bin Int k v (Map k v) (Map k v)"
+        ]
+  in pure (parseTypeParams raw == ["k", "v"])
+
+testTypeParamsNone :: IO Bool
+testTypeParamsNone =
+  let raw = T.unlines
+        [ "type Foo :: *"
+        , "data Foo = MkFoo"
+        ]
+  in pure (null (parseTypeParams raw))
+
+testTemplatePolymorphic :: IO Bool
+testTemplatePolymorphic =
+  let out = renderTemplate "Run" ["a"]
+              [Constructor "Run" (replicate 2 "arbitrary")]
+  in pure $
+       "instance Arbitrary a => Arbitrary (Run a) where" `T.isInfixOf` out
+    && "Run <$> arbitrary <*> arbitrary"                  `T.isInfixOf` out
+
+testTemplateMultiParam :: IO Bool
+testTemplateMultiParam =
+  let out = renderTemplate "Either" ["a", "b"]
+              [ Constructor "Left"  ["arbitrary"]
+              , Constructor "Right" ["arbitrary"]
+              ]
+  in pure $
+       "instance (Arbitrary a, Arbitrary b) => Arbitrary (Either a b) where"
+         `T.isInfixOf` out
+    && "Left <$> arbitrary"                   `T.isInfixOf` out
+    && "Right <$> arbitrary"                  `T.isInfixOf` out
 
 -- | Phase 11c F-11: the first F-09 fix shipped with only one
 -- derived @--hpcdir@. Cabal 3.14 writes mix files to TWO separate
