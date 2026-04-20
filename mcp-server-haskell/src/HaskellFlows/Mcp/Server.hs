@@ -40,6 +40,9 @@ import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Types (ProjectDir, mkProjectDir)
+import qualified HaskellFlows.Tool.AddImport       as AddImportTool
+import qualified HaskellFlows.Tool.AddModules      as AddModulesTool
+import qualified HaskellFlows.Tool.ApplyExports    as ApplyExportsTool
 import qualified HaskellFlows.Tool.Arbitrary       as ArbitraryTool
 import qualified HaskellFlows.Tool.Batch           as BatchTool
 import qualified HaskellFlows.Tool.CheckModule     as CheckModuleTool
@@ -50,11 +53,13 @@ import qualified HaskellFlows.Tool.CreateProject   as CreateProjectTool
 import qualified HaskellFlows.Tool.Deps            as DepsTool
 import qualified HaskellFlows.Tool.Doc             as DocTool
 import qualified HaskellFlows.Tool.Eval            as EvalTool
+import qualified HaskellFlows.Tool.FixWarning      as FixWarningTool
 import qualified HaskellFlows.Tool.Format          as FormatTool
 import qualified HaskellFlows.Tool.Gate            as GateTool
 import qualified HaskellFlows.Tool.Goto            as GotoTool
 import qualified HaskellFlows.Tool.Hole            as HoleTool
 import qualified HaskellFlows.Tool.Hoogle          as HoogleTool
+import qualified HaskellFlows.Tool.Imports         as ImportsTool
 import qualified HaskellFlows.Tool.Info            as InfoTool
 import qualified HaskellFlows.Tool.Lint            as LintTool
 import qualified HaskellFlows.Tool.Load            as Load
@@ -244,6 +249,20 @@ dispatchTool srv call = case tcName call of
   "ghci_quickcheck_export" -> do
     pd <- readIORef (srvProjectDir srv)
     QcExportTool.handle (srvStore srv) pd (tcArguments call)
+  "ghci_add_import" ->
+    AddImportTool.handle (tcArguments call)
+  "ghci_add_modules" -> do
+    pd <- readIORef (srvProjectDir srv)
+    AddModulesTool.handle pd (tcArguments call)
+  "ghci_apply_exports" -> do
+    pd <- readIORef (srvProjectDir srv)
+    ApplyExportsTool.handle pd (tcArguments call)
+  "ghci_fix_warning" -> do
+    pd <- readIORef (srvProjectDir srv)
+    FixWarningTool.handle pd (tcArguments call)
+  "ghci_imports" -> do
+    sess <- getOrStartSession srv
+    ImportsTool.handle sess (tcArguments call)
   other ->
     pure ToolResult
       { trContent = [ TextContent ("Unknown tool: " <> other) ]
@@ -285,6 +304,11 @@ allToolDescriptors =
   , ValidateCabalTool.descriptor
   , CheckProjectTool.descriptor
   , SuggestTool.descriptor
+  , AddImportTool.descriptor
+  , AddModulesTool.descriptor
+  , ApplyExportsTool.descriptor
+  , FixWarningTool.descriptor
+  , ImportsTool.descriptor
   ]
 
 allToolNames :: [Text]

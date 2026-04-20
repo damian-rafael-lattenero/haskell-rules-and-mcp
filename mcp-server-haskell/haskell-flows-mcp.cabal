@@ -54,6 +54,9 @@ library
                       HaskellFlows.Refactor.Extract
                       HaskellFlows.Refactor.Rename
                       HaskellFlows.Suggest.Rules
+                      HaskellFlows.Tool.AddImport
+                      HaskellFlows.Tool.AddModules
+                      HaskellFlows.Tool.ApplyExports
                       HaskellFlows.Tool.Arbitrary
                       HaskellFlows.Tool.Batch
                       HaskellFlows.Tool.CheckModule
@@ -64,11 +67,13 @@ library
                       HaskellFlows.Tool.Deps
                       HaskellFlows.Tool.Doc
                       HaskellFlows.Tool.Eval
+                      HaskellFlows.Tool.FixWarning
                       HaskellFlows.Tool.Format
                       HaskellFlows.Tool.Gate
                       HaskellFlows.Tool.Goto
                       HaskellFlows.Tool.Hole
                       HaskellFlows.Tool.Hoogle
+                      HaskellFlows.Tool.Imports
                       HaskellFlows.Tool.Info
                       HaskellFlows.Tool.Lint
                       HaskellFlows.Tool.Load

@@ -72,6 +72,10 @@ import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescripto
 import HaskellFlows.Tool.Batch (BatchArgs (..))
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
+import qualified HaskellFlows.Tool.AddImport as AddImport
+import qualified HaskellFlows.Tool.AddModules as AddModules
+import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
+import qualified HaskellFlows.Tool.FixWarning as FixWarning
 import HaskellFlows.Tool.CheckProject (parseExposedModules)
 import HaskellFlows.Tool.Lint (parseHlintJson)
 import qualified HaskellFlows.Tool.Lint as LintTool
@@ -255,6 +259,12 @@ main = do
       , test "qcexport: sanitizeLabel strips LF"   testQcExportSanitize
       , test "warnings: categorize common classes" testWarningCategorize
       , test "warnings: bucketize orders by count" testWarningBucketize
+      , test "code tools: all 5 registered"        testCodeToolsRegistered
+      , test "add_import: qualified renderImportLine" testAddImportQualified
+      , test "add_modules: moduleToPath mapping"   testAddModulesPath
+      , test "apply_exports: rewriteHeader idempotent" testApplyExportsIdempotent
+      , test "apply_exports: injects exports"      testApplyExportsInjects
+      , test "fix_warning: plan for unused imports" testFixWarningUnusedImports
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1174,6 +1184,54 @@ testCoverageInvokesHpcReport = do
 -- quoted literal in source and the concatenation form. Either is fine.
 ellipticalOr :: Bool -> Bool -> Bool
 ellipticalOr = (||)
+
+-- | Phase 11j: all 5 Code tools registered in the inventory.
+testCodeToolsRegistered :: IO Bool
+testCodeToolsRegistered = pure $
+  all (`elem` allToolNames)
+    [ "ghci_add_import"
+    , "ghci_add_modules"
+    , "ghci_apply_exports"
+    , "ghci_fix_warning"
+    , "ghci_imports"
+    ]
+
+testAddImportQualified :: IO Bool
+testAddImportQualified = pure $
+     AddImport.renderImportLine False "Data.Map"
+       == "import Data.Map"
+  && AddImport.renderImportLine True  "Data.Map"
+       == "import qualified Data.Map as M"
+
+testAddModulesPath :: IO Bool
+testAddModulesPath = pure $
+     AddModules.moduleToPath "Expr.Syntax"  == "src/Expr/Syntax.hs"
+  && AddModules.moduleToPath "Main"         == "src/Main.hs"
+
+testApplyExportsIdempotent :: IO Bool
+testApplyExportsIdempotent =
+  let body = T.unlines
+        [ "-- header"
+        , "module Foo (a, b) where"
+        , "a = 1"
+        ]
+  in pure (isNothing (ApplyExports.rewriteHeader ["x"] body))
+
+testApplyExportsInjects :: IO Bool
+testApplyExportsInjects =
+  let body = T.unlines
+        [ "module Foo where"
+        , "a = 1"
+        ]
+  in case ApplyExports.rewriteHeader ["a", "b"] body of
+       Just newBody -> pure (T.isInfixOf "module Foo (a, b) where" newBody)
+       Nothing      -> pure False
+
+testFixWarningUnusedImports :: IO Bool
+testFixWarningUnusedImports =
+  let plan = FixWarning.planForCode "GHC-66111"
+  in pure $ FixWarning.fpDrop plan
+         && T.isInfixOf "unused import" (T.toLower (FixWarning.fpHint plan))
 
 -- | Phase 11i: warning categorizer buckets common messages into
 -- the 5 coarse classes the agent can prioritise on.
