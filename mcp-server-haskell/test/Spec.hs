@@ -67,7 +67,12 @@ import HaskellFlows.Suggest.Rules
   , mkRuleContext
   )
 import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNames)
-import HaskellFlows.Mcp.NextStep (NextStep (..), injectNextStep, suggestNext)
+import HaskellFlows.Mcp.NextStep
+  ( ChainStep (..)
+  , NextStep (..)
+  , injectNextStep
+  , suggestNext
+  )
 import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescriptor (..), ToolResult (..))
 import HaskellFlows.Tool.Batch (BatchArgs (..))
 import qualified HaskellFlows.Tool.Gate as Gate
@@ -306,6 +311,20 @@ main = do
       , test "suggest: parseBrowseBindings skips continuations" testParseBrowseContinuation
       , test "suggest: siblings enable preservation" testSuggestSiblingsEnablePreservation
       , test "suggest: siblings enable soundness"   testSuggestSiblingsEnableSoundness
+      , test "nextStep: gate pass -> coverage"      testNextStepGatePass
+      , test "nextStep: gate fail -> check_project" testNextStepGateFail
+      , test "nextStep: qcexport -> gate"           testNextStepQcExport
+      , test "nextStep: determinism pass -> regression" testNextStepDeterminismPass
+      , test "nextStep: determinism fail -> quickcheck" testNextStepDeterminismFail
+      , test "nextStep: add_import -> load"         testNextStepAddImport
+      , test "nextStep: add_modules carries chain"  testNextStepAddModulesChain
+      , test "nextStep: apply_exports -> load"      testNextStepApplyExports
+      , test "nextStep: fix_warning -> load"        testNextStepFixWarning
+      , test "nextStep: browse -> suggest"          testNextStepBrowse
+      , test "nextStep: toolchain_warmup -> workflow" testNextStepToolchainWarmup
+      , test "nextStep: property_lifecycle(list) -> regression" testNextStepPropertyLifecycleList
+      , test "nextStep: create_project carries chain" testNextStepCreateProjectChain
+      , test "nextStep: every tool covered or whitelisted" testNextStepFullCoverage
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1615,6 +1634,155 @@ testSuggestSiblingsEnableSoundness =
            []    -> False
     _ -> pure False
 
+--------------------------------------------------------------------------------
+-- BUG-06 / BUG-22 — nextStep coverage for Phase 11f..11n tools +
+-- multi-step chain support
+--------------------------------------------------------------------------------
+
+-- | Helper: assert the nextStep for a (tool, payload) pair points
+-- at a specific follow-up tool.
+assertNext :: Text -> A.Value -> Text -> Bool
+assertNext tool payload expected =
+  case suggestNext tool True payload of
+    Just ns -> nsTool ns == expected
+    Nothing -> False
+
+testNextStepGatePass :: IO Bool
+testNextStepGatePass =
+  let payload = A.object [ "success" .= True, "totalDurationSec" .= (1.0 :: Double) ]
+  in pure (assertNext "ghci_gate" payload "ghci_coverage")
+
+testNextStepGateFail :: IO Bool
+testNextStepGateFail =
+  let payload = A.object [ "success" .= False, "totalDurationSec" .= (1.0 :: Double) ]
+  in pure (assertNext "ghci_gate" payload "ghci_check_project")
+
+testNextStepQcExport :: IO Bool
+testNextStepQcExport =
+  let payload = A.object [ "success" .= True, "properties_written" .= (3 :: Int) ]
+  in pure (assertNext "ghci_quickcheck_export" payload "ghci_gate")
+
+testNextStepDeterminismPass :: IO Bool
+testNextStepDeterminismPass =
+  let payload = A.object [ "success" .= True, "runs" .= (3 :: Int) ]
+  in pure (assertNext "ghci_determinism" payload "ghci_regression")
+
+testNextStepDeterminismFail :: IO Bool
+testNextStepDeterminismFail =
+  let payload = A.object [ "success" .= False, "runs" .= (3 :: Int) ]
+  in pure (assertNext "ghci_determinism" payload "ghci_quickcheck")
+
+testNextStepAddImport :: IO Bool
+testNextStepAddImport =
+  let payload = A.object [ "success" .= True, "module" .= ("src/Foo.hs" :: Text) ]
+  in pure (assertNext "ghci_add_import" payload "ghci_load")
+
+-- | BUG-22 — add_modules now emits a multi-step chain. The
+-- primary next tool must be 'ghci_load' AND the chain must
+-- include at least 'ghci_load' + 'ghci_check_project'.
+testNextStepAddModulesChain :: IO Bool
+testNextStepAddModulesChain =
+  let payload = A.object [ "success" .= True, "cabal_added" .= (["Foo.Bar"] :: [Text]) ]
+  in case suggestNext "ghci_add_modules" True payload of
+       Just ns ->
+         pure $ nsTool ns == "ghci_load"
+             && case nsChain ns of
+                  Just steps ->
+                       any ((== "ghci_load")           . csTool) steps
+                    && any ((== "ghci_check_project")  . csTool) steps
+                  Nothing -> False
+       Nothing -> pure False
+
+testNextStepApplyExports :: IO Bool
+testNextStepApplyExports =
+  let payload = A.object [ "success" .= True, "module" .= ("src/Foo.hs" :: Text) ]
+  in pure (assertNext "ghci_apply_exports" payload "ghci_load")
+
+testNextStepFixWarning :: IO Bool
+testNextStepFixWarning =
+  let payload = A.object [ "success" .= True, "module" .= ("src/Foo.hs" :: Text) ]
+  in pure (assertNext "ghci_fix_warning" payload "ghci_load")
+
+testNextStepBrowse :: IO Bool
+testNextStepBrowse =
+  let payload = A.object [ "success" .= True, "count" .= (5 :: Int) ]
+  in pure (assertNext "ghci_browse" payload "ghci_suggest")
+
+testNextStepToolchainWarmup :: IO Bool
+testNextStepToolchainWarmup =
+  let payload = A.object [ "success" .= True ]
+  in pure (assertNext "ghci_toolchain_warmup" payload "ghci_workflow")
+
+testNextStepPropertyLifecycleList :: IO Bool
+testNextStepPropertyLifecycleList =
+  let payload = A.object [ "success" .= True, "action" .= ("list" :: Text) ]
+  in pure (assertNext "ghci_property_lifecycle" payload "ghci_regression")
+
+-- | BUG-22: create_project emits the canonical project-bootstrap
+-- chain (deps + add_modules + load). Pin that all three steps are
+-- present so the agent can hand it off to ghci_batch.
+testNextStepCreateProjectChain :: IO Bool
+testNextStepCreateProjectChain =
+  let payload = A.object [ "success" .= True, "files_written" .= ([] :: [Text]) ]
+  in case suggestNext "ghci_create_project" True payload of
+       Just ns ->
+         pure $ nsTool ns == "ghci_deps"
+             && case nsChain ns of
+                  Just steps ->
+                    let tools = map csTool steps
+                    in "ghci_deps"        `elem` tools
+                    && "ghci_add_modules" `elem` tools
+                    && "ghci_load"        `elem` tools
+                  Nothing -> False
+       Nothing -> pure False
+
+-- | BUG-06 "full coverage" invariant: every registered tool must
+-- either produce a nextStep on success OR be explicitly whitelisted
+-- as an exploratory / terminal tool, OR be action-conditional (the
+-- per-tool tests above pin each branch individually). This is the
+-- forcing function that guarantees the "every successful response
+-- carries nextStep" promise holds across the whole registry —
+-- adding a new tool without a nextStep entry fails the suite.
+testNextStepFullCoverage :: IO Bool
+testNextStepFullCoverage = pure $
+  let -- Tools that legitimately return Nothing on the generic
+      -- success payload. Two buckets:
+      --   (a) exploratory / terminal: no strong next-action.
+      --   (b) action-conditional: nextStep depends on @action@ or
+      --       @state@ field; covered by dedicated per-branch tests.
+      whitelist =
+        -- (a) exploratory / terminal
+        [ "ghci_type", "ghci_info", "ghci_eval", "ghci_goto"
+        , "ghci_doc", "ghci_complete", "hoogle_search"
+        , "ghci_coverage"    -- terminal: final report
+        , "ghci_workflow"    -- meta: would self-loop
+        , "ghci_batch"       -- result depends on inner tools
+        , "ghci_lint"        -- agent interprets per-hint
+        , "ghci_imports"     -- pure diagnostic aid
+        -- (b) action-conditional — per-branch tests cover each action
+        , "ghci_deps"                 -- add/remove/list
+        , "ghci_regression"           -- list/run
+        , "ghci_property_lifecycle"   -- list/drop
+        , "ghci_validate_cabal"       -- errors > 0 vs clean
+        , "ghci_quickcheck"           -- state = passed/failed
+        ]
+      -- A wholly-generic success payload. Intentionally omits
+      -- @action@/@state@ so action-conditional tools show up as
+      -- Nothing here and the whitelist forces us to keep
+      -- dedicated per-branch tests.
+      payload = A.object
+        [ "success"          .= True
+        , "errors"           .= ([] :: [Text])
+        , "warnings"         .= ([] :: [Text])
+        , "totalDurationSec" .= (1.0 :: Double)
+        , "count"            .= (1 :: Int)
+        , "overall"          .= True
+        ]
+      covered t = case suggestNext t True payload of
+        Just _  -> True
+        Nothing -> t `elem` whitelist
+  in all covered allToolNames
+
 -- | Phase 11k: WorkflowState tracker starts at zero counters + empty history.
 testWorkflowStateInitial :: IO Bool
 testWorkflowStateInitial = do
@@ -2010,12 +2178,21 @@ testNextStepCheckModule =
        Just ns -> nsTool ns == "ghci_check_project"
        Nothing -> False
 
--- | Project gate → coverage.
+-- | Project gate → gate (pre-push finalizer). BUG-06 re-routed
+-- check_project from coverage → gate (the Phase 11n finalizer
+-- tool) so the agent reaches the real CI-equivalent step; coverage
+-- moves into the attached chain as the optional follow-up.
 testNextStepCheckProject :: IO Bool
 testNextStepCheckProject =
   let payload = A.object [ "success" .= True, "overall" .= True ]
   in pure $ case suggestNext "ghci_check_project" True payload of
-       Just ns -> nsTool ns == "ghci_coverage"
+       Just ns ->
+            nsTool ns == "ghci_gate"
+         && case nsChain ns of
+              Just steps ->
+                   any ((== "ghci_gate")     . csTool) steps
+                && any ((== "ghci_coverage") . csTool) steps
+              Nothing -> False
        Nothing -> False
 
 -- | Errors suppress the suggestion — the agent should read the error
@@ -2052,7 +2229,8 @@ testInjectSplices =
   let body = A.object [ "success" .= True, "data" .= (42 :: Int) ]
       txt  = TL.toStrict (TLE.decodeUtf8 (A.encode body))
       tr   = ToolResult { trContent = [ TextContent txt ], trIsError = False }
-      ns   = NextStep { nsTool = "ghci_foo", nsWhy = "because", nsExample = Nothing }
+      ns   = NextStep { nsTool = "ghci_foo", nsWhy = "because"
+                      , nsExample = Nothing, nsChain = Nothing }
       tr'  = injectNextStep ns tr
   in case trContent tr' of
        [TextContent t] -> pure $
@@ -2067,7 +2245,8 @@ testInjectSkipsNonJson :: IO Bool
 testInjectSkipsNonJson =
   let raw = "this is not json"
       tr  = ToolResult { trContent = [ TextContent raw ], trIsError = False }
-      ns  = NextStep { nsTool = "ghci_foo", nsWhy = "x", nsExample = Nothing }
+      ns  = NextStep { nsTool = "ghci_foo", nsWhy = "x"
+                     , nsExample = Nothing, nsChain = Nothing }
       tr' = injectNextStep ns tr
   in case trContent tr' of
        [TextContent t] -> pure (t == raw)  -- unchanged
