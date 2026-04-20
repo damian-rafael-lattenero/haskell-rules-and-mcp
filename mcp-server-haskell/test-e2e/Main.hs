@@ -32,6 +32,7 @@ import qualified Scenarios.FlowCorpusTransport  as FlowCT
 import qualified Scenarios.FlowCoverage         as FlowCov
 import qualified Scenarios.FlowCrossValidation  as FlowXV
 import qualified Scenarios.FlowExploratory      as FlowE
+import qualified Scenarios.FlowExprEvaluatorDogfood as FlowEED
 import qualified Scenarios.FlowFixWarning       as FlowFW
 import qualified Scenarios.FlowGracefulMiss      as FlowGM
 import qualified Scenarios.FlowInjectionGuard   as FlowIG
@@ -98,6 +99,8 @@ scenarios =
     , FlowGM.runFlow )
   , ( "Flow: Session robustness (user throws don't kill GHCi)"
     , FlowSR.runFlow )
+  , ( "Flow: Expr evaluator dogfood (full 4-module library build + 3 bug pins)"
+    , FlowEED.runFlow )
   , ( "Flow: Corpus transport (hostile JSON-RPC lines · subprocess)"
     , FlowCT.runFlow )
   , ( "Flow: Cross-validation (MCP check_project vs cabal build)"

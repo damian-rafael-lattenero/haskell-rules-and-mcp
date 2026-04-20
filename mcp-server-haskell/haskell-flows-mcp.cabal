@@ -156,6 +156,7 @@ test-suite haskell-flows-mcp-e2e
                       E2E.Assert
                       E2E.Smoke
                       Scenarios.ExprEvaluator
+                      Scenarios.ExprEvaluatorDogfoodSources
                       Scenarios.ExprSources
                       Scenarios.FlowArbitrary
                       Scenarios.FlowBatch
@@ -164,6 +165,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowCoverage
                       Scenarios.FlowCrossValidation
                       Scenarios.FlowExploratory
+                      Scenarios.FlowExprEvaluatorDogfood
                       Scenarios.FlowFixWarning
                       Scenarios.FlowGracefulMiss
                       Scenarios.FlowInjectionGuard
