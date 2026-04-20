@@ -59,6 +59,7 @@ import qualified HaskellFlows.Tool.Info            as InfoTool
 import qualified HaskellFlows.Tool.Lint            as LintTool
 import qualified HaskellFlows.Tool.Load            as Load
 import qualified HaskellFlows.Tool.QuickCheck      as QcTool
+import qualified HaskellFlows.Tool.QuickCheckExport as QcExportTool
 import qualified HaskellFlows.Tool.Refactor        as RefactorTool
 import qualified HaskellFlows.Tool.Regression      as RegressionTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
@@ -240,6 +241,9 @@ dispatchTool srv call = case tcName call of
     sess <- getOrStartSession srv
     pd   <- readIORef (srvProjectDir srv)
     GateTool.handle (srvStore srv) sess pd (tcArguments call)
+  "ghci_quickcheck_export" -> do
+    pd <- readIORef (srvProjectDir srv)
+    QcExportTool.handle (srvStore srv) pd (tcArguments call)
   other ->
     pure ToolResult
       { trContent = [ TextContent ("Unknown tool: " <> other) ]
@@ -269,6 +273,7 @@ allToolDescriptors =
   , CompleteTool.descriptor
   , FormatTool.descriptor
   , GateTool.descriptor
+  , QcExportTool.descriptor
   , DepsTool.descriptor
   , CreateProjectTool.descriptor
   , DocTool.descriptor

@@ -73,6 +73,7 @@ library
                       HaskellFlows.Tool.Lint
                       HaskellFlows.Tool.Load
                       HaskellFlows.Tool.QuickCheck
+                      HaskellFlows.Tool.QuickCheckExport
                       HaskellFlows.Tool.Refactor
                       HaskellFlows.Tool.Regression
                       HaskellFlows.Tool.Suggest

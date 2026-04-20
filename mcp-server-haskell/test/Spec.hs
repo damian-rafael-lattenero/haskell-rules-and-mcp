@@ -64,6 +64,7 @@ import HaskellFlows.Mcp.NextStep (NextStep (..), injectNextStep, suggestNext)
 import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescriptor (..), ToolResult (..))
 import HaskellFlows.Tool.Batch (BatchArgs (..))
 import qualified HaskellFlows.Tool.Gate as Gate
+import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import HaskellFlows.Tool.CheckProject (parseExposedModules)
 import HaskellFlows.Tool.Lint (parseHlintJson)
 import qualified HaskellFlows.Tool.Lint as LintTool
@@ -242,6 +243,9 @@ main = do
       , test "suggest: evaluator needs sibling"    testSuggestEvaluatorNoSibling
       , test "gate: tool registered in inventory"  testGateRegistered
       , test "gate: all-skip parses + passes"      testGateAllSkip
+      , test "qcexport: tool registered"           testQcExportRegistered
+      , test "qcexport: renderTestFile shape"      testQcExportRenderShape
+      , test "qcexport: sanitizeLabel strips LF"   testQcExportSanitize
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1161,6 +1165,50 @@ testCoverageInvokesHpcReport = do
 -- quoted literal in source and the concatenation form. Either is fine.
 ellipticalOr :: Bool -> Bool -> Bool
 ellipticalOr = (||)
+
+-- | Phase 11h: ghci_quickcheck_export must be in the canonical
+-- tool list.
+testQcExportRegistered :: IO Bool
+testQcExportRegistered = pure $ "ghci_quickcheck_export" `elem` allToolNames
+
+-- | Phase 11h: renderTestFile emits a valid-looking Main module
+-- with the expected structural pieces (main, imports, a prop_N
+-- binding per property, a runProp helper).
+testQcExportRenderShape :: IO Bool
+testQcExportRenderShape =
+  let props =
+        [ StoredProperty
+            { spExpression = "\\(xs :: [Int]) -> reverse (reverse xs) == xs"
+            , spModule     = Just "src/DogfoodRle.hs"
+            , spPassed     = 1
+            , spUpdated    = 0
+            }
+        , StoredProperty
+            { spExpression = "\\(xs :: [Int]) -> length xs >= 0"
+            , spModule     = Nothing
+            , spPassed     = 1
+            , spUpdated    = 0
+            }
+        ]
+      body = QcExport.renderTestFile props
+  in pure $
+       T.isInfixOf "module Main where"          body
+    && T.isInfixOf "import Test.QuickCheck"     body
+    && T.isInfixOf "import DogfoodRle"          body
+    && T.isInfixOf "prop_1 ="                   body
+    && T.isInfixOf "prop_2 ="                   body
+    && T.isInfixOf "runProp :: Testable p"      body
+    && T.isInfixOf "exitFailure"                body
+
+-- | Phase 11h: sanitizeLabel must (a) strip CR/LF so a label never
+-- breaks the generated string literal, (b) collapse whitespace
+-- runs, (c) fall back to "property" on an empty-after-clean input.
+testQcExportSanitize :: IO Bool
+testQcExportSanitize = pure $
+     QcExport.sanitizeLabel "add right identity"    == "add_right_identity"
+  && QcExport.sanitizeLabel "with\nnewline"         == "with_newline"
+  && QcExport.sanitizeLabel "   "                    == "property"
+  && QcExport.sanitizeLabel "weird@#$_chars"         == "weird____chars"
 
 -- | Phase 11g: ghci_gate must be in the canonical tool list + the
 -- descriptor mentions its three sub-steps.
