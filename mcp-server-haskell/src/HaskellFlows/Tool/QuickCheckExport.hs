@@ -29,12 +29,13 @@ module HaskellFlows.Tool.QuickCheckExport
   , ExportArgs (..)
   , renderTestFile
   , sanitizeLabel
+  , modulePathToModule
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import Data.Char (isAlphaNum)
+import Data.Char (isAlphaNum, isAsciiLower, isAsciiUpper, isDigit)
 import Data.List (nub, sort)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
@@ -202,18 +203,48 @@ sanitizeLabel raw =
 -- | Map a source path like @src/Foo/Bar.hs@ to a module name
 -- @Foo.Bar@. Returns 'Nothing' when the path does not match the
 -- convention (we cannot know the right import line without it).
+--
+-- BUG-02 fix: historically this function only stripped @src@ /
+-- @lib@ as leading directories. Test-only helper modules live
+-- under @test/@ (e.g. @test/Gen.hs@ containing @module Gen@) and
+-- were mis-mapped to @test.Gen@ — a lowercase first segment that
+-- is not a valid Haskell module name, so the generated Spec.hs
+-- failed to compile. Strip @test@ too, plus every segment must
+-- start with an uppercase letter; otherwise return 'Nothing' so
+-- the renderer simply omits the bad import rather than emit
+-- broken Haskell.
 modulePathToModule :: Text -> Maybe Text
 modulePathToModule raw
   | not (".hs" `T.isSuffixOf` raw) = Nothing
   | otherwise =
       let noExt  = T.dropEnd 3 raw
           parts  = T.splitOn "/" noExt
-          -- drop a leading "src" / "lib" / similar directory name.
+          -- drop a leading sources-dir name. 'src'/'lib' are the
+          -- library conventions; 'test' covers test-suite helpers.
+          -- We also drop 'app' for executable mains, though those
+          -- are typically 'module Main' and do not import cleanly.
           core   = case parts of
-            (p:rest) | p == "src" || p == "lib" -> rest
-            _                                   -> parts
-          dotted = T.intercalate "." core
-      in if T.null dotted then Nothing else Just dotted
+            (p:rest) | p `elem` ["src", "lib", "test", "app"] -> rest
+            _                                                  -> parts
+      in if null core || not (all segmentIsUppercaseHead core)
+           then Nothing
+           else let dotted = T.intercalate "." core
+                in if T.null dotted then Nothing else Just dotted
+
+-- | A Haskell module-name segment must start with an uppercase
+-- letter and contain only identifier-safe characters. Anything
+-- else (spaces, kebab-case, lowercase dirs like @support@) is
+-- rejected.
+segmentIsUppercaseHead :: Text -> Bool
+segmentIsUppercaseHead seg = case T.uncons seg of
+  Just (c, rest) -> isAsciiUpper c && T.all idChar rest
+  Nothing        -> False
+  where
+    idChar ch =
+         isAsciiUpper ch
+      || isAsciiLower ch
+      || isDigit      ch
+      || ch == '_' || ch == '\''
 
 -- | Tiny helper to chain Maybe through pure functions.
 (>=>) :: (a -> Maybe b) -> (b -> Maybe c) -> a -> Maybe c

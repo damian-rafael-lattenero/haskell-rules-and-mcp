@@ -44,7 +44,7 @@ import Data.Aeson
 import Data.Text (Text)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
@@ -123,11 +123,21 @@ loadAll s = withMVar (sLock s) $ \_ -> do
 
 -- | Insert or update an entry identified by @expression@ (+ optional
 -- @module@). Increments the pass count and refreshes the timestamp.
+--
+-- BUG-04 defence-in-depth: re-assert the parent directory exists
+-- before every write. @openStore@ creates it once at server boot,
+-- but the ProjectDir may not have existed at boot time (scaffold
+-- happens later), and external deletes (user @rm -rf@, stale
+-- git-clean) can erase it between server start and the first
+-- save. An unconditional @createDirectoryIfMissing True@ is
+-- O(stat) + cheap on the happy path and turns a crash into a
+-- silent no-op on the bad path.
 save :: Store -> Text -> Maybe Text -> IO ()
 save s expr mModule = withMVar (sLock s) $ \_ -> do
   now  <- realToFrac <$> getPOSIXTime
   curr <- loadCurrent
   let updated = upsert curr now
+  createDirectoryIfMissing True (takeDirectory (sFile s))
   encodeFile (sFile s) updated
   where
     loadCurrent :: IO [StoredProperty]
@@ -160,7 +170,8 @@ save s expr mModule = withMVar (sLock s) $ \_ -> do
                  ]
 
 -- | Delete an entry matching @expression@ + optional @module@. No-op if
--- the entry doesn't exist.
+-- the entry doesn't exist. BUG-04 defence mirror of 'save' — the
+-- write path re-asserts the dir exists.
 remove :: Store -> Text -> Maybe Text -> IO ()
 remove s expr mModule = withMVar (sLock s) $ \_ -> do
   exists <- doesFileExist (sFile s)
@@ -173,6 +184,7 @@ remove s expr mModule = withMVar (sLock s) $ \_ -> do
         Right (Right ps) -> do
           let keep p = not (spExpression p == expr && spModule p == mModule)
               filtered = filter keep ps
+          createDirectoryIfMissing True (takeDirectory (sFile s))
           encodeFile (sFile s) filtered
         _ -> pure ()
 

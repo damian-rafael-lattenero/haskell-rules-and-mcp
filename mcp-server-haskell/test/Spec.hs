@@ -133,8 +133,11 @@ import HaskellFlows.Tool.Hoogle
   ( HoogleHit (..)
   , parseHoogleLine
   )
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
+import qualified HaskellFlows.Types
 import HaskellFlows.Types
   ( PathError (..)
   , ProjectDir
@@ -283,6 +286,16 @@ main = do
       , test "guidance: no phantom ghci_session"    testGuidanceNoPhantomSession
       , test "deps: description has no phantom"     testDepsDescriptorNoPhantom
       , test "deps: hint text has no phantom"       testDepsHintNoPhantom
+      , test "qcexport: modulePathToModule src"     testExportPathSrc
+      , test "qcexport: modulePathToModule lib"     testExportPathLib
+      , test "qcexport: modulePathToModule test"    testExportPathTest
+      , test "qcexport: modulePathToModule nested"  testExportPathNested
+      , test "qcexport: modulePathToModule lowercase rejected" testExportPathLowercaseRejected
+      , test "qcexport: modulePathToModule no .hs"  testExportPathNoSuffix
+      , test "qcexport: render emits valid imports" testExportRenderValidImports
+      , test "propstore: save auto-creates dir"     testPropStoreCreatesDir
+      , test "propstore: save after rm -rf dir"     testPropStoreResurrectsDir
+      , test "propstore: concurrent saves no loss"  testPropStoreConcurrentSaves
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1305,6 +1318,127 @@ testDepsHintNoPhantom :: IO Bool
 testDepsHintNoPhantom = do
   src <- TIO.readFile "src/HaskellFlows/Tool/Deps.hs"
   pure (not ("ghci_session" `T.isInfixOf` src))
+
+--------------------------------------------------------------------------------
+-- BUG-02 — ghci_quickcheck_export must generate valid Haskell
+--------------------------------------------------------------------------------
+
+-- | The classic cases: 'src/Foo.hs' -> 'Foo', 'src/Foo/Bar.hs' -> 'Foo.Bar'.
+testExportPathSrc :: IO Bool
+testExportPathSrc = pure $
+     QcExport.modulePathToModule "src/Foo.hs"        == Just "Foo"
+  && QcExport.modulePathToModule "src/Foo/Bar.hs"    == Just "Foo.Bar"
+
+-- | Library convention alias. Same semantics as 'src/'.
+testExportPathLib :: IO Bool
+testExportPathLib = pure $
+     QcExport.modulePathToModule "lib/Foo.hs"        == Just "Foo"
+  && QcExport.modulePathToModule "lib/Foo/Bar.hs"    == Just "Foo.Bar"
+
+-- | BUG-02 core: test-suite helpers like @test/Gen.hs@ containing
+-- @module Gen where@ used to be mis-mapped to @test.Gen@ — lowercase
+-- first segment, not a valid Haskell module name. Pin the fix.
+testExportPathTest :: IO Bool
+testExportPathTest = pure $
+     QcExport.modulePathToModule "test/Gen.hs"       == Just "Gen"
+  && QcExport.modulePathToModule "test/Support/Fix.hs" == Just "Support.Fix"
+
+-- | Paths with no leading convention-dir: take the whole path as
+-- the module name (each segment still has to start uppercase).
+testExportPathNested :: IO Bool
+testExportPathNested = pure $
+     QcExport.modulePathToModule "Main.hs"           == Just "Main"
+  && QcExport.modulePathToModule "Foo/Bar.hs"        == Just "Foo.Bar"
+
+-- | Paths containing lowercase segments (non-canonical layouts)
+-- must return 'Nothing' — the renderer will omit a broken import
+-- rather than emit invalid Haskell.
+testExportPathLowercaseRejected :: IO Bool
+testExportPathLowercaseRejected = pure $
+     isNothing (QcExport.modulePathToModule "experiments/foo.hs")
+  && isNothing (QcExport.modulePathToModule "src/support/Gen.hs")
+  && isNothing (QcExport.modulePathToModule "src/.hidden/Foo.hs")
+
+-- | Non-Haskell files are outright rejected (no @.hs@ suffix).
+testExportPathNoSuffix :: IO Bool
+testExportPathNoSuffix = pure $
+     isNothing (QcExport.modulePathToModule "src/Foo.txt")
+  && isNothing (QcExport.modulePathToModule "src/Foo")
+  && isNothing (QcExport.modulePathToModule "")
+
+-- | End-to-end: a property whose stored module is 'test/Gen.hs'
+-- must generate an @import Gen@ line — never the old broken
+-- @import test.Gen@. Exercises the fix through 'renderTestFile'.
+testExportRenderValidImports :: IO Bool
+testExportRenderValidImports = do
+  let props =
+        [ StoredProperty
+            { spExpression = "\\(x :: Expr) -> simplify (simplify x) == simplify x"
+            , spModule     = Just "test/Gen.hs"
+            , spPassed     = 1
+            , spUpdated    = 0
+            }
+        ]
+      rendered = QcExport.renderTestFile props
+  pure $ T.isInfixOf "import Gen"         rendered
+      && not (T.isInfixOf "import test."  rendered)
+      && not (T.isInfixOf "import test_"  rendered)
+
+--------------------------------------------------------------------------------
+-- BUG-04 — PropertyStore cold-start resilience
+--------------------------------------------------------------------------------
+
+-- | BUG-04 core: a fresh project whose @.haskell-flows/@ dir
+-- does not yet exist must still accept a first @save@. The fix
+-- re-asserts @createDirectoryIfMissing True@ before every write.
+testPropStoreCreatesDir :: IO Bool
+testPropStoreCreatesDir = withTempProject $ \pd -> do
+  -- Do NOT call 'openStore' upfront. Simulate the pathological
+  -- case where the dir was cleaned between boot and the first
+  -- save: mkdir removed, then save issued.
+  removePathForcibly (unProjectDirRaw pd </> ".haskell-flows")
+  store <- openStore pd
+  removePathForcibly (unProjectDirRaw pd </> ".haskell-flows")
+  save store "\\x -> x == (x :: Int)" (Just "src/Foo.hs")
+  props <- loadAll store
+  pure (length props == 1)
+
+-- | BUG-04 defence-in-depth: an external @rm -rf .haskell-flows/@
+-- between two saves must not leave the store in an unrecoverable
+-- state — the second save recreates the dir and persists.
+testPropStoreResurrectsDir :: IO Bool
+testPropStoreResurrectsDir = withTempProject $ \pd -> do
+  store <- openStore pd
+  save store "\\x -> x == (x :: Int)" (Just "src/Foo.hs")
+  -- Nuke the dir the way a user might via rm -rf.
+  removePathForcibly (unProjectDirRaw pd </> ".haskell-flows")
+  save store "\\x -> x + 0 == (x :: Int)" (Just "src/Foo.hs")
+  props <- loadAll store
+  -- After nuke + save, at least the 2nd property must be present.
+  pure (any ((== "\\x -> x + 0 == (x :: Int)") . spExpression) props)
+
+-- | BUG-04 companion: parallel saves must not race into an
+-- inconsistent JSON. 10 concurrent saves → 10 distinct entries,
+-- no truncation, no last-writer-wins.
+testPropStoreConcurrentSaves :: IO Bool
+testPropStoreConcurrentSaves = withTempProject $ \pd -> do
+  store <- openStore pd
+  let exprs = [ "\\x -> x + " <> T.pack (show i) <> " >= (x :: Int)"
+              | i <- [1 .. 10 :: Int] ]
+  mvs <- mapM (\e -> do
+                 mv <- newEmptyMVar
+                 _  <- forkIO (save store e (Just "src/X.hs")
+                                 >> putMVar mv ())
+                 pure mv) exprs
+  mapM_ takeMVar mvs
+  props <- loadAll store
+  pure (length props == 10)
+
+-- | Internal: unwrap ProjectDir to its FilePath. Exported in the
+-- production module but not used elsewhere in this test file; keep
+-- it inline here so we can stat / rm under the validated root.
+unProjectDirRaw :: ProjectDir -> FilePath
+unProjectDirRaw = HaskellFlows.Types.unProjectDir
 
 -- | Phase 11k: WorkflowState tracker starts at zero counters + empty history.
 testWorkflowStateInitial :: IO Bool
