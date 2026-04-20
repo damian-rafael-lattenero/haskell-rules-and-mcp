@@ -132,6 +132,19 @@ runCoverage pd = do
 -- the text summary. Append the result to the cabal stdout so
 -- downstream 'parseCoverage' can pick up the metrics without needing
 -- to understand cabal's HTML-only output shape.
+--
+-- Cabal 3.14 actually writes mix files to **two** separate paths:
+--
+--   dist-newstyle/build/<arch>/ghc-<ver>/<pkg>-<ver>/build/extra-compilation-artifacts/hpc/vanilla/mix/<pkg>-<ver>-inplace/
+--   dist-newstyle/build/<arch>/ghc-<ver>/<pkg>-<ver>/t/<test>/build/<test>/<test>-tmp/extra-compilation-artifacts/hpc/vanilla/mix/
+--
+-- (library modules vs. test-suite entry point). `hpc report` needs a
+-- @--hpcdir@ flag for each one; passing only the first gets
+-- \"can not find dogfood-rle-0.1.0.0-inplace/Main in …\". Earlier
+-- attempts derived a single mix dir from the tix path by chopping
+-- parents — but there is no @<hpc/vanilla>/mix@ in the actual
+-- layout, so the chop landed on a nonexistent directory. We now
+-- locate every mix dir via a targeted @find -path@ pattern.
 enrichWithHpcReport :: ProjectDir -> Text -> IO Text
 enrichWithHpcReport pd cabalOut = do
   let distDir = unProjectDir pd </> "dist-newstyle"
@@ -139,17 +152,14 @@ enrichWithHpcReport pd cabalOut = do
   case mTix of
     Nothing  -> pure cabalOut
     Just tix -> do
-      -- Cabal lays out the coverage artefacts predictably:
-      --   .../hpc/vanilla/tix/<name>/<name>.tix
-      --   .../hpc/vanilla/mix
-      -- So the mix dir is three parent levels up from the tix file
-      -- plus the sibling `mix` directory.
-      let hpcVanilla = takeDirectory (takeDirectory (takeDirectory tix))
-          mixDir     = hpcVanilla </> "mix"
-      mReport <- runHpcReport mixDir tix
-      case mReport of
-        Nothing  -> pure cabalOut
-        Just rpt -> pure (cabalOut <> "\n" <> rpt)
+      mixDirs <- findMixDirs distDir
+      if null mixDirs
+        then pure cabalOut
+        else do
+          mReport <- runHpcReport mixDirs tix
+          case mReport of
+            Nothing  -> pure cabalOut
+            Just rpt -> pure (cabalOut <> "\n" <> rpt)
 
 -- | Locate the first @.tix@ file under @root@. Uses @find@ via argv
 -- so no shell interpolation path is open; empty output means no file.
@@ -166,17 +176,39 @@ findTixFile root = do
     (p:_) -> pure (Just p)
     []    -> pure Nothing
 
--- | Invoke @hpc report --hpcdir=<mix> <tix>@ and return its stdout on
--- success. Any failure (hpc not on PATH, nonzero exit, missing
--- paths) collapses to 'Nothing' so the caller can fall back to the
--- cabal stdout untouched.
-runHpcReport :: FilePath -> FilePath -> IO (Maybe Text)
-runHpcReport mixDir tix = do
+-- | Locate every cabal-generated mix directory under @root@. Matches
+-- the layout @.../extra-compilation-artifacts/hpc/vanilla/mix@ which
+-- cabal uses for both library and test-suite coverage data. Returns
+-- an empty list when none are found.
+findMixDirs :: FilePath -> IO [FilePath]
+findMixDirs root = do
+  let cp = (proc "find"
+             [ root, "-type", "d"
+             , "-path", "*extra-compilation-artifacts/hpc/vanilla/mix"
+             ])
+             { std_out = CreatePipe
+             , std_err = NoStream
+             }
+  (_, Just hOut, _, ph) <- createProcess cp
+  out <- hGetContents hOut
+  _   <- waitForProcess ph
+  pure (filter (not . null) (lines out))
+
+-- | Invoke @hpc report --hpcdir=<d1> --hpcdir=<d2> … <tix>@ and
+-- return its stdout on success. Passing multiple mix dirs is the
+-- fix for F-11: library modules and test entry points live in
+-- different mix trees and @hpc@ needs all of them to resolve every
+-- @*.mix@ reference the tix file carries. Any failure (hpc not on
+-- PATH, nonzero exit, missing paths) collapses to 'Nothing' so the
+-- caller can fall back to the cabal stdout untouched.
+runHpcReport :: [FilePath] -> FilePath -> IO (Maybe Text)
+runHpcReport mixDirs tix = do
   mHpc <- findExecutable "hpc"
   case mHpc of
     Nothing -> pure Nothing
     Just _  -> do
-      let cp = (proc "hpc" ["report", "--hpcdir=" <> mixDir, tix])
+      let hpcDirArgs = [ "--hpcdir=" <> d | d <- mixDirs ]
+          cp = (proc "hpc" (["report"] <> hpcDirArgs <> [tix]))
                  { std_out = CreatePipe
                  , std_err = CreatePipe
                  }

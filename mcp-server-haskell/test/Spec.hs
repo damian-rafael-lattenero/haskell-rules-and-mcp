@@ -204,6 +204,7 @@ main = do
       , test "loadModule Strict uses -fno-defer-*" testLoadStrictClearsDeferred
       , test "coverage enriches w/ hpc report call" testCoverageInvokesHpcReport
       , test "parseCoverage handles hpc report out" testParseHpcReportText
+      , test "coverage passes multiple --hpcdir"    testCoveragePassesAllMixDirs
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1123,6 +1124,25 @@ testCoverageInvokesHpcReport = do
 -- quoted literal in source and the concatenation form. Either is fine.
 ellipticalOr :: Bool -> Bool -> Bool
 ellipticalOr = (||)
+
+-- | Phase 11c F-11: the first F-09 fix shipped with only one
+-- derived @--hpcdir@. Cabal 3.14 writes mix files to TWO separate
+-- paths (library's @build/extra-compilation-artifacts/hpc/vanilla/mix@
+-- + test's @t/<test>/build/…/extra-compilation-artifacts/hpc/vanilla/mix@)
+-- and @hpc report@ needs both flags present or it bails with
+-- "can not find <pkg>-<ver>-inplace/Module in …". Post-fix,
+-- @findMixDirs@ uses a @find -path@ pattern to enumerate every
+-- mix dir under @dist-newstyle@, and @runHpcReport@ expands them
+-- into a list of @--hpcdir=@ flags. Static source check is the
+-- narrowest regression:
+testCoveragePassesAllMixDirs :: IO Bool
+testCoveragePassesAllMixDirs = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Coverage.hs"
+  pure $ T.isInfixOf "findMixDirs"                        src
+      && T.isInfixOf "extra-compilation-artifacts"        src
+      && T.isInfixOf "[FilePath] -> FilePath"             src
+      -- keep the F-09 invariants alongside the F-11 ones
+      && T.isInfixOf "findTixFile"                        src
 
 -- | End-to-end smoke of the happy path: 'parseCoverage' must
 -- recognise the text shape that @hpc report@ emits under GHC 9.x.
