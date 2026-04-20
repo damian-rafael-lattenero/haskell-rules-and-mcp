@@ -190,36 +190,49 @@ ruleCommutative = Rule
 
 -- | @f :: [a] -> [a]@ ⇒ check @length (f xs) == length xs@ (strict) or
 -- @length (f xs) <= length xs@ (filter-like).
+--
+-- The inner type of arg and return must match — @[a] -> [b]@ (or
+-- @[a] -> [Run a]@, the case that surfaced this fix) is a different
+-- shape: the result list holds elements of a different type, so
+-- \"length\" relationships between them are not a generic list-shape
+-- property.
 ruleListLengthPreserving :: Rule
 ruleListLengthPreserving = Rule
   { rId = "list-length-preserving"
   , rMatches = \nm sig -> case (psArgs sig, psReturn sig) of
-      ([TyList _], TyList _) -> Just Suggestion
-        { sLaw        = "Length preserving / non-extending"
-        , sProperty   =
-            "\\(xs :: [Int]) -> length (" <> nm <> " xs) <= length xs"
-        , sRationale  = "Type is `[a] -> [a]`; the function can shrink \
-                        \or permute the list but not grow it (common for \
-                        \filter, take, drop, sort)."
-        , sConfidence = Medium
-        , sCategory   = "list"
-        }
+      ([TyList argInner], TyList retInner)
+        | argInner == retInner -> Just Suggestion
+          { sLaw        = "Length preserving / non-extending"
+          , sProperty   =
+              "\\(xs :: [Int]) -> length (" <> nm <> " xs) <= length xs"
+          , sRationale  = "Type is `[a] -> [a]`; the function can shrink \
+                          \or permute the list but not grow it (common for \
+                          \filter, take, drop, sort)."
+          , sConfidence = Medium
+          , sCategory   = "list"
+          }
       _ -> Nothing
   }
 
 -- | @f :: [a] -> [a]@ combined with involutive hint: check @f (f xs) == xs@.
+--
+-- Same same-inner-type guard as 'ruleListLengthPreserving': the
+-- self-composition only type-checks when arg and return carry the
+-- same element type.
 ruleListRoundtrip :: Rule
 ruleListRoundtrip = Rule
   { rId = "list-roundtrip"
   , rMatches = \nm sig -> case (psArgs sig, psReturn sig) of
-      ([TyList _], TyList _) -> Just Suggestion
-        { sLaw        = "Self-inverse on lists"
-        , sProperty   = "\\(xs :: [Int]) -> " <> nm <> " (" <> nm <> " xs) == xs"
-        , sRationale  = "Type is `[a] -> [a]`; common candidate for reverse, \
-                        \rot-k rotations, swap-adjacent-pairs."
-        , sConfidence = Medium
-        , sCategory   = "list"
-        }
+      ([TyList argInner], TyList retInner)
+        | argInner == retInner -> Just Suggestion
+          { sLaw        = "Self-inverse on lists"
+          , sProperty   =
+              "\\(xs :: [Int]) -> " <> nm <> " (" <> nm <> " xs) == xs"
+          , sRationale  = "Type is `[a] -> [a]`; common candidate for reverse, \
+                          \rot-k rotations, swap-adjacent-pairs."
+          , sConfidence = Medium
+          , sCategory   = "list"
+          }
       _ -> Nothing
   }
 

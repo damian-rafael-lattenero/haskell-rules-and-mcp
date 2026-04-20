@@ -115,13 +115,27 @@ data Constructor = Constructor
 -- list, so we return @[]@ and let the tool layer explain to the agent.
 parseConstructors :: Text -> [Constructor]
 parseConstructors out =
-  let trimmed  = T.unlines (takeWhile (not . isDefinedComment) (T.lines out))
+  let allLns   = T.lines out
+      -- GHC 9.x prepends a kind signature line (e.g. @type Run :: * -> *@)
+      -- before the @data@ declaration. Drop everything up to the first
+      -- line that actually opens with @data @ / @newtype @ — the
+      -- constructor list is there.
+      declLns  = dropWhile (not . isDataDeclLine) allLns
+      trimmed  = T.unlines (takeWhile (not . isDefinedComment) declLns)
       -- Collapse newline+indent runs so inline and multiline forms
       -- converge on a single "= A | B ..." string.
       one      = T.strip (T.replace "\n" " " trimmed)
   in if hasCtorHeader one
        then mapMaybe parseCtorText (splitOnPipe (dropDataHeader one))
        else []
+
+-- | Is @ln@ the @data Foo@ or @newtype Bar@ declaration line (after
+-- optional leading whitespace)?
+isDataDeclLine :: Text -> Bool
+isDataDeclLine ln =
+  let s = T.stripStart ln
+  in "data "    `T.isPrefixOf` s
+  || "newtype " `T.isPrefixOf` s
 
 -- | Does the declaration open with @data @ or @newtype @?
 -- The trailing space guards against accidentally matching @dataX@.
@@ -158,19 +172,47 @@ splitOnPipe = go 0 []
 
 -- | Parse one @Ctor arg1 arg2@ fragment into a 'Constructor'.
 --
--- Argument tokenisation is space-separated with parentheses kept
--- together. Records, strict fields (@!Int@), and kind annotations
--- survive as literal tokens — good enough for <$>/<*> counting.
+-- Argument tokenisation is space-separated with parentheses AND
+-- braces preserved as single groups. Records, strict fields
+-- (@!Int@), and kind annotations survive intact — we then expand a
+-- record block's internal fields so the <$>/<*> template stays
+-- arity-correct.
 parseCtorText :: Text -> Maybe Constructor
 parseCtorText raw =
   case groupTokens (T.strip raw) of
     []     -> Nothing
-    (n:xs) ->
-      if T.null n
-        then Nothing
-        else Just Constructor { cName = n, cArgs = xs }
+    (n:xs)
+      | T.null n  -> Nothing
+      | otherwise ->
+          Just Constructor
+            { cName = n
+            , cArgs = normaliseArgs xs
+            }
+  where
+    -- Record form: @Ctor {f1 :: T1, f2 :: T2}@ groups to
+    -- @[\"Ctor\", \"{f1 :: T1, f2 :: T2}\"]@. Expand to one synthetic
+    -- \"arbitrary\"-slot per record field so the template emits the
+    -- right number of @<*>@s. Content of the slot is a literal; the
+    -- template only ever counts the list length.
+    normaliseArgs :: [Text] -> [Text]
+    normaliseArgs [single]
+      | Just n' <- recordFieldCount single
+          = replicate n' "arbitrary"
+    normaliseArgs xs = xs
 
--- | Whitespace-split with parenthesised groups preserved as one token.
+-- | If @tok@ is a record block @{f1 :: T1, f2 :: T2, ...}@, return the
+-- field count. Commas inside nested parens or braces do not count.
+recordFieldCount :: Text -> Maybe Int
+recordFieldCount t
+  | "{" `T.isPrefixOf` t && "}" `T.isSuffixOf` t =
+      let inner = T.init (T.tail t)
+      in if T.null (T.strip inner)
+           then Just 0
+           else Just (length (splitTopLevelCommas inner))
+  | otherwise = Nothing
+
+-- | Whitespace-split with parenthesised AND brace groups preserved
+-- as one token.
 groupTokens :: Text -> [Text]
 groupTokens = go 0 [] []
   where
@@ -178,14 +220,29 @@ groupTokens = go 0 [] []
     go depth curr acc t = case T.uncons t of
       Nothing -> reverse (flush curr acc)
       Just (c, rest)
-        | c == '(' -> go (depth + 1) (c:curr) acc rest
-        | c == ')' -> go (max 0 (depth - 1)) (c:curr) acc rest
+        | c == '(' || c == '{' -> go (depth + 1) (c:curr) acc rest
+        | c == ')' || c == '}' -> go (max 0 (depth - 1)) (c:curr) acc rest
         | c == ' ' && depth == 0 ->
             go depth [] (flush curr acc) rest
         | otherwise -> go depth (c:curr) acc rest
 
     flush [] acc = acc
     flush xs acc = T.pack (reverse xs) : acc
+
+-- | Split on commas at depth 0, ignoring those inside nested parens
+-- or braces. Used to count record fields.
+splitTopLevelCommas :: Text -> [Text]
+splitTopLevelCommas = go 0 []
+  where
+    go :: Int -> String -> Text -> [Text]
+    go depth acc t = case T.uncons t of
+      Nothing -> [T.pack (reverse acc)]
+      Just (c, rest)
+        | c == '(' || c == '{' -> go (depth + 1) (c:acc) rest
+        | c == ')' || c == '}' -> go (max 0 (depth - 1)) (c:acc) rest
+        | c == ',' && depth == 0 ->
+            T.pack (reverse acc) : go 0 [] rest
+        | otherwise -> go depth (c:acc) rest
 
 --------------------------------------------------------------------------------
 -- template rendering

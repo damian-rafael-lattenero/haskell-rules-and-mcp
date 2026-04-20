@@ -195,6 +195,9 @@ main = do
       , test "deps add targets stanza: test-suite"  testDepsAddTargetsTestSuite
       , test "parseStanzaSelector accepts common"   testParseStanzaAccepts
       , test "parseStanzaSelector rejects garbage"  testParseStanzaRejects
+      , test "suggest [a]->[Run a] skips list rules" testSuggestEncodeShapeSkipsListRules
+      , test "parseCtors record strict w/ kind header" testCtorsRecordStrictWithKindHeader
+      , test "parseCtors inline record 2 fields"    testCtorsInlineRecord2Fields
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1091,6 +1094,50 @@ testParseStanzaRejects = pure $
     rejects raw = case parseStanzaSelector raw of
       Left  _ -> True
       Right _ -> False
+
+-- | Phase 11b F-04 part A: GHC 9.x emits a kind-signature line
+-- (@type Run :: * -> *@) BEFORE the data decl in @:i@ output.
+-- 'parseConstructors' previously bailed because @hasCtorHeader@
+-- only checked the collapsed string's prefix. Pin the GHC 9.x layout
+-- plus a record constructor with strict fields — must parse into a
+-- 2-arg Constructor.
+testCtorsRecordStrictWithKindHeader :: IO Bool
+testCtorsRecordStrictWithKindHeader =
+  let raw = T.unlines
+        [ "type Run :: * -> *"
+        , "data Run a = Run {runLen :: !Int, runVal :: !a}"
+        , "  \t-- Defined at src/DogfoodRle.hs:20:1"
+        ]
+  in case parseConstructors raw of
+       [c] -> pure (cName c == "Run" && length (cArgs c) == 2)
+       _   -> pure False
+
+-- | Phase 11b F-04 part B: even absent the kind header, a record
+-- constructor @Ctor {f1 :: T1, f2 :: T2}@ used to be mis-tokenised
+-- because @groupTokens@ didn't treat @{}@ as grouping — fields got
+-- split on every internal space, inflating 'cArgs' to 6 tokens.
+testCtorsInlineRecord2Fields :: IO Bool
+testCtorsInlineRecord2Fields =
+  let raw = "data Run a = Run {runLen :: !Int, runVal :: !a}"
+  in case parseConstructors raw of
+       [c] -> pure (cName c == "Run" && length (cArgs c) == 2)
+       _   -> pure False
+
+-- | Phase 11b F-05: @ghci_suggest@ used to emit false laws for
+-- @encode :: [a] -> [Run a]@ because @ruleListLengthPreserving@ and
+-- @ruleListRoundtrip@ matched @([TyList _], TyList _)@ without
+-- checking the inner types. Both @Self-inverse on lists@ and
+-- @Length preserving@ are nonsense (don't even type-check) when
+-- arg and return lists carry different element types. Pin the
+-- invariant: for @[a] -> [SomeOther a]@, neither rule fires.
+testSuggestEncodeShapeSkipsListRules :: IO Bool
+testSuggestEncodeShapeSkipsListRules =
+  case parseSignature "[a] -> [Run a]" of
+    Nothing  -> pure False
+    Just sig ->
+      let laws = map sLaw (applyRules "encode" sig)
+      in pure $ "Self-inverse on lists" `notElem` laws
+             && "Length preserving / non-extending" `notElem` laws
 
 -- | Helper: create a fresh temp directory and delete it after the test.
 -- Passes a validated 'ProjectDir' (absolute + normalised) to the body.
