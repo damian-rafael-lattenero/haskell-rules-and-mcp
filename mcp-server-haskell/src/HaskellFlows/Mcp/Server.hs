@@ -32,8 +32,9 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Directory (getCurrentDirectory)
-import System.Environment (lookupEnv)
+import System.Environment (getExecutablePath, lookupEnv)
 import System.Timeout (timeout)
 
 import HaskellFlows.Data.PropertyStore (Store, openStore)
@@ -42,11 +43,11 @@ import HaskellFlows.Mcp.Guidance (sessionInstructionsText, workflowRulesMarkdown
 import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.Resources (allResources)
+import HaskellFlows.Mcp.Staleness (checkStaleness)
 import HaskellFlows.Mcp.WorkflowState
   ( WorkflowStateRef
   , newWorkflowStateRef
   , readState
-  , renderHelp
   , trackTool
   )
 import HaskellFlows.Types (ProjectDir, mkProjectDir)
@@ -95,16 +96,29 @@ import qualified HaskellFlows.Tool.Workflow        as WorkflowTool
 --
 -- 'srvSession' is held behind an 'MVar' so concurrent handlers cannot race
 -- on startup: the first caller wins, everyone else waits on the mutex.
+--
+-- 'srvBootPosix' + 'srvBinaryPath' wire BUG-07's staleness check:
+-- @ghci_workflow(status)@ now compares the on-disk binary mtime
+-- with the boot time and flags the user if they rebuilt the MCP
+-- but forgot to relaunch the host.
 data Server = Server
   { srvProjectDir    :: !(IORef ProjectDir)
   , srvSession       :: !(MVar (Maybe Session))
   , srvStore         :: !Store
   , srvWorkflowState :: !WorkflowStateRef
+  , srvBootPosix     :: !Double
+  , srvBinaryPath    :: !FilePath
   }
 
 -- | Build a server whose project directory is sourced from
 -- @HASKELL_PROJECT_DIR@ or the current working directory (mirrors TS
 -- @src/index.ts@). Rejects a relative value up front — no lazy errors.
+--
+-- Also captures two facts used by BUG-07's staleness check:
+-- the server's boot time (POSIX seconds) and the absolute path of
+-- the running binary. Both are deployment-level details —
+-- 'getExecutablePath' is what @ghci_workflow(status)@ will later
+-- stat to detect a rebuild the host hasn't relaunched against.
 defaultServer :: IO Server
 defaultServer = do
   envVal <- lookupEnv "HASKELL_PROJECT_DIR"
@@ -113,15 +127,19 @@ defaultServer = do
   case mkProjectDir raw of
     Left err -> error ("Could not build ProjectDir: " <> show err)
     Right pd -> do
-      pdRef <- newIORef pd
-      sess  <- newMVar Nothing
-      store <- openStore pd
-      ws    <- newWorkflowStateRef
+      pdRef    <- newIORef pd
+      sess     <- newMVar Nothing
+      store    <- openStore pd
+      ws       <- newWorkflowStateRef
+      bootPos  <- realToFrac <$> getPOSIXTime
+      binPath  <- getExecutablePath
       pure Server
         { srvProjectDir    = pdRef
         , srvSession       = sess
         , srvStore         = store
         , srvWorkflowState = ws
+        , srvBootPosix     = bootPos
+        , srvBinaryPath    = binPath
         }
 
 -- | Dispatch a single parsed request. 'Nothing' means the input was a
@@ -242,13 +260,14 @@ dispatchTool srv call = case tcName call of
   "hoogle_search" ->
     HoogleTool.handle (tcArguments call)
   "ghci_workflow" -> do
-    ws <- readState (srvWorkflowState srv)
-    let stateHelp = renderHelp ws
+    ws        <- readState (srvWorkflowState srv)
+    staleness <- checkStaleness (srvBinaryPath srv) (srvBootPosix srv)
     WorkflowTool.handle
       (srvProjectDir srv)
       (srvSession srv)
       allToolNames
-      stateHelp
+      ws
+      staleness
       (tcArguments call)
   "ghci_regression" -> do
     sess <- getOrStartSession srv

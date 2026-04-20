@@ -30,6 +30,14 @@ import qualified Data.Text.Lazy.Encoding as TLE
 
 import HaskellFlows.Ghci.Session (Session)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Staleness (StalenessReport (..))
+import HaskellFlows.Mcp.WorkflowState
+  ( SessionPhase
+  , WorkflowState
+  , classifyPhase
+  , renderHelp
+  , renderPhaseHint
+  )
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 descriptor :: ToolDescriptor
@@ -80,19 +88,30 @@ instance FromJSON WorkflowArgs where
 -- Passing it in keeps this module free of a dependency on Server
 -- (no import cycle) while guaranteeing the @toolsActive@ view can
 -- never drift from the @tools/list@ surface again.
+--
+-- BUG-07: 'StalenessReport' surfaces as the @staleness@ field of
+-- the status / help views so the agent (and the user, via chat)
+-- sees the "rebuild vs running binary" gap without hunting for it.
+-- BUG-08 + BUG-24: the raw 'WorkflowState' is passed through so
+-- this module can call 'renderHelp' and 'renderPhaseHint'
+-- directly, avoiding the previous "Server pre-renders + passes
+-- as flat [Text]" indirection that hid information the help view
+-- could use.
 handle
   :: IORef ProjectDir
   -> MVar (Maybe Session)
   -> [Text]
-  -> [Text]       -- ^ state-aware help hints (from WorkflowState.renderHelp)
+  -> WorkflowState
+  -> StalenessReport
   -> Value
   -> IO ToolResult
-handle pdRef sessMVar toolNames stateHints rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
-  Right (WorkflowArgs a) -> do
-    pd       <- readIORef pdRef
-    sessAlive <- isAlive sessMVar
-    pure (render a pd sessAlive toolNames stateHints)
+handle pdRef sessMVar toolNames ws staleness rawArgs =
+  case parseEither parseJSON rawArgs of
+    Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+    Right (WorkflowArgs a) -> do
+      pd        <- readIORef pdRef
+      sessAlive <- isAlive sessMVar
+      pure (render a pd sessAlive toolNames ws staleness)
 
 isAlive :: MVar (Maybe Session) -> IO Bool
 isAlive sessMVar = do
@@ -105,33 +124,51 @@ isAlive sessMVar = do
 
 -- | Render the workflow view. The three branches share the same
 -- top-level shape so agents can treat the tool's output polymorphically.
-render :: Action -> ProjectDir -> Bool -> [Text] -> [Text] -> ToolResult
-render a pd alive toolNames stateHints =
-  let payload = case a of
-        ActStatus -> statusPayload pd alive toolNames
-        ActHelp   -> helpPayload pd alive stateHints
+render
+  :: Action
+  -> ProjectDir
+  -> Bool
+  -> [Text]
+  -> WorkflowState
+  -> StalenessReport
+  -> ToolResult
+render a pd alive toolNames ws staleness =
+  let phase    = classifyPhase ws
+      stateHints = renderHelp ws
+      payload  = case a of
+        ActStatus -> statusPayload pd alive toolNames staleness phase
+        ActHelp   -> helpPayload pd alive stateHints staleness phase
         ActNext   -> nextPayload pd alive
   in ToolResult
        { trContent = [ TextContent (encodeUtf8Text payload) ]
        , trIsError = False
        }
 
-statusPayload :: ProjectDir -> Bool -> [Text] -> Value
-statusPayload pd alive toolNames =
+statusPayload :: ProjectDir -> Bool -> [Text] -> StalenessReport -> SessionPhase -> Value
+statusPayload pd alive toolNames staleness phase =
   object
     [ "view"        .= ("status" :: Text)
     , "projectDir"  .= T.pack (unProjectDir pd)
     , "ghciAlive"   .= alive
     , "toolsActive" .= toolNames
+    , "phase"       .= T.pack (show phase)
+      -- BUG-07: full 'StalenessReport' body. Agents that care
+      -- about "is my binary stale?" get the @stale@ bool + a
+      -- human-readable @message@ without a second tool call.
+    , "staleness"   .= staleness
     ]
 
-helpPayload :: ProjectDir -> Bool -> [Text] -> Value
-helpPayload _pd alive stateHints =
+helpPayload
+  :: ProjectDir -> Bool -> [Text] -> StalenessReport -> SessionPhase -> Value
+helpPayload _pd alive stateHints staleness phase =
   object $
-    [ "view"      .= ("help" :: Text)
-    , "ghciAlive" .= alive
-    , "steps"     .= steps
-    , "reasoning" .= reasoning
+    [ "view"       .= ("help" :: Text)
+    , "ghciAlive"  .= alive
+    , "phase"      .= T.pack (show phase)
+    , "phaseHint"  .= renderPhaseHint phase
+    , "steps"      .= steps
+    , "reasoning"  .= reasoning
+    , "staleness"  .= staleness
     ]
     <> [ "stateHints" .= stateHints | not (null stateHints) ]
   where

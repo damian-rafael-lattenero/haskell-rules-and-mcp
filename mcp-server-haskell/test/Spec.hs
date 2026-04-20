@@ -325,6 +325,15 @@ main = do
       , test "nextStep: property_lifecycle(list) -> regression" testNextStepPropertyLifecycleList
       , test "nextStep: create_project carries chain" testNextStepCreateProjectChain
       , test "nextStep: every tool covered or whitelisted" testNextStepFullCoverage
+      , test "staleness: wired into server (static)"  testStalenessWired
+      , test "workflow: history polls ghci_load"      testHistoryPolling
+      , test "workflow: history missing quickcheck"   testHistoryMissingQc
+      , test "workflow: history refactor unreloaded"  testHistoryRefactorNotReloaded
+      , test "workflow: phase pre-scaffold"           testPhasePreScaffold
+      , test "workflow: phase bootstrap"              testPhaseBootstrap
+      , test "workflow: phase testing laws"           testPhaseTestingLaws
+      , test "workflow: phase ready to push"          testPhaseReadyToPush
+      , test "workflow: phase hint non-empty"         testPhaseHintNonEmpty
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1735,6 +1744,98 @@ testNextStepCreateProjectChain =
                     && "ghci_load"        `elem` tools
                   Nothing -> False
        Nothing -> pure False
+
+-- | BUG-07 — static source check: the Server must (a) import
+-- Staleness, (b) capture boot time + binary path, (c) actually
+-- invoke 'checkStaleness' when dispatching ghci_workflow, and
+-- (d) pass the report into Workflow.handle. Any of these missing
+-- means the Staleness module lapses back to dead code.
+testStalenessWired :: IO Bool
+testStalenessWired = do
+  src <- TIO.readFile "src/HaskellFlows/Mcp/Server.hs"
+  pure $ T.isInfixOf "import HaskellFlows.Mcp.Staleness" src
+      && T.isInfixOf "srvBootPosix"            src
+      && T.isInfixOf "srvBinaryPath"           src
+      && T.isInfixOf "checkStaleness (srvBinaryPath" src
+      && T.isInfixOf "getExecutablePath"       src
+
+-- | BUG-08 — 5 @ghci_load@ calls in a row must trigger the
+-- polling nudge that points at ghci_determinism / check_project.
+testHistoryPolling :: IO Bool
+testHistoryPolling =
+  let nudges = WS.historyNudges (replicate 5 "ghci_load")
+  in pure $ any ("polling" `T.isInfixOf`) nudges
+         && any ("ghci_determinism" `T.isInfixOf`) nudges
+
+-- | BUG-08 — ghci_suggest followed by non-quickcheck activity
+-- surfaces the "pick a law" nudge.
+testHistoryMissingQc :: IO Bool
+testHistoryMissingQc =
+  let hist = ["ghci_load", "ghci_suggest", "ghci_load"]
+      nudges = WS.historyNudges hist
+  in pure $ any ("ghci_quickcheck" `T.isInfixOf`) nudges
+
+-- | BUG-08 — last tool was ghci_refactor with no ghci_load since
+-- triggers the "reload after refactor" nudge.
+testHistoryRefactorNotReloaded :: IO Bool
+testHistoryRefactorNotReloaded =
+  let hist = ["ghci_refactor", "ghci_type"]
+      nudges = WS.historyNudges hist
+  in pure $ any (\n -> "refactor" `T.isInfixOf` T.toLower n) nudges
+
+-- | BUG-24 — a zero-activity state classifies as pre-scaffold.
+testPhasePreScaffold :: IO Bool
+testPhasePreScaffold = do
+  ref <- WS.newWorkflowStateRef
+  s   <- WS.readState ref
+  pure (WS.classifyPhase s == WS.PhasePreScaffold)
+
+-- | BUG-24 — a failed ghci_load classifies as bootstrap. Verify
+-- with a synthetic state update sequence.
+testPhaseBootstrap :: IO Bool
+testPhaseBootstrap = do
+  ref <- WS.newWorkflowStateRef
+  let failedLoad = A.object [ "success" .= False, "errors" .= ["broken" :: Text]
+                            , "warnings" .= ([] :: [Text]) ]
+  WS.trackTool ref "ghci_load" False failedLoad
+  s <- WS.readState ref
+  pure (WS.classifyPhase s == WS.PhaseBootstrap)
+
+-- | BUG-24 — recent ghci_suggest or ghci_quickcheck classifies
+-- as testing-laws.
+testPhaseTestingLaws :: IO Bool
+testPhaseTestingLaws = do
+  ref <- WS.newWorkflowStateRef
+  let okLoad   = A.object [ "success" .= True, "errors" .= ([] :: [Text])
+                          , "warnings" .= ([] :: [Text]) ]
+      suggest  = A.object [ "success" .= True, "count" .= (1 :: Int) ]
+  WS.trackTool ref "ghci_load"    True okLoad
+  WS.trackTool ref "ghci_suggest" True suggest
+  s <- WS.readState ref
+  pure (WS.classifyPhase s == WS.PhaseTestingLaws)
+
+-- | BUG-24 — 3+ persisted properties classifies as ready-to-push.
+testPhaseReadyToPush :: IO Bool
+testPhaseReadyToPush = do
+  ref <- WS.newWorkflowStateRef
+  let okLoad  = A.object [ "success" .= True, "errors" .= ([] :: [Text])
+                         , "warnings" .= ([] :: [Text]) ]
+      passQc  = A.object [ "success" .= True, "state"  .= ("passed" :: Text)
+                         , "passed" .= (100 :: Int) ]
+  WS.trackTool ref "ghci_load"       True okLoad
+  WS.trackTool ref "ghci_quickcheck" True passQc
+  WS.trackTool ref "ghci_quickcheck" True passQc
+  WS.trackTool ref "ghci_quickcheck" True passQc
+  s <- WS.readState ref
+  pure (WS.classifyPhase s == WS.PhaseReadyToPush)
+
+-- | BUG-24 — every phase renders a non-empty hint paragraph.
+testPhaseHintNonEmpty :: IO Bool
+testPhaseHintNonEmpty = pure $
+  let phases = [ WS.PhasePreScaffold, WS.PhaseBootstrap
+               , WS.PhaseDeveloping, WS.PhaseTestingLaws
+               , WS.PhaseReadyToPush ]
+  in not (any (T.null . WS.renderPhaseHint) phases)
 
 -- | BUG-06 "full coverage" invariant: every registered tool must
 -- either produce a nextStep on success OR be explicitly whitelisted

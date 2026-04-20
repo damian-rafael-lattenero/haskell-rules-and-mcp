@@ -17,12 +17,19 @@ module HaskellFlows.Mcp.WorkflowState
   , trackTool
   , readState
   , renderHelp
+    -- * BUG-24 — phase classifier
+  , SessionPhase (..)
+  , classifyPhase
+  , renderPhaseHint
+    -- * BUG-08 — history-pattern nudges (exported for testing)
+  , historyNudges
   ) where
 
 import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
 import Data.Aeson
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Maybe (isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -120,9 +127,16 @@ readState (WorkflowStateRef ref) = readMVar ref
 
 -- | Turn the state into a short human-readable nudge list. Empty
 -- list means "nothing urgent".
+--
+-- BUG-08: now also inspects 'wsToolHistory' to catch *patterns*
+-- the scalar counters miss — e.g. N consecutive @ghci_load@
+-- calls (polling without progress), a @ghci_suggest@ that was
+-- never followed by @ghci_quickcheck@, a @ghci_refactor@ that
+-- was never re-loaded.
 renderHelp :: WorkflowState -> [Text]
 renderHelp s = concat
-  [ [ "You have " <> tshow (wsEditsSinceLastLoad s)
+  [ -- Counter-based nudges (pre-BUG-08 behaviour).
+    [ "You have " <> tshow (wsEditsSinceLastLoad s)
       <> " edits since the last ghci_load — recompile to see fresh \
       \diagnostics."
     | wsEditsSinceLastLoad s >= 3
@@ -141,7 +155,102 @@ renderHelp s = concat
       \test/Spec.hs."
     | wsPassedProperties s >= 3
     ]
+    -- BUG-08: history-pattern nudges.
+  , historyNudges (wsToolHistory s)
   ]
   where
     tshow :: Int -> Text
     tshow = T.pack . show
+
+-- | Pattern-based nudges derived from the sliding tool-call
+-- history. Each case inspects a small prefix (typically 3..5
+-- entries) and looks for a known anti-pattern or an obvious
+-- missed follow-up.
+historyNudges :: [Text] -> [Text]
+historyNudges hist = concat
+  [ -- 5 consecutive ghci_load calls → the agent is polling
+    -- rather than editing. Suggest a flakiness / stability
+    -- check instead of another reload.
+    [ "The last 5 tool calls were all ghci_load — you're polling \
+      \rather than progressing. Try ghci_determinism on a recent \
+      \property for flakiness, or ghci_check_project to surface \
+      \module-level gates you can knock out in parallel."
+    | length recent5 >= 5, all (== "ghci_load") recent5
+    ]
+    -- ghci_suggest recent, no ghci_quickcheck since.
+  , [ "You ran ghci_suggest but haven't tried any of the proposals \
+      \with ghci_quickcheck yet. Pick the highest-confidence law \
+      \and feed it in — passes auto-persist to the regression store."
+    | "ghci_suggest" `elem` recent3, "ghci_quickcheck" `notElem` recent3
+    ]
+    -- Last tool was ghci_refactor and there's been no load since.
+  , [ "Last tool was ghci_refactor. The refactor was snapshot-and-\
+      \compile-verified, but a fresh ghci_load(diagnostics=true) \
+      \catches any new holes or warnings the rename surfaced."
+    | case hist of
+        ("ghci_refactor" : rest) -> "ghci_load" `notElem` take 2 rest
+        _                        -> False
+    ]
+  ]
+  where
+    recent3 = take 3 hist
+    recent5 = take 5 hist
+
+-- | BUG-24: session phase classifier. Given the counters, decide
+-- which "phase" the project is in and return a hint tailored to
+-- that phase. Phases are coarse but cover the dominant flows —
+-- the agent gets a pointer at the most probable next *flow*, not
+-- just the next tool.
+data SessionPhase
+  = PhasePreScaffold       -- ^ No successful load yet; likely pre-scaffold.
+  | PhaseBootstrap         -- ^ Scaffold done, first load needs deps + modules.
+  | PhaseDeveloping        -- ^ Modules loaded, iterating on code.
+  | PhaseTestingLaws       -- ^ Iterating on properties.
+  | PhaseReadyToPush       -- ^ Several passing properties; ready for gate.
+  deriving stock (Eq, Show)
+
+-- | Classify the session based purely on the counters. Deliberately
+-- coarse; never throws.
+classifyPhase :: WorkflowState -> SessionPhase
+classifyPhase s
+  | isNothing (wsLastLoadSuccess s)
+      && wsToolCalls s < 3              = PhasePreScaffold
+  | wsLastLoadSuccess s == Just False   = PhaseBootstrap
+  | wsPassedProperties s >= 3           = PhaseReadyToPush
+  | "ghci_quickcheck" `elem` recent3
+      || "ghci_suggest"   `elem` recent3 = PhaseTestingLaws
+  | otherwise                           = PhaseDeveloping
+  where
+    recent3 = take 3 (wsToolHistory s)
+
+-- | Render a phase-specific follow-up. Returned as a short
+-- paragraph so the @ghci_workflow(help)@ view can concatenate it
+-- next to the counter-based nudges.
+renderPhaseHint :: SessionPhase -> Text
+renderPhaseHint p = case p of
+  PhasePreScaffold ->
+    "Phase: pre-scaffold. If this is a new project, start with \
+    \ghci_create_project(name=...); if you already have one, \
+    \ghci_load(module_path=\"src/<Entry>.hs\") boots GHCi and \
+    \gives you the cleanest error surface."
+  PhaseBootstrap ->
+    "Phase: bootstrap. The last load failed — likely a missing \
+    \dependency or an unregistered module. Chain ghci_deps(add,...) \
+    \+ ghci_add_modules(modules=[...]) + ghci_load; ghci_batch can \
+    \run the three as one round-trip."
+  PhaseDeveloping ->
+    "Phase: developing. Modules load clean. ghci_suggest on a \
+    \recently-edited binding gives you QuickCheck candidates; \
+    \names that hint at normalisation (simplify / normalize / fold) \
+    \automatically bump the evaluator-preservation law to High \
+    \confidence if a paired interpreter is a sibling."
+  PhaseTestingLaws ->
+    "Phase: testing laws. Feed the highest-confidence proposal from \
+    \ghci_suggest into ghci_quickcheck; every pass auto-persists \
+    \to .haskell-flows/properties.json. Use ghci_determinism to \
+    \check stability before adding to the regression suite."
+  PhaseReadyToPush ->
+    "Phase: ready to push. ghci_regression(action=\"run\") replays \
+    \the full set; ghci_quickcheck_export materialises them as \
+    \test/Spec.hs; ghci_gate runs regression + cabal test + cabal \
+    \build in one call — if green, push is safe."
