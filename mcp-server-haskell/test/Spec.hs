@@ -77,6 +77,7 @@ import qualified HaskellFlows.Tool.AddModules as AddModules
 import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
 import qualified HaskellFlows.Mcp.WorkflowState as WS
+import qualified HaskellFlows.Mcp.Guidance as Guidance
 import qualified HaskellFlows.Mcp.Resources as Resources
 import qualified HaskellFlows.Mcp.Staleness as Staleness
 import HaskellFlows.Tool.CheckProject (parseExposedModules)
@@ -275,6 +276,13 @@ main = do
       , test "resources: unknown URI returns Nothing" testResourcesUnknown
       , test "staleness: threshold constant"         testStalenessThreshold
       , test "baja bundle: 4 tools registered"      testBajaRegistered
+      , test "guidance: tool count is dynamic"      testGuidanceDynamicCount
+      , test "guidance: text lists every tool"      testGuidanceListsEveryTool
+      , test "guidance: markdown lists every tool"  testGuidanceMarkdownListsEveryTool
+      , test "guidance: situation table non-empty"  testGuidanceSituationNonEmpty
+      , test "guidance: no phantom ghci_session"    testGuidanceNoPhantomSession
+      , test "deps: description has no phantom"     testDepsDescriptorNoPhantom
+      , test "deps: hint text has no phantom"       testDepsHintNoPhantom
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1207,24 +1215,96 @@ testBajaRegistered = pure $
 
 -- | Phase 11l: resources/read for the rules URI returns the
 -- embedded markdown; unknown URIs return Nothing.
+-- | Phase 11m + BUG-09: the workflow-rules resource body is
+-- rendered dynamically from the live tool descriptor list, not
+-- a stale hand-edited string. Pin both the URI advertisement
+-- and the body's dynamic shape.
 testResourcesRulesRead :: IO Bool
 testResourcesRulesRead = pure $
-  case Resources.readResource "haskell-flows://rules/workflow" of
-    Just txt -> T.isInfixOf "haskell-flows" txt
-             && T.isInfixOf "situation" (T.toLower txt)
-    Nothing -> False
+  let md = Guidance.workflowRulesMarkdown allToolDescriptors
+      advertised =
+        "haskell-flows://rules/workflow" `elem` Resources.knownResourceUris
+  in advertised
+     && T.isInfixOf "haskell-flows" md
+     && T.isInfixOf "situation" (T.toLower md)
+     && T.isInfixOf (T.pack (show (length allToolDescriptors))) md
 
 testResourcesUnknown :: IO Bool
-testResourcesUnknown = pure $
-  case Resources.readResource "haskell-flows://nonexistent" of
-    Nothing -> True
-    Just _  -> False
+testResourcesUnknown =
+  pure ("haskell-flows://nonexistent" `notElem` Resources.knownResourceUris)
 
 -- | Phase 11m: staleness threshold is the documented 1-minute
 -- default. Changing it is a flags-level change; pin it so we
 -- notice.
 testStalenessThreshold :: IO Bool
 testStalenessThreshold = pure (Staleness.thresholdMinutes == 1.0)
+
+-- | BUG-05: @initialize.instructions@ used to hard-code "25 tools".
+-- The fix derives the tool count from 'allToolDescriptors'. Pin
+-- that the rendered text contains the live count and not any of
+-- the historic stale counts.
+testGuidanceDynamicCount :: IO Bool
+testGuidanceDynamicCount = do
+  let instructions  = Guidance.sessionInstructionsText allToolDescriptors
+      liveCount     = T.pack (show (length allToolDescriptors))
+      staleCounts   = ["25 tools", "26 tools", "27 tools", "28 tools"]
+      hasLive       = T.isInfixOf (liveCount <> " tools") instructions
+      hasAnyStale   = any (`T.isInfixOf` instructions) staleCounts
+  pure (hasLive && not hasAnyStale)
+
+-- | BUG-05: every registered tool's name must appear in the
+-- rendered instructions. If a new tool ships without a mention,
+-- this test fails — the forcing function that keeps the docs in
+-- sync with the registry.
+testGuidanceListsEveryTool :: IO Bool
+testGuidanceListsEveryTool = do
+  let instructions = Guidance.sessionInstructionsText allToolDescriptors
+  pure (all (`T.isInfixOf` instructions) allToolNames)
+
+-- | BUG-09: the markdown resource must match the plain-text
+-- instructions in tool coverage — both are derived from the same
+-- 'allToolDescriptors', so neither can omit a tool.
+testGuidanceMarkdownListsEveryTool :: IO Bool
+testGuidanceMarkdownListsEveryTool = do
+  let md = Guidance.workflowRulesMarkdown allToolDescriptors
+  pure (all (`T.isInfixOf` md) allToolNames)
+
+-- | BUG-05: the situation-tool table is the curated map from
+-- "user intent" to tool. Must be non-empty and every row's tool
+-- must actually be in the registry.
+testGuidanceSituationNonEmpty :: IO Bool
+testGuidanceSituationNonEmpty = pure $
+     not (null Guidance.situationTable)
+  && all (\r -> Guidance.srTool r `elem` allToolNames) Guidance.situationTable
+
+-- | BUG-19: @ghci_session@ is a TS-era tool name that does not
+-- exist in the Haskell MCP. The phantom reference used to leak
+-- into @ghci_deps@' description and hint. Pin that no guidance
+-- text mentions the phantom tool.
+testGuidanceNoPhantomSession :: IO Bool
+testGuidanceNoPhantomSession = do
+  let instructions = Guidance.sessionInstructionsText allToolDescriptors
+      md           = Guidance.workflowRulesMarkdown   allToolDescriptors
+      phantom      = "ghci_session"
+  pure $ not (phantom `T.isInfixOf` instructions)
+      && not (phantom `T.isInfixOf` md)
+
+-- | BUG-19 companion: the @ghci_deps@ tool descriptor used to say
+-- \"run ghci_session(action='restart')\". Pin that the description
+-- no longer mentions the phantom tool.
+testDepsDescriptorNoPhantom :: IO Bool
+testDepsDescriptorNoPhantom = do
+  let depsDesc = head [ tdDescription d | d <- allToolDescriptors
+                                        , tdName d == "ghci_deps" ]
+  pure (not ("ghci_session" `T.isInfixOf` depsDesc))
+
+-- | BUG-19 companion: the @ghci_deps@ add/remove response carried
+-- a @hint@ string instructing the agent to call @ghci_session@.
+-- Pin that the live Deps source no longer embeds the phantom.
+testDepsHintNoPhantom :: IO Bool
+testDepsHintNoPhantom = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Deps.hs"
+  pure (not ("ghci_session" `T.isInfixOf` src))
 
 -- | Phase 11k: WorkflowState tracker starts at zero counters + empty history.
 testWorkflowStateInitial :: IO Bool
@@ -1715,22 +1795,25 @@ testInitializeEmitsInstructions = do
 
 testInstructionsMentionCore :: IO Bool
 testInstructionsMentionCore = do
-  src <- TIO.readFile "src/HaskellFlows/Mcp/Server.hs"
-  -- The text lives inside a literal block; read the whole file and
-  -- look for the key markers. If any one is missing, the
-  -- instructions are drifting away from the real tool surface.
-  let markers =
-        [ "ghci_workflow"    , "ghci_toolchain_status"
-        , "ghci_arbitrary"   , "ghci_hole"
-        , "ghci_suggest"     , "ghci_quickcheck"
-        , "ghci_refactor"    , "ghci_deps"
-        , "ghci_coverage"    , "ghci_check_project"
-        , "ci-local.sh"
-        , "SessionStatus"    , "Dead"
-        , "registerDelay"    , "10-min"
+  -- BUG-05: the instructions are now rendered dynamically from
+  -- 'allToolDescriptors' + the situation table. Assert the
+  -- rendered text contains (a) every registered tool name and
+  -- (b) the core workflow / invariant markers. Any drift between
+  -- the registry and the text fails here.
+  let instructions = Guidance.sessionInstructionsText allToolDescriptors
+      staticMarkers =
+        [ "ci-local.sh"
+        , "SessionStatus"   , "Dead"
+        , "registerDelay"   , "10-min"
         , "dogfood"
+        , "handshake"
+        , "situation"       , "invariant"
+        , "nextStep"
         ]
-  pure (all (`T.isInfixOf` src) markers)
+      toolMarkers = allToolNames
+      lowerInstructions = T.toLower instructions
+  pure $ all (`T.isInfixOf` instructions) toolMarkers
+      && all ((`T.isInfixOf` lowerInstructions) . T.toLower) staticMarkers
 
 -- | Phase 11c F-12 — defence-in-depth. Even if the Session.hs
 -- fixes above miss a pathological code path, the server's outer

@@ -38,9 +38,10 @@ import System.Timeout (timeout)
 
 import HaskellFlows.Data.PropertyStore (Store, openStore)
 import HaskellFlows.Ghci.Session
+import HaskellFlows.Mcp.Guidance (sessionInstructionsText, workflowRulesMarkdown)
 import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.Resources (allResources, readResource)
+import HaskellFlows.Mcp.Resources (allResources)
 import HaskellFlows.Mcp.WorkflowState
   ( WorkflowStateRef
   , newWorkflowStateRef
@@ -145,7 +146,8 @@ dispatch _ "initialize" _ rid =
             { siName    = "haskell-flows"
             , siVersion = "0.1.0-haskell"
             }
-      , irInstructions    = Just sessionInstructions
+      , irInstructions    =
+          Just (sessionInstructionsText allToolDescriptors)
       }
 dispatch _ "tools/list" _ rid =
   pure $ ok rid $ object [ "tools" .= allToolDescriptors ]
@@ -156,7 +158,7 @@ dispatch _ "resources/read" (Just params) rid =
     Left err -> pure (err_ rid (invalidParamsErr (T.pack err)))
     Right v  -> case v of
       Object o -> case KeyMap.lookup "uri" o of
-        Just (String u) -> case readResource u of
+        Just (String u) -> case renderResource u of
           Just contents -> pure $ ok rid $ object
             [ "contents" .= [ object
                 [ "uri"      .= u
@@ -167,6 +169,16 @@ dispatch _ "resources/read" (Just params) rid =
           Nothing -> pure (err_ rid (invalidParamsErr ("unknown resource uri: " <> u)))
         _ -> pure (err_ rid (invalidParamsErr "resources/read requires a `uri` string"))
       _ -> pure (err_ rid (invalidParamsErr "resources/read params must be an object"))
+  where
+    -- Dispatch resource URIs to their dynamically-rendered bodies.
+    -- Keeping this inline (not in Resources.hs) avoids a cyclic
+    -- import: Resources advertises URI metadata; Server owns the
+    -- renderer because it has access to 'allToolDescriptors'.
+    renderResource :: Text -> Maybe Text
+    renderResource uri = case uri of
+      "haskell-flows://rules/workflow" ->
+        Just (workflowRulesMarkdown allToolDescriptors)
+      _ -> Nothing
 dispatch _ "resources/read" Nothing rid =
   pure (err_ rid (invalidParamsErr "resources/read requires params"))
 dispatch srv "tools/call" (Just params) rid =
@@ -371,64 +383,11 @@ allToolDescriptors =
 allToolNames :: [Text]
 allToolNames = map tdName allToolDescriptors
 
---------------------------------------------------------------------------------
--- MCP initialize.instructions — surfaced to the LLM at session start
---------------------------------------------------------------------------------
-
--- | The guidance surfaced at session start. Kept deliberately
--- compact — the MCP client shows this inline to the LLM, and a wall
--- of text eats context budget. Detailed tool signatures live in each
--- tool's @tdDescription@; this text just tells the agent which tool
--- to reach for in which situation, and which invariants it can rely
--- on (so it does not waste a call re-learning them).
-sessionInstructions :: Text
-sessionInstructions = T.unlines
-  [ "haskell-flows MCP — 25 tools for Haskell dev. Use this MCP for ALL"
-  , "Haskell work; do not shell out to cabal/ghc/ghci/hlint directly."
-  , ""
-  , "Start-of-session handshake:"
-  , "  ghci_workflow(action=\"status\")         — confirm alive + 25 tools"
-  , "  ghci_toolchain_status()                 — cabal/ghc/hlint gates"
-  , ""
-  , "Situation -> tool:"
-  , "  new data T            -> ghci_arbitrary(type_name=\"T\")"
-  , "  hole / empty stub     -> ghci_hole(module_path=\"src/X.hs\")"
-  , "  want properties       -> ghci_suggest(function_name=\"f\")"
-  , "  check a law           -> ghci_quickcheck(property=\"...\", module_path=\"src/X.hs\")"
-  , "  rename local          -> ghci_refactor(action=\"rename_local\", scope_line_start=, scope_line_end=)"
-  , "  add dep               -> ghci_deps(action=\"add\", package=\"...\", stanza=\"library\"|\"test-suite\"|...)"
-  , "  coverage              -> ghci_coverage()  -- 8 HPC metrics"
-  , "  module gate           -> ghci_check_module(module_path=\"src/X.hs\")"
-  , "  full gate before push -> ghci_check_project() + scripts/ci-local.sh --fast"
-  , "  what next?            -> ghci_workflow(action=\"help\")"
-  , ""
-  , "Every successful tool response carries a `nextStep` field with"
-  , "{tool, why, example?} — a direct push from the server about the"
-  , "most probable next call. Treat it as an anchor: if it fits what"
-  , "you are trying to do, follow it; if not, ignore it and pick your"
-  , "own path. It replaces the need to ping ghci_workflow(next) after"
-  , "every single call."
-  , ""
-  , "NEVER edit .cabal by hand for deps — use ghci_deps (post-edit"
-  , "parse invariant refuses to persist a broken file)."
-  , ""
-  , "NEVER sed/awk across .hs files — use ghci_refactor"
-  , "(snapshot-and-compile-verify rolls back on failure)."
-  , ""
-  , "Liveness guarantees (post-Phase 11c):"
-  , "  * SessionStatus has a Dead terminal state; GHCi death wakes"
-  , "    every STM-blocked executeNoLock via a status-TVar write."
-  , "  * executeNoLock honours its timeoutMicros via registerDelay."
-  , "  * Server.runTool wraps each handler in a 10-min outer timeout"
-  , "    as defence in depth. A tool that hangs > 10 min is a real"
-  , "    regression, report it."
-  , ""
-  , "If a tool returns a wrong result or hangs: fix the MCP source at"
-  , "mcp-server-haskell/src/HaskellFlows/, add a regression test at"
-  , "test/Spec.hs, run scripts/ci-local.sh --fast, commit+push. Keep"
-  , "working with the stale running binary — the fix lands on next"
-  , "natural reinstall. This is the established dogfood-fix flow."
-  ]
+-- Dynamic @initialize.instructions@ + @resources/read@ rendering
+-- lives in 'HaskellFlows.Mcp.Guidance'; the Server only wires them
+-- into the dispatch table above. Having the guidance derived from
+-- 'allToolDescriptors' + 'situationTable' means the text can never
+-- drift from the real tool registry (BUG-05).
 
 -- | Last-resort hard ceiling for any tool. This is intentionally
 -- generous — 10 minutes — and is NOT meant to be the primary time

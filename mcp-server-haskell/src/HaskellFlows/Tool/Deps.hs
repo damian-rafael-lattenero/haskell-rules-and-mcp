@@ -55,7 +55,8 @@ descriptor =
         "Manage build-depends in the project's .cabal file. Actions: "
           <> "'list' (current deps), 'add' (insert pkg + optional "
           <> "version constraint), 'remove' (delete by name). After "
-          <> "add/remove run ghci_session(action='restart') to reload."
+          <> "add/remove, the next ghci_load picks up the new "
+          <> "package graph — no explicit session restart needed."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -607,8 +608,10 @@ editResult file pkg verb =
           , "action"     .= verb
           , "cabal_file" .= T.pack file
           , "package"    .= pkg
-          , "hint"       .= ( "Run ghci_session(action=\"restart\") to \
-                             \reload GHCi with the new dependency set."
+          , "hint"       .= ( "Dependency set changed. The next \
+                             \ghci_load reloads GHCi with the new \
+                             \package graph — no explicit session \
+                             \restart tool is needed."
                             :: Text )
           ]
   in ToolResult
