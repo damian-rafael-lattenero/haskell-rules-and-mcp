@@ -1,0 +1,180 @@
+name: Release
+
+# ---------------------------------------------------------------------------
+#  Publish signed binaries to GitHub Releases on version-tag push.
+#
+#  BUG-14 from the dogfood report: the README promised "darwin-arm64
+#  bundled binaries pinned by SHA256" but the project shipped zero
+#  releases. Users were stuck building from source, which required
+#  ghcup + a 5-minute cabal compile on cold cache.
+#
+#  Fix: on a `v*.*.*` tag, build the binary on three platforms
+#  (macos-14 arm64, macos-13 x64, ubuntu-22.04 x64), strip it,
+#  compute a SHA256 checksum, and attach both to the corresponding
+#  GitHub Release.
+#
+#  SLSA provenance is deliberately deferred to a follow-up — keeping
+#  this first pass small so the happy path is observable before
+#  adding attestation tooling.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build from (e.g. v0.2.0)"
+        required: true
+
+permissions:
+  contents: write  # needed to upload to the Release
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: mcp-server-haskell
+
+jobs:
+  # -------------------------------------------------------------------------
+  #  Per-platform build. Every runner produces one artefact named
+  #  haskell-flows-mcp-<platform>.tar.gz containing the stripped binary
+  #  plus a SHA256 checksum file.
+  # -------------------------------------------------------------------------
+  build:
+    name: Build — ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: darwin-arm64
+            ghc: "9.12.2"
+            cabal: "3.12.1.0"
+          - os: macos-13
+            label: darwin-x64
+            ghc: "9.12.2"
+            cabal: "3.12.1.0"
+          - os: ubuntu-22.04
+            label: linux-x64
+            ghc: "9.12.2"
+            cabal: "3.12.1.0"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up GHC ${{ matrix.ghc }} / cabal ${{ matrix.cabal }}
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: ${{ matrix.ghc }}
+          cabal-version: ${{ matrix.cabal }}
+          cabal-update: true
+
+      - name: Build + install binary
+        run: |
+          cabal install exe:haskell-flows-mcp \
+            --installdir="$GITHUB_WORKSPACE/dist-release" \
+            --install-method=copy \
+            --overwrite-policy=always
+
+      - name: Strip binary (Linux)
+        if: runner.os == 'Linux'
+        working-directory: ${{ github.workspace }}
+        run: strip dist-release/haskell-flows-mcp
+
+      - name: Strip binary (macOS)
+        if: runner.os == 'macOS'
+        working-directory: ${{ github.workspace }}
+        run: strip -u -r dist-release/haskell-flows-mcp
+
+      - name: Package + checksum
+        working-directory: ${{ github.workspace }}
+        run: |
+          cd dist-release
+          tar -czf "haskell-flows-mcp-${{ matrix.label }}.tar.gz" haskell-flows-mcp
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            shasum -a 256 "haskell-flows-mcp-${{ matrix.label }}.tar.gz" \
+              > "haskell-flows-mcp-${{ matrix.label }}.tar.gz.sha256"
+          else
+            sha256sum "haskell-flows-mcp-${{ matrix.label }}.tar.gz" \
+              > "haskell-flows-mcp-${{ matrix.label }}.tar.gz.sha256"
+          fi
+
+      - name: Upload build artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: haskell-flows-mcp-${{ matrix.label }}
+          path: |
+            dist-release/haskell-flows-mcp-${{ matrix.label }}.tar.gz
+            dist-release/haskell-flows-mcp-${{ matrix.label }}.tar.gz.sha256
+          retention-days: 14
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  #  Gather every platform's artefact and publish to the Release.
+  # -------------------------------------------------------------------------
+  publish:
+    name: Publish Release
+    needs: [build]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artefacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artefacts
+
+      - name: Flatten artefacts
+        run: |
+          mkdir -p release-flat
+          find release-artefacts -type f \
+            \( -name "*.tar.gz" -o -name "*.sha256" \) \
+            -exec cp -v {} release-flat/ \;
+          ls -lah release-flat/
+
+      - name: Determine tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: ${{ steps.tag.outputs.name }}
+          body: |
+            ## haskell-flows-mcp ${{ steps.tag.outputs.name }}
+
+            Pre-built `haskell-flows-mcp` binaries for three platforms.
+
+            Install (macOS + Linux):
+
+            ```bash
+            PLATFORM=darwin-arm64   # or darwin-x64 / linux-x64
+            VERSION=${{ steps.tag.outputs.name }}
+            curl -L -o haskell-flows-mcp.tar.gz \
+              "https://github.com/${{ github.repository }}/releases/download/$VERSION/haskell-flows-mcp-$PLATFORM.tar.gz"
+            curl -L -o haskell-flows-mcp.tar.gz.sha256 \
+              "https://github.com/${{ github.repository }}/releases/download/$VERSION/haskell-flows-mcp-$PLATFORM.tar.gz.sha256"
+            shasum -a 256 -c haskell-flows-mcp.tar.gz.sha256
+            tar -xzf haskell-flows-mcp.tar.gz -C "$HOME/.local/bin/"
+            ```
+
+            Then wire your MCP client at
+            `$HOME/.local/bin/haskell-flows-mcp` — see
+            [`mcp-server-haskell/README.md`](https://github.com/${{ github.repository }}/blob/master/mcp-server-haskell/README.md)
+            for the per-host config shape.
+          files: |
+            release-flat/*.tar.gz
+            release-flat/*.tar.gz.sha256
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true

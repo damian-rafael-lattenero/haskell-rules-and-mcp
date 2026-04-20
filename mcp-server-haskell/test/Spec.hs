@@ -356,6 +356,7 @@ main = do
       , test "bootstrap: pathForHost is closed enum"  testBootstrapPathEnum
       , test "doc: main README uses haskell-flows-mcp" testDocsMainReadme
       , test "doc: haskell README lists real tools"   testDocsHaskellReadme
+      , test "release: workflow file exists + well-formed" testReleaseWorkflow
       ]
   if and results then exitSuccess else exitFailure
 
@@ -2148,6 +2149,26 @@ testDocsHaskellReadme = do
       && T.isInfixOf "`ghci_suggest`"    readme
       && T.isInfixOf "`ghci_remove_modules`" readme
       && not ("Phase 1" `T.isInfixOf` readme)
+
+-- | BUG-14 — the release workflow must exist and wire up the
+-- three target platforms the README promises (darwin-arm64,
+-- darwin-x64, linux-x64). This is a plain existence + content
+-- probe; we can't actually run the workflow in the unit test,
+-- but dropping one of the labels fails this test before a push.
+testReleaseWorkflow :: IO Bool
+testReleaseWorkflow = do
+  let path = "../.github/workflows/release.yml"
+  exists <- doesFileExist path
+  if not exists
+    then pure False
+    else do
+      body <- TIO.readFile path
+      pure $ T.isInfixOf "haskell-flows-mcp" body
+          && T.isInfixOf "darwin-arm64"      body
+          && T.isInfixOf "darwin-x64"        body
+          && T.isInfixOf "linux-x64"         body
+          && T.isInfixOf "SHA256"            (T.toUpper body)
+          && T.isInfixOf "softprops/action-gh-release" body
 
 -- | BUG-06 "full coverage" invariant: every registered tool must
 -- either produce a nextStep on success OR be explicitly whitelisted

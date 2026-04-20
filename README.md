@@ -80,6 +80,24 @@ The GHCi child is watched by the session layer. If the process exits or its pipe
 
 ## Install + run
 
+**Option A — pre-built binary (fast path).** Each tagged release
+publishes stripped binaries + SHA256 checksums for
+`darwin-arm64`, `darwin-x64`, `linux-x64`
+([Releases](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases)):
+
+```bash
+PLATFORM=darwin-arm64   # or darwin-x64 / linux-x64
+VERSION=v0.1.0          # pick the tag you want
+curl -L -o haskell-flows-mcp.tar.gz \
+  "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/$VERSION/haskell-flows-mcp-$PLATFORM.tar.gz"
+curl -L -o haskell-flows-mcp.tar.gz.sha256 \
+  "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/$VERSION/haskell-flows-mcp-$PLATFORM.tar.gz.sha256"
+shasum -a 256 -c haskell-flows-mcp.tar.gz.sha256
+mkdir -p "$HOME/.local/bin" && tar -xzf haskell-flows-mcp.tar.gz -C "$HOME/.local/bin/"
+```
+
+**Option B — from source (ghcup + cabal):**
+
 ```bash
 git clone https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp
 cd haskell-rules-and-mcp/mcp-server-haskell
