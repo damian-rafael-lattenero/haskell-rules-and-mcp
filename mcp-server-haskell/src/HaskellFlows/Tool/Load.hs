@@ -126,8 +126,17 @@ okResult gr diags =
 
 errorResult :: Text -> ToolResult
 errorResult msg =
+  -- NOTE: the @success@ field is MANDATORY on every error payload so
+  -- callers can branch uniformly on @success == false@ instead of
+  -- sniffing for the presence of an @error@ key. Omitting it gave
+  -- path-traversal refusals a different envelope shape than every
+  -- other tool's error path, defeating the uniformity clients depend
+  -- on. FlowInjectionGuard (test-e2e) pinned this invariant.
   ToolResult
-    { trContent = [ TextContent (encodeText (object [ "error" .= msg ])) ]
+    { trContent = [ TextContent (encodeText (object
+        [ "success" .= False
+        , "error"   .= msg
+        ])) ]
     , trIsError = True
     }
 
