@@ -22,8 +22,11 @@
 It solves the fundamental gap between "LLMs generate Haskell" and "LLMs generate **correct** Haskell": every step is compiler-verified, every property persists, every gate is honest.
 
 ```text
-ghci_create_project  →  ghci_suggest(analyze)  →  ghci_quickcheck(label=…)
-  →  ghci_lint  →  ghci_format  →  ghci_workflow(action="gate")
+ghci_create_project  →  ghci_add_modules / ghci_deps
+  →  ghci_load  →  ghci_suggest(function_name=…)
+  →  ghci_quickcheck(property=…, module=…)
+  →  ghci_regression(action="run")  →  ghci_quickcheck_export
+  →  ghci_gate                       # pre-push finalizer
 ```
 
 See [`docs/flows.md`](docs/flows.md) for rendered Mermaid diagrams of
@@ -47,28 +50,28 @@ pipeline (add `haddock + cabal check + sdist`) takes ~5 min; drop
 One call creates a cabal project: `<name>.cabal`, `cabal.project`, `src/<Module>.hs` per module, `test/Spec.hs`. GHCi session starts automatically.
 
 ### 2 · Suggest properties from type signatures
-When you load a module with `simplify :: Expr -> Expr` **next to** `eval :: Env -> Expr -> r`, `ghci_suggest(analyze)` proposes:
+When you load a module with `simplify :: Expr -> Expr` **next to** `eval :: Env -> Expr -> r`, `ghci_suggest(function_name="simplify")` proposes:
 
 ```haskell
 -- constant-folding soundness · confidence: high
-\p1 x -> eval p1 (simplify x) == eval p1 (x :: Expr)
+\env x -> eval env (simplify x) == eval env x
 ```
 
-with rationale and confidence. **Seven engines** detect shapes: endomorphism, binary-op, list-endomorphism, roundtrip, evaluator-preservation, constant-folding-soundness, functor-laws.
+with rationale and confidence. **Multiple engines** detect shapes: endomorphism (idempotent / involutive), binary-op (associative / commutative / identity), list-endomorphism, roundtrip, evaluator-preservation, constant-folding-soundness, functor-laws. The sibling-aware ones (preservation / soundness) walk the loaded module's other top-level bindings via `:browse` so the right law fires without hand-supplied siblings.
 
 ### 3 · Run + persist
-`ghci_quickcheck` runs the property, auto-saves passing ones to `.haskell-flows/properties.json`, accepts a `label=` so `test/Spec.hs` comes out with `addRightIdentity:` not `property_1:`.
+`ghci_quickcheck` runs the property, auto-saves passing ones to `.haskell-flows/properties.json`. `ghci_quickcheck_export` materialises the persisted set as a committable `test/Spec.hs` — `cabal test` then replays them in CI without the MCP in the loop. `ghci_determinism` re-runs a property N times to catch flakiness before it enters the regression suite.
 
 ### 4 · Quality gates that don't lie
 `ghci_lint` (real hlint) and `ghci_format` (real fourmolu/ormolu) run with a layered resolution chain (host PATH → bundled → auto-download). If no real linter is available, the fallback returns `gateEligible: false` so **a degraded pass can never unlock a module-complete gate**.
 
 ### 5 · One-call finalizer
 ```text
-ghci_workflow(action="gate")
+ghci_gate()
   → regression · cabal test · cabal build · consolidated JSON
 ```
 
-Three round-trips collapsed into one, with per-step durations and partial-success semantics.
+Three round-trips collapsed into one, with per-step durations and partial-success semantics. `skip_regression` / `skip_cabal_test` / `skip_cabal_build` let the agent opt out of any step; exceptions are caught per-step so one red gate can't take down the session.
 
 ### 6 · Agents know when a session died
 The GHCi child is watched by the session layer. If the process exits or its pipes hit EOF, the `SessionStatus` flips to `Dead`, every in-flight command aborts with `SessionExhausted`, and the next call respawns a fresh child. No indefinite hangs, no zombies held behind a lock.
@@ -79,37 +82,41 @@ The GHCi child is watched by the session layer. If the process exits or its pipe
 
 ```bash
 git clone https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp
-cd haskell-rules-and-mcp
-
-# Option A — Nix (recommended, reproducible)
-nix develop
-
-# Option B — host toolchain (ghcup + node 22)
-cd mcp-server
-npm install
-npm run build
-
-# Point your MCP client at the server
-cp ../.mcp.example.json ../.mcp.json
+cd haskell-rules-and-mcp/mcp-server-haskell
+cabal install exe:haskell-flows-mcp \
+  --installdir="$HOME/.local/bin" \
+  --install-method=copy \
+  --overwrite-policy=always
 ```
 
-`.mcp.example.json` is the template; drop it into your Claude Code / Cursor config. See [`.mcp.example.json`](.mcp.example.json) for the exact shape.
+Binary lands at `~/.local/bin/haskell-flows-mcp`. Point your MCP
+client at it (`"command": "/path/to/.local/bin/haskell-flows-mcp"`).
+See [`mcp-server-haskell/README.md`](mcp-server-haskell/README.md)
+for the full per-host config shape.
+
+**No rules file needed on your machine.** The MCP handshake's
+`initialize.instructions` ships the situation→tool table dynamically
+derived from the live registry. If your host (Claude Code, Cursor)
+insists on a project-level rules file, call `ghci_bootstrap(host="claude-code", write=true)`
+— the MCP writes `.claude/rules/haskell-flows-mcp.md` from content
+baked into the binary, always in sync with the tool surface you have.
 
 ---
 
 ## Tool surface
 
-30+ MCP tools grouped by workflow phase. The five that carry the weight:
+38+ MCP tools grouped by workflow phase. The ones that carry the weight:
 
 | Tool | What it does |
 |---|---|
-| **`ghci_create_project`** | Scaffold a cabal project atomically — one call, no prompts. |
-| **`ghci_suggest(analyze)`** | Seven engines propose QuickCheck laws with confidence + rationale. |
-| **`ghci_quickcheck`** | Run a property, auto-persist on pass, auto-resolve scope errors. |
-| **`ghci_workflow(gate)`** | Regression + `cabal test` + `cabal build` in a single call. |
-| **`mcp_reload_code`** | Graceful process restart so TS edits take effect without exiting the client. |
+| **`ghci_create_project`** | Scaffold a cabal project atomically — one call, no prompts. Emits a multi-step `chain` (deps + add_modules + load) the agent can `ghci_batch`. |
+| **`ghci_suggest(function_name=…)`** | Multi-engine law proposer with confidence + rationale. Sibling-aware: `simplify :: Expr -> Expr` next to `eval :: Env -> Expr -> r` auto-proposes evaluator preservation / constant-folding soundness at High confidence. |
+| **`ghci_quickcheck`** | Run a property, auto-persist on pass; `ghci_determinism` re-runs N times to catch flakiness before adopting. |
+| **`ghci_gate`** | Regression + `cabal test` + `cabal build` in a single call, per-step exception-safe. |
+| **`ghci_bootstrap`** | Emit host rules file from the running binary — no external repo clone needed to get Claude Code / Cursor guidance. |
 
-Full catalog with "what problem each one solved" → [**docs/haskell-flows-mcp.pdf**](docs/haskell-flows-mcp.pdf).
+See [`mcp-server-haskell/README.md`](mcp-server-haskell/README.md) for
+the full 38-tool catalogue by workflow phase.
 
 ---
 

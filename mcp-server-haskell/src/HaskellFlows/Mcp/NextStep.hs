@@ -381,6 +381,13 @@ dispatch name payload = case name of
     \for a session-state-aware pointer at the next action."
     (Just (object [ "action" .= ("help" :: Text) ])))
 
+  -- Bootstrap — previewed content; suggest writing or moving on.
+  "ghci_bootstrap" -> Just (simple "ghci_workflow"
+    "Host rules preview emitted. Re-run with write=true to persist \
+    \them under .claude/ or .cursor/, then 'ghci_workflow(help)' for \
+    \the next project-level step."
+    (Just (object [ "action" .= ("help" :: Text) ])))
+
   -- Workflow meta — would loop if we suggested itself.
   "ghci_workflow" -> Nothing
 

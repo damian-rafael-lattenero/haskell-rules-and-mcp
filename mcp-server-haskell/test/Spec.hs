@@ -77,6 +77,7 @@ import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescripto
 import HaskellFlows.Tool.Batch (BatchArgs (..))
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
+import qualified HaskellFlows.Tool.Bootstrap as Bootstrap
 import qualified HaskellFlows.Tool.RemoveModules as RM
 import qualified HaskellFlows.Tool.Suggest as SuggestTool
 import qualified HaskellFlows.Tool.AddImport as AddImport
@@ -144,7 +145,7 @@ import HaskellFlows.Tool.Hoogle
   )
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
-import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
+import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 import qualified HaskellFlows.Types
 import HaskellFlows.Types
@@ -349,6 +350,12 @@ main = do
       , test "nextStep: remove_modules -> check+load" testNextStepRemoveModules
       , test "gate: runStep catches exceptions"       testGateRunStepCatchesExceptions
       , test "gate: cabalStep uses bracket + partial safe" testGateCabalStepBracket
+      , test "bootstrap: tool registered"             testBootstrapRegistered
+      , test "bootstrap: preview returns dynamic content" testBootstrapPreview
+      , test "bootstrap: write persists to disk"      testBootstrapWrite
+      , test "bootstrap: pathForHost is closed enum"  testBootstrapPathEnum
+      , test "doc: main README uses haskell-flows-mcp" testDocsMainReadme
+      , test "doc: haskell README lists real tools"   testDocsHaskellReadme
       ]
   if and results then exitSuccess else exitFailure
 
@@ -2047,6 +2054,100 @@ testNextStepRemoveModules =
                     && any ((== "ghci_load")          . csTool) steps
                   Nothing -> False
        Nothing -> pure False
+
+--------------------------------------------------------------------------------
+-- BUG-10 — ghci_bootstrap writes host rules from the running binary
+--------------------------------------------------------------------------------
+
+-- | Tool is in the registry.
+testBootstrapRegistered :: IO Bool
+testBootstrapRegistered = pure ("ghci_bootstrap" `elem` allToolNames)
+
+-- | 'ghci_bootstrap(host="claude-code")' preview mode returns
+-- the live workflow markdown body (dynamically derived) and
+-- does NOT write anything. The markdown is inlined as a JSON
+-- string field, so newlines etc. are escaped — we assert
+-- *markers* from the markdown, not byte equality.
+testBootstrapPreview :: IO Bool
+testBootstrapPreview = withTempProject $ \pd -> do
+  let args = A.object [ "host" .= ("claude-code" :: Text) ]
+  tr <- Bootstrap.handle pd allToolDescriptors args
+  let body = case trContent tr of
+        (TextContent t : _) -> t
+        _                   -> ""
+      dest = unProjectDirRaw pd </> ".claude" </> "rules" </> "haskell-flows-mcp.md"
+  wrote <- doesFileExist dest
+  pure $ not (trIsError tr)
+      && T.isInfixOf "\"mode\":\"preview\""     body
+      && T.isInfixOf "\"host\":\"claude-code\"" body
+      && T.isInfixOf "haskell-flows"            body
+      && T.isInfixOf "ghci_workflow"            body
+      && not wrote          -- preview must NOT write
+
+-- | 'ghci_bootstrap(host="claude-code", write=true)' persists the
+-- markdown under '.claude/rules/haskell-flows-mcp.md' inside the
+-- project dir and the file contents match workflowRulesMarkdown.
+testBootstrapWrite :: IO Bool
+testBootstrapWrite = withTempProject $ \pd -> do
+  let args = A.object
+        [ "host"  .= ("claude-code" :: Text)
+        , "write" .= True
+        ]
+  tr <- Bootstrap.handle pd allToolDescriptors args
+  let dest = unProjectDirRaw pd </> ".claude" </> "rules" </> "haskell-flows-mcp.md"
+  fileExists <- doesFileExist dest
+  if not fileExists
+    then pure False
+    else do
+      contents <- TIO.readFile dest
+      let expected = Guidance.workflowRulesMarkdown allToolDescriptors
+      pure $ not (trIsError tr)
+          && contents == expected
+
+-- | 'pathForHost' is a closed enum — any future host addition
+-- changes this test alongside. Guards against a 'generic' path
+-- accidentally being wired up in a way that writes to a
+-- user-controllable location (security-relevant: the host enum
+-- is the only user-visible lever into the file path).
+testBootstrapPathEnum :: IO Bool
+testBootstrapPathEnum = pure $
+     Bootstrap.pathForHost Bootstrap.HostClaudeCode
+       == ".claude/rules/haskell-flows-mcp.md"
+  && Bootstrap.pathForHost Bootstrap.HostCursor
+       == ".cursor/rules/haskell-flows-mcp.md"
+  && Bootstrap.pathForHost Bootstrap.HostGeneric == ""
+
+--------------------------------------------------------------------------------
+-- BUG-11 + BUG-12 — README accuracy (doc-as-code)
+--------------------------------------------------------------------------------
+
+-- | The main README.md must:
+--   * mention the Haskell install path (haskell-flows-mcp).
+--   * NOT reference the TS-only install (npm / mcp-server/).
+--   * NOT reference the broken APIs the README used to show
+--     ('ghci_suggest(analyze)', 'ghci_workflow(action="gate")').
+testDocsMainReadme :: IO Bool
+testDocsMainReadme = do
+  readme <- TIO.readFile "../README.md"
+  pure $ T.isInfixOf "haskell-flows-mcp"          readme
+      && T.isInfixOf "cabal install"              readme
+      && T.isInfixOf "ghci_bootstrap"             readme
+      && not ("ghci_suggest(analyze)"             `T.isInfixOf` readme)
+      && not ("ghci_workflow(action=\"gate\")"    `T.isInfixOf` readme)
+      && not ("npm install"                       `T.isInfixOf` readme)
+      && not ("cd mcp-server\n"                   `T.isInfixOf` readme)
+
+-- | The mcp-server-haskell/README.md must reflect the live tool
+-- registry: mention every registered tool at least once.
+testDocsHaskellReadme :: IO Bool
+testDocsHaskellReadme = do
+  readme <- TIO.readFile "README.md"
+  pure $ T.isInfixOf "haskell-flows-mcp" readme
+      && T.isInfixOf "`ghci_bootstrap`"  readme
+      && T.isInfixOf "`ghci_gate`"       readme
+      && T.isInfixOf "`ghci_suggest`"    readme
+      && T.isInfixOf "`ghci_remove_modules`" readme
+      && not ("Phase 1" `T.isInfixOf` readme)
 
 -- | BUG-06 "full coverage" invariant: every registered tool must
 -- either produce a nextStep on success OR be explicitly whitelisted

@@ -63,6 +63,7 @@ library
                       HaskellFlows.Tool.ApplyExports
                       HaskellFlows.Tool.Arbitrary
                       HaskellFlows.Tool.Batch
+                      HaskellFlows.Tool.Bootstrap
                       HaskellFlows.Tool.Browse
                       HaskellFlows.Tool.CheckModule
                       HaskellFlows.Tool.CheckProject

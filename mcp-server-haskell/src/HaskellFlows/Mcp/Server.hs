@@ -56,6 +56,7 @@ import qualified HaskellFlows.Tool.AddModules      as AddModulesTool
 import qualified HaskellFlows.Tool.ApplyExports    as ApplyExportsTool
 import qualified HaskellFlows.Tool.Arbitrary       as ArbitraryTool
 import qualified HaskellFlows.Tool.Batch           as BatchTool
+import qualified HaskellFlows.Tool.Bootstrap       as BootstrapTool
 import qualified HaskellFlows.Tool.Browse          as BrowseTool
 import qualified HaskellFlows.Tool.Determinism     as DeterminismTool
 import qualified HaskellFlows.Tool.PropertyLifecycle as PropertyLifecycleTool
@@ -351,6 +352,9 @@ dispatchTool srv call = case tcName call of
     PropertyLifecycleTool.handle (srvStore srv) (tcArguments call)
   "ghci_toolchain_warmup" ->
     ToolchainWarmupTool.handle (tcArguments call)
+  "ghci_bootstrap" -> do
+    pd <- readIORef (srvProjectDir srv)
+    BootstrapTool.handle pd allToolDescriptors (tcArguments call)
   other ->
     pure ToolResult
       { trContent = [ TextContent ("Unknown tool: " <> other) ]
@@ -400,6 +404,7 @@ allToolDescriptors =
   , BrowseTool.descriptor
   , DeterminismTool.descriptor
   , RemoveModulesTool.descriptor
+  , BootstrapTool.descriptor
   , PropertyLifecycleTool.descriptor
   , ToolchainWarmupTool.descriptor
   ]
