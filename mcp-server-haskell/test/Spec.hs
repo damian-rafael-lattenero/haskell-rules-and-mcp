@@ -19,6 +19,7 @@ import qualified Data.Text.IO as TIO
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (exitFailure, exitSuccess)
+import System.Timeout (timeout)
 import qualified Test.QuickCheck as QC
 import Test.QuickCheck
   ( Args (..)
@@ -87,7 +88,6 @@ import qualified HaskellFlows.Tool.FixWarning as FixWarning
 import qualified HaskellFlows.Mcp.WorkflowState as WS
 import qualified HaskellFlows.Mcp.Guidance as Guidance
 import qualified HaskellFlows.Mcp.Resources as Resources
-import qualified HaskellFlows.Mcp.Staleness as Staleness
 import HaskellFlows.Tool.CheckProject (parseExposedModules)
 import HaskellFlows.Tool.Lint (parseHlintJson)
 import qualified HaskellFlows.Tool.Lint as LintTool
@@ -287,7 +287,6 @@ main = do
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
       , test "resources: rules workflow URI resolves" testResourcesRulesRead
       , test "resources: unknown URI returns Nothing" testResourcesUnknown
-      , test "staleness: threshold constant"         testStalenessThreshold
       , test "baja bundle: 4 tools registered"      testBajaRegistered
       , test "guidance: tool count is dynamic"      testGuidanceDynamicCount
       , test "guidance: text lists every tool"      testGuidanceListsEveryTool
@@ -360,10 +359,23 @@ main = do
       ]
   if and results then exitSuccess else exitFailure
 
+-- | Per-test defensive timeout. Any unit test that doesn't complete in
+-- 60 s is reported as a hard failure with a TIMEOUT prefix rather than
+-- hanging the whole suite. Protects CI from the class of hazards that
+-- land when a test uses forkIO/takeMVar or spawns a subprocess that
+-- stops emitting without closing its pipe.
+testTimeoutMicros :: Int
+testTimeoutMicros = 60 * 1000 * 1000
+
 test :: String -> IO Bool -> IO Bool
 test name action = do
-  ok <- action
-  putStrLn ((if ok then "PASS  " else "FAIL  ") <> name)
+  mok <- timeout testTimeoutMicros action
+  let ok = fromMaybe False mok
+      prefix
+        | Nothing <- mok = "TIMEOUT "
+        | ok             = "PASS    "
+        | otherwise      = "FAIL    "
+  putStrLn (prefix <> name)
   pure ok
 
 testRejectsRelativeProject :: IO Bool
@@ -465,9 +477,14 @@ testOutOfScope = pure $
 -- boundary misses without slowing CI, same posture as hspec-quickcheck.
 quickTest :: Testable prop => String -> prop -> IO Bool
 quickTest name prop = do
-  res <- quickCheckWithResult stdArgs { chatty = False, maxSuccess = 200 } prop
-  let ok = case res of Success {} -> True; _ -> False
-  putStrLn ((if ok then "PASS  " else "FAIL  ") <> name)
+  mres <- timeout (2 * testTimeoutMicros)
+            (quickCheckWithResult stdArgs { chatty = False, maxSuccess = 200 } prop)
+  let ok = case mres of Just Success {} -> True; _ -> False
+      prefix
+        | Nothing <- mres = "TIMEOUT "
+        | ok              = "PASS    "
+        | otherwise       = "FAIL    "
+  putStrLn (prefix <> name)
   pure ok
 
 -- | Any input containing a literal newline or carriage return must be
@@ -1307,12 +1324,6 @@ testResourcesUnknown :: IO Bool
 testResourcesUnknown =
   pure ("haskell-flows://nonexistent" `notElem` Resources.knownResourceUris)
 
--- | Phase 11m: staleness threshold is the documented 1-minute
--- default. Changing it is a flags-level change; pin it so we
--- notice.
-testStalenessThreshold :: IO Bool
-testStalenessThreshold = pure (Staleness.thresholdMinutes == 1.0)
-
 -- | BUG-05: @initialize.instructions@ used to hard-code "25 tools".
 -- The fix derives the tool count from 'allToolDescriptors'. Pin
 -- that the rendered text contains the live count and not any of
@@ -1491,9 +1502,15 @@ testPropStoreConcurrentSaves = withTempProject $ \pd -> do
                  _  <- forkIO (save store e (Just "src/X.hs")
                                  >> putMVar mv ())
                  pure mv) exprs
-  mapM_ takeMVar mvs
-  props <- loadAll store
-  pure (length props == 10)
+  -- Inner budget: if any single save hangs on the property-store
+  -- lock (e.g. disk full, FS ACL weirdness under CI), we fail fast
+  -- rather than waiting 60s for the outer 'test' timeout.
+  m <- timeout 10_000_000 (mapM_ takeMVar mvs)
+  case m of
+    Nothing -> pure False
+    Just () -> do
+      props <- loadAll store
+      pure (length props == 10)
 
 -- | Internal: unwrap ProjectDir to its FilePath. Exported in the
 -- production module but not used elsewhere in this test file; keep

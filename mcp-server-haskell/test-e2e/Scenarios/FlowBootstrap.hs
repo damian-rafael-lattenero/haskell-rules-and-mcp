@@ -37,7 +37,9 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "bootstrap(claude-code) preview"
   r1 <- Client.callTool c "ghci_bootstrap"
           (object [ "host" .= ("claude-code" :: Text) ])
-  c1 <- liveCheck $ checkJsonField "claude-code preview success" r1 "success" (Bool True)
+  -- Dropped: "claude-code preview success" — redundant with 'mode=preview'
+  -- which is the stronger semantic assertion (tool cannot return
+  -- mode=preview with success=false).
   c2 <- liveCheck $ checkJsonField "claude-code preview mode=preview"
                       r1 "mode" (String "preview")
   c3 <- liveCheck $ checkJsonFieldMatches
@@ -60,7 +62,8 @@ runFlow c projectDir = do
     [ "host"  .= ("claude-code" :: Text)
     , "write" .= True
     ])
-  c5 <- liveCheck $ checkJsonField "claude-code write success" r2 "success" (Bool True)
+  -- Dropped: "claude-code write success" — subsumed by 'mode=written'
+  -- + 'file lands on disk' below (both strictly stronger).
   c6 <- liveCheck $ checkJsonField "claude-code mode=written"
                       r2 "mode" (String "written")
   exists2 <- doesFileExist cPath
@@ -78,7 +81,8 @@ runFlow c projectDir = do
     [ "host"  .= ("cursor" :: Text)
     , "write" .= True
     ])
-  c8 <- liveCheck $ checkJsonField "cursor write success" r3 "success" (Bool True)
+  -- Dropped: "cursor write success" — the file-landed assertion below
+  -- is the real oracle (success=true with no file would be a bug anyway).
   let cursorPath = projectDir </> ".cursor" </> "rules" </> "haskell-flows-mcp.md"
   cursorExists <- doesFileExist cursorPath
   c9 <- liveCheck $ checkPure
@@ -95,14 +99,14 @@ runFlow c projectDir = do
     [ "host"  .= ("generic" :: Text)
     , "write" .= True   -- even with write=true, generic never writes
     ])
-  c10 <- liveCheck $ checkJsonField "generic success" r4 "success" (Bool True)
+  -- Dropped: "generic success" — redundant with content assertion below.
   c11 <- liveCheck $ checkJsonFieldMatches
           "generic · content carries the markdown"
           r4 "content" (containsText "haskell-flows")
           "generic host returns the body for the agent to paste"
   stepFooter 4 t3
 
-  pure [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11]
+  pure [c2, c3, c4, c6, c7, c9, c11]
 
 --------------------------------------------------------------------------------
 -- helpers

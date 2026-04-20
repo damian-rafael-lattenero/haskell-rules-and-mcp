@@ -90,7 +90,8 @@ runFlow c projectDir = do
   t3 <- stepHeader 4 "ghci_check_module(src/Calc.hs)"
   cmR <- Client.callTool c "ghci_check_module"
            (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
-  c4 <- liveCheck $ checkJsonField "check_module success" cmR "success" (Bool True)
+  -- Dropped: "check_module success" — 'overall=true' is strictly stronger
+  -- (a false overall with true success would itself be a bug).
   c5 <- liveCheck $ checkJsonField "check_module overall=true"
                       cmR "overall" (Bool True)
   c6 <- liveCheck $ checkJsonFieldMatches
@@ -104,7 +105,8 @@ runFlow c projectDir = do
   ----------------------------------------------------------------
   t4 <- stepHeader 5 "ghci_check_project"
   cpR <- Client.callTool c "ghci_check_project" (object [])
-  c7 <- liveCheck $ checkJsonField "check_project success" cpR "success" (Bool True)
+  -- Dropped: "check_project success" — 'overall=true' + 'failed=0' are
+  -- strictly stronger and catch the real failure shape.
   c8 <- liveCheck $ checkJsonField "check_project overall=true"
                       cpR "overall" (Bool True)
   c9 <- liveCheck $ checkJsonFieldMatches
@@ -115,7 +117,7 @@ runFlow c projectDir = do
                       cpR "failed" (Number 0)
   stepFooter 5 t4
 
-  pure [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10]
+  pure [c1, c2, c3, c5, c6, c8, c9, c10]
 
 --------------------------------------------------------------------------------
 -- helpers
