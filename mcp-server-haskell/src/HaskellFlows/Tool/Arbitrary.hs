@@ -24,10 +24,15 @@ module HaskellFlows.Tool.Arbitrary
   , parseConstructors
   , parseTypeParams
   , Constructor (..)
+    -- * BUG-17 — recursive-type detection + sized template
+  , isRecursiveArg
+  , isRecursiveConstructor
+  , hasRecursiveConstructor
   ) where
 
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Data.Char (isAlphaNum)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -286,22 +291,47 @@ parseTypeParams out =
       | "newtype " `T.isPrefixOf` t = T.drop 8 t
       | otherwise                   = t
 
--- | Produce a compilable @instance Arbitrary T where arbitrary = oneof [...]@
--- snippet. Uses 'pure' for nullary constructors and an @<$> … <*> …@
--- chain for the rest. Does not emit @shrink@ — the default is fine and
--- the agent can extend by hand if needed.
+-- | BUG-17: does this argument's type text mention the focal
+-- type as a standalone identifier? Splits on non-identifier
+-- characters so @(Tree a)@ yields tokens @["Tree", "a"]@ and
+-- @[Tree a]@ / @Maybe (Tree a)@ both pick up.
+isRecursiveArg :: Text -> Text -> Bool
+isRecursiveArg typeName arg = typeName `elem` tokensOf arg
+  where
+    tokensOf = filter (not . T.null)
+             . T.split (\c -> not (isAlphaNum c || c == '_' || c == '\''))
+
+-- | Does any argument of this constructor recurse on the focal
+-- type? A constructor with no args is trivially non-recursive.
+isRecursiveConstructor :: Text -> Constructor -> Bool
+isRecursiveConstructor typeName c = any (isRecursiveArg typeName) (cArgs c)
+
+-- | Does ANY constructor of the type recurse on the focal type?
+-- Flag that tells 'renderTemplate' whether to emit the classical
+-- 'oneof' template or the BUG-17 'sized' template.
+hasRecursiveConstructor :: Text -> [Constructor] -> Bool
+hasRecursiveConstructor typeName = any (isRecursiveConstructor typeName)
+
+-- | Produce a compilable @instance Arbitrary T where arbitrary = ...@
+-- snippet. For non-recursive types the template is the classical
+-- @oneof [ ctor <$> arbitrary <*> ... ]@; for recursive types
+-- (BUG-17) the template uses 'sized' + 'frequency' with every
+-- recursive position generated at half the current size, bounding
+-- the expected tree depth logarithmically so QuickCheck can't OOM
+-- on deep trees.
 --
 -- Polymorphic types are handled by wrapping the type expression and
 -- emitting the right 'Arbitrary' constraints:
 --
--- * @[]@      ⇒ @instance Arbitrary T where …@
--- * @[\"a\"]@   ⇒ @instance Arbitrary a => Arbitrary (T a) where …@
+-- * @[]@            ⇒ @instance Arbitrary T where …@
+-- * @[\"a\"]@       ⇒ @instance Arbitrary a => Arbitrary (T a) where …@
 -- * @[\"a\",\"b\"]@ ⇒ @instance (Arbitrary a, Arbitrary b) => Arbitrary (T a b) where …@
 --
 -- Known limitations:
 --
--- * Does not look at argument types — everything is @arbitrary@,
---   leaning on type inference to pick the right instance.
+-- * Does not look at argument types for non-recursive fields —
+--   everything non-recursive is @arbitrary@, leaning on type
+--   inference to pick the right instance.
 renderTemplate :: Text -> [Text] -> [Constructor] -> Text
 renderTemplate typeName params ctors =
   let typeExpr = case params of
@@ -312,22 +342,95 @@ renderTemplate typeName params ctors =
         [p] -> "Arbitrary " <> p <> " => "
         ps  -> "(" <> T.intercalate ", " [ "Arbitrary " <> p | p <- ps ]
             <> ") => "
+      header   = "instance " <> context <> "Arbitrary " <> typeExpr <> " where"
+      recursive = hasRecursiveConstructor typeName ctors
   in T.unlines $
-       [ "instance " <> context <> "Arbitrary " <> typeExpr <> " where"
-       , "  arbitrary = oneof"
-       ]
-       <> zipWith renderBranch [0 :: Int ..] ctors
-       <> [ "    ]" ]
+       if recursive
+         then renderSizedBody typeName ctors header
+         else renderFlatBody              ctors header
+
+-- | Classical non-recursive template: @arbitrary = oneof [...]@.
+renderFlatBody :: [Constructor] -> Text -> [Text]
+renderFlatBody ctors header =
+     [ header
+     , "  arbitrary = oneof"
+     ]
+     <> zipWith renderBranch [0 :: Int ..] ctors
+     <> [ "    ]" ]
   where
     renderBranch i c =
       let prefix = if i == 0 then "    [ " else "    , "
-          nArgs  = length (cArgs c)
-      in  prefix <> case nArgs of
-            0 -> "pure " <> cName c
-            1 -> cName c <> " <$> arbitrary"
-            n -> cName c
-                 <> " <$> arbitrary"
-                 <> T.concat (replicate (n - 1) " <*> arbitrary")
+      in prefix <> renderRhsFlat c
+
+-- | BUG-17 sized template for recursive types.
+--
+-- Shape:
+--
+-- > instance Arbitrary T where
+-- >   arbitrary = sized go
+-- >     where
+-- >       go 0 = oneof
+-- >         [ <every leaf constructor with arbitrary args>
+-- >         ]
+-- >       go n = frequency
+-- >         [ (2, <leaf ctor>)
+-- >         , (1, <recursive ctor with `go (n \`div\` 2)` in each
+-- >                recursive position>)
+-- >         ]
+--
+-- Leaves get weight 2 so the generator biases toward terminating
+-- as size drops; recursive branches get weight 1 each. Every
+-- recursive arg position is generated at half the current size,
+-- giving logarithmic expected depth.
+renderSizedBody :: Text -> [Constructor] -> Text -> [Text]
+renderSizedBody typeName ctors header =
+  let leaves = filter (not . isRecursiveConstructor typeName) ctors
+      base0  = if null leaves then ctors else leaves
+  in [ header
+     , "  arbitrary = sized go"
+     , "    where"
+     , "      go 0 = oneof"
+     ]
+     <> zipWith (baseBranch "        ") [0 :: Int ..] base0
+     <> [ "        ]"
+        , "      go n = frequency"
+        ]
+     <> zipWith (freqBranch "        " typeName) [0 :: Int ..] ctors
+     <> [ "        ]" ]
+  where
+    baseBranch indent i c =
+      let prefix = indent <> (if i == 0 then "[ " else ", ")
+      in prefix <> renderRhsFlat c
+
+    freqBranch indent tn i c =
+      let prefix = indent <> (if i == 0 then "[ " else ", ")
+          w      = if isRecursiveConstructor tn c then 1 else 2
+      in prefix <> "(" <> T.pack (show (w :: Int)) <> ", "
+              <> renderRhsSized tn c <> ")"
+
+-- | Non-recursive RHS: @Ctor <$> arbitrary <*> arbitrary ...@.
+renderRhsFlat :: Constructor -> Text
+renderRhsFlat c = case length (cArgs c) of
+  0 -> "pure " <> cName c
+  1 -> cName c <> " <$> arbitrary"
+  n -> cName c
+       <> " <$> arbitrary"
+       <> T.concat (replicate (n - 1) " <*> arbitrary")
+
+-- | Sized RHS: @Ctor <$> arbitrary <*> go (n `div` 2) <*> ...@
+-- where each recursive arg becomes @go (n \`div\` 2)@ and each
+-- non-recursive arg stays @arbitrary@.
+renderRhsSized :: Text -> Constructor -> Text
+renderRhsSized typeName c = case cArgs c of
+  []     -> "pure " <> cName c
+  (a:as) ->
+       cName c
+    <> " <$> " <> slot a
+    <> T.concat [ " <*> " <> slot a' | a' <- as ]
+  where
+    slot arg
+      | isRecursiveArg typeName arg = "go (n `div` 2)"
+      | otherwise                   = "arbitrary"
 
 --------------------------------------------------------------------------------
 -- response shaping

@@ -101,6 +101,8 @@ import HaskellFlows.Parser.Type
   )
 import HaskellFlows.Tool.Arbitrary
   ( Constructor (..)
+  , hasRecursiveConstructor
+  , isRecursiveArg
   , parseConstructors
   , parseTypeParams
   , renderTemplate
@@ -334,6 +336,11 @@ main = do
       , test "workflow: phase testing laws"           testPhaseTestingLaws
       , test "workflow: phase ready to push"          testPhaseReadyToPush
       , test "workflow: phase hint non-empty"         testPhaseHintNonEmpty
+      , test "arbitrary: detects recursion on self"   testArbitraryDetectsRecursion
+      , test "arbitrary: Expr template uses sized"    testArbitraryExprSized
+      , test "arbitrary: Tree polymorphic sized"      testArbitraryTreeSized
+      , test "arbitrary: Status flat template"        testArbitraryFlatTemplate
+      , test "arbitrary: recursion detection tokens"  testArbitraryRecursionTokens
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1836,6 +1843,96 @@ testPhaseHintNonEmpty = pure $
                , WS.PhaseDeveloping, WS.PhaseTestingLaws
                , WS.PhaseReadyToPush ]
   in not (any (T.null . WS.renderPhaseHint) phases)
+
+--------------------------------------------------------------------------------
+-- BUG-17 — ghci_arbitrary uses 'sized' for recursive types
+--------------------------------------------------------------------------------
+
+-- | Bit-level: 'hasRecursiveConstructor' flags the classic
+-- recursive shapes ('Expr', 'Tree') and leaves flat shapes alone.
+testArbitraryDetectsRecursion :: IO Bool
+testArbitraryDetectsRecursion =
+  let expr =
+        [ Constructor "Lit" ["Int"]
+        , Constructor "Neg" ["Expr"]
+        , Constructor "Add" ["Expr", "Expr"]
+        ]
+      tree =
+        [ Constructor "Leaf" ["a"]
+        , Constructor "Node" ["(Tree a)", "(Tree a)"]
+        ]
+      status =
+        [ Constructor "Ok" []
+        , Constructor "Err" ["String"]
+        ]
+  in pure $ hasRecursiveConstructor "Expr"   expr
+         && hasRecursiveConstructor "Tree"   tree
+         && not (hasRecursiveConstructor "Status" status)
+
+-- | BUG-17 core: a recursive Expr must produce the 'sized'
+-- template shape — 'sized go', a base 'oneof' branch, a
+-- recursive 'frequency' branch, and 'go (n `div` 2)' in each
+-- recursive arg position. If the template ever reverts to naive
+-- 'oneof' for a recursive type, QuickCheck will OOM on the
+-- first sample with default size.
+testArbitraryExprSized :: IO Bool
+testArbitraryExprSized =
+  let ctors =
+        [ Constructor "Lit" ["Int"]
+        , Constructor "Var" ["String"]
+        , Constructor "Neg" ["Expr"]
+        , Constructor "Add" ["Expr", "Expr"]
+        , Constructor "Mul" ["Expr", "Expr"]
+        ]
+      out = renderTemplate "Expr" [] ctors
+  in pure $ T.isInfixOf "instance Arbitrary Expr where" out
+         && T.isInfixOf "arbitrary = sized go"          out
+         && T.isInfixOf "go 0 = oneof"                  out
+         && T.isInfixOf "go n = frequency"              out
+         && T.isInfixOf "Lit <$> arbitrary"             out
+         && T.isInfixOf "Neg <$> go (n `div` 2)"        out
+         && T.isInfixOf "Add <$> go (n `div` 2) <*> go (n `div` 2)" out
+
+-- | Polymorphic recursive type: 'Tree a' should emit the sized
+-- template AND the proper 'Arbitrary a =>' context.
+testArbitraryTreeSized :: IO Bool
+testArbitraryTreeSized =
+  let ctors =
+        [ Constructor "Leaf" ["a"]
+        , Constructor "Node" ["(Tree a)", "(Tree a)"]
+        ]
+      out = renderTemplate "Tree" ["a"] ctors
+  in pure $ T.isInfixOf "instance Arbitrary a => Arbitrary (Tree a) where" out
+         && T.isInfixOf "arbitrary = sized go"                out
+         && T.isInfixOf "Leaf <$> arbitrary"                  out
+         && T.isInfixOf "Node <$> go (n `div` 2) <*> go (n `div` 2)" out
+
+-- | Non-recursive types keep the classical flat template —
+-- 'sized' is pure overhead without recursion.
+testArbitraryFlatTemplate :: IO Bool
+testArbitraryFlatTemplate =
+  let ctors =
+        [ Constructor "Ok"  []
+        , Constructor "Err" ["String"]
+        ]
+      out = renderTemplate "Status" [] ctors
+  in pure $ T.isInfixOf "arbitrary = oneof"       out
+         && not (T.isInfixOf "sized"       out)
+         && not (T.isInfixOf "frequency"   out)
+         && T.isInfixOf "pure Ok"                 out
+         && T.isInfixOf "Err <$> arbitrary"       out
+
+-- | 'isRecursiveArg' must tokenise on non-identifier characters
+-- so paren / bracket / comma-separated arg positions pick up the
+-- type name cleanly. Pin the tokeniser shape.
+testArbitraryRecursionTokens :: IO Bool
+testArbitraryRecursionTokens = pure $
+     isRecursiveArg "Tree" "(Tree a)"
+  && isRecursiveArg "Tree" "Maybe (Tree a)"
+  && isRecursiveArg "Tree" "[Tree a]"
+  && not (isRecursiveArg "Tree" "TreeLike a")   -- different identifier
+  && not (isRecursiveArg "Tree" "Int")
+  && not (isRecursiveArg "Tree" "String")
 
 -- | BUG-06 "full coverage" invariant: every registered tool must
 -- either produce a nextStep on success OR be explicitly whitelisted
