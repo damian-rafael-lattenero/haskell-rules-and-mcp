@@ -38,7 +38,14 @@ import HaskellFlows.Ghci.Session
   , sanitizeExpression
   , sessionCabalArgs
   )
-import HaskellFlows.Parser.Error (parseGhcErrors, Severity (..), GhcError (..))
+import HaskellFlows.Parser.Error
+  ( GhcError (..)
+  , Severity (..)
+  , WarningCategory (..)
+  , bucketize
+  , categorizeWarning
+  , parseGhcErrors
+  )
 import HaskellFlows.Parser.Hole
   ( HoleFit (..)
   , TypedHole (..)
@@ -246,6 +253,8 @@ main = do
       , test "qcexport: tool registered"           testQcExportRegistered
       , test "qcexport: renderTestFile shape"      testQcExportRenderShape
       , test "qcexport: sanitizeLabel strips LF"   testQcExportSanitize
+      , test "warnings: categorize common classes" testWarningCategorize
+      , test "warnings: bucketize orders by count" testWarningBucketize
       ]
   if and results then exitSuccess else exitFailure
 
@@ -1165,6 +1174,42 @@ testCoverageInvokesHpcReport = do
 -- quoted literal in source and the concatenation form. Either is fine.
 ellipticalOr :: Bool -> Bool -> Bool
 ellipticalOr = (||)
+
+-- | Phase 11i: warning categorizer buckets common messages into
+-- the 5 coarse classes the agent can prioritise on.
+testWarningCategorize :: IO Bool
+testWarningCategorize = pure $
+     cat "Defined but not used: `foo'"           == WcUnused
+  && cat "Pattern match(es) are non-exhaustive"  == WcNonExhaustive
+  && cat "This binding for `x' shadows"          == WcShadowing
+  && cat "Top-level binding with no type signature: foo :: Int -> Int"
+                                                  == WcMissingSig
+  && cat "Something else entirely"                == WcOther
+  where
+    cat msg = categorizeWarning GhcError
+      { geFile = "Foo.hs", geLine = 1, geColumn = 1
+      , geSeverity = SevWarning, geCode = Nothing, geMessage = msg
+      }
+
+-- | Phase 11i: bucketize returns (category, count) pairs ordered
+-- by count descending, so agents reading the head triage first.
+testWarningBucketize :: IO Bool
+testWarningBucketize =
+  let mk msg = GhcError
+        { geFile = "Foo.hs", geLine = 1, geColumn = 1
+        , geSeverity = SevWarning, geCode = Nothing, geMessage = msg
+        }
+      errs =
+        [ mk "Defined but not used: x"
+        , mk "Defined but not used: y"
+        , mk "Defined but not used: z"
+        , mk "Pattern match(es) are non-exhaustive"
+        , mk "This binding shadows"
+        ]
+      buckets = bucketize errs
+  in pure $ case buckets of
+       ((WcUnused, 3) : _) -> True
+       _                   -> False
 
 -- | Phase 11h: ghci_quickcheck_export must be in the canonical
 -- tool list.
