@@ -13,7 +13,6 @@
 
 # Disposable playground projects
 playground/smoke-test/
-playground/expr-evaluator/
 
 # Property store (generated at runtime by ghci_quickcheck)
 **/.haskell-flows/
