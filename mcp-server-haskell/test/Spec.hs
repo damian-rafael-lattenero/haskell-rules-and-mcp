@@ -347,6 +347,8 @@ main = do
       , test "remove_modules: idempotent no-op"       testRemoveModulesIdempotent
       , test "remove_modules: preserves other fields" testRemoveModulesPreservesFields
       , test "nextStep: remove_modules -> check+load" testNextStepRemoveModules
+      , test "gate: runStep catches exceptions"       testGateRunStepCatchesExceptions
+      , test "gate: cabalStep uses bracket + partial safe" testGateCabalStepBracket
       ]
   if and results then exitSuccess else exitFailure
 
@@ -2000,6 +2002,32 @@ testRemoveModulesPreservesFields =
          && T.isInfixOf "build-depends:    base" newCabal
          && T.isInfixOf "test-suite expr-test"   newCabal
          && T.isInfixOf "QuickCheck"             newCabal
+
+-- | BUG-01 — static source check that 'runStep' catches
+-- synchronous exceptions from a step's body. If someone removes
+-- the 'try' wrap, a step that throws would escape runStep,
+-- propagate past runTool's outer try as a connection close, and
+-- reproduce F-22 (the dogfood crash that killed the MCP
+-- mid-session).
+testGateRunStepCatchesExceptions :: IO Bool
+testGateRunStepCatchesExceptions = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Gate.hs"
+  pure $ T.isInfixOf "timeout budget (try body)"  src
+      && T.isInfixOf "Left (e :: SomeException)" src
+      && T.isInfixOf "\"exception\" .= T.pack (show e)" src
+
+-- | BUG-01 — 'cabalStep' must use 'bracket' to guarantee
+-- process cleanup (terminateProcess + hClose) on any exit path,
+-- and must not partial-pattern on 'createProcess'. The old
+-- irrefutable @(_, Just hOut, Just hErr, ph)@ match would
+-- throw on any unexpected CreateProcess return shape; the new
+-- code pattern-matches totally and returns a structured error.
+testGateCabalStepBracket :: IO Bool
+testGateCabalStepBracket = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Gate.hs"
+  pure $ T.isInfixOf "bracket acquire release body"  src
+      && T.isInfixOf "(Just hOut, Just hErr)"        src
+      && not (T.isInfixOf "(_, Just hOut, Just hErr, ph) <- createProcess" src)
 
 -- | BUG-06 nextStep coverage for the new tool: 'ghci_remove_modules'
 -- on success suggests project-wide check + reload chain so any

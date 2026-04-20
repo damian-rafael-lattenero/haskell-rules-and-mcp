@@ -39,7 +39,7 @@ module HaskellFlows.Tool.Gate
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
-import Control.Monad (void)
+import Control.Exception (SomeException, bracket, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -48,9 +48,10 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (ExitCode (..))
-import System.IO (hClose, hGetContents)
+import System.IO (Handle, hClose, hGetContents)
 import System.Process
   ( CreateProcess (..)
+  , ProcessHandle
   , StdStream (..)
   , createProcess
   , proc
@@ -157,16 +158,41 @@ stepPassed _          = False
 -- | Run a step inside a timeout budget. TimedOut / exception paths
 -- collapse to a structured 'Step' so the caller never sees a raw
 -- exception escape.
+--
+-- BUG-01 (F-22 from the expr-evaluator dogfood): the old runStep
+-- wrapped 'body' in 'timeout' only. Any synchronous exception
+-- thrown by 'body' (cabal binary not on PATH, partial pattern on
+-- createProcess, resource exhaustion) would escape 'runStep',
+-- propagate through 'ghci_gate''s handler, and only get caught
+-- by Server.runTool's outer 'try' — but by then the GHCi session
+-- had been evicted and the MCP client saw a bare \"Connection
+-- closed\" instead of a structured gate failure.
+--
+-- Fix: wrap 'body' in BOTH 'try' (catch synchronous exceptions)
+-- and 'timeout' (bound wall-clock). Any exception turns into a
+-- Failed step whose @details.exception@ field carries the message;
+-- any over-budget run turns into TimedOut. The tool response
+-- always looks like a normal gate report to the agent.
 runStep :: Int -> IO (Bool, Value) -> IO Step
 runStep budget body = do
   t0 <- now
-  out <- timeout budget body
+  out <- timeout budget (try body)
   t1 <- now
   let dt = t1 - t0
   case out of
-    Nothing           -> pure (TimedOut dt)
-    Just (True, det)  -> pure (Passed dt det)
-    Just (False, det) -> pure (Failed dt det)
+    Nothing                 -> pure (TimedOut dt)
+    Just (Left (e :: SomeException)) ->
+      pure (Failed dt (object
+        [ "exception" .= T.pack (show e)
+        , "hint"      .=
+            ( "Step raised a synchronous exception before producing a \
+              \result. Common causes: cabal not on PATH, dist-newstyle \
+              \lock held by a concurrent GHCi session, or the cabal \
+              \subprocess exited before its pipes were drained. The \
+              \gate stays up; other steps continue." :: Text )
+        ]))
+    Just (Right (True, det))  -> pure (Passed dt det)
+    Just (Right (False, det)) -> pure (Failed dt det)
 
 --------------------------------------------------------------------------------
 -- step implementations
@@ -213,39 +239,84 @@ qcStateText QC.QcUnparsed  {} = "unparsed"
 
 -- | Generic @cabal <args>@ runner, argv-form, with combined stdout +
 -- stderr capture (capped at 256 KiB to keep the response sane).
+--
+-- BUG-01 hardening:
+--
+--  * 'createProcess' was producing a 4-tuple via an irrefutable
+--    pattern match. If somehow the runtime returned 'Nothing' for
+--    either pipe (unexpected but possible after an async
+--    interrupt) the pattern match itself would throw and the
+--    whole server would see a crash. The pipes are now matched
+--    with a total case and a structured error returned on any
+--    shape mismatch.
+--
+--  * The whole process lifecycle is wrapped in 'bracket' so
+--    'terminateProcess' + 'hClose' always run — whether the
+--    normal path, a timeout-driven async kill, or an exception
+--    from 'hGetContents' interrupted us. No more leaked cabal
+--    children holding a dist-newstyle lock.
+--
+--  * 'waitForProcess' is in the bracket's body; the acquire step
+--    is just the 'createProcess' + pipe extraction. If
+--    'createProcess' itself raises (cabal not on PATH), the
+--    exception propagates to 'runStep' which now catches it and
+--    returns a Failed step with the exception text — the gate
+--    stays up for the remaining steps.
 cabalStep :: ProjectDir -> [String] -> IO (Bool, Value)
-cabalStep pd args = do
-  let cp = (proc "cabal" args)
-             { cwd     = Just (unProjectDir pd)
-             , std_in  = NoStream
-             , std_out = CreatePipe
-             , std_err = CreatePipe
-             }
-  (_, Just hOut, Just hErr, ph) <- createProcess cp
-  outV <- newEmptyMVar
-  errV <- newEmptyMVar
-  _ <- forkIO (hGetContents hOut >>= putMVar outV)
-  _ <- forkIO (hGetContents hErr >>= putMVar errV)
-  ec <- waitForProcess ph
-  o  <- T.take outputCap . T.pack <$> takeMVar outV
-  e  <- T.take outputCap . T.pack <$> takeMVar errV
-  _  <- try_ (hClose hOut)
-  _  <- try_ (hClose hErr)
-  _  <- try_ (terminateProcess ph)   -- no-op if already exited
-  let passed = ec == ExitSuccess
-      detail = object
-        [ "command"  .= ("cabal " <> T.unwords (map T.pack args))
-        , "exitCode" .= (case ec of ExitSuccess -> 0
-                                    ExitFailure n -> n)
-        , "stdout"   .= o
-        , "stderr"   .= e
-        ]
-  pure (passed, detail)
+cabalStep pd args =
+  bracket acquire release body
   where
+    cp = (proc "cabal" args)
+           { cwd     = Just (unProjectDir pd)
+           , std_in  = NoStream
+           , std_out = CreatePipe
+           , std_err = CreatePipe
+           }
+
+    acquire = do
+      (_, mOut, mErr, ph) <- createProcess cp
+      case (mOut, mErr) of
+        (Just hOut, Just hErr) -> pure (hOut, hErr, ph)
+        _ -> do
+          -- Best-effort kill; release handles nothing we own at
+          -- this point because the tuple destructure failed.
+          _ <- try (terminateProcess ph) :: IO (Either SomeException ())
+          error "createProcess did not supply the expected stdout/stderr \
+                \pipes; cannot run cabal step. This indicates a CreateProcess \
+                \configuration regression."
+
+    release (hOut, hErr, ph) = do
+      -- Always try to reap and clean up. Closing handles twice
+      -- is benign; terminating an already-exited process is a
+      -- no-op. Swallow cleanup exceptions so they cannot mask
+      -- the primary result.
+      _ <- try (terminateProcess ph) :: IO (Either SomeException ())
+      _ <- try (hClose hOut)         :: IO (Either SomeException ())
+      _ <- try (hClose hErr)         :: IO (Either SomeException ())
+      pure ()
+
+    body :: (Handle, Handle, ProcessHandle) -> IO (Bool, Value)
+    body (hOut, hErr, ph) = do
+      outV <- newEmptyMVar
+      errV <- newEmptyMVar
+      _ <- forkIO (hGetContents hOut >>= putMVar outV)
+      _ <- forkIO (hGetContents hErr >>= putMVar errV)
+      ec <- waitForProcess ph
+      o  <- T.take outputCap . T.pack <$> takeMVar outV
+      e  <- T.take outputCap . T.pack <$> takeMVar errV
+      let passed = ec == ExitSuccess
+          detail = object
+            [ "command"  .= ("cabal " <> T.unwords (map T.pack args))
+            , "exitCode" .= (case ec of
+                               ExitSuccess   -> 0
+                               ExitFailure n -> n)
+            , "stdout"   .= o
+            , "stderr"   .= e
+            ]
+      pure (passed, detail)
+
     outputCap :: Int
     outputCap = 256 * 1024
-    try_ :: IO a -> IO ()
-    try_ = void -- handle exits already; we only attempt cleanup
 
 --------------------------------------------------------------------------------
 -- response shaping
