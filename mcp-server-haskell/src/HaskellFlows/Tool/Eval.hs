@@ -108,6 +108,9 @@ formatCommandError = \case
     "expression contains the internal framing sentinel and was rejected"
   EmptyInput ->
     "expression is empty"
+  InputTooLarge sz cap ->
+    "expression is too large (" <> T.pack (show sz) <> " chars, cap is "
+      <> T.pack (show cap) <> ")"
 
 encodeUtf8Text :: Value -> Text
 encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

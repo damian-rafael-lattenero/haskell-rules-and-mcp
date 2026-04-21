@@ -40,6 +40,7 @@ module HaskellFlows.Ghci.Session
   , runProperty
   , sanitizeExpression
   , maxEvalBytes
+  , maxExpressionBytes
   , maxBufferBytes
   , sessionCabalArgs
   ) where
@@ -344,6 +345,20 @@ evaluate s expr = case sanitizeExpression expr of
       , erTruncated = truncated
       }
 
+-- | Hard cap on the size (in characters) of any single expression,
+-- name, prefix or property sent through 'sanitizeExpression'. Matches
+-- 'maxEvalBytes' so input and output capacity are symmetric — a
+-- caller that fits their output under the return cap can always fit
+-- their input under this one.
+--
+-- Without this cap, 'sanitizeExpression' happily forwards a 1 MB
+-- string to the child GHCi which must parse + type-check + evaluate
+-- it; every one of the ~9 tools routing through this boundary
+-- becomes a CWE-400 (Uncontrolled Resource Consumption) vector.
+-- Found by 'Scenarios.FlowOversizedInput' in the e2e suite.
+maxExpressionBytes :: Int
+maxExpressionBytes = 64 * 1024
+
 -- | Reasons a GHCi command argument was rejected at the boundary.
 data CommandError
   = ContainsNewline
@@ -354,6 +369,10 @@ data CommandError
     -- reader think the response ended inside the echoed prompt.
   | EmptyInput
     -- ^ After stripping, nothing remained. GHCi would prompt-loop.
+  | InputTooLarge !Int !Int
+    -- ^ @InputTooLarge observed cap@. Input exceeded
+    -- 'maxExpressionBytes'. Rejected at the boundary so the MCP
+    -- never writes a pathological payload to the GHCi child's stdin.
   deriving stock (Eq, Show)
 
 -- | Boundary check for anything sent to GHCi as part of a single-line
@@ -363,6 +382,8 @@ sanitizeExpression raw
   | T.null stripped                          = Left EmptyInput
   | T.any (`elem` ("\n\r" :: String)) raw    = Left ContainsNewline
   | sentinel `T.isInfixOf` raw               = Left ContainsSentinel
+  | T.length raw > maxExpressionBytes        =
+      Left (InputTooLarge (T.length raw) maxExpressionBytes)
   | otherwise                                = Right stripped
   where
     stripped = T.strip raw

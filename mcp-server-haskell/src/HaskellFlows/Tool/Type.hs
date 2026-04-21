@@ -120,6 +120,9 @@ formatCommandError = \case
     "expression contains the internal framing sentinel and was rejected"
   EmptyInput ->
     "expression is empty"
+  InputTooLarge sz cap ->
+    "expression is too large (" <> T.pack (show sz) <> " chars, cap is "
+      <> T.pack (show cap) <> ")"
 
 -- | UTF-8-safe JSON → Text. Fixes the Phase-1 TODO in Tool.Load where
 -- @T.pack . show . encode@ mis-rendered non-ASCII output.

@@ -238,6 +238,9 @@ formatCommandError = \case
   ContainsNewline  -> "property must be a single line (no newline characters)"
   ContainsSentinel -> "property contains the internal framing sentinel and was rejected"
   EmptyInput       -> "property is empty"
+  InputTooLarge sz cap ->
+    "property is too large (" <> T.pack (show sz) <> " chars, cap is "
+      <> T.pack (show cap) <> ")"
 
 encodeUtf8Text :: Value -> Text
 encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

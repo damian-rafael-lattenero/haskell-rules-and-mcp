@@ -37,6 +37,7 @@ import qualified Scenarios.FlowFixWarning       as FlowFW
 import qualified Scenarios.FlowGhciSigkill       as FlowSK
 import qualified Scenarios.FlowGracefulMiss      as FlowGM
 import qualified Scenarios.FlowInjectionGuard   as FlowIG
+import qualified Scenarios.FlowOversizedInput   as FlowOI
 import qualified Scenarios.FlowTimeoutEnforcement as FlowTE
 import qualified Scenarios.FlowMutation          as FlowMut
 import qualified Scenarios.FlowPropertyLifecycle as FlowPL
@@ -106,6 +107,8 @@ scenarios =
     , FlowTE.runFlow )
   , ( "Flow: GHCi SIGKILL (child exitWith · recovery via evictSession)"
     , FlowSK.runFlow )
+  , ( "Flow: Oversized input (256 KiB expression rejected at boundary)"
+    , FlowOI.runFlow )
   , ( "Flow: Expr evaluator dogfood (full 4-module library build + 3 bug pins)"
     , FlowEED.runFlow )
   , ( "Flow: Corpus transport (hostile JSON-RPC lines · subprocess)"

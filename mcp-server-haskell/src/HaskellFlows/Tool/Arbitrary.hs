@@ -478,6 +478,9 @@ formatCommandError = \case
   ContainsNewline  -> "type_name must be a single line (no newline characters)"
   ContainsSentinel -> "type_name contains the internal framing sentinel and was rejected"
   EmptyInput       -> "type_name is empty"
+  InputTooLarge sz cap ->
+    "type_name is too large (" <> T.pack (show sz) <> " chars, cap is "
+      <> T.pack (show cap) <> ")"
 
 encodeUtf8Text :: Value -> Text
 encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

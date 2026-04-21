@@ -145,6 +145,9 @@ formatCommandError = \case
   ContainsNewline  -> "prefix must be a single line (no newline characters)"
   ContainsSentinel -> "prefix contains the internal framing sentinel and was rejected"
   EmptyInput       -> "prefix is empty"
+  InputTooLarge sz cap ->
+    "prefix is too large (" <> T.pack (show sz) <> " chars, cap is "
+      <> T.pack (show cap) <> ")"
 
 encodeUtf8Text :: Value -> Text
 encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
