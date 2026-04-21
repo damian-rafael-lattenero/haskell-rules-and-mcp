@@ -36,6 +36,23 @@ cabal test haskell-flows-mcp-e2e
 Typical cycle time: 200–220 s with all scenarios, ~130 s with the
 slow-tagged ones skipped (see below).
 
+## On parallel execution (deferred)
+
+There's no `HASKELL_FLOWS_E2E_PARALLEL` knob today — an earlier
+experiment tried one, but N≥2 is fundamentally flaky against the
+current architecture (each scenario spawns `cabal repl`, and
+cabal-install upstream doesn't serialise the cross-process state
+it depends on). Proof by reference: no major Haskell project runs
+concurrent `cabal repl` per-test (HLS uses the GHC API as a
+library, ghcid uses hie-bios, etc.).
+
+The honest fix is a `startSession` refactor to bypass `cabal repl`
+and use the GHC API via hie-bios — same pattern as HLS. See
+[`docs/TODO-parallel-e2e.md`](TODO-parallel-e2e.md) for the full
+design doc, references, implementation plan, and acceptance
+criteria. ~1–2 days of focused work; deferred until someone takes
+the slot.
+
 ## Skipping slow scenarios in the dev inner loop
 
 Some scenarios dominate wall-time:
