@@ -100,10 +100,26 @@ jobs:
       # toolchain. `haskell-actions/setup@v2` installs cabal + ghc but
       # not hlint, so we stage hlint separately here. Keep this step
       # right BEFORE `Run tests` so cache hits above don't skip it.
-      - name: Install HLint (for ghci_toolchain_status + lint e2e)
+      # `haskell-actions/hlint-setup@v2` ships only x86_64 prebuilt
+      # binaries — it fails on macos-latest (now arm64) with
+      # "Unsupported architecture hlint: arm64". Linux keeps the
+      # action; macOS falls back to Homebrew, which has a native
+      # aarch64 bottle. The standalone `hlint` job on ubuntu is the
+      # authoritative version gate, so brew's hlint version on the
+      # matrix is only used for the e2e `findExecutable "hlint"`
+      # probe and minor drift is tolerable.
+      - name: Install HLint (Linux, via action)
+        if: runner.os == 'Linux'
         uses: haskell-actions/hlint-setup@v2
         with:
           version: "latest"
+
+      - name: Install HLint (macOS, via Homebrew)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install hlint
+          hlint --version
 
       - name: Run tests
         run: cabal test all --test-show-details=direct --test-options="--color"
