@@ -183,6 +183,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowPropertyStoreRace
                       Scenarios.FlowQualityGates
                       Scenarios.FlowRefactor
+                      Scenarios.FlowRefactorAdversarial
                       Scenarios.FlowRefactorOutOfScope
                       Scenarios.FlowRegressionScopeFix
                       Scenarios.FlowSessionRobustness

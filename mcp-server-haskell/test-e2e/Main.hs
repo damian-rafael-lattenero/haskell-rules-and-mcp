@@ -51,6 +51,7 @@ import qualified Scenarios.FlowPropertyLifecycle as FlowPL
 import qualified Scenarios.FlowPropertyStoreRace as FlowPSR
 import qualified Scenarios.FlowQualityGates     as FlowQG
 import qualified Scenarios.FlowRefactor         as FlowR
+import qualified Scenarios.FlowRefactorAdversarial as FlowRAdv
 import qualified Scenarios.FlowRefactorOutOfScope as FlowROS
 import qualified Scenarios.FlowRegressionScopeFix as FlowRSF
 import qualified Scenarios.FlowSessionRobustness as FlowSR
@@ -83,6 +84,8 @@ scenarios =
     , False, FlowH.runFlow )
   , ( "Flow: Refactor (rename happy + rollback + keyword-reject)"
     , False, FlowR.runFlow )
+  , ( "Flow: Refactor adversarial (collision / extract / bad-scope / missing)"
+    , False, FlowRAdv.runFlow )
   , ( "Flow: Arbitrary templates (flat / sized / polymorphic)"
     , False, FlowA.runFlow )
   , ( "Flow: Scope mgmt (browse / imports / apply_exports / add_import)"
