@@ -31,7 +31,8 @@ module HaskellFlows.Tool.Deps
   , removeDep
   ) where
 
-import Control.Exception (SomeException, try)
+import Control.Concurrent.MVar (MVar, newMVar, withMVar)
+import Control.Exception (SomeException, bracket, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAlphaNum, isDigit, isSpace)
@@ -41,11 +42,53 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import GHC.IO.Handle.Lock (hLock, hUnlock, LockMode (..))
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
+import System.IO (IOMode (..), openFile, hClose)
+import System.IO.Unsafe (unsafePerformIO)
 
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Types (ProjectDir, unProjectDir)
+
+-- | Serialise concurrent .cabal edits across every call originating
+-- in THIS process. 'hLock' below serialises across processes; the
+-- MVar covers the two-in-process-Server case that 'FlowConcurrentClients'
+-- exercises (hLock with two FDs inside one process behaves
+-- unpredictably on some POSIX implementations).
+--
+-- NOINLINE + unsafePerformIO is the canonical top-level-MVar pattern.
+-- It's a per-program singleton: the MVar has one state across the
+-- whole server lifetime, which is exactly what we want.
+{-# NOINLINE inProcessCabalLock #-}
+inProcessCabalLock :: MVar ()
+inProcessCabalLock = unsafePerformIO (newMVar ())
+
+-- | Exclusive read-modify-write guard around any .cabal mutation.
+-- Holds the in-process MVar AND an exclusive flock on a dedicated
+-- @.lock@ sidecar file.
+--
+-- We do NOT flock the .cabal itself: on some POSIX configurations
+-- holding an exclusive flock on a file blocks subsequent 'writeFile'
+-- attempts on the same path with "resource busy (file is locked)",
+-- which defeats the purpose. The sidecar lockfile is independent
+-- of the read/write path so both ends can proceed freely while
+-- the lock does its job.
+--
+-- Found-by: 'Scenarios.FlowConcurrentClients' in the e2e suite
+-- (two McpClients firing ghci_deps(add) concurrently dropped one
+-- of the writes with "resource busy (file is locked)" because the
+-- naive read + writeFile had no serialisation).
+withCabalLock :: FilePath -> IO a -> IO a
+withCabalLock cabalPath action =
+  withMVar inProcessCabalLock $ \_ -> do
+    let lockPath = cabalPath <> ".lock"
+    bracket
+      (do h <- openFile lockPath AppendMode  -- creates if missing
+          hLock h ExclusiveLock
+          pure h)
+      (\h -> hUnlock h >> hClose h)
+      (const action)
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -182,7 +225,7 @@ runEdit
   -> (Text -> Text -> Text)                  -- (pkg -> body -> newBody)
   -> Text                                    -- verb for the success message
   -> IO ToolResult
-runEdit file pkg mStanza f verb = do
+runEdit file pkg mStanza f verb = withCabalLock file $ do
   res <- try (TIO.readFile file) :: IO (Either SomeException Text)
   case res of
     Left e -> pure (errorResult (T.pack ("Could not read cabal file: " <> show e)))

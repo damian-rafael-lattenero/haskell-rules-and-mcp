@@ -29,15 +29,20 @@ import qualified Scenarios.FlowArbitrary        as FlowA
 import qualified Scenarios.FlowBatch            as FlowB
 import qualified Scenarios.FlowBootstrap        as FlowBoot
 import qualified Scenarios.FlowCorpusTransport  as FlowCT
+import qualified Scenarios.FlowConcurrentClients as FlowCC
 import qualified Scenarios.FlowCoverage         as FlowCov
 import qualified Scenarios.FlowCrossValidation  as FlowXV
+import qualified Scenarios.FlowDependencyConflict as FlowDC
+import qualified Scenarios.FlowDiskFull          as FlowDF
 import qualified Scenarios.FlowExploratory      as FlowE
 import qualified Scenarios.FlowExprEvaluatorDogfood as FlowEED
 import qualified Scenarios.FlowFixWarning       as FlowFW
 import qualified Scenarios.FlowGhciSigkill       as FlowSK
 import qualified Scenarios.FlowGracefulMiss      as FlowGM
 import qualified Scenarios.FlowInjectionGuard   as FlowIG
+import qualified Scenarios.FlowNonUTF8           as FlowNU
 import qualified Scenarios.FlowOversizedInput   as FlowOI
+import qualified Scenarios.FlowSandboxEscape     as FlowSE
 import qualified Scenarios.FlowTimeoutEnforcement as FlowTE
 import qualified Scenarios.FlowMutation          as FlowMut
 import qualified Scenarios.FlowPropertyLifecycle as FlowPL
@@ -109,6 +114,16 @@ scenarios =
     , FlowSK.runFlow )
   , ( "Flow: Oversized input (256 KiB expression rejected at boundary)"
     , FlowOI.runFlow )
+  , ( "Flow: Non-UTF-8 source file (graceful load error)"
+    , FlowNU.runFlow )
+  , ( "Flow: Dependency conflict (bogus dep · loud failure · clean remove)"
+    , FlowDC.runFlow )
+  , ( "Flow: Sandbox escape / RCE contract (documents ghci_eval capabilities)"
+    , FlowSE.runFlow )
+  , ( "Flow: Concurrent clients (two MCP clients, same project dir)"
+    , FlowCC.runFlow )
+  , ( "Flow: Disk full / permission denied on property store"
+    , FlowDF.runFlow )
   , ( "Flow: Expr evaluator dogfood (full 4-module library build + 3 bug pins)"
     , FlowEED.runFlow )
   , ( "Flow: Corpus transport (hostile JSON-RPC lines · subprocess)"
