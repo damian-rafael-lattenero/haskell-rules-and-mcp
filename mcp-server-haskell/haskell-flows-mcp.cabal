@@ -167,8 +167,10 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowExploratory
                       Scenarios.FlowExprEvaluatorDogfood
                       Scenarios.FlowFixWarning
+                      Scenarios.FlowGhciSigkill
                       Scenarios.FlowGracefulMiss
                       Scenarios.FlowInjectionGuard
+                      Scenarios.FlowTimeoutEnforcement
                       Scenarios.FlowMutation
                       Scenarios.FlowPropertyLifecycle
                       Scenarios.FlowQualityGates

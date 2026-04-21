@@ -456,13 +456,16 @@ runTool srv toolName rid action = do
            :: IO (Either SomeException (Maybe ToolResult))
   case out of
     Left ex -> do
+      let kind = case fromException ex :: Maybe SessionExhausted of
+                   Just _  -> "session_exhausted"
+                   Nothing -> "tool_exception"
       case fromException ex :: Maybe SessionExhausted of
         Just _  -> evictSession srv
         Nothing -> pure ()
-      pure (ok rid (toJSON (toolException (T.pack (show ex)))))
+      pure (ok rid (toJSON (toolException kind (T.pack (show ex)))))
     Right Nothing -> do
       evictSession srv
-      pure (ok rid (toJSON (toolException (timeoutMsg toolName))))
+      pure (ok rid (toJSON (toolException "timeout" (timeoutMsg toolName))))
     Right (Just tr) -> do
       let payload = firstJsonContent tr
       trackTool (srvWorkflowState srv) toolName (not (trIsError tr)) payload
@@ -529,9 +532,29 @@ ok rid v = Response { respId = rid, respPayload = Right v }
 err_ :: RequestId -> RpcError -> Response
 err_ rid e = Response { respId = rid, respPayload = Left e }
 
-toolException :: Text -> ToolResult
-toolException msg =
-  ToolResult
-    { trContent = [ TextContent ("Tool threw an exception: " <> msg) ]
-    , trIsError = True
-    }
+-- | Structured tool-level error payload used when 'runTool' catches
+-- an exception or a timeout elapses. Pre-fix this returned a raw
+-- @"Tool threw an exception: X"@ plain string, which broke every
+-- client that expected the per-tool JSON envelope
+-- (@{"success":false,"error":"…"}@) — a timeout was
+-- indistinguishable from a rename-local failure at the schema level.
+-- The payload now carries:
+--
+-- * @success@  — always @false@, matches the per-tool error shape
+-- * @error@    — human-readable detail (unchanged text)
+-- * @error_kind@ — machine-readable tag: @"session_exhausted"@,
+--                  @"timeout"@, or @"tool_exception"@.
+--
+-- Found by 'Scenarios.FlowTimeoutEnforcement' in the e2e suite.
+toolException :: Text -> Text -> ToolResult
+toolException kind msg =
+  let payload = object
+        [ "success"    .= False
+        , "error"      .= ("Tool threw an exception: " <> msg)
+        , "error_kind" .= kind
+        ]
+      encoded = TE.decodeUtf8 (BL.toStrict (encode payload))
+  in ToolResult
+       { trContent = [ TextContent encoded ]
+       , trIsError = True
+       }
