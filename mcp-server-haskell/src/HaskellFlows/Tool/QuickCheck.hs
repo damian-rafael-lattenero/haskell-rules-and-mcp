@@ -20,10 +20,14 @@ module HaskellFlows.Tool.QuickCheck
   ( descriptor
   , handle
   , QuickCheckArgs (..)
+    -- * Pure helpers exposed for unit tests
+  , chooseStoreModule
+  , isSimpleIdent
   ) where
 
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Data.Char (isAlpha, isAlphaNum)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
@@ -33,6 +37,7 @@ import HaskellFlows.Data.PropertyStore (Store, save)
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Parser.QuickCheck
+import HaskellFlows.Tool.Goto (Location (..), parseDefinedAt)
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -84,6 +89,16 @@ instance FromJSON QuickCheckArgs where
 -- to the 'Store' so 'ghci_regression' can replay it later. Failures are
 -- not persisted — only properties that have passed at least once count
 -- as trusted baseline.
+--
+-- Note on the persisted @module@ field: when the property expression
+-- is a bare identifier (e.g. @prop_idempotent@), we ignore the
+-- caller's @qaModule@ hint and instead query GHCi's @:info@ to find
+-- where the identifier is actually defined. That way a caller who
+-- passes the module of the /function under test/ (the natural choice)
+-- doesn't accidentally make the replay fail when the property lives
+-- in a different file (typically the test-suite's @Main@). The
+-- caller hint is used verbatim only for anonymous-lambda properties,
+-- where @:info@ cannot help.
 handle :: Store -> Session -> Value -> IO ToolResult
 handle store sess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
@@ -95,9 +110,61 @@ handle store sess rawArgs = case parseEither parseJSON rawArgs of
       Right gr    -> do
         let qr = parseQuickCheckOutput prop (grOutput gr)
         case qr of
-          QcPassed _ _ -> save store prop md
+          QcPassed _ _ -> do
+            resolved <- resolvePropertyModule sess prop md
+            save store prop resolved
           _            -> pure ()
         pure (renderResult qr)
+
+--------------------------------------------------------------------------------
+-- store-module resolution
+--------------------------------------------------------------------------------
+
+-- | Resolve the module path to persist alongside a passing property.
+-- For simple identifiers we consult @:info@; for anonymous
+-- expressions we fall back to whatever the caller provided.
+resolvePropertyModule :: Session -> Text -> Maybe Text -> IO (Maybe Text)
+resolvePropertyModule sess prop callerHint
+  | isSimpleIdent prop = do
+      r <- infoOf sess prop
+      let mRaw = case r of
+            Right gr | grSuccess gr -> Just (grOutput gr)
+            _                        -> Nothing
+      pure (chooseStoreModule prop callerHint mRaw)
+  | otherwise =
+      pure (chooseStoreModule prop callerHint Nothing)
+
+-- | Pure selector: given the property text, the caller's hint, and
+-- (optionally) the @:info@ output, pick which path to persist.
+--
+-- * Identifier + valid @:info@ with a file location → that file path.
+-- * Anything else → the caller hint verbatim (may itself be
+--   'Nothing').
+--
+-- Exposed for unit tests so the resolution rules can be pinned
+-- without spawning a live GHCi.
+chooseStoreModule :: Text -> Maybe Text -> Maybe Text -> Maybe Text
+chooseStoreModule prop callerHint mInfo
+  | isSimpleIdent prop
+  , Just raw <- mInfo
+  , Just (InFile path _ _) <- parseDefinedAt raw
+  = Just path
+  | otherwise
+  = callerHint
+
+-- | True iff @t@ parses as a single Haskell identifier (possibly
+-- qualified with dots, e.g. @Spec.prop_x@). Used to decide whether
+-- @:info t@ is a meaningful query — lambda expressions, operator
+-- sections, and other compound forms are bounced so we never ask
+-- GHCi for the "definition site" of @(\\x -> x + 1)@.
+isSimpleIdent :: Text -> Bool
+isSimpleIdent t = case T.uncons t of
+  Nothing      -> False
+  Just (c, cs) ->
+    (isAlpha c || c == '_')
+      && T.all validRest cs
+  where
+    validRest c = isAlphaNum c || c == '_' || c == '\'' || c == '.'
 
 --------------------------------------------------------------------------------
 -- response shaping

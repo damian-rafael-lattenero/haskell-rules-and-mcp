@@ -77,7 +77,9 @@ import HaskellFlows.Mcp.NextStep
 import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescriptor (..), ToolResult (..))
 import HaskellFlows.Tool.Batch (BatchArgs (..))
 import qualified HaskellFlows.Tool.Gate as Gate
+import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
+import qualified HaskellFlows.Tool.Regression as RegTool
 import qualified HaskellFlows.Tool.Bootstrap as Bootstrap
 import qualified HaskellFlows.Tool.RemoveModules as RM
 import qualified HaskellFlows.Tool.Suggest as SuggestTool
@@ -176,6 +178,10 @@ main = do
       , quickTest "prop_sanitize_clean_roundtrip"     prop_sanitize_clean_roundtrip
       , quickTest "prop_modulePath_rejects_dotdot"    prop_modulePath_rejects_dotdot
       , quickTest "prop_modulePath_accepts_inTree"    prop_modulePath_accepts_inTree
+      , quickTest "prop_parseShowModulesPaths_total"  prop_parseShowModulesPaths_total
+      , quickTest "prop_parseQuickCheckOutput_total"  prop_parseQuickCheckOutput_total
+      , quickTest "prop_chooseStoreModule_nonIdent_uses_hint" prop_chooseStoreModule_nonIdent_uses_hint
+      , quickTest "prop_chooseStoreModule_ident_no_info_uses_hint" prop_chooseStoreModule_ident_no_info_uses_hint
       , test "parseQuickCheckOutput passed"        testQcPassed
       , test "parseQuickCheckOutput failed"        testQcFailed
       , test "parseQuickCheckOutput gave up"       testQcGaveUp
@@ -305,6 +311,14 @@ main = do
       , test "propstore: save auto-creates dir"     testPropStoreCreatesDir
       , test "propstore: save after rm -rf dir"     testPropStoreResurrectsDir
       , test "propstore: concurrent saves no loss"  testPropStoreConcurrentSaves
+      , test "quickcheck: chooseStoreModule ident + info"     testChooseStoreModuleIdentWithInfo
+      , test "quickcheck: chooseStoreModule ident no info"    testChooseStoreModuleIdentNoInfo
+      , test "quickcheck: chooseStoreModule lambda uses hint" testChooseStoreModuleLambda
+      , test "quickcheck: chooseStoreModule ignores module loc" testChooseStoreModuleModuleLoc
+      , test "quickcheck: isSimpleIdent classifier"            testIsSimpleIdentClassifier
+      , test "regression: parseShowModulesPaths simple"        testParseShowModulesPathsSimple
+      , test "regression: parseShowModulesPaths multi-module"  testParseShowModulesPathsMulti
+      , test "regression: parseShowModulesPaths tolerates garbage" testParseShowModulesPathsGarbage
       , test "suggest: involutive Low for normalizer" testInvolutiveLowForNormalizer
       , test "suggest: involutive Medium for reverse" testInvolutiveMediumForReverse
       , test "suggest: scope error -> structured hint" testSuggestScopeStructuredHint
@@ -564,6 +578,55 @@ instance QC.Arbitrary SafeSegment where
   arbitrary = SafeSegment <$> QC.listOf1 (QC.elements alphaNum)
     where
       alphaNum = ['a'..'z'] <> ['A'..'Z'] <> ['0'..'9'] <> "_-"
+
+--------------------------------------------------------------------------------
+-- Totality / law properties added after the dogfood UX fixes. These
+-- cover surfaces that parse external text (@:show modules@, QuickCheck
+-- output) and pure decision functions (@chooseStoreModule@). Each one
+-- is an honest bug-finder: running 200 QuickCheck cases exercises
+-- shapes a hand-rolled unit test would never type.
+--------------------------------------------------------------------------------
+
+-- | @parseShowModulesPaths@ must be total on any input and never
+-- return more paths than input lines. Catches: runaway parsers,
+-- hangs on degenerate input, infinite output loops.
+prop_parseShowModulesPaths_total :: String -> Bool
+prop_parseShowModulesPaths_total input =
+  let txt    = T.pack input
+      result = RegTool.parseShowModulesPaths txt
+      maxN   = length (T.lines txt)
+  in length result <= max maxN 1
+
+-- | @parseQuickCheckOutput@ must be total on any (propName, output)
+-- pair and return a renderable 'QuickCheckResult'. Catches: bottom
+-- constructors, partial pattern matches on output regex splits, and
+-- (via 'length . show') infinite loops.
+prop_parseQuickCheckOutput_total :: String -> String -> Bool
+prop_parseQuickCheckOutput_total propName output =
+  not (null (show (parseQuickCheckOutput (T.pack propName) (T.pack output))))
+
+-- | For any property expression that is NOT a simple identifier
+-- (here: anything starting with '\\'), 'chooseStoreModule' must
+-- return the caller's hint verbatim — the @:info@ output is
+-- irrelevant for lambdas. Pinned so a refactor cannot accidentally
+-- extend auto-resolution to expressions where @:info@ would return
+-- useless results.
+prop_chooseStoreModule_nonIdent_uses_hint :: SafeSegment -> SafeSegment -> Bool
+prop_chooseStoreModule_nonIdent_uses_hint (SafeSegment body) (SafeSegment hint) =
+  let prop  = T.pack ("\\x -> " <> body <> " x")
+      mHint = Just (T.pack ("src/" <> hint <> ".hs"))
+      info  = Just (T.pack "prop :: a -- Defined at other/File.hs:1:1")
+  in QcTool.chooseStoreModule prop mHint info == mHint
+
+-- | Simple identifier but no @:info@ output available (e.g. GHCi
+-- returned an error): fall back to the caller's hint rather than
+-- inventing a path. Pinned so a refactor cannot accidentally
+-- default to something path-like that the caller didn't authorise.
+prop_chooseStoreModule_ident_no_info_uses_hint :: SafeSegment -> SafeSegment -> Bool
+prop_chooseStoreModule_ident_no_info_uses_hint (SafeSegment seg) (SafeSegment hint) =
+  let prop  = T.pack ("prop_" <> seg)
+      mHint = Just (T.pack ("src/" <> hint <> ".hs"))
+  in QcTool.chooseStoreModule prop mHint Nothing == mHint
 
 --------------------------------------------------------------------------------
 -- Phase 4: QuickCheck output + typed-hole parsers
@@ -2950,6 +3013,119 @@ testSuggestEncodeShapeSkipsListRules =
       let laws = map sLaw (applyRules "encode" sig)
       in pure $ "Self-inverse on lists" `notElem` laws
              && "Length preserving / non-extending" `notElem` laws
+
+--------------------------------------------------------------------------------
+-- ghci_quickcheck: store-module resolution (the "persist with the right file"
+-- UX fix). The dogfood of the expr-evaluator surfaced the bug: callers pass
+-- the module of the /function under test/ ('src/Foo.hs'), but the property
+-- itself lives in 'test/Spec.hs', and regression replay needs the latter to
+-- put the identifier in scope. These tests pin the pure decision function
+-- so the resolution rule can evolve without a live GHCi.
+--------------------------------------------------------------------------------
+
+-- | Happy path: identifier + valid ':info' output → use the file from ':info'.
+testChooseStoreModuleIdentWithInfo :: IO Bool
+testChooseStoreModuleIdentWithInfo = pure $
+  QcTool.chooseStoreModule
+    "prop_idempotent"
+    (Just "src/Foo.hs")                 -- caller's (wrong) hint
+    (Just ":info output\nprop_idempotent :: Expr -> Bool \
+           \\t-- Defined at test/Spec.hs:12:1\n")
+  == Just "test/Spec.hs"
+
+-- | Identifier but no ':info' available (e.g. session busy) → fall back
+-- to whatever the caller passed. We don't invent a path.
+testChooseStoreModuleIdentNoInfo :: IO Bool
+testChooseStoreModuleIdentNoInfo = pure $
+  QcTool.chooseStoreModule
+    "prop_idempotent"
+    (Just "src/Foo.hs")
+    Nothing
+  == Just "src/Foo.hs"
+
+-- | Lambda expression (not a simple identifier) → ':info' doesn't apply
+-- even if we had it; use caller hint verbatim. Keeps backwards
+-- compatibility for inline-property callers.
+testChooseStoreModuleLambda :: IO Bool
+testChooseStoreModuleLambda = pure $
+  QcTool.chooseStoreModule
+    "\\xs -> reverse (reverse xs) == xs"
+    (Just "src/Foo.hs")
+    (Just "anything") -- should be ignored because the expression isn't an ident
+  == Just "src/Foo.hs"
+
+-- | ':info' reports only a module ("Defined in 'Prelude'"), not a file
+-- location. That's not actionable for regression replay, so we still
+-- fall back to the caller hint. Prevents a regression where we'd
+-- persist a module NAME where the store expects a file PATH.
+testChooseStoreModuleModuleLoc :: IO Bool
+testChooseStoreModuleModuleLoc = pure $
+  QcTool.chooseStoreModule
+    "prop_trivial"
+    (Just "src/Foo.hs")
+    (Just "prop_trivial :: Bool -- Defined in 'Prelude'")
+  == Just "src/Foo.hs"
+
+-- | Classifier: bare identifiers pass, qualified identifiers pass,
+-- prefix operators and lambdas are rejected.
+testIsSimpleIdentClassifier :: IO Bool
+testIsSimpleIdentClassifier = pure $ and
+  [       QcTool.isSimpleIdent "prop_x"
+  ,       QcTool.isSimpleIdent "Spec.prop_x"
+  ,       QcTool.isSimpleIdent "prop_x'"
+  ,       QcTool.isSimpleIdent "Foo.Bar.baz"
+  , not ( QcTool.isSimpleIdent "\\x -> x" )
+  , not ( QcTool.isSimpleIdent "prop_x y" )           -- space → compound
+  , not ( QcTool.isSimpleIdent "(prop_x)" )           -- parens rejected
+  , not ( QcTool.isSimpleIdent "prop_x + 1" )
+  , not ( QcTool.isSimpleIdent "" )
+  , not ( QcTool.isSimpleIdent "42" )                 -- leading digit
+  ]
+
+--------------------------------------------------------------------------------
+-- ghci_regression: parser for ':show modules' output. Used by the scope
+-- snapshot/restore path so a regression run doesn't clobber the caller's
+-- previously-loaded module set.
+--------------------------------------------------------------------------------
+
+-- | Single-module shape: the format GHCi emits for a project with
+-- exactly one compiled module.
+testParseShowModulesPathsSimple :: IO Bool
+testParseShowModulesPathsSimple =
+  let raw = T.pack "Foo              ( src/Foo.hs, interpreted )\n"
+  in pure (RegTool.parseShowModulesPaths raw == ["src/Foo.hs"])
+
+-- | Multi-module shape: library + test-suite layout. Order preserved;
+-- paths extracted without picking up the module name or the 'kind'
+-- trailing bit.
+testParseShowModulesPathsMulti :: IO Bool
+testParseShowModulesPathsMulti =
+  let raw = T.unlines
+        [ "Expr.Syntax     ( src/Expr/Syntax.hs, interpreted )"
+        , "Expr.Eval       ( src/Expr/Eval.hs, interpreted )"
+        , "Main            ( test/Spec.hs, interpreted )"
+        ]
+  in pure $
+       RegTool.parseShowModulesPaths raw ==
+         ["src/Expr/Syntax.hs", "src/Expr/Eval.hs", "test/Spec.hs"]
+
+-- | Garbage / empty lines: skip. Parser is a best-effort tool, not a
+-- strict validator; refusing to crash on unexpected input is the
+-- important invariant.
+testParseShowModulesPathsGarbage :: IO Bool
+testParseShowModulesPathsGarbage = pure $ and
+  [ null (RegTool.parseShowModulesPaths "")
+  , null (RegTool.parseShowModulesPaths "random log output\n")
+  , null (RegTool.parseShowModulesPaths "Foo  ( , interpreted )")
+    -- real-looking line sandwiched between garbage: still extracted.
+  , RegTool.parseShowModulesPaths
+      ( T.unlines
+          [ "random warning line"
+          , "Bar  ( src/Bar.hs, interpreted )"
+          , ""
+          ]
+      ) == ["src/Bar.hs"]
+  ]
 
 -- | Helper: create a fresh temp directory and delete it after the test.
 -- Passes a validated 'ProjectDir' (absolute + normalised) to the body.

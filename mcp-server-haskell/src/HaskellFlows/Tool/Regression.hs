@@ -23,8 +23,11 @@ module HaskellFlows.Tool.Regression
     -- * Reusable runners for other tools (e.g. Tool.Gate)
   , Replay (..)
   , runOne
+    -- * Pure helpers exposed for unit tests
+  , parseShowModulesPaths
   ) where
 
+import Control.Monad (void)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -40,6 +43,7 @@ import HaskellFlows.Data.PropertyStore
 import HaskellFlows.Ghci.Session
   ( Session
   , GhciResult (..)
+  , execute
   , runProperty
   )
 import HaskellFlows.Mcp.Protocol
@@ -98,7 +102,14 @@ handle store sess rawArgs = case parseEither parseJSON rawArgs of
     case a of
       ActList -> pure (listResult props)
       ActRun  -> do
-        results <- mapM (runOne sess) props
+        -- Snapshot the caller's scope before we start re-loading
+        -- modules per property. Without this, a run that touches
+        -- several test-suite modules leaves GHCi pointing at the
+        -- last one, and the next @ghci_eval@ from the caller
+        -- fails with "Variable not in scope: main" / similar.
+        scopeBefore <- snapshotLoadedModules sess
+        results     <- mapM (runOne sess) props
+        restoreLoadedModules sess scopeBefore
         pure (runResult results)
 
 --------------------------------------------------------------------------------
@@ -113,12 +124,83 @@ data Replay = Replay
 
 runOne :: Session -> StoredProperty -> IO Replay
 runOne sess sp = do
+  -- If the store knows which file defines the property, re-load
+  -- that file first so the identifier is guaranteed in scope. A
+  -- missing or invalid path is a silent no-op — 'runProperty' will
+  -- surface the resulting "Variable not in scope" as an unparsed
+  -- regression. (The path was validated when persisted.)
+  case spModule sp of
+    Just m | not (T.null m) ->
+      void (execute sess (":load " <> m))
+    _ -> pure ()
   res <- runProperty sess (spExpression sp)
   let qr = case res of
         Left _   -> QcUnparsed (spExpression sp)
                      "boundary-sanitiser rejected the stored expression"
         Right gr -> parseQuickCheckOutput (spExpression sp) (grOutput gr)
   pure Replay { rpStored = sp, rpResult = qr }
+
+--------------------------------------------------------------------------------
+-- scope snapshot / restore
+--
+-- We pay one extra @:show modules@ + one @:load <paths>@ at the end
+-- of every regression run so callers aren't surprised by their
+-- previously-loaded test-suite module having been knocked out of
+-- scope by the replay loop. Both primitives are best-effort: if
+-- @:show modules@ cannot be parsed we just don't restore anything.
+--------------------------------------------------------------------------------
+
+snapshotLoadedModules :: Session -> IO [Text]
+snapshotLoadedModules sess = do
+  GhciResult raw ok <- execute sess ":show modules"
+  pure $ if ok then parseShowModulesPaths raw else []
+
+restoreLoadedModules :: Session -> [Text] -> IO ()
+restoreLoadedModules _sess []    = pure ()    -- nothing to restore
+restoreLoadedModules sess  paths =
+  -- Pass the LAST path only. GHCi's ':show modules' emits
+  -- dependents after their dependencies, so the last entry is
+  -- (with overwhelming probability) the target module the caller
+  -- had set with their earlier ':load'. A single-argument ':load'
+  -- on that file pulls in the transitive imports automatically
+  -- and unambiguously sets the target module — which in turn
+  -- governs what's in scope for the next ':eval' or ':info'.
+  --
+  -- Multi-argument ':load A.hs B.hs C.hs' was observed to leave
+  -- the target-module scope in an inconsistent state on GHC 9.12
+  -- for multi-module test-suites (the subsequent ':eval' saw
+  -- neither the Main-binding-level exports nor the qualified
+  -- imports from the would-be target). Use the one-file form.
+  void (execute sess (":load " <> last paths))
+
+-- | Parse the output of GHCi's @:show modules@ into the list of file
+-- paths it references. Output lines look like:
+--
+-- >   Foo              ( src/Foo.hs, interpreted )
+-- >   Main             ( test/Spec.hs, interpreted )
+--
+-- Anything that doesn't match the @Name ( path, kind )@ shape is
+-- silently skipped. Exposed for unit tests so the parser's
+-- tolerance to GHC-version drift can be pinned without a live
+-- session.
+parseShowModulesPaths :: Text -> [Text]
+parseShowModulesPaths raw =
+  [ path
+  | ln <- T.lines raw
+  , Just path <- [pathFromLine ln]
+  ]
+  where
+    pathFromLine ln =
+      let (_, afterOpen) = T.breakOn "(" ln
+      in if T.null afterOpen
+           then Nothing
+           else
+             let inside          = T.strip (T.drop 1 afterOpen)
+                 (rawPath, _)    = T.breakOn "," inside
+                 pathStripped    = T.strip rawPath
+             in if T.null pathStripped
+                  then Nothing
+                  else Just pathStripped
 
 --------------------------------------------------------------------------------
 -- response shaping

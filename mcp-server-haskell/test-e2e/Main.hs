@@ -41,6 +41,7 @@ import qualified Scenarios.FlowPropertyLifecycle as FlowPL
 import qualified Scenarios.FlowQualityGates     as FlowQG
 import qualified Scenarios.FlowRefactor         as FlowR
 import qualified Scenarios.FlowRefactorOutOfScope as FlowROS
+import qualified Scenarios.FlowRegressionScopeFix as FlowRSF
 import qualified Scenarios.FlowSessionRobustness as FlowSR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
@@ -105,6 +106,8 @@ scenarios =
     , FlowCT.runFlow )
   , ( "Flow: Cross-validation (MCP check_project vs cabal build)"
     , FlowXV.runFlow )
+  , ( "Flow: Regression scope fix (module resolve + scope restore)"
+    , FlowRSF.runFlow )
   ]
 
 main :: IO ()
