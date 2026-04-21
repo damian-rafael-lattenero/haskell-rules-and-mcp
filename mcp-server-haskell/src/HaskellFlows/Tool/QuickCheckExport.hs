@@ -44,7 +44,7 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (createDirectoryIfMissing)
-import System.FilePath (takeDirectory, (</>))
+import System.FilePath (takeDirectory)
 
 import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
 import HaskellFlows.Mcp.Protocol

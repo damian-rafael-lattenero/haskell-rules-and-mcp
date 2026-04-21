@@ -25,6 +25,8 @@ import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Vector as V
 
 import E2E.Assert
   ( Check (..)
@@ -98,27 +100,59 @@ runFlow c _projectDir = do
   stepFooter 2 t1
 
   ----------------------------------------------------------------
-  -- (2) Fail-fast: second action is broken (invalid package
-  -- name rejects at the boundary validator). With the default
-  -- fail_fast=true, action #3 must surface as skipped.
+  -- (2) Fail-fast with OBSERVABLE side effects.
+  --
+  -- The earlier version of this scenario fired (status → bad-dep →
+  -- help) and asserted the batch's own counters (ok/failed/skipped).
+  -- That only proves the TOOL can count. A tool bug where the
+  -- fail_fast flag is silently ignored and action #3 DOES run would
+  -- still report ok=1, failed=1, skipped=1 if the emitter is buggy
+  -- in the same direction.
+  --
+  -- To close that hole we chain THREE 'ghci_deps(add)' actions with
+  -- distinct packages. Action #2 is deliberately invalid (validator
+  -- refuses). With fail_fast=true, action #3 (bytestring) must
+  -- NEVER run — the oracle is the .cabal on disk:
+  --
+  --    build_depends must contain 'text'       (action #1 ran)
+  --    build_depends must NOT contain 'bytestring' (action #3 skipped)
+  --
+  -- That's an observable fact, independent of the batch's own
+  -- counters. If the tool lies about counters the filesystem still
+  -- tells the truth.
   ----------------------------------------------------------------
-  t2 <- stepHeader 3 "ghci_batch(fail_fast=true on bad middle action)"
+  t2 <- stepHeader 3
+          "ghci_batch(fail_fast=true) · filesystem oracle"
+  -- Use packages DISTINCT from the happy-case batch above so
+  -- action #1 genuinely inserts (happy case already added 'text';
+  -- re-adding it here returns "No change: already at desired
+  -- state" which reads as failure, not success — that is the
+  -- correct ghci_deps behaviour but would be a false negative
+  -- for the fail-fast oracle).
   let ffActions =
-        [ object
-            [ "tool" .= ("ghci_workflow" :: Text)
-            , "args" .= object [ "action" .= ("status" :: Text) ]
-            ]
-        , object
+        [ object  -- action 1: genuinely new dep → success
             [ "tool" .= ("ghci_deps" :: Text)
             , "args" .= object
                 [ "action"  .= ("add" :: Text)
-                , "package" .= ("this has spaces, clearly invalid!" :: Text)
+                , "package" .= ("aeson" :: Text)
                 , "stanza"  .= ("library" :: Text)
                 ]
             ]
-        , object
-            [ "tool" .= ("ghci_workflow" :: Text)
-            , "args" .= object [ "action" .= ("help" :: Text) ]
+        , object  -- action 2: boundary-rejected (validator)
+            [ "tool" .= ("ghci_deps" :: Text)
+            , "args" .= object
+                [ "action"  .= ("add" :: Text)
+                , "package" .= ("has spaces and ! is invalid" :: Text)
+                , "stanza"  .= ("library" :: Text)
+                ]
+            ]
+        , object  -- action 3: MUST be skipped by fail_fast
+            [ "tool" .= ("ghci_deps" :: Text)
+            , "args" .= object
+                [ "action"  .= ("add" :: Text)
+                , "package" .= ("bytestring" :: Text)
+                , "stanza"  .= ("library" :: Text)
+                ]
             ]
         ]
   ffR <- Client.callTool c "ghci_batch" (object
@@ -146,7 +180,35 @@ runFlow c _projectDir = do
           "response should echo fail_fast=true so consumers know the mode"
   stepFooter 3 t2
 
-  pure [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10]
+  -- The REAL oracle: what does the filesystem say?
+  t3 <- stepHeader 4 "filesystem oracle · ls build_depends after batch"
+  ls <- Client.callTool c "ghci_deps"
+          (object [ "action" .= ("list" :: Text) ])
+  let deps = case lookupField "build_depends" ls of
+        Just (Array xs) -> [ p | String p <- toListVec xs ]
+        _               -> []
+      hasAeson = any ("aeson" `textInfix`) deps
+      hasBS    = any ("bytestring" `textInfix`) deps
+  c11 <- liveCheck $ Check
+    { cName   = "action #1 landed · 'aeson' is in build_depends"
+    , cOk     = hasAeson
+    , cDetail = "If 'aeson' is missing, even the FIRST successful \
+                \batch action didn't persist — the batch short-circuit \
+                \also rolled back earlier successes, or ghci_deps is \
+                \broken. build_depends=" <> T.pack (show deps)
+    }
+  c12 <- liveCheck $ Check
+    { cName   = "action #3 SKIPPED · 'bytestring' NOT in build_depends"
+    , cOk     = not hasBS
+    , cDetail = "If 'bytestring' IS in build_depends the third action \
+                \ran despite fail_fast=true and a failed middle action. \
+                \The counters in ffR may look right (tool cheats) but \
+                \the filesystem doesn't lie. build_depends="
+                <> T.pack (show deps)
+    }
+  stepFooter 4 t3
+
+  pure [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12]
 
 --------------------------------------------------------------------------------
 -- helpers
@@ -156,5 +218,12 @@ numberAtLeast :: Int -> Value -> Bool
 numberAtLeast n (Number x) = n <= (round x :: Int)
 numberAtLeast _ _          = False
 
-_unused :: KeyMap.KeyMap Value -> Key.Key
-_unused _ = Key.fromText ""
+lookupField :: Text -> Value -> Maybe Value
+lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
+lookupField _ _          = Nothing
+
+toListVec :: V.Vector a -> [a]
+toListVec = V.toList
+
+textInfix :: Text -> Text -> Bool
+textInfix = T.isInfixOf

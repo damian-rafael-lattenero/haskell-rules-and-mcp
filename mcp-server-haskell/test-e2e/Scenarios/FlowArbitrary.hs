@@ -168,7 +168,74 @@ runFlow c projectDir = do
           "recursive branches of a polymorphic type must still halve"
   stepFooter 4 t3
 
-  pure [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14]
+  ----------------------------------------------------------------
+  -- (4) BUG-FINDING ORACLE: paste the 3 generated templates into a
+  -- real module and ghci_load it. If ANY template has a typo, a
+  -- missing import, an unbalanced paren, or renders a constructor
+  -- that doesn't exist, load will fail.
+  --
+  -- The earlier steps check substring patterns in the template
+  -- string; this step closes the "string looks right but code
+  -- doesn't compile" hole. The test now catches:
+  --   * missing newline between ctor lines
+  --   * generated code that references an undefined symbol
+  --   * 'Arbitrary a =>' constraint dropped on polymorphic types
+  --   * misrendered operator precedence in the sized body
+  ----------------------------------------------------------------
+  t4 <- stepHeader 5 "compile oracle · paste 3 templates + ghci_load"
+
+  -- Pull the template strings out of the three responses. If any
+  -- of them returned Null, the file write uses an empty stub and
+  -- load will fail loudly (which is the right signal).
+  let tpl1 = extractTemplate r1
+      tpl2 = extractTemplate r2
+      tpl3 = extractTemplate r3
+      genSrc = T.unlines
+        [ "{-# OPTIONS_GHC -Wno-orphans -Wno-missing-signatures #-}"
+        , "module ShapesGen () where"
+        , ""
+        , "import Shapes"
+        , "import Test.QuickCheck"
+        , ""
+        , tpl1
+        , ""
+        , tpl2
+        , ""
+        , tpl3
+        ]
+  TIO.writeFile (projectDir </> "src" </> "ShapesGen.hs") genSrc
+
+  _ <- Client.callTool c "ghci_add_modules"
+         (object [ "modules" .= (["ShapesGen"] :: [Text]) ])
+  -- The session needs QuickCheck in scope to resolve 'Arbitrary',
+  -- 'arbitrary', 'oneof', 'sized', 'frequency'. It's already a
+  -- build-depends in the library stanza (cabal repl injects it),
+  -- but we add it to the library explicitly so the generated
+  -- module loads under its own power, not via the test-only scope.
+  _ <- Client.callTool c "ghci_deps"
+         (object
+           [ "action"  .= ("add" :: Text)
+           , "package" .= ("QuickCheck" :: Text)
+           , "stanza"  .= ("library" :: Text)
+           ])
+  loadGen <- Client.callTool c "ghci_load"
+               (object [ "module_path" .= ("src/ShapesGen.hs" :: Text) ])
+  c15 <- liveCheck $ Check
+    { cName   = "3 generated Arbitrary instances compile together"
+    , cOk     = fieldBool "success" loadGen == Just True
+             && case lookupField "errors" loadGen of
+                  Just (Array xs) -> null xs
+                  _               -> True  -- missing errors field = ok
+    , cDetail = "If this fails, at least one template from \
+                \ghci_arbitrary produced non-compiling code. That's \
+                \a real bug — the template string can look correct \
+                \to substring matchers (steps 2-4 above) yet not \
+                \type-check. Raw: "
+                <> renderShort loadGen
+    }
+  stepFooter 5 t4
+
+  pure [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15]
 
 --------------------------------------------------------------------------------
 -- helpers
@@ -182,5 +249,24 @@ notContaining :: Text -> Value -> Bool
 notContaining needle (String s) = not (needle `T.isInfixOf` s)
 notContaining _      _          = False
 
-_unused :: KeyMap.KeyMap Value -> Key.Key
-_unused _ = Key.fromText ""
+-- | Pull the 'template' string out of a ghci_arbitrary response.
+-- Empty text on missing — ghci_load will then fail on an empty
+-- stub, which is the right signal.
+extractTemplate :: Value -> Text
+extractTemplate v = case lookupField "template" v of
+  Just (String s) -> s
+  _               -> T.empty
+
+fieldBool :: Text -> Value -> Maybe Bool
+fieldBool k v = case lookupField k v of
+  Just (Bool b) -> Just b
+  _             -> Nothing
+
+lookupField :: Text -> Value -> Maybe Value
+lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
+lookupField _ _          = Nothing
+
+renderShort :: Value -> Text
+renderShort v =
+  let s = T.pack (show v)
+  in if T.length s > 400 then T.take 400 s <> "…(truncated)" else s

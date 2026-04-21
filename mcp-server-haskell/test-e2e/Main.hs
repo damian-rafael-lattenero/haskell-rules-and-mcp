@@ -17,6 +17,7 @@ import Control.Exception (bracket, try, SomeException)
 import qualified Data.Text as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
+import qualified System.Environment
 import System.Exit (exitFailure, exitSuccess)
 import System.FilePath ((</>))
 import System.IO (BufferMode (..), hSetBuffering, stderr, stdout)
@@ -25,6 +26,7 @@ import qualified E2E.Assert as Assert
 import qualified E2E.Client as Client
 import qualified E2E.Smoke  as Smoke
 import qualified Scenarios.ExprEvaluator        as Expr
+import qualified Scenarios.FlowANSIEscape        as FlowANSI
 import qualified Scenarios.FlowArbitrary        as FlowA
 import qualified Scenarios.FlowBatch            as FlowB
 import qualified Scenarios.FlowBootstrap        as FlowBoot
@@ -46,6 +48,7 @@ import qualified Scenarios.FlowSandboxEscape     as FlowSE
 import qualified Scenarios.FlowTimeoutEnforcement as FlowTE
 import qualified Scenarios.FlowMutation          as FlowMut
 import qualified Scenarios.FlowPropertyLifecycle as FlowPL
+import qualified Scenarios.FlowPropertyStoreRace as FlowPSR
 import qualified Scenarios.FlowQualityGates     as FlowQG
 import qualified Scenarios.FlowRefactor         as FlowR
 import qualified Scenarios.FlowRefactorOutOfScope as FlowROS
@@ -60,78 +63,88 @@ import qualified Scenarios.FlowWorkflowHelp     as FlowWH
 
 -- | Every scenario exposes the same shape:
 --
---   @(label, runFlow :: McpClient -> FilePath -> IO [Check])@
+--   @(label, isSlow, runFlow :: McpClient -> FilePath -> IO [Check])@
+--
+-- 'isSlow' = True marks scenarios that dominate wall-time — cabal
+-- coverage runs, the 30 s inner-timeout assertion, real session
+-- respawns, concurrent-clients fan-out, etc. CI runs everything by
+-- default; the dev inner loop can skip them with
+-- @HASKELL_FLOWS_E2E_SKIP_SLOW=1@ to drop ~3 min of wall-time.
 --
 -- Main iterates this list, each iteration = one fresh tempdir +
 -- one fresh in-process Server pointed at it.
-scenarios :: [(T.Text, Client.McpClient -> FilePath -> IO [Assert.Check])]
+scenarios :: [(T.Text, Bool, Client.McpClient -> FilePath -> IO [Assert.Check])]
 scenarios =
   [ ( "Scenario: Arithmetic Expression Evaluator (15 steps)"
-    , Expr.runExprScenario )
+    , True, Expr.runExprScenario )
   , ( "Flow: Exploratory (type / info / eval / complete / goto / doc)"
-    , FlowE.runFlow )
+    , False, FlowE.runFlow )
   , ( "Flow: Typed holes (hole → patch → clean)"
-    , FlowH.runFlow )
+    , False, FlowH.runFlow )
   , ( "Flow: Refactor (rename happy + rollback + keyword-reject)"
-    , FlowR.runFlow )
+    , False, FlowR.runFlow )
   , ( "Flow: Arbitrary templates (flat / sized / polymorphic)"
-    , FlowA.runFlow )
+    , False, FlowA.runFlow )
   , ( "Flow: Scope mgmt (browse / imports / apply_exports / add_import)"
-    , FlowS.runFlow )
+    , False, FlowS.runFlow )
   , ( "Flow: Batch composition (happy + fail_fast)"
-    , FlowB.runFlow )
+    , False, FlowB.runFlow )
   , ( "Flow: Toolchain probes (status + warmup)"
-    , FlowTC.runFlow )
+    , False, FlowTC.runFlow )
   , ( "Flow: Bootstrap host rules (preview + write + 3 hosts)"
-    , FlowBoot.runFlow )
+    , False, FlowBoot.runFlow )
   , ( "Flow: Validate cabal (clean + duplicate deps)"
-    , FlowVC.runFlow )
+    , False, FlowVC.runFlow )
   , ( "Flow: Property lifecycle (store inspection)"
-    , FlowPL.runFlow )
+    , False, FlowPL.runFlow )
   , ( "Flow: Workflow help/next (phase + state hints)"
-    , FlowWH.runFlow )
+    , False, FlowWH.runFlow )
   , ( "Flow: Quality gates (lint / format / check_module / check_project)"
-    , FlowQG.runFlow )
+    , False, FlowQG.runFlow )
   , ( "Flow: Fix warning (unused-import patch preview)"
-    , FlowFW.runFlow )
+    , False, FlowFW.runFlow )
   , ( "Flow: Coverage (cabal test --enable-coverage + HPC)"
-    , FlowCov.runFlow )
+    , True, FlowCov.runFlow )
   , ( "Flow: Mutation testing (bug-finding oracle for regression)"
-    , FlowMut.runFlow )
+    , False, FlowMut.runFlow )
   , ( "Flow: Refactor out-of-scope (refuse silent no-op)"
-    , FlowROS.runFlow )
+    , False, FlowROS.runFlow )
   , ( "Flow: Type breakage (check_module must flag type mismatch)"
-    , FlowTB.runFlow )
+    , False, FlowTB.runFlow )
   , ( "Flow: Injection guard (newline / sentinel / path traversal)"
-    , FlowIG.runFlow )
+    , False, FlowIG.runFlow )
   , ( "Flow: Graceful miss (deps remove / hole-free / non-predicate QC)"
-    , FlowGM.runFlow )
+    , False, FlowGM.runFlow )
   , ( "Flow: Session robustness (user throws don't kill GHCi)"
-    , FlowSR.runFlow )
+    , False, FlowSR.runFlow )
   , ( "Flow: Timeout enforcement (inner 30 s budget must trip)"
-    , FlowTE.runFlow )
+    , True, FlowTE.runFlow )
   , ( "Flow: GHCi SIGKILL (child exitWith · recovery via evictSession)"
-    , FlowSK.runFlow )
+    , True, FlowSK.runFlow )
   , ( "Flow: Oversized input (256 KiB expression rejected at boundary)"
-    , FlowOI.runFlow )
+    , False, FlowOI.runFlow )
   , ( "Flow: Non-UTF-8 source file (graceful load error)"
-    , FlowNU.runFlow )
+    , False, FlowNU.runFlow )
   , ( "Flow: Dependency conflict (bogus dep · loud failure · clean remove)"
-    , FlowDC.runFlow )
+    , False, FlowDC.runFlow )
   , ( "Flow: Sandbox escape / RCE contract (documents ghci_eval capabilities)"
-    , FlowSE.runFlow )
+    , False, FlowSE.runFlow )
   , ( "Flow: Concurrent clients (two MCP clients, same project dir)"
-    , FlowCC.runFlow )
+    , True, FlowCC.runFlow )
   , ( "Flow: Disk full / permission denied on property store"
-    , FlowDF.runFlow )
+    , True, FlowDF.runFlow )
+  , ( "Flow: ANSI escape in GHC error message (JSON safety)"
+    , False, FlowANSI.runFlow )
+  , ( "Flow: Property store race (two clients, concurrent save)"
+    , True, FlowPSR.runFlow )
   , ( "Flow: Expr evaluator dogfood (full 4-module library build + 3 bug pins)"
-    , FlowEED.runFlow )
+    , True, FlowEED.runFlow )
   , ( "Flow: Corpus transport (hostile JSON-RPC lines · subprocess)"
-    , FlowCT.runFlow )
+    , False, FlowCT.runFlow )
   , ( "Flow: Cross-validation (MCP check_project vs cabal build)"
-    , FlowXV.runFlow )
+    , True, FlowXV.runFlow )
   , ( "Flow: Regression scope fix (module resolve + scope restore)"
-    , FlowRSF.runFlow )
+    , False, FlowRSF.runFlow )
   ]
 
 main :: IO ()
@@ -139,8 +152,25 @@ main = do
   hSetBuffering stdout LineBuffering
   hSetBuffering stderr LineBuffering
   binary <- Client.findMcpBinaryPath
+
+  -- Read the opt-in slow-skip flag before we start banner-printing
+  -- so the operator knows which mode they're about to watch.
+  mSkipRaw <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_SKIP_SLOW"
+  let skipSlow = mSkipRaw == Just "1"
+      selected
+        | skipSlow  = filter (\(_, slow, _) -> not slow) scenarios
+        | otherwise = scenarios
+      totalCount   = length scenarios
+      selCount     = length selected
+      skippedCount = totalCount - selCount
+
   putStrLn "==> haskell-flows-mcp e2e"
   putStrLn ("==> binary: " <> binary)
+  if skipSlow
+    then putStrLn ("==> HASKELL_FLOWS_E2E_SKIP_SLOW=1 — running "
+                   <> show selCount <> " of " <> show totalCount
+                   <> " scenarios (" <> show skippedCount <> " slow-tagged skipped)")
+    else putStrLn ("==> running all " <> show totalCount <> " scenarios")
 
   -- Layer 1 — transport smoke.
   Assert.beginSection "Transport smoke (subprocess, 1 round-trip)"
@@ -160,8 +190,8 @@ main = do
       exitFailure
     else do
       wallStart <- getPOSIXTime
-      -- Layer 2 — run every scenario in order.
-      checks <- concat <$> mapM (runScenario binary) scenarios
+      -- Layer 2 — run every selected scenario in order.
+      checks <- concat <$> mapM (runScenario binary) selected
       wallEnd <- getPOSIXTime
       let secs   = realToFrac (wallEnd - wallStart) :: Double
           passed = length (filter Assert.cOk checks)
@@ -191,9 +221,9 @@ main = do
 -- the aggregate report stays coherent.
 runScenario
   :: FilePath
-  -> (T.Text, Client.McpClient -> FilePath -> IO [Assert.Check])
+  -> (T.Text, Bool, Client.McpClient -> FilePath -> IO [Assert.Check])
   -> IO [Assert.Check]
-runScenario binary (label, go) = do
+runScenario binary (label, _slow, go) = do
   Assert.beginSection label
   withTempProjectDir $ \dir -> do
     res <- try $ bracket

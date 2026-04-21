@@ -7,12 +7,16 @@
 -- right context), the number of cases it has passed historically, and a
 -- timestamp for the most recent successful run.
 --
--- Concurrency model: we take a file-level lock by serialising every
--- 'save'/'loadAll' through an 'MVar' held at the call site — the Server
--- layer holds exactly one 'Store' instance per session, so there's no
--- cross-process contention on typical MCP usage. For multi-agent
--- scenarios we'd need proper file locking; deferred until we see that
--- pattern.
+-- Concurrency model: two layers.
+--
+--   * Each 'Store' value carries an in-process 'MVar' ('sLock')
+--     that serialises writers from a single Server.
+--   * Every save/remove/loadAll ALSO takes a second lock
+--     ('withGlobalStoreLock') that covers the two-Server-one-dir
+--     case — a TOP-LEVEL MVar keyed on the path (in-process) AND
+--     an exclusive flock on a sidecar @.lock@ file (cross-process).
+--     Found-by: 'Scenarios.FlowPropertyStoreRace' in the e2e suite
+--     (two McpClients, one lost its property on the concurrent save).
 --
 -- Security note: the store path is always derived from a validated
 -- 'ProjectDir' — it cannot escape the project root. The JSON file is
@@ -28,7 +32,7 @@ module HaskellFlows.Data.PropertyStore
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
-import Control.Exception (SomeException, try)
+import Control.Exception (SomeException, bracket, try)
 import Data.Aeson
   ( FromJSON (..)
   , ToJSON (..)
@@ -43,10 +47,40 @@ import Data.Aeson
   )
 import Data.Text (Text)
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import GHC.IO.Handle.Lock (hLock, hUnlock, LockMode (..))
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath (takeDirectory, (</>))
+import System.IO (IOMode (..), openFile, hClose)
+import System.IO.Unsafe (unsafePerformIO)
 
 import HaskellFlows.Types (ProjectDir, unProjectDir)
+
+-- | In-process MVar that serialises every read-modify-write of the
+-- property store across ALL Servers in this process. Paired with the
+-- on-disk flock below, this closes the two-MCP-clients-one-project
+-- race the flock alone cannot handle (two FDs from the same process
+-- cannot reliably contend for a POSIX flock).
+{-# NOINLINE inProcessStoreLock #-}
+inProcessStoreLock :: MVar ()
+inProcessStoreLock = unsafePerformIO (newMVar ())
+
+-- | Hold both layers of the lock for the duration of @action@. The
+-- cross-process flock lives on a @<store>.lock@ sidecar so it does
+-- not conflict with the @encodeFile@/@eitherDecodeFileStrict'@ write
+-- path on the store itself (GHC POSIX-flock-on-read-handle blocks
+-- later writes on some configurations — see the same pattern in
+-- 'HaskellFlows.Tool.Deps.withCabalLock').
+withGlobalStoreLock :: FilePath -> IO a -> IO a
+withGlobalStoreLock storeFile action =
+  withMVar inProcessStoreLock $ \_ -> do
+    createDirectoryIfMissing True (takeDirectory storeFile)
+    let lockPath = storeFile <> ".lock"
+    bracket
+      (do h <- openFile lockPath AppendMode
+          hLock h ExclusiveLock
+          pure h)
+      (\h -> hUnlock h >> hClose h)
+      (const action)
 
 -- | An in-memory handle to the on-disk store. Serialises concurrent
 -- access through an MVar so concurrent 'save' calls don't race on the
@@ -109,7 +143,7 @@ openStore pd = do
 -- | Load every stored property. Returns @[]@ on a missing or corrupted
 -- file rather than throwing — a fresh project has no store yet.
 loadAll :: Store -> IO [StoredProperty]
-loadAll s = withMVar (sLock s) $ \_ -> do
+loadAll s = withGlobalStoreLock (sFile s) $ withMVar (sLock s) $ \_ -> do
   exists <- doesFileExist (sFile s)
   if not exists
     then pure []
@@ -133,7 +167,7 @@ loadAll s = withMVar (sLock s) $ \_ -> do
 -- O(stat) + cheap on the happy path and turns a crash into a
 -- silent no-op on the bad path.
 save :: Store -> Text -> Maybe Text -> IO ()
-save s expr mModule = withMVar (sLock s) $ \_ -> do
+save s expr mModule = withGlobalStoreLock (sFile s) $ withMVar (sLock s) $ \_ -> do
   now  <- realToFrac <$> getPOSIXTime
   curr <- loadCurrent
   let updated = upsert curr now
@@ -173,7 +207,7 @@ save s expr mModule = withMVar (sLock s) $ \_ -> do
 -- the entry doesn't exist. BUG-04 defence mirror of 'save' — the
 -- write path re-asserts the dir exists.
 remove :: Store -> Text -> Maybe Text -> IO ()
-remove s expr mModule = withMVar (sLock s) $ \_ -> do
+remove s expr mModule = withGlobalStoreLock (sFile s) $ withMVar (sLock s) $ \_ -> do
   exists <- doesFileExist (sFile s)
   if not exists
     then pure ()
