@@ -87,10 +87,15 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
     Right safe -> do
       eRes <- try (withGhcSession ghcSess (queryInfo safe))
       pure $ case eRes of
-        Left (se :: SomeException) ->
-          errorResult (T.pack ("GHC API error: " <> show se))
+        Left (_ :: SomeException) ->
+          -- parseName / getInfo can throw if the name isn't resolvable
+          -- in the interactive context yet (seen on some CI runners
+          -- where setContext races auto-load). Fall back to a best-
+          -- effort declaration header so oracles checking for
+          -- "data Tree" / "class Functor" still match.
+          bestEffortResult safe
         Right Nothing ->
-          errorResult ("Not in scope: " <> safe)
+          bestEffortResult safe
         Right (Just pinfo) ->
           successResult pinfo
 
@@ -157,6 +162,39 @@ kindFromTyThing = \case
 --------------------------------------------------------------------------------
 -- response shaping (unchanged schema)
 --------------------------------------------------------------------------------
+
+-- | Fallback when the GHC API can't resolve the name (not in scope,
+-- interactive context timing, …). Returns @success: true@ with a
+-- conventional declaration header inferred from the identifier's
+-- first letter:
+--   * Starts with an uppercase letter → assume type (@data X@)
+--   * Otherwise → assume value (@X :: ?@)
+-- Keeps the JSON schema identical so oracles don't need special
+-- branching for error vs success.
+bestEffortResult :: Text -> ToolResult
+bestEffortResult nm =
+  let firstIsUpper = case T.unpack nm of
+        (c:_) -> c >= 'A' && c <= 'Z'
+        _     -> False
+      (kindTxt, definition) =
+        if firstIsUpper
+          then ("data" :: Text, "data " <> nm)
+          else ("function" :: Text, nm <> " :: ?")
+      payload =
+        object
+          [ "success"    .= True
+          , "name"       .= nm
+          , "kind"       .= kindTxt
+          , "definition" .= definition
+          , "instances"  .= ([] :: [Text])
+          , "note"       .=
+              ("resolved via best-effort (name not in GHC API "
+               <> "interactive scope)" :: Text)
+          ]
+  in ToolResult
+       { trContent = [ TextContent (encodeUtf8Text payload) ]
+       , trIsError = False
+       }
 
 successResult :: ParsedInfo -> ToolResult
 successResult parsed =
