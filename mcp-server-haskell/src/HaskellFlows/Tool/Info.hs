@@ -1,18 +1,20 @@
--- | @ghci_info@ — Phase 3 tool.
+-- | @ghci_info@ — Phase-2 tool (GHC-API migrated).
 --
--- Mirrors @mcp-server/src/tools/type-info.ts@: given a Haskell name,
--- issues @:i@ via the persistent GHCi and returns a structured summary —
--- the 'InfoKind' + extracted instances — rather than a free-form blob.
+-- Given a name, returns a structured @:info@ view: kind classification
+-- (class/data/newtype/function/…), rendered definition, and list of
+-- class instances. Pre-migration parsed @:i@ stdout via regex;
+-- post-migration queries 'GHC.getInfo' directly and builds the same
+-- 'ParsedInfo' shape from the returned 'TyThing' + @[ClsInst]@.
 --
--- Boundary safety mirrors 'HaskellFlows.Tool.Type': the name is routed
--- through 'sanitizeExpression' before hitting GHCi so a newline or the
--- framing sentinel can't desync the response protocol.
+-- Boundary safety: still routes through 'sanitizeExpression' so the
+-- newline/sentinel/empty/too-large rejection contract is unchanged.
 module HaskellFlows.Tool.Info
   ( descriptor
   , handle
   , InfoArgs (..)
   ) where
 
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -20,19 +22,38 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Ghci.Session
+import GHC
+  ( Ghc
+  , TyThing (AConLike, ATyCon, AnId)
+  , getInfo
+  , getNamesInScope
+  )
+import GHC.Core.TyCon
+  ( isClassTyCon
+  , isDataTyCon
+  , isNewTyCon
+  , isTypeSynonymTyCon
+  )
+import GHC.Types.Name (nameOccName)
+import GHC.Types.Name.Occurrence (occNameString)
+import GHC.Utils.Outputable (showPprUnsafe)
+
+import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
+import HaskellFlows.Ghci.Session (CommandError (..), sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Parser.Type
+  ( InfoKind (..)
+  , ParsedInfo (..)
+  )
 
--- | The schema surfaced to clients via @tools/list@.
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
     { tdName        = "ghci_info"
     , tdDescription =
-        "Get detailed information about a Haskell name (function, type, typeclass) "
-          <> "using GHCi's :i command. Shows the definition, kind, instances, and "
-          <> "where it's defined."
+        "Get detailed information about a Haskell name (function, type, "
+          <> "typeclass) via the GHC API. Shows the definition, kind, "
+          <> "instances, and where it's defined."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -58,29 +79,69 @@ instance FromJSON InfoArgs where
   parseJSON = withObject "InfoArgs" $ \o ->
     InfoArgs <$> o .: "name"
 
--- | Handle a @tools/call@ for @ghci_info@.
-handle :: Session -> Value -> IO ToolResult
-handle sess rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> Value -> IO ToolResult
+handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
-  Right (InfoArgs nm) -> do
-    res <- infoOf sess nm
-    case res of
-      Left cmdErr ->
-        pure (errorResult (formatCommandError cmdErr))
-      Right gr
-        | not (grSuccess gr)         -> pure (errorResult (grOutput gr))
-        | isOutOfScope (grOutput gr) -> pure (errorResult (grOutput gr))
-        | otherwise                  -> pure (successResult (grOutput gr))
+  Right (InfoArgs nm) -> case sanitizeExpression nm of
+    Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
+    Right safe -> do
+      eRes <- try (withGhcSession ghcSess (queryInfo safe))
+      pure $ case eRes of
+        Left (se :: SomeException) ->
+          errorResult (T.pack ("GHC API error: " <> show se))
+        Right Nothing ->
+          errorResult ("Not in scope: " <> safe)
+        Right (Just pinfo) ->
+          successResult pinfo
+
+-- | Resolve the name in scope, query 'getInfo' including instances,
+-- and build the pre-migration 'ParsedInfo' shape from its return.
+queryInfo :: Text -> Ghc (Maybe ParsedInfo)
+queryInfo nm = do
+  names <- getNamesInScope
+  let target = T.unpack nm
+      matches =
+        [ n
+        | n <- names
+        , occNameString (nameOccName n) == target
+        ]
+  case matches of
+    []    -> pure Nothing
+    (n:_) -> do
+      info <- getInfo True n
+      pure $ case info of
+        Nothing -> Nothing
+        Just (thing, _fixity, clsInsts, famInsts, _doc) ->
+          Just ParsedInfo
+            { piName       = nm
+            , piKind       = kindFromTyThing thing
+            , piDefinition = T.pack (showPprUnsafe thing)
+            , piInstances  = map (T.pack . showPprUnsafe) clsInsts
+                          <> map (T.pack . showPprUnsafe) famInsts
+            }
+
+-- | Classify a 'TyThing' into our enum. Mirrors what the @:i@ parser
+-- guessed from the first-line syntax.
+kindFromTyThing :: TyThing -> InfoKind
+kindFromTyThing = \case
+  AnId _      -> IkFunction
+  AConLike _  -> IkData  -- a data constructor (not the type)
+  ATyCon tc
+    | isClassTyCon tc       -> IkClass
+    | isNewTyCon tc         -> IkNewtype
+    | isTypeSynonymTyCon tc -> IkTypeSynonym
+    | isDataTyCon tc        -> IkData
+    | otherwise             -> IkUnknown
+  _           -> IkUnknown
 
 --------------------------------------------------------------------------------
--- response shaping
+-- response shaping (unchanged schema)
 --------------------------------------------------------------------------------
 
-successResult :: Text -> ToolResult
-successResult raw =
-  let parsed = parseInfoOutput raw
-      payload =
+successResult :: ParsedInfo -> ToolResult
+successResult parsed =
+  let payload =
         object
           [ "success"    .= True
           , "name"       .= piName parsed

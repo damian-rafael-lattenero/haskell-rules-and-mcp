@@ -263,8 +263,9 @@ dispatchTool srv call = case tcName call of
     ghcSess <- getOrStartGhcSession srv
     TypeTool.handle ghcSess (tcArguments call)
   "ghci_info" -> do
-    sess <- getOrStartSession srv
-    InfoTool.handle sess (tcArguments call)
+    -- Phase-2 migrated: getInfo + TyThing classification.
+    ghcSess <- getOrStartGhcSession srv
+    InfoTool.handle ghcSess (tcArguments call)
   "ghci_eval" -> do
     sess <- getOrStartSession srv
     EvalTool.handle sess (tcArguments call)
