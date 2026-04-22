@@ -16,6 +16,7 @@ module Main where
 import Control.Concurrent.Async (forConcurrently)
 import Control.Concurrent.QSem (newQSem, signalQSem, waitQSem)
 import Control.Exception (bracket, bracket_, try, SomeException)
+import Control.Monad (when)
 import qualified Data.List as List
 import qualified Data.Text as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -184,10 +185,9 @@ main = do
                    <> show selCount <> " of " <> show totalCount
                    <> " scenarios (" <> show skippedCount <> " slow-tagged skipped)")
     else putStrLn ("==> running all " <> show totalCount <> " scenarios")
-  if parallelism > 1
-    then putStrLn ("==> HASKELL_FLOWS_E2E_PARALLEL=" <> show parallelism
-                   <> " (capabilities=" <> show numCaps <> ")")
-    else pure ()
+  when (parallelism > 1) $
+    putStrLn ("==> HASKELL_FLOWS_E2E_PARALLEL=" <> show parallelism
+              <> " (capabilities=" <> show numCaps <> ")")
 
   -- Layer 1 — transport smoke.
   Assert.beginSection "Transport smoke (subprocess, 1 round-trip)"
