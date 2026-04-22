@@ -48,7 +48,7 @@ module HaskellFlows.Ghc.ApiSession
 
 import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)
 import Control.Exception (SomeException, try)
-import Control.Monad (filterM, unless, when)
+import Control.Monad (filterM, unless)
 import Control.Monad.IO.Class (liftIO)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Text (Text)
@@ -99,6 +99,7 @@ import System.Directory
   , listDirectory
   )
 import System.FilePath ((</>), takeExtension)
+import qualified System.Process as Proc
 
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
@@ -143,8 +144,13 @@ withGhcSession sess act = withMVar (gsLock sess) $ \_ ->
     case mEnv of
       Just env -> setSession env
       Nothing  -> do
+        -- Apply cabal's package env file (if any) to DynFlags on
+        -- first boot so 'import Test.QuickCheck' etc. resolve via
+        -- the cabal store. Scoped to THIS GhcSession — the legacy
+        -- Session's subprocess ghci is not affected.
         dflags <- getSessionDynFlags
-        _      <- setSessionDynFlags dflags
+        dflags' <- liftIO (applyCabalPackageEnv (gsProject sess) dflags)
+        _       <- setSessionDynFlags dflags'
         pure ()
     loaded <- liftIO (readIORef (gsLoadedRef sess))
     unless loaded $ do
@@ -154,6 +160,78 @@ withGhcSession sess act = withMVar (gsLock sess) $ \_ ->
     env'   <- getSession
     liftIO (writeIORef (gsEnvRef sess) (Just env'))
     pure result
+
+-- | Inject cabal's generated @.ghc.environment.*@ file into DynFlags
+-- via the 'packageEnv' field. Scoped to the GHC-API session only —
+-- never mutates process env vars, so legacy 'Session' subprocess
+-- spawns stay untouched.
+applyCabalPackageEnv :: ProjectDir -> DynFlags -> IO DynFlags
+applyCabalPackageEnv pd dflags = do
+  mEnvFile <- findOrGenerateCabalEnvFile pd
+  pure $ case mEnvFile of
+    Nothing   -> dflags
+    Just path -> dflags { packageEnv = Just path }
+
+-- | Find or create @.ghc.environment.\<triple\>@ in the project root.
+-- Returns 'Nothing' if the project isn't a cabal package (no .cabal
+-- file) or if 'cabal build' fails — both tolerable, the rest of the
+-- auto-load falls back gracefully to base-only.
+findOrGenerateCabalEnvFile :: ProjectDir -> IO (Maybe FilePath)
+findOrGenerateCabalEnvFile pd = do
+  let root = unProjectDir pd
+  rootExists <- doesDirectoryExist root
+  if not rootExists
+    then pure Nothing
+    else do
+      existing <- findExistingEnvFile root
+      case existing of
+        Just p  -> pure (Just p)
+        Nothing -> do
+          hasCabal <- hasCabalFile root
+          if not hasCabal
+            then pure Nothing
+            else do
+              _ <- generateEnvFile root
+              findExistingEnvFile root
+
+-- | Scan the project root for any @.ghc.environment.*@ file.
+findExistingEnvFile :: FilePath -> IO (Maybe FilePath)
+findExistingEnvFile root = do
+  entries <- listDirectory root
+  let envFiles =
+        [ root </> e
+        | e <- entries
+        , ".ghc.environment." `isPrefixOf` e
+        ]
+  case envFiles of
+    (p : _) -> pure (Just p)
+    []      -> pure Nothing
+  where
+    isPrefixOf p s = take (length p) s == p
+
+hasCabalFile :: FilePath -> IO Bool
+hasCabalFile root = do
+  entries <- listDirectory root
+  pure (any ((".cabal" ==) . takeExtension) entries)
+
+-- | Fire cabal to generate the env file. Swallows failures — if the
+-- project doesn't build cleanly, the env file won't be generated and
+-- GhcSession falls back to default package visibility.
+generateEnvFile :: FilePath -> IO ()
+generateEnvFile root = do
+  let cp = (Proc.proc "cabal"
+             [ "build"
+             , "all"
+             , "--write-ghc-environment-files=always"
+             , "--only-dependencies"
+             ])
+             { Proc.cwd = Just root
+             , Proc.std_out = Proc.CreatePipe
+             , Proc.std_err = Proc.CreatePipe
+             , Proc.std_in  = Proc.NoStream
+             }
+  _ <- try @SomeException (Proc.readCreateProcess cp "")
+  pure ()
 
 autoLoadProject :: ProjectDir -> Ghc ()
 autoLoadProject pd = do
