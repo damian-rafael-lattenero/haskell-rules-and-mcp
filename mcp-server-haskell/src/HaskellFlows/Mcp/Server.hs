@@ -24,12 +24,13 @@ module HaskellFlows.Mcp.Server
   , evictGhcSession
   ) where
 
-import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
 import Control.Exception (SomeException, fromException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString.Lazy as BL
+import Data.Foldable (for_)
 import Data.IORef (IORef, newIORef, readIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -39,8 +40,6 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Directory (getCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
 import System.Timeout (timeout)
-
-import Control.Concurrent.MVar (readMVar)
 
 import HaskellFlows.Data.PropertyStore (Store, openStore)
 import HaskellFlows.Ghc.ApiSession (GhcSession, invalidateLoadCache, killGhcSession, startGhcSession)
@@ -607,9 +606,7 @@ getOrStartGhcSession srv = modifyMVar (srvGhcSession srv) $ \case
 invalidateGhcSessionIfPresent :: Server -> IO ()
 invalidateGhcSessionIfPresent srv = do
   m <- readMVar (srvGhcSession srv)
-  case m of
-    Nothing -> pure ()
-    Just s  -> invalidateLoadCache s
+  for_ m invalidateLoadCache
 
 --------------------------------------------------------------------------------
 -- small response helpers

@@ -50,9 +50,7 @@ handle ghcSess _rawArgs = do
     Right imports              -> successResult imports
 
 queryImports :: Ghc [Text]
-queryImports = do
-  ctx <- getContext
-  pure (map renderImport ctx)
+queryImports = map renderImport <$> getContext
 
 renderImport :: InteractiveImport -> Text
 renderImport = \case

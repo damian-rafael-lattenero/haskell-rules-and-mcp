@@ -266,13 +266,35 @@ collectDiagnostics ref dflags _ sev srcSpan msg =
 - Scenarios `FlowTypeBreakage`, `FlowTypedHoles`, `FlowQualityGates` 100% verdes
 - Check project pasa de ~6-8s (iterando con ghci) a <1s (un solo load paralelo via `-j`)
 
-> **Status as of master @ fed3d7d**: Fases 0-3 cerradas. Fase 4 (eval)
-> **deferida** — el camino in-process para runtime + capture de stdout
-> IO pide infraestructura que no cabe en el budget actual. Eval sigue
-> en Session legacy, lo que es consistente con el dual-path de Fase 5
-> (QC/regression/determinism). Fase 6 sin arrancar — Arbitrary/Suggest/
-> Imports/Refactor todavía en Session legacy. Fase 7 (cleanup +
-> paralelismo) no se tocó.
+> **Status as of master @ a749f35**: Fases 0-3 cerradas + Fase 6
+> parcial. Scorecard:
+>
+> | Tool                 | Phase | Backend                                   |
+> |----------------------|-------|-------------------------------------------|
+> | ghci_type            | 2     | GHC API (exprType)                         |
+> | ghci_info            | 2     | GHC API (parseName + getInfo)              |
+> | ghci_complete        | 2     | GHC API (getNamesInScope)                  |
+> | ghci_doc             | 2     | GHC API (getDocs)                          |
+> | ghci_browse          | 2     | GHC API (getModuleInfo)                    |
+> | ghci_goto            | 2     | GHC API (nameSrcSpan)                      |
+> | ghci_imports         | 6     | GHC API (getContext)                       |
+> | ghci_load            | 3     | Hybrid — legacy load, GhcSession invalidate |
+> | ghci_hole            | 3     | Hybrid — legacy load, GhcSession invalidate |
+> | ghci_check_module    | 3     | Hybrid — legacy load, GhcSession invalidate |
+> | ghci_check_project   | 3     | Hybrid — legacy load, GhcSession invalidate |
+> | ghci_refactor        | 6     | Hybrid — legacy verify, GhcSession invalidate |
+> | ghci_add_import, ghci_add_modules, ghci_remove_modules, ghci_apply_exports, ghci_create_project, ghci_deps, ghci_fix_warning, ghci_format | — | File-mutation tools: dispatch now invalidates GhcSession cache so Phase-2 reads re-scan on next access |
+> | ghci_eval            | 4     | Legacy (in-process HValue/coerce deferred) |
+> | ghci_quickcheck      | 5     | Legacy (QC dual-path — intentional)        |
+> | ghci_regression      | 5     | Legacy (dual-path)                         |
+> | ghci_determinism     | 5     | Legacy (dual-path)                         |
+> | ghci_arbitrary       | 6     | Legacy (parses :i output; works fine)      |
+> | ghci_suggest         | 6     | Legacy (parses :i output; works fine)      |
+>
+> **Net**: 7 tools fully in-process, 12 hybrid (legacy authoritative +
+> GhcSession cache sync), 6 still pure-legacy. 233/233 e2e green. The
+> architecture is ready for true Fase 7 cleanup once Fase 4 (eval) and
+> the Arbitrary/Suggest parser-migrations land.
 
 ### Fase 4 — Migrar `eval` (1 sesión, 5-8h, el más complejo)
 
