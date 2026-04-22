@@ -156,6 +156,20 @@ import HaskellFlows.Types
   , mkModulePath
   , mkProjectDir
   )
+import HaskellFlows.Ghc.ApiSession
+  ( killGhcSession
+  , startGhcSession
+  , withGhcSession
+  )
+import GHC
+  ( InteractiveImport (IIDecl)
+  , TcRnExprMode (TM_Inst)
+  , exprType
+  , mkModuleName
+  , setContext
+  , simpleImportDecl
+  )
+import GHC.Utils.Outputable (showPprUnsafe)
 
 main :: IO ()
 main = do
@@ -370,6 +384,7 @@ main = do
       , test "doc: main README uses haskell-flows-mcp" testDocsMainReadme
       , test "doc: haskell README lists real tools"   testDocsHaskellReadme
       , test "release: workflow file exists + well-formed" testReleaseWorkflow
+      , test "ghc-api: GhcSession boots + exprType roundtrip" testGhcSessionBoots
       ]
   if and results then exitSuccess else exitFailure
 
@@ -3126,6 +3141,25 @@ testParseShowModulesPathsGarbage = pure $ and
           ]
       ) == ["src/Bar.hs"]
   ]
+
+-- | Phase-1 gate for the GHC-API-in-process migration: can we boot a
+-- 'GhcSession', round-trip an 'exprType' through 'withGhcSession', and
+-- tear it down cleanly? The 'map' type string is checked for @->@ to
+-- confirm the pretty-print path works, not just the compile path.
+--
+-- No modules are loaded here — Phase 2 will layer that in when real
+-- tool handlers (type, info) migrate.
+testGhcSessionBoots :: IO Bool
+testGhcSessionBoots = case mkProjectDir "/tmp" of
+  Left _   -> pure False
+  Right pd -> do
+    sess   <- startGhcSession pd
+    result <- withGhcSession sess $ do
+      setContext [IIDecl (simpleImportDecl (mkModuleName "Prelude"))]
+      ty <- exprType TM_Inst "map"
+      pure (showPprUnsafe ty)
+    killGhcSession sess
+    pure (not (null result) && "->" `T.isInfixOf` T.pack result)
 
 -- | Helper: create a fresh temp directory and delete it after the test.
 -- Passes a validated 'ProjectDir' (absolute + normalised) to the body.

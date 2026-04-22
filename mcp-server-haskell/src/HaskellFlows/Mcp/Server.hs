@@ -19,6 +19,9 @@ module HaskellFlows.Mcp.Server
   , allToolNames
     -- * Per-tool timeout envelope (F-12 defence)
   , toolTimeoutMicros
+    -- * GHC-API session (Phase-1 scaffolding, docs/GHC-API-rewrite-plan.md)
+  , getOrStartGhcSession
+  , evictGhcSession
   ) where
 
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar)
@@ -38,6 +41,7 @@ import System.Environment (getExecutablePath, lookupEnv)
 import System.Timeout (timeout)
 
 import HaskellFlows.Data.PropertyStore (Store, openStore)
+import HaskellFlows.Ghc.ApiSession (GhcSession, killGhcSession, startGhcSession)
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Guidance (sessionInstructionsText, workflowRulesMarkdown)
 import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
@@ -106,6 +110,16 @@ import qualified HaskellFlows.Tool.Workflow        as WorkflowTool
 data Server = Server
   { srvProjectDir    :: !(IORef ProjectDir)
   , srvSession       :: !(MVar (Maybe Session))
+    -- ^ Legacy subprocess-ghci session. Still the only option for
+    -- 'ghci_quickcheck' / 'ghci_regression' / 'ghci_determinism'
+    -- (need runtime randomisation + shrinking), and the primary
+    -- for everything else until Phase 2 of the GHC-API migration
+    -- starts porting tools over (docs/GHC-API-rewrite-plan.md).
+  , srvGhcSession    :: !(MVar (Maybe GhcSession))
+    -- ^ In-process GHC-API session. Phase-1 scaffolding — sustained
+    -- alongside 'srvSession' but unused by any tool yet. Phase 2+
+    -- migrates read-only tools (type, info, complete, doc, browse,
+    -- goto) onto it; Phases 3-6 finish the port.
   , srvStore         :: !Store
   , srvWorkflowState :: !WorkflowStateRef
   , srvBootPosix     :: !Double
@@ -131,6 +145,7 @@ defaultServer = do
     Right pd -> do
       pdRef    <- newIORef pd
       sess     <- newMVar Nothing
+      ghcSess  <- newMVar Nothing
       store    <- openStore pd
       ws       <- newWorkflowStateRef
       bootPos  <- realToFrac <$> getPOSIXTime
@@ -138,6 +153,7 @@ defaultServer = do
       pure Server
         { srvProjectDir    = pdRef
         , srvSession       = sess
+        , srvGhcSession    = ghcSess
         , srvStore         = store
         , srvWorkflowState = ws
         , srvBootPosix     = bootPos
@@ -520,6 +536,27 @@ getOrStartSession srv = modifyMVar (srvSession srv) $ \case
   Nothing -> do
     pd <- readIORef (srvProjectDir srv)
     s  <- startSession pd
+    pure (Just s, s)
+
+-- | Phase-1 analogue of 'evictSession' for the in-process GHC API
+-- session. Idempotent; catches any failure so an evict from a
+-- watchdog path cannot raise.
+evictGhcSession :: Server -> IO ()
+evictGhcSession srv = modifyMVar_ (srvGhcSession srv) $ \case
+  Nothing -> pure Nothing
+  Just s  -> do
+    _ <- try (killGhcSession s) :: IO (Either SomeException ())
+    pure Nothing
+
+-- | Phase-1 analogue of 'getOrStartSession' for the in-process GHC
+-- API session. Unused by any tool yet — Phase 2 starts calling this
+-- when the first read-only tools (type, info) migrate.
+getOrStartGhcSession :: Server -> IO GhcSession
+getOrStartGhcSession srv = modifyMVar (srvGhcSession srv) $ \case
+  Just s  -> pure (Just s, s)
+  Nothing -> do
+    pd <- readIORef (srvProjectDir srv)
+    s  <- startGhcSession pd
     pure (Just s, s)
 
 --------------------------------------------------------------------------------
