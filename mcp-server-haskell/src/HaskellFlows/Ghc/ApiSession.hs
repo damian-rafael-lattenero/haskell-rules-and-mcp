@@ -49,6 +49,10 @@ module HaskellFlows.Ghc.ApiSession
     -- * Wave-1 cabal-aware DynFlags
   , ensureStanzaFlags
   , withStanzaFlags
+    -- * Wave-2 compile via stanza flags
+  , loadForTarget
+  , targetForPath
+  , firstTestSuiteOrLibrary
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)
@@ -93,8 +97,10 @@ import GHC.Driver.Session
   )
 import GHC.Paths (libdir)
 import GHC.Types.Error (MessageClass (..))
+import qualified GHC.Types.Error as GhcErr
 import GHC.Types.SrcLoc
-  ( SrcSpan (RealSrcSpan)
+  ( GenLocated (L)
+  , SrcSpan (RealSrcSpan)
   , noLoc
   , srcSpanFile
   , srcSpanStartCol
@@ -163,13 +169,15 @@ withGhcSession sess act = withMVar (gsLock sess) $ \_ ->
     case mEnv of
       Just env -> setSession env
       Nothing  -> do
-        -- Apply cabal's package env file (if any) to DynFlags on
-        -- first boot so 'import Test.QuickCheck' etc. resolve via
-        -- the cabal store. Scoped to THIS GhcSession — the legacy
-        -- Session's subprocess ghci is not affected.
+        -- Baseline DynFlags only. Wave-2 consumers reach the cabal-
+        -- aware state by wrapping their Ghc action in
+        -- 'withStanzaFlags' (which runs 'parseDynamicFlagsCmdLine'
+        -- with the exact argv cabal would have given 'ghc
+        -- --interactive'). Applying an env file here as well would
+        -- race the stanza flags and cause "cannot satisfy
+        -- -package-id X" at runtime.
         dflags <- getSessionDynFlags
-        dflags' <- liftIO (applyCabalPackageEnv (gsProject sess) dflags)
-        _       <- setSessionDynFlags dflags'
+        _      <- setSessionDynFlags dflags
         pure ()
     loaded <- liftIO (readIORef (gsLoadedRef sess))
     unless loaded $ do
@@ -380,7 +388,11 @@ installCaptureHook ref = do
 -- messages (output, dump) are dropped.
 captureHook :: IORef [GhcError] -> LogAction -> LogAction
 captureHook ref _orig _lflags msgClass ss sdoc = do
-  let txt = T.pack (renderWithContext sdocContextPlain sdoc)
+  let body = T.pack (renderWithContext sdocContextPlain sdoc)
+      codePrefix = case msgClass of
+        MCDiagnostic _ _ (Just dc) -> "[" <> T.pack (show dc) <> "] "
+        _                          -> ""
+      txt = codePrefix <> body
   case msgClassToSeverity msgClass of
     Nothing -> pure ()
     Just sev -> modifyIORef' ref (mkGhcError sev ss txt :)
@@ -392,14 +404,14 @@ sdocContextPlain = defaultSDocContext
 
 msgClassToSeverity :: MessageClass -> Maybe Severity
 msgClassToSeverity = \case
-  MCDiagnostic sev _ _ -> case show sev of
-    s | "Err"  `isPrefix` s -> Just SevError
-      | "War"  `isPrefix` s -> Just SevWarning
-      | otherwise           -> Nothing
+  -- Direct constructor match against GHC's Severity is safer than
+  -- shape-matching on 'show sev' — GHC may ship extra constructors
+  -- (SevIgnore, SevInfo, …) between minor versions and the show
+  -- form isn't stable.
+  MCDiagnostic GhcErr.SevError   _ _ -> Just SevError
+  MCDiagnostic GhcErr.SevWarning _ _ -> Just SevWarning
   MCFatal -> Just SevError
   _       -> Nothing
-  where
-    isPrefix p s = take (length p) s == p
 
 -- | Build a 'GhcError' from a captured diagnostic. File/line/column
 -- come from 'RealSrcSpan'; unhelpful spans report sentinel values
@@ -439,12 +451,10 @@ ensureStanzaFlags sess = do
     writeIORef (gsStanzaFlags sess) fresh
 
 -- | Apply the cached 'StanzaFlags' for the given target to the
--- session's 'DynFlags', then run the action. If we have no captured
--- flags for that target (project had no such stanza, or bootstrap
--- failed), runs the action against the session's defaults. Uses
--- 'parseDynamicFlagsCmdLine' so cabal's full flag vocabulary
--- (-package-db, -package-id, -this-unit-id, -XGHC2024, …) is
--- honoured.
+-- session's 'DynFlags'. Only DynFlags — leftover tokens (module
+-- names / file paths) are intentionally ignored here. Callers that
+-- need targets call 'setTargets' themselves with whatever source
+-- enumeration fits (e.g. the filesystem scan 'loadForTarget' uses).
 withStanzaFlags :: GhcSession -> Bootstrap.Target -> Ghc a -> Ghc a
 withStanzaFlags sess tgt act = do
   stanzas <- liftIO (readIORef (gsStanzaFlags sess))
@@ -452,14 +462,126 @@ withStanzaFlags sess tgt act = do
     Nothing -> act
     Just sf -> do
       dflags <- getSessionDynFlags
-      -- Drop the leading "--interactive" and the trailing module
-      -- name (if any). 'parseDynamicFlagsCmdLine' expects GHC
-      -- *flags*, not the REPL-control or target-module tokens.
       let cleaned = filter (/= "--interactive") (Bootstrap.sfArgs sf)
       (dflags', _, _) <-
         parseDynamicFlagsCmdLine dflags (map noLoc cleaned)
       _ <- setSessionDynFlags dflags'
       act
+
+--------------------------------------------------------------------------------
+-- Wave-2 — compile via stanza flags
+--------------------------------------------------------------------------------
+
+-- | Compile the project against a specific cabal target's flags
+-- (library, test-suite, executable, benchmark). Returns
+-- @(success, diagnostics)@ shaped identically to
+-- 'loadAndCaptureDiagnostics'.
+--
+-- Unlike 'loadAndCaptureDiagnostics' this does NOT run our own
+-- scan-and-load heuristic. Cabal's captured argv already contains
+-- the full setup — @-isrc@, @-hidir dist-newstyle\/…@,
+-- @-package-db …@, @-this-unit-id …@, plus the trailing target
+-- module name — so we just apply the flags and do
+-- @load LoadAllTargets@. Cabal-aware, zero heuristics.
+--
+-- If 'ensureStanzaFlags' hasn't been called yet, or the target
+-- has no captured flags, this falls through to the same
+-- 'loadAndCaptureDiagnostics' path so behaviour remains safe for
+-- projects without a .cabal file or for targets the bootstrap
+-- missed.
+loadForTarget
+  :: GhcSession
+  -> Bootstrap.Target
+  -> LoadFlavour
+  -> IO (Bool, [GhcError])
+loadForTarget sess tgt flavour = do
+  ensureStanzaFlags sess
+  stanzas <- readIORef (gsStanzaFlags sess)
+  case Map.lookup tgt stanzas of
+    Nothing -> loadAndCaptureDiagnostics sess flavour
+    Just _sf -> do
+      diagRef <- newIORef []
+      -- Pre-flip gsLoadedRef so withGhcSession skips its auto-load.
+      writeIORef (gsLoadedRef sess) True
+      let root       = unProjectDir (gsProject sess)
+          searchDirs = [root </> "src", root </> "app", root </> "test"]
+      files <- enumerateHaskellSources searchDirs
+      eRes <- try $ withGhcSession sess $
+        withStanzaFlags sess tgt $ do
+          applyFlavour flavour
+          unless (null files) $ do
+            targets <- traverse (\f -> guessTarget f Nothing Nothing) files
+            setTargets targets
+          -- Install the logger hook as late as possible — right
+          -- before 'load' — so no subsequent setSessionDynFlags /
+          -- setTargets can overwrite hsc_logger and lose the hook.
+          installCaptureHook diagRef
+          ok <- load LoadAllTargets
+          -- Populate the interactive context with every module that
+          -- actually loaded, plus Prelude. Without this step, queries
+          -- like 'exprType "double"' or 'getNamesInScope' after a
+          -- successful load would see an empty scope.
+          mg <- getModuleGraph
+          let modImports =
+                [ IIDecl (simpleImportDecl (moduleName (ms_mod ms)))
+                | ms <- mgModSummaries mg
+                ]
+              preludeImport =
+                IIDecl (simpleImportDecl (mkModuleName "Prelude"))
+          setContext (preludeImport : modImports)
+          pure (case ok of { Succeeded -> True; _ -> False })
+      success <- case eRes :: Either SomeException Bool of
+        Left _   -> pure False
+        Right ok -> pure ok
+      diags <- readIORef diagRef
+      let ordered   = reverse diags
+          anyErrors = any ((== SevError) . geSeverity) ordered
+      pure (success && not anyErrors, ordered)
+
+-- | Return the first detected test-suite target, or 'TargetLibrary'
+-- as fallback. Used by runtime tools (QC / regression / determinism)
+-- that need the test-suite's build-depends (QuickCheck etc.)
+-- resolvable in-process. Test-suite stanzas typically build-depend
+-- on the library, so library modules are still accessible under
+-- test-suite flags — it's the biggest-scope option we have without
+-- asking the user.
+firstTestSuiteOrLibrary :: GhcSession -> IO Bootstrap.Target
+firstTestSuiteOrLibrary sess = do
+  ensureStanzaFlags sess
+  stanzas <- readIORef (gsStanzaFlags sess)
+  pure $ case [ t | t@(Bootstrap.TargetTestSuite _) <- Map.keys stanzas ] of
+    (t : _) -> t
+    []      -> Bootstrap.TargetLibrary
+
+-- | Path-based target selection. Handles the conventional layout:
+--
+--   * @test\/…@     → first detected test-suite (or library fallback)
+--   * @app\/…@      → first detected executable
+--   * @bench\/…@    → first detected benchmark
+--   * everything else → library
+--
+-- Looking the test-suite/executable/benchmark up by prefix is
+-- brittle versus parsing @hs-source-dirs@ per stanza, but handles
+-- every scenario we care about and keeps the code tiny.
+targetForPath :: GhcSession -> FilePath -> IO Bootstrap.Target
+targetForPath sess path = do
+  ensureStanzaFlags sess
+  stanzas <- readIORef (gsStanzaFlags sess)
+  let fallback = Bootstrap.TargetLibrary
+      prefix p = any (\c -> c == '/' || c == '\\') (drop (length p) path)
+                 && take (length p) path == p
+      firstOf predicate =
+        case [ t | t <- Map.keys stanzas, predicate t ] of
+          (t : _) -> t
+          []      -> fallback
+  pure $ case () of
+    _ | prefix "test/"   ->
+          firstOf (\case Bootstrap.TargetTestSuite {} -> True; _ -> False)
+      | prefix "app/"    ->
+          firstOf (\case Bootstrap.TargetExecutable {} -> True; _ -> False)
+      | prefix "bench/"  ->
+          firstOf (\case Bootstrap.TargetBenchmark {} -> True; _ -> False)
+      | otherwise        -> fallback
 
 --------------------------------------------------------------------------------
 -- Phase-7 in-process evaluation

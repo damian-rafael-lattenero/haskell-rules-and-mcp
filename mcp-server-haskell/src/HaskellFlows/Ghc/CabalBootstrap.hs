@@ -39,7 +39,8 @@ import System.Directory
   )
 import System.Environment (getEnvironment)
 import System.FilePath ((</>), takeExtension)
-import System.IO (IOMode (WriteMode), hClose, openFile)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS8
 import qualified System.Process as Proc
 
 import HaskellFlows.Types (ProjectDir, unProjectDir)
@@ -67,7 +68,8 @@ data StanzaFlags = StanzaFlags
   deriving stock (Eq, Show)
 
 -- | POSIX shim script. Intercepts @--interactive@; delegates
--- everything else to whichever @ghc@ is on PATH.
+-- everything else to the real ghc binary (discovered via
+-- @command -v@ which searches PATH reliably under cabal's sub-env).
 --
 -- Output destination comes from the env var @HASKELL_FLOWS_SHIM_OUT@.
 -- Each bootstrap call sets a unique value before spawning cabal so
@@ -76,13 +78,22 @@ shimScript :: String
 shimScript = unlines
   [ "#!/bin/sh"
   , "# haskell-flows ghc shim — intercepts --interactive only."
+  , "# Locate real ghc. 'command -v' searches PATH; 'which' fallback."
+  , "REAL_GHC=\"$(command -v ghc 2>/dev/null)\""
+  , "if [ -z \"$REAL_GHC\" ]; then"
+  , "  REAL_GHC=\"$(which ghc 2>/dev/null)\""
+  , "fi"
+  , "if [ -z \"$REAL_GHC\" ]; then"
+  , "  echo 'ghc-shim: real ghc not found on PATH' >&2"
+  , "  exit 1"
+  , "fi"
   , "for arg in \"$@\"; do"
   , "  if [ \"$arg\" = \"--interactive\" ]; then"
   , "    printf '%s\\0' \"$@\" > \"$HASKELL_FLOWS_SHIM_OUT\""
   , "    exit 0"
   , "  fi"
   , "done"
-  , "exec ghc \"$@\""
+  , "exec \"$REAL_GHC\" \"$@\""
   ]
 
 -- | Write the shim to @.haskell-flows/shim/ghc-shim.sh@ under the
@@ -178,10 +189,11 @@ bootstrapOne root shimPath tgt = do
   let outDir  = root </> ".haskell-flows" </> "flags"
       outFile = outDir </> targetFileName tgt
   createDirectoryIfMissing True outDir
-  -- Start with an empty output so a failed bootstrap doesn't leave
-  -- stale flags behind.
-  h <- openFile outFile WriteMode
-  hClose h
+  -- Start with an empty file; a failed bootstrap leaves it empty
+  -- and we skip that target. BS.writeFile is strict (no lingering
+  -- handle) — critical on macOS where lazy readFile from a stale
+  -- handle produces "resource busy" on the next open.
+  BS.writeFile outFile BS.empty
   let cp = (Proc.proc "cabal"
              ( ["v2-repl"]
                <> renderTarget tgt
@@ -198,7 +210,9 @@ bootstrapOne root shimPath tgt = do
   parentEnv <- getEnvironment
   let cpFinal = cp { Proc.env = Just (("HASKELL_FLOWS_SHIM_OUT", outFile) : parentEnv) }
   _ <- try @SomeException (Proc.readCreateProcess cpFinal "")
-  contents <- try @SomeException (readFile outFile)
+  -- Strict read so no handle outlives this call. Translate bytes
+  -- back to String for the null-separated parser.
+  contents <- try @SomeException (BS8.unpack <$> BS.readFile outFile)
   case contents :: Either SomeException String of
     Right bs | not (null bs) -> pure (Just (StanzaFlags tgt (parseNullSep bs)))
     _                        -> pure Nothing

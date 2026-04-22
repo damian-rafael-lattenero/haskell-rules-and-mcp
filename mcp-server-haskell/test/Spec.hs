@@ -167,6 +167,7 @@ import HaskellFlows.Ghc.CabalBootstrap
   , Target (..)
   , bootstrapProject
   )
+import qualified HaskellFlows.Ghc.ApiSession as ApiSession
 import qualified Data.Map.Strict as Map
 import GHC
   ( InteractiveImport (IIDecl)
@@ -395,6 +396,7 @@ main = do
       , test "ghc-api: HscEnv persists across withGhcSession calls" testGhcSessionPersists
       , test "ghc-api: evalIOString runs IO String actions in-process" testEvalIOString
       , test "ghc-api: bootstrapProject captures cabal flags for library" testCabalBootstrapLibrary
+      , test "ghc-api: loadForTarget compiles library module via stanza flags" testLoadForTargetLibrary
       ]
   if and results then exitSuccess else exitFailure
 
@@ -3167,6 +3169,22 @@ testEvalIOString = case mkProjectDir "/tmp" of
       evalIOString "(return \"hello-from-ghc-api\") :: IO String"
     killGhcSession sess
     pure (result == "hello-from-ghc-api")
+
+-- | Wave-2 gate: 'loadForTarget' against /tmp/bench-project library
+-- must compile Foo.hs cleanly (success=True, no errors). If the
+-- fixture dir is missing, skip gracefully.
+testLoadForTargetLibrary :: IO Bool
+testLoadForTargetLibrary = case mkProjectDir "/tmp/bench-project" of
+  Left _   -> pure True
+  Right pd -> do
+    exists <- doesFileExist "/tmp/bench-project/bench-project.cabal"
+    if not exists
+      then pure True
+      else do
+        sess <- startGhcSession pd
+        (ok, diags) <- ApiSession.loadForTarget sess TargetLibrary ApiSession.Strict
+        killGhcSession sess
+        pure (ok && null diags)
 
 -- | Wave-1 gate: drive cabal via the shim against a real project
 -- and verify we get back a non-empty flag set that includes the
