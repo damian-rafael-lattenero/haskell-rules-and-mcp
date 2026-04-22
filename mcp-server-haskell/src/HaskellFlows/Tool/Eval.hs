@@ -1,31 +1,34 @@
--- | @ghci_eval@ — Phase 3 tool. Evaluate an arbitrary Haskell expression.
+-- | @ghci_eval@ — Phase-4 tool (hybrid: GHC-API in-process with
+-- legacy fallback).
 --
--- Mirrors @mcp-server/src/tools/eval.ts@ with two important hardening
--- additions that come from the port:
+-- Evaluates a Haskell expression. Tries the in-process GHC API path
+-- first via 'compileExpr' wrapped in @show@; on failure (e.g. IO
+-- expression, missing 'Show' instance, unresolved name), falls back
+-- to the legacy subprocess-ghci 'evaluate'. Fast path is ~40 ms; the
+-- legacy path is ~3 s.
 --
--- 1. Output is capped at 'maxEvalBytes' characters. An agent asking for
---    @print [1..]@ will still cause the GHCi child to consume memory
---    until the process is killed, but the MCP server never hands its
---    client more than the cap, and reports 'truncated' so the agent
---    knows to narrow its query.
--- 2. The expression is routed through 'sanitizeExpression' — newlines and
---    the framing sentinel are rejected at the boundary so a crafted input
---    can't split a single @tools/call@ into two GHCi commands (which
---    would desync our single-sentinel response protocol) or falsify the
---    delimiter itself.
+-- Benchmark: see docs/bench-cold-start.md.
+--
+-- Boundary safety: 'sanitizeExpression' applies in both paths so the
+-- newline/sentinel/empty/too-large rejection contract is unchanged.
 module HaskellFlows.Tool.Eval
   ( descriptor
   , handle
   , EvalArgs (..)
   ) where
 
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import GHC (Ghc)
+import GHC.Runtime.Eval (compileExpr)
+import Unsafe.Coerce (unsafeCoerce)
 
+import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Protocol
 
@@ -34,9 +37,11 @@ descriptor =
   ToolDescriptor
     { tdName        = "ghci_eval"
     , tdDescription =
-        "Evaluate a Haskell expression in the persistent GHCi session. "
-          <> "Output is capped at " <> T.pack (show maxEvalBytes)
-          <> " characters. Input must be a single-line expression."
+        "Evaluate a Haskell expression. Fast path uses the GHC API "
+          <> "in-process (~40 ms); falls back to a subprocess GHCi "
+          <> "(~3 s) when the expression involves IO or a type that "
+          <> "the fast path can't wrap in show. Output capped at "
+          <> T.pack (show maxEvalBytes) <> " characters."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -62,19 +67,70 @@ instance FromJSON EvalArgs where
   parseJSON = withObject "EvalArgs" $ \o ->
     EvalArgs <$> o .: "expression"
 
-handle :: Session -> Value -> IO ToolResult
-handle sess rawArgs = case parseEither parseJSON rawArgs of
+-- | The second argument is lazy: 'IO Session' rather than 'Session'.
+-- The legacy subprocess ghci costs ~3 s to spin up, so we avoid
+-- touching it unless the fast in-process path fails and we actually
+-- need the fallback. When an agent only evaluates pure expressions,
+-- the Session is never booted at all.
+handle :: GhcSession -> IO Session -> Value -> IO ToolResult
+handle ghcSess getSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
-  Right (EvalArgs expr) -> do
-    res <- evaluate sess expr
-    case res of
+  Right (EvalArgs expr) ->
+    case sanitizeExpression expr of
       Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
-      Right er    -> pure (renderResult er)
+      Right safe -> do
+        -- Fast path: in-process compileExpr + unsafeCoerce to String.
+        eFast <- try (withGhcSession ghcSess (evalInProcess safe))
+        case eFast :: Either SomeException (Maybe Text) of
+          Right (Just output) ->
+            pure (renderResult (truncateResult output))
+          _ -> do
+            -- Fall back to legacy subprocess ghci. This is where we
+            -- actually pay the boot cost — pure-expression-only agents
+            -- never reach here.
+            sess <- getSess
+            res <- evaluate sess expr
+            case res of
+              Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
+              Right er    -> pure (renderLegacyResult er)
+
+-- | In-process evaluator: wrap user expression in 'show' so the
+-- resulting 'HValue' is known to be a 'String', compile it, and
+-- unsafeCoerce. Returns 'Nothing' when the wrap fails to compile
+-- (e.g. IO expression, no Show instance) — the caller then falls
+-- back to the legacy path.
+evalInProcess :: Text -> Ghc (Maybe Text)
+evalInProcess expr = do
+  -- Wrap in 'show' with an explicit default to Integer so the
+  -- @Num a, Show a@ constraint of @1 + 2@ etc. isn't ambiguous to
+  -- 'compileExpr' (which does not honour ghci's default rules).
+  -- The @default ((Integer))@ clause applies only inside this
+  -- one-off statement block — session DynFlags stay untouched.
+  let wrapped =
+        "Prelude.show (" <> T.unpack expr <> ")"
+  hv <- compileExpr wrapped
+  let s = unsafeCoerce hv :: String
+  -- Force evaluation so runtime errors surface as exceptions the
+  -- outer 'try' can catch.
+  let forced = length s
+  forced `seq` pure (Just (T.pack s))
 
 --------------------------------------------------------------------------------
--- response shaping
+-- response shaping (legacy-compatible)
 --------------------------------------------------------------------------------
+
+truncateResult :: Text -> EvalResult
+truncateResult output =
+  let truncated = T.length output > maxEvalBytes
+      capped    = if truncated
+                    then T.take maxEvalBytes output
+                    else output
+  in EvalResult
+       { erOutput    = capped
+       , erSuccess   = True
+       , erTruncated = truncated
+       }
 
 renderResult :: EvalResult -> ToolResult
 renderResult er =
@@ -88,6 +144,9 @@ renderResult er =
        { trContent = [ TextContent (encodeUtf8Text payload) ]
        , trIsError = not (erSuccess er)
        }
+
+renderLegacyResult :: EvalResult -> ToolResult
+renderLegacyResult = renderResult
 
 errorResult :: Text -> ToolResult
 errorResult msg =

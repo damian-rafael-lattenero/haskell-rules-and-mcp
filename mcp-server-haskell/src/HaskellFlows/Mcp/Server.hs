@@ -271,8 +271,12 @@ dispatchTool srv call = case tcName call of
     ghcSess <- getOrStartGhcSession srv
     InfoTool.handle ghcSess (tcArguments call)
   "ghci_eval" -> do
-    sess <- getOrStartSession srv
-    EvalTool.handle sess (tcArguments call)
+    -- Phase-4 hybrid: fast in-process path via compileExpr +
+    -- unsafeCoerce, with legacy Session fallback for IO / unshowable.
+    -- Session is passed lazily (via a thunk) so a pure-expression
+    -- workload never pays the ~3 s subprocess boot.
+    ghcSess <- getOrStartGhcSession srv
+    EvalTool.handle ghcSess (getOrStartSession srv) (tcArguments call)
   "ghci_quickcheck" -> do
     sess <- getOrStartSession srv
     QcTool.handle (srvStore srv) sess (tcArguments call)

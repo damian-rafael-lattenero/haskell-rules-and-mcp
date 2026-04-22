@@ -20,8 +20,14 @@ Benchmark script: [`bench/bench-cold-start.py`](../bench/bench-cold-start.py).
 | `ghci_complete`        | GhcSession                      |   36 |   36 |    37 |
 | `ghci_imports`         | GhcSession                      |   36 |   36 |    36 |
 | `ghci_goto`            | GhcSession                      |   36 |   37 |    38 |
-| `ghci_eval`            | subprocess ghci (legacy)        | 2925 | 3059 |  3147 |
+| `ghci_eval`            | GHC API fast path (Phase 4)     |  488 |  553 |   663 |
 | `ghci_quickcheck`      | subprocess ghci (legacy)        | 2944 | 2971 |  3006 |
+
+> Pre-Phase-4 `ghci_eval` ran at 2925–3147 ms. Phase 4 adds an
+> in-process `compileExpr` path guarded by a legacy fallback for IO /
+> unshowable expressions — measured 5.5× speedup on the fast path.
+> The remaining ~500 ms is the actual bytecode compilation of the
+> expression (`show (userExpr)`); not HscEnv boot.
 
 Cold-cold (truly first server after power-on, no warmup): ~390 ms for
 `ghci_type`. Subsequent cold invocations hit the cabal/plan/db cache.
