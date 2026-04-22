@@ -1,16 +1,10 @@
--- | @ghci_check_module@ — run every module-complete gate in a single
--- call and return a consolidated report.
+-- | @ghci_check_module@ — Phase-3 tool (GHC-API migrated, hybrid).
 --
--- The gates ('compile', 'warnings', 'holes', 'regression') are the
--- subset that can be answered from the Haskell MCP's current toolchain
--- without requiring external binaries. Format + HLint checks are
--- deferred to 'ghci_format' / 'ghci_lint' when those tools are ported
--- — this tool will pick them up automatically the day they become
--- available on the server side.
---
--- Each gate is reported with its pass/fail status and a short message.
--- A single @overall@ flag is the AND of every gate — this is what an
--- agent should check to decide whether the module is \"done\".
+-- Compile + warnings + holes gates run off the in-process GHC API via
+-- 'loadAndCaptureDiagnostics'. The property-regression gate still
+-- uses the legacy subprocess 'Session' because QuickCheck randomisation
+-- doesn't live well in-process (that's what the Phase-5 dual path
+-- preserves).
 module HaskellFlows.Tool.CheckModule
   ( descriptor
   , handle
@@ -29,18 +23,20 @@ import HaskellFlows.Data.PropertyStore
   , StoredProperty (..)
   , loadAll
   )
+import HaskellFlows.Ghc.ApiSession
+  ( GhcSession
+  , LoadFlavour (Deferred, Strict)
+  , loadAndCaptureDiagnostics
+  )
 import HaskellFlows.Ghci.Session
   ( Session
   , GhciResult (..)
-  , LoadMode (..)
-  , loadModuleWith
   , runProperty
   )
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Parser.Error
   ( GhcError (..)
   , Severity (..)
-  , parseGhcErrors
   )
 import HaskellFlows.Parser.Hole (parseTypedHoles)
 import HaskellFlows.Parser.QuickCheck
@@ -87,36 +83,42 @@ instance FromJSON CheckArgs where
   parseJSON = withObject "CheckArgs" $ \o ->
     CheckArgs <$> o .: "module_path"
 
-handle :: Session -> Store -> ProjectDir -> Value -> IO ToolResult
-handle sess store pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> Session -> Store -> ProjectDir -> Value -> IO ToolResult
+handle ghcSess sess store pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
   Right (CheckArgs raw) -> case mkModulePath pd (T.unpack raw) of
     Left e -> pure (errorResult (formatPathError e))
-    Right mp -> do
-      -- Single dual-pass load gives us compile + warnings + holes.
-      strict <- loadModuleWith sess mp Strict
-      let diags      = parseGhcErrors (grOutput strict)
-          errors     = filter ((== SevError)   . geSeverity) diags
-          warnings   = filter ((== SevWarning) . geSeverity) diags
-          compileOk  = grSuccess strict && null errors
-      -- Deferred pass only if strict compiled — otherwise holes are
-      -- irrelevant, errors are blocking.
-      holes <- if compileOk
-                 then do
-                   deferred <- loadModuleWith sess mp Deferred
-                   pure (parseTypedHoles (grOutput deferred))
-                 else pure []
-      -- Regression: run only properties associated with this module.
+    Right _mp -> do
+      -- Gate 1: strict compile + warnings.
+      (compileOk, strictDiags) <- loadAndCaptureDiagnostics ghcSess Strict
+      let errors    = filter ((== SevError)   . geSeverity) strictDiags
+          warnings  = filter ((== SevWarning) . geSeverity) strictDiags
+
+      -- Gate 2: holes — only meaningful when strict compiled.
+      holes <-
+        if compileOk && null errors
+          then do
+            (_, deferredDiags) <- loadAndCaptureDiagnostics ghcSess Deferred
+            let bundled = T.unlines
+                  [ geMessage d
+                  | d <- deferredDiags
+                  , "hole" `T.isInfixOf` T.toLower (geMessage d)
+                  ]
+            pure (parseTypedHoles bundled)
+          else pure []
+
+      -- Gate 3: property regression — still on legacy Session.
       allProps <- loadAll store
       let relevant = filter (\p -> spModule p == Just raw) allProps
       regs <- mapM (runOne sess) relevant
       let regressions = filter (not . isPass . snd) regs
+
       pure $ renderResult
         raw compileOk errors warnings holes regressions (length relevant)
 
 --------------------------------------------------------------------------------
--- gates
+-- gates (legacy helper for regression — unchanged)
 --------------------------------------------------------------------------------
 
 runOne
@@ -135,17 +137,17 @@ isPass (QcPassed _ _) = True
 isPass _              = False
 
 --------------------------------------------------------------------------------
--- response shaping
+-- response shaping (unchanged schema)
 --------------------------------------------------------------------------------
 
 renderResult
-  :: Text                      -- module_path
-  -> Bool                      -- compileOk
-  -> [GhcError]                -- errors
-  -> [GhcError]                -- warnings
-  -> [a]                       -- holes (opaque; we only count)
-  -> [(StoredProperty, QuickCheckResult)]   -- regressions
-  -> Int                       -- total relevant stored props
+  :: Text
+  -> Bool
+  -> [GhcError]
+  -> [GhcError]
+  -> [a]
+  -> [(StoredProperty, QuickCheckResult)]
+  -> Int
   -> ToolResult
 renderResult mp compileOk errs warns holes regressions totalProps =
   let gateCompile    = gate compileOk     "module compiles strictly"

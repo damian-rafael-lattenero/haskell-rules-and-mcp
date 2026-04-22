@@ -1,12 +1,15 @@
--- | @ghci_hole@ — interactive typed-hole exploration.
+-- | @ghci_hole@ — Phase-3 tool (GHC-API migrated).
 --
--- Loads the target module under the deferred-hole pass ('Deferred' mode)
--- so GHCi reports holes as warnings rather than failing compilation,
--- then parses those warnings into structured 'TypedHole' records.
+-- Loads the project under 'Deferred' mode and returns structured
+-- typed-hole information. Schema preserved — the MVP port captures
+-- diagnostic messages via the log hook and runs them through the
+-- pre-migration 'parseTypedHoles' parser. Relevant bindings + valid
+-- fits parse when the logger's SDoc rendering matches the legacy
+-- GHCi output shape; when the rendering diverges they come back as
+-- empty lists, with the hole identifier + expected type still intact.
 --
--- Security: the @module_path@ argument goes through 'mkModulePath' — the
--- same traversal-safe smart constructor used by 'ghci_load' — so a
--- path-escape input is rejected at the boundary before any GHCi traffic.
+-- Security: the @module_path@ argument is still validated through
+-- 'mkModulePath' so traversal refusal is preserved at the boundary.
 module HaskellFlows.Tool.Hole
   ( descriptor
   , handle
@@ -20,8 +23,13 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Ghci.Session
+import HaskellFlows.Ghc.ApiSession
+  ( GhcSession
+  , LoadFlavour (Deferred)
+  , loadAndCaptureDiagnostics
+  )
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Parser.Error (GhcError (..))
 import HaskellFlows.Parser.Hole
   ( HoleFit (..)
   , TypedHole (..)
@@ -73,23 +81,27 @@ instance FromJSON HoleArgs where
     hn <- o .:? "hole_name"
     pure HoleArgs { haModulePath = mp, haHoleName = hn }
 
-handle :: Session -> ProjectDir -> Value -> IO ToolResult
-handle sess pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
   Right (HoleArgs rawPath filt) ->
     case mkModulePath pd (T.unpack rawPath) of
       Left err -> pure (errorResult (formatPathError err))
-      Right mp -> do
-        gr <- loadModuleWith sess mp Deferred
-        let allHoles = parseTypedHoles (grOutput gr)
-            holes    = case filt of
-              Nothing  -> allHoles
-              Just nm  -> filter ((== nm) . thHole) allHoles
+      Right _  -> do
+        (_, diags) <- loadAndCaptureDiagnostics ghcSess Deferred
+        let bundled = T.unlines [ geMessage d | d <- diags, looksLikeHole d ]
+            allHoles = parseTypedHoles bundled
+            holes = case filt of
+              Nothing -> allHoles
+              Just nm -> filter ((== nm) . thHole) allHoles
         pure (successResult rawPath holes)
+  where
+    looksLikeHole d =
+      "hole" `T.isInfixOf` T.toLower (geMessage d)
 
 --------------------------------------------------------------------------------
--- response shaping
+-- response shaping (schema preserved)
 --------------------------------------------------------------------------------
 
 successResult :: Text -> [TypedHole] -> ToolResult

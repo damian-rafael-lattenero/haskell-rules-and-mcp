@@ -253,9 +253,10 @@ handleToolCall srv call rid = case tcName call of
 dispatchTool :: Server -> ToolCall -> IO ToolResult
 dispatchTool srv call = case tcName call of
   "ghci_load" -> do
-    sess <- getOrStartSession srv
-    pd   <- readIORef (srvProjectDir srv)
-    Load.handle sess pd (tcArguments call)
+    -- Phase-3 migrated: in-process load via loadAndCaptureDiagnostics.
+    ghcSess <- getOrStartGhcSession srv
+    pd      <- readIORef (srvProjectDir srv)
+    Load.handle ghcSess pd (tcArguments call)
   "ghci_type" -> do
     -- Phase-2 migrated: reads from the in-process GHC API session,
     -- not the legacy subprocess ghci. Auto-load on first call keeps
@@ -273,9 +274,10 @@ dispatchTool srv call = case tcName call of
     sess <- getOrStartSession srv
     QcTool.handle (srvStore srv) sess (tcArguments call)
   "ghci_hole" -> do
-    sess <- getOrStartSession srv
-    pd   <- readIORef (srvProjectDir srv)
-    HoleTool.handle sess pd (tcArguments call)
+    -- Phase-3 migrated: Deferred load + diagnostic capture.
+    ghcSess <- getOrStartGhcSession srv
+    pd      <- readIORef (srvProjectDir srv)
+    HoleTool.handle ghcSess pd (tcArguments call)
   "ghci_arbitrary" -> do
     sess <- getOrStartSession srv
     ArbitraryTool.handle sess (tcArguments call)
@@ -295,9 +297,12 @@ dispatchTool srv call = case tcName call of
     sess <- getOrStartSession srv
     RegressionTool.handle (srvStore srv) sess (tcArguments call)
   "ghci_check_module" -> do
-    sess <- getOrStartSession srv
-    pd   <- readIORef (srvProjectDir srv)
-    CheckModuleTool.handle sess (srvStore srv) pd (tcArguments call)
+    -- Phase-3 migrated (hybrid): GhcSession for compile/warnings/holes,
+    -- Session for property regression (stays on legacy until Phase 5).
+    ghcSess <- getOrStartGhcSession srv
+    sess    <- getOrStartSession srv
+    pd      <- readIORef (srvProjectDir srv)
+    CheckModuleTool.handle ghcSess sess (srvStore srv) pd (tcArguments call)
   "ghci_coverage" -> do
     pd <- readIORef (srvProjectDir srv)
     CoverageTool.handle pd (tcArguments call)
@@ -335,9 +340,11 @@ dispatchTool srv call = case tcName call of
     pd <- readIORef (srvProjectDir srv)
     ValidateCabalTool.handle pd (tcArguments call)
   "ghci_check_project" -> do
-    sess <- getOrStartSession srv
-    pd   <- readIORef (srvProjectDir srv)
-    CheckProjectTool.handle sess (srvStore srv) pd (tcArguments call)
+    -- Phase-3 migrated (hybrid, delegates to check_module per file).
+    ghcSess <- getOrStartGhcSession srv
+    sess    <- getOrStartSession srv
+    pd      <- readIORef (srvProjectDir srv)
+    CheckProjectTool.handle ghcSess sess (srvStore srv) pd (tcArguments call)
   "ghci_suggest" -> do
     sess <- getOrStartSession srv
     SuggestTool.handle sess (tcArguments call)

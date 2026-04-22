@@ -33,6 +33,7 @@ import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
 
 import HaskellFlows.Data.PropertyStore (Store)
+import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Ghci.Session (Session)
 import HaskellFlows.Mcp.Protocol
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
@@ -71,8 +72,8 @@ instance FromJSON CheckProjectArgs where
     ff <- o .:? "fail_fast" .!= False
     pure CheckProjectArgs { cpFailFast = ff }
 
-handle :: Session -> Store -> ProjectDir -> Value -> IO ToolResult
-handle sess store pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> Session -> Store -> ProjectDir -> Value -> IO ToolResult
+handle ghcSess sess store pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
   Right args -> do
@@ -88,7 +89,7 @@ handle sess store pd rawArgs = case parseEither parseJSON rawArgs of
           Right body -> do
             let moduleNames = parseExposedModules body
             modulePaths   <- resolveModulePaths pd moduleNames
-            results       <- runChecks sess store pd (cpFailFast args) modulePaths
+            results       <- runChecks ghcSess sess store pd (cpFailFast args) modulePaths
             pure (renderResult results)
 
 --------------------------------------------------------------------------------
@@ -197,24 +198,25 @@ data ModuleOutcome
   | MoSkipped !Text
 
 runChecks
-  :: Session
+  :: GhcSession
+  -> Session
   -> Store
   -> ProjectDir
   -> Bool                  -- fail_fast
   -> [(Text, Maybe Text)]
   -> IO [ModuleOutcome]
-runChecks _ _ _ _ [] = pure []
-runChecks sess store pd ff ((nm, mp) : rest) = case mp of
+runChecks _ _ _ _ _ [] = pure []
+runChecks ghcSess sess store pd ff ((nm, mp) : rest) = case mp of
   Nothing ->
-    (MoNotFound nm :) <$> runChecks sess store pd ff rest
+    (MoNotFound nm :) <$> runChecks ghcSess sess store pd ff rest
   Just relPath -> do
-    tr <- CheckModule.handle sess store pd (object ["module_path" .= relPath])
+    tr <- CheckModule.handle ghcSess sess store pd (object ["module_path" .= relPath])
     let this = MoChecked nm tr
         stop = ff && trIsError tr
     cont <-
       if stop
         then pure (map (MoSkipped . fst) rest)
-        else runChecks sess store pd ff rest
+        else runChecks ghcSess sess store pd ff rest
     pure (this : cont)
 
 --------------------------------------------------------------------------------
