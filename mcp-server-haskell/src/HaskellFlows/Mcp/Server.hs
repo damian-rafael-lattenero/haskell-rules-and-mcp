@@ -314,8 +314,9 @@ dispatchTool srv call = case tcName call of
     pd <- readIORef (srvProjectDir srv)
     CreateProjectTool.handle pd (tcArguments call)
   "ghci_doc" -> do
-    sess <- getOrStartSession srv
-    DocTool.handle sess (tcArguments call)
+    -- Phase-2 migrated: GHC.getDocs on the resolved Name.
+    ghcSess <- getOrStartGhcSession srv
+    DocTool.handle ghcSess (tcArguments call)
   "ghci_goto" -> do
     -- Phase-2 migrated: in-process Name -> nameSrcSpan lookup.
     ghcSess <- getOrStartGhcSession srv
