@@ -257,8 +257,11 @@ dispatchTool srv call = case tcName call of
     pd   <- readIORef (srvProjectDir srv)
     Load.handle sess pd (tcArguments call)
   "ghci_type" -> do
-    sess <- getOrStartSession srv
-    TypeTool.handle sess (tcArguments call)
+    -- Phase-2 migrated: reads from the in-process GHC API session,
+    -- not the legacy subprocess ghci. Auto-load on first call keeps
+    -- the FlowExploratory 'type(localBinding)' scenario green.
+    ghcSess <- getOrStartGhcSession srv
+    TypeTool.handle ghcSess (tcArguments call)
   "ghci_info" -> do
     sess <- getOrStartSession srv
     InfoTool.handle sess (tcArguments call)
