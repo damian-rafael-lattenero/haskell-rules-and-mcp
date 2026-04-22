@@ -374,8 +374,9 @@ dispatchTool srv call = case tcName call of
     pd <- readIORef (srvProjectDir srv)
     FixWarningTool.handle pd (tcArguments call)
   "ghci_imports" -> do
-    sess <- getOrStartSession srv
-    ImportsTool.handle sess (tcArguments call)
+    -- Phase-6 migrated: reads from GhcSession's interactive context.
+    ghcSess <- getOrStartGhcSession srv
+    ImportsTool.handle ghcSess (tcArguments call)
   "ghci_browse" -> do
     -- Phase-2 migrated: in-process getModuleInfo + modInfoExports.
     ghcSess <- getOrStartGhcSession srv
