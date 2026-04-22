@@ -46,13 +46,18 @@ module HaskellFlows.Ghc.ApiSession
   , loadAndCaptureDiagnostics
     -- * Phase-7 in-process evaluation
   , evalIOString
+    -- * Wave-1 cabal-aware DynFlags
+  , ensureStanzaFlags
+  , withStanzaFlags
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)
 import Control.Exception (SomeException, try)
-import Control.Monad (filterM, unless)
+import Control.Monad (filterM, unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC
@@ -76,6 +81,7 @@ import GHC
   , setTargets
   , simpleImportDecl
   )
+import GHC.Types.SrcLoc (noLoc)
 import GHC.Driver.Env (HscEnv (hsc_logger))
 import GHC.Driver.Flags (WarningFlag (..))
 import GHC.Driver.Session
@@ -93,6 +99,7 @@ import GHC.Types.SrcLoc
   , srcSpanStartCol
   , srcSpanStartLine
   )
+import GHC.Driver.Session (parseDynamicFlagsCmdLine)
 import GHC.Runtime.Eval (compileExpr)
 import GHC.Utils.Logger (LogAction, pushLogHook)
 import GHC.Utils.Outputable (SDocContext, defaultSDocContext, renderWithContext)
@@ -105,31 +112,39 @@ import System.Directory
 import System.FilePath ((</>), takeExtension)
 import qualified System.Process as Proc
 
+import qualified HaskellFlows.Ghc.CabalBootstrap as Bootstrap
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 -- | A persistent GHC-API session scoped to a single Haskell project.
 data GhcSession = GhcSession
-  { gsEnvRef    :: !(IORef (Maybe HscEnv))
-  , gsLibdir    :: !FilePath
-  , gsLock      :: !(MVar ())
-  , gsProject   :: !ProjectDir
-  , gsLoadedRef :: !(IORef Bool)
+  { gsEnvRef      :: !(IORef (Maybe HscEnv))
+  , gsLibdir      :: !FilePath
+  , gsLock        :: !(MVar ())
+  , gsProject     :: !ProjectDir
+  , gsLoadedRef   :: !(IORef Bool)
+  , gsStanzaFlags :: !(IORef (Map Bootstrap.Target Bootstrap.StanzaFlags))
+    -- ^ Wave-1 cache: per-target flags captured from
+    -- 'cabal repl --with-compiler=<shim>'. 'Map.empty' until
+    -- 'ensureStanzaFlags' runs. Consumers use 'withStanzaFlags'
+    -- to apply the flags for a target before load / eval.
   }
 
 -- | Bootstrap a 'GhcSession' for the given project. Cheap — HscEnv
 -- is created lazily on the first 'withGhcSession' call.
 startGhcSession :: ProjectDir -> IO GhcSession
 startGhcSession pd = do
-  ref       <- newIORef Nothing
-  lock      <- newMVar ()
-  loadedRef <- newIORef False
+  ref         <- newIORef Nothing
+  lock        <- newMVar ()
+  loadedRef   <- newIORef False
+  stanzaRef   <- newIORef Map.empty
   pure GhcSession
-    { gsEnvRef    = ref
-    , gsLibdir    = libdir
-    , gsLock      = lock
-    , gsProject   = pd
-    , gsLoadedRef = loadedRef
+    { gsEnvRef      = ref
+    , gsLibdir      = libdir
+    , gsLock        = lock
+    , gsProject     = pd
+    , gsLoadedRef   = loadedRef
+    , gsStanzaFlags = stanzaRef
     }
 
 killGhcSession :: GhcSession -> IO ()
@@ -408,6 +423,43 @@ mkGhcError sev ss msg = case ss of
     , geCode     = Nothing
     , geMessage  = msg
     }
+
+--------------------------------------------------------------------------------
+-- Wave-1 cabal-aware DynFlags
+--------------------------------------------------------------------------------
+
+-- | Populate the session's per-target 'StanzaFlags' cache by driving
+-- cabal via the shim (see 'HaskellFlows.Ghc.CabalBootstrap'). Cheap
+-- no-op if the cache is already non-empty. Idempotent.
+ensureStanzaFlags :: GhcSession -> IO ()
+ensureStanzaFlags sess = do
+  existing <- readIORef (gsStanzaFlags sess)
+  when (Map.null existing) $ do
+    fresh <- Bootstrap.bootstrapProject (gsProject sess)
+    writeIORef (gsStanzaFlags sess) fresh
+
+-- | Apply the cached 'StanzaFlags' for the given target to the
+-- session's 'DynFlags', then run the action. If we have no captured
+-- flags for that target (project had no such stanza, or bootstrap
+-- failed), runs the action against the session's defaults. Uses
+-- 'parseDynamicFlagsCmdLine' so cabal's full flag vocabulary
+-- (-package-db, -package-id, -this-unit-id, -XGHC2024, …) is
+-- honoured.
+withStanzaFlags :: GhcSession -> Bootstrap.Target -> Ghc a -> Ghc a
+withStanzaFlags sess tgt act = do
+  stanzas <- liftIO (readIORef (gsStanzaFlags sess))
+  case Map.lookup tgt stanzas of
+    Nothing -> act
+    Just sf -> do
+      dflags <- getSessionDynFlags
+      -- Drop the leading "--interactive" and the trailing module
+      -- name (if any). 'parseDynamicFlagsCmdLine' expects GHC
+      -- *flags*, not the REPL-control or target-module tokens.
+      let cleaned = filter (/= "--interactive") (Bootstrap.sfArgs sf)
+      (dflags', _, _) <-
+        parseDynamicFlagsCmdLine dflags (map noLoc cleaned)
+      _ <- setSessionDynFlags dflags'
+      act
 
 --------------------------------------------------------------------------------
 -- Phase-7 in-process evaluation

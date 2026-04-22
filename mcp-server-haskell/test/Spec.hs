@@ -162,6 +162,12 @@ import HaskellFlows.Ghc.ApiSession
   , startGhcSession
   , withGhcSession
   )
+import HaskellFlows.Ghc.CabalBootstrap
+  ( StanzaFlags (..)
+  , Target (..)
+  , bootstrapProject
+  )
+import qualified Data.Map.Strict as Map
 import GHC
   ( InteractiveImport (IIDecl)
   , TcRnExprMode (TM_Inst)
@@ -388,6 +394,7 @@ main = do
       , test "ghc-api: GhcSession boots + exprType roundtrip" testGhcSessionBoots
       , test "ghc-api: HscEnv persists across withGhcSession calls" testGhcSessionPersists
       , test "ghc-api: evalIOString runs IO String actions in-process" testEvalIOString
+      , test "ghc-api: bootstrapProject captures cabal flags for library" testCabalBootstrapLibrary
       ]
   if and results then exitSuccess else exitFailure
 
@@ -3160,6 +3167,33 @@ testEvalIOString = case mkProjectDir "/tmp" of
       evalIOString "(return \"hello-from-ghc-api\") :: IO String"
     killGhcSession sess
     pure (result == "hello-from-ghc-api")
+
+-- | Wave-1 gate: drive cabal via the shim against a real project
+-- and verify we get back a non-empty flag set that includes the
+-- expected package-db paths. Uses '/tmp/bench-project' (created
+-- during the Phase-2 benchmark work) as a minimal test fixture.
+-- If that dir isn't there — e.g. on CI before the benchmark has
+-- been run — we skip gracefully by returning True.
+testCabalBootstrapLibrary :: IO Bool
+testCabalBootstrapLibrary = case mkProjectDir "/tmp/bench-project" of
+  Left _   -> pure True   -- malformed path shouldn't happen, skip
+  Right pd -> do
+    exists <- doesFileExist "/tmp/bench-project/bench-project.cabal"
+    if not exists
+      then pure True   -- fixture missing, skip (don't fail CI)
+      else do
+        stanzas <- bootstrapProject pd
+        case Map.lookup TargetLibrary stanzas of
+          Nothing ->
+            pure False   -- bootstrap did not capture the library
+          Just flags ->
+            pure
+              ( "--interactive" `elem` sfArgs flags
+              && any ("-package-db" `isPrefix`) (sfArgs flags)
+              && any ("-this-unit-id" `isPrefix`) (sfArgs flags)
+              )
+  where
+    isPrefix p s = take (length p) s == p
 
 -- | Phase-2 derisk: verify the interactive context set in one
 -- 'withGhcSession' call survives into the next call. This is the
