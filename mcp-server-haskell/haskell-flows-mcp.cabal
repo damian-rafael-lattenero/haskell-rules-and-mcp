@@ -117,6 +117,21 @@ executable haskell-flows-mcp
     build-depends:    base              >= 4.20 && < 5
                     , haskell-flows-mcp
 
+-- --------------------------------------------------------------------------
+--  Phase 0 spike — probe that the GHC API boots in-process with our
+--  toolchain (GHC 9.12.2). Not part of the product binary; exists only
+--  to prove the migration plan's foundation (docs/GHC-API-rewrite-plan.md).
+--  Removed in Phase 1 when library code starts using `ghc` + `ghc-paths`.
+-- --------------------------------------------------------------------------
+executable spike-ghc-api
+    import:           shared
+    main-is:          GhcApiSpike.hs
+    hs-source-dirs:   spike
+    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+    build-depends:    base              >= 4.20 && < 5
+                    , ghc               >= 9.10 && < 9.13
+                    , ghc-paths         >= 0.1  && < 0.2
+
 test-suite haskell-flows-mcp-test
     import:           shared
     type:             exitcode-stdio-1.0
