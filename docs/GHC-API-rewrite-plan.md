@@ -194,6 +194,26 @@ Cada fase es **commiteable independiente** y deja master en estado verde. Las fa
 
 ### Fase 2 — Migrar tools simples read-only (1 sesión, 4-5h)
 
+> **Finding (post-Fase-1 derisk, master @ e56bb58)**: portar un tool
+> "read-only" aislado rompe los scenarios e2e que encadenan
+> `ghci_load` → `ghci_type(localBinding)`. `ghci_load` sigue escribiendo
+> al `Session` legacy mientras que el tool migrado leería de
+> `GhcSession` — dos universos paralelos. **Opciones para resolver**:
+>
+> 1. **Fusionar Fase 2 + Fase 3** en una sola sesión (~9-11h): migrar
+>    `load` + los 6 read-only juntos. Garantiza state compartido en
+>    el mismo session.
+> 2. **Auto-load on boot** en `startGhcSession`: parsear `.cabal`,
+>    extraer `exposed-modules`, correr `setTargets + load` al primer
+>    `withGhcSession`. Equivale al init script de `cabal repl`. Suma
+>    ~1-2h a Fase 2 y la desacopla de Fase 3.
+> 3. **Dual-write de load**: `ghci_load` invoca los dos sessions hasta
+>    que Fase 3 migra. Simple pero añade coupling que hay que limpiar.
+>
+> El test unitario `ghc-api: HscEnv persists across withGhcSession calls`
+> (test/Spec.hs) prueba la invariante load-once-query-many, así que
+> cualquiera de las 3 opciones es técnicamente factible.
+
 **Goal**: portar los 6 tools más simples (sólo lectura, sin state change) al `GhcSession`. El `Session` legacy sigue existiendo para las otras tools.
 
 **Tools a migrar** (en orden creciente de complejidad):

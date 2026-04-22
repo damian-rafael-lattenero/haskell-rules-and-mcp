@@ -385,6 +385,7 @@ main = do
       , test "doc: haskell README lists real tools"   testDocsHaskellReadme
       , test "release: workflow file exists + well-formed" testReleaseWorkflow
       , test "ghc-api: GhcSession boots + exprType roundtrip" testGhcSessionBoots
+      , test "ghc-api: HscEnv persists across withGhcSession calls" testGhcSessionPersists
       ]
   if and results then exitSuccess else exitFailure
 
@@ -3141,6 +3142,33 @@ testParseShowModulesPathsGarbage = pure $ and
           ]
       ) == ["src/Bar.hs"]
   ]
+
+-- | Phase-2 derisk: verify the interactive context set in one
+-- 'withGhcSession' call survives into the next call. This is the
+-- invariant the 22 read-only tool migrations rely on — each tool
+-- call is its own 'withGhcSession', so if 'setSession' + 'getSession'
+-- doesn't round-trip the HscEnv faithfully, we'd have to redo the
+-- context every single call (which defeats the "1s cold-start" benefit).
+--
+-- If this ever starts failing, the fix is to host GHC in a
+-- dedicated thread (HLS/ghcid pattern) rather than invoking 'runGhc'
+-- per call. Better to discover that here than 6 tools into Phase 2.
+testGhcSessionPersists :: IO Bool
+testGhcSessionPersists = case mkProjectDir "/tmp" of
+  Left _   -> pure False
+  Right pd -> do
+    sess <- startGhcSession pd
+    -- Call 1: seed the interactive context with Prelude.
+    withGhcSession sess $
+      setContext [IIDecl (simpleImportDecl (mkModuleName "Prelude"))]
+    -- Call 2: depend on call 1's side effect. If Prelude is gone,
+    -- 'exprType "map"' throws a SourceError ("not in scope") and
+    -- the test fails by exception.
+    result <- withGhcSession sess $ do
+      ty <- exprType TM_Inst "map"
+      pure (showPprUnsafe ty)
+    killGhcSession sess
+    pure (not (null result) && "->" `T.isInfixOf` T.pack result)
 
 -- | Phase-1 gate for the GHC-API-in-process migration: can we boot a
 -- 'GhcSession', round-trip an 'exprType' through 'withGhcSession', and
