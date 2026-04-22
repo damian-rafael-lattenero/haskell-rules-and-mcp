@@ -250,14 +250,33 @@ loadModule s mp = loadModuleWith s mp Strict
 -- start of the load. This is belt-and-suspenders: a future caller
 -- that sets the flags by other means (or a prior bug that leaked
 -- them) cannot poison subsequent strict loads.
+-- | Per-command budget for @:l@ (module load).
+--
+-- Bumped from 30 s to 90 s after the Flow 'type error detected'
+-- scenario tripped on CI with elapsed=30001 ms — CI runners are
+-- slower than a warm local cache, and the dual-pass
+-- (strict + deferred) path of 'ghci_check_module' runs @:l@ twice
+-- plus two @:set@ toggles per call. 30 s per @:l@ is borderline
+-- on a cold cabal store; 90 s is generous without being able to
+-- hide a real hang (the outer 10-min Server.runTool ceiling still
+-- catches those).
+--
+-- @:set@ remains on the 30 s budget — toggling GHC flags is
+-- instantaneous on any machine.
+loadTimeoutMicros :: Int
+loadTimeoutMicros = 90_000_000
+
+setTimeoutMicros :: Int
+setTimeoutMicros = 30_000_000
+
 loadModuleWith :: Session -> ModulePath -> LoadMode -> IO GhciResult
 loadModuleWith s mp Strict = withLock s $ do
-  _   <- executeNoLock s ":set -fno-defer-type-errors -fno-defer-typed-holes" 30_000000
-  executeNoLock s (T.pack (":l " <> unModulePath mp)) 30_000000
+  _   <- executeNoLock s ":set -fno-defer-type-errors -fno-defer-typed-holes" setTimeoutMicros
+  executeNoLock s (T.pack (":l " <> unModulePath mp)) loadTimeoutMicros
 loadModuleWith s mp Deferred = withLock s $ do
-  _   <- executeNoLock s ":set -fdefer-type-errors -fdefer-typed-holes"      30_000000
-  out <- executeNoLock s (T.pack (":l " <> unModulePath mp))                  30_000000
-  _   <- executeNoLock s ":set -fno-defer-type-errors -fno-defer-typed-holes" 30_000000
+  _   <- executeNoLock s ":set -fdefer-type-errors -fdefer-typed-holes"      setTimeoutMicros
+  out <- executeNoLock s (T.pack (":l " <> unModulePath mp))                  loadTimeoutMicros
+  _   <- executeNoLock s ":set -fno-defer-type-errors -fno-defer-typed-holes" setTimeoutMicros
   pure out
 
 -- | Re-load all currently-loaded modules. Wraps @:r@.
