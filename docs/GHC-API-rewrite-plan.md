@@ -296,6 +296,60 @@ collectDiagnostics ref dflags _ sev srcSpan msg =
 > architecture is ready for true Fase 7 cleanup once Fase 4 (eval) and
 > the Arbitrary/Suggest parser-migrations land.
 
+## Status update post-Phase-4 + Phase-7-step-1 (master @ 05a69a0)
+
+- **Phase 4 landed** — `ghci_eval` now runs in-process via
+  `compileExpr` + `unsafeCoerce` when the expression wraps cleanly in
+  `show`; falls back to the legacy subprocess ghci for IO /
+  unshowable types. Lazy-Session shim means pure-eval workloads never
+  boot `cabal repl`. Measured 5.5× speedup (3059 ms → 553 ms). ~500 ms
+  residual is bytecode compilation inherent to `compileExpr`, not
+  HscEnv boot — see `docs/bench-cold-start.md`.
+
+- **Phase 7 parallel infrastructure landed, default still sequential** —
+  `HASKELL_FLOWS_E2E_PARALLEL=N` opt-in is wired with fast/slow bucketing
+  in `test-e2e/Main.hs` (a749f35 / a0aa80b). N≥2 still fails because
+  many scenarios drive `ghci_load`/`ghci_refactor`/`ghci_check_module`
+  which route through the legacy `Session`'s `cabal repl`. Fully
+  unblocking parallel needs those tools to stop booting a per-scenario
+  `cabal repl`.
+
+### Two concrete blockers for further migration
+
+1. **Making `ghci_load` / `check_module` primary in-process**:
+   attempted in this session, but reverted. Root cause: test-suite /
+   benchmark / example targets depend on packages (QuickCheck, etc.)
+   that the legacy `cabal repl --build-depends QuickCheck` arranges
+   via cabal. GhcSession's auto-load knows only the library's
+   implicit `base` + `ghc-paths` — it can't compile `test/Spec.hs`
+   that imports `Test.QuickCheck`. Unblocking requires
+   cabal-aware package resolution in GhcSession (the hie-bios-style
+   path the plan originally targeted and abandoned due to GHC 9.12
+   + cabal 3.14 incompatibility with hie-bios 0.14/0.15).
+
+2. **Arbitrary / Suggest migrations**: each is 400+ LOC of parsers
+   tuned to GHCi's `:i` textual output. Structurally migratable to
+   GHC API (`parseName` + `getInfo` + TyCon introspection), but the
+   gain is small (they already work on legacy) and the rewrite is
+   substantial. Deferred as low-ROI.
+
+### What the current architecture delivers
+
+- **80× speedup** on the 7 fully-in-process read-only tools (36–43 ms
+  cold-start vs 3000 ms legacy).
+- **5.5× speedup** on `ghci_eval` pure path (553 ms vs 3059 ms).
+- **Lazy Session boot** — pure-eval + Phase-2 workloads never spawn
+  `cabal repl` at all. Only QC / regression / determinism /
+  IO-eval-fallback pay the legacy cost.
+- **233/233 e2e green** on master.
+- **Invalidation wiring** covers every file-mutation tool so
+  Phase-2 reads stay consistent with on-disk state.
+
+What's NOT yet delivered: parallel e2e default, HscEnv-scoped
+parallelism for concurrent tool calls from one agent. Both require
+breaking the last scenarios off `cabal repl`, which is gated on
+cabal-aware package resolution for test-suites.
+
 ### Fase 4 — Migrar `eval` (1 sesión, 5-8h, el más complejo)
 
 **Goal**: in-process evaluator para `ghci_eval`.
