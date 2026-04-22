@@ -1,22 +1,12 @@
--- | @ghci_load@ — Phase-3 tool (GHC-API migrated).
+-- | @ghci_load@ — hybrid (Phase-3 session-sync refactor).
 --
--- Loads the project in-process via 'loadAndCaptureDiagnostics' and
--- returns a JSON summary of captured errors + warnings. Schema kept
--- compatible with the pre-migration shape so scenarios that check
--- @{success, errors, warnings, summary}@ stay green.
+-- Loads via the legacy 'Session' (still authoritative for QC /
+-- regression / determinism / eval which haven't migrated yet), then
+-- invalidates the 'GhcSession' auto-load cache so the next Phase-2
+-- tool call re-scans disk and sees the fresh module graph.
 --
--- Scope delta from the legacy tool:
---
--- * @module_path@ is still validated through 'mkModulePath' (security:
---   path-traversal refusal preserved). The in-process backend always
---   re-loads the full project rather than a single file — the auto-load
---   enumerates @src\/@ + @app\/@ and loads everything. This is wider
---   than @:l src\/Foo.hs@ but cheap because GHC skips unchanged modules,
---   and for MCP usage the distinction rarely matters.
---
--- * @diagnostics=true@ flips the load flavour from 'Strict' to
---   'Deferred' — enables @-fdefer-type-errors -fdefer-typed-holes@ so
---   hole / deferred-error warnings appear in the returned list.
+-- Pure-in-process migration lands in Phase 4+ once eval/QC move off
+-- legacy.
 module HaskellFlows.Tool.Load
   ( descriptor
   , handle
@@ -30,13 +20,10 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Ghc.ApiSession
-  ( GhcSession
-  , LoadFlavour (Deferred, Strict)
-  , loadAndCaptureDiagnostics
-  )
+import HaskellFlows.Ghc.ApiSession (GhcSession, invalidateLoadCache)
+import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
+import HaskellFlows.Parser.Error
 import HaskellFlows.Types
 
 descriptor :: ToolDescriptor
@@ -44,10 +31,10 @@ descriptor =
   ToolDescriptor
     { tdName        = "ghci_load"
     , tdDescription =
-        "Load or reload Haskell modules via the GHC API. Returns structured "
-          <> "compilation errors and warnings. Pass diagnostics=true to "
-          <> "enable a deferred pass (-fdefer-type-errors -fdefer-typed-holes) "
-          <> "that surfaces holes and deferred-type-error warnings."
+        "Load or reload Haskell modules in GHCi. Returns parsed compilation "
+          <> "errors and warnings. Pass diagnostics=true to additionally run "
+          <> "a deferred pass (-fdefer-type-errors -fdefer-typed-holes) and "
+          <> "surface typed holes discovered that way."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -56,17 +43,14 @@ descriptor =
                   [ "type"        .= ("string" :: Text)
                   , "description" .=
                       ("Path to a module to load, relative to the project \
-                       \directory. Omit to reload current modules. NOTE: "
-                    <> "post-migration the backend always re-loads the full \
-                       \project tree; the path is still validated for "
-                    <> "traversal safety but doesn't narrow the load." :: Text)
+                       \directory. Omit to reload current modules." :: Text)
                   ]
               , "diagnostics" .= object
                   [ "type"        .= ("boolean" :: Text)
                   , "description" .=
-                      ("When true, runs in deferred mode to surface typed \
-                       \holes and deferred-type-error warnings. Default: false."
-                       :: Text)
+                      ("When true, runs a second deferred pass to extract \
+                       \typed holes and deferred-type-error warnings. \
+                       \Default: false." :: Text)
                   ]
               ]
           , "additionalProperties" .= False
@@ -85,49 +69,48 @@ instance FromJSON LoadArgs where
     dx <- o .:? "diagnostics" .!= False
     pure LoadArgs { laModulePath = mp, laDiagnostics = dx }
 
-handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> Session -> ProjectDir -> Value -> IO ToolResult
+handle ghcSess sess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
-  Right (LoadArgs mPath useDeferred) ->
-    case validatePath pd mPath of
-      Left errMsg -> pure (errorResult errMsg)
-      Right () -> do
-        let flavour = if useDeferred then Deferred else Strict
-        (success, diags) <- loadAndCaptureDiagnostics ghcSess flavour
-        pure (okResult success diags)
-
--- | Security gate: reject paths that would escape the project. We
--- don't USE the resolved path (the in-process backend reloads the
--- whole tree) but we still refuse malicious input up-front so the
--- rejection surface matches the pre-migration contract.
-validatePath :: ProjectDir -> Maybe Text -> Either Text ()
-validatePath _ Nothing  = Right ()
-validatePath pd (Just p) = case mkModulePath pd (T.unpack p) of
-  Left err -> Left (formatPathError err)
-  Right _  -> Right ()
+  Right (LoadArgs Nothing _) -> do
+    result <- reload sess
+    invalidateLoadCache ghcSess
+    pure (okResult result [])
+  Right (LoadArgs (Just p) dx) -> case mkModulePath pd (T.unpack p) of
+    Left err -> pure (errorResult (formatPathError err))
+    Right mp -> do
+      strict <- loadModuleWith sess mp Strict
+      let strictDiags = parseGhcErrors (grOutput strict)
+      finalResult <- if dx
+        then do
+          deferred <- loadModuleWith sess mp Deferred
+          let extraDiags = parseGhcErrors (grOutput deferred)
+              merged     = mergeDiags strictDiags extraDiags
+          pure (okResult strict merged)
+        else pure (okResult strict strictDiags)
+      invalidateLoadCache ghcSess
+      pure finalResult
 
 --------------------------------------------------------------------------------
--- response shaping (schema preserved)
+-- response shaping
 --------------------------------------------------------------------------------
 
-okResult :: Bool -> [GhcError] -> ToolResult
-okResult success diags =
-  let errs  = filter ((== SevError)   . geSeverity) diags
+okResult :: GhciResult -> [GhcError] -> ToolResult
+okResult gr diags =
+  let errs  = filter ((== SevError) . geSeverity) diags
       warns = filter ((== SevWarning) . geSeverity) diags
       payload =
         object
-          [ "success"  .= (success && null errs)
+          [ "success"  .= (grSuccess gr && null errs)
           , "errors"   .= errs
           , "warnings" .= warns
-          , "summary"  .= summarise success errs warns
-          , "raw"      .= ("" :: Text)
-            -- 'raw' retained for schema compat — the in-process backend
-            -- has no stdout stream to capture, so this is always "".
+          , "summary"  .= summarise (grSuccess gr) errs warns
+          , "raw"      .= grOutput gr
           ]
   in ToolResult
        { trContent = [ TextContent (encodeText payload) ]
-       , trIsError = not (success && null errs)
+       , trIsError = not (grSuccess gr) || not (null errs)
        }
 
 errorResult :: Text -> ToolResult
@@ -140,12 +123,20 @@ errorResult msg =
     , trIsError = True
     }
 
+mergeDiags :: [GhcError] -> [GhcError] -> [GhcError]
+mergeDiags strictDiags deferredDiags =
+  strictDiags <> filter (not . alreadyReported) deferredDiags
+  where
+    seen = map posKey strictDiags
+    alreadyReported d = posKey d `elem` seen
+    posKey d = (geFile d, geLine d, geColumn d, geMessage d)
+
 summarise :: Bool -> [GhcError] -> [GhcError] -> Text
 summarise ok errs warns
   | not (null errs) = T.pack (show (length errs)) <> " error(s)"
   | ok && null warns = "Compiled OK. No issues."
   | ok = "Compiled OK. " <> T.pack (show (length warns)) <> " warning(s)."
-  | otherwise = "Compilation produced no errors but load reported failure."
+  | otherwise = "Compilation produced no errors but GHCi reported failure."
 
 encodeText :: Value -> Text
 encodeText = TL.toStrict . TLE.decodeUtf8 . encode

@@ -266,6 +266,14 @@ collectDiagnostics ref dflags _ sev srcSpan msg =
 - Scenarios `FlowTypeBreakage`, `FlowTypedHoles`, `FlowQualityGates` 100% verdes
 - Check project pasa de ~6-8s (iterando con ghci) a <1s (un solo load paralelo via `-j`)
 
+> **Status as of master @ fed3d7d**: Fases 0-3 cerradas. Fase 4 (eval)
+> **deferida** — el camino in-process para runtime + capture de stdout
+> IO pide infraestructura que no cabe en el budget actual. Eval sigue
+> en Session legacy, lo que es consistente con el dual-path de Fase 5
+> (QC/regression/determinism). Fase 6 sin arrancar — Arbitrary/Suggest/
+> Imports/Refactor todavía en Session legacy. Fase 7 (cleanup +
+> paralelismo) no se tocó.
+
 ### Fase 4 — Migrar `eval` (1 sesión, 5-8h, el más complejo)
 
 **Goal**: in-process evaluator para `ghci_eval`.

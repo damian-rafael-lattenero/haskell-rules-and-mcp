@@ -1,10 +1,9 @@
--- | @ghci_check_module@ — Phase-3 tool (GHC-API migrated, hybrid).
+-- | @ghci_check_module@ — hybrid (Phase-3 session-sync refactor).
 --
--- Compile + warnings + holes gates run off the in-process GHC API via
--- 'loadAndCaptureDiagnostics'. The property-regression gate still
--- uses the legacy subprocess 'Session' because QuickCheck randomisation
--- doesn't live well in-process (that's what the Phase-5 dual path
--- preserves).
+-- All four gates (compile / warnings / holes / regression) run off the
+-- legacy 'Session' which remains authoritative for QC / regression /
+-- eval. Invalidates the 'GhcSession' auto-load cache at the end so
+-- Phase-2 reads observe the refreshed module graph on next access.
 module HaskellFlows.Tool.CheckModule
   ( descriptor
   , handle
@@ -23,20 +22,19 @@ import HaskellFlows.Data.PropertyStore
   , StoredProperty (..)
   , loadAll
   )
-import HaskellFlows.Ghc.ApiSession
-  ( GhcSession
-  , LoadFlavour (Deferred, Strict)
-  , loadAndCaptureDiagnostics
-  )
+import HaskellFlows.Ghc.ApiSession (GhcSession, invalidateLoadCache)
 import HaskellFlows.Ghci.Session
   ( Session
   , GhciResult (..)
+  , LoadMode (..)
+  , loadModuleWith
   , runProperty
   )
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Parser.Error
   ( GhcError (..)
   , Severity (..)
+  , parseGhcErrors
   )
 import HaskellFlows.Parser.Hole (parseTypedHoles)
 import HaskellFlows.Parser.QuickCheck
@@ -89,36 +87,27 @@ handle ghcSess sess store pd rawArgs = case parseEither parseJSON rawArgs of
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
   Right (CheckArgs raw) -> case mkModulePath pd (T.unpack raw) of
     Left e -> pure (errorResult (formatPathError e))
-    Right _mp -> do
-      -- Gate 1: strict compile + warnings.
-      (compileOk, strictDiags) <- loadAndCaptureDiagnostics ghcSess Strict
-      let errors    = filter ((== SevError)   . geSeverity) strictDiags
-          warnings  = filter ((== SevWarning) . geSeverity) strictDiags
-
-      -- Gate 2: holes — only meaningful when strict compiled.
-      holes <-
-        if compileOk && null errors
-          then do
-            (_, deferredDiags) <- loadAndCaptureDiagnostics ghcSess Deferred
-            let bundled = T.unlines
-                  [ geMessage d
-                  | d <- deferredDiags
-                  , "hole" `T.isInfixOf` T.toLower (geMessage d)
-                  ]
-            pure (parseTypedHoles bundled)
-          else pure []
-
-      -- Gate 3: property regression — still on legacy Session.
+    Right mp -> do
+      strict <- loadModuleWith sess mp Strict
+      let diags      = parseGhcErrors (grOutput strict)
+          errors     = filter ((== SevError)   . geSeverity) diags
+          warnings   = filter ((== SevWarning) . geSeverity) diags
+          compileOk  = grSuccess strict && null errors
+      holes <- if compileOk
+                 then do
+                   deferred <- loadModuleWith sess mp Deferred
+                   pure (parseTypedHoles (grOutput deferred))
+                 else pure []
       allProps <- loadAll store
       let relevant = filter (\p -> spModule p == Just raw) allProps
       regs <- mapM (runOne sess) relevant
       let regressions = filter (not . isPass . snd) regs
-
+      invalidateLoadCache ghcSess
       pure $ renderResult
         raw compileOk errors warnings holes regressions (length relevant)
 
 --------------------------------------------------------------------------------
--- gates (legacy helper for regression — unchanged)
+-- gates
 --------------------------------------------------------------------------------
 
 runOne
@@ -137,7 +126,7 @@ isPass (QcPassed _ _) = True
 isPass _              = False
 
 --------------------------------------------------------------------------------
--- response shaping (unchanged schema)
+-- response shaping
 --------------------------------------------------------------------------------
 
 renderResult

@@ -253,10 +253,12 @@ handleToolCall srv call rid = case tcName call of
 dispatchTool :: Server -> ToolCall -> IO ToolResult
 dispatchTool srv call = case tcName call of
   "ghci_load" -> do
-    -- Phase-3 migrated: in-process load via loadAndCaptureDiagnostics.
+    -- Phase-3 hybrid: legacy Session authoritative, GhcSession
+    -- auto-load cache invalidated post-load for Phase-2 sync.
     ghcSess <- getOrStartGhcSession srv
+    sess    <- getOrStartSession srv
     pd      <- readIORef (srvProjectDir srv)
-    Load.handle ghcSess pd (tcArguments call)
+    Load.handle ghcSess sess pd (tcArguments call)
   "ghci_type" -> do
     -- Phase-2 migrated: reads from the in-process GHC API session,
     -- not the legacy subprocess ghci. Auto-load on first call keeps
@@ -274,10 +276,12 @@ dispatchTool srv call = case tcName call of
     sess <- getOrStartSession srv
     QcTool.handle (srvStore srv) sess (tcArguments call)
   "ghci_hole" -> do
-    -- Phase-3 migrated: Deferred load + diagnostic capture.
+    -- Phase-3 hybrid: legacy Deferred load authoritative, GhcSession
+    -- invalidated for Phase-2 sync.
     ghcSess <- getOrStartGhcSession srv
+    sess    <- getOrStartSession srv
     pd      <- readIORef (srvProjectDir srv)
-    HoleTool.handle ghcSess pd (tcArguments call)
+    HoleTool.handle ghcSess sess pd (tcArguments call)
   "ghci_arbitrary" -> do
     sess <- getOrStartSession srv
     ArbitraryTool.handle sess (tcArguments call)

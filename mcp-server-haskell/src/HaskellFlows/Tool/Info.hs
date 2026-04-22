@@ -17,6 +17,7 @@ module HaskellFlows.Tool.Info
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
@@ -26,7 +27,7 @@ import GHC
   ( Ghc
   , TyThing (AConLike, ATyCon, AnId)
   , getInfo
-  , getNamesInScope
+  , parseName
   )
 import GHC.Core.TyCon
   ( isClassTyCon
@@ -34,8 +35,6 @@ import GHC.Core.TyCon
   , isNewTyCon
   , isTypeSynonymTyCon
   )
-import GHC.Types.Name (nameOccName)
-import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Utils.Outputable (showPprUnsafe)
 
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
@@ -99,27 +98,47 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
 -- and build the pre-migration 'ParsedInfo' shape from its return.
 queryInfo :: Text -> Ghc (Maybe ParsedInfo)
 queryInfo nm = do
-  names <- getNamesInScope
-  let target = T.unpack nm
-      matches =
-        [ n
-        | n <- names
-        , occNameString (nameOccName n) == target
-        ]
-  case matches of
-    []    -> pure Nothing
-    (n:_) -> do
-      info <- getInfo True n
-      pure $ case info of
-        Nothing -> Nothing
-        Just (thing, _fixity, clsInsts, famInsts, _doc) ->
-          Just ParsedInfo
-            { piName       = nm
-            , piKind       = kindFromTyThing thing
-            , piDefinition = T.pack (showPprUnsafe thing)
-            , piInstances  = map (T.pack . showPprUnsafe) clsInsts
-                          <> map (T.pack . showPprUnsafe) famInsts
-            }
+  -- parseName finds both value-level and type-level names (TyCons
+  -- don't live in getNamesInScope, so the old scan missed 'data'
+  -- declarations like Tree). If parseName throws, the outer 'try'
+  -- in handle catches it and returns an errorResult.
+  n :| _ <- parseName (T.unpack nm)
+  info <- getInfo True n
+  pure $ case info of
+    Nothing -> Nothing
+    Just (thing, _fixity, clsInsts, famInsts, _doc) ->
+      let kind = kindFromTyThing thing
+      in Just ParsedInfo
+        { piName       = nm
+        , piKind       = kind
+        , piDefinition = renderDefinition kind nm (T.pack (showPprUnsafe thing))
+        , piInstances  = map (T.pack . showPprUnsafe) clsInsts
+                      <> map (T.pack . showPprUnsafe) famInsts
+        }
+
+-- | Rebuild the declaration header (@data Tree@ / @class Functor@ /
+-- …) that @:info@ would have emitted as the first line. Uses the
+-- caller's name + detected kind; the GHC-rendered TyThing is
+-- concatenated as body context. This is a pragmatic reconstruction —
+-- the real @pprTyThing@ output is richer but the MCP's JSON contract
+-- only requires that "data <Name>" / "class <Name>" / … appear in
+-- the field. Body keeps the rendered info for the client that wants
+-- the full shape.
+renderDefinition :: InfoKind -> Text -> Text -> Text
+renderDefinition kind nm rendered
+  | T.null keyword  = rendered
+  | otherwise       = keyword <> nm <> bodySep <> rendered
+  where
+    keyword = case kind of
+      IkClass       -> "class "
+      IkData        -> "data "
+      IkNewtype     -> "newtype "
+      IkTypeSynonym -> "type "
+      _             -> ""
+    bodySep
+      | T.null (T.strip rendered) = ""
+      | T.strip rendered == nm    = ""   -- rendered is just the name
+      | otherwise                 = " "
 
 -- | Classify a 'TyThing' into our enum. Mirrors what the @:i@ parser
 -- guessed from the first-line syntax.
