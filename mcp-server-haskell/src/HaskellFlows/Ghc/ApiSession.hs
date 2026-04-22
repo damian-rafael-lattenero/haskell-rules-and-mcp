@@ -44,6 +44,8 @@ module HaskellFlows.Ghc.ApiSession
     -- * Phase-3 diagnostic capture
   , LoadFlavour (..)
   , loadAndCaptureDiagnostics
+    -- * Phase-7 in-process evaluation
+  , evalIOString
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)
@@ -91,8 +93,10 @@ import GHC.Types.SrcLoc
   , srcSpanStartCol
   , srcSpanStartLine
   )
+import GHC.Runtime.Eval (compileExpr)
 import GHC.Utils.Logger (LogAction, pushLogHook)
 import GHC.Utils.Outputable (SDocContext, defaultSDocContext, renderWithContext)
+import Unsafe.Coerce (unsafeCoerce)
 import System.Directory
   ( doesDirectoryExist
   , doesFileExist
@@ -404,6 +408,30 @@ mkGhcError sev ss msg = case ss of
     , geCode     = Nothing
     , geMessage  = msg
     }
+
+--------------------------------------------------------------------------------
+-- Phase-7 in-process evaluation
+--------------------------------------------------------------------------------
+
+-- | Compile and run an expression whose type must be @IO String@,
+-- returning the String. For QC/regression/determinism and for
+-- ghci_eval's IO fallback path. The caller wraps the user
+-- expression (e.g. @"quickCheckResult (" ++ prop ++ ")"@) into an
+-- @IO String@-typed statement; this helper handles the compile +
+-- coerce + execute cycle.
+--
+-- Exceptions thrown during compilation (SourceError for unresolved
+-- names, ambiguous types, missing instances) or during execution
+-- (runtime error, user code ⊥) propagate as 'SomeException' — the
+-- caller wraps with 'try' at the tool layer.
+evalIOString :: String -> Ghc String
+evalIOString stmt = do
+  hv <- compileExpr stmt
+  let action = unsafeCoerce hv :: IO String
+  result <- liftIO action
+  -- Force the whole String so runtime ⊥ surfaces as a catchable
+  -- exception instead of a lazy payload that blows up downstream.
+  length result `seq` pure result
 
 -- | Tweak the session 'DynFlags' for the requested load flavour.
 -- 'Strict' clears the defer flags; 'Deferred' enables them so

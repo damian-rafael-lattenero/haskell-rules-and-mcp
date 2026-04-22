@@ -157,7 +157,8 @@ import HaskellFlows.Types
   , mkProjectDir
   )
 import HaskellFlows.Ghc.ApiSession
-  ( killGhcSession
+  ( evalIOString
+  , killGhcSession
   , startGhcSession
   , withGhcSession
   )
@@ -386,6 +387,7 @@ main = do
       , test "release: workflow file exists + well-formed" testReleaseWorkflow
       , test "ghc-api: GhcSession boots + exprType roundtrip" testGhcSessionBoots
       , test "ghc-api: HscEnv persists across withGhcSession calls" testGhcSessionPersists
+      , test "ghc-api: evalIOString runs IO String actions in-process" testEvalIOString
       ]
   if and results then exitSuccess else exitFailure
 
@@ -3142,6 +3144,22 @@ testParseShowModulesPathsGarbage = pure $ and
           ]
       ) == ["src/Bar.hs"]
   ]
+
+-- | Phase-7 foundation: can we compile + run an 'IO String' action
+-- in-process and read its result back? This is the primitive QC /
+-- regression / determinism / IO-eval migrations depend on. If this
+-- test ever regresses, those migrations are off the table until the
+-- GHC API boundary changes.
+testEvalIOString :: IO Bool
+testEvalIOString = case mkProjectDir "/tmp" of
+  Left _   -> pure False
+  Right pd -> do
+    sess   <- startGhcSession pd
+    result <- withGhcSession sess $ do
+      setContext [IIDecl (simpleImportDecl (mkModuleName "Prelude"))]
+      evalIOString "(return \"hello-from-ghc-api\") :: IO String"
+    killGhcSession sess
+    pure (result == "hello-from-ghc-api")
 
 -- | Phase-2 derisk: verify the interactive context set in one
 -- 'withGhcSession' call survives into the next call. This is the
