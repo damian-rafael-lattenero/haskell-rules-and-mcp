@@ -1,7 +1,15 @@
 # Refactor `startSession` to use the GHC API via hie-bios
 
-Status: **deferred**, documented deuda técnica. No active work.
-Estimated effort: 1–2 focused days.
+Status: **infrastructure landed, default still sequential**. Parallel
+mode is wired (`HASKELL_FLOWS_E2E_PARALLEL=N`) but fails for N≥2
+because many scenarios still drive the legacy subprocess `Session`
+(ghci_load, ghci_refactor, ghci_quickcheck, ghci_check_module, …)
+and parallel `cabal repl` spawns contend on `~/.cabal/store`.
+
+Estimated effort to fully unlock parallel default: migrate every
+compile-verify path (ghci_load/check_module/refactor) fully off
+`Session`, which requires Phase 4+ of the GHC-API rewrite plan to
+be done (currently ghci_load is hybrid with Session-authoritative).
 Owner: unassigned.
 
 ## Context
@@ -21,6 +29,19 @@ cabal-install upstream is not designed for 3+ concurrent
 The dev-loop speedup we actually have today is
 `HASKELL_FLOWS_E2E_SKIP_SLOW=1` → 222 s → 127 s serial. Good enough
 for iteration, but the full suite is still ~3.5 min on CI.
+
+## Current state (Phase 7, infrastructure step)
+
+`test-e2e/Main.hs` now reads `HASKELL_FLOWS_E2E_PARALLEL=N` and
+partitions scenarios into fast and slow buckets. Fast scenarios run
+through a QSem-bounded pool of width N; slow scenarios (`isSlow` in
+the scenario list) stay sequential regardless. Default N=1 preserves
+the exact pre-Phase-7 behaviour, so `cabal test haskell-flows-mcp-e2e`
+stays green. N≥2 partially works — some fast scenarios fail under
+load because their tool calls still route through `Session`'s
+`cabal repl`. Stress testing with N=4 × 10 consecutive runs (the
+plan's global acceptance criterion) is blocked until more tools
+migrate off the subprocess path.
 
 ## Why the current approach is fundamentally limited
 

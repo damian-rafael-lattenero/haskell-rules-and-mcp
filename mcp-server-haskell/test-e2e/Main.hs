@@ -13,14 +13,19 @@
 -- banner, live progress streaming, and duration accounting.
 module Main where
 
-import Control.Exception (bracket, try, SomeException)
+import Control.Concurrent.Async (forConcurrently)
+import Control.Concurrent.QSem (newQSem, signalQSem, waitQSem)
+import Control.Exception (bracket, bracket_, try, SomeException)
+import qualified Data.List as List
 import qualified Data.Text as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import GHC.Conc (getNumCapabilities)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import qualified System.Environment
 import System.Exit (exitFailure, exitSuccess)
 import System.FilePath ((</>))
 import System.IO (BufferMode (..), hSetBuffering, stderr, stdout)
+import Text.Read (readMaybe)
 
 import qualified E2E.Assert as Assert
 import qualified E2E.Client as Client
@@ -159,7 +164,12 @@ main = do
   -- Read the opt-in slow-skip flag before we start banner-printing
   -- so the operator knows which mode they're about to watch.
   mSkipRaw <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_SKIP_SLOW"
+  mParRaw  <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_PARALLEL"
+  numCaps  <- getNumCapabilities
   let skipSlow = mSkipRaw == Just "1"
+      parallelism = case mParRaw >>= readMaybe of
+        Just k | k >= 1 -> min k numCaps
+        _              -> 1   -- default: sequential; opt-in parallel via env
       selected
         | skipSlow  = filter (\(_, slow, _) -> not slow) scenarios
         | otherwise = scenarios
@@ -174,6 +184,10 @@ main = do
                    <> show selCount <> " of " <> show totalCount
                    <> " scenarios (" <> show skippedCount <> " slow-tagged skipped)")
     else putStrLn ("==> running all " <> show totalCount <> " scenarios")
+  if parallelism > 1
+    then putStrLn ("==> HASKELL_FLOWS_E2E_PARALLEL=" <> show parallelism
+                   <> " (capabilities=" <> show numCaps <> ")")
+    else pure ()
 
   -- Layer 1 — transport smoke.
   Assert.beginSection "Transport smoke (subprocess, 1 round-trip)"
@@ -193,8 +207,20 @@ main = do
       exitFailure
     else do
       wallStart <- getPOSIXTime
-      -- Layer 2 — run every selected scenario in order.
-      checks <- concat <$> mapM (runScenario binary) selected
+      -- Layer 2 — scheduler:
+      -- * Sequential (parallelism=1, default): 'mapM' in declared order.
+      -- * Parallel (parallelism>=2): fast scenarios run through a QSem
+      --   pool of the given width; slow scenarios (marked 'isSlow')
+      --   stay sequential. Slow scenarios create fresh cabal projects
+      --   that resolve deps through the shared ~/.cabal/store and
+      --   contend heavily under parallel spawn — best to let them run
+      --   one at a time even when parallelism is enabled.
+      let (slowOnes, fastOnes) = List.partition (\(_, s, _) -> s) selected
+      fastChecks <- if parallelism > 1
+        then concat <$> runPool parallelism binary fastOnes
+        else concat <$> mapM (runScenario binary) fastOnes
+      slowChecks <- concat <$> mapM (runScenario binary) slowOnes
+      let checks = fastChecks <> slowChecks
       wallEnd <- getPOSIXTime
       let secs   = realToFrac (wallEnd - wallStart) :: Double
           passed = length (filter Assert.cOk checks)
@@ -218,6 +244,20 @@ main = do
           fracS  = if frac < 10 then '0' : show frac else show frac
       in show whole <> "." <> fracS
     takeLine = takeWhile (/= '\n')
+
+-- | 'QSem'-bounded pool for parallel scenario execution. Each
+-- scenario still owns its own tempdir + MCP server — the pool just
+-- caps the concurrent spawn count so we don't overwhelm the cabal
+-- store, the file system, or the GHC runtime.
+runPool
+  :: Int
+  -> FilePath
+  -> [(T.Text, Bool, Client.McpClient -> FilePath -> IO [Assert.Check])]
+  -> IO [[Assert.Check]]
+runPool bound binary xs = do
+  sem <- newQSem bound
+  forConcurrently xs $ \s ->
+    bracket_ (waitQSem sem) (signalQSem sem) (runScenario binary s)
 
 -- | One scenario run. Fresh tempdir, fresh client. Framework
 -- errors get converted to a single synthetic Failed check so
