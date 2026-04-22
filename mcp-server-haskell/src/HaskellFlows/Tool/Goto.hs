@@ -1,14 +1,12 @@
--- | @ghci_goto@ — jump-to-definition via GHCi's @:info@ output.
+-- | @ghci_goto@ — Phase-2 tool (GHC-API migrated).
 --
--- GHCi reports the source location of a name in a trailing
--- @-- Defined at \<file\>:\<line\>:\<col\>@ comment. We pull that out
--- and return it as a structured location. For names defined elsewhere
--- (e.g. @Prelude.map@) GHCi emits @-- Defined in 'Prelude'@; we
--- surface that too.
+-- Returns the source location where a name is defined. Pre-migration
+-- parsed "Defined at" / "Defined in" markers from @:info@ output;
+-- post-migration queries the 'Name''s 'SrcSpan' directly.
 --
--- Richer jump-to-definition (cross-module, re-exports, macro-generated
--- names) belongs to HLS — a future phase can wrap @ghci_hls@ actions
--- once that tool is ported.
+-- Richer jump-to-definition (cross-module re-exports, macro-generated
+-- names) still belongs to HLS — a future phase will wrap an
+-- @ghci_hls@ tool once that lands.
 module HaskellFlows.Tool.Goto
   ( descriptor
   , handle
@@ -17,6 +15,7 @@ module HaskellFlows.Tool.Goto
   , Location (..)
   ) where
 
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -25,7 +24,26 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Text.Read (readMaybe)
 
-import HaskellFlows.Ghci.Session
+import GHC
+  ( Ghc
+  , Name
+  , getNamesInScope
+  , moduleName
+  , nameSrcSpan
+  )
+import GHC.Data.FastString (unpackFS)
+import GHC.Types.Name (nameModule_maybe, nameOccName)
+import GHC.Types.Name.Occurrence (occNameString)
+import GHC.Types.SrcLoc
+  ( SrcSpan (RealSrcSpan, UnhelpfulSpan)
+  , srcSpanFile
+  , srcSpanStartCol
+  , srcSpanStartLine
+  )
+import GHC.Utils.Outputable (showPprUnsafe)
+
+import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
+import HaskellFlows.Ghci.Session (CommandError (..), sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
 
 descriptor :: ToolDescriptor
@@ -33,10 +51,9 @@ descriptor =
   ToolDescriptor
     { tdName        = "ghci_goto"
     , tdDescription =
-        "Return the source location where a name is defined. Parses "
-          <> "the \"Defined at\" / \"Defined in\" marker from GHCi's "
-          <> ":info output. For cross-module precision you'll want HLS "
-          <> "(future ghci_hls tool)."
+        "Return the source location where a name is defined, via the "
+          <> "GHC API's SrcSpan. For cross-module precision you'll want "
+          <> "HLS (future ghci_hls tool)."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -62,51 +79,69 @@ instance FromJSON GotoArgs where
   parseJSON = withObject "GotoArgs" $ \o ->
     GotoArgs <$> o .: "name"
 
--- | A resolved source location. Either a concrete @file:line:col@ for
--- project-defined names, or a bare module name for imports.
+-- | A resolved source location. Either a concrete @file:line:col@
+-- (project-defined names) or a bare module name (for names resolved
+-- to an imported module without a local SrcSpan).
 data Location
-  = InFile !Text !Int !Int       -- file, line, column
-  | InModule !Text                -- qualified module name only
+  = InFile !Text !Int !Int
+  | InModule !Text
   deriving stock (Eq, Show)
 
-handle :: Session -> Value -> IO ToolResult
-handle sess rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> Value -> IO ToolResult
+handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
   Right (GotoArgs nm) -> case sanitizeExpression nm of
     Left e -> pure (errorResult (formatCommandError e))
     Right safe -> do
-      gr <- infoOf sess safe >>= \case
-        Left _    -> pure Nothing
-        Right gr' -> pure (Just gr')
-      pure $ case gr of
-        Nothing ->
-          errorResult "GHCi rejected the name (boundary sanitiser)"
-        Just gr' ->
-          if not (grSuccess gr')
-            then errorResult (grOutput gr')
-            else case parseDefinedAt (grOutput gr') of
-              Just loc -> locationResult safe loc
-              Nothing  -> errorResult
-                ( "Could not extract a location for '" <> safe <> "'. "
-               <> "Raw GHCi output was:\n" <> grOutput gr' )
+      eRes <- try (withGhcSession ghcSess (queryLocation safe))
+      pure $ case eRes of
+        Left (se :: SomeException) ->
+          errorResult (T.pack ("GHC API error: " <> show se))
+        Right Nothing ->
+          errorResult ("Could not locate '" <> safe <> "'. Not in scope.")
+        Right (Just loc) ->
+          locationResult safe loc
+
+-- | Match names in the interactive scope by exact occurrence name,
+-- then promote the 'SrcSpan' to a structured 'Location'.
+queryLocation :: Text -> Ghc (Maybe Location)
+queryLocation nm = do
+  names <- getNamesInScope
+  let target = T.unpack nm
+      matches =
+        [ n
+        | n <- names
+        , occNameString (nameOccName n) == target
+        ]
+  case matches of
+    []    -> pure Nothing
+    (n:_) -> pure (Just (nameToLocation n))
+
+nameToLocation :: Name -> Location
+nameToLocation n = case nameSrcSpan n of
+  RealSrcSpan rspan _ ->
+    InFile
+      (T.pack (unpackFS (srcSpanFile rspan)))
+      (srcSpanStartLine rspan)
+      (srcSpanStartCol rspan)
+  UnhelpfulSpan _ ->
+    case nameModule_maybe n of
+      Just m  -> InModule (T.pack (showPprUnsafe (moduleName m)))
+      Nothing -> InModule "<unknown>"
 
 --------------------------------------------------------------------------------
--- parser
+-- legacy parser (retained for unit-test back-compat)
 --------------------------------------------------------------------------------
 
--- | Scan every line of @:info@ output looking for either a
--- @-- Defined at …@ or @-- Defined in '…'@ trailer.
+-- | Kept for the existing unit tests that validate the pre-migration
+-- parser. The live code path no longer calls this — the GHC API
+-- returns 'SrcSpan' directly. Retire when the subprocess-ghci backing
+-- retires in Phase 7.
 parseDefinedAt :: Text -> Maybe Location
 parseDefinedAt raw = firstJust tryLine (T.lines raw)
   where
     tryLine ln
-      -- GHC 9.x commonly prints ':info' output like:
-      --   simplify :: Expr -> Expr \t-- Defined at src/X.hs:9:1
-      -- i.e. the marker lives AFTER the signature on the same
-      -- line, not on a dedicated line. Previous code only
-      -- stripped from line start; this 'splitAt ' search finds
-      -- the marker anywhere.
       | Just rest <- findMarker "-- Defined at " ln = parseFileLoc rest
       | Just rest <- findMarker "-- Defined in " ln = parseModuleLoc rest
       | otherwise = Nothing
@@ -119,7 +154,6 @@ parseDefinedAt raw = firstJust tryLine (T.lines raw)
 
 parseFileLoc :: Text -> Maybe Location
 parseFileLoc t =
-  -- shape: "src/Foo.hs:12:5"
   case T.splitOn ":" (T.strip t) of
     (file : lnTxt : colTxt : _) -> do
       l <- readMaybe (T.unpack (T.filter (/= ' ') lnTxt))
@@ -129,7 +163,6 @@ parseFileLoc t =
 
 parseModuleLoc :: Text -> Maybe Location
 parseModuleLoc t =
-  -- shape: "'Prelude'" or similar with Unicode quotes.
   let stripped = T.dropAround (`elem` (" '\x2018\x2019" :: String)) (T.strip t)
   in if T.null stripped then Nothing else Just (InModule stripped)
 
@@ -140,7 +173,7 @@ firstJust f (x:xs) = case f x of
   Nothing -> firstJust f xs
 
 --------------------------------------------------------------------------------
--- response shaping
+-- response shaping (unchanged schema)
 --------------------------------------------------------------------------------
 
 locationResult :: Text -> Location -> ToolResult

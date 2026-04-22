@@ -1,26 +1,32 @@
--- | @ghci_complete@ — identifier autocomplete via GHCi's @:complete@
--- command.
+-- | @ghci_complete@ — Phase-2 tool (GHC-API migrated).
 --
--- Wraps @:complete repl "prefix"@. GHCi returns a count header + one
--- candidate per line; we parse that into a list. Useful for agent IDEs
--- that want to narrow a name before calling @:info@ on it.
+-- Returns in-scope identifiers that start with the given prefix.
+-- Pre-migration this wrapped @:complete repl "prefix"@ and parsed
+-- its framed count+list output; post-migration it queries
+-- 'getNamesInScope' directly and filters in-process.
 --
--- Boundary safety: the prefix goes through 'sanitizeExpression' like
--- every other string sent to GHCi — same rationale as @:t@/@:i@.
+-- Boundary safety: prefix still routes through 'sanitizeExpression'
+-- so the newline/sentinel/empty/too-large contract is identical.
 module HaskellFlows.Tool.Complete
   ( descriptor
   , handle
   , CompleteArgs (..)
   ) where
 
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Data.List (isPrefixOf, nub, sort)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import GHC (Ghc, getNamesInScope)
+import GHC.Types.Name (nameOccName)
+import GHC.Types.Name.Occurrence (occNameString)
 
-import HaskellFlows.Ghci.Session
+import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
+import HaskellFlows.Ghci.Session (CommandError (..), sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
 
 descriptor :: ToolDescriptor
@@ -28,8 +34,8 @@ descriptor =
   ToolDescriptor
     { tdName        = "ghci_complete"
     , tdDescription =
-        "Return the identifiers GHCi's :complete knows that start with "
-          <> "the given prefix. Useful before calling :info or :type on a "
+        "Return in-scope identifiers that start with the given prefix, "
+          <> "via the GHC API. Useful before calling :info or :type on a "
           <> "candidate."
     , tdInputSchema =
         object
@@ -71,46 +77,38 @@ clampLimit n
   | n > 200   = 200
   | otherwise = n
 
-handle :: Session -> Value -> IO ToolResult
-handle sess rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> Value -> IO ToolResult
+handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
   Right (CompleteArgs prefix limit) ->
     case sanitizeExpression prefix of
       Left e -> pure (errorResult (formatCommandError e))
       Right safe -> do
-        -- The "repl" flavour queries GHCi's in-scope names + imported.
-        -- Double-quote the prefix so :complete treats it as a literal.
-        gr <- execute sess (":complete repl \"" <> safe <> "\"")
-        pure (successResult prefix limit (parseCompleteOutput (grOutput gr)))
+        eRes <- try (withGhcSession ghcSess (queryCompletions safe))
+        case eRes of
+          Left (se :: SomeException) ->
+            pure (errorResult (T.pack ("GHC API error: " <> show se)))
+          Right cands ->
+            pure (successResult prefix limit cands)
+
+-- | Scan every name currently in the interactive context, keep the
+-- ones whose occurrence name starts with the prefix. Sort + dedupe
+-- to match the shape the subprocess @:complete@ produced.
+queryCompletions :: Text -> Ghc [Text]
+queryCompletions prefix = do
+  names <- getNamesInScope
+  let pfxStr = T.unpack prefix
+      matches =
+        [ s
+        | n <- names
+        , let s = occNameString (nameOccName n)
+        , pfxStr `isPrefixOf` s
+        ]
+  pure (map T.pack (sort (nub matches)))
 
 --------------------------------------------------------------------------------
--- parser
---------------------------------------------------------------------------------
-
--- | GHCi's @:complete@ output:
---
--- > 4 4 ""
--- > "foldr"
--- > "foldl"
--- > "foldMap"
--- > "foldr1"
---
--- The first line is @<count-returned> <count-total> ""@. Remaining
--- lines are one candidate each, already quoted. We strip the quotes
--- and ignore the header.
-parseCompleteOutput :: Text -> [Text]
-parseCompleteOutput raw =
-  let lns   = T.lines (T.strip raw)
-      body  = case lns of { (_:rest) -> rest; _ -> [] }
-  in map unquote (filter (not . T.null) body)
-  where
-    unquote t =
-      let t1 = T.dropWhile (== '"') t
-      in T.takeWhile (/= '"') t1
-
---------------------------------------------------------------------------------
--- response shaping
+-- response shaping (unchanged schema)
 --------------------------------------------------------------------------------
 
 successResult :: Text -> Int -> [Text] -> ToolResult

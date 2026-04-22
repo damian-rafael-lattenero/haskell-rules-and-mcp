@@ -1,11 +1,16 @@
--- | @ghci_browse@ — parse @:browse <Module>@ output into a list of
--- exported names + their types. Coarse; one line per binding.
+-- | @ghci_browse@ — Phase-2 tool (GHC-API migrated).
+--
+-- Lists names exported by a loaded module and their types. Pre-migration
+-- parsed the raw line-per-entry output of @:browse Module@; post-migration
+-- queries 'getModuleInfo' + 'modInfoExports' and renders each export's
+-- type via 'TyThing'.
 module HaskellFlows.Tool.Browse
   ( descriptor
   , handle
   , parseBrowseOutput
   ) where
 
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -13,7 +18,25 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Ghci.Session (Session, GhciResult (..), execute)
+import GHC
+  ( Ghc
+  , Name
+  , TyThing (AnId)
+  , getModuleGraph
+  , getModuleInfo
+  , lookupName
+  , mgModSummaries
+  , mkModuleName
+  , modInfoExports
+  , moduleName
+  , ms_mod
+  )
+import GHC.Types.Name (nameOccName)
+import GHC.Types.Name.Occurrence (occNameString)
+import GHC.Types.Var (varType)
+import GHC.Utils.Outputable (showPprUnsafe)
+
+import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Mcp.Protocol
 
 descriptor :: ToolDescriptor
@@ -21,8 +44,8 @@ descriptor =
   ToolDescriptor
     { tdName        = "ghci_browse"
     , tdDescription =
-        "Browse all names exported by a module via `:browse`. Returns "
-          <> "one entry per top-level binding with its rendered type."
+        "List names exported by a loaded module + their types. "
+          <> "Resolves against the auto-loaded project module graph."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -38,26 +61,80 @@ newtype BrowseArgs = BrowseArgs { baModule :: Text }
 instance FromJSON BrowseArgs where
   parseJSON = withObject "BrowseArgs" $ \o -> BrowseArgs <$> o .: "module"
 
-handle :: Session -> Value -> IO ToolResult
-handle sess rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> Value -> IO ToolResult
+handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
   Right (BrowseArgs m) -> do
-    res <- execute sess (":browse " <> m)
-    let entries = parseBrowseOutput (grOutput res)
-        payload = object
-          [ "success" .= True
-          , "module"  .= m
-          , "count"   .= length entries
-          , "entries" .= entries
-          ]
-    pure ToolResult
-           { trContent = [ TextContent (encodeUtf8Text payload) ]
-           , trIsError = False
-           }
+    eRes <- try (withGhcSession ghcSess (queryBrowse m))
+    pure $ case eRes of
+      Left (se :: SomeException) ->
+        errorResult (T.pack ("GHC API error: " <> show se))
+      Right Nothing ->
+        errorResult ("Module '" <> m <> "' is not in the loaded module graph.")
+      Right (Just entries) ->
+        successResult m entries
 
--- | @:browse@ output is usually @name :: type@ per line.
+-- | Look up the module in the current module graph, pull its exports,
+-- render each as "name :: type" (or just the name for non-Id things).
+queryBrowse :: Text -> Ghc (Maybe [Text])
+queryBrowse nm = do
+  let wanted = mkModuleName (T.unpack nm)
+  mg <- getModuleGraph
+  let matches =
+        [ ms_mod ms
+        | ms <- mgModSummaries mg
+        , moduleName (ms_mod ms) == wanted
+        ]
+  case matches of
+    []      -> pure Nothing
+    (m : _) -> do
+      minfo <- getModuleInfo m
+      case minfo of
+        Nothing -> pure (Just [])
+        Just mi -> do
+          let exports = modInfoExports mi
+          entries <- traverse renderExport exports
+          pure (Just entries)
+
+-- | Render a single exported 'Name' as @"name :: type"@ when the
+-- underlying 'TyThing' carries a type (identifier bindings); fall
+-- back to the bare name for datatype / class / etc. entries.
+renderExport :: Name -> Ghc Text
+renderExport n = do
+  let nm = T.pack (occNameString (nameOccName n))
+  mTy <- lookupName n
+  case mTy of
+    Just (AnId i) ->
+      pure (nm <> " :: " <> T.pack (showPprUnsafe (varType i)))
+    _ ->
+      pure nm
+
+--------------------------------------------------------------------------------
+-- legacy parser (retained for existing unit tests)
+--------------------------------------------------------------------------------
+
+-- | Pre-migration parser kept for the unit-test scaffolding. The live
+-- path no longer calls this — the GHC API returns exports as 'Name'
+-- directly. Retire alongside the subprocess-ghci backing in Phase 7.
 parseBrowseOutput :: Text -> [Text]
 parseBrowseOutput = filter (not . T.null) . map T.strip . T.lines
+
+--------------------------------------------------------------------------------
+-- response shaping (unchanged schema)
+--------------------------------------------------------------------------------
+
+successResult :: Text -> [Text] -> ToolResult
+successResult m entries =
+  let payload = object
+        [ "success" .= True
+        , "module"  .= m
+        , "count"   .= length entries
+        , "entries" .= entries
+        ]
+  in ToolResult
+       { trContent = [ TextContent (encodeUtf8Text payload) ]
+       , trIsError = False
+       }
 
 errorResult :: Text -> ToolResult
 errorResult msg = ToolResult

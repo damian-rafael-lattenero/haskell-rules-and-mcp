@@ -301,8 +301,9 @@ dispatchTool srv call = case tcName call of
     pd <- readIORef (srvProjectDir srv)
     CoverageTool.handle pd (tcArguments call)
   "ghci_complete" -> do
-    sess <- getOrStartSession srv
-    CompleteTool.handle sess (tcArguments call)
+    -- Phase-2 migrated: in-process getNamesInScope + prefix filter.
+    ghcSess <- getOrStartGhcSession srv
+    CompleteTool.handle ghcSess (tcArguments call)
   "ghci_format" -> do
     pd <- readIORef (srvProjectDir srv)
     FormatTool.handle pd (tcArguments call)
@@ -316,8 +317,9 @@ dispatchTool srv call = case tcName call of
     sess <- getOrStartSession srv
     DocTool.handle sess (tcArguments call)
   "ghci_goto" -> do
-    sess <- getOrStartSession srv
-    GotoTool.handle sess (tcArguments call)
+    -- Phase-2 migrated: in-process Name -> nameSrcSpan lookup.
+    ghcSess <- getOrStartGhcSession srv
+    GotoTool.handle ghcSess (tcArguments call)
   "ghci_refactor" -> do
     sess <- getOrStartSession srv
     pd   <- readIORef (srvProjectDir srv)
@@ -362,8 +364,9 @@ dispatchTool srv call = case tcName call of
     sess <- getOrStartSession srv
     ImportsTool.handle sess (tcArguments call)
   "ghci_browse" -> do
-    sess <- getOrStartSession srv
-    BrowseTool.handle sess (tcArguments call)
+    -- Phase-2 migrated: in-process getModuleInfo + modInfoExports.
+    ghcSess <- getOrStartGhcSession srv
+    BrowseTool.handle ghcSess (tcArguments call)
   "ghci_determinism" -> do
     sess <- getOrStartSession srv
     DeterminismTool.handle sess (tcArguments call)
