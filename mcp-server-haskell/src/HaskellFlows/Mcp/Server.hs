@@ -332,9 +332,10 @@ dispatchTool srv call = case tcName call of
     ghcSess <- getOrStartGhcSession srv
     GotoTool.handle ghcSess (tcArguments call)
   "ghci_refactor" -> do
-    sess <- getOrStartSession srv
-    pd   <- readIORef (srvProjectDir srv)
-    RefactorTool.handle sess pd (tcArguments call)
+    ghcSess <- getOrStartGhcSession srv
+    sess    <- getOrStartSession srv
+    pd      <- readIORef (srvProjectDir srv)
+    RefactorTool.handle ghcSess sess pd (tcArguments call)
   "ghci_lint" -> do
     pd <- readIORef (srvProjectDir srv)
     LintTool.handle pd (tcArguments call)

@@ -42,6 +42,7 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
+import HaskellFlows.Ghc.ApiSession (GhcSession, invalidateLoadCache)
 import HaskellFlows.Ghci.Session
   ( Session
   , GhciResult (..)
@@ -165,13 +166,19 @@ instance FromJSON RefactorArgs where
       , raDryRun         = dr
       }
 
-handle :: Session -> ProjectDir -> Value -> IO ToolResult
-handle sess pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> Session -> ProjectDir -> Value -> IO ToolResult
+handle ghcSess sess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
   Right args -> case mkModulePath pd (T.unpack (raModulePath args)) of
     Left e   -> pure (errorResult (formatPathError e))
-    Right mp -> handleAction sess mp args
+    Right mp -> do
+      r <- handleAction sess mp args
+      -- Refactor mutates files on disk. Invalidate GhcSession's
+      -- auto-load cache so Phase-2 reads see the renamed binding
+      -- on next access.
+      invalidateLoadCache ghcSess
+      pure r
 
 handleAction :: Session -> ModulePath -> RefactorArgs -> IO ToolResult
 handleAction sess mp args = case raAction args of
