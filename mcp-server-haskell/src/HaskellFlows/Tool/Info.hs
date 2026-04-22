@@ -17,6 +17,7 @@ module HaskellFlows.Tool.Info
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Data.Char (isAsciiUpper)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -174,7 +175,7 @@ kindFromTyThing = \case
 bestEffortResult :: Text -> ToolResult
 bestEffortResult nm =
   let firstIsUpper = case T.unpack nm of
-        (c:_) -> c >= 'A' && c <= 'Z'
+        (c:_) -> isAsciiUpper c
         _     -> False
       (kindTxt, definition) =
         if firstIsUpper
