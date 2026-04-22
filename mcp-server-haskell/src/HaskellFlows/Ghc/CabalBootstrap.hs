@@ -123,7 +123,7 @@ detectTargets projectRoot = do
       pure (parseTargetsFromCabal body)
 
 parseTargetsFromCabal :: Text -> [Target]
-parseTargetsFromCabal = mapMaybe classify . map T.stripStart . T.lines
+parseTargetsFromCabal = mapMaybe (classify . T.stripStart) . T.lines
   where
     classify ln
       | "library" == lower = Just TargetLibrary

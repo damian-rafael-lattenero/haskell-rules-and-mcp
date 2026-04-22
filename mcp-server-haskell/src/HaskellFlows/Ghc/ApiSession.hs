@@ -81,7 +81,6 @@ import GHC
   , setTargets
   , simpleImportDecl
   )
-import GHC.Types.SrcLoc (noLoc)
 import GHC.Driver.Env (HscEnv (hsc_logger))
 import GHC.Driver.Flags (WarningFlag (..))
 import GHC.Driver.Session
@@ -89,17 +88,18 @@ import GHC.Driver.Session
   , GeneralFlag (..)
   , gopt_set
   , gopt_unset
+  , parseDynamicFlagsCmdLine
   , wopt_set
   )
 import GHC.Paths (libdir)
 import GHC.Types.Error (MessageClass (..))
 import GHC.Types.SrcLoc
   ( SrcSpan (RealSrcSpan)
+  , noLoc
   , srcSpanFile
   , srcSpanStartCol
   , srcSpanStartLine
   )
-import GHC.Driver.Session (parseDynamicFlagsCmdLine)
 import GHC.Runtime.Eval (compileExpr)
 import GHC.Utils.Logger (LogAction, pushLogHook)
 import GHC.Utils.Outputable (SDocContext, defaultSDocContext, renderWithContext)

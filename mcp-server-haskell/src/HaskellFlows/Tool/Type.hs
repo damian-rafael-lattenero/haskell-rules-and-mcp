@@ -30,7 +30,7 @@ import GHC (Ghc, TcRnExprMode (TM_Inst), exprType)
 import GHC.Utils.Outputable (showPprUnsafe)
 
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
-import HaskellFlows.Ghci.Session (CommandError (..), sanitizeExpression)
+import HaskellFlows.Ghc.Sanitize (CommandError (..), sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
 
 -- | The schema surfaced to clients via @tools/list@.

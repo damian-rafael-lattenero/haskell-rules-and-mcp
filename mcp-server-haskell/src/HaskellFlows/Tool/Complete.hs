@@ -26,7 +26,7 @@ import GHC.Types.Name (nameOccName)
 import GHC.Types.Name.Occurrence (occNameString)
 
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
-import HaskellFlows.Ghci.Session (CommandError (..), sanitizeExpression)
+import HaskellFlows.Ghc.Sanitize (CommandError (..), sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
 
 descriptor :: ToolDescriptor
