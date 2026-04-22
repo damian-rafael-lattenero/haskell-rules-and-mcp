@@ -40,8 +40,10 @@ import System.Directory (getCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
 import System.Timeout (timeout)
 
+import Control.Concurrent.MVar (readMVar)
+
 import HaskellFlows.Data.PropertyStore (Store, openStore)
-import HaskellFlows.Ghc.ApiSession (GhcSession, killGhcSession, startGhcSession)
+import HaskellFlows.Ghc.ApiSession (GhcSession, invalidateLoadCache, killGhcSession, startGhcSession)
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Guidance (sessionInstructionsText, workflowRulesMarkdown)
 import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
@@ -316,13 +318,19 @@ dispatchTool srv call = case tcName call of
     CompleteTool.handle ghcSess (tcArguments call)
   "ghci_format" -> do
     pd <- readIORef (srvProjectDir srv)
-    FormatTool.handle pd (tcArguments call)
+    r  <- FormatTool.handle pd (tcArguments call)
+    invalidateGhcSessionIfPresent srv
+    pure r
   "ghci_deps" -> do
     pd <- readIORef (srvProjectDir srv)
-    DepsTool.handle pd (tcArguments call)
+    r  <- DepsTool.handle pd (tcArguments call)
+    invalidateGhcSessionIfPresent srv
+    pure r
   "ghci_create_project" -> do
     pd <- readIORef (srvProjectDir srv)
-    CreateProjectTool.handle pd (tcArguments call)
+    r  <- CreateProjectTool.handle pd (tcArguments call)
+    invalidateGhcSessionIfPresent srv
+    pure r
   "ghci_doc" -> do
     -- Phase-2 migrated: GHC.getDocs on the resolved Name.
     ghcSess <- getOrStartGhcSession srv
@@ -360,20 +368,30 @@ dispatchTool srv call = case tcName call of
   "ghci_quickcheck_export" -> do
     pd <- readIORef (srvProjectDir srv)
     QcExportTool.handle (srvStore srv) pd (tcArguments call)
-  "ghci_add_import" ->
-    AddImportTool.handle (tcArguments call)
+  "ghci_add_import" -> do
+    r <- AddImportTool.handle (tcArguments call)
+    invalidateGhcSessionIfPresent srv
+    pure r
   "ghci_add_modules" -> do
     pd <- readIORef (srvProjectDir srv)
-    AddModulesTool.handle pd (tcArguments call)
+    r  <- AddModulesTool.handle pd (tcArguments call)
+    invalidateGhcSessionIfPresent srv
+    pure r
   "ghci_remove_modules" -> do
     pd <- readIORef (srvProjectDir srv)
-    RemoveModulesTool.handle pd (tcArguments call)
+    r  <- RemoveModulesTool.handle pd (tcArguments call)
+    invalidateGhcSessionIfPresent srv
+    pure r
   "ghci_apply_exports" -> do
     pd <- readIORef (srvProjectDir srv)
-    ApplyExportsTool.handle pd (tcArguments call)
+    r  <- ApplyExportsTool.handle pd (tcArguments call)
+    invalidateGhcSessionIfPresent srv
+    pure r
   "ghci_fix_warning" -> do
     pd <- readIORef (srvProjectDir srv)
-    FixWarningTool.handle pd (tcArguments call)
+    r  <- FixWarningTool.handle pd (tcArguments call)
+    invalidateGhcSessionIfPresent srv
+    pure r
   "ghci_imports" -> do
     -- Phase-6 migrated: reads from GhcSession's interactive context.
     ghcSess <- getOrStartGhcSession srv
@@ -579,6 +597,19 @@ getOrStartGhcSession srv = modifyMVar (srvGhcSession srv) $ \case
     pd <- readIORef (srvProjectDir srv)
     s  <- startGhcSession pd
     pure (Just s, s)
+
+-- | Drop the GhcSession auto-load cache iff a session has already
+-- been booted. Used by file-mutation tools (add_import, add_modules,
+-- remove_modules, apply_exports, create_project, deps, fix_warning,
+-- format) so the next Phase-2 read re-scans disk and sees their
+-- edits. Intentionally DOES NOT boot a session if one doesn't exist —
+-- that would burn an HscEnv for a cache-invalidation side-effect.
+invalidateGhcSessionIfPresent :: Server -> IO ()
+invalidateGhcSessionIfPresent srv = do
+  m <- readMVar (srvGhcSession srv)
+  case m of
+    Nothing -> pure ()
+    Just s  -> invalidateLoadCache s
 
 --------------------------------------------------------------------------------
 -- small response helpers
