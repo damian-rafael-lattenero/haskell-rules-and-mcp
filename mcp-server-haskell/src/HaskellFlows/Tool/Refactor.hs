@@ -42,18 +42,17 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Ghc.ApiSession (GhcSession, invalidateLoadCache)
-import HaskellFlows.Ghci.Session
-  ( Session
-  , GhciResult (..)
-  , LoadMode (..)
-  , loadModuleWith
+import HaskellFlows.Ghc.ApiSession
+  ( GhcSession
+  , LoadFlavour (..)
+  , invalidateLoadCache
+  , loadForTarget
+  , targetForPath
   )
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Parser.Error
   ( GhcError (..)
   , Severity (..)
-  , parseGhcErrors
   )
 import HaskellFlows.Refactor.Extract
   ( ExtractResult (..)
@@ -166,21 +165,18 @@ instance FromJSON RefactorArgs where
       , raDryRun         = dr
       }
 
-handle :: GhcSession -> Session -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess sess pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
   Right args -> case mkModulePath pd (T.unpack (raModulePath args)) of
     Left e   -> pure (errorResult (formatPathError e))
     Right mp -> do
-      r <- handleAction sess mp args
-      -- Refactor mutates files on disk. Invalidate GhcSession's
-      -- auto-load cache so Phase-2 reads see the renamed binding
-      -- on next access.
+      r <- handleAction ghcSess mp args
       invalidateLoadCache ghcSess
       pure r
 
-handleAction :: Session -> ModulePath -> RefactorArgs -> IO ToolResult
+handleAction :: GhcSession -> ModulePath -> RefactorArgs -> IO ToolResult
 handleAction sess mp args = case raAction args of
   ActRename  -> handleRename  sess mp args
   ActExtract -> handleExtract sess mp args
@@ -189,7 +185,7 @@ handleAction sess mp args = case raAction args of
 -- rename_local
 --------------------------------------------------------------------------------
 
-handleRename :: Session -> ModulePath -> RefactorArgs -> IO ToolResult
+handleRename :: GhcSession -> ModulePath -> RefactorArgs -> IO ToolResult
 handleRename sess mp args = case raOldName args of
   Nothing  -> pure (errorResult "'old_name' is required for rename_local")
   Just old -> case validateIdentifier old of
@@ -222,7 +218,7 @@ renameSuccess old new rr =
 -- extract_binding
 --------------------------------------------------------------------------------
 
-handleExtract :: Session -> ModulePath -> RefactorArgs -> IO ToolResult
+handleExtract :: GhcSession -> ModulePath -> RefactorArgs -> IO ToolResult
 handleExtract sess mp args = case validateIdentifier (raNewName args) of
   Left err -> pure (errorResult err)
   Right safeNew -> case (raScopeLineStart args, raScopeLineEnd args) of
@@ -257,7 +253,7 @@ extractSuccess newName er ls le =
 -- The callback returns @Left errTxt@ to abort cleanly or
 -- @Right (newContent, successPayload)@ to attempt the rewrite.
 withSnapshot
-  :: Session
+  :: GhcSession
   -> ModulePath
   -> Bool                                    -- ^ dry_run
   -> (Text -> IO (Either Text (Text, Value)))
@@ -277,33 +273,53 @@ withSnapshot sess mp dryRun cont = do
             else commitWithVerify sess mp orig newContent baseSuccess
 
 commitWithVerify
-  :: Session
+  :: GhcSession
   -> ModulePath
   -> Text           -- original file content (snapshot)
   -> Text           -- rewritten content
   -> Value          -- base success payload (augmented with compile info)
   -> IO ToolResult
-commitWithVerify sess mp orig newContent baseSuccess = do
+commitWithVerify ghcSess mp orig newContent baseSuccess = do
   writeRes <- try (TIO.writeFile (unModulePath mp) newContent)
               :: IO (Either SomeException ())
   case writeRes of
     Left e -> pure (errorResult (T.pack ("Could not write module: " <> show e)))
     Right _ -> do
-      gr    <- loadModuleWith sess mp Strict
-      let diags = parseGhcErrors (grOutput gr)
-          errs  = filter ((== SevError) . geSeverity) diags
-      if not (null errs) || not (grSuccess gr)
+      -- Drop the auto-load cache so loadForTarget re-scans the
+      -- freshly-written file instead of reusing a stale HscEnv.
+      invalidateLoadCache ghcSess
+      tgt <- targetForPath ghcSess (unModulePath mp)
+      eLoad <- try (loadForTarget ghcSess tgt Strict)
+               :: IO (Either SomeException (Bool, [GhcError]))
+      let (ok, diags) = case eLoad of
+            Left ex   -> (False,
+                          [GhcError { geFile = T.pack (unModulePath mp)
+                                    , geLine = 0, geColumn = 0
+                                    , geSeverity = SevError
+                                    , geCode = Nothing
+                                    , geMessage = T.pack (show ex)
+                                    }])
+            Right res -> res
+          errs = filter ((== SevError) . geSeverity) diags
+      if not (null errs) || not ok
         then do
-          -- Restore snapshot. If the restore itself fails we surface
-          -- that as a separate error — the agent needs to know the
-          -- file is in an undefined state.
           restored <- try (TIO.writeFile (unModulePath mp) orig)
                       :: IO (Either SomeException ())
           let restoreMsg = case restored of
                 Left _  -> " — AND snapshot restore ALSO failed, file is dirty"
                 Right _ -> " — snapshot restored"
-          pure (compileFailResult errs (grOutput gr) restoreMsg)
+          pure (compileFailResult errs (renderDiags diags) restoreMsg)
         else pure (commitResult baseSuccess)
+
+-- | Render a list of diagnostics into a single text blob matching
+-- the legacy @grOutput@ shape (file:line:col: message, blank line
+-- between entries).
+renderDiags :: [GhcError] -> Text
+renderDiags = T.intercalate "\n\n" . map one
+  where
+    one e =
+      geFile e <> ":" <> T.pack (show (geLine e)) <> ":"
+        <> T.pack (show (geColumn e)) <> ": " <> geMessage e
 
 --------------------------------------------------------------------------------
 -- response shaping

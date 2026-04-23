@@ -39,9 +39,40 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Ghci.Session
+import Control.Exception (SomeException, try)
+
+import GHC
+  ( Ghc
+  , ModSummary
+  , TcRnExprMode (TM_Inst)
+  , TyThing (AnId)
+  , exprType
+  , getModuleGraph
+  , getModuleInfo
+  , mgModSummaries
+  , modInfoExports
+  , modInfoLookupName
+  , ms_mod
+  )
+import GHC.Types.Id (idType)
+import GHC.Types.Name (nameOccName)
+import GHC.Types.Name.Occurrence (occNameString)
+import GHC.Utils.Outputable (showPprUnsafe)
+
+import HaskellFlows.Ghc.ApiSession
+  ( GhcSession
+  , firstLibraryOrTestSuite
+  , LoadFlavour (..)
+  , loadForTarget
+  , withGhcSession
+  )
+import HaskellFlows.Ghc.Sanitize
+  ( CommandError (..)
+  , sanitizeExpression
+  )
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Parser.Type (parseTypeOutput, ParsedType (..), isOutOfScope)
+import HaskellFlows.Parser.Error (GhcError)
+import HaskellFlows.Parser.Type (isOutOfScope)
 import HaskellFlows.Parser.TypeSignature (ParsedSig, parseSignature)
 import HaskellFlows.Suggest.Rules
   ( Confidence (..)
@@ -49,7 +80,6 @@ import HaskellFlows.Suggest.Rules
   , Suggestion (..)
   , applyRulesCtx
   )
-import HaskellFlows.Tool.Goto (Location (..), parseDefinedAt)
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -96,61 +126,50 @@ instance FromJSON SuggestArgs where
     c  <- o .:? "category"
     pure SuggestArgs { saFunctionName = fn, saCategory = c }
 
-handle :: Session -> Value -> IO ToolResult
-handle sess rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> Value -> IO ToolResult
+handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
   Right args -> case sanitizeExpression (saFunctionName args) of
     Left e -> pure (errorResult (formatCommandError e))
     Right safe -> do
-      typeRes <- typeOf sess safe
-      case typeRes of
-        Left cmdErr ->
-          pure (errorResult (formatCommandError cmdErr))
-        Right gr
-          -- BUG-15: surface GHC's "not in scope" diagnostic as a
-          -- structured, actionable hint instead of the raw GHC
-          -- error message. The most common cause is that the
-          -- caller asked for laws on a function whose module
-          -- hasn't been loaded in this GHCi session — the fix is
-          -- to @ghci_load@ the module first, not to rephrase the
-          -- function name.
-          | isOutOfScope (grOutput gr) ->
-              pure (outOfScopeResult safe (grOutput gr))
-          | not (grSuccess gr) ->
-              pure (errorResult (grOutput gr))
-          | otherwise -> do
-              let mParsedType = parseTypeOutput (grOutput gr)
-              case mParsedType of
-                Nothing -> pure (errorResult
-                  ( "Could not parse ':t " <> safe <> "' output. "
-                 <> "Raw:\n" <> grOutput gr ))
-                Just pt -> case parseSignature (ptType pt) of
-                  Nothing -> pure (errorResult
-                    ( "Could not parse signature: " <> ptType pt ))
-                  Just sig -> do
-                    -- BUG-03: discover the focal function's home
-                    -- module and collect its OTHER top-level
-                    -- bindings as siblings. The sibling list is
-                    -- what enables 'ruleEvaluatorPreservation' and
-                    -- 'ruleConstantFoldingSoundness' to fire — the
-                    -- engines match on "this function is @a -> a@
-                    -- and there is a sibling whose last argument is
-                    -- @a@ and whose return type is different". Pre
-                    -- BUG-03 the siblings list was hard-wired to
-                    -- @[]@ via 'applyRules' (back-compat single-sig
-                    -- entrypoint) and the engines never fired.
-                    siblings <- gatherSiblings sess safe
-                    let ctx = RuleContext
-                          { rcName     = safe
-                          , rcSig      = sig
-                          , rcSiblings = siblings
-                          }
-                        matches  = applyRulesCtx ctx
-                        filtered = case saCategory args of
-                          Nothing -> matches
-                          Just c  -> filter ((c ==) . sCategory) matches
-                    pure (successResult safe (ptType pt) filtered)
+      tgt <- firstLibraryOrTestSuite ghcSess
+      eLoad <- try (loadForTarget ghcSess tgt Strict)
+      case eLoad :: Either SomeException (Bool, [GhcError]) of
+        Left ex ->
+          pure (errorResult ("loadForTarget failed: " <> T.pack (show ex)))
+        Right _ -> do
+          eType <- try (withGhcSession ghcSess (queryType safe))
+          case eType :: Either SomeException Text of
+            Left ex ->
+              pure (outOfScopeResult safe (T.pack (show ex)))
+            Right typeText
+              | isOutOfScope typeText ->
+                  pure (outOfScopeResult safe typeText)
+              | otherwise ->
+                  case parseSignature typeText of
+                    Nothing ->
+                      pure (errorResult
+                        ("Could not parse signature: " <> typeText))
+                    Just sig -> do
+                      siblings <- gatherSiblings ghcSess safe
+                      let ctx = RuleContext
+                            { rcName     = safe
+                            , rcSig      = sig
+                            , rcSiblings = siblings
+                            }
+                          matches  = applyRulesCtx ctx
+                          filtered = case saCategory args of
+                            Nothing -> matches
+                            Just c  -> filter ((c ==) . sCategory) matches
+                      pure (successResult safe typeText filtered)
+
+-- | Ask GHC for the type of @safe@. Exceptions (unresolved name,
+-- ambiguous type, …) are caught at the IO layer by the caller.
+queryType :: Text -> Ghc Text
+queryType safe = do
+  t <- exprType TM_Inst (T.unpack safe)
+  pure (T.pack (showPprUnsafe t))
 
 --------------------------------------------------------------------------------
 -- response shaping
@@ -286,28 +305,48 @@ encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
 --
 -- Any step failing produces @[]@ so the non-sibling rules
 -- still fire — degradation, never crash.
-gatherSiblings :: Session -> Text -> IO [(Text, ParsedSig)]
-gatherSiblings sess focalName = do
-  showRes <- execute sess ":show modules"
-  let showLines = parseShowModulesLines (grOutput showRes)
-      -- Browse EVERY loaded module. Previous attempts that
-      -- narrowed to just the focal's home module miss the common
-      -- pattern where the project splits one concept across
-      -- several modules (Expr.Simplify + Expr.Eval + …) and a
-      -- harness module re-exports them. The rule engine's
-      -- 'interpreterSiblings' filters by type anyway, so an
-      -- irrelevant sibling just doesn't match. ~5–10 modules
-      -- per project; each @:browse@ is sub-100ms, so total
-      -- cost stays under half a second.
-      targets   = map (\(_, n, _) -> n) showLines
-  browsed <- mapM (\m -> execute sess (":browse " <> m)) targets
-  let siblings =
-        nubByName
-          [ s
-          | gr <- browsed
-          , s  <- siblingsFromBrowse focalName (grOutput gr)
-          ]
-  pure siblings
+gatherSiblings :: GhcSession -> Text -> IO [(Text, ParsedSig)]
+gatherSiblings ghcSess focalName = do
+  eRes <- try (withGhcSession ghcSess (collectSiblings focalName))
+  pure $ case eRes :: Either SomeException [(Text, ParsedSig)] of
+    Left _   -> []
+    Right xs -> xs
+
+-- | Walk the loaded module graph. For each module, iterate its
+-- exported 'Name's, resolve each to a 'TyThing', keep only value
+-- bindings ('AnId'), render the name + type as Text, parse the
+-- signature, and return the (name, sig) pair. Drops the focal
+-- function itself. Dedup by name (first wins).
+collectSiblings :: Text -> Ghc [(Text, ParsedSig)]
+collectSiblings focalName = do
+  mg <- getModuleGraph
+  allPairs <- concat <$> mapM collectFromModule (mgModSummaries mg)
+  pure (nubByName allPairs)
+  where
+    collectFromModule :: ModSummary -> Ghc [(Text, ParsedSig)]
+    collectFromModule ms = do
+      mInfo <- getModuleInfo (ms_mod ms)
+      case mInfo of
+        Nothing   -> pure []
+        Just info -> do
+          let names = modInfoExports info
+          allPairs <- mapM (tryId info) names
+          pure [ (nm, sig)
+               | Just (nm, ty) <- allPairs
+               , nm /= focalName
+               , Just sig <- [parseSignature ty]
+               ]
+
+    -- Look up a Name's 'TyThing'; keep only value bindings (AnId).
+    -- Returns Just (name, typeText) or Nothing when not a value.
+    tryId info nm = do
+      mThing <- modInfoLookupName info nm
+      pure $ case mThing of
+        Just (AnId i) ->
+          let occ = T.pack (occNameString (nameOccName nm))
+              ty  = T.pack (showPprUnsafe (idType i))
+          in Just (occ, ty)
+        _ -> Nothing
 
 -- | Dedup a list of @(Text, a)@ by the first projection,
 -- keeping the first occurrence.
@@ -319,40 +358,10 @@ nubByName = go []
       | n `elem` seen          = go seen rest
       | otherwise              = (n, s) : go (n : seen) rest
 
-nubText :: [Text] -> [Text]
-nubText = go []
-  where
-    go _    []         = []
-    go seen (x : xs)
-      | x `elem` seen  = go seen xs
-      | otherwise      = x : go (x : seen) xs
-
-catMaybesT :: [Maybe Text] -> [Text]
-catMaybesT = foldr (\m acc -> maybe acc (: acc) m) []
-
--- | Identify the currently-focused module (marked with leading
--- @*@ in GHCi's @:show modules@). GHCi marks exactly one module
--- as focused when the caller used @:load@ with an explicit
--- target; omit otherwise.
-focusedModule :: [(Bool, Text, FilePath)] -> Maybe Text
-focusedModule = firstJust (\(starred, name, _) -> if starred then Just name else Nothing)
-  where
-    firstJust _ []     = Nothing
-    firstJust f (x:xs) = case f x of
-      Just y  -> Just y
-      Nothing -> firstJust f xs
-
--- | Discard the star-flag from a parsed @:show modules@ output
--- so the existing 'moduleForFile' helper can do an ordinary
--- reverse lookup.
-stripStarMap :: [(Bool, Text, FilePath)] -> [(Text, FilePath)]
-stripStarMap = map (\(_, n, p) -> (n, p))
-
--- | Extract the source file path from a @:info@ response.
-focalFileFromInfo :: Text -> Maybe FilePath
-focalFileFromInfo txt = case parseDefinedAt txt of
-  Just (InFile f _ _) -> Just (T.unpack f)
-  _                   -> Nothing
+-- Wave-5 removed `nubText`, `catMaybesT`, `focusedModule`,
+-- `moduleForFile`, `_siblingsFromBrowse` — all only made sense in
+-- the text-based @:browse@ + @:show modules@ parsing era. The
+-- in-process collectSiblings walks the module graph directly.
 
 -- | Parse GHCi's @:show modules@ output into @(ModuleName, FilePath)@
 -- tuples. Typical line (stripped):
@@ -388,15 +397,6 @@ parseShowModulesLines = mapMaybe parseShowLine . T.lines
            then Nothing
            else Just (starred, name', T.unpack file')
 
--- | Reverse-lookup: given a focal source file and the output of
--- @:show modules@, return the module whose file matches. An exact
--- string compare on the GHCi-reported path is all we need — GHCi
--- always reports the project-relative form.
-moduleForFile :: FilePath -> [(Text, FilePath)] -> Maybe Text
-moduleForFile focal = lookup focal . map swap
-  where
-    swap (a, b) = (b, a)
-
 -- | Extract top-level value bindings from @:browse@ output as
 -- @(name, type)@ tuples. Skips type/class declarations (names
 -- that don't start with a lowercase letter or underscore) and
@@ -423,9 +423,12 @@ parseBrowseBindings = mapMaybe parseOne . T.lines
       Nothing     -> False
 
 -- | Combine 'parseBrowseBindings' + 'parseSignature', drop the
--- focal function itself, and yield rule siblings.
-siblingsFromBrowse :: Text -> Text -> [(Text, ParsedSig)]
-siblingsFromBrowse focalName browseOut =
+-- focal function itself, and yield rule siblings. Not used by
+-- the Wave-5 handler (which walks the module graph directly),
+-- but kept because 'parseBrowseBindings' still has a unit-test
+-- and co-locating the helper makes the parser layer self-contained.
+_siblingsFromBrowse :: Text -> Text -> [(Text, ParsedSig)]
+_siblingsFromBrowse focalName browseOut =
   [ (nm, sig)
   | (nm, ty) <- parseBrowseBindings browseOut
   , nm /= focalName

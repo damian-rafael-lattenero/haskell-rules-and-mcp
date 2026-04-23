@@ -25,7 +25,7 @@ module HaskellFlows.Mcp.Server
   ) where
 
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
-import Control.Exception (SomeException, fromException, try)
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import qualified Data.Aeson.KeyMap as KeyMap
@@ -49,7 +49,6 @@ import HaskellFlows.Ghc.ApiSession
   , killGhcSession
   , startGhcSession
   )
-import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Guidance (sessionInstructionsText, workflowRulesMarkdown)
 import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
 import HaskellFlows.Mcp.Protocol
@@ -107,8 +106,9 @@ import qualified HaskellFlows.Tool.Workflow        as WorkflowTool
 -- runtime project switching through a tool — we'll upgrade it to a TVar
 -- the moment we port 'ghci_switch_project'.
 --
--- 'srvSession' is held behind an 'MVar' so concurrent handlers cannot race
--- on startup: the first caller wins, everyone else waits on the mutex.
+-- 'srvGhcSession' is held behind an 'MVar' so concurrent handlers
+-- cannot race on startup: the first caller wins, everyone else waits
+-- on the mutex.
 --
 -- 'srvBootPosix' + 'srvBinaryPath' wire BUG-07's staleness check:
 -- @ghci_workflow(status)@ now compares the on-disk binary mtime
@@ -116,17 +116,10 @@ import qualified HaskellFlows.Tool.Workflow        as WorkflowTool
 -- but forgot to relaunch the host.
 data Server = Server
   { srvProjectDir    :: !(IORef ProjectDir)
-  , srvSession       :: !(MVar (Maybe Session))
-    -- ^ Legacy subprocess-ghci session. Still the only option for
-    -- 'ghci_quickcheck' / 'ghci_regression' / 'ghci_determinism'
-    -- (need runtime randomisation + shrinking), and the primary
-    -- for everything else until Phase 2 of the GHC-API migration
-    -- starts porting tools over (docs/GHC-API-rewrite-plan.md).
   , srvGhcSession    :: !(MVar (Maybe GhcSession))
-    -- ^ In-process GHC-API session. Phase-1 scaffolding — sustained
-    -- alongside 'srvSession' but unused by any tool yet. Phase 2+
-    -- migrates read-only tools (type, info, complete, doc, browse,
-    -- goto) onto it; Phases 3-6 finish the port.
+    -- ^ In-process GHC-API session — the single source of compile
+    -- and execute state after Wave 5 landed. All 25 tools route
+    -- through this; the legacy subprocess ghci module is gone.
   , srvStore         :: !Store
   , srvWorkflowState :: !WorkflowStateRef
   , srvBootPosix     :: !Double
@@ -151,7 +144,6 @@ defaultServer = do
     Left err -> error ("Could not build ProjectDir: " <> show err)
     Right pd -> do
       pdRef    <- newIORef pd
-      sess     <- newMVar Nothing
       ghcSess  <- newMVar Nothing
       store    <- openStore pd
       ws       <- newWorkflowStateRef
@@ -159,7 +151,6 @@ defaultServer = do
       binPath  <- getExecutablePath
       pure Server
         { srvProjectDir    = pdRef
-        , srvSession       = sess
         , srvGhcSession    = ghcSess
         , srvStore         = store
         , srvWorkflowState = ws
@@ -277,12 +268,10 @@ dispatchTool srv call = case tcName call of
     ghcSess <- getOrStartGhcSession srv
     InfoTool.handle ghcSess (tcArguments call)
   "ghci_eval" -> do
-    -- Phase-4 hybrid: fast in-process path via compileExpr +
-    -- unsafeCoerce, with legacy Session fallback for IO / unshowable.
-    -- Session is passed lazily (via a thunk) so a pure-expression
-    -- workload never pays the ~3 s subprocess boot.
+    -- Wave-5 full in-process. Fast path: show-wrap + compileExpr.
+    -- Fallback: evalIOString (for IO-typed expressions).
     ghcSess <- getOrStartGhcSession srv
-    EvalTool.handle ghcSess (getOrStartSession srv) (tcArguments call)
+    EvalTool.handle ghcSess (tcArguments call)
   "ghci_quickcheck" -> do
     -- Wave-3 full in-process: compileExpr + unsafeCoerce of a
     -- Test.QuickCheck.quickCheckWithResult invocation.
@@ -306,7 +295,7 @@ dispatchTool srv call = case tcName call of
     staleness <- checkStaleness (srvBinaryPath srv) (srvBootPosix srv)
     WorkflowTool.handle
       (srvProjectDir srv)
-      (srvSession srv)
+      (srvGhcSession srv)
       allToolNames
       ws
       staleness
@@ -316,12 +305,11 @@ dispatchTool srv call = case tcName call of
     ghcSess <- getOrStartGhcSession srv
     RegressionTool.handle (srvStore srv) ghcSess (tcArguments call)
   "ghci_check_module" -> do
-    -- Phase-3 migrated (hybrid): GhcSession for compile/warnings/holes,
-    -- Session for property regression (stays on legacy until Phase 5).
+    -- Wave-5 full GhcSession: compile/warnings/holes + in-process
+    -- property replay via Regression.runOne.
     ghcSess <- getOrStartGhcSession srv
-    sess    <- getOrStartSession srv
     pd      <- readIORef (srvProjectDir srv)
-    CheckModuleTool.handle ghcSess sess (srvStore srv) pd (tcArguments call)
+    CheckModuleTool.handle ghcSess (srvStore srv) pd (tcArguments call)
   "ghci_coverage" -> do
     pd <- readIORef (srvProjectDir srv)
     CoverageTool.handle pd (tcArguments call)
@@ -356,10 +344,10 @@ dispatchTool srv call = case tcName call of
     ghcSess <- getOrStartGhcSession srv
     GotoTool.handle ghcSess (tcArguments call)
   "ghci_refactor" -> do
+    -- Wave-5 full GhcSession: compile-verify via loadForTarget.
     ghcSess <- getOrStartGhcSession srv
-    sess    <- getOrStartSession srv
     pd      <- readIORef (srvProjectDir srv)
-    RefactorTool.handle ghcSess sess pd (tcArguments call)
+    RefactorTool.handle ghcSess pd (tcArguments call)
   "ghci_lint" -> do
     pd <- readIORef (srvProjectDir srv)
     LintTool.handle pd (tcArguments call)
@@ -369,14 +357,14 @@ dispatchTool srv call = case tcName call of
     pd <- readIORef (srvProjectDir srv)
     ValidateCabalTool.handle pd (tcArguments call)
   "ghci_check_project" -> do
-    -- Phase-3 migrated (hybrid, delegates to check_module per file).
+    -- Wave-5 full GhcSession (delegates to check_module per file).
     ghcSess <- getOrStartGhcSession srv
-    sess    <- getOrStartSession srv
     pd      <- readIORef (srvProjectDir srv)
-    CheckProjectTool.handle ghcSess sess (srvStore srv) pd (tcArguments call)
+    CheckProjectTool.handle ghcSess (srvStore srv) pd (tcArguments call)
   "ghci_suggest" -> do
-    sess <- getOrStartSession srv
-    SuggestTool.handle sess (tcArguments call)
+    -- Wave-5 full GhcSession: exprType + module-graph walk for siblings.
+    ghcSess <- getOrStartGhcSession srv
+    SuggestTool.handle ghcSess (tcArguments call)
   "ghci_gate" -> do
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
@@ -530,15 +518,13 @@ runTool srv toolName rid action = do
            :: IO (Either SomeException (Maybe ToolResult))
   case out of
     Left ex -> do
-      let kind = case fromException ex :: Maybe SessionExhausted of
-                   Just _  -> "session_exhausted"
-                   Nothing -> "tool_exception"
-      case fromException ex :: Maybe SessionExhausted of
-        Just _  -> evictSession srv
-        Nothing -> pure ()
-      pure (ok rid (toJSON (toolException kind (T.pack (show ex)))))
+      -- Any exception that escapes the handler: reset the GhcSession
+      -- so the next call starts with a fresh HscEnv, then surface as
+      -- a structured error.
+      evictGhcSession srv
+      pure (ok rid (toJSON (toolException "tool_exception" (T.pack (show ex)))))
     Right Nothing -> do
-      evictSession srv
+      evictGhcSession srv
       pure (ok rid (toJSON (toolException "timeout" (timeoutMsg toolName))))
     Right (Just tr) -> do
       let payload = firstJsonContent tr
@@ -579,26 +565,8 @@ timeoutMsg tool =
   \budgets. If this fires, there is probably a deadlock below this \
   \layer."
 
--- | Remove the current session from the MVar, killing it if present.
--- The next 'getOrStartSession' will boot a fresh child process.
-evictSession :: Server -> IO ()
-evictSession srv = modifyMVar_ (srvSession srv) $ \case
-  Nothing -> pure Nothing
-  Just s  -> do
-    _ <- try (killSession s) :: IO (Either SomeException ())
-    pure Nothing
-
-getOrStartSession :: Server -> IO Session
-getOrStartSession srv = modifyMVar (srvSession srv) $ \case
-  Just s  -> pure (Just s, s)
-  Nothing -> do
-    pd <- readIORef (srvProjectDir srv)
-    s  <- startSession pd
-    pure (Just s, s)
-
--- | Phase-1 analogue of 'evictSession' for the in-process GHC API
--- session. Idempotent; catches any failure so an evict from a
--- watchdog path cannot raise.
+-- | Reset the in-process GhcSession. Idempotent; catches any
+-- failure so an evict from a watchdog path cannot raise.
 evictGhcSession :: Server -> IO ()
 evictGhcSession srv = modifyMVar_ (srvGhcSession srv) $ \case
   Nothing -> pure Nothing

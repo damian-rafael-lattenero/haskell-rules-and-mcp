@@ -28,7 +28,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Ghci.Session (Session)
+import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.Staleness (StalenessReport (..))
 import HaskellFlows.Mcp.WorkflowState
@@ -99,7 +99,7 @@ instance FromJSON WorkflowArgs where
 -- could use.
 handle
   :: IORef ProjectDir
-  -> MVar (Maybe Session)
+  -> MVar (Maybe GhcSession)
   -> [Text]
   -> WorkflowState
   -> StalenessReport
@@ -113,7 +113,7 @@ handle pdRef sessMVar toolNames ws staleness rawArgs =
       sessAlive <- isAlive sessMVar
       pure (render a pd sessAlive toolNames ws staleness)
 
-isAlive :: MVar (Maybe Session) -> IO Bool
+isAlive :: MVar (Maybe GhcSession) -> IO Bool
 isAlive sessMVar = do
   m <- readMVar sessMVar
   pure (case m of Nothing -> False; Just _ -> True)

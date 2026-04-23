@@ -1,15 +1,16 @@
--- | @ghci_check_module@ — hybrid (Phase-3 session-sync refactor).
+-- | @ghci_check_module@ — Wave-5 full GhcSession.
 --
--- All four gates (compile / warnings / holes / regression) run off the
--- legacy 'Session' which remains authoritative for QC / regression /
--- eval. Invalidates the 'GhcSession' auto-load cache at the end so
--- Phase-2 reads observe the refreshed module graph on next access.
+-- All four gates (compile / warnings / holes / regression) run
+-- in-process: 'loadForTarget' Strict → errors + warnings;
+-- 'loadForTarget' Deferred → hole warnings; property replay via
+-- 'Regression.runOne' (which itself is in-process Wave-3).
 module HaskellFlows.Tool.CheckModule
   ( descriptor
   , handle
   , CheckArgs (..)
   ) where
 
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -22,25 +23,22 @@ import HaskellFlows.Data.PropertyStore
   , StoredProperty (..)
   , loadAll
   )
-import HaskellFlows.Ghc.ApiSession (GhcSession, invalidateLoadCache)
-import HaskellFlows.Ghci.Session
-  ( Session
-  , GhciResult (..)
-  , LoadMode (..)
-  , loadModuleWith
-  , runProperty
+import HaskellFlows.Ghc.ApiSession
+  ( GhcSession
+  , LoadFlavour (..)
+  , invalidateLoadCache
+  , loadForTarget
+  , targetForPath
   )
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Parser.Error
   ( GhcError (..)
   , Severity (..)
-  , parseGhcErrors
+  , renderGhciStyle
   )
 import HaskellFlows.Parser.Hole (parseTypedHoles)
-import HaskellFlows.Parser.QuickCheck
-  ( QuickCheckResult (..)
-  , parseQuickCheckOutput
-  )
+import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..))
+import qualified HaskellFlows.Tool.Regression as RegTool
 import HaskellFlows.Types
   ( ProjectDir
   , PathError (..)
@@ -81,49 +79,45 @@ instance FromJSON CheckArgs where
   parseJSON = withObject "CheckArgs" $ \o ->
     CheckArgs <$> o .: "module_path"
 
-handle :: GhcSession -> Session -> Store -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess sess store pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
+handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
   Right (CheckArgs raw) -> case mkModulePath pd (T.unpack raw) of
     Left e -> pure (errorResult (formatPathError e))
-    Right mp -> do
-      strict <- loadModuleWith sess mp Strict
-      let diags      = parseGhcErrors (grOutput strict)
-          errors     = filter ((== SevError)   . geSeverity) diags
-          warnings   = filter ((== SevWarning) . geSeverity) diags
-          compileOk  = grSuccess strict && null errors
-      holes <- if compileOk
-                 then do
-                   deferred <- loadModuleWith sess mp Deferred
-                   pure (parseTypedHoles (grOutput deferred))
-                 else pure []
-      allProps <- loadAll store
-      let relevant = filter (\p -> spModule p == Just raw) allProps
-      regs <- mapM (runOne sess) relevant
-      let regressions = filter (not . isPass . snd) regs
+    Right _ -> do
       invalidateLoadCache ghcSess
-      pure $ renderResult
-        raw compileOk errors warnings holes regressions (length relevant)
-
---------------------------------------------------------------------------------
--- gates
---------------------------------------------------------------------------------
-
-runOne
-  :: Session
-  -> StoredProperty
-  -> IO (StoredProperty, QuickCheckResult)
-runOne sess sp = do
-  res <- runProperty sess (spExpression sp)
-  let qr = case res of
-        Left _   -> QcUnparsed (spExpression sp) "boundary sanitiser rejected"
-        Right gr -> parseQuickCheckOutput (spExpression sp) (grOutput gr)
-  pure (sp, qr)
-
-isPass :: QuickCheckResult -> Bool
-isPass (QcPassed _ _) = True
-isPass _              = False
+      tgt <- targetForPath ghcSess (T.unpack raw)
+      eStrict <- try (loadForTarget ghcSess tgt Strict)
+      case eStrict :: Either SomeException (Bool, [GhcError]) of
+        Left ex ->
+          pure (errorResult ("loadForTarget failed: " <> T.pack (show ex)))
+        Right (strictOk, strictDiags) -> do
+          let errors    = filter ((== SevError)   . geSeverity) strictDiags
+              warnings  = filter ((== SevWarning) . geSeverity) strictDiags
+              compileOk = strictOk && null errors
+          holes <- if compileOk
+                     then do
+                       eDef <- try (loadForTarget ghcSess tgt Deferred)
+                       pure $ case eDef :: Either SomeException (Bool, [GhcError]) of
+                         Left _           -> []
+                         Right (_, diags) ->
+                           parseTypedHoles (renderGhciStyle diags)
+                     else pure []
+          allProps <- loadAll store
+          let relevant = filter (\p -> spModule p == Just raw) allProps
+          -- Reuse the Wave-3 Regression.runOne — it's already
+          -- in-process via evalIOString.
+          replays <- mapM (RegTool.runOne ghcSess) relevant
+          let regressions =
+                [ (RegTool.rpStored r, RegTool.rpResult r)
+                | r <- replays
+                , case RegTool.rpResult r of
+                    QcPassed _ _ -> False
+                    _            -> True
+                ]
+          pure $ renderResult
+            raw compileOk errors warnings holes regressions (length relevant)
 
 --------------------------------------------------------------------------------
 -- response shaping

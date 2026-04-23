@@ -1,20 +1,14 @@
 -- | Pure boundary sanitisation for tool arguments.
 --
--- Wave-1 extraction: these three names ('sanitizeExpression',
--- 'CommandError', 'maxExpressionBytes') were historically in the
--- legacy subprocess 'HaskellFlows.Ghci.Session' module. They are
--- pure — no subprocess dependency — so they live here now where the
--- in-process GHC API tools can import them without pulling in the
--- legacy transport.
---
--- The sentinel check still imports the framing sentinel from
--- 'HaskellFlows.Ghci.Sentinel' for backward compatibility with
--- scenarios that verify "input containing the framing sentinel is
--- rejected". When Wave 5 deletes the subprocess layer, the sentinel
--- constant can move here (or be deleted outright).
+-- These helpers originally lived in the legacy subprocess
+-- 'HaskellFlows.Ghci.Session' module. They are pure — no
+-- subprocess dependency — so after Wave 5 retired the subprocess
+-- they live here as the single source of boundary-rejection
+-- logic.
 module HaskellFlows.Ghc.Sanitize
   ( CommandError (..)
   , sanitizeExpression
+  , sentinel
   , maxEvalBytes
   , maxExpressionBytes
   ) where
@@ -22,7 +16,13 @@ module HaskellFlows.Ghc.Sanitize
 import Data.Text (Text)
 import qualified Data.Text as T
 
-import HaskellFlows.Ghci.Sentinel (sentinel)
+-- | The fixed end-of-output marker from the pre-Wave-5 subprocess
+-- framing protocol. Kept as a literal constant so 'sanitizeExpression'
+-- can reject user inputs that happen to contain it — defending
+-- the one remaining use of the token (boundary rejection) without
+-- pulling back the legacy transport.
+sentinel :: Text
+sentinel = "<<<GHCi-DONE-7f3a2b>>>"
 
 -- | Reasons a tool-input argument was rejected at the boundary.
 --

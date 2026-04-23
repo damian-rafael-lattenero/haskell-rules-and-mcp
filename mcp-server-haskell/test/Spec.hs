@@ -34,10 +34,9 @@ import Test.QuickCheck
   , (==>)
   )
 
-import HaskellFlows.Ghci.Session
+import HaskellFlows.Ghc.Sanitize
   ( CommandError (..)
   , sanitizeExpression
-  , sessionCabalArgs
   )
 import HaskellFlows.Parser.Error
   ( GhcError (..)
@@ -264,8 +263,6 @@ main = do
       , test "suggest [a]->[Run a] skips list rules" testSuggestEncodeShapeSkipsListRules
       , test "parseCtors record strict w/ kind header" testCtorsRecordStrictWithKindHeader
       , test "parseCtors inline record 2 fields"    testCtorsInlineRecord2Fields
-      , test "session spawns with QuickCheck dep"   testSessionIncludesQuickCheck
-      , test "loadModule Strict uses -fno-defer-*" testLoadStrictClearsDeferred
       , test "coverage enriches w/ hpc report call" testCoverageInvokesHpcReport
       , test "parseCoverage handles hpc report out" testParseHpcReportText
       , test "coverage passes multiple --hpcdir"    testCoveragePassesAllMixDirs
@@ -274,8 +271,6 @@ main = do
       , test "parseTypeParams empty for monotype"   testTypeParamsNone
       , test "renderTemplate wraps polymorphic T a" testTemplatePolymorphic
       , test "renderTemplate multi-param context"   testTemplateMultiParam
-      , test "session Dead status + EOF flip"       testSessionDeadOnEOF
-      , test "session honors command timeout"       testSessionHonoursTimeout
       , test "server wraps runTool in timeout"      testServerOuterTimeout
       , test "initialize emits instructions field"  testInitializeEmitsInstructions
       , test "instructions mention key tools+flows" testInstructionsMentionCore
@@ -2585,39 +2580,13 @@ testSuggestEvaluatorNoSibling =
 --   1. 'Dead' is a constructor of 'SessionStatus'.
 --   2. 'drainHandle' flips the status to 'Dead' on EOF.
 --   3. 'executeNoLock' recognises 'Dead' and aborts.
-testSessionDeadOnEOF :: IO Bool
-testSessionDeadOnEOF = do
-  src <- TIO.readFile "src/HaskellFlows/Ghci/Session.hs"
-  let codeLines = filter (not . isDocLine) (T.lines src)
-      code      = T.unlines codeLines
-  pure $ T.isInfixOf "Alive | Overflowed | Dead" code
-      && T.isInfixOf "writeTVar status Dead"     code
-      && T.isInfixOf "Dead       -> pure FExhausted"  code
-  where
-    isDocLine ln =
-      let s = T.stripStart ln in "--" `T.isPrefixOf` s
-
--- | Phase 11c F-12 — the 'timeoutMicros' parameter of
--- 'executeNoLock' used to be silently ignored (the identifier was
--- prefixed @_timeoutMicros@). Without it, no per-command cap
--- existed: a GHCi that stopped emitting output but kept the pipe
--- open would stall the STM retry indefinitely. Fix wires the
--- param through 'registerDelay' + STM @readTVar@ of the delay
--- var so the transaction wakes either when the sentinel arrives
--- or the budget expires. Static source check pins both.
-testSessionHonoursTimeout :: IO Bool
-testSessionHonoursTimeout = do
-  src <- TIO.readFile "src/HaskellFlows/Ghci/Session.hs"
-  let codeLines = filter (not . isDocLine) (T.lines src)
-      code      = T.unlines codeLines
-  pure $ T.isInfixOf "registerDelay timeoutMicros" code
-      && T.isInfixOf "readTVar delayVar"           code
-      && T.isInfixOf "FTimedOut"                   code
-      -- and the old "silently ignored" shape is gone:
-      && not (T.isInfixOf "_timeoutMicros" code)
-  where
-    isDocLine ln =
-      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+-- testSessionDeadOnEOF / testSessionHonoursTimeout — removed in
+-- Wave 5 along with the subprocess ghci. Their invariants were
+-- pinning behaviour of the retired HaskellFlows.Ghci.Session
+-- module; the in-process GhcSession replaces them at a different
+-- layer (HscEnv lifetime + Ghc monad exceptions) and those paths
+-- are covered by the testGhcSessionPersists / testEvalIOString
+-- / testHoleDiagnosticCapture unit tests.
 
 --------------------------------------------------------------------------------
 -- Phase 11e — NextStep transition table + injection
@@ -2964,40 +2933,12 @@ testParseHpcReportText =
 -- using the same @-fno-@ form (not @:unset@). Grepping the module
 -- source is the narrowest regression check that survives without
 -- a live GHCi.
-testLoadStrictClearsDeferred :: IO Bool
-testLoadStrictClearsDeferred = do
-  src <- TIO.readFile "src/HaskellFlows/Ghci/Session.hs"
-  -- Drop docstrings so the doc mentions of the old buggy form don't
-  -- trip us up.
-  let codeLines = filter (not . isDocLine) (T.lines src)
-      code      = T.unlines codeLines
-      setLineCount pat = length
-        [ () | ln <- codeLines, T.isInfixOf pat ln, T.isInfixOf ":set" ln ]
-      unsetLineCount pat = length
-        [ () | ln <- codeLines, T.isInfixOf pat ln, T.isInfixOf ":unset" ln ]
-  pure $ T.isInfixOf "-fno-defer-type-errors" code
-      && T.isInfixOf "-fno-defer-typed-holes" code
-      && setLineCount "-fno-defer-type-errors" >= 1
-      && setLineCount "-fno-defer-typed-holes" >= 1
-      && unsetLineCount "-fdefer-type-errors" == 0
-      && unsetLineCount "-fdefer-typed-holes" == 0
-  where
-    isDocLine ln =
-      let s = T.stripStart ln
-      in "--" `T.isPrefixOf` s || "|" `T.isPrefixOf` s
-
--- | Phase 11b F-06: @cabal repl@ was spawned with no extra deps so
--- the GHCi session never had @Test.QuickCheck@ on its load path.
--- Calling @ghci_quickcheck@ against a scratch project that only
--- listed QuickCheck as a test-suite dep therefore failed with
--- \"Variable not in scope: quickCheck\". Fix attaches QuickCheck
--- via @--build-depends@ at session spawn time so the tool called
--- @ghci_quickcheck@ can actually… quickCheck. Pin the argv shape.
-testSessionIncludesQuickCheck :: IO Bool
-testSessionIncludesQuickCheck = pure $
-     "repl"             `elem` sessionCabalArgs
-  && "--build-depends"  `elem` sessionCabalArgs
-  && "QuickCheck"       `elem` sessionCabalArgs
+-- testLoadStrictClearsDeferred / testSessionIncludesQuickCheck —
+-- removed in Wave 5. Both pinned the legacy subprocess' argv /
+-- @:set@ invocations; the in-process path owns these through
+-- 'applyFlavour' (Strict vs Deferred) + the stanza flags captured
+-- from cabal's own @v2-repl@ argv. Covered now by the Deferred
+-- hole-capture round-trip in testHoleDiagnosticCapture.
 
 -- | Phase 11b F-04 part A: GHC 9.x emits a kind-signature line
 -- (@type Run :: * -> *@) BEFORE the data decl in @:i@ output.
