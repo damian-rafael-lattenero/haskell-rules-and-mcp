@@ -38,15 +38,24 @@ import System.Exit (ExitCode (..))
 import HaskellFlows.Data.PropertyStore (Store, save)
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
+  , LoadFlavour (..)
+  , firstTestSuiteOrLibrary
   , gsProject
+  , loadForTarget
   , withGhcSession
   )
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
-import qualified Data.List.NonEmpty as NE
-import GHC (parseName)
+import GHC
+  ( getModuleGraph
+  , getModuleInfo
+  , mgModSummaries
+  , modInfoExports
+  , ms_mod
+  )
 import GHC.Data.FastString (unpackFS)
-import GHC.Types.Name (nameSrcSpan)
+import GHC.Types.Name (nameOccName, nameSrcSpan)
+import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.SrcLoc (RealSrcSpan, SrcSpan (..), srcSpanFile)
 import HaskellFlows.Ghc.Sanitize
   ( CommandError (..)
@@ -155,16 +164,45 @@ resolvePropertyModule :: GhcSession -> Text -> IO (Maybe Text)
 resolvePropertyModule ghcSess nm
   | not (isSimpleIdent nm) = pure Nothing
   | otherwise = do
+      -- Prime the session against the test-suite stanza first.
+      -- The cached env a prior 'ghci_load' left behind may reflect
+      -- a DIFFERENT target (e.g. library), in which case the test-
+      -- suite's Main module is not in the graph and its
+      -- 'prop_trivial' is invisible. 'firstTestSuiteOrLibrary'
+      -- picks the test-suite when one exists (where named
+      -- properties typically live); 'loadForTarget' then loads
+      -- test/ + src/ sources under the test-suite's stanza flags,
+      -- producing a module graph that contains Main alongside the
+      -- library modules.
+      tgt <- firstTestSuiteOrLibrary ghcSess
+      _   <- try @SomeException (loadForTarget ghcSess tgt Strict)
+      -- Walk the module graph: for each loaded module, scan its
+      -- exports for a Name whose OccName matches the property.
+      -- Beats 'parseName' here because (a) 'IIDecl (import Main)'
+      -- doesn't expose Main's top-level names and (b) 'IIModule'
+      -- requires interpreted mode while cabal compiles to objects.
       eRes <- try @SomeException $ withGhcSession ghcSess $ do
-        names <- parseName (T.unpack nm)
-        case NE.toList names of
-          []     -> pure Nothing
-          (n:_)  -> pure (fileFromSpan (nameSrcSpan n))
+        mg <- getModuleGraph
+        matches <- sequence
+          [ do
+              mi <- getModuleInfo (ms_mod ms)
+              pure $ case mi of
+                Nothing   -> Nothing
+                Just info ->
+                  case filter matchesName (modInfoExports info) of
+                    (n:_) -> fileFromSpan (nameSrcSpan n)
+                    []    -> Nothing
+          | ms <- mgModSummaries mg
+          ]
+        pure (firstJust matches)
       pure $ case eRes of
         Left _           -> Nothing
         Right (Just fp)  -> Just (T.pack fp)
         Right Nothing    -> Nothing
   where
+    matchesName n =
+      occNameString (nameOccName n) == T.unpack nm
+    firstJust = foldr (\x acc -> case x of Just _ -> x; Nothing -> acc) Nothing
     fileFromSpan :: SrcSpan -> Maybe FilePath
     fileFromSpan = \case
       RealSrcSpan s _ -> Just (unpackFS (srcSpanFile (s :: RealSrcSpan)))
