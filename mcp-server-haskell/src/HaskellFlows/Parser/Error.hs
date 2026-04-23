@@ -19,6 +19,7 @@ module HaskellFlows.Parser.Error
   , parseGhcErrors
   , categorizeWarning
   , bucketize
+  , renderGhciStyle
   ) where
 
 import Data.Aeson (ToJSON (..), object, (.=))
@@ -112,6 +113,35 @@ categorizeWarning e =
       , "GHC-83865"  -- couldn't match expected type (deferred)
       , "GHC-66111"  -- unused-imports warning family
       ]
+
+-- | Render a list of 'GhcError' as GHCi-style terminal output so
+-- parsers tuned for that shape (currently
+-- 'HaskellFlows.Parser.Hole.parseTypedHoles') keep working against
+-- diagnostics captured via the GHC API logger hook.
+--
+-- Each diagnostic becomes a block:
+--
+-- > <file>:<line>:<col>: <severity>:
+-- >     <body lines indented 4 spaces>
+--
+-- The body is already rendered by the capture hook (see
+-- 'HaskellFlows.Ghc.ApiSession.captureHook') and may contain bullets,
+-- @[GHC-NNNN]@ codes, and "Relevant bindings include" / "Valid hole
+-- fits include" sub-headers exactly as GHCi would print them.
+renderGhciStyle :: [GhcError] -> Text
+renderGhciStyle = T.intercalate "\n\n" . map renderOne
+  where
+    renderOne e =
+      let sev = case geSeverity e of
+            SevError   -> "error"
+            SevWarning -> "warning"
+          header = geFile e <> ":"
+            <> T.pack (show (geLine e)) <> ":"
+            <> T.pack (show (geColumn e)) <> ": "
+            <> sev <> ":"
+          bodyLines = T.lines (geMessage e)
+          indented  = T.intercalate "\n" (map ("    " <>) bodyLines)
+      in header <> "\n" <> indented
 
 -- | Group a list of errors by category + count. Returned ordered by
 -- bucket count descending — agents lean on the head for prioritised

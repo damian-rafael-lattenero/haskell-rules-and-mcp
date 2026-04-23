@@ -46,6 +46,7 @@ import HaskellFlows.Parser.Error
   , bucketize
   , categorizeWarning
   , parseGhcErrors
+  , renderGhciStyle
   )
 import HaskellFlows.Parser.Hole
   ( HoleFit (..)
@@ -397,6 +398,7 @@ main = do
       , test "ghc-api: evalIOString runs IO String actions in-process" testEvalIOString
       , test "ghc-api: bootstrapProject captures cabal flags for library" testCabalBootstrapLibrary
       , test "ghc-api: loadForTarget compiles library module via stanza flags" testLoadForTargetLibrary
+      , test "ghc-api: deferred hole warnings are captured by logger hook" testHoleDiagnosticCapture
       ]
   if and results then exitSuccess else exitFailure
 
@@ -3050,15 +3052,18 @@ testSuggestEncodeShapeSkipsListRules =
 -- so the resolution rule can evolve without a live GHCi.
 --------------------------------------------------------------------------------
 
--- | Happy path: identifier + valid ':info' output → use the file from ':info'.
+-- | Wave-3: chooseStoreModule no longer consults ':info' output —
+-- that plumbing sat on top of the subprocess ghci which is being
+-- retired. Under the new contract it always returns the caller's
+-- hint verbatim, regardless of what ':info' would have said.
 testChooseStoreModuleIdentWithInfo :: IO Bool
 testChooseStoreModuleIdentWithInfo = pure $
   QcTool.chooseStoreModule
     "prop_idempotent"
-    (Just "src/Foo.hs")                 -- caller's (wrong) hint
+    (Just "src/Foo.hs")
     (Just ":info output\nprop_idempotent :: Expr -> Bool \
            \\t-- Defined at test/Spec.hs:12:1\n")
-  == Just "test/Spec.hs"
+  == Just "src/Foo.hs"
 
 -- | Identifier but no ':info' available (e.g. session busy) → fall back
 -- to whatever the caller passed. We don't invent a path.
@@ -3185,6 +3190,31 @@ testLoadForTargetLibrary = case mkProjectDir "/tmp/bench-project" of
         (ok, diags) <- ApiSession.loadForTarget sess TargetLibrary ApiSession.Strict
         killGhcSession sess
         pure (ok && null diags)
+
+-- | Diagnostic: prove whether 'loadForTarget' with 'Deferred' flavour
+-- captures typed-hole warnings through the logger hook. Writes a
+-- detailed trace to @/tmp/hole-hook-diag.log@ for inspection. If the
+-- fixture dir or the @Hole.hs@ fixture is missing, skip gracefully.
+testHoleDiagnosticCapture :: IO Bool
+testHoleDiagnosticCapture = case mkProjectDir "/tmp/hole-fixture" of
+  Left _   -> pure True
+  Right pd -> do
+    cabalExists <- doesFileExist "/tmp/hole-fixture/hole-fixture.cabal"
+    holeExists  <- doesFileExist "/tmp/hole-fixture/src/Hole.hs"
+    if not (cabalExists && holeExists)
+      then pure True  -- no fixture, skip
+      else do
+        sess <- startGhcSession pd
+        (_ok, diags) <- ApiSession.loadForTarget sess TargetLibrary ApiSession.Deferred
+        killGhcSession sess
+        -- Full Wave-2 hole pipeline: capture -> render -> parse.
+        -- A non-empty holes list with the expected file proves the
+        -- hook captured the warning, the renderer produced a valid
+        -- GHCi-style header, and parseTypedHoles extracted the hole.
+        let rendered = renderGhciStyle diags
+            holes    = parseTypedHoles rendered
+        pure $ not (null holes)
+             && any ("Hole.hs" `T.isSuffixOf`) (map thFile holes)
 
 -- | Wave-1 gate: drive cabal via the shim against a real project
 -- and verify we get back a non-empty flag set that includes the

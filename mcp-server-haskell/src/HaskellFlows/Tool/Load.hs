@@ -1,18 +1,22 @@
--- | @ghci_load@ — hybrid (Phase-3 session-sync refactor).
+-- | @ghci_load@ — full GhcSession (Wave 2).
 --
--- Loads via the legacy 'Session' (still authoritative for QC /
--- regression / determinism / eval which haven't migrated yet), then
--- invalidates the 'GhcSession' auto-load cache so the next Phase-2
--- tool call re-scans disk and sees the fresh module graph.
+-- Loads the project via 'loadForTarget' (cabal-aware stanza flags)
+-- and returns parsed diagnostics (errors + warnings) sourced directly
+-- from GHC's typechecker via the logger hook. When the caller passes
+-- @diagnostics=true@, the same target is re-loaded with @Deferred@
+-- flavour so typed holes and deferred type errors surface as
+-- warnings.
 --
--- Pure-in-process migration lands in Phase 4+ once eval/QC move off
--- legacy.
+-- Response shape matches the legacy ghci_load for backward
+-- compatibility with existing e2e scenarios: success, errors,
+-- warnings, summary, raw.
 module HaskellFlows.Tool.Load
   ( descriptor
   , handle
   , LoadArgs (..)
   ) where
 
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -20,10 +24,19 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Ghc.ApiSession (GhcSession, invalidateLoadCache)
-import HaskellFlows.Ghci.Session
+import HaskellFlows.Ghc.ApiSession
+  ( GhcSession
+  , LoadFlavour (..)
+  , loadForTarget
+  , targetForPath
+  , firstTestSuiteOrLibrary
+  )
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Parser.Error
+  ( GhcError (..)
+  , Severity (..)
+  , renderGhciStyle
+  )
 import HaskellFlows.Types
 
 descriptor :: ToolDescriptor
@@ -31,10 +44,11 @@ descriptor =
   ToolDescriptor
     { tdName        = "ghci_load"
     , tdDescription =
-        "Load or reload Haskell modules in GHCi. Returns parsed compilation "
-          <> "errors and warnings. Pass diagnostics=true to additionally run "
-          <> "a deferred pass (-fdefer-type-errors -fdefer-typed-holes) and "
-          <> "surface typed holes discovered that way."
+        "Load or reload Haskell modules via the in-process GHC API. "
+          <> "Returns structured compilation errors and warnings. Pass "
+          <> "diagnostics=true to additionally run a deferred pass "
+          <> "(-fdefer-type-errors -fdefer-typed-holes) and surface typed "
+          <> "holes discovered that way."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -69,48 +83,57 @@ instance FromJSON LoadArgs where
     dx <- o .:? "diagnostics" .!= False
     pure LoadArgs { laModulePath = mp, laDiagnostics = dx }
 
-handle :: GhcSession -> Session -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess sess pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
-  Right (LoadArgs Nothing _) -> do
-    result <- reload sess
-    invalidateLoadCache ghcSess
-    pure (okResult result [])
-  Right (LoadArgs (Just p) dx) -> case mkModulePath pd (T.unpack p) of
-    Left err -> pure (errorResult (formatPathError err))
-    Right mp -> do
-      strict <- loadModuleWith sess mp Strict
-      let strictDiags = parseGhcErrors (grOutput strict)
-      finalResult <- if dx
-        then do
-          deferred <- loadModuleWith sess mp Deferred
-          let extraDiags = parseGhcErrors (grOutput deferred)
-              merged     = mergeDiags strictDiags extraDiags
-          pure (okResult strict merged)
-        else pure (okResult strict strictDiags)
-      invalidateLoadCache ghcSess
-      pure finalResult
+  Right (LoadArgs mModPath dx) -> do
+    mTgt <- case mModPath of
+      Nothing -> Right <$> firstTestSuiteOrLibrary ghcSess
+      Just p  -> case mkModulePath pd (T.unpack p) of
+        Left err -> pure (Left err)
+        Right _  -> Right <$> targetForPath ghcSess (T.unpack p)
+    case mTgt of
+      Left pathErr -> pure (errorResult (formatPathError pathErr))
+      Right tgt -> do
+        -- Strict first gives agents the canonical error set.
+        -- diagnostics=true merges a Deferred pass so typed holes
+        -- and deferred-type-errors also show up as warnings.
+        eStrict <- try (loadForTarget ghcSess tgt Strict)
+        case eStrict :: Either SomeException (Bool, [GhcError]) of
+          Left ex ->
+            pure (errorResult ("loadForTarget failed: " <> T.pack (show ex)))
+          Right (strictOk, strictDiags) ->
+            if dx
+              then do
+                eDef <- try (loadForTarget ghcSess tgt Deferred)
+                case eDef :: Either SomeException (Bool, [GhcError]) of
+                  Left _  -> pure (okResult strictOk strictDiags)
+                  Right (_, deferredDiags) ->
+                    let merged = mergeDiags strictDiags deferredDiags
+                    in pure (okResult strictOk merged)
+              else pure (okResult strictOk strictDiags)
 
 --------------------------------------------------------------------------------
 -- response shaping
 --------------------------------------------------------------------------------
 
-okResult :: GhciResult -> [GhcError] -> ToolResult
-okResult gr diags =
-  let errs  = filter ((== SevError) . geSeverity) diags
+okResult :: Bool -> [GhcError] -> ToolResult
+okResult ok diags =
+  let errs  = filter ((== SevError)   . geSeverity) diags
       warns = filter ((== SevWarning) . geSeverity) diags
+      succ_ = ok && null errs
       payload =
         object
-          [ "success"  .= (grSuccess gr && null errs)
+          [ "success"  .= succ_
           , "errors"   .= errs
           , "warnings" .= warns
-          , "summary"  .= summarise (grSuccess gr) errs warns
-          , "raw"      .= grOutput gr
+          , "summary"  .= summarise ok errs warns
+          , "raw"      .= renderGhciStyle diags
           ]
   in ToolResult
        { trContent = [ TextContent (encodeText payload) ]
-       , trIsError = not (grSuccess gr) || not (null errs)
+       , trIsError = not succ_
        }
 
 errorResult :: Text -> ToolResult
@@ -136,7 +159,7 @@ summarise ok errs warns
   | not (null errs) = T.pack (show (length errs)) <> " error(s)"
   | ok && null warns = "Compiled OK. No issues."
   | ok = "Compiled OK. " <> T.pack (show (length warns)) <> " warning(s)."
-  | otherwise = "Compilation produced no errors but GHCi reported failure."
+  | otherwise = "Compilation produced no errors but GHC reported failure."
 
 encodeText :: Value -> Text
 encodeText = TL.toStrict . TLE.decodeUtf8 . encode

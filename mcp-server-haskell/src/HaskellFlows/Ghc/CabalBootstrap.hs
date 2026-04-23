@@ -194,10 +194,22 @@ bootstrapOne root shimPath tgt = do
   -- handle) — critical on macOS where lazy readFile from a stale
   -- handle produces "resource busy" on the next open.
   BS.writeFile outFile BS.empty
+  -- Pass defer flags so cabal's own pre-interactive build phase
+  -- tolerates incomplete user code (typed holes, deferred type
+  -- errors, out-of-scope names). Without these, any module in the
+  -- target's source tree with a hole would abort cabal before the
+  -- shim sees the '--interactive' invocation and we'd never capture
+  -- stanza flags. The flags aren't baked into the captured argv —
+  -- our in-process compile re-applies them via 'applyFlavour
+  -- Deferred' anyway when the Hole / diagnostics path wants them.
   let cp = (Proc.proc "cabal"
              ( ["v2-repl"]
                <> renderTarget tgt
                <> ["--with-compiler=" <> shimPath]
+               <> [ "--ghc-options=-fdefer-type-errors"
+                  , "--ghc-options=-fdefer-typed-holes"
+                  , "--ghc-options=-fdefer-out-of-scope-variables"
+                  ]
              ))
              { Proc.cwd     = Just root
              , Proc.env     = Nothing  -- inherit parent env

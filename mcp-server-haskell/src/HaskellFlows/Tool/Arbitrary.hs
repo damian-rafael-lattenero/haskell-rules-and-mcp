@@ -1,21 +1,17 @@
--- | @ghci_arbitrary@ — generate a template 'Arbitrary' instance for a
--- user-defined data type.
+-- | @ghci_arbitrary@ — Wave-4 full GhcSession.
 --
--- Mirrors @mcp-server/src/tools/arbitrary.ts@ at its essential level.
 -- Given a type name, the tool:
 --
--- 1. queries GHCi for @:i \<type\>@ to get the declaration,
--- 2. parses out the constructors and their argument counts,
--- 3. emits an @instance Arbitrary T where arbitrary = oneof [...]@
---    template that the agent can paste into the source file.
+-- 1. loads the user's project via 'loadForTarget' so user types resolve,
+-- 2. looks the name up via 'parseName' + 'getInfo',
+-- 3. renders the resulting 'TyThing' with 'showPprUnsafe' so the
+--    existing text parser ('parseConstructors' / 'parseTypeParams')
+--    still applies unchanged,
+-- 4. emits an @instance Arbitrary T where arbitrary = oneof [...]@
+--    template that the agent can paste.
 --
--- Deliberately does NOT write to disk. Arbitrary generation is
--- best-effort (see the caveats in 'renderTemplate'); letting the agent
--- review + paste preserves the auditing loop and keeps the tool
--- idempotent.
---
--- Security: the type-name argument is routed through
--- 'sanitizeExpression' (the same boundary used for @:t@/@:i@/@:eval@).
+-- Deliberately does NOT write to disk — letting the agent review +
+-- paste preserves the auditing loop.
 module HaskellFlows.Tool.Arbitrary
   ( descriptor
   , handle
@@ -24,23 +20,58 @@ module HaskellFlows.Tool.Arbitrary
   , parseConstructors
   , parseTypeParams
   , Constructor (..)
-    -- * BUG-17 — recursive-type detection + sized template
   , isRecursiveArg
   , isRecursiveConstructor
   , hasRecursiveConstructor
   ) where
 
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAlphaNum)
+import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Ghci.Session
+import GHC
+  ( Ghc
+  , TyThing (ATyCon)
+  , getInfo
+  , parseName
+  )
+import GHC.Core.DataCon
+  ( DataCon
+  , dataConName
+  , dataConOrigArgTys
+  )
+import GHC.Core.TyCon
+  ( TyCon
+  , tyConDataCons
+  , tyConName
+  , tyConTyVars
+  )
+import GHC.Types.Var (tyVarName)
+import GHC.Core.TyCo.Rep (scaledThing)
+import GHC.Types.Name (nameOccName)
+import GHC.Types.Name.Occurrence (occNameString)
+import GHC.Utils.Outputable (showPprUnsafe)
+
+import HaskellFlows.Ghc.ApiSession
+  ( GhcSession
+  , LoadFlavour (..)
+  , firstLibraryOrTestSuite
+  , loadForTarget
+  , withGhcSession
+  )
+import HaskellFlows.Ghc.Sanitize
+  ( CommandError (..)
+  , sanitizeExpression
+  )
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Parser.Error (GhcError)
 import HaskellFlows.Parser.Type (isOutOfScope)
 
 descriptor :: ToolDescriptor
@@ -79,77 +110,124 @@ instance FromJSON ArbitraryArgs where
   parseJSON = withObject "ArbitraryArgs" $ \o ->
     ArbitraryArgs <$> o .: "type_name"
 
-handle :: Session -> Value -> IO ToolResult
-handle sess rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> Value -> IO ToolResult
+handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
-  Right (ArbitraryArgs tname) -> do
-    res <- infoOf sess tname
-    case res of
-      Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
-      Right gr
-        | not (grSuccess gr)         -> pure (errorResult (grOutput gr))
-        | isOutOfScope (grOutput gr) -> pure (errorResult (grOutput gr))
-        | otherwise -> do
-            let raw    = grOutput gr
-                params = parseTypeParams raw
-            case parseConstructors raw of
-              []    -> pure (errorResult
-                        ( "No constructors parsed for '" <> tname
-                        <> "'. It may be a GADT, typeclass, or type synonym — "
-                        <> "those need a hand-written Arbitrary." ))
-              ctors -> pure (successResult tname ctors
-                              (renderTemplate tname params ctors))
+  Right (ArbitraryArgs tname) -> case sanitizeExpression tname of
+    Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
+    Right safe -> do
+      tgt <- firstLibraryOrTestSuite ghcSess
+      eLoad <- try (loadForTarget ghcSess tgt Strict)
+      case eLoad :: Either SomeException (Bool, [GhcError]) of
+        Left ex ->
+          pure (errorResult ("loadForTarget failed: " <> T.pack (show ex)))
+        Right _ -> do
+          -- loadForTarget already primed the session with the
+          -- correct stanza flags + setContext. Don't wrap in
+          -- withStanzaFlags here — re-applying setSessionDynFlags
+          -- would reset the interactive context established above,
+          -- leaving parseName unable to resolve user types.
+          eRes <- try (withGhcSession ghcSess (renderTyThing safe))
+          case eRes :: Either SomeException (Maybe Text) of
+            Left ex ->
+              pure (errorResult ("'" <> safe <> "' not in scope: " <> T.pack (show ex)))
+            Right Nothing ->
+              pure (errorResult ("'" <> safe <> "' not in scope (getInfo=Nothing)"))
+            Right (Just rendered)
+              | isOutOfScope rendered -> pure (errorResult rendered)
+              | otherwise -> do
+                  let params = parseTypeParams rendered
+                  case parseConstructors rendered of
+                    []    -> pure (errorResult
+                              ( "No constructors parsed for '" <> safe
+                              <> "'. It may be a GADT, typeclass, or type synonym — "
+                              <> "those need a hand-written Arbitrary." ))
+                    ctors -> pure (successResult safe ctors
+                                    (renderTemplate safe params ctors))
 
---------------------------------------------------------------------------------
--- constructor parsing
---------------------------------------------------------------------------------
-
--- | A data constructor extracted from @:i@ output.
+-- | Resolve the name and render the resulting 'TyThing' in the
+-- exact @data T = A | B Int | ...@ shape @:info@ would print.
 --
--- Argument types are kept opaque as free-form 'Text' — we don't need
--- parsed types to emit the template (we only count them for <$>/<*>).
+-- 'showPprUnsafe' on a bare 'TyThing' only renders @"Type
+-- constructor \`T\'"@ — useless for parseConstructors. Instead we
+-- walk the 'TyCon' directly: tyConTyVars for the header, then
+-- tyConDataCons + dataConOrigArgTys for each constructor.
+renderTyThing :: Text -> Ghc (Maybe Text)
+renderTyThing nm = do
+  n :| _ <- parseName (T.unpack nm)
+  info <- getInfo True n
+  pure $ case info of
+    Just (ATyCon tc, _fixity, _clsInsts, _famInsts, _doc) ->
+      Just (renderTyConAsDataDecl tc)
+    _ -> Nothing
+
+-- | Render a 'TyCon' as a GHCi-style @data T a b = C1 Int | C2 Bool a@
+-- declaration. Covers newtypes identically (single-constructor data).
+-- Returns "data T" header only when the TyCon has no data constructors
+-- (class / type synonym); the tool layer then reports "No constructors
+-- parsed" which is the pre-existing behaviour.
+renderTyConAsDataDecl :: TyCon -> Text
+renderTyConAsDataDecl tc =
+  let tyName    = T.pack (occNameString (nameOccName (tyConName tc)))
+      -- Print just the user-facing OccName for each tyvar —
+      -- 'showPprUnsafe' on a TyVar prefixes an internal unique tag
+      -- ("a_ig1m"), which then breaks the "Arbitrary a =>" context
+      -- emitted by renderTemplate.
+      tvs       = map (T.pack . occNameString . nameOccName . tyVarName)
+                      (tyConTyVars tc)
+      header    = "data " <> tyName
+                    <> (if null tvs then "" else " " <> T.intercalate " " tvs)
+      dcs       = tyConDataCons tc
+      rhs       = T.intercalate " | " (map renderDataCon dcs)
+  in if null dcs
+       then header
+       else header <> " = " <> rhs
+
+renderDataCon :: DataCon -> Text
+renderDataCon dc =
+  let cn   = T.pack (occNameString (nameOccName (dataConName dc)))
+      args = map (parenArg . T.pack . showPprUnsafe . scaledThing)
+                 (dataConOrigArgTys dc)
+  in if null args then cn else cn <> " " <> T.intercalate " " args
+  where
+    -- Wrap multi-word argument types in parens so parseConstructors'
+    -- space-split doesn't chop them (e.g. "Maybe Int" → "(Maybe Int)").
+    parenArg t
+      | T.any (== ' ') (T.strip t) && not (isAlreadyWrapped t) = "(" <> t <> ")"
+      | otherwise                                              = t
+    isAlreadyWrapped t = case T.uncons (T.strip t) of
+      Just ('(', _) -> T.last (T.strip t) == ')'
+      Just ('[', _) -> T.last (T.strip t) == ']'
+      _             -> False
+
+--------------------------------------------------------------------------------
+-- constructor parsing (kept identical to the legacy version; the
+-- GHC-rendered TyThing prints constructors in the same shape)
+--------------------------------------------------------------------------------
+
 data Constructor = Constructor
   { cName :: !Text
   , cArgs :: ![Text]
   }
   deriving stock (Eq, Show)
 
--- | Parse @:i@ output for a data/newtype and return its constructors.
---
--- Handles both the inline form (@data T = A | B Int@) and the multi-line
--- form that GHCi prints for wider declarations (each @|@ on its own
--- line). Everything after the first @-- Defined@ comment is ignored.
---
--- Only fires on declarations starting with @data@ or @newtype@ — a
--- @type Alias = Int@ synonym also contains @=@ but has no constructor
--- list, so we return @[]@ and let the tool layer explain to the agent.
 parseConstructors :: Text -> [Constructor]
 parseConstructors out =
   let allLns   = T.lines out
-      -- GHC 9.x prepends a kind signature line (e.g. @type Run :: * -> *@)
-      -- before the @data@ declaration. Drop everything up to the first
-      -- line that actually opens with @data @ / @newtype @ — the
-      -- constructor list is there.
       declLns  = dropWhile (not . isDataDeclLine) allLns
       trimmed  = T.unlines (takeWhile (not . isDefinedComment) declLns)
-      -- Collapse newline+indent runs so inline and multiline forms
-      -- converge on a single "= A | B ..." string.
       one      = T.strip (T.replace "\n" " " trimmed)
   in if hasCtorHeader one
        then mapMaybe parseCtorText (splitOnPipe (dropDataHeader one))
        else []
 
--- | Is @ln@ the @data Foo@ or @newtype Bar@ declaration line (after
--- optional leading whitespace)?
 isDataDeclLine :: Text -> Bool
 isDataDeclLine ln =
   let s = T.stripStart ln
   in "data "    `T.isPrefixOf` s
   || "newtype " `T.isPrefixOf` s
 
--- | Does the declaration open with @data @ or @newtype @?
--- The trailing space guards against accidentally matching @dataX@.
 hasCtorHeader :: Text -> Bool
 hasCtorHeader t = "data "    `T.isPrefixOf` t
                || "newtype " `T.isPrefixOf` t
@@ -157,18 +235,12 @@ hasCtorHeader t = "data "    `T.isPrefixOf` t
 isDefinedComment :: Text -> Bool
 isDefinedComment l = "-- Defined" `T.isInfixOf` l || "\t-- Defined" `T.isInfixOf` l
 
--- | Drop everything up to and including the @=@ that opens the
--- constructor list. If no @=@ is present this was a type synonym or
--- class and we return an empty string so the caller reports no ctors.
 dropDataHeader :: Text -> Text
 dropDataHeader t =
   case T.breakOn "=" t of
     (_, rest) | T.null rest -> ""
     (_, rest)               -> T.strip (T.drop 1 rest)
 
--- | Split on @|@ but only at the top level. Nested @(|)@ inside
--- parameter types would break a naive split; constructors rarely carry
--- those, but we at least skip @|@ inside parens to be conservative.
 splitOnPipe :: Text -> [Text]
 splitOnPipe = go 0 []
   where
@@ -181,13 +253,6 @@ splitOnPipe = go 0 []
         | depth == 0 -> T.pack (reverse acc) : go 0 [] rest
       Just (c, rest) -> go depth (c:acc) rest
 
--- | Parse one @Ctor arg1 arg2@ fragment into a 'Constructor'.
---
--- Argument tokenisation is space-separated with parentheses AND
--- braces preserved as single groups. Records, strict fields
--- (@!Int@), and kind annotations survive intact — we then expand a
--- record block's internal fields so the <$>/<*> template stays
--- arity-correct.
 parseCtorText :: Text -> Maybe Constructor
 parseCtorText raw =
   case groupTokens (T.strip raw) of
@@ -200,19 +265,12 @@ parseCtorText raw =
             , cArgs = normaliseArgs xs
             }
   where
-    -- Record form: @Ctor {f1 :: T1, f2 :: T2}@ groups to
-    -- @[\"Ctor\", \"{f1 :: T1, f2 :: T2}\"]@. Expand to one synthetic
-    -- \"arbitrary\"-slot per record field so the template emits the
-    -- right number of @<*>@s. Content of the slot is a literal; the
-    -- template only ever counts the list length.
     normaliseArgs :: [Text] -> [Text]
     normaliseArgs [single]
       | Just n' <- recordFieldCount single
           = replicate n' "arbitrary"
     normaliseArgs xs = xs
 
--- | If @tok@ is a record block @{f1 :: T1, f2 :: T2, ...}@, return the
--- field count. Commas inside nested parens or braces do not count.
 recordFieldCount :: Text -> Maybe Int
 recordFieldCount t
   | "{" `T.isPrefixOf` t && "}" `T.isSuffixOf` t =
@@ -222,8 +280,6 @@ recordFieldCount t
            else Just (length (splitTopLevelCommas inner))
   | otherwise = Nothing
 
--- | Whitespace-split with parenthesised AND brace groups preserved
--- as one token.
 groupTokens :: Text -> [Text]
 groupTokens = go 0 [] []
   where
@@ -240,8 +296,6 @@ groupTokens = go 0 [] []
     flush [] acc = acc
     flush xs acc = T.pack (reverse xs) : acc
 
--- | Split on commas at depth 0, ignoring those inside nested parens
--- or braces. Used to count record fields.
 splitTopLevelCommas :: Text -> [Text]
 splitTopLevelCommas = go 0 []
   where
@@ -256,21 +310,9 @@ splitTopLevelCommas = go 0 []
         | otherwise -> go depth (c:acc) rest
 
 --------------------------------------------------------------------------------
--- template rendering
+-- template rendering (unchanged)
 --------------------------------------------------------------------------------
 
--- | Extract the type parameters from the declaration line of a
--- @data@/@newtype@ in GHCi @:i@ output.
---
--- * @data Run a = Run {…}@           → @[\"a\"]@
--- * @data Map k v = Empty | Bin …@    → @[\"k\", \"v\"]@
--- * @data Foo = MkFoo Int@            → @[]@
--- * @newtype Wrap a = Wrap a@         → @[\"a\"]@
---
--- Anything we cannot parse yields @[]@; callers then render the
--- no-parameter template and the caller can add parameters by hand
--- (still better than producing a broken @instance Arbitrary T where@
--- for a polymorphic T, which was F-10).
 parseTypeParams :: Text -> [Text]
 parseTypeParams out =
   let allLns  = T.lines out
@@ -279,7 +321,6 @@ parseTypeParams out =
        []    -> []
        (h:_) ->
          let afterKw = stripKw (T.stripStart h)
-             -- Take up to "=" or "where" (GADT syntax).
              headPart = T.takeWhile (/= '=') afterKw
              tokens   = T.words (T.strip headPart)
          in case tokens of
@@ -291,47 +332,18 @@ parseTypeParams out =
       | "newtype " `T.isPrefixOf` t = T.drop 8 t
       | otherwise                   = t
 
--- | BUG-17: does this argument's type text mention the focal
--- type as a standalone identifier? Splits on non-identifier
--- characters so @(Tree a)@ yields tokens @["Tree", "a"]@ and
--- @[Tree a]@ / @Maybe (Tree a)@ both pick up.
 isRecursiveArg :: Text -> Text -> Bool
 isRecursiveArg typeName arg = typeName `elem` tokensOf arg
   where
     tokensOf = filter (not . T.null)
              . T.split (\c -> not (isAlphaNum c || c == '_' || c == '\''))
 
--- | Does any argument of this constructor recurse on the focal
--- type? A constructor with no args is trivially non-recursive.
 isRecursiveConstructor :: Text -> Constructor -> Bool
 isRecursiveConstructor typeName c = any (isRecursiveArg typeName) (cArgs c)
 
--- | Does ANY constructor of the type recurse on the focal type?
--- Flag that tells 'renderTemplate' whether to emit the classical
--- 'oneof' template or the BUG-17 'sized' template.
 hasRecursiveConstructor :: Text -> [Constructor] -> Bool
 hasRecursiveConstructor typeName = any (isRecursiveConstructor typeName)
 
--- | Produce a compilable @instance Arbitrary T where arbitrary = ...@
--- snippet. For non-recursive types the template is the classical
--- @oneof [ ctor <$> arbitrary <*> ... ]@; for recursive types
--- (BUG-17) the template uses 'sized' + 'frequency' with every
--- recursive position generated at half the current size, bounding
--- the expected tree depth logarithmically so QuickCheck can't OOM
--- on deep trees.
---
--- Polymorphic types are handled by wrapping the type expression and
--- emitting the right 'Arbitrary' constraints:
---
--- * @[]@            ⇒ @instance Arbitrary T where …@
--- * @[\"a\"]@       ⇒ @instance Arbitrary a => Arbitrary (T a) where …@
--- * @[\"a\",\"b\"]@ ⇒ @instance (Arbitrary a, Arbitrary b) => Arbitrary (T a b) where …@
---
--- Known limitations:
---
--- * Does not look at argument types for non-recursive fields —
---   everything non-recursive is @arbitrary@, leaning on type
---   inference to pick the right instance.
 renderTemplate :: Text -> [Text] -> [Constructor] -> Text
 renderTemplate typeName params ctors =
   let typeExpr = case params of
@@ -349,7 +361,6 @@ renderTemplate typeName params ctors =
          then renderSizedBody typeName ctors header
          else renderFlatBody              ctors header
 
--- | Classical non-recursive template: @arbitrary = oneof [...]@.
 renderFlatBody :: [Constructor] -> Text -> [Text]
 renderFlatBody ctors header =
      [ header
@@ -362,26 +373,6 @@ renderFlatBody ctors header =
       let prefix = if i == 0 then "    [ " else "    , "
       in prefix <> renderRhsFlat c
 
--- | BUG-17 sized template for recursive types.
---
--- Shape:
---
--- > instance Arbitrary T where
--- >   arbitrary = sized go
--- >     where
--- >       go 0 = oneof
--- >         [ <every leaf constructor with arbitrary args>
--- >         ]
--- >       go n = frequency
--- >         [ (2, <leaf ctor>)
--- >         , (1, <recursive ctor with `go (n \`div\` 2)` in each
--- >                recursive position>)
--- >         ]
---
--- Leaves get weight 2 so the generator biases toward terminating
--- as size drops; recursive branches get weight 1 each. Every
--- recursive arg position is generated at half the current size,
--- giving logarithmic expected depth.
 renderSizedBody :: Text -> [Constructor] -> Text -> [Text]
 renderSizedBody typeName ctors header =
   let leaves = filter (not . isRecursiveConstructor typeName) ctors
@@ -408,7 +399,6 @@ renderSizedBody typeName ctors header =
       in prefix <> "(" <> T.pack (show (w :: Int)) <> ", "
               <> renderRhsSized tn c <> ")"
 
--- | Non-recursive RHS: @Ctor <$> arbitrary <*> arbitrary ...@.
 renderRhsFlat :: Constructor -> Text
 renderRhsFlat c = case length (cArgs c) of
   0 -> "pure " <> cName c
@@ -417,9 +407,6 @@ renderRhsFlat c = case length (cArgs c) of
        <> " <$> arbitrary"
        <> T.concat (replicate (n - 1) " <*> arbitrary")
 
--- | Sized RHS: @Ctor <$> arbitrary <*> go (n `div` 2) <*> ...@
--- where each recursive arg becomes @go (n \`div\` 2)@ and each
--- non-recursive arg stays @arbitrary@.
 renderRhsSized :: Text -> Constructor -> Text
 renderRhsSized typeName c = case cArgs c of
   []     -> "pure " <> cName c

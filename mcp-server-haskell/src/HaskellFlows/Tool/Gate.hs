@@ -61,7 +61,7 @@ import System.Process
 import System.Timeout (timeout)
 
 import HaskellFlows.Data.PropertyStore (Store, loadAll)
-import HaskellFlows.Ghci.Session (Session)
+import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Mcp.Protocol
 import qualified HaskellFlows.Parser.QuickCheck as QC
 import HaskellFlows.Tool.Regression (Replay (..), runOne)
@@ -118,7 +118,7 @@ cabalBuildTimeoutMicros  = 3 * 60 * 1_000_000     -- 3 min
 -- handle
 --------------------------------------------------------------------------------
 
-handle :: Store -> Session -> ProjectDir -> Value -> IO ToolResult
+handle :: Store -> GhcSession -> ProjectDir -> Value -> IO ToolResult
 handle store sess pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
   Right args -> do
@@ -198,7 +198,7 @@ runStep budget body = do
 -- step implementations
 --------------------------------------------------------------------------------
 
-regressionStep :: Store -> Session -> IO (Bool, Value)
+regressionStep :: Store -> GhcSession -> IO (Bool, Value)
 regressionStep store sess = do
   props <- loadAll store
   replays <- mapM (runOne sess) props

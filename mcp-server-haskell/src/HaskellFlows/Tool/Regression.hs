@@ -1,52 +1,48 @@
--- | @ghci_regression@ — replay every persisted QuickCheck property as a
--- regression suite.
+-- | @ghci_regression@ — Wave-3 full in-process.
 --
--- Properties are auto-saved by 'HaskellFlows.Tool.QuickCheck' the first
--- time they pass. This tool lets the agent re-verify the whole suite in
--- one call — essential at the start of a session to confirm nothing
--- drifted, or after a large refactor.
+-- Replay every persisted QuickCheck property as a regression suite.
+-- For each stored property, pick the target that owns its recorded
+-- @module@ (test-suite / library / …), compile-load that target, then
+-- run the property via 'evalIOString'.
 --
--- Actions:
---
--- * @list@ — return the stored property inventory without running
---   anything. Useful for introspection.
--- * @run@ (default) — execute every stored property. Aggregates the
---   per-property outcomes into a summary + list of regressions.
---
--- No new property is ever persisted by this tool — it's a
--- /verification/ layer, not a capture layer.
+-- Compared to the legacy subprocess path, no more @:load@ / @:show
+-- modules@ dance — 'loadForTarget' owns scope selection.
 module HaskellFlows.Tool.Regression
   ( descriptor
   , handle
   , RegressionArgs (..)
   , Action (..)
-    -- * Reusable runners for other tools (e.g. Tool.Gate)
   , Replay (..)
   , runOne
-    -- * Pure helpers exposed for unit tests
   , parseShowModulesPaths
   ) where
 
-import Control.Monad (void)
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import System.Timeout (timeout)
 
 import HaskellFlows.Data.PropertyStore
   ( Store
   , StoredProperty (..)
   , loadAll
   )
-import HaskellFlows.Ghci.Session
-  ( Session
-  , GhciResult (..)
-  , execute
-  , runProperty
+import HaskellFlows.Ghc.ApiSession
+  ( GhcSession
+  , LoadFlavour (..)
+  , evalIOString
+  , firstTestSuiteOrLibrary
+  , loadForTarget
+  , targetForPath
+  , withGhcSession
   )
+import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Parser.Error (GhcError)
 import HaskellFlows.Parser.QuickCheck
   ( QuickCheckResult (..)
   , parseQuickCheckOutput
@@ -93,8 +89,12 @@ instance FromJSON RegressionArgs where
       Just other  -> fail ("unknown action: " <> T.unpack other)
     pure (RegressionArgs a)
 
-handle :: Store -> Session -> Value -> IO ToolResult
-handle store sess rawArgs = case parseEither parseJSON rawArgs of
+-- | 30 s per property replay, mirroring the ghci_quickcheck budget.
+replayTimeoutMicros :: Int
+replayTimeoutMicros = 30_000_000
+
+handle :: Store -> GhcSession -> Value -> IO ToolResult
+handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
   Right (RegressionArgs a) -> do
@@ -102,87 +102,59 @@ handle store sess rawArgs = case parseEither parseJSON rawArgs of
     case a of
       ActList -> pure (listResult props)
       ActRun  -> do
-        -- Snapshot the caller's scope before we start re-loading
-        -- modules per property. Without this, a run that touches
-        -- several test-suite modules leaves GHCi pointing at the
-        -- last one, and the next @ghci_eval@ from the caller
-        -- fails with "Variable not in scope: main" / similar.
-        scopeBefore <- snapshotLoadedModules sess
-        results     <- mapM (runOne sess) props
-        restoreLoadedModules sess scopeBefore
+        results <- mapM (runOne ghcSess) props
         pure (runResult results)
 
 --------------------------------------------------------------------------------
 -- running
 --------------------------------------------------------------------------------
 
--- | One stored property's replay result, ready for JSON shaping.
 data Replay = Replay
   { rpStored :: !StoredProperty
   , rpResult :: !QuickCheckResult
   }
 
-runOne :: Session -> StoredProperty -> IO Replay
-runOne sess sp = do
-  -- If the store knows which file defines the property, re-load
-  -- that file first so the identifier is guaranteed in scope. A
-  -- missing or invalid path is a silent no-op — 'runProperty' will
-  -- surface the resulting "Variable not in scope" as an unparsed
-  -- regression. (The path was validated when persisted.)
-  case spModule sp of
-    Just m | not (T.null m) ->
-      void (execute sess (":load " <> m))
-    _ -> pure ()
-  res <- runProperty sess (spExpression sp)
-  let qr = case res of
-        Left _   -> QcUnparsed (spExpression sp)
-                     "boundary-sanitiser rejected the stored expression"
-        Right gr -> parseQuickCheckOutput (spExpression sp) (grOutput gr)
+runOne :: GhcSession -> StoredProperty -> IO Replay
+runOne ghcSess sp = do
+  let expr = spExpression sp
+  -- Pick the target that governs the scope of the property's module.
+  tgt <- case spModule sp of
+    Just m | not (T.null m) -> targetForPath ghcSess (T.unpack m)
+    _                       -> firstTestSuiteOrLibrary ghcSess
+  -- Load the target (Strict — warnings don't matter for replay,
+  -- errors would poison the property) and if that succeeds, run
+  -- the property via evalIOString.
+  eLoad <- try (loadForTarget ghcSess tgt Strict)
+  qr <- case eLoad :: Either SomeException (Bool, [GhcError]) of
+    Left ex ->
+      pure (QcException expr ("loadForTarget failed: " <> T.pack (show ex)))
+    Right (False, diags) ->
+      pure (QcException expr ("target did not compile; "
+                              <> T.pack (show (length diags)) <> " diag(s)"))
+    Right (True, _) ->
+      case sanitizeExpression expr of
+        Left _ -> pure (QcUnparsed expr
+                        "boundary-sanitiser rejected the stored expression")
+        Right safe -> do
+          let stmt = "fmap Test.QuickCheck.output "
+                <> "(Test.QuickCheck.quickCheckWithResult "
+                <> "(Test.QuickCheck.stdArgs { Test.QuickCheck.chatty = False }) "
+                <> "(" <> T.unpack safe <> "))"
+          mRes <- timeout replayTimeoutMicros $
+            try $ withGhcSession ghcSess (evalIOString stmt)
+          case mRes of
+            Nothing                      -> pure (QcException expr "timeout")
+            Just (Left (ex :: SomeException)) ->
+              pure (QcException expr (T.pack (show ex)))
+            Just (Right out)             ->
+              pure (parseQuickCheckOutput expr (T.pack out))
   pure Replay { rpStored = sp, rpResult = qr }
 
 --------------------------------------------------------------------------------
--- scope snapshot / restore
---
--- We pay one extra @:show modules@ + one @:load <paths>@ at the end
--- of every regression run so callers aren't surprised by their
--- previously-loaded test-suite module having been knocked out of
--- scope by the replay loop. Both primitives are best-effort: if
--- @:show modules@ cannot be parsed we just don't restore anything.
+-- :show modules parser (kept for unit-test coverage even though the
+-- Wave-3 code path no longer invokes ghci meta-commands)
 --------------------------------------------------------------------------------
 
-snapshotLoadedModules :: Session -> IO [Text]
-snapshotLoadedModules sess = do
-  GhciResult raw ok <- execute sess ":show modules"
-  pure $ if ok then parseShowModulesPaths raw else []
-
-restoreLoadedModules :: Session -> [Text] -> IO ()
-restoreLoadedModules _sess []    = pure ()    -- nothing to restore
-restoreLoadedModules sess  paths =
-  -- Pass the LAST path only. GHCi's ':show modules' emits
-  -- dependents after their dependencies, so the last entry is
-  -- (with overwhelming probability) the target module the caller
-  -- had set with their earlier ':load'. A single-argument ':load'
-  -- on that file pulls in the transitive imports automatically
-  -- and unambiguously sets the target module — which in turn
-  -- governs what's in scope for the next ':eval' or ':info'.
-  --
-  -- Multi-argument ':load A.hs B.hs C.hs' was observed to leave
-  -- the target-module scope in an inconsistent state on GHC 9.12
-  -- for multi-module test-suites (the subsequent ':eval' saw
-  -- neither the Main-binding-level exports nor the qualified
-  -- imports from the would-be target). Use the one-file form.
-  void (execute sess (":load " <> last paths))
-
--- | Parse the output of GHCi's @:show modules@ into the list of file
--- paths it references. Output lines look like:
---
--- >   Foo              ( src/Foo.hs, interpreted )
--- >   Main             ( test/Spec.hs, interpreted )
---
--- Anything that doesn't match the @Name ( path, kind )@ shape is
--- silently skipped. Exposed for unit tests so the parser's
--- tolerance to GHC-version drift can be pinned without a live
--- session.
 parseShowModulesPaths :: Text -> [Text]
 parseShowModulesPaths raw =
   [ path

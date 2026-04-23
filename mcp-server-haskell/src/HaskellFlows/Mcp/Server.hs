@@ -42,7 +42,13 @@ import System.Environment (getExecutablePath, lookupEnv)
 import System.Timeout (timeout)
 
 import HaskellFlows.Data.PropertyStore (Store, openStore)
-import HaskellFlows.Ghc.ApiSession (GhcSession, invalidateLoadCache, killGhcSession, startGhcSession)
+import HaskellFlows.Ghc.ApiSession
+  ( GhcSession
+  , invalidateLoadCache
+  , invalidateStanzaFlags
+  , killGhcSession
+  , startGhcSession
+  )
 import HaskellFlows.Ghci.Session
 import HaskellFlows.Mcp.Guidance (sessionInstructionsText, workflowRulesMarkdown)
 import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
@@ -254,12 +260,12 @@ handleToolCall srv call rid = case tcName call of
 dispatchTool :: Server -> ToolCall -> IO ToolResult
 dispatchTool srv call = case tcName call of
   "ghci_load" -> do
-    -- Phase-3 hybrid: legacy Session authoritative, GhcSession
-    -- auto-load cache invalidated post-load for Phase-2 sync.
+    -- Wave-2 full GhcSession: cabal-aware stanza compile via
+    -- loadForTarget, diagnostics captured from the logger hook,
+    -- rendered to GHCi-style text so agents still see 'raw' output.
     ghcSess <- getOrStartGhcSession srv
-    sess    <- getOrStartSession srv
     pd      <- readIORef (srvProjectDir srv)
-    Load.handle ghcSess sess pd (tcArguments call)
+    Load.handle ghcSess pd (tcArguments call)
   "ghci_type" -> do
     -- Phase-2 migrated: reads from the in-process GHC API session,
     -- not the legacy subprocess ghci. Auto-load on first call keeps
@@ -278,18 +284,21 @@ dispatchTool srv call = case tcName call of
     ghcSess <- getOrStartGhcSession srv
     EvalTool.handle ghcSess (getOrStartSession srv) (tcArguments call)
   "ghci_quickcheck" -> do
-    sess <- getOrStartSession srv
-    QcTool.handle (srvStore srv) sess (tcArguments call)
-  "ghci_hole" -> do
-    -- Phase-3 hybrid: legacy Deferred load authoritative, GhcSession
-    -- invalidated for Phase-2 sync.
+    -- Wave-3 full in-process: compileExpr + unsafeCoerce of a
+    -- Test.QuickCheck.quickCheckWithResult invocation.
     ghcSess <- getOrStartGhcSession srv
-    sess    <- getOrStartSession srv
+    QcTool.handle (srvStore srv) ghcSess (tcArguments call)
+  "ghci_hole" -> do
+    -- Wave-2 full GhcSession: Deferred compile via stanza flags,
+    -- diagnostics captured through the logger hook, rendered to
+    -- GHCi-style text for parseTypedHoles.
+    ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
-    HoleTool.handle ghcSess sess pd (tcArguments call)
+    HoleTool.handle ghcSess pd (tcArguments call)
   "ghci_arbitrary" -> do
-    sess <- getOrStartSession srv
-    ArbitraryTool.handle sess (tcArguments call)
+    -- Wave-4 full GhcSession: parseName + getInfo + showPprUnsafe.
+    ghcSess <- getOrStartGhcSession srv
+    ArbitraryTool.handle ghcSess (tcArguments call)
   "hoogle_search" ->
     HoogleTool.handle (tcArguments call)
   "ghci_workflow" -> do
@@ -303,8 +312,9 @@ dispatchTool srv call = case tcName call of
       staleness
       (tcArguments call)
   "ghci_regression" -> do
-    sess <- getOrStartSession srv
-    RegressionTool.handle (srvStore srv) sess (tcArguments call)
+    -- Wave-3 full in-process replay via evalIOString.
+    ghcSess <- getOrStartGhcSession srv
+    RegressionTool.handle (srvStore srv) ghcSess (tcArguments call)
   "ghci_check_module" -> do
     -- Phase-3 migrated (hybrid): GhcSession for compile/warnings/holes,
     -- Session for property regression (stays on legacy until Phase 5).
@@ -327,12 +337,15 @@ dispatchTool srv call = case tcName call of
   "ghci_deps" -> do
     pd <- readIORef (srvProjectDir srv)
     r  <- DepsTool.handle pd (tcArguments call)
-    invalidateGhcSessionIfPresent srv
+    -- Stanza flags hold the resolved package set; ghci_deps just
+    -- changed it, so re-bootstrap on next session use.
+    invalidateStanzaFlagsIfPresent srv
     pure r
   "ghci_create_project" -> do
     pd <- readIORef (srvProjectDir srv)
     r  <- CreateProjectTool.handle pd (tcArguments call)
-    invalidateGhcSessionIfPresent srv
+    -- New project = completely different stanza set.
+    invalidateStanzaFlagsIfPresent srv
     pure r
   "ghci_doc" -> do
     -- Phase-2 migrated: GHC.getDocs on the resolved Name.
@@ -365,9 +378,9 @@ dispatchTool srv call = case tcName call of
     sess <- getOrStartSession srv
     SuggestTool.handle sess (tcArguments call)
   "ghci_gate" -> do
-    sess <- getOrStartSession srv
-    pd   <- readIORef (srvProjectDir srv)
-    GateTool.handle (srvStore srv) sess pd (tcArguments call)
+    ghcSess <- getOrStartGhcSession srv
+    pd      <- readIORef (srvProjectDir srv)
+    GateTool.handle (srvStore srv) ghcSess pd (tcArguments call)
   "ghci_quickcheck_export" -> do
     pd <- readIORef (srvProjectDir srv)
     QcExportTool.handle (srvStore srv) pd (tcArguments call)
@@ -378,12 +391,14 @@ dispatchTool srv call = case tcName call of
   "ghci_add_modules" -> do
     pd <- readIORef (srvProjectDir srv)
     r  <- AddModulesTool.handle pd (tcArguments call)
-    invalidateGhcSessionIfPresent srv
+    -- Changes exposed-modules in .cabal, so stanza flags need
+    -- re-bootstrap to capture the new unit-id / include path set.
+    invalidateStanzaFlagsIfPresent srv
     pure r
   "ghci_remove_modules" -> do
     pd <- readIORef (srvProjectDir srv)
     r  <- RemoveModulesTool.handle pd (tcArguments call)
-    invalidateGhcSessionIfPresent srv
+    invalidateStanzaFlagsIfPresent srv
     pure r
   "ghci_apply_exports" -> do
     pd <- readIORef (srvProjectDir srv)
@@ -404,8 +419,9 @@ dispatchTool srv call = case tcName call of
     ghcSess <- getOrStartGhcSession srv
     BrowseTool.handle ghcSess (tcArguments call)
   "ghci_determinism" -> do
-    sess <- getOrStartSession srv
-    DeterminismTool.handle sess (tcArguments call)
+    -- Wave-3 full in-process via evalIOString.
+    ghcSess <- getOrStartGhcSession srv
+    DeterminismTool.handle ghcSess (tcArguments call)
   "ghci_property_lifecycle" ->
     PropertyLifecycleTool.handle (srvStore srv) (tcArguments call)
   "ghci_toolchain_warmup" ->
@@ -611,6 +627,14 @@ invalidateGhcSessionIfPresent :: Server -> IO ()
 invalidateGhcSessionIfPresent srv = do
   m <- readMVar (srvGhcSession srv)
   for_ m invalidateLoadCache
+
+-- | Heavier-hammer cousin for tools that change the .cabal dep
+-- graph or stanza layout. Forces a re-bootstrap of stanza flags
+-- and a fresh HscEnv on the next session use.
+invalidateStanzaFlagsIfPresent :: Server -> IO ()
+invalidateStanzaFlagsIfPresent srv = do
+  m <- readMVar (srvGhcSession srv)
+  for_ m invalidateStanzaFlags
 
 --------------------------------------------------------------------------------
 -- small response helpers

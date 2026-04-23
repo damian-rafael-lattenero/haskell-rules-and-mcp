@@ -1,15 +1,16 @@
--- | @ghci_hole@ — hybrid (Phase-3 session-sync refactor).
+-- | @ghci_hole@ — full GhcSession (Wave 2).
 --
--- Uses the legacy 'Session' deferred-load path to produce the
--- 'parseTypedHoles' input (the parser is tuned for GHCi's terminal
--- output shape). Invalidates the 'GhcSession' cache so Phase-2 reads
--- see the freshly-loaded module graph on next access.
+-- Loads the project via 'loadForTarget' with 'Deferred' flavour, then
+-- renders the captured diagnostics in GHCi-style output so the
+-- existing 'parseTypedHoles' parser (tuned for terminal output) works
+-- unchanged.
 module HaskellFlows.Tool.Hole
   ( descriptor
   , handle
   , HoleArgs (..)
   ) where
 
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -17,9 +18,14 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Ghc.ApiSession (GhcSession, invalidateLoadCache)
-import HaskellFlows.Ghci.Session
+import HaskellFlows.Ghc.ApiSession
+  ( GhcSession
+  , LoadFlavour (..)
+  , loadForTarget
+  , targetForPath
+  )
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Parser.Error (GhcError, renderGhciStyle)
 import HaskellFlows.Parser.Hole
   ( HoleFit (..)
   , TypedHole (..)
@@ -71,21 +77,26 @@ instance FromJSON HoleArgs where
     hn <- o .:? "hole_name"
     pure HoleArgs { haModulePath = mp, haHoleName = hn }
 
-handle :: GhcSession -> Session -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess sess pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
   Right (HoleArgs rawPath filt) ->
     case mkModulePath pd (T.unpack rawPath) of
       Left err -> pure (errorResult (formatPathError err))
-      Right mp -> do
-        gr <- loadModuleWith sess mp Deferred
-        invalidateLoadCache ghcSess
-        let allHoles = parseTypedHoles (grOutput gr)
-            holes    = case filt of
-              Nothing  -> allHoles
-              Just nm  -> filter ((== nm) . thHole) allHoles
-        pure (successResult rawPath holes)
+      Right _ -> do
+        tgt <- targetForPath ghcSess (T.unpack rawPath)
+        eRes <- try (loadForTarget ghcSess tgt Deferred)
+        case eRes :: Either SomeException (Bool, [GhcError]) of
+          Left ex ->
+            pure (errorResult ("loadForTarget failed: " <> T.pack (show ex)))
+          Right (_ok, diags) -> do
+            let rendered = renderGhciStyle diags
+                allHoles = parseTypedHoles rendered
+                holes    = case filt of
+                  Nothing  -> allHoles
+                  Just nm  -> filter ((== nm) . thHole) allHoles
+            pure (successResult rawPath holes)
 
 --------------------------------------------------------------------------------
 -- response shaping

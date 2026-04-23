@@ -41,6 +41,7 @@ module HaskellFlows.Ghc.ApiSession
   , killGhcSession
   , withGhcSession
   , invalidateLoadCache
+  , invalidateStanzaFlags
     -- * Phase-3 diagnostic capture
   , LoadFlavour (..)
   , loadAndCaptureDiagnostics
@@ -53,6 +54,7 @@ module HaskellFlows.Ghc.ApiSession
   , loadForTarget
   , targetForPath
   , firstTestSuiteOrLibrary
+  , firstLibraryOrTestSuite
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)
@@ -98,9 +100,9 @@ import GHC.Driver.Session
 import GHC.Paths (libdir)
 import GHC.Types.Error (MessageClass (..))
 import qualified GHC.Types.Error as GhcErr
+import GHC.Data.FastString (unpackFS)
 import GHC.Types.SrcLoc
-  ( GenLocated (L)
-  , SrcSpan (RealSrcSpan)
+  ( SrcSpan (RealSrcSpan)
   , noLoc
   , srcSpanFile
   , srcSpanStartCol
@@ -114,6 +116,7 @@ import System.Directory
   ( doesDirectoryExist
   , doesFileExist
   , listDirectory
+  , withCurrentDirectory
   )
 import System.FilePath ((</>), takeExtension)
 import qualified System.Process as Proc
@@ -159,12 +162,40 @@ killGhcSession sess = do
   writeIORef (gsEnvRef sess) Nothing
   writeIORef (gsLoadedRef sess) False
 
+-- | Cheap: next 'withGhcSession' will re-run the filesystem scan
+-- and @load LoadAllTargets@ but keeps the cached stanza flags and
+-- package resolution. Use this after any tool that mutates @.hs@
+-- source files without touching the cabal dep graph (write/format
+-- /rename / extract / apply_exports / add_import / fix_warning).
 invalidateLoadCache :: GhcSession -> IO ()
 invalidateLoadCache sess = writeIORef (gsLoadedRef sess) False
 
+-- | Expensive: next 'withGhcSession' re-bootstraps the stanza flags
+-- (re-runs @cabal v2-repl@ with the shim) AND re-loads the module
+-- graph. Use ONLY after a tool mutates the .cabal dep graph or
+-- stanza layout (ghci_deps add/remove, ghci_add_modules,
+-- ghci_remove_modules, ghci_create_project, ghci_apply_exports when
+-- it writes @exposed-modules:@).
+--
+-- The HscEnv is also dropped so the next session starts from a
+-- clean DynFlags baseline — otherwise the stale @-package-id X@
+-- tokens would be mixed with the fresh ones.
+invalidateStanzaFlags :: GhcSession -> IO ()
+invalidateStanzaFlags sess = do
+  writeIORef (gsLoadedRef sess) False
+  writeIORef (gsStanzaFlags sess) Map.empty
+  writeIORef (gsEnvRef sess) Nothing
+
 withGhcSession :: GhcSession -> Ghc a -> IO a
 withGhcSession sess act = withMVar (gsLock sess) $ \_ ->
-  runGhc (Just (gsLibdir sess)) $ do
+  -- Run with CWD pinned to the project root so the stanza flags'
+  -- relative paths (@-outputdir dist-newstyle/...@, @-isrc@, …)
+  -- resolve correctly regardless of the MCP process's own CWD.
+  -- Cabal always writes the captured @ghc --interactive@ argv with
+  -- paths relative to the project root, matching its own invocation
+  -- environment.
+  withCurrentDirectory (unProjectDir (gsProject sess)) $
+    runGhc (Just (gsLibdir sess)) $ do
     mEnv <- liftIO (readIORef (gsEnvRef sess))
     case mEnv of
       Just env -> setSession env
@@ -420,7 +451,7 @@ msgClassToSeverity = \case
 mkGhcError :: Severity -> SrcSpan -> Text -> GhcError
 mkGhcError sev ss msg = case ss of
   RealSrcSpan rspan _ -> GhcError
-    { geFile     = T.pack (show (srcSpanFile rspan))
+    { geFile     = T.pack (unpackFS (srcSpanFile rspan))
     , geLine     = srcSpanStartLine rspan
     , geColumn   = srcSpanStartCol rspan
     , geSeverity = sev
@@ -462,11 +493,65 @@ withStanzaFlags sess tgt act = do
     Nothing -> act
     Just sf -> do
       dflags <- getSessionDynFlags
-      let cleaned = filter (/= "--interactive") (Bootstrap.sfArgs sf)
+      let root    = unProjectDir (gsProject sess)
+          -- Rewrite relative paths in the captured argv to absolute
+          -- so package-db / importPath resolution doesn't hinge on
+          -- the live CWD.
+          -- Also dedupe "-hide-all-packages" — cabal's v2-repl
+          -- emits it TWICE (once in the main flags, once at the end
+          -- of the argv via --ghc-options bookkeeping). The second
+          -- occurrence lands after all the "-package-id" entries
+          -- and, under the GHC-API's flag-parsing path (unlike the
+          -- driver CLI), resets the visible-package set, leaving
+          -- "cannot satisfy -package-id X" even though the package
+          -- is resolvable in the package-db.
+          rawArgs = filter (/= "--interactive") (Bootstrap.sfArgs sf)
+          cleaned = map (absolutizePathArg root)
+                  $ dedupHideAllPackages rawArgs
       (dflags', _, _) <-
         parseDynamicFlagsCmdLine dflags (map noLoc cleaned)
       _ <- setSessionDynFlags dflags'
       act
+
+-- | Keep only the first occurrence of "-hide-all-packages". Any
+-- later copy gets dropped.
+dedupHideAllPackages :: [String] -> [String]
+dedupHideAllPackages = go False
+  where
+    go _    [] = []
+    go seen (x : xs)
+      | x == "-hide-all-packages" = if seen then go True xs else x : go True xs
+      | otherwise                 = x : go seen xs
+
+-- | Convert a likely-path-shaped argv token to an absolute path
+-- under the given root. Leaves flag names (starting with @-@) and
+-- non-path-looking tokens untouched.
+--
+-- Handles both bare path tokens ("dist-newstyle/…") and
+-- flag-embedded paths ("-isrc", "-idist-newstyle/…"). The flag
+-- letters we expand — @-i@, @-I@, @-L@, @-outputdir@, @-odir@,
+-- @-hidir@, @-hiedir@, @-stubdir@, @-package-db@ — are the ones
+-- cabal's @v2-repl@ routinely emits with relative values.
+absolutizePathArg :: FilePath -> String -> String
+absolutizePathArg root arg = case arg of
+  ('-' : rest)
+    | Just path <- stripPrefix "i" rest, not (null path), isRel path -> "-i" <> makeAbs path
+    | Just path <- stripPrefix "I" rest, not (null path), isRel path -> "-I" <> makeAbs path
+    | Just path <- stripPrefix "L" rest, not (null path), isRel path -> "-L" <> makeAbs path
+    | otherwise -> arg
+  _ | looksLikePath arg && isRel arg -> makeAbs arg
+    | otherwise -> arg
+  where
+    isRel path = not (null path) && head path /= '/'
+    makeAbs p = root <> "/" <> p
+    stripPrefix p s = if take (length p) s == p
+                        then Just (drop (length p) s)
+                        else Nothing
+    -- Conservative: only treat as path if it contains "/" or is
+    -- a known dist-newstyle-looking fragment. Avoids touching
+    -- module names (e.g. "Shapes") or package-ids.
+    looksLikePath s = '/' `elem` s
+                   || take 3 s == "dist"
 
 --------------------------------------------------------------------------------
 -- Wave-2 — compile via stanza flags
@@ -504,7 +589,19 @@ loadForTarget sess tgt flavour = do
       -- Pre-flip gsLoadedRef so withGhcSession skips its auto-load.
       writeIORef (gsLoadedRef sess) True
       let root       = unProjectDir (gsProject sess)
-          searchDirs = [root </> "src", root </> "app", root </> "test"]
+          -- Scope the FS scan to the directories the target owns.
+          -- A library target only owns @src/@ (and @app/@ if the
+          -- user happened to put library modules there); loading
+          -- @test/Spec.hs@ under library stanza flags would fail
+          -- because the library's build-depends rarely include the
+          -- test framework. Keeping stanza boundaries intact lets
+          -- GHC resolve each file's imports against the right
+          -- dep set.
+          searchDirs = case tgt of
+            Bootstrap.TargetLibrary      -> [root </> "src", root </> "app"]
+            Bootstrap.TargetTestSuite _  -> [root </> "test", root </> "src"]
+            Bootstrap.TargetExecutable _ -> [root </> "app", root </> "src"]
+            Bootstrap.TargetBenchmark _  -> [root </> "bench", root </> "src"]
       files <- enumerateHaskellSources searchDirs
       eRes <- try $ withGhcSession sess $
         withStanzaFlags sess tgt $ do
@@ -531,7 +628,22 @@ loadForTarget sess tgt flavour = do
           setContext (preludeImport : modImports)
           pure (case ok of { Succeeded -> True; _ -> False })
       success <- case eRes :: Either SomeException Bool of
-        Left _   -> pure False
+        Left ex -> do
+          -- Surface the exception so the caller sees WHAT went
+          -- wrong instead of "no errors but GHC reported failure".
+          -- Package resolution failures and other GhcExceptions
+          -- bypass the logger hook.
+          let msg = T.pack (show ex)
+              err = GhcError
+                { geFile     = ""
+                , geLine     = 0
+                , geColumn   = 0
+                , geSeverity = SevError
+                , geCode     = Nothing
+                , geMessage  = msg
+                }
+          modifyIORef' diagRef (err :)
+          pure False
         Right ok -> pure ok
       diags <- readIORef diagRef
       let ordered   = reverse diags
@@ -552,6 +664,22 @@ firstTestSuiteOrLibrary sess = do
   pure $ case [ t | t@(Bootstrap.TargetTestSuite _) <- Map.keys stanzas ] of
     (t : _) -> t
     []      -> Bootstrap.TargetLibrary
+
+-- | Return 'TargetLibrary' if the project has one, otherwise the
+-- first detected test-suite. Dual of 'firstTestSuiteOrLibrary'.
+-- Used by introspective tools (arbitrary / suggest) whose target
+-- types almost always live in the library — loading under library
+-- flags keeps the @-this-unit-id@ aligned so 'parseName' resolves
+-- user types correctly.
+firstLibraryOrTestSuite :: GhcSession -> IO Bootstrap.Target
+firstLibraryOrTestSuite sess = do
+  ensureStanzaFlags sess
+  stanzas <- readIORef (gsStanzaFlags sess)
+  pure $ if Map.member Bootstrap.TargetLibrary stanzas
+           then Bootstrap.TargetLibrary
+           else case [ t | t@(Bootstrap.TargetTestSuite _) <- Map.keys stanzas ] of
+                  (t : _) -> t
+                  []      -> Bootstrap.TargetLibrary
 
 -- | Path-based target selection. Handles the conventional layout:
 --
@@ -614,14 +742,31 @@ evalIOString stmt = do
 applyFlavour :: LoadFlavour -> Ghc ()
 applyFlavour flavour = do
   dflags <- getSessionDynFlags
+  -- Force recompilation so we always see fresh diagnostics. Without
+  -- this, if cabal's pre-bootstrap build phase produced a .hi for
+  -- the target module, GHC would skip recompilation and emit zero
+  -- warnings — our in-process logger hook would have nothing to
+  -- capture. Re-compiling is cheap for small modules; large
+  -- projects pay once per tool call, which is still far cheaper
+  -- than the old 3s subprocess boot.
   let dflags' = case flavour of
         Strict ->
+          -- No ForceRecomp here: lets GHC reuse cabal's pre-built
+          -- .hi files when the target hasn't changed. Saves ~5 s
+          -- per invocation on a warm project and avoids a subtle
+          -- package-id resolution bug observed with ForceRecomp +
+          -- -hide-all-packages + cabal stanza flags.
           dflags
             `gopt_unset` Opt_DeferTypeErrors
             `gopt_unset` Opt_DeferTypedHoles
             `gopt_unset` Opt_DeferOutOfScopeVariables
         Deferred ->
+          -- ForceRecomp IS needed for Deferred: without it, GHC
+          -- skips compile on cached .hi files and emits zero
+          -- warnings — meaning the logger hook captures nothing
+          -- and we lose the hole / deferred-error payload.
           dflags
+            `gopt_set` Opt_ForceRecomp
             `gopt_set` Opt_DeferTypeErrors
             `gopt_set` Opt_DeferTypedHoles
             `gopt_set` Opt_DeferOutOfScopeVariables
