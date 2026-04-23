@@ -1,0 +1,35 @@
+mcp-server-haskell/test-e2e/Scenarios/FlowSwitchProject.hs
+  0288bbe3a485f322 1-238
+mcp-server-haskell/test-e2e/Main.hs
+  0288bbe3a485f322 65,159-160
+mcp-server-haskell/test/Spec.hs
+  0288bbe3a485f322 150-151,167-172,406-411,3247-3354
+mcp-server-haskell/src/HaskellFlows/Mcp/NextStep.hs
+  0288bbe3a485f322 404-414
+mcp-server-haskell/src/HaskellFlows/Tool/SwitchProject.hs
+  0288bbe3a485f322 1-211
+mcp-server-haskell/haskell-flows-mcp.cabal
+  0288bbe3a485f322 95,209
+mcp-server-haskell/src/HaskellFlows/Mcp/Server.hs
+  0288bbe3a485f322 98,421-430,472
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "bffa676dbc41be56307ad4622ff7b0770b57c106",
+  "prompts": {
+    "0288bbe3a485f322": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6ad5c5e0-ae3e-4125-bb36-4c701ab5970f",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 3620,
+      "total_deletions": 6660,
+      "accepted_lines": 7241,
+      "overriden_lines": 0
+    }
+  }
+}
