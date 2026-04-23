@@ -26,35 +26,19 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import System.Timeout (timeout)
 
-import GHC
-  ( InteractiveImport (IIDecl)
-  , getContext
-  , mkModuleName
-  , setContext
-  , simpleImportDecl
-  )
-
 import HaskellFlows.Data.PropertyStore
   ( Store
   , StoredProperty (..)
   , loadAll
   )
-import HaskellFlows.Ghc.ApiSession
-  ( GhcSession
-  , LoadFlavour (..)
-  , evalIOString
-  , firstTestSuiteOrLibrary
-  , loadForTarget
-  , targetForPath
-  , withGhcSession
-  )
+import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Parser.Error (GhcError)
 import HaskellFlows.Parser.QuickCheck
   ( QuickCheckResult (..)
   , parseQuickCheckOutput
   )
+import qualified HaskellFlows.Tool.QuickCheck as QcTool
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -125,41 +109,24 @@ data Replay = Replay
 runOne :: GhcSession -> StoredProperty -> IO Replay
 runOne ghcSess sp = do
   let expr = spExpression sp
-  -- Pick the target that governs the scope of the property's module.
-  tgt <- case spModule sp of
-    Just m | not (T.null m) -> targetForPath ghcSess (T.unpack m)
-    _                       -> firstTestSuiteOrLibrary ghcSess
-  -- Load the target (Strict — warnings don't matter for replay,
-  -- errors would poison the property) and if that succeeds, run
-  -- the property via evalIOString.
-  eLoad <- try (loadForTarget ghcSess tgt Strict)
-  qr <- case eLoad :: Either SomeException (Bool, [GhcError]) of
-    Left ex ->
-      pure (QcException expr ("loadForTarget failed: " <> T.pack (show ex)))
-    Right (False, diags) ->
-      pure (QcException expr ("target did not compile; "
-                              <> T.pack (show (length diags)) <> " diag(s)"))
-    Right (True, _) ->
-      case sanitizeExpression expr of
-        Left _ -> pure (QcUnparsed expr
-                        "boundary-sanitiser rejected the stored expression")
-        Right safe -> do
-          let stmt = "fmap Test.QuickCheck.output "
-                <> "(Test.QuickCheck.quickCheckWithResult "
-                <> "(Test.QuickCheck.stdArgs { Test.QuickCheck.chatty = False }) "
-                <> "(" <> T.unpack safe <> "))"
-          mRes <- timeout replayTimeoutMicros $
-            try $ withGhcSession ghcSess $ do
-              ctx <- getContext
-              setContext (ctx
-                <> [IIDecl (simpleImportDecl (mkModuleName "Test.QuickCheck"))])
-              evalIOString stmt
-          case mRes of
-            Nothing                      -> pure (QcException expr "timeout")
-            Just (Left (ex :: SomeException)) ->
-              pure (QcException expr (T.pack (show ex)))
-            Just (Right out)             ->
-              pure (parseQuickCheckOutput expr (T.pack out))
+  -- Wave-6: route the replay through the same subprocess-cabal-repl
+  -- vehicle as ghci_quickcheck. The in-process evalIOString path
+  -- depended on the GHC-API stanza-flag replay, which misresolved
+  -- @-package-id QckChck-…@. cabal repl does that resolution
+  -- natively and works every time.
+  qr <- case sanitizeExpression expr of
+    Left _ -> pure (QcUnparsed expr
+                    "boundary-sanitiser rejected the stored expression")
+    Right safe -> do
+      mRes <- timeout replayTimeoutMicros $
+        try $ QcTool.runQuickCheckViaCabalRepl
+                (gsProject ghcSess) (spModule sp) safe
+      case mRes of
+        Nothing                      -> pure (QcException expr "timeout")
+        Just (Left (ex :: SomeException)) ->
+          pure (QcException expr (T.pack (show ex)))
+        Just (Right out)             ->
+          pure (parseQuickCheckOutput expr out)
   pure Replay { rpStored = sp, rpResult = qr }
 
 --------------------------------------------------------------------------------

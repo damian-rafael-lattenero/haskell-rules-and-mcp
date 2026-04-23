@@ -14,6 +14,8 @@ module HaskellFlows.Tool.QuickCheck
   ( descriptor
   , handle
   , QuickCheckArgs (..)
+    -- * Shared runtime-execution helper (Regression, Determinism)
+  , runQuickCheckViaCabalRepl
     -- * Pure helpers exposed for unit tests
   , chooseStoreModule
   , isSimpleIdent
@@ -29,30 +31,17 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import System.Timeout (timeout)
 
-import GHC
-  ( Ghc
-  , InteractiveImport (IIDecl)
-  , getContext
-  , mkModuleName
-  , setContext
-  , simpleImportDecl
-  )
+import qualified System.Process as Proc
+import System.Exit (ExitCode (..))
 
 import HaskellFlows.Data.PropertyStore (Store, save)
-import HaskellFlows.Ghc.ApiSession
-  ( GhcSession
-  , evalIOString
-  , firstTestSuiteOrLibrary
-  , loadForTarget
-  , LoadFlavour (..)
-  , withGhcSession
-  )
+import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
+import HaskellFlows.Types (ProjectDir, unProjectDir)
 import HaskellFlows.Ghc.Sanitize
   ( CommandError (..)
   , sanitizeExpression
   )
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Parser.Error (GhcError)
 import HaskellFlows.Parser.QuickCheck
 
 descriptor :: ToolDescriptor
@@ -116,67 +105,95 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Right (QuickCheckArgs prop md) -> case sanitizeExpression prop of
     Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
     Right safe -> do
-      tgt <- firstTestSuiteOrLibrary ghcSess
-      -- Prime the session under the test-suite stanza so Test.QuickCheck
-      -- (and the project's own library modules) are resolvable when we
-      -- compileExpr the property.
-      eLoad <- try (loadForTarget ghcSess tgt Strict)
-      case eLoad :: Either SomeException (Bool, [GhcError]) of
-        Left ex -> pure (errorResult ("loadForTarget failed: " <> T.pack (show ex)))
-        Right _ -> do
-          let stmt = buildQuickCheckStatement (T.unpack safe)
-          -- No withStanzaFlags wrap: loadForTarget above already
-          -- left hsc_dflags with the correct stanza flags cached
-          -- in the HscEnv. Re-applying setSessionDynFlags would
-          -- reset the interactive context and nothing would be
-          -- in scope for compileExpr.
-          mRes <- timeout quickCheckTimeoutMicros $
-            try $ withGhcSession ghcSess $ do
-              -- loadForTarget sets the context to the loaded
-              -- module graph, but 'Test.QuickCheck' is an external
-              -- package (via -package-id QckChck-…) — not in the
-              -- graph, so it isn't imported. Add it explicitly so
-              -- compileExpr can resolve 'Test.QuickCheck.output' /
-              -- 'Test.QuickCheck.quickCheckWithResult' /
-              -- 'Test.QuickCheck.stdArgs' in the statement we build.
-              ensureTestQuickCheckImported
-              evalIOString stmt
-          case mRes of
-            Nothing -> pure (renderResult (QcException prop "timeout: property exceeded 30s budget"))
-            Just (Left (ex :: SomeException)) ->
-              pure (renderResult (QcException prop (T.pack (show ex))))
-            Just (Right out) -> do
-              let qr = parseQuickCheckOutput prop (T.pack out)
-              case qr of
-                QcPassed _ _ ->
-                  save store prop md
-                _            -> pure ()
-              pure (renderResult qr)
+      -- Wave-6 runtime approach: shell out to `cabal v2-repl`
+      -- instead of driving the GHC API in-process. The GHC-API
+      -- 'setSessionDynFlags' + stanza-flag replay path has been
+      -- observed to mis-resolve '-package-id QckChck-…' even
+      -- when the package-db contains the exact unit-id (see
+      -- FlowArbitrary step 5 and sibling regressions in
+      -- FlowPropertyLifecycle / FlowMutation). cabal repl, on
+      -- the other hand, speaks its own package resolution flow
+      -- natively and works every time.
+      --
+      -- Tradeoff: ~3 s boot per QC call vs ~40 ms in-process.
+      -- For a test-driven property loop that's acceptable; in
+      -- exchange we recover full correctness. The in-process
+      -- path stays authoritative for compile / type / info /
+      -- complete / goto / doc (Phase-2), eval pure expressions
+      -- (Phase-4), and hole / load / refactor (Wave 2/4).
+      mRes <- timeout quickCheckTimeoutMicros $
+        try $ runQuickCheckViaCabalRepl (gsProject ghcSess) md safe
+      case mRes of
+        Nothing ->
+          pure (renderResult
+            (QcException prop "timeout: property exceeded 30s budget"))
+        Just (Left (ex :: SomeException)) ->
+          pure (renderResult (QcException prop (T.pack (show ex))))
+        Just (Right out) -> do
+          let qr = parseQuickCheckOutput prop out
+          case qr of
+            QcPassed _ _ -> save store prop md
+            _            -> pure ()
+          pure (renderResult qr)
 
--- | Add @import qualified Test.QuickCheck@ (or a plain @import
--- Test.QuickCheck@) to the session's interactive context, on top
--- of whatever 'setContext' the prior 'loadForTarget' installed.
--- Idempotent — calling it twice is harmless.
-ensureTestQuickCheckImported :: Ghc ()
-ensureTestQuickCheckImported = do
-  ctx <- getContext
-  let qcImport = IIDecl (simpleImportDecl (mkModuleName "Test.QuickCheck"))
-  setContext (ctx <> [qcImport])
-
--- | The exact expression we feed to 'evalIOString'. Wraps the user
--- property with 'quickCheckWithResult' so we get back a 'Result'
--- whose 'output' string is parsable by 'parseQuickCheckOutput'.
+-- | Run a QuickCheck property via @cabal v2-repl@ on the project's
+-- test-suite target. Returns the raw @Result.output@ text so the
+-- existing 'parseQuickCheckOutput' can consume it unchanged.
 --
--- We disable 'chatty' so QuickCheck does not also print to stdout —
--- that would interleave with the MCP JSON framing. 'output' still
--- contains the full chatty-style text because QuickCheck fills it
--- from its own formatter, independent of the stdout switch.
-buildQuickCheckStatement :: String -> String
-buildQuickCheckStatement safe =
-  "fmap Test.QuickCheck.output "
-    <> "(Test.QuickCheck.quickCheckWithResult "
-    <> "(Test.QuickCheck.stdArgs { Test.QuickCheck.chatty = False }) "
-    <> "(" <> safe <> "))"
+-- The statement we pipe into repl is the same shape as the
+-- in-process Wave-3 one (show Result.output) — the only difference
+-- is the execution vehicle. cabal invokes ghci with the correct
+-- per-stanza flags, resolves deps (QuickCheck included) natively,
+-- and returns clean.
+runQuickCheckViaCabalRepl :: ProjectDir -> Maybe Text -> Text -> IO Text
+runQuickCheckViaCabalRepl pd mModule safeProp = do
+  let loadDirective = case mModule of
+        Just modPath | not (T.null modPath) ->
+          [":load " <> T.unpack modPath]
+        _ -> []
+      input = unlines $
+        loadDirective <>
+        [ "import Test.QuickCheck"
+        -- Record-update with unqualified field names — GHC 9.12
+        -- panics on the fully-qualified @Test.QuickCheck.chatty@
+        -- variant inside a record update.
+        , "let qcArgs = stdArgs { chatty = False }"
+        , "r <- quickCheckWithResult qcArgs (" <> T.unpack safeProp <> ")"
+        , "putStrLn \"__QC_OUTPUT_START__\""
+        , "putStr (output r)"
+        , "putStrLn \"__QC_OUTPUT_END__\""
+        , ":q"
+        ]
+      -- Target @all@ by default. The repl loads the library +
+      -- its exposed modules, so :load against a src/ file brings
+      -- the user's definitions into scope without needing to
+      -- know the module name.
+      cp = (Proc.proc "cabal"
+             [ "v2-repl", "all"
+             , "--build-depends=QuickCheck"
+             , "-v0"
+             ])
+             { Proc.cwd     = Just (unProjectDir pd)
+             , Proc.std_in  = Proc.CreatePipe
+             , Proc.std_out = Proc.CreatePipe
+             , Proc.std_err = Proc.CreatePipe
+             }
+  (ec, outStr, _errStr) <- Proc.readCreateProcessWithExitCode cp input
+  case ec of
+    ExitSuccess    -> pure (extractQcOutput (T.pack outStr))
+    ExitFailure _c -> pure (T.pack outStr)
+
+-- | Slice the chatty output between our sentinel markers. The
+-- rest of cabal's chatter (ghci prompt, module-load lines,
+-- "Leaving GHCi", …) is discarded; only the QuickCheck formatter's
+-- text reaches the parser.
+extractQcOutput :: Text -> Text
+extractQcOutput full =
+  let (_, afterStart) = T.breakOn "__QC_OUTPUT_START__" full
+      body            = T.drop (T.length "__QC_OUTPUT_START__") afterStart
+      (captured, _)   = T.breakOn "__QC_OUTPUT_END__" body
+  in T.strip captured
+
 
 --------------------------------------------------------------------------------
 -- store-module resolution

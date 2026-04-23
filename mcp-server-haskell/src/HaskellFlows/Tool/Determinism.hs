@@ -20,26 +20,11 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import System.Timeout (timeout)
 
-import GHC
-  ( InteractiveImport (IIDecl)
-  , getContext
-  , mkModuleName
-  , setContext
-  , simpleImportDecl
-  )
-
-import HaskellFlows.Ghc.ApiSession
-  ( GhcSession
-  , LoadFlavour (..)
-  , evalIOString
-  , firstTestSuiteOrLibrary
-  , loadForTarget
-  , withGhcSession
-  )
+import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Parser.Error (GhcError)
 import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..), parseQuickCheckOutput)
+import qualified HaskellFlows.Tool.QuickCheck as QcTool
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -84,49 +69,37 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Right args -> case sanitizeExpression (daProperty args) of
     Left _ -> pure (errorResult "property is empty or contains forbidden characters")
     Right safe -> do
-      tgt <- firstTestSuiteOrLibrary ghcSess
-      eLoad <- try (loadForTarget ghcSess tgt Strict)
-      case eLoad :: Either SomeException (Bool, [GhcError]) of
-        Left ex ->
-          pure (errorResult ("loadForTarget failed: " <> T.pack (show ex)))
-        Right _ -> do
-          results <- replicateM (daRuns args) (runOnce ghcSess (daProperty args) safe)
-          let allPassed = all isPassed results
-              payload = object
-                [ "success" .= allPassed
-                , "runs"    .= daRuns args
-                , "states"  .= map stateText results
-                , "summary" .=
-                    ( if allPassed
-                        then "All " <> T.pack (show (daRuns args)) <> " runs passed — no flakiness observed."
-                        else "At least one run did not pass — property is flaky or broken."
-                    )
-                ]
-          pure ToolResult
-                 { trContent = [ TextContent (encodeUtf8Text payload) ]
-                 , trIsError = not allPassed
-                 }
+      results <- replicateM (daRuns args) (runOnce ghcSess (daProperty args) safe)
+      let allPassed = all isPassed results
+          payload = object
+            [ "success" .= allPassed
+            , "runs"    .= daRuns args
+            , "states"  .= map stateText results
+            , "summary" .=
+                ( if allPassed
+                    then "All " <> T.pack (show (daRuns args)) <> " runs passed — no flakiness observed."
+                    else "At least one run did not pass — property is flaky or broken."
+                )
+            ]
+      pure ToolResult
+             { trContent = [ TextContent (encodeUtf8Text payload) ]
+             , trIsError = not allPassed
+             }
   where
     runOnce sess origExpr safe = do
-      let stmt = "fmap Test.QuickCheck.output "
-            <> "(Test.QuickCheck.quickCheckWithResult "
-            <> "(Test.QuickCheck.stdArgs { Test.QuickCheck.chatty = False }) "
-            <> "(" <> T.unpack safe <> "))"
+      -- Route through the same subprocess-cabal-repl vehicle as
+      -- ghci_quickcheck. The in-process evalIOString path was
+      -- tripping on the GHC-API package-resolution bug even when
+      -- the stanza flags had -package-id QuickCheck — cabal repl
+      -- sidesteps that entirely.
       mRes <- timeout runTimeoutMicros $
-        try $ withGhcSession sess $ do
-          -- Ensure Test.QuickCheck is in the interactive import
-          -- context; loadForTarget doesn't import external
-          -- packages, only local module-graph entries.
-          ctx <- getContext
-          setContext (ctx
-            <> [IIDecl (simpleImportDecl (mkModuleName "Test.QuickCheck"))])
-          evalIOString stmt
+        try $ QcTool.runQuickCheckViaCabalRepl (gsProject sess) Nothing safe
       case mRes of
         Nothing -> pure (QcException origExpr "timeout")
         Just (Left (ex :: SomeException)) ->
           pure (QcException origExpr (T.pack (show ex)))
         Just (Right out) ->
-          pure (parseQuickCheckOutput origExpr (T.pack out))
+          pure (parseQuickCheckOutput origExpr out)
 
     isPassed QcPassed {} = True
     isPassed _           = False
