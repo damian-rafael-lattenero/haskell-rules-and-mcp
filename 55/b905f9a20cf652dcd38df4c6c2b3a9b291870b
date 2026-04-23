@@ -1,0 +1,23 @@
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheck.hs
+  0288bbe3a485f322 41-42,44,49-55,57-58,167-183,185-197,203-205
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "55b905f9a20cf652dcd38df4c6c2b3a9b291870b",
+  "prompts": {
+    "0288bbe3a485f322": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6ad5c5e0-ae3e-4125-bb36-4c701ab5970f",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 549,
+      "total_deletions": 502,
+      "accepted_lines": 4931,
+      "overriden_lines": 0
+    }
+  }
+}
