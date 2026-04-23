@@ -507,8 +507,9 @@ withStanzaFlags sess tgt act = do
           -- is resolvable in the package-db.
           rawArgs = filter (/= "--interactive") (Bootstrap.sfArgs sf)
           cleaned = map (absolutizePathArg root)
+                  . stripPositionalModuleNames
                   $ dedupHideAllPackages rawArgs
-      (dflags', _, _) <-
+      (dflags', _leftover, _warnings) <-
         parseDynamicFlagsCmdLine dflags (map noLoc cleaned)
       _ <- setSessionDynFlags dflags'
       act
@@ -522,6 +523,31 @@ dedupHideAllPackages = go False
     go seen (x : xs)
       | x == "-hide-all-packages" = if seen then go True xs else x : go True xs
       | otherwise                 = x : go seen xs
+
+-- | Cabal appends the target module name (e.g. @Shapes@) as a
+-- positional argv token near the end of the captured flag list.
+-- Under @parseDynamicFlagsCmdLine@ it lands in the leftover list
+-- (non-flag tokens), which we already discard — but keep it in
+-- anyway because some positional tokens can confuse flag
+-- ordering semantics. Strip every non-flag, non-path, non-empty
+-- token that looks like an uppercase identifier.
+stripPositionalModuleNames :: [String] -> [String]
+stripPositionalModuleNames = filter (not . isModuleNameToken)
+  where
+    isModuleNameToken s = case s of
+      []      -> False
+      (c : cs)
+        -- Module name shape: uppercase first char, identifier chars
+        -- only, no '/', no '-'. We do NOT touch tokens starting
+        -- with '-' (flags) or lowercase (rare, but e.g. -package-id
+        -- values start lowercase sometimes).
+        | c `elem` ['A'..'Z']
+        , '/' `notElem` s
+        , '-' `notElem` cs
+        , all (\k -> k `elem` (['A'..'Z'] <> ['a'..'z'] <> ['0'..'9'] <> ['.','_'])) cs
+        -> True
+        | otherwise -> False
+
 
 -- | Convert a likely-path-shaped argv token to an absolute path
 -- under the given root. Leaves flag names (starting with @-@) and
