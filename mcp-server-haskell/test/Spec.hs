@@ -146,6 +146,7 @@ import HaskellFlows.Tool.Hoogle
   , parseHoogleLine
   )
 import Control.Concurrent (forkIO)
+import Control.Monad (when)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
@@ -394,6 +395,7 @@ main = do
       , test "ghc-api: bootstrapProject captures cabal flags for library" testCabalBootstrapLibrary
       , test "ghc-api: loadForTarget compiles library module via stanza flags" testLoadForTargetLibrary
       , test "ghc-api: deferred hole warnings are captured by logger hook" testHoleDiagnosticCapture
+      , test "ghc-api: loadForTarget after deps-add resolves -package-id"   testLoadAfterDepsAdd
       ]
   if and results then exitSuccess else exitFailure
 
@@ -3156,6 +3158,78 @@ testHoleDiagnosticCapture = case mkProjectDir "/tmp/hole-fixture" of
             holes    = parseTypedHoles rendered
         pure $ not (null holes)
              && any (("Hole.hs" `T.isSuffixOf`) . thFile) holes
+
+-- | Regression for the FlowArbitrary e2e failure: after
+-- 'invalidateStanzaFlags' (which the server fires after every
+-- 'ghci_deps add'), the NEXT 'loadForTarget' must re-bootstrap
+-- cabal flags AND successfully compile a module that references
+-- the newly-added dependency. Before the fix, the captured argv
+-- still held a stale @-hide-all-packages@ AFTER the
+-- @-package-id@ tokens, which under GHC-API flag-parsing resets
+-- the visible-package set and surfaces as
+-- @cannot satisfy -package-id QckChck-...@.
+testLoadAfterDepsAdd :: IO Bool
+testLoadAfterDepsAdd = do
+  base <- getTemporaryDirectory
+  ts   <- getPOSIXTime
+  let dir = base </> ("arb-repro-" <> show (floor (ts * 1000000) :: Int))
+  createDirectoryIfMissing True dir
+  let pdE = mkProjectDir dir
+  case pdE of
+    Left _   -> do removePathForcibly dir; pure False
+    Right pd -> do
+      let srcDir = dir </> "src"
+      createDirectoryIfMissing True srcDir
+      -- 1. Scaffold with base only (no QuickCheck yet).
+      TIO.writeFile (dir </> "arb-repro.cabal") $ T.unlines
+        [ "cabal-version: 2.4"
+        , "name: arb-repro"
+        , "version: 0.1.0.0"
+        , ""
+        , "library"
+        , "  hs-source-dirs:   src"
+        , "  exposed-modules:  Shapes, ShapesGen"
+        , "  build-depends:    base"
+        , "  default-language: Haskell2010"
+        ]
+      TIO.writeFile (dir </> "cabal.project") "packages: .\n"
+      TIO.writeFile (srcDir </> "Shapes.hs") $ T.unlines
+        [ "{-# LANGUAGE DerivingStrategies #-}"
+        , "module Shapes (Status (..)) where"
+        , "data Status = Ok | Err String deriving stock (Eq, Show)"
+        ]
+      TIO.writeFile (srcDir </> "ShapesGen.hs") $ T.unlines
+        [ "{-# OPTIONS_GHC -Wno-orphans -Wno-missing-signatures #-}"
+        , "module ShapesGen () where"
+        , "import Shapes"
+        , "import Test.QuickCheck"
+        , "instance Arbitrary Status where"
+        , "  arbitrary = oneof [ pure Ok, Err <$> arbitrary ]"
+        ]
+      sess <- startGhcSession pd
+      -- 2. Mutate .cabal to add QuickCheck (simulates ghci_deps add).
+      TIO.writeFile (dir </> "arb-repro.cabal") $ T.unlines
+        [ "cabal-version: 2.4"
+        , "name: arb-repro"
+        , "version: 0.1.0.0"
+        , ""
+        , "library"
+        , "  hs-source-dirs:   src"
+        , "  exposed-modules:  Shapes, ShapesGen"
+        , "  build-depends:    base, QuickCheck"
+        , "  default-language: Haskell2010"
+        ]
+      ApiSession.invalidateStanzaFlags sess
+      -- 3. Load via the full in-process path.
+      (ok, diags) <- ApiSession.loadForTarget sess TargetLibrary ApiSession.Strict
+      killGhcSession sess
+      let satisfy =
+            any (T.isInfixOf "cannot satisfy -package-id" . geMessage) diags
+      when (not ok || satisfy) $ do
+        putStrLn "  -- testLoadAfterDepsAdd diagnostics --"
+        mapM_ (putStrLn . ("    " <>) . T.unpack . geMessage) diags
+      removePathForcibly dir
+      pure (ok && not satisfy)
 
 -- | Wave-1 gate: drive cabal via the shim against a real project
 -- and verify we get back a non-empty flag set that includes the

@@ -167,6 +167,7 @@ main = do
   -- so the operator knows which mode they're about to watch.
   mSkipRaw <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_SKIP_SLOW"
   mParRaw  <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_PARALLEL"
+  mOnlyRaw <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_ONLY"
   numCaps  <- getNumCapabilities
   let skipSlow = mSkipRaw == Just "1"
       -- Parallel e2e is OPT-IN via HASKELL_FLOWS_E2E_PARALLEL=<N>.
@@ -179,20 +180,39 @@ main = do
       parallelism = case mParRaw >>= readMaybe of
         Just k | k >= 1 -> min k numCaps
         _              -> 1
+      -- Case-insensitive substring filter on scenario label.
+      -- Empty string / unset env var = no filter. Lets the
+      -- inner-loop pattern be: pick one red, fix, re-run only
+      -- that one in ~20 s instead of ~200 s.
+      mOnly = case mOnlyRaw of
+        Just s | not (null s) -> Just (T.toLower (T.pack s))
+        _                     -> Nothing
+      matchOnly label = case mOnly of
+        Nothing     -> True
+        Just needle -> needle `T.isInfixOf` T.toLower label
+      afterOnly
+        | Just _ <- mOnly = filter (\(lbl, _, _) -> matchOnly lbl) scenarios
+        | otherwise       = scenarios
       selected
-        | skipSlow  = filter (\(_, slow, _) -> not slow) scenarios
-        | otherwise = scenarios
+        | skipSlow  = filter (\(_, slow, _) -> not slow) afterOnly
+        | otherwise = afterOnly
       totalCount   = length scenarios
       selCount     = length selected
-      skippedCount = totalCount - selCount
+      skippedCount = length afterOnly - selCount
 
   putStrLn "==> haskell-flows-mcp e2e"
   putStrLn ("==> binary: " <> binary)
+  case mOnly of
+    Nothing -> pure ()
+    Just n  -> putStrLn ("==> HASKELL_FLOWS_E2E_ONLY=" <> T.unpack n
+                         <> " — running " <> show (length afterOnly)
+                         <> " of " <> show totalCount <> " scenarios (substring match)")
   if skipSlow
     then putStrLn ("==> HASKELL_FLOWS_E2E_SKIP_SLOW=1 — running "
                    <> show selCount <> " of " <> show totalCount
                    <> " scenarios (" <> show skippedCount <> " slow-tagged skipped)")
-    else putStrLn ("==> running all " <> show totalCount <> " scenarios")
+    else putStrLn ("==> running "
+                   <> show selCount <> " of " <> show totalCount <> " scenarios")
   when (parallelism > 1) $
     putStrLn ("==> HASKELL_FLOWS_E2E_PARALLEL=" <> show parallelism
               <> " (capabilities=" <> show numCaps <> ")")

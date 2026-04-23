@@ -61,6 +61,7 @@ import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)
 import Control.Exception (SomeException, try)
 import Control.Monad (filterM, unless, when)
 import Control.Monad.IO.Class (liftIO)
+import qualified Data.Foldable
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -197,19 +198,20 @@ withGhcSession sess act = withMVar (gsLock sess) $ \_ ->
   withCurrentDirectory (unProjectDir (gsProject sess)) $
     runGhc (Just (gsLibdir sess)) $ do
     mEnv <- liftIO (readIORef (gsEnvRef sess))
-    case mEnv of
-      Just env -> setSession env
-      Nothing  -> do
-        -- Baseline DynFlags only. Wave-2 consumers reach the cabal-
-        -- aware state by wrapping their Ghc action in
-        -- 'withStanzaFlags' (which runs 'parseDynamicFlagsCmdLine'
-        -- with the exact argv cabal would have given 'ghc
-        -- --interactive'). Applying an env file here as well would
-        -- race the stanza flags and cause "cannot satisfy
-        -- -package-id X" at runtime.
-        dflags <- getSessionDynFlags
-        _      <- setSessionDynFlags dflags
-        pure ()
+    -- When the session has no cached HscEnv, we rely on the state
+    -- 'runGhc' just initialised from libdir. No redundant
+    -- 'setSessionDynFlags dflags' here — that would force an
+    -- extra 'initPackages' against the default (user + global)
+    -- package-db set, and the resulting UnitState then "sticks":
+    -- when 'withStanzaFlags' later applies the cabal-captured
+    -- argv (adding new -package-db paths + '-hide-all-packages
+    -- -package-id X'), GHC's second initPackages blends the fresh
+    -- dbs with the stale default-hash unit lookup and reports
+    -- "cannot satisfy -package-id QckChck-..." even though the
+    -- package is in the newly-provided db. Letting 'runGhc' own
+    -- the one-and-only initial init keeps the 'withStanzaFlags'
+    -- init as the sole source of truth for package resolution.
+    Data.Foldable.for_ mEnv setSession
     loaded <- liftIO (readIORef (gsLoadedRef sess))
     unless loaded $ do
       autoLoadProject (gsProject sess)
@@ -509,8 +511,23 @@ withStanzaFlags sess tgt act = do
           cleaned = map (absolutizePathArg root)
                   . stripPositionalModuleNames
                   $ dedupHideAllPackages rawArgs
+          -- Reset package-related fields on the baseline dflags
+          -- so the captured argv is the sole source of truth for
+          -- package resolution. Without this reset, a previous
+          -- withStanzaFlags call (or the default libdir init) leaves
+          -- 'packageDBFlags' / 'packageFlags' / 'packageEnv' populated,
+          -- which under 'parseDynamicFlagsCmdLine' accumulate — a
+          -- 'ghci_deps add' + reload then resolves package-ids
+          -- against the OLD merged view and GHC reports
+          -- "cannot satisfy -package-id X" even though X is available
+          -- in the newly-provided package-db set.
+          dflagsReset = dflags
+            { packageDBFlags = []
+            , packageFlags   = []
+            , packageEnv     = Nothing
+            }
       (dflags', _leftover, _warnings) <-
-        parseDynamicFlagsCmdLine dflags (map noLoc cleaned)
+        parseDynamicFlagsCmdLine dflagsReset (map noLoc cleaned)
       _ <- setSessionDynFlags dflags'
       act
 
