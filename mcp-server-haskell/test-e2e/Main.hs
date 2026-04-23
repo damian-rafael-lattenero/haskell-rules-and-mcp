@@ -13,6 +13,7 @@
 -- banner, live progress streaming, and duration accounting.
 module Main where
 
+import qualified Control.Concurrent
 import Control.Concurrent.Async (forConcurrently)
 import Control.Concurrent.QSem (newQSem, signalQSem, waitQSem)
 import Control.Exception (bracket, bracket_, try, SomeException)
@@ -168,9 +169,16 @@ main = do
   mParRaw  <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_PARALLEL"
   numCaps  <- getNumCapabilities
   let skipSlow = mSkipRaw == Just "1"
+      -- Parallel e2e default after Wave 5 deleted the legacy
+      -- subprocess ghci. Each scenario spawns its own MCP child
+      -- with its own tmp projectDir, and the in-process GhcSession
+      -- doesn't contend on the cabal store the way `cabal repl`
+      -- subprocesses used to. min 4 capabilities gives ~3× wall-
+      -- time speedup without over-scheduling on typical dev
+      -- machines; opt out with HASKELL_FLOWS_E2E_PARALLEL=1.
       parallelism = case mParRaw >>= readMaybe of
         Just k | k >= 1 -> min k numCaps
-        _              -> 1   -- default: sequential; opt-in parallel via env
+        _              -> min 4 numCaps
       selected
         | skipSlow  = filter (\(_, slow, _) -> not slow) scenarios
         | otherwise = scenarios
@@ -283,12 +291,20 @@ runScenario binary (label, _slow, go) = do
              ]
       Right cs -> pure cs
 
--- | Fresh temp project dir per scenario.
+-- | Fresh temp project dir per scenario. Suffix mixes POSIX time
+-- AND 'ThreadId' so parallel scenarios that land on the same
+-- microsecond still get distinct paths — without that, two parallel
+-- scenarios would collide, stomp on each other's fixtures, and
+-- surface as "file does not exist" mid-run.
 withTempProjectDir :: (FilePath -> IO a) -> IO a
 withTempProjectDir k = do
   base <- getTemporaryDirectory
   ts   <- getPOSIXTime
-  let dir = base </> ("haskell-flows-e2e-" <> show (floor (ts * 1000000) :: Int))
+  tid  <- Control.Concurrent.myThreadId
+  let tidTag = filter (\c -> c /= ' ' && c /= '(' && c /= ')')
+                      (show tid)   -- e.g. "ThreadId42"
+      dir = base </> ("haskell-flows-e2e-" <> show (floor (ts * 1000000) :: Int)
+                       <> "-" <> tidTag)
   bracket
     (createDirectoryIfMissing True dir >> pure dir)
     removePathForcibly

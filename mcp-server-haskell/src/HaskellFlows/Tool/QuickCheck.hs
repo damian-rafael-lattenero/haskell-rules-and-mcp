@@ -29,6 +29,15 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import System.Timeout (timeout)
 
+import GHC
+  ( Ghc
+  , InteractiveImport (IIDecl)
+  , getContext
+  , mkModuleName
+  , setContext
+  , simpleImportDecl
+  )
+
 import HaskellFlows.Data.PropertyStore (Store, save)
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
@@ -122,7 +131,16 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
           -- reset the interactive context and nothing would be
           -- in scope for compileExpr.
           mRes <- timeout quickCheckTimeoutMicros $
-            try $ withGhcSession ghcSess (evalIOString stmt)
+            try $ withGhcSession ghcSess $ do
+              -- loadForTarget sets the context to the loaded
+              -- module graph, but 'Test.QuickCheck' is an external
+              -- package (via -package-id QckChck-…) — not in the
+              -- graph, so it isn't imported. Add it explicitly so
+              -- compileExpr can resolve 'Test.QuickCheck.output' /
+              -- 'Test.QuickCheck.quickCheckWithResult' /
+              -- 'Test.QuickCheck.stdArgs' in the statement we build.
+              ensureTestQuickCheckImported
+              evalIOString stmt
           case mRes of
             Nothing -> pure (renderResult (QcException prop "timeout: property exceeded 30s budget"))
             Just (Left (ex :: SomeException)) ->
@@ -134,6 +152,16 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
                   save store prop md
                 _            -> pure ()
               pure (renderResult qr)
+
+-- | Add @import qualified Test.QuickCheck@ (or a plain @import
+-- Test.QuickCheck@) to the session's interactive context, on top
+-- of whatever 'setContext' the prior 'loadForTarget' installed.
+-- Idempotent — calling it twice is harmless.
+ensureTestQuickCheckImported :: Ghc ()
+ensureTestQuickCheckImported = do
+  ctx <- getContext
+  let qcImport = IIDecl (simpleImportDecl (mkModuleName "Test.QuickCheck"))
+  setContext (ctx <> [qcImport])
 
 -- | The exact expression we feed to 'evalIOString'. Wraps the user
 -- property with 'quickCheckWithResult' so we get back a 'Result'

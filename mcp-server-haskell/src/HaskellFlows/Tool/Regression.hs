@@ -26,6 +26,14 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import System.Timeout (timeout)
 
+import GHC
+  ( InteractiveImport (IIDecl)
+  , getContext
+  , mkModuleName
+  , setContext
+  , simpleImportDecl
+  )
+
 import HaskellFlows.Data.PropertyStore
   ( Store
   , StoredProperty (..)
@@ -141,7 +149,11 @@ runOne ghcSess sp = do
                 <> "(Test.QuickCheck.stdArgs { Test.QuickCheck.chatty = False }) "
                 <> "(" <> T.unpack safe <> "))"
           mRes <- timeout replayTimeoutMicros $
-            try $ withGhcSession ghcSess (evalIOString stmt)
+            try $ withGhcSession ghcSess $ do
+              ctx <- getContext
+              setContext (ctx
+                <> [IIDecl (simpleImportDecl (mkModuleName "Test.QuickCheck"))])
+              evalIOString stmt
           case mRes of
             Nothing                      -> pure (QcException expr "timeout")
             Just (Left (ex :: SomeException)) ->

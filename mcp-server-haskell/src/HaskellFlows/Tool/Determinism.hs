@@ -20,6 +20,14 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import System.Timeout (timeout)
 
+import GHC
+  ( InteractiveImport (IIDecl)
+  , getContext
+  , mkModuleName
+  , setContext
+  , simpleImportDecl
+  )
+
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
   , LoadFlavour (..)
@@ -105,7 +113,14 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
             <> "(Test.QuickCheck.stdArgs { Test.QuickCheck.chatty = False }) "
             <> "(" <> T.unpack safe <> "))"
       mRes <- timeout runTimeoutMicros $
-        try $ withGhcSession sess (evalIOString stmt)
+        try $ withGhcSession sess $ do
+          -- Ensure Test.QuickCheck is in the interactive import
+          -- context; loadForTarget doesn't import external
+          -- packages, only local module-graph entries.
+          ctx <- getContext
+          setContext (ctx
+            <> [IIDecl (simpleImportDecl (mkModuleName "Test.QuickCheck"))])
+          evalIOString stmt
       case mRes of
         Nothing -> pure (QcException origExpr "timeout")
         Just (Left (ex :: SomeException)) ->
