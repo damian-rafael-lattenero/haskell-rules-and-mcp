@@ -92,6 +92,7 @@ library
                       HaskellFlows.Tool.Regression
                       HaskellFlows.Tool.RemoveModules
                       HaskellFlows.Tool.Suggest
+                      HaskellFlows.Tool.SwitchProject
                       HaskellFlows.Tool.ToolchainStatus
                       HaskellFlows.Tool.ToolchainWarmup
                       HaskellFlows.Tool.Type
@@ -205,6 +206,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowRefactorOutOfScope
                       Scenarios.FlowRegressionScopeFix
                       Scenarios.FlowSessionRobustness
+                      Scenarios.FlowSwitchProject
                       Scenarios.FlowTypeBreakage
                       Scenarios.FlowScopeMgmt
                       Scenarios.FlowToolchain

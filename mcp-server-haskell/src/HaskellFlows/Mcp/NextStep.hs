@@ -401,6 +401,17 @@ dispatch name payload = case name of
   "hoogle_search" -> Nothing
   "ghci_coverage" -> Nothing
 
+  -- Just switched projects → the next useful action is almost
+  -- always a status check: 'ghci_workflow(status)' reports the
+  -- new project's phase, the 37 tool registry, and whether the
+  -- on-disk binary is newer than what's running — the canonical
+  -- orient-yourself step after a context change.
+  "ghci_switch_project" -> Just (simple "ghci_workflow"
+    "Project root swapped. Ask 'ghci_workflow(status)' to \
+    \orient yourself in the new project: phase classifier, \
+    \tools active, and staleness check against the new .cabal."
+    (Just (object [ "action" .= ("status" :: Text) ])))
+
   _ -> Nothing
 
 -- | 'ghci_gate' payload carries per-step status. On green, push is

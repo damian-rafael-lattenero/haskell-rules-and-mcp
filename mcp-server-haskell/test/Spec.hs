@@ -147,7 +147,8 @@ import HaskellFlows.Tool.Hoogle
   )
 import Control.Concurrent (forkIO)
 import Control.Monad (when)
-import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Control.Concurrent.MVar
+  ( newEmptyMVar, putMVar, takeMVar, newMVar, readMVar )
 import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 import qualified HaskellFlows.Types
@@ -163,6 +164,12 @@ import HaskellFlows.Ghc.ApiSession
   , startGhcSession
   , withGhcSession
   )
+import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
+import HaskellFlows.Tool.SwitchProject
+  ( ValidationError (..)
+  , validateSwitchTarget
+  )
+import Data.IORef (newIORef, readIORef)
 import HaskellFlows.Ghc.CabalBootstrap
   ( StanzaFlags (..)
   , Target (..)
@@ -396,6 +403,12 @@ main = do
       , test "ghc-api: loadForTarget compiles library module via stanza flags" testLoadForTargetLibrary
       , test "ghc-api: deferred hole warnings are captured by logger hook" testHoleDiagnosticCapture
       , test "ghc-api: loadForTarget after deps-add resolves -package-id"   testLoadAfterDepsAdd
+      , test "switch_project: rejects relative path"             testSwitchRejectsRelative
+      , test "switch_project: rejects missing directory"         testSwitchRejectsMissing
+      , test "switch_project: rejects dir without .cabal"        testSwitchRejectsNoCabal
+      , test "switch_project: accepts a valid cabal project"     testSwitchAcceptsValid
+      , test "switch_project: handle swaps project + kills session"
+                                                                 testSwitchHandleSwaps
       ]
   if and results then exitSuccess else exitFailure
 
@@ -3230,6 +3243,114 @@ testLoadAfterDepsAdd = do
         mapM_ (putStrLn . ("    " <>) . T.unpack . geMessage) diags
       removePathForcibly dir
       pure (ok && not satisfy)
+
+--------------------------------------------------------------------------------
+-- ghci_switch_project tests
+--------------------------------------------------------------------------------
+
+-- | Build a tempdir-scoped project with the given name and .cabal
+-- file. Returns the absolute path. Caller owns cleanup.
+scaffoldTmpProject :: String -> IO FilePath
+scaffoldTmpProject tag = do
+  base <- getTemporaryDirectory
+  ts   <- getPOSIXTime
+  let dir = base </> ("sp-" <> tag <> "-"
+                       <> show (floor (ts * 1000000) :: Int))
+  createDirectoryIfMissing True dir
+  TIO.writeFile (dir </> (tag <> ".cabal")) $ T.unlines
+    [ "cabal-version: 2.4"
+    , "name: " <> T.pack tag
+    , "version: 0.1.0.0"
+    , ""
+    , "library"
+    , "  build-depends: base"
+    , "  default-language: Haskell2010"
+    ]
+  pure dir
+
+-- | Relative paths must be rejected before touching the filesystem —
+-- 'mkProjectDir' is the guard; 'validateSwitchTarget' surfaces it as
+-- 'VEPathError'.
+testSwitchRejectsRelative :: IO Bool
+testSwitchRejectsRelative = do
+  res <- validateSwitchTarget "relative/path"
+  pure $ case res of
+    Left (VEPathError (PathNotAbsolute _)) -> True
+    _                                      -> False
+
+-- | Absolute but non-existent path → 'VENotADirectory'. Using a
+-- time-stamped path guarantees we don't collide with a real dir on
+-- the test machine.
+testSwitchRejectsMissing :: IO Bool
+testSwitchRejectsMissing = do
+  ts <- getPOSIXTime
+  let bogus = "/tmp/definitely-missing-"
+                <> show (floor (ts * 1000000) :: Int)
+  res <- validateSwitchTarget (T.pack bogus)
+  pure $ case res of
+    Left (VENotADirectory _) -> True
+    _                        -> False
+
+-- | Real dir with no .cabal file → 'VENoCabalFile'. Scaffolds a
+-- bare tempdir, runs the validator, cleans up regardless.
+testSwitchRejectsNoCabal :: IO Bool
+testSwitchRejectsNoCabal = do
+  base <- getTemporaryDirectory
+  ts   <- getPOSIXTime
+  let dir = base </> ("no-cabal-" <> show (floor (ts * 1000000) :: Int))
+  createDirectoryIfMissing True dir
+  res <- validateSwitchTarget (T.pack dir)
+  removePathForcibly dir
+  pure $ case res of
+    Left (VENoCabalFile _) -> True
+    _                      -> False
+
+-- | Happy path: a real cabal project returns 'Right ProjectDir'
+-- pointing at the scaffolded dir.
+testSwitchAcceptsValid :: IO Bool
+testSwitchAcceptsValid = do
+  dir <- scaffoldTmpProject "sp-happy"
+  res <- validateSwitchTarget (T.pack dir)
+  removePathForcibly dir
+  pure $ case res of
+    Right pd -> HaskellFlows.Types.unProjectDir pd == dir
+    _        -> False
+
+-- | End-to-end contract of the 'handle' function: after it returns
+-- with success, the project-dir IORef points at the new path AND
+-- the session MVar is emptied (Nothing) so the next
+-- getOrStartGhcSession boots fresh.
+testSwitchHandleSwaps :: IO Bool
+testSwitchHandleSwaps = do
+  dirA <- scaffoldTmpProject "from"
+  dirB <- scaffoldTmpProject "to"
+  case (mkProjectDir dirA, mkProjectDir dirB) of
+    (Right pdA, Right pdB) -> do
+      pdRef    <- newIORef pdA
+      sessRef  <- newMVar Nothing
+      -- Prime the session so we can observe the kill semantics:
+      -- handle must wipe whatever Session was there.
+      primed   <- startGhcSession pdA
+      _        <- readMVar sessRef
+      sessRef' <- newMVar (Just primed)
+      let args = A.object [ "path" A..= T.pack dirB ]
+      result  <- SwitchProject.handle pdRef sessRef' args
+      newPd   <- readIORef pdRef
+      mSess   <- readMVar sessRef'
+      removePathForcibly dirA
+      removePathForcibly dirB
+      pure
+        ( not (trIsError result)
+            && HaskellFlows.Types.unProjectDir newPd ==
+                 HaskellFlows.Types.unProjectDir pdB
+            && isNothing mSess
+        )
+    _ -> do
+      removePathForcibly dirA
+      removePathForcibly dirB
+      pure False
+
+--------------------------------------------------------------------------------
 
 -- | Wave-1 gate: drive cabal via the shim against a real project
 -- and verify we get back a non-empty flag set that includes the

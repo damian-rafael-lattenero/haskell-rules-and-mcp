@@ -62,6 +62,7 @@ import qualified Scenarios.FlowRefactorAdversarial as FlowRAdv
 import qualified Scenarios.FlowRefactorOutOfScope as FlowROS
 import qualified Scenarios.FlowRegressionScopeFix as FlowRSF
 import qualified Scenarios.FlowSessionRobustness as FlowSR
+import qualified Scenarios.FlowSwitchProject    as FlowSwP
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
 import qualified Scenarios.FlowToolchain        as FlowTC
@@ -155,6 +156,8 @@ scenarios =
     , True, FlowXV.runFlow )
   , ( "Flow: Regression scope fix (module resolve + scope restore)"
     , False, FlowRSF.runFlow )
+  , ( "Flow: Switch project (runtime projectDir swap + isolation)"
+    , False, FlowSwP.runFlow )
   ]
 
 main :: IO ()

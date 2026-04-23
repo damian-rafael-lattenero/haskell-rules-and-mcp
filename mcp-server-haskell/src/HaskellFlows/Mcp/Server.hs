@@ -95,6 +95,7 @@ import qualified HaskellFlows.Tool.Refactor        as RefactorTool
 import qualified HaskellFlows.Tool.Regression      as RegressionTool
 import qualified HaskellFlows.Tool.RemoveModules   as RemoveModulesTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
+import qualified HaskellFlows.Tool.SwitchProject   as SwitchProjectTool
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
 import qualified HaskellFlows.Tool.Type            as TypeTool
 import qualified HaskellFlows.Tool.ValidateCabal   as ValidateCabalTool
@@ -417,6 +418,16 @@ dispatchTool srv call = case tcName call of
   "ghci_bootstrap" -> do
     pd <- readIORef (srvProjectDir srv)
     BootstrapTool.handle pd allToolDescriptors (tcArguments call)
+  "ghci_switch_project" ->
+    -- SwitchProject is the one tool that mutates BOTH the
+    -- project-dir ref AND the session MVar — it takes those
+    -- handles directly instead of going through
+    -- getOrStartGhcSession, which would boot a fresh session
+    -- against the OLD path right before we tear it down.
+    SwitchProjectTool.handle
+      (srvProjectDir srv)
+      (srvGhcSession srv)
+      (tcArguments call)
   other ->
     pure ToolResult
       { trContent = [ TextContent ("Unknown tool: " <> other) ]
@@ -458,6 +469,7 @@ allToolDescriptors =
   , ValidateCabalTool.descriptor
   , CheckProjectTool.descriptor
   , SuggestTool.descriptor
+  , SwitchProjectTool.descriptor
   , AddImportTool.descriptor
   , AddModulesTool.descriptor
   , ApplyExportsTool.descriptor
