@@ -22,14 +22,25 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
-import GHC (Ghc)
+import GHC
+  ( Ghc
+  , InteractiveImport (IIDecl)
+  , getContext
+  , mkModuleName
+  , setContext
+  , simpleImportDecl
+  )
 import GHC.Runtime.Eval (compileExpr)
 import Unsafe.Coerce (unsafeCoerce)
 
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
+  , LoadFlavour (..)
   , evalIOString
+  , firstLibraryOrTestSuite
+  , loadForTarget
   , withGhcSession
+  , withStanzaFlags
   )
 import HaskellFlows.Ghc.Sanitize
   ( CommandError (..)
@@ -82,15 +93,39 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
     case sanitizeExpression expr of
       Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
       Right safe -> do
-        -- Fast path: show-wrap + compileExpr + unsafeCoerce to String.
-        eFast <- try (withGhcSession ghcSess (evalShowPure safe))
+        -- Prime the session via 'loadForTarget' so the eval runs
+        -- with: cabal stanza flags applied (exposes base / ghc-prim
+        -- / user deps), targets set, module graph loaded, and the
+        -- interactive context populated with 'Prelude' plus every
+        -- home module. Without this priming, raw 'withGhcSession'
+        -- hit either "no unit id matching 'ghc-prim'" (stanza flags
+        -- never applied) or "Variable not in scope: double" (user
+        -- module never loaded) depending on the scenario. One call
+        -- to loadForTarget covers both.
+        --
+        -- loadForTarget caches the resulting HscEnv in 'gsEnvRef',
+        -- so the subsequent 'withGhcSession' restores it verbatim
+        -- via 'setSession' — no redundant re-compile.
+        tgt <- firstLibraryOrTestSuite ghcSess
+        _   <- try @SomeException (loadForTarget ghcSess tgt Strict)
+        -- Wrap both eval paths in 'withStanzaFlags' as well as
+        -- 'withGhcSession'. If 'loadForTarget' succeeded the cached
+        -- env already has the target's flags and withStanzaFlags is
+        -- a no-op skip; if loadForTarget failed mid-way (typical for
+        -- scenarios that probe broken loads — non-UTF-8, ANSI-error
+        -- source) the env is empty and withStanzaFlags re-applies,
+        -- ensuring '-this-unit-id' is set before setContext /
+        -- compileExpr run. Without this wrap, GHC panics with
+        -- "findImportedModule: no home-unit".
+        eFast <- try (withGhcSession ghcSess $
+                        withStanzaFlags ghcSess tgt (evalShowPure safe))
         case eFast :: Either SomeException (Maybe Text) of
           Right (Just out) -> pure (renderOk (truncateOutput out))
           _ -> do
-            -- Second path: treat as an IO String statement. Works for
-            -- expressions like `getLine`, `fmap show (readFile "…")`,
-            -- and anything returning `IO String` already.
-            eIO <- try (withGhcSession ghcSess (evalIOString (T.unpack safe)))
+            eIO <- try (withGhcSession ghcSess $
+                          withStanzaFlags ghcSess tgt $ do
+                            augmentEvalContext
+                            evalIOString (T.unpack safe))
             case eIO :: Either SomeException String of
               Right out ->
                 pure (renderOk (truncateOutput (T.pack out)))
@@ -102,10 +137,37 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
 -- expression) so the caller can fall through to 'evalIOString'.
 evalShowPure :: Text -> Ghc (Maybe Text)
 evalShowPure expr = do
+  augmentEvalContext
   let wrapped = "Prelude.show (" <> T.unpack expr <> ")"
   hv <- compileExpr wrapped
   let s = unsafeCoerce hv :: String
   length s `seq` pure (Just (T.pack s))
+
+-- | Augment the interactive context with the "convenience" imports
+-- that subprocess GHCi would have had visible by default. 'setContext'
+-- established by 'loadForTarget' holds Prelude plus the home modules;
+-- eval users commonly reach for qualified IO (@System.IO.writeFile@,
+-- @System.IO.readFile@) — expose those by appending 'System.IO' +
+-- IO-adjacent modules to the import set. Idempotent: 'setContext'
+-- itself dedupes on the underlying ModuleName — duplicate imports
+-- don't accumulate across repeated calls.
+augmentEvalContext :: Ghc ()
+augmentEvalContext = do
+  existing <- getContext
+  -- Prelude first: when we arrive here after a 'withStanzaFlags'
+  -- that had to re-apply (because the previous load failed and
+  -- the env cache was empty), the interactive context is fresh —
+  -- zero imports — and 'compileExpr "Prelude.show ..."' fails
+  -- with "No module named 'Prelude' is imported".
+  let extras =
+        [ "Prelude"
+        , "System.IO"
+        , "Data.List"
+        , "Control.Monad"
+        ]
+      newImports =
+        [ IIDecl (simpleImportDecl (mkModuleName m)) | m <- extras ]
+  setContext (existing <> newImports)
 
 --------------------------------------------------------------------------------
 -- response shaping

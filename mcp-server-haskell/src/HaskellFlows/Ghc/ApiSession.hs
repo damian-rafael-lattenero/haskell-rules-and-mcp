@@ -138,6 +138,12 @@ data GhcSession = GhcSession
     -- 'cabal repl --with-compiler=<shim>'. 'Map.empty' until
     -- 'ensureStanzaFlags' runs. Consumers use 'withStanzaFlags'
     -- to apply the flags for a target before load / eval.
+  , gsAppliedTarget :: !(IORef (Maybe Bootstrap.Target))
+    -- ^ Which target's stanza flags are currently live on the
+    -- cached HscEnv. 'Nothing' means no stanza apply has happened
+    -- yet (or the last apply was invalidated). 'withStanzaFlags'
+    -- consults this to skip the expensive re-apply when the
+    -- cached env already matches the requested target.
   }
 
 -- | Bootstrap a 'GhcSession' for the given project. Cheap — HscEnv
@@ -148,13 +154,15 @@ startGhcSession pd = do
   lock        <- newMVar ()
   loadedRef   <- newIORef False
   stanzaRef   <- newIORef Map.empty
+  appliedRef  <- newIORef Nothing
   pure GhcSession
-    { gsEnvRef      = ref
-    , gsLibdir      = libdir
-    , gsLock        = lock
-    , gsProject     = pd
-    , gsLoadedRef   = loadedRef
-    , gsStanzaFlags = stanzaRef
+    { gsEnvRef        = ref
+    , gsLibdir        = libdir
+    , gsLock          = lock
+    , gsProject       = pd
+    , gsLoadedRef     = loadedRef
+    , gsStanzaFlags   = stanzaRef
+    , gsAppliedTarget = appliedRef
     }
 
 killGhcSession :: GhcSession -> IO ()
@@ -162,6 +170,7 @@ killGhcSession sess = do
   _ <- tryTakeMVar (gsLock sess)
   writeIORef (gsEnvRef sess) Nothing
   writeIORef (gsLoadedRef sess) False
+  writeIORef (gsAppliedTarget sess) Nothing
 
 -- | Cheap: next 'withGhcSession' will re-run the filesystem scan
 -- and @load LoadAllTargets@ but keeps the cached stanza flags and
@@ -186,6 +195,8 @@ invalidateStanzaFlags sess = do
   writeIORef (gsLoadedRef sess) False
   writeIORef (gsStanzaFlags sess) Map.empty
   writeIORef (gsEnvRef sess) Nothing
+  writeIORef (gsAppliedTarget sess) Nothing
+
 
 withGhcSession :: GhcSession -> Ghc a -> IO a
 withGhcSession sess act = withMVar (gsLock sess) $ \_ ->
@@ -198,20 +209,20 @@ withGhcSession sess act = withMVar (gsLock sess) $ \_ ->
   withCurrentDirectory (unProjectDir (gsProject sess)) $
     runGhc (Just (gsLibdir sess)) $ do
     mEnv <- liftIO (readIORef (gsEnvRef sess))
-    -- When the session has no cached HscEnv, we rely on the state
-    -- 'runGhc' just initialised from libdir. No redundant
-    -- 'setSessionDynFlags dflags' here — that would force an
-    -- extra 'initPackages' against the default (user + global)
-    -- package-db set, and the resulting UnitState then "sticks":
-    -- when 'withStanzaFlags' later applies the cabal-captured
-    -- argv (adding new -package-db paths + '-hide-all-packages
-    -- -package-id X'), GHC's second initPackages blends the fresh
-    -- dbs with the stale default-hash unit lookup and reports
-    -- "cannot satisfy -package-id QckChck-..." even though the
-    -- package is in the newly-provided db. Letting 'runGhc' own
-    -- the one-and-only initial init keeps the 'withStanzaFlags'
-    -- init as the sole source of truth for package resolution.
     Data.Foldable.for_ mEnv setSession
+    -- No 'setSessionDynFlags dflags' baseline here. runGhc has
+    -- already initialised the DynFlags from libdir. A redundant
+    -- set forces a second initPackages against the default user+
+    -- global dbs, and the resulting UnitState gets stuck: when
+    -- 'withStanzaFlags' later applies the cabal argv (new -package-
+    -- db + '-hide-all-packages -package-id X'), GHC's next
+    -- initPackages blends the fresh dbs with the stale default-
+    -- hash unit lookup and reports "cannot satisfy -package-id
+    -- QckChck-..." even though the package is in the newly-provided
+    -- db. Consumers that need cabal-aware resolution reach it via
+    -- 'withStanzaFlags'; consumers that don't (raw 'ghci_eval')
+    -- stay on the runGhc baseline where base / ghc-prim are
+    -- visible, which is all a Prelude-only eval requires.
     loaded <- liftIO (readIORef (gsLoadedRef sess))
     unless loaded $ do
       autoLoadProject (gsProject sess)
@@ -491,8 +502,25 @@ ensureStanzaFlags sess = do
 withStanzaFlags :: GhcSession -> Bootstrap.Target -> Ghc a -> Ghc a
 withStanzaFlags sess tgt act = do
   stanzas <- liftIO (readIORef (gsStanzaFlags sess))
+  applied <- liftIO (readIORef (gsAppliedTarget sess))
+  cached  <- liftIO (readIORef (gsEnvRef sess))
   case Map.lookup tgt stanzas of
     Nothing -> act
+    -- Skip re-apply only when BOTH invariants hold: the cached
+    -- HscEnv is present (so 'setSession' restored a real state)
+    -- AND the last applied target matches the requested one (so
+    -- we know the restored state already carries the right
+    -- stanza flags). Tracking applied-target separately from
+    -- env-presence avoids two regressions:
+    --   * "cannot satisfy -package-id QckChck-..." after a
+    --     'ghci_deps add' + reload, because a second
+    --     setSessionDynFlags with the same package set corrupts
+    --     GHC's UnitState (Arbitrary fix).
+    --   * "findImportedModule: no home-unit" panic when a
+    --     partial/failed load left the env invalidated but the
+    --     apply flag stale. We must re-apply in that case so
+    --     setContext / compileExpr have a home-unit.
+    Just _ | applied == Just tgt, Just _ <- cached -> act
     Just sf -> do
       dflags <- getSessionDynFlags
       let root    = unProjectDir (gsProject sess)
@@ -511,16 +539,13 @@ withStanzaFlags sess tgt act = do
           cleaned = map (absolutizePathArg root)
                   . stripPositionalModuleNames
                   $ dedupHideAllPackages rawArgs
-          -- Reset package-related fields on the baseline dflags
+          -- Zero the package-related fields on the baseline dflags
           -- so the captured argv is the sole source of truth for
-          -- package resolution. Without this reset, a previous
-          -- withStanzaFlags call (or the default libdir init) leaves
-          -- 'packageDBFlags' / 'packageFlags' / 'packageEnv' populated,
-          -- which under 'parseDynamicFlagsCmdLine' accumulate — a
-          -- 'ghci_deps add' + reload then resolves package-ids
-          -- against the OLD merged view and GHC reports
-          -- "cannot satisfy -package-id X" even though X is available
-          -- in the newly-provided package-db set.
+          -- package resolution. Without this reset any residual
+          -- packageDBFlags / packageFlags / packageEnv on dflags
+          -- (from the libdir boot or a prior apply) blend with the
+          -- cabal-provided flags under 'parseDynamicFlagsCmdLine'
+          -- and trigger "cannot satisfy -package-id X" regressions.
           dflagsReset = dflags
             { packageDBFlags = []
             , packageFlags   = []
@@ -529,6 +554,7 @@ withStanzaFlags sess tgt act = do
       (dflags', _leftover, _warnings) <-
         parseDynamicFlagsCmdLine dflagsReset (map noLoc cleaned)
       _ <- setSessionDynFlags dflags'
+      liftIO (writeIORef (gsAppliedTarget sess) (Just tgt))
       act
 
 -- | Keep only the first occurrence of "-hide-all-packages". Any

@@ -21,6 +21,7 @@ module HaskellFlows.Tool.QuickCheck
   , isSimpleIdent
   ) where
 
+import Control.Applicative ((<|>))
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
@@ -35,8 +36,18 @@ import qualified System.Process as Proc
 import System.Exit (ExitCode (..))
 
 import HaskellFlows.Data.PropertyStore (Store, save)
-import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
+import HaskellFlows.Ghc.ApiSession
+  ( GhcSession
+  , gsProject
+  , withGhcSession
+  )
 import HaskellFlows.Types (ProjectDir, unProjectDir)
+
+import qualified Data.List.NonEmpty as NE
+import GHC (parseName)
+import GHC.Data.FastString (unpackFS)
+import GHC.Types.Name (nameSrcSpan)
+import GHC.Types.SrcLoc (RealSrcSpan, SrcSpan (..), srcSpanFile)
 import HaskellFlows.Ghc.Sanitize
   ( CommandError (..)
   , sanitizeExpression
@@ -105,24 +116,22 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Right (QuickCheckArgs prop md) -> case sanitizeExpression prop of
     Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
     Right safe -> do
-      -- Wave-6 runtime approach: shell out to `cabal v2-repl`
-      -- instead of driving the GHC API in-process. The GHC-API
-      -- 'setSessionDynFlags' + stanza-flag replay path has been
-      -- observed to mis-resolve '-package-id QckChck-…' even
-      -- when the package-db contains the exact unit-id (see
-      -- FlowArbitrary step 5 and sibling regressions in
-      -- FlowPropertyLifecycle / FlowMutation). cabal repl, on
-      -- the other hand, speaks its own package resolution flow
-      -- natively and works every time.
+      -- Resolve the property's defining module via the GHC API.
+      -- If the property is a bare identifier we can look up
+      -- 'parseName + nameSrcSpan' and the resulting file path
+      -- becomes authoritative; the caller hint ('md') is treated
+      -- as a fallback for lambda/expression properties where
+      -- parseName would legitimately fail.
       --
-      -- Tradeoff: ~3 s boot per QC call vs ~40 ms in-process.
-      -- For a test-driven property loop that's acceptable; in
-      -- exchange we recover full correctness. The in-process
-      -- path stays authoritative for compile / type / info /
-      -- complete / goto / doc (Phase-2), eval pure expressions
-      -- (Phase-4), and hole / load / refactor (Wave 2/4).
+      -- This restores the pre-Wave-5 behaviour where
+      -- 'ghci_quickcheck prop_x module="src/Foo.hs"' — a common
+      -- caller mistake when the property actually lives in the
+      -- test suite — still persisted test/Spec.hs in the
+      -- regression store, so replay loaded the right scope.
+      resolved <- resolvePropertyModule ghcSess safe
+      let loadHint = resolved <|> md
       mRes <- timeout quickCheckTimeoutMicros $
-        try $ runQuickCheckViaCabalRepl (gsProject ghcSess) md safe
+        try $ runQuickCheckViaCabalRepl (gsProject ghcSess) loadHint safe
       case mRes of
         Nothing ->
           pure (renderResult
@@ -132,9 +141,34 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
         Just (Right out) -> do
           let qr = parseQuickCheckOutput prop out
           case qr of
-            QcPassed _ _ -> save store prop md
+            QcPassed _ _ -> save store prop loadHint
             _            -> pure ()
           pure (renderResult qr)
+
+-- | Resolve a property name to the source file it was defined in
+-- by asking the GHC API. Returns 'Nothing' when the input isn't a
+-- simple identifier, when parseName can't resolve it in the
+-- current interactive scope, or when the resulting Name has no
+-- RealSrcSpan (e.g. a name from a pre-built package). Callers then
+-- fall back to the user-provided hint.
+resolvePropertyModule :: GhcSession -> Text -> IO (Maybe Text)
+resolvePropertyModule ghcSess nm
+  | not (isSimpleIdent nm) = pure Nothing
+  | otherwise = do
+      eRes <- try @SomeException $ withGhcSession ghcSess $ do
+        names <- parseName (T.unpack nm)
+        case NE.toList names of
+          []     -> pure Nothing
+          (n:_)  -> pure (fileFromSpan (nameSrcSpan n))
+      pure $ case eRes of
+        Left _           -> Nothing
+        Right (Just fp)  -> Just (T.pack fp)
+        Right Nothing    -> Nothing
+  where
+    fileFromSpan :: SrcSpan -> Maybe FilePath
+    fileFromSpan = \case
+      RealSrcSpan s _ -> Just (unpackFS (srcSpanFile (s :: RealSrcSpan)))
+      UnhelpfulSpan _ -> Nothing
 
 -- | Run a QuickCheck property via @cabal v2-repl@ on the project's
 -- test-suite target. Returns the raw @Result.output@ text so the

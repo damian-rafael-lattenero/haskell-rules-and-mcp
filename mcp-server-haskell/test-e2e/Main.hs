@@ -259,7 +259,12 @@ main = do
       putStrLn ("  " <> show passed <> " / " <> show total
                  <> " checks passed in "
                  <> formatSecs secs <> " s")
-      mapM_ (\c -> putStrLn ("  · FAIL " <> takeLine (show (Assert.cName c))))
+      mapM_ (\c -> do
+                let detail = T.unpack (Assert.cDetail c)
+                    name   = takeLine (show (Assert.cName c))
+                putStrLn ("  · FAIL " <> name)
+                when (not (null detail) && "framework error" `List.isInfixOf` name) $
+                  putStrLn ("       → " <> takeLine detail))
             fails
       putStrLn "════════════════════════════════════════════════════════"
       if Assert.allPassed checks then exitSuccess else exitFailure
@@ -302,7 +307,10 @@ runScenario binary (label, _slow, go) = do
              Client.close
              (`go` dir)
     case res of
-      Left (e :: SomeException) ->
+      Left (e :: SomeException) -> do
+        -- Dump the exception inline so batched runs don't lose the
+        -- root cause to the summary's name-only listing.
+        putStrLn ("  [fx] framework error: " <> show e)
         pure [ Assert.Check
                  { Assert.cName   = label <> " · framework error"
                  , Assert.cOk     = False
