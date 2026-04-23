@@ -95,6 +95,7 @@ import qualified HaskellFlows.Tool.Refactor        as RefactorTool
 import qualified HaskellFlows.Tool.Regression      as RegressionTool
 import qualified HaskellFlows.Tool.RemoveModules   as RemoveModulesTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
+import qualified HaskellFlows.Mcp.PathBootstrap    as PathBootstrap
 import qualified HaskellFlows.Tool.SwitchProject   as SwitchProjectTool
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
 import qualified HaskellFlows.Tool.Type            as TypeTool
@@ -138,6 +139,14 @@ data Server = Server
 -- stat to detect a rebuild the host hasn't relaunched against.
 defaultServer :: IO Server
 defaultServer = do
+  -- BUG-04 fix: augment PATH before any subprocess-invoking tool
+  -- touches the environment. Hosts launched from macOS Dock /
+  -- Finder pass a minimal PATH that omits ~/.ghcup/bin and
+  -- ~/.cabal/bin; without this, 'ghci_lint', 'ghci_quickcheck',
+  -- 'ghci_regression', 'ghci_gate', 'ghci_coverage',
+  -- 'ghci_validate_cabal' all fail with
+  -- "posix_spawnp: does not exist".
+  _ <- PathBootstrap.augmentPath
   envVal <- lookupEnv "HASKELL_PROJECT_DIR"
   cwd    <- getCurrentDirectory
   let raw = fromMaybe cwd envVal

@@ -119,6 +119,7 @@ allRules =
   , ruleFunctor
   , ruleEvaluatorPreservation
   , ruleConstantFoldingSoundness
+  , rulePrinterParserRoundtrip
   ]
 
 -- | @f :: a -> a@ ⇒ check @f (f x) == f x@.
@@ -541,6 +542,85 @@ mkEvalLaw transformName interp conf =
        , sConfidence = conf
        , sCategory   = "evaluator"
        }
+
+-- | Printer / parser roundtrip law. When a focal fn has shape
+-- @A -> B@ (A ≠ B) and a sibling has shape @B -> Maybe A@
+-- (partial inverse) or @B -> A@ (total inverse), propose:
+--
+--   parser (printer x) == Just x     (partial inverse)
+--   parser (printer x) == x          (total inverse)
+--
+-- This is the canonical roundtrip law for pretty-printer + parser
+-- pairs. Without this rule, 'ghci_suggest' returned 0 candidates
+-- for @pretty :: Expr -> String@ + @parseExpr :: String -> Maybe
+-- Expr@ because existing rules only match same-type or
+-- container-shape transforms. Dogfood finding BUG-PLUS-06.
+--
+-- Confidence is High because a matched printer/parser pair that
+-- DOESN'T roundtrip is almost always a bug — the shape implies
+-- intent.
+rulePrinterParserRoundtrip :: Rule
+rulePrinterParserRoundtrip = Rule
+  { rId = "printer-parser-roundtrip"
+  , rMatches = \ctx ->
+      let nm  = rcName ctx
+          sig = rcSig ctx
+      in case (psArgs sig, psReturn sig) of
+           ([srcTy], tgtTy) | srcTy /= tgtTy ->
+             [ mkRoundtripLaw nm srcTy sibName needsJust
+             | (sibName, needsJust) <-
+                 findInverseSiblings srcTy tgtTy (rcSiblings ctx)
+             ]
+           _ -> []
+  }
+
+-- | Collect siblings that serve as inverses of a focal
+-- @A -> B@ function. An inverse either returns @A@ directly
+-- (@g :: B -> A@) or wraps it in Maybe (@g :: B -> Maybe A@).
+-- The Bool in the result is True when the sibling returns Maybe
+-- (so the property asserts @== Just x@ rather than @== x@).
+findInverseSiblings
+  :: SigType           -- source type (focal's input)
+  -> SigType           -- target type (focal's output)
+  -> [(Text, ParsedSig)]
+  -> [(Text, Bool)]
+findInverseSiblings src tgt sibs =
+  [ (name, needsJust)
+  | (name, sig) <- sibs
+  , Just needsJust <- [classifyInverse src tgt sig]
+  ]
+
+classifyInverse :: SigType -> SigType -> ParsedSig -> Maybe Bool
+classifyInverse src tgt sig = case (psArgs sig, psReturn sig) of
+  ([sibArg], sibRet)
+    | sibArg == tgt && sibRet == src      -> Just False
+    | sibArg == tgt, Just inner <- stripMaybe sibRet, inner == src
+                                          -> Just True
+  _                                       -> Nothing
+  where
+    stripMaybe (TyApp (TyCon "Maybe") [t]) = Just t
+    stripMaybe _                           = Nothing
+
+mkRoundtripLaw :: Text -> SigType -> Text -> Bool -> Suggestion
+mkRoundtripLaw printer srcTy parser needsJust =
+  Suggestion
+    { sLaw        = "Printer/parser roundtrip"
+    , sProperty   =
+        "\\x -> " <> parser <> " (" <> printer <> " x) == "
+          <> (if needsJust then "Just x" else "x")
+    , sRationale  =
+        "Sibling `" <> parser <> "` has the inverse shape of `"
+          <> printer <> "`: parser's input type matches printer's \
+          \output, parser's output recovers the printer's input"
+          <> (if needsJust then " (wrapped in Maybe)" else "")
+          <> ". Any roundtrip through a printer/parser pair must \
+          \preserve the source — a counterexample points at a \
+          \real drift between the two."
+    , sConfidence = High
+    , sCategory   = "roundtrip"
+    }
+  where
+    _ = srcTy  -- retained in signature for clarity; unused in output today
 
 --------------------------------------------------------------------------------
 -- tiny formatter

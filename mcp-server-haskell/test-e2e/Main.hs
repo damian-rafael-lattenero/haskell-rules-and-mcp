@@ -63,6 +63,7 @@ import qualified Scenarios.FlowRefactorOutOfScope as FlowROS
 import qualified Scenarios.FlowRegressionScopeFix as FlowRSF
 import qualified Scenarios.FlowSessionRobustness as FlowSR
 import qualified Scenarios.FlowSwitchProject    as FlowSwP
+import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
 import qualified Scenarios.FlowToolchain        as FlowTC
@@ -158,6 +159,8 @@ scenarios =
     , False, FlowRSF.runFlow )
   , ( "Flow: Switch project (runtime projectDir swap + isolation)"
     , False, FlowSwP.runFlow )
+  , ( "Flow: Dogfood replay (7 MCP fixes round-tripped through one session)"
+    , True, FlowDFR.runFlow )
   ]
 
 main :: IO ()

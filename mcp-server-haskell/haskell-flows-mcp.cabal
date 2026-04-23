@@ -40,6 +40,7 @@ library
                       HaskellFlows.Types
                       HaskellFlows.Mcp.Guidance
                       HaskellFlows.Mcp.NextStep
+                      HaskellFlows.Mcp.PathBootstrap
                       HaskellFlows.Mcp.Protocol
                       HaskellFlows.Mcp.Resources
                       HaskellFlows.Mcp.Staleness
@@ -207,6 +208,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowRegressionScopeFix
                       Scenarios.FlowSessionRobustness
                       Scenarios.FlowSwitchProject
+                      Scenarios.FlowDogfoodReplay
                       Scenarios.FlowTypeBreakage
                       Scenarios.FlowScopeMgmt
                       Scenarios.FlowToolchain

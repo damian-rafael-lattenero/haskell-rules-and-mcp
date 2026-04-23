@@ -135,6 +135,21 @@ renderValidationError = \case
 
 -- | Pure-ish pre-flight: validates the path without touching any
 -- server state. Exposed for unit tests.
+--
+-- Validation rules:
+--
+--   * Path must parse as an absolute 'ProjectDir' — 'mkProjectDir'
+--     does that.
+--   * Directory must exist.
+--   * Directory must EITHER contain at least one @.cabal@ file
+--     OR be empty. An empty directory is a valid target because
+--     the canonical next step is @ghci_create_project@ — the
+--     previous "must have .cabal" gate forced callers to pre-
+--     scaffold a stub just to unlock the tool, which is
+--     unnecessary friction. A non-empty directory without a
+--     @.cabal@ is still rejected to avoid accidentally pointing
+--     at a random folder (e.g. @~/Downloads@) whose contents
+--     would be interpreted as sources by subsequent tools.
 validateSwitchTarget :: Text -> IO (Either ValidationError ProjectDir)
 validateSwitchTarget raw =
   case mkProjectDir (T.unpack raw) of
@@ -147,9 +162,10 @@ validateSwitchTarget raw =
         else do
           entries <- listDirectory root
           let hasCabal = any ((".cabal" ==) . takeExtension) entries
-          if not hasCabal
-            then pure (Left (VENoCabalFile root))
-            else pure (Right pd)
+              isEmpty  = null entries
+          if hasCabal || isEmpty
+            then pure (Right pd)
+            else pure (Left (VENoCabalFile root))
 
 -- | Side-effecting handler. Takes the mutable refs the server
 -- already owns — we don't import 'Server' here to keep

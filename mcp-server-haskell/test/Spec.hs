@@ -16,7 +16,7 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (exitFailure, exitSuccess)
 import System.Timeout (timeout)
@@ -145,7 +145,11 @@ import HaskellFlows.Tool.Hoogle
   ( HoogleHit (..)
   , parseHoogleLine
   )
-import Control.Concurrent (forkIO)
+import Control.Concurrent (forkIO, threadDelay)
+import qualified HaskellFlows.Mcp.PathBootstrap
+import qualified HaskellFlows.Parser.TypeSignature
+import qualified System.Directory
+import qualified System.FilePath
 import Control.Monad (when)
 import Control.Concurrent.MVar
   ( newEmptyMVar, putMVar, takeMVar, newMVar, readMVar )
@@ -409,6 +413,23 @@ main = do
       , test "switch_project: accepts a valid cabal project"     testSwitchAcceptsValid
       , test "switch_project: handle swaps project + kills session"
                                                                  testSwitchHandleSwaps
+      , test "switch_project: empty dir accepted (scaffold-ready)"
+                                                                 testSwitchAcceptsEmpty
+      , test "path-bootstrap: hard-coded candidates are absolute"
+                                                                 testPathBootstrapAbsolute
+      , test "path-bootstrap: augmentPath only keeps existing dirs"
+                                                                 testPathBootstrapExisting
+      , test "path-bootstrap: augmentPath is idempotent"          testPathBootstrapIdempotent
+      , test "add_modules: FromJSON accepts string fallback"      testAddModulesStringFallback
+      , test "add_modules: FromJSON accepts JSON array"           testAddModulesArrayForm
+      , test "cabal validator: stanza-aware dup check"            testCabalStanzaDupCheck
+      , test "cabal validator: cross-stanza repeats are NOT dups" testCabalCrossStanzaOk
+      , test "cabal validator: hs-source-dirs not mis-parsed as dep"
+                                                                 testCabalHsSourceDirsIgnored
+      , test "suggest: printer/parser roundtrip rule fires"       testSuggestRoundtripRule
+      , test "suggest: no roundtrip when sibling shape mismatches" testSuggestRoundtripNegative
+      , test "ghc-api: external cabal edit invalidates stanza cache"
+                                                                 testMtimeInvalidation
       ]
   if and results then exitSuccess else exitFailure
 
@@ -3299,6 +3320,12 @@ testSwitchRejectsNoCabal = do
   ts   <- getPOSIXTime
   let dir = base </> ("no-cabal-" <> show (floor (ts * 1000000) :: Int))
   createDirectoryIfMissing True dir
+  -- A NON-empty directory without a .cabal stays rejected — we
+  -- don't want to accidentally point at @~/Downloads@ or similar
+  -- and have subsequent tools treat its contents as sources.
+  -- (Empty dirs are allowed post-BUG-PLUS-07; see
+  -- 'testSwitchAcceptsEmpty'.)
+  TIO.writeFile (dir </> "README.md") "not a cabal project\n"
   res <- validateSwitchTarget (T.pack dir)
   removePathForcibly dir
   pure $ case res of
@@ -3349,6 +3376,275 @@ testSwitchHandleSwaps = do
       removePathForcibly dirA
       removePathForcibly dirB
       pure False
+
+--------------------------------------------------------------------------------
+-- BUG-PLUS-07: switch_project accepts empty dirs (scaffold-ready)
+--------------------------------------------------------------------------------
+
+-- | An empty directory should be a valid switch target so the
+-- user can follow up with 'ghci_create_project' — the canonical
+-- "I want to start a new project here" workflow. Before the fix
+-- the validator demanded an existing .cabal, forcing callers to
+-- pre-scaffold a stub just to unlock the tool.
+testSwitchAcceptsEmpty :: IO Bool
+testSwitchAcceptsEmpty = do
+  base <- getTemporaryDirectory
+  ts   <- getPOSIXTime
+  let dir = base </> ("sp-empty-" <> show (floor (ts * 1000000) :: Int))
+  createDirectoryIfMissing True dir
+  res <- validateSwitchTarget (T.pack dir)
+  removePathForcibly dir
+  pure $ case res of
+    Right pd -> HaskellFlows.Types.unProjectDir pd == dir
+    _        -> False
+
+--------------------------------------------------------------------------------
+-- BUG-PLUS-04: PATH self-augmentation
+--------------------------------------------------------------------------------
+
+-- | The hard-coded candidate list must contain only absolute
+-- paths. A relative entry would be silently ignored by
+-- 'augmentPath' (which filters with 'isAbsolute') but represents
+-- a code-review miss worth catching in CI.
+testPathBootstrapAbsolute :: IO Bool
+testPathBootstrapAbsolute = do
+  home <- System.Directory.getHomeDirectory
+  let cands = HaskellFlows.Mcp.PathBootstrap.hardCodedCandidates home
+  pure $ all System.FilePath.isAbsolute cands
+
+-- | 'augmentedPathCandidates' filters to dirs that actually exist.
+-- On a dev machine at least ONE of the candidates should exist
+-- (home dir is guaranteed). Returned list is a subset of the
+-- hard-coded one.
+testPathBootstrapExisting :: IO Bool
+testPathBootstrapExisting = do
+  home  <- System.Directory.getHomeDirectory
+  cands <- HaskellFlows.Mcp.PathBootstrap.augmentedPathCandidates
+  let fullList = HaskellFlows.Mcp.PathBootstrap.hardCodedCandidates home
+  pure $ all (`elem` fullList) cands
+
+-- | 'augmentPath' must not duplicate entries across repeated
+-- calls — the MCP is sometimes spawned twice against the same
+-- shell env (e.g. supervised restarts) and a runaway PATH blows
+-- past @ARG_MAX@ fast. Calling twice should produce the same
+-- PATH string as calling once.
+testPathBootstrapIdempotent :: IO Bool
+testPathBootstrapIdempotent = do
+  first  <- HaskellFlows.Mcp.PathBootstrap.augmentPath
+  second <- HaskellFlows.Mcp.PathBootstrap.augmentPath
+  pure (first == second)
+
+--------------------------------------------------------------------------------
+-- BUG-PLUS-01: ghci_add_modules string fallback
+--------------------------------------------------------------------------------
+
+-- | The documented shape: @{"modules": ["A", "B"]}@.
+testAddModulesArrayForm :: IO Bool
+testAddModulesArrayForm =
+  let payload = A.object [ "modules" A..= (["Expr.Syntax", "Expr.Eval"] :: [Text]) ]
+  in case A.fromJSON payload of
+       A.Success (AddModules.AddModulesArgs xs) ->
+         pure (xs == ["Expr.Syntax", "Expr.Eval"])
+       _ -> pure False
+
+-- | Fallback shape: @{"modules": "Expr.Syntax, Expr.Eval"}@.
+-- Observed in Claude for Desktop's deferred-tool path which
+-- stringifies array args before dispatch. Accepting this shape
+-- removes an entire class of "my JSON looks right but the server
+-- rejects it" failure modes.
+testAddModulesStringFallback :: IO Bool
+testAddModulesStringFallback = do
+  let csv   = A.object [ "modules" A..= ("Expr.Syntax, Expr.Eval" :: Text) ]
+      ws    = A.object [ "modules" A..= ("Expr.Syntax Expr.Eval"  :: Text) ]
+      mixed = A.object [ "modules" A..= ("Expr.Syntax,Expr.Eval\tExpr.Pretty" :: Text) ]
+      ok payload =
+        case A.fromJSON payload of
+          A.Success (AddModules.AddModulesArgs xs) ->
+            xs == ["Expr.Syntax", "Expr.Eval"]
+               || xs == ["Expr.Syntax", "Expr.Eval", "Expr.Pretty"]
+          _ -> False
+  pure (ok csv && ok ws && ok mixed)
+
+--------------------------------------------------------------------------------
+-- BUG-PLUS-05: stanza-aware duplicate-dep detection
+--------------------------------------------------------------------------------
+
+-- | Same-stanza duplicate IS flagged.
+testCabalStanzaDupCheck :: IO Bool
+testCabalStanzaDupCheck =
+  let body = T.unlines
+        [ "cabal-version: 2.4"
+        , "name: demo"
+        , "library"
+        , "  build-depends: base, containers, base"
+        ]
+      issues = VC.scanCabalText body
+      hit = any (\i -> VC.iKind i == "duplicate-dep"
+                      && "base" `T.isInfixOf` VC.iMessage i) issues
+  in pure hit
+
+-- | Cross-stanza repeats are legitimate — same dep in both
+-- library and test-suite is standard — and must NOT surface as
+-- duplicates.
+testCabalCrossStanzaOk :: IO Bool
+testCabalCrossStanzaOk =
+  let body = T.unlines
+        [ "cabal-version: 2.4"
+        , "name: demo"
+        , "library"
+        , "  build-depends: base, containers"
+        , ""
+        , "test-suite demo-test"
+        , "  type: exitcode-stdio-1.0"
+        , "  main-is: Spec.hs"
+        , "  build-depends: base, QuickCheck"
+        ]
+      issues = VC.scanCabalText body
+      dupIssues = filter (\i -> VC.iKind i == "duplicate-dep") issues
+  in pure (null dupIssues)
+
+-- | Indented NON-build-depends fields — @hs-source-dirs:@,
+-- @import:@, @default-language:@ — must NEVER be harvested as
+-- fake package names.
+testCabalHsSourceDirsIgnored :: IO Bool
+testCabalHsSourceDirsIgnored =
+  let body = T.unlines
+        [ "cabal-version: 2.4"
+        , "name: demo"
+        , "common shared"
+        , "  hs-source-dirs: src"
+        , "  default-language: GHC2024"
+        , "library"
+        , "  import: shared"
+        , "  hs-source-dirs: src"
+        , "  build-depends: base"
+        , "test-suite demo-test"
+        , "  import: shared"
+        , "  hs-source-dirs: test"
+        , "  build-depends: base"
+        ]
+      issues = VC.scanCabalText body
+      dupIssues = filter (\i -> VC.iKind i == "duplicate-dep") issues
+      badNames  = map VC.iMessage dupIssues
+  in pure
+      ( null dupIssues
+        && not (any ("hs-source-dirs" `T.isInfixOf`) badNames)
+        && not (any ("import" `T.isInfixOf`) badNames)
+      )
+
+--------------------------------------------------------------------------------
+-- BUG-PLUS-06: printer/parser roundtrip suggestion rule
+--------------------------------------------------------------------------------
+
+-- | A realistic printer/parser pair: focal is @pretty :: Expr ->
+-- String@, sibling is @parseExpr :: String -> Maybe Expr@. The
+-- rule must propose @parseExpr (pretty x) == Just x@.
+testSuggestRoundtripRule :: IO Bool
+testSuggestRoundtripRule = do
+  -- parseSignature expects the RHS of '::' only. Passing the full
+  -- 'name :: type' form in earlier iterations produced a garbled
+  -- 'ParsedSig' whose psArgs was a TyApp of the function name —
+  -- hence the rule never fired.
+  let prettySig = HaskellFlows.Parser.TypeSignature.parseSignature
+                    "Expr -> String"
+      parserSig = HaskellFlows.Parser.TypeSignature.parseSignature
+                    "String -> Maybe Expr"
+  case (prettySig, parserSig) of
+    (Just ps, Just qs) ->
+      let ctx = RuleContext
+            { rcName     = "pretty"
+            , rcSig      = ps
+            , rcSiblings = [("parseExpr", qs)]
+            }
+          suggestions = applyRulesCtx ctx
+          hit = any (\s -> sLaw s == "Printer/parser roundtrip"
+                          && "parseExpr" `T.isInfixOf` sProperty s
+                          && "Just x"    `T.isInfixOf` sProperty s)
+                   suggestions
+      in pure hit
+    _ -> pure False
+
+-- | Negative: a same-type transform (@Expr -> Expr@) must NOT
+-- trip the roundtrip rule even when a sibling returns Maybe Expr
+-- — the rule is shape-keyed on A ≠ B.
+testSuggestRoundtripNegative :: IO Bool
+testSuggestRoundtripNegative = do
+  let simpSig = HaskellFlows.Parser.TypeSignature.parseSignature
+                  "Expr -> Expr"
+      parserSig = HaskellFlows.Parser.TypeSignature.parseSignature
+                  "String -> Maybe Expr"
+  case (simpSig, parserSig) of
+    (Just ps, Just qs) ->
+      let ctx = RuleContext
+            { rcName     = "simplify"
+            , rcSig      = ps
+            , rcSiblings = [("parseExpr", qs)]
+            }
+          roundtripSuggestions =
+            filter (\s -> sLaw s == "Printer/parser roundtrip")
+                   (applyRulesCtx ctx)
+      in pure (null roundtripSuggestions)
+    _ -> pure False
+
+--------------------------------------------------------------------------------
+-- BUG-PLUS-03: external cabal edit invalidates stanza cache
+--------------------------------------------------------------------------------
+
+-- | Prove 'ensureStanzaFlags' picks up cabal-file changes made
+-- OUTSIDE the MCP's ghci_deps pipeline. The sequence:
+--
+--   1. Scaffold a real cabal project.
+--   2. Call 'ensureStanzaFlags' — cache populates, mtime
+--      recorded.
+--   3. Touch the .cabal so its mtime strictly advances.
+--   4. Call 'ensureStanzaFlags' again — 'cabalWasTouched'
+--      returns True, bootstrap re-runs, and the env ref / applied
+--      target are invalidated.
+testMtimeInvalidation :: IO Bool
+testMtimeInvalidation = do
+  base <- getTemporaryDirectory
+  ts   <- getPOSIXTime
+  let dir = base </> ("mtime-inv-" <> show (floor (ts * 1000000) :: Int))
+  createDirectoryIfMissing True dir
+  TIO.writeFile (dir </> "demo.cabal") $ T.unlines
+    [ "cabal-version: 2.4"
+    , "name: demo"
+    , "version: 0.1.0.0"
+    , ""
+    , "library"
+    , "  build-depends: base"
+    , "  default-language: Haskell2010"
+    ]
+  TIO.writeFile (dir </> "cabal.project") "packages: .\n"
+  case mkProjectDir dir of
+    Left _ -> do removePathForcibly dir; pure False
+    Right pd -> do
+      sess <- startGhcSession pd
+      before <- ApiSession.readCabalMtimeForTest sess
+      ApiSession.ensureStanzaFlags sess
+      afterFirst <- ApiSession.readCabalMtimeForTest sess
+      -- macOS fs mtime has 1-sec resolution; sleep past it to
+      -- guarantee a strictly-advanced mtime on the next write.
+      threadDelay 1_100_000
+      TIO.writeFile (dir </> "demo.cabal") $ T.unlines
+        [ "cabal-version: 2.4"
+        , "name: demo"
+        , "version: 0.2.0.0"
+        , ""
+        , "library"
+        , "  build-depends: base, containers"
+        , "  default-language: Haskell2010"
+        ]
+      ApiSession.ensureStanzaFlags sess
+      afterTouch <- ApiSession.readCabalMtimeForTest sess
+      killGhcSession sess
+      removePathForcibly dir
+      pure
+        ( isNothing before
+        && isJust afterFirst
+        && isJust afterTouch
+        && afterFirst < afterTouch
+        )
 
 --------------------------------------------------------------------------------
 

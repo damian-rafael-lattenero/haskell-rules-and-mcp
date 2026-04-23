@@ -32,8 +32,6 @@ module Scenarios.FlowSwitchProject
   ) where
 
 import Data.Aeson (Value (..), object, (.=))
-import qualified Data.Aeson.Key as Key
-import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -111,9 +109,14 @@ runFlow c projectDir = do
     "missing dir → success=false"
     missErr "success" (Bool False)
 
-  -- Create a bare dir (no .cabal inside) to exercise VENoCabalFile.
+  -- Create a NON-EMPTY dir without a .cabal to exercise
+  -- VENoCabalFile. Empty directories are now accepted post-
+  -- BUG-PLUS-07 (so @ghci_create_project@ can land there);
+  -- a non-empty non-cabal dir (looks like a random folder that
+  -- shouldn't be treated as a project) stays rejected.
   let bareDir = projectDir </> "bare-no-cabal"
   createDirectoryIfMissing True bareDir
+  TIO.writeFile (bareDir </> "README.md") "not a cabal project\n"
   bareErr <- Client.callTool c "ghci_switch_project"
                (object [ "path" .= T.pack bareDir ])
   cErr3 <- liveCheck $ checkJsonField

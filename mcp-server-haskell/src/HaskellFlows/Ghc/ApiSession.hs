@@ -55,6 +55,8 @@ module HaskellFlows.Ghc.ApiSession
   , targetForPath
   , firstTestSuiteOrLibrary
   , firstLibraryOrTestSuite
+    -- * Test-only introspection
+  , readCabalMtimeForTest
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)
@@ -116,9 +118,11 @@ import Unsafe.Coerce (unsafeCoerce)
 import System.Directory
   ( doesDirectoryExist
   , doesFileExist
+  , getModificationTime
   , listDirectory
   , withCurrentDirectory
   )
+import Data.Time.Clock.POSIX (POSIXTime, utcTimeToPOSIXSeconds)
 import System.FilePath ((</>), takeExtension)
 import qualified System.Process as Proc
 
@@ -144,6 +148,15 @@ data GhcSession = GhcSession
     -- yet (or the last apply was invalidated). 'withStanzaFlags'
     -- consults this to skip the expensive re-apply when the
     -- cached env already matches the requested target.
+  , gsCabalMtime :: !(IORef (Maybe POSIXTime))
+    -- ^ Modification time of the project's @.cabal@ file at the
+    -- last successful bootstrap. 'ensureStanzaFlags' compares
+    -- the on-disk mtime against this cache on every call and
+    -- auto-invalidates when the file was touched externally
+    -- (Edit tool / hand-editing the .cabal / @cabal gen-bounds@).
+    -- Closes BUG-PLUS-03 where external edits left the stanza
+    -- cache stale and the next 'ghci_load' ran against a .cabal
+    -- it hadn't re-read.
   }
 
 -- | Bootstrap a 'GhcSession' for the given project. Cheap — HscEnv
@@ -155,6 +168,7 @@ startGhcSession pd = do
   loadedRef   <- newIORef False
   stanzaRef   <- newIORef Map.empty
   appliedRef  <- newIORef Nothing
+  mtimeRef    <- newIORef Nothing
   pure GhcSession
     { gsEnvRef        = ref
     , gsLibdir        = libdir
@@ -163,6 +177,7 @@ startGhcSession pd = do
     , gsLoadedRef     = loadedRef
     , gsStanzaFlags   = stanzaRef
     , gsAppliedTarget = appliedRef
+    , gsCabalMtime    = mtimeRef
     }
 
 killGhcSession :: GhcSession -> IO ()
@@ -171,6 +186,7 @@ killGhcSession sess = do
   writeIORef (gsEnvRef sess) Nothing
   writeIORef (gsLoadedRef sess) False
   writeIORef (gsAppliedTarget sess) Nothing
+  writeIORef (gsCabalMtime sess) Nothing
 
 -- | Cheap: next 'withGhcSession' will re-run the filesystem scan
 -- and @load LoadAllTargets@ but keeps the cached stanza flags and
@@ -196,6 +212,13 @@ invalidateStanzaFlags sess = do
   writeIORef (gsStanzaFlags sess) Map.empty
   writeIORef (gsEnvRef sess) Nothing
   writeIORef (gsAppliedTarget sess) Nothing
+  writeIORef (gsCabalMtime sess) Nothing
+
+-- | Test-only accessor for the cached cabal-file mtime. Exposed so
+-- 'testMtimeInvalidation' can prove the cache is actually being
+-- populated + advanced. Not part of the operational surface.
+readCabalMtimeForTest :: GhcSession -> IO (Maybe POSIXTime)
+readCabalMtimeForTest = readIORef . gsCabalMtime
 
 
 withGhcSession :: GhcSession -> Ghc a -> IO a
@@ -490,9 +513,53 @@ mkGhcError sev ss msg = case ss of
 ensureStanzaFlags :: GhcSession -> IO ()
 ensureStanzaFlags sess = do
   existing <- readIORef (gsStanzaFlags sess)
-  when (Map.null existing) $ do
+  -- BUG-PLUS-03 fix: also invalidate when the .cabal file was
+  -- touched since the last bootstrap. External edits (Edit tool,
+  -- the user's own shell, @cabal gen-bounds@) don't route through
+  -- 'invalidateStanzaFlags', so the server used to serve a stale
+  -- cache until some tool happened to mutate via ghci_deps.
+  -- Auto-invalidation on mtime change means "edit the .cabal,
+  -- then ghci_load" just works.
+  stale <- cabalWasTouched sess
+  when (Map.null existing || stale) $ do
     fresh <- Bootstrap.bootstrapProject (gsProject sess)
     writeIORef (gsStanzaFlags sess) fresh
+    -- Record the mtime so the next call doesn't re-bootstrap
+    -- gratuitously. Also wipe the applied-target tracker; the
+    -- new flags may differ and any cached HscEnv is now suspect.
+    mtime <- currentCabalMtime (unProjectDir (gsProject sess))
+    writeIORef (gsCabalMtime sess) mtime
+    when stale $ do
+      writeIORef (gsEnvRef sess) Nothing
+      writeIORef (gsAppliedTarget sess) Nothing
+      writeIORef (gsLoadedRef sess) False
+
+-- | Has the project's @.cabal@ file been modified since the last
+-- bootstrap? Returns 'True' on first call (cache empty), on
+-- cabal-missing (safer to retry bootstrap), or when the mtime
+-- strictly advanced.
+cabalWasTouched :: GhcSession -> IO Bool
+cabalWasTouched sess = do
+  cachedMtime <- readIORef (gsCabalMtime sess)
+  nowMtime    <- currentCabalMtime (unProjectDir (gsProject sess))
+  pure $ case (cachedMtime, nowMtime) of
+    (Nothing, _)           -> False   -- first bootstrap handled by Map.null check
+    (Just _,  Nothing)     -> True    -- cabal disappeared — bootstrap will surface it
+    (Just old, Just fresh) -> fresh > old
+
+-- | 'POSIXTime' mtime of the first @*.cabal@ file in the project
+-- root, or 'Nothing' if none. We pick the first entry for
+-- simplicity — cabal projects conventionally carry exactly one.
+currentCabalMtime :: FilePath -> IO (Maybe POSIXTime)
+currentCabalMtime root = do
+  exists <- doesDirectoryExist root
+  if not exists
+    then pure Nothing
+    else do
+      entries <- listDirectory root
+      case [root </> e | e <- entries, takeExtension e == ".cabal"] of
+        []      -> pure Nothing
+        (fp:_)  -> Just . utcTimeToPOSIXSeconds <$> getModificationTime fp
 
 -- | Apply the cached 'StanzaFlags' for the given target to the
 -- session's 'DynFlags'. Only DynFlags — leftover tokens (module

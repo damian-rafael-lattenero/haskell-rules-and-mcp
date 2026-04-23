@@ -26,7 +26,7 @@ import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import Data.Char (isSpace)
+import Data.Char (isAlpha, isSpace)
 import Data.List (group, sort)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -142,36 +142,128 @@ scanCabalText body =
     , checkMissingSynopsis
     ]
 
--- | Duplicate package names across build-depends (including across
--- multiple stanzas). For each line that contributes entries, strip
--- the @build-depends:@ header (when present) before splitting on
--- commas — otherwise the header would show up as a \"package\" and
--- corrupt the duplicate count.
+-- | Duplicate package names in 'build-depends'.
+--
+-- Stanza-aware AND field-aware. Only flags duplicates that
+-- appear within the SAME stanza. Earlier versions counted
+-- cross-stanza repeats — e.g. @base@ in both @library@ and
+-- @test-suite@ — as duplicates, and they also mis-parsed
+-- indented lines like @hs-source-dirs: src@ as fictional
+-- packages because their continuation-line heuristic matched
+-- any indented text following a stanza header.
+--
+-- Algorithm: walk the cabal file line by line with a small
+-- state machine — track which stanza we're in and whether the
+-- last header was @build-depends:@. Only lines that are
+-- continuations of an active @build-depends:@ field contribute
+-- package names, and duplicates are counted per-stanza.
 checkDuplicateDeps :: Text -> [Issue]
 checkDuplicateDeps body =
-  let pkgs = [ firstWord (T.strip tok)
-             | ln <- T.lines body
-             , let stripped      = T.stripStart ln
-                   isHeader      = "build-depends:" `T.isInfixOf` T.toLower stripped
-                   isContinuation = isContinuationLine ln
-             , isHeader || isContinuation
-             , let effective = if isHeader
-                                 then T.drop 1 (T.dropWhile (/= ':') stripped)
-                                 else stripped
-             , tok <- T.splitOn "," effective
-             , not (T.null (T.strip tok))
-             ]
-      grouped = filter ((> 1) . length) . group . sort $ filter (not . T.null) pkgs
+  let perStanza = collectDeps (T.lines body)
+      flagged   =
+        [ (stanzaTag, name)
+        | (stanzaTag, names) <- perStanza
+        , (name : _) <- filter ((> 1) . length) . group . sort $ names
+        ]
   in [ Issue CabalSevWarn "duplicate-dep"
-         ("Package appears more than once in build-depends: " <> name)
-     | (name : _) <- grouped
+         ("Package '" <> name
+          <> "' listed more than once in " <> stanzaTag
+          <> "'s build-depends")
+     | (stanzaTag, name) <- flagged
      ]
+
+-- | Line-by-line walker. Returns a list of (stanza-label,
+-- deps-in-that-stanza). Dep names are stripped of version
+-- bounds; empty entries are filtered out.
+collectDeps :: [Text] -> [(Text, [Text])]
+collectDeps = go "top-level" "" []
   where
-    firstWord = T.takeWhile (\c -> not (isSpace c) && c /= '<' && c /= '>'
-                                 && c /= '=' && c /= '^' && c /= '&')
-    isContinuationLine ln =
+    -- stanzaTag: label of the stanza we're currently scanning
+    -- activeField: name of the field whose continuation lines we
+    --   should append to (""  when none active)
+    -- deps:      dep names collected for the current stanza so far
+    go :: Text -> Text -> [Text] -> [Text] -> [(Text, [Text])]
+    go stanzaTag _active deps [] = [(stanzaTag, reverse deps)]
+    go stanzaTag active deps (ln : rest)
+      | Just newStanza <- matchStanzaHeader ln =
+          (stanzaTag, reverse deps)
+            : go newStanza "" [] rest
+      | Just (field, value) <- matchField ln =
+          let pkgs = if field == "build-depends"
+                       then tokenise value
+                       else []
+              nextActive = field
+          in go stanzaTag nextActive (reverse pkgs <> deps) rest
+      | isContinuation ln =
+          if active == "build-depends"
+            then
+              let pkgs = tokenise (T.stripStart ln)
+              in go stanzaTag active (reverse pkgs <> deps) rest
+            else go stanzaTag active deps rest
+      | otherwise =
+          -- blank line or comment → close any active field
+          go stanzaTag "" deps rest
+
+    -- Recognise 'library' / 'executable NAME' / 'test-suite NAME'
+    -- / 'benchmark NAME' / 'common NAME'. Case-insensitive,
+    -- must start at column 0 (cabal stanzas are not indented).
+    matchStanzaHeader :: Text -> Maybe Text
+    matchStanzaHeader ln
+      | not (T.null ln), not (isSpace (T.head ln))
+      , let low = T.toLower (T.strip ln)
+      , Just tag <- headerTag low
+      = Just tag
+      | otherwise = Nothing
+
+    headerTag :: Text -> Maybe Text
+    headerTag s
+      | s == "library"                          = Just "library"
+      | "executable "  `T.isPrefixOf` s         =
+          Just ("executable '" <> firstTok (T.drop 11 s) <> "'")
+      | "test-suite "  `T.isPrefixOf` s         =
+          Just ("test-suite '" <> firstTok (T.drop 11 s) <> "'")
+      | "benchmark "   `T.isPrefixOf` s         =
+          Just ("benchmark '"  <> firstTok (T.drop 10 s) <> "'")
+      | "common "      `T.isPrefixOf` s         =
+          Just ("common '"     <> firstTok (T.drop 7 s)  <> "'")
+      | otherwise                               = Nothing
+    firstTok = T.takeWhile (not . isSpace)
+
+    -- Match @<whitespace>field-name: rest@. Returns (field-name,
+    -- rest). Field names are the text left of the first colon,
+    -- lowercased for comparison.
+    matchField :: Text -> Maybe (Text, Text)
+    matchField ln =
+      let stripped = T.stripStart ln
+      in case T.breakOn ":" stripped of
+           (nm, rest) | not (T.null rest), not (T.null (T.strip nm))
+                      , T.all (\c -> isAlpha c || c == '-' || c == '_') (T.strip nm)
+             -> Just (T.toLower (T.strip nm), T.drop 1 rest)
+           _ -> Nothing
+
+    -- An indented line that's NOT a field header (no colon
+    -- followed by value, OR starts with ',' or whitespace-only).
+    isContinuation :: Text -> Bool
+    isContinuation ln =
       let s = T.strip ln
-      in "," `T.isPrefixOf` s || T.isPrefixOf "  " ln
+      in not (T.null s)
+         && case T.uncons ln of
+              Just (c, _) -> isSpace c  -- must be indented
+              Nothing     -> False
+
+    -- Split on commas, trim, strip version bounds, drop blanks.
+    tokenise :: Text -> [Text]
+    tokenise raw =
+      [ depName
+      | tok <- T.splitOn "," raw
+      , let depName = firstWordOf (T.strip tok)
+      , not (T.null depName)
+      ]
+
+    firstWordOf :: Text -> Text
+    firstWordOf = T.takeWhile
+      (\c -> not (isSpace c) && c /= '<' && c /= '>'
+          && c /= '=' && c /= '^' && c /= '&')
 
 -- | A cabal-hygiene nit that @cabal check@ also flags but we surface
 -- earlier with a more agent-friendly message.

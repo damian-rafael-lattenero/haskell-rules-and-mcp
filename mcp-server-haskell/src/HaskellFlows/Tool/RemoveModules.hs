@@ -32,7 +32,7 @@ import System.Directory (doesFileExist, listDirectory, removeFile)
 import System.FilePath (takeExtension, (</>))
 
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Tool.AddModules (moduleToPath)
+import HaskellFlows.Tool.AddModules (moduleToPath, parseModuleList)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath, unProjectDir)
 
 descriptor :: ToolDescriptor
@@ -50,10 +50,20 @@ descriptor =
           [ "type"       .= ("object" :: Text)
           , "properties" .= object
               [ "modules" .= object
-                  [ "type"        .= ("array" :: Text)
+                  [ "oneOf" .= (
+                      [ object
+                          [ "type"  .= ("array" :: Text)
+                          , "items" .= object [ "type" .= ("string" :: Text) ]
+                          ]
+                      , object
+                          [ "type" .= ("string" :: Text) ]
+                      ] :: [Value])
                   , "description" .=
-                      ("Module names to de-register, e.g. [\"Expr.Old\"]." :: Text)
-                  , "items"       .= object [ "type" .= ("string" :: Text) ]
+                      ("Module names to de-register. Accepts either a \
+                       \JSON array (e.g. [\"Expr.Old\"]) or a single \
+                       \comma-/whitespace-separated string \
+                       \(e.g. \"Expr.Old, Expr.Unused\"). Same lenient \
+                       \parsing as ghci_add_modules." :: Text)
                   ]
               , "delete_files" .= object
                   [ "type"        .= ("boolean" :: Text)
@@ -76,10 +86,11 @@ data RemoveModulesArgs = RemoveModulesArgs
   deriving stock (Show)
 
 instance FromJSON RemoveModulesArgs where
-  parseJSON = withObject "RemoveModulesArgs" $ \o ->
-    RemoveModulesArgs
-      <$> o .:  "modules"
-      <*> o .:? "delete_files" .!= False
+  parseJSON = withObject "RemoveModulesArgs" $ \o -> do
+    raw <- o .: "modules"
+    mods <- parseModuleList raw
+    delF <- o .:? "delete_files" .!= False
+    pure (RemoveModulesArgs mods delF)
 
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of

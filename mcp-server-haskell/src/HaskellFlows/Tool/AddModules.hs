@@ -6,11 +6,12 @@ module HaskellFlows.Tool.AddModules
   , handle
   , AddModulesArgs (..)
   , moduleToPath
+  , parseModuleList
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
-import Data.Aeson.Types (parseEither)
+import Data.Aeson.Types (Parser, parseEither)
 import Data.List (foldl')
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -35,9 +36,22 @@ descriptor =
           [ "type"       .= ("object" :: Text)
           , "properties" .= object
               [ "modules" .= object
-                  [ "type"        .= ("array" :: Text)
-                  , "description" .= ("Module names, e.g. [\"Expr.Syntax\", \"Expr.Eval\"]." :: Text)
-                  , "items"       .= object [ "type" .= ("string" :: Text) ]
+                  [ "oneOf" .= (
+                      [ object
+                          [ "type"  .= ("array" :: Text)
+                          , "items" .= object [ "type" .= ("string" :: Text) ]
+                          ]
+                      , object
+                          [ "type" .= ("string" :: Text) ]
+                      ] :: [Value])
+                  , "description" .=
+                      ("Module names. Accepts either a JSON array \
+                       \(e.g. [\"Expr.Syntax\", \"Expr.Eval\"]) or \
+                       \a single string with comma- or whitespace-\
+                       \separated names (e.g. \"Expr.Syntax, \
+                       \Expr.Eval\"). The string form is a fallback \
+                       \for MCP clients whose deferred-tool wrapper \
+                       \stringifies array arguments before dispatch." :: Text)
                   ]
               ]
           , "required"             .= ["modules" :: Text]
@@ -49,8 +63,47 @@ newtype AddModulesArgs = AddModulesArgs { amModules :: [Text] }
   deriving stock (Show)
 
 instance FromJSON AddModulesArgs where
-  parseJSON = withObject "AddModulesArgs" $ \o ->
-    AddModulesArgs <$> o .: "modules"
+  parseJSON = withObject "AddModulesArgs" $ \o -> do
+    raw <- o .: "modules"
+    AddModulesArgs <$> parseModuleList raw
+
+-- | Parse the @modules@ field of an 'AddModulesArgs' payload.
+--
+-- Accepts two forms:
+--
+--   * JSON array of strings — the documented, canonical shape.
+--     @[\"Expr.Syntax\", \"Expr.Eval\"]@.
+--   * Single JSON string — split on commas and/or whitespace.
+--     @\"Expr.Syntax, Expr.Eval\"@ or @\"Expr.Syntax Expr.Eval\"@
+--     both normalise to the same two-module list.
+--
+-- Motivation: some MCP clients (observed in Claude for Desktop's
+-- deferred-tool path) serialize array-valued arguments as strings
+-- before dispatch, which then hit the server as 'String' and fail
+-- the array parser. Accepting the string form as a fallback
+-- eliminates an entire class of "my tool call is rejected but the
+-- JSON looks fine" user reports.
+--
+-- Empty or whitespace-only entries are filtered. Empty input
+-- produces an empty list — the handler decides whether that's an
+-- error (it is, but the validation message is friendlier at the
+-- handler layer than here).
+parseModuleList :: Value -> Parser [Text]
+parseModuleList (Array xs) =
+  traverse parseString (foldr (:) [] xs)  -- Data.Vector.toList without the dep
+  where
+    parseString (String s) = pure (T.strip s)
+    parseString other      =
+      fail ("expected module-name string, got: " <> show other)
+parseModuleList (String s) =
+  pure
+    . filter (not . T.null)
+    . map T.strip
+    . T.split (\c -> c == ',' || c == ' ' || c == '\t' || c == '\n')
+    $ s
+parseModuleList other =
+  fail ("modules must be an array of strings or a comma-/whitespace-\
+        \separated string; got: " <> show other)
 
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
