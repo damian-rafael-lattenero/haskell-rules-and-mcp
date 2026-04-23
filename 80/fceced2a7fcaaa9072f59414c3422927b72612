@@ -1,0 +1,47 @@
+mcp-server-haskell/src/HaskellFlows/Tool/RemoveModules.hs
+  0288bbe3a485f322 35,53-60,62-66,89-93
+mcp-server-haskell/src/HaskellFlows/Ghc/ApiSession.hs
+  0288bbe3a485f322 58-59,121,125,151-159,171,180,189,215-221,516-524,527-562
+mcp-server-haskell/haskell-flows-mcp.cabal
+  0288bbe3a485f322 43,211
+mcp-server-haskell/src/HaskellFlows/Mcp/Server.hs
+  0288bbe3a485f322 98,142-149
+mcp-server-haskell/test-e2e/Main.hs
+  0288bbe3a485f322 66,162-163
+mcp-server-haskell/src/HaskellFlows/Suggest/Rules.hs
+  0288bbe3a485f322 122,546-624
+mcp-server-haskell/src/HaskellFlows/Mcp/PathBootstrap.hs
+  0288bbe3a485f322 1-86
+mcp-server-haskell/test/Spec.hs
+  0288bbe3a485f322 19,148-152,416-432,3323-3328,3380-3648
+mcp-server-haskell/test-e2e/Scenarios/FlowSwitchProject.hs
+  0288bbe3a485f322 112-116,119
+mcp-server-haskell/src/HaskellFlows/Tool/ValidateCabal.hs
+  0288bbe3a485f322 29,145-159,162-167,169-172,174-179,181-247,249-266
+mcp-server-haskell/src/HaskellFlows/Tool/AddModules.hs
+  0288bbe3a485f322 9,14,39-54,66-106
+mcp-server-haskell/test-e2e/Scenarios/FlowDogfoodReplay.hs
+  0288bbe3a485f322 1-494
+mcp-server-haskell/src/HaskellFlows/Tool/SwitchProject.hs
+  0288bbe3a485f322 138-152,165-168
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.2",
+  "base_commit_sha": "80fceced2a7fcaaa9072f59414c3422927b72612",
+  "prompts": {
+    "0288bbe3a485f322": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6ad5c5e0-ae3e-4125-bb36-4c701ab5970f",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 3857,
+      "total_deletions": 9221,
+      "accepted_lines": 9924,
+      "overriden_lines": 0
+    }
+  }
+}
