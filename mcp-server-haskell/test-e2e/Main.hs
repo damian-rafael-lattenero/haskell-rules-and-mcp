@@ -169,16 +169,16 @@ main = do
   mParRaw  <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_PARALLEL"
   numCaps  <- getNumCapabilities
   let skipSlow = mSkipRaw == Just "1"
-      -- Parallel e2e default after Wave 5 deleted the legacy
-      -- subprocess ghci. Each scenario spawns its own MCP child
-      -- with its own tmp projectDir, and the in-process GhcSession
-      -- doesn't contend on the cabal store the way `cabal repl`
-      -- subprocesses used to. min 4 capabilities gives ~3× wall-
-      -- time speedup without over-scheduling on typical dev
-      -- machines; opt out with HASKELL_FLOWS_E2E_PARALLEL=1.
+      -- Parallel e2e is OPT-IN via HASKELL_FLOWS_E2E_PARALLEL=<N>.
+      -- Default stays sequential: the Linux CI scheduler dispatches
+      -- threads fast enough to surface races in scenarios that
+      -- weren't authored with parallelism in mind (shared
+      -- property-store locks, cabal build contention, test-suite
+      -- tmp-dir collisions). Local `HASKELL_FLOWS_E2E_PARALLEL=4`
+      -- still gets the ~15× speedup on macOS dev machines.
       parallelism = case mParRaw >>= readMaybe of
         Just k | k >= 1 -> min k numCaps
-        _              -> min 4 numCaps
+        _              -> 1
       selected
         | skipSlow  = filter (\(_, slow, _) -> not slow) scenarios
         | otherwise = scenarios

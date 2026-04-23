@@ -3155,7 +3155,7 @@ testHoleDiagnosticCapture = case mkProjectDir "/tmp/hole-fixture" of
         let rendered = renderGhciStyle diags
             holes    = parseTypedHoles rendered
         pure $ not (null holes)
-             && any ("Hole.hs" `T.isSuffixOf`) (map thFile holes)
+             && any (("Hole.hs" `T.isSuffixOf`) . thFile) holes
 
 -- | Wave-1 gate: drive cabal via the shim against a real project
 -- and verify we get back a non-empty flag set that includes the
