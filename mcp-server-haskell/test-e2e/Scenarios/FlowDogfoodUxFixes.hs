@@ -119,7 +119,7 @@ runFlow c projectDir = do
   t3 <- stepHeader 3
           "Fix 1 · ghci_add_modules stanza=test-suite → other-modules + test/"
   r3 <- Client.callTool c "ghci_add_modules"
-          (object [ "modules" .= (["Gen" :: Text])
+          (object [ "modules" .= ["Gen" :: Text]
                   , "stanza" .= ("test-suite" :: Text)
                   ])
   let c3a = checkPure

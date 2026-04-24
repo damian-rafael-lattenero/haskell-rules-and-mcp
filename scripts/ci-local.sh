@@ -27,11 +27,14 @@
 # gate for a quick inner loop.
 set -euo pipefail
 
-# Put the standard ghcup binary dir on PATH so the script works from any
-# shell (non-login shells on macOS don't source .zprofile). No-op if
-# ghcup isn't installed — the step that needs cabal will fail with a
-# clear message.
-export PATH="$HOME/.ghcup/bin:$PATH"
+# Put both the ghcup binary dir AND cabal's user bin dir on PATH so
+# the script works from any shell (non-login shells on macOS don't
+# source .zprofile). 'cabal install hlint' / 'cabal install fourmolu'
+# land binaries under '~/.cabal/bin', not under ghcup, so without
+# this the recursive hlint step at [9/9] silently no-ops with
+# "No hlint on PATH" — exactly the gap that let a redundant-bracket
+# warning slip through to GitHub CI in PR #110.
+export PATH="$HOME/.ghcup/bin:$HOME/.cabal/bin:$PATH"
 
 cd "$(dirname "$0")/.."
 
