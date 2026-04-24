@@ -39,6 +39,7 @@ module HaskellFlows.Ghc.ApiSession
   , gsProject
   , startGhcSession
   , killGhcSession
+  , resetHscEnvInPlace
   , withGhcSession
   , invalidateLoadCache
   , invalidateStanzaFlags
@@ -187,6 +188,24 @@ killGhcSession sess = do
   writeIORef (gsLoadedRef sess) False
   writeIORef (gsAppliedTarget sess) Nothing
   writeIORef (gsCabalMtime sess) Nothing
+
+-- | Reset the HscEnv-side state WITHOUT touching 'gsLock'. The next
+-- 'withGhcSession' re-boots 'HscEnv' and re-runs the auto-load
+-- preamble, but any caller currently blocked on the MVar still makes
+-- progress (unlike 'killGhcSession', which drains the MVar and never
+-- refills it — safe only when the 'GhcSession' itself is being
+-- discarded immediately afterwards).
+--
+-- Use this from a tool handler that wants the next call to start
+-- fresh (e.g. 'ghci_eval' after an inner-budget timeout) while
+-- keeping the 'GhcSession' object alive in the 'Server' 'MVar'.
+-- Keeps the cached stanza-flags + cabal mtime so the next call
+-- doesn't pay the ~5 s cabal v2-repl re-bootstrap.
+resetHscEnvInPlace :: GhcSession -> IO ()
+resetHscEnvInPlace sess = do
+  writeIORef (gsEnvRef sess) Nothing
+  writeIORef (gsLoadedRef sess) False
+  writeIORef (gsAppliedTarget sess) Nothing
 
 -- | Cheap: next 'withGhcSession' will re-run the filesystem scan
 -- and @load LoadAllTargets@ but keeps the cached stanza flags and

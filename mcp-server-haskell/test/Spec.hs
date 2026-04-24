@@ -285,6 +285,8 @@ main = do
       , test "renderTemplate wraps polymorphic T a" testTemplatePolymorphic
       , test "renderTemplate multi-param context"   testTemplateMultiParam
       , test "server wraps runTool in timeout"      testServerOuterTimeout
+      , test "ghci_eval exposes Control.Concurrent"  testEvalContextHasControlConcurrent
+      , test "ghci_eval enforces inner per-call budget" testEvalInnerTimeoutBudget
       , test "initialize emits instructions field"  testInitializeEmitsInstructions
       , test "instructions mention key tools+flows" testInstructionsMentionCore
       , test "nextStep: create_project -> deps"     testNextStepCreateProject
@@ -2890,6 +2892,45 @@ testServerOuterTimeout = do
   pure $ T.isInfixOf "import System.Timeout" code
       && T.isInfixOf "timeout toolTimeoutMicros action"   code
       && T.isInfixOf "toolTimeoutMicros :: Int"           code
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- | Scenario-1 regression (FlowTimeoutEnforcement, step 3).
+-- 'Control.Concurrent' must be in the eval interactive context —
+-- fully-qualified references like @Control.Concurrent.threadDelay@
+-- still need the module brought into scope. Without this, the
+-- scenario's slow-eval step fails at compile time with "No module
+-- named Control.Concurrent is imported" instead of tripping the
+-- inner 30 s budget.
+testEvalContextHasControlConcurrent :: IO Bool
+testEvalContextHasControlConcurrent = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Eval.hs"
+  let codeLines = filter (not . isDocLine) (T.lines src)
+      code      = T.unlines codeLines
+  pure $ T.isInfixOf "\"Control.Concurrent\"" code
+      && T.isInfixOf "augmentEvalContext" code
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- | Scenario-1 regression (FlowTimeoutEnforcement, step 2+3).
+-- The Eval handler must enforce a tighter per-call budget than the
+-- 10-min outer 'toolTimeoutMicros', wrap the eval pipeline in
+-- 'System.Timeout.timeout', evict the GhcSession on elapse, and
+-- render a structured @error_kind=timeout@ payload so clients
+-- can distinguish budget trips from user compile/runtime errors.
+testEvalInnerTimeoutBudget :: IO Bool
+testEvalInnerTimeoutBudget = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Eval.hs"
+  let codeLines = filter (not . isDocLine) (T.lines src)
+      code      = T.unlines codeLines
+  pure $ T.isInfixOf "import System.Timeout" code
+      && T.isInfixOf "evalTimeoutMicros" code
+      && T.isInfixOf "timeout evalTimeoutMicros" code
+      && T.isInfixOf "resetHscEnvInPlace" code
+      && T.isInfixOf "\"error_kind\" .= (\"timeout\" :: Text)" code
+      && T.isInfixOf "SomeAsyncException" code
   where
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s

@@ -15,7 +15,13 @@ module HaskellFlows.Tool.Eval
   , EvalArgs (..)
   ) where
 
-import Control.Exception (SomeException, try)
+import Control.Exception
+  ( SomeAsyncException
+  , SomeException
+  , fromException
+  , throwIO
+  , try
+  )
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -31,6 +37,7 @@ import GHC
   , simpleImportDecl
   )
 import GHC.Runtime.Eval (compileExpr)
+import System.Timeout (timeout)
 import Unsafe.Coerce (unsafeCoerce)
 
 import HaskellFlows.Ghc.ApiSession
@@ -39,6 +46,7 @@ import HaskellFlows.Ghc.ApiSession
   , evalIOString
   , firstLibraryOrTestSuite
   , loadForTarget
+  , resetHscEnvInPlace
   , withGhcSession
   , withStanzaFlags
   )
@@ -93,44 +101,120 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
     case sanitizeExpression expr of
       Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
       Right safe -> do
-        -- Prime the session via 'loadForTarget' so the eval runs
-        -- with: cabal stanza flags applied (exposes base / ghc-prim
-        -- / user deps), targets set, module graph loaded, and the
-        -- interactive context populated with 'Prelude' plus every
-        -- home module. Without this priming, raw 'withGhcSession'
-        -- hit either "no unit id matching 'ghc-prim'" (stanza flags
-        -- never applied) or "Variable not in scope: double" (user
-        -- module never loaded) depending on the scenario. One call
-        -- to loadForTarget covers both.
+        -- Inner per-eval budget. 'ghci_eval' is the only tool that
+        -- interprets user-supplied expressions; without a tighter
+        -- inner cap, pathological inputs ('threadDelay 60000000',
+        -- 'let go = go in go', a blocking foreign call) would ride
+        -- the 10-minute outer 'toolTimeoutMicros' ceiling and make
+        -- the server unresponsive for the duration. 'Scenarios.
+        -- FlowTimeoutEnforcement' pins this contract at ~30 s.
         --
-        -- loadForTarget caches the resulting HscEnv in 'gsEnvRef',
-        -- so the subsequent 'withGhcSession' restores it verbatim
-        -- via 'setSession' — no redundant re-compile.
-        tgt <- firstLibraryOrTestSuite ghcSess
-        _   <- try @SomeException (loadForTarget ghcSess tgt Strict)
-        -- Wrap both eval paths in 'withStanzaFlags' as well as
-        -- 'withGhcSession'. If 'loadForTarget' succeeded the cached
-        -- env already has the target's flags and withStanzaFlags is
-        -- a no-op skip; if loadForTarget failed mid-way (typical for
-        -- scenarios that probe broken loads — non-UTF-8, ANSI-error
-        -- source) the env is empty and withStanzaFlags re-applies,
-        -- ensuring '-this-unit-id' is set before setContext /
-        -- compileExpr run. Without this wrap, GHC panics with
-        -- "findImportedModule: no home-unit".
-        eFast <- try (withGhcSession ghcSess $
-                        withStanzaFlags ghcSess tgt (evalShowPure safe))
-        case eFast :: Either SomeException (Maybe Text) of
-          Right (Just out) -> pure (renderOk (truncateOutput out))
-          _ -> do
-            eIO <- try (withGhcSession ghcSess $
-                          withStanzaFlags ghcSess tgt $ do
-                            augmentEvalContext
-                            evalIOString (T.unpack safe))
-            case eIO :: Either SomeException String of
-              Right out ->
-                pure (renderOk (truncateOutput (T.pack out)))
-              Left ex ->
-                pure (errorResult (T.pack (show ex)))
+        -- We run the full eval pipeline inside 'System.Timeout.
+        -- timeout' and — on elapse — evict the GhcSession (the
+        -- interrupted compile/action may have left 'HscEnv' in an
+        -- indeterminate state) and render a structured
+        -- 'error_kind=timeout' payload so clients can tell a
+        -- user-level compile failure apart from a budget trip.
+        mResult <- timeout evalTimeoutMicros (runEvalBody ghcSess safe)
+        case mResult of
+          Just tr -> pure tr
+          Nothing -> do
+            -- Reset the HscEnv-side state only. 'killGhcSession'
+            -- would drain 'gsLock' without refilling it, which
+            -- wedges the next 'withGhcSession' call — observable
+            -- as an indefinite hang on 'Scenarios.
+            -- FlowTimeoutEnforcement' step 4 (recovery).
+            _ <- trySyncOnly (resetHscEnvInPlace ghcSess)
+            pure timeoutResult
+
+-- | Per-eval inner timeout. 30 s matches the ceiling documented in
+-- 'Scenarios.FlowTimeoutEnforcement' and leaves comfortable
+-- headroom under its 45 s failure threshold.
+evalTimeoutMicros :: Int
+evalTimeoutMicros = 30 * 1_000_000
+
+evalTimeoutSeconds :: Int
+evalTimeoutSeconds = evalTimeoutMicros `div` 1_000_000
+
+-- | Try an IO action but re-throw any 'SomeAsyncException' — needed
+-- so the 'Timeout' thrown by 'System.Timeout.timeout' into this
+-- thread isn't silently swallowed by the inner 'try's below.
+-- 'Timeout' is a 'SomeAsyncException' (see 'System.Timeout' in
+-- base), so 'fromException' on 'SomeAsyncException' correctly
+-- identifies it without needing a direct import of the private
+-- 'Timeout' type.
+trySyncOnly :: IO a -> IO (Either SomeException a)
+trySyncOnly action = do
+  res <- try action
+  case res of
+    Right a -> pure (Right a)
+    Left e
+      | Just (_ :: SomeAsyncException) <- fromException e -> throwIO e
+      | otherwise -> pure (Left e)
+
+-- | The original eval pipeline, unwrapped from the timeout envelope.
+-- See the Server.hs comment on why both 'withGhcSession' and
+-- 'withStanzaFlags' wrap every eval path.
+runEvalBody :: GhcSession -> Text -> IO ToolResult
+runEvalBody ghcSess safe = do
+  -- Prime the session via 'loadForTarget' so the eval runs
+  -- with: cabal stanza flags applied (exposes base / ghc-prim
+  -- / user deps), targets set, module graph loaded, and the
+  -- interactive context populated with 'Prelude' plus every
+  -- home module. Without this priming, raw 'withGhcSession'
+  -- hit either "no unit id matching 'ghc-prim'" (stanza flags
+  -- never applied) or "Variable not in scope: double" (user
+  -- module never loaded) depending on the scenario. One call
+  -- to loadForTarget covers both.
+  --
+  -- loadForTarget caches the resulting HscEnv in 'gsEnvRef',
+  -- so the subsequent 'withGhcSession' restores it verbatim
+  -- via 'setSession' — no redundant re-compile.
+  tgt <- firstLibraryOrTestSuite ghcSess
+  _   <- trySyncOnly (loadForTarget ghcSess tgt Strict)
+  -- Wrap both eval paths in 'withStanzaFlags' as well as
+  -- 'withGhcSession'. If 'loadForTarget' succeeded the cached
+  -- env already has the target's flags and withStanzaFlags is
+  -- a no-op skip; if loadForTarget failed mid-way (typical for
+  -- scenarios that probe broken loads — non-UTF-8, ANSI-error
+  -- source) the env is empty and withStanzaFlags re-applies,
+  -- ensuring '-this-unit-id' is set before setContext /
+  -- compileExpr run. Without this wrap, GHC panics with
+  -- "findImportedModule: no home-unit".
+  eFast <- trySyncOnly (withGhcSession ghcSess $
+                          withStanzaFlags ghcSess tgt (evalShowPure safe))
+  case eFast :: Either SomeException (Maybe Text) of
+    Right (Just out) -> pure (renderOk (truncateOutput out))
+    _ -> do
+      eIO <- trySyncOnly (withGhcSession ghcSess $
+                            withStanzaFlags ghcSess tgt $ do
+                              augmentEvalContext
+                              evalIOString (T.unpack safe))
+      case eIO :: Either SomeException String of
+        Right out ->
+          pure (renderOk (truncateOutput (T.pack out)))
+        Left ex ->
+          pure (errorResult (T.pack (show ex)))
+
+-- | Structured payload emitted when the inner per-eval timeout
+-- fires. Shape matches 'Server.toolException'\'s 'error_kind'
+-- contract — clients use the tag to distinguish budget trips
+-- from user-level compile/runtime errors.
+timeoutResult :: ToolResult
+timeoutResult =
+  let payload = object
+        [ "success"    .= False
+        , "error"      .=
+            ("ghci_eval exceeded inner budget ("
+             <> T.pack (show evalTimeoutSeconds)
+             <> " s). GHC session evicted; next call boots fresh."
+             :: Text)
+        , "error_kind" .= ("timeout" :: Text)
+        ]
+  in ToolResult
+       { trContent = [ TextContent (encodeUtf8Text payload) ]
+       , trIsError = True
+       }
 
 -- | Fast path: wrap user expr in 'show', compile, coerce. Returns
 -- 'Nothing' if the wrap fails to compile (typically an IO
@@ -147,10 +231,11 @@ evalShowPure expr = do
 -- that subprocess GHCi would have had visible by default. 'setContext'
 -- established by 'loadForTarget' holds Prelude plus the home modules;
 -- eval users commonly reach for qualified IO (@System.IO.writeFile@,
--- @System.IO.readFile@) — expose those by appending 'System.IO' +
--- IO-adjacent modules to the import set. Idempotent: 'setContext'
--- itself dedupes on the underlying ModuleName — duplicate imports
--- don't accumulate across repeated calls.
+-- @System.IO.readFile@) or timing primitives
+-- (@Control.Concurrent.threadDelay@) — expose those by appending
+-- 'System.IO' + IO-adjacent modules to the import set. Idempotent:
+-- 'setContext' itself dedupes on the underlying ModuleName —
+-- duplicate imports don't accumulate across repeated calls.
 augmentEvalContext :: Ghc ()
 augmentEvalContext = do
   existing <- getContext
@@ -159,11 +244,18 @@ augmentEvalContext = do
   -- the env cache was empty), the interactive context is fresh —
   -- zero imports — and 'compileExpr "Prelude.show ..."' fails
   -- with "No module named 'Prelude' is imported".
+  --
+  -- 'Control.Concurrent' is in the extras because qualified
+  -- references like @Control.Concurrent.threadDelay@ and @forkIO@
+  -- need the module imported (GHC requires the module be brought
+  -- into scope even for a fully-qualified reference). Tested by
+  -- 'Scenarios.FlowTimeoutEnforcement'.
   let extras =
         [ "Prelude"
         , "System.IO"
         , "Data.List"
         , "Control.Monad"
+        , "Control.Concurrent"
         ]
       newImports =
         [ IIDecl (simpleImportDecl (mkModuleName m)) | m <- extras ]
