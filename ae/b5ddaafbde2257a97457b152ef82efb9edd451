@@ -1,0 +1,243 @@
+mcp-server-haskell/src/HaskellFlows/Tool/Browse.hs
+  c8d2b4a64f7aa848 1,45
+mcp-server-haskell/test-e2e/Scenarios/FlowWorkflowHelp.hs
+  c8d2b4a64f7aa848 1,4,53,68,70,72,80,90,100,109,116
+SECURITY.md
+  c8d2b4a64f7aa848 50-51,61,64,88,92,94
+mcp-server-haskell/test-e2e/Scenarios/FlowDependencyConflict.hs
+  c8d2b4a64f7aa848 1,9-10,16,24,27,29-30,38,41,72,76-77,85,95,108,119-120,133,148-149,158,173
+mcp-server-haskell/src/HaskellFlows/Tool/AddImport.hs
+  c8d2b4a64f7aa848 1,26,82
+mcp-server-haskell/src/HaskellFlows/Tool/ApplyExports.hs
+  c8d2b4a64f7aa848 1,26
+mcp-server-haskell/src/HaskellFlows/Tool/Arbitrary.hs
+  c8d2b4a64f7aa848 1,80
+mcp-server-haskell/src/HaskellFlows/Tool/Goto.hs
+  c8d2b4a64f7aa848 1,9,52,56
+mcp-server-haskell/src/HaskellFlows/Mcp/Guidance.hs
+  c8d2b4a64f7aa848 55,58,61,64,67,70,73,76,79,82,85,88,91,94,97,100,103,106,109,112,115,118,121,124,127,130,133,136,139,142,165,167-168,179,182,184,236,238-239,265,269-270
+docs/dogfood-2026-04-19-rle.md
+  c8d2b4a64f7aa848 23,31-39,45-47,52-53,57-58,61-65,75,81,93,104,131,137,142,156,160,170,193-199,207-208,211,225
+mcp-server-haskell/src/HaskellFlows/Mcp/NextStep.hs
+  c8d2b4a64f7aa848 24,55,67-68,105,119,132-134,138,145,150,152,157,162,170-171,177-178,180-181,184,192-193,195,200,209,215,225-227,229,231,233,238-239,243,250,259,265-266,270-271,275-276,282-284,291,294,301,310,312,314-315,322,324,328,335,341,343,348,350-351,354-355,360,367,374,376,383,387-388,396-397,402,404,409,412-417,419,423,425,428,431,433,437-438,445,449-451,454,456-457,460,464,466,469,471-472,495,501,515,525,548,552
+mcp-server-haskell/test-e2e/Scenarios/FlowSwitchProject.hs
+  c8d2b4a64f7aa848 1,4,18,58,83,85,93,104,114,120,146,166-167,188,193
+mcp-server-haskell/src/HaskellFlows/Mcp/WorkflowState.hs
+  c8d2b4a64f7aa848 2,37,92,97,99,101,132-134,140,144-145,148,153-154,171,174-176,178,180-182,184,186-188,191,220-221,227,233-234,238-239,242,249-250,253-255
+mcp-server-haskell/test-e2e/Scenarios/FlowBootstrap.hs
+  c8d2b4a64f7aa848 1,38,61,80,98
+mcp-server-haskell/test-e2e/Scenarios/FlowGracefulMiss.hs
+  c8d2b4a64f7aa848 10,15,20,69,71,73,81,95-96,127,133-134,155-156,182-183,187
+mcp-server-haskell/src/HaskellFlows/Ghc/ApiSession.hs
+  c8d2b4a64f7aa848 27,162,203,224-225,268,376,385,620,622,683,957,986
+mcp-server-haskell/src/HaskellFlows/Tool/Complete.hs
+  c8d2b4a64f7aa848 1,35
+mcp-server-haskell/test-e2e/Scenarios/FlowBatch.hs
+  c8d2b4a64f7aa848 1,18,52,59,62,67,75,79,112,125,130,134,142,150,158,185,197
+mcp-server-haskell/test-e2e/Scenarios/FlowTypedHoles.hs
+  c8d2b4a64f7aa848 4,10-11,15,79,84,86,93,99-100,116,121,124-125,128,130,134,144,161,163-164,167
+mcp-server-haskell/test-e2e/Scenarios/FlowPropertyStoreRace.hs
+  c8d2b4a64f7aa848 1,59,70,72,74,90,139
+.gitignore
+  c8d2b4a64f7aa848 33
+mcp-server-haskell/src/HaskellFlows/Tool/Bootstrap.hs
+  c8d2b4a64f7aa848 1,58
+docs/TODO-parallel-e2e.md
+  c8d2b4a64f7aa848 6,10,12,20,48,121,143,196-198
+CONTRIBUTING.md
+  c8d2b4a64f7aa848 121
+mcp-server-haskell/src/HaskellFlows/Tool/CreateProject.hs
+  c8d2b4a64f7aa848 1,12,51,253,290
+mcp-server-haskell/src/HaskellFlows/Tool/Coverage.hs
+  c8d2b4a64f7aa848 1,48
+mcp-server-haskell/test-e2e/Scenarios/FlowConcurrentClients.hs
+  c8d2b4a64f7aa848 6,8,27,65,74,80,101,106-107,124,126
+docs/GHC-API-rewrite-plan.md
+  c8d2b4a64f7aa848 8,44-47,81-82,86-90,199,210,220-225,253-256,274-292,301,312,319,340,355,399,405,430-431
+mcp-server-haskell/test-e2e/Scenarios/FlowRegressionScopeFix.hs
+  c8d2b4a64f7aa848 1,6,11,13-14,66,90,92,94,103,115,131-132,134,161,165-166,175-176,197,204,218
+mcp-server-haskell/test-e2e/Scenarios/FlowTypeBreakage.hs
+  c8d2b4a64f7aa848 2,7,13,16,70,72,76,84,100
+mcp-server-haskell/test-e2e/Scenarios/FlowValidateCabal.hs
+  c8d2b4a64f7aa848 1,36,43-44,68
+mcp-server-haskell/src/HaskellFlows/Tool/Type.hs
+  c8d2b4a64f7aa848 1,40,70
+mcp-server-haskell/src/HaskellFlows/Tool/Workflow.hs
+  c8d2b4a64f7aa848 1,46,178-181,184-187,199,212,215-216
+mcp-server-haskell/test-e2e/E2E/Client.hs
+  c8d2b4a64f7aa848 90,95,97
+mcp-server-haskell/src/HaskellFlows/Tool/Eval.hs
+  c8d2b4a64f7aa848 1,63,104,208
+mcp-server-haskell/src/HaskellFlows/Tool/Load.hs
+  c8d2b4a64f7aa848 1,10,45
+mcp-server-haskell/test-e2e/Scenarios/FlowSessionRobustness.hs
+  c8d2b4a64f7aa848 58,63-64,83,92,104,109,116
+mcp-server-haskell/test-e2e/Scenarios/FlowOversizedInput.hs
+  c8d2b4a64f7aa848 19-20,33,37,55,85,90-91,107,143,150
+mcp-server-haskell/haskell-flows-mcp.cabal
+  c8d2b4a64f7aa848 174
+scripts/ci-local.sh
+  c8d2b4a64f7aa848 6
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheckExport.hs
+  c8d2b4a64f7aa848 1,4,12,56,60,144,267
+mcp-server-haskell/src/HaskellFlows/Tool/SwitchProject.hs
+  c8d2b4a64f7aa848 1,8-9,77,146
+mcp-server-haskell/test-e2e/Scenarios/FlowToolchain.hs
+  c8d2b4a64f7aa848 5-6,31-33,53-55
+mcp-server-haskell/test-e2e/Scenarios/FlowDogfoodUxFixes.hs
+  c8d2b4a64f7aa848 5,8,10-12,15,18,59-60,68-70,78,81,86,88-89,120-121,155,170,188
+mcp-server-haskell/src/HaskellFlows/Tool/Hole.hs
+  c8d2b4a64f7aa848 1,40
+mcp-server-haskell/test-e2e/Scenarios/FlowMutation.hs
+  c8d2b4a64f7aa848 7,19,97,99,101,109,117,129,154,169-170
+docs/testing.md
+  c8d2b4a64f7aa848 105,109,138,161,171-172,238
+mcp-server-haskell/test-e2e/Scenarios/FlowCoverage.hs
+  c8d2b4a64f7aa848 1,85,87,106,141,179
+docs/dogfood-2026-04-19.md
+  c8d2b4a64f7aa848 47,53-55,77,80,83,86,88,107,111-119,147,155,185,188,192-197,219,231,233,245,261,295,302,317,319,322,352,354,381,390,398,400,440,444
+mcp-server-haskell/src/HaskellFlows/Tool/AddModules.hs
+  c8d2b4a64f7aa848 1,37
+docs/install.md
+  c8d2b4a64f7aa848 87,111,122-123
+mcp-server-haskell/src/HaskellFlows/Tool/RemoveModules.hs
+  c8d2b4a64f7aa848 1,14,41,46,66,150,274-275
+mcp-server-haskell/test-e2e/Scenarios/FlowRefactorOutOfScope.hs
+  c8d2b4a64f7aa848 2,7,64,66,71,86,126
+.github/ISSUE_TEMPLATE/bug_report.yml
+  c8d2b4a64f7aa848 61,70
+CHANGELOG.md
+  c8d2b4a64f7aa848 29-30,32,72,79,125-126,128,131,138-141
+mcp-server-haskell/src/HaskellFlows/Tool/ToolchainStatus.hs
+  c8d2b4a64f7aa848 1,52
+mcp-server-haskell/test-e2e/Scenarios/FlowInjectionGuard.hs
+  c8d2b4a64f7aa848 45,49,55-56,62,69,77-78,91,99-100
+mcp-server-haskell/src/HaskellFlows/Tool/ValidateCabal.hs
+  c8d2b4a64f7aa848 1,56
+mcp-server-haskell/src/HaskellFlows/Parser/Error.hs
+  c8d2b4a64f7aa848 182
+mcp-server-haskell/src/HaskellFlows/Tool/CheckModule.hs
+  c8d2b4a64f7aa848 1,51
+mcp-server-haskell/README.md
+  c8d2b4a64f7aa848 55,61,77-81,87-96,103-112,118-122,128-133,139,153,161,163-164,201
+mcp-server-haskell/test-e2e/Scenarios/FlowNonUTF8.hs
+  c8d2b4a64f7aa848 5,67,71,77,80,83-84,116-117,120
+mcp-server-haskell/test-e2e/Scenarios/FlowArbitrary.hs
+  c8d2b4a64f7aa848 1,17,19,49,85,87,91,98-99,124-125,151-152,173,185,208,215,221,230,252-253
+mcp-server-haskell/test-e2e/Scenarios/FlowExprEvaluatorDogfood.hs
+  c8d2b4a64f7aa848 31-32,73-74,79,85,91,113-114,131,152-153,165,177,190,194,208,214,221,235,253,274,284-285
+mcp-server-haskell/test-e2e/Scenarios/ExprEvaluator.hs
+  c8d2b4a64f7aa848 6-10,13-14,17-19,21-22,24,116-119,122-129,151,176,184-186,188-190,222,230-231,233,242,258,302,329,339-341,351,403,421,426,435,445,463,480,507,512
+mcp-server-haskell/test-e2e/Main.hs
+  c8d2b4a64f7aa848 140
+mcp-server-haskell/test-e2e/Scenarios/FlowDogfoodReplay.hs
+  c8d2b4a64f7aa848 10-11,16,19,23,31,224,240,247,254,266,279,300,304,311,326,329,338,361,363-364,367,370,374,380,383-384,387,390,407,409,430,435,456-458,461-462,465,468,472,505,534,557
+mcp-server-haskell/src/HaskellFlows/Suggest/Rules.hs
+  c8d2b4a64f7aa848 6,133,554
+mcp-server-haskell/src/HaskellFlows/Tool/Lint.hs
+  c8d2b4a64f7aa848 1,56
+mcp-server-haskell/src/HaskellFlows/Ghc/CabalBootstrap.hs
+  c8d2b4a64f7aa848 208
+.claude/rules/use-haskell-flows-mcp.md
+  c8d2b4a64f7aa848 24,28,43-45,51-58,65-66,69,71,73,80-83,90,93,95,101,111-118,121,124,178,192,203,205-206,209,214-216,219,222-223
+mcp-server-haskell/test-e2e/Scenarios/FlowCorpusTransport.hs
+  c8d2b4a64f7aa848 96,98,100,223
+mcp-server-haskell/src/HaskellFlows/Tool/Refactor.hs
+  c8d2b4a64f7aa848 1,15,77
+bench/bench-cold-start.py
+  c8d2b4a64f7aa848 86-87,93-98
+mcp-server-haskell/src/HaskellFlows/Tool/PropertyLifecycle.hs
+  c8d2b4a64f7aa848 1,21
+mcp-server-haskell/test-e2e/Scenarios/FlowSandboxEscape.hs
+  c8d2b4a64f7aa848 2,8,17,34,68,72,80-81,85,87,95-96,106,117
+mcp-server-haskell/src/HaskellFlows/Mcp/Server.hs
+  c8d2b4a64f7aa848 15,17,109,116,138,145-147,239,243,259,263,270,276,280,285,290,297,303,313,317,323,326,330,335,338,342,348,352,356,361,364,366,369,374,378,382,385,389,396,401,406,411,415,419,423,425,427,430,448
+mcp-server-haskell/test-e2e/Scenarios/FlowQualityGates.hs
+  c8d2b4a64f7aa848 12-13,18-19,22,87,89,94,99,105-106,125,129-130,146,152,158-159
+mcp-server-haskell/src/HaskellFlows/Tool/Regression.hs
+  c8d2b4a64f7aa848 1,46,51,84,113,132,203
+mcp-server-haskell/test-e2e/Scenarios/FlowTimeoutEnforcement.hs
+  c8d2b4a64f7aa848 9,16,53,57-58,73,87,120,122
+mcp-server-haskell/src/HaskellFlows/Tool/FixWarning.hs
+  c8d2b4a64f7aa848 1,34,100
+mcp-server-haskell/test-e2e/Scenarios/FlowExploratory.hs
+  c8d2b4a64f7aa848 8-9,13,74,76,80,86,88-89,91,94,96,100,102-103,106,112,114-115,117,120,122,126,128-129,132,138,140-141,144,153,157-158,161,163
+mcp-server-haskell/test-e2e/Scenarios/FlowRefactor.hs
+  c8d2b4a64f7aa848 3,16-17,80,82,87,92,101,121,141,170
+mcp-server-haskell/test-e2e/Scenarios/FlowPropertyLifecycle.hs
+  c8d2b4a64f7aa848 1,3-4,30,45,47,49,57,65,72,74-75
+mcp-server-haskell/src/HaskellFlows/Tool/Gate.hs
+  c8d2b4a64f7aa848 1,73,166
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheck.hs
+  c8d2b4a64f7aa848 1,12,76,98,142,180
+README.md
+  c8d2b4a64f7aa848 25-29,53,63,66,70,118,130-134,161
+mcp-server-haskell/test/Spec.hs
+  c8d2b4a64f7aa848 288-289,292-297,342,387,453,455,457,1174,1183,1191,1207,1214,1246,1258,1261,1423,1450-1453,1514,1516,1522,1526-1527,1532-1533,1535-1536,1541,1544,1712,1728,1851,1856,1861,1866,1871,1876,1879-1880,1884,1886,1889-1890,1897,1902,1907,1912,1917,1921,1925,1927,1931-1933,1939,1951-1952,1955,1957,1959,1963,1965,1967,1971,1982,1989,1993,2001-2002,2014-2017,2030,2120,2127,2206,2215,2217,2220-2221,2226,2231,2233,2251,2254,2295,2301-2303,2313-2316,2355-2361,2363-2367,2395,2402-2403,2405,2420,2426-2430,2506,2509,2550,2554-2555,2640,2661-2662,2665,2670,2673-2674,2678,2691-2692,2698,2700-2701,2703,2714-2715,2722-2723,2730-2731,2738-2739,2742,2746-2747,2754-2755,2762-2763,2773,2775,2778-2779,2788,2797-2804,2817,2823,2833,2849-2850,2946,2951,2974,2993-2994,3003,3010,3025,3044,3061,3083,3101,3193,3238,3255,3326,3429,3475,3500,3616,3669,3825,3922,3989,3993,4001-4002,4005,4021-4022,4026,4041-4042
+mcp-server-haskell/src/HaskellFlows/Tool/Deps.hs
+  c8d2b4a64f7aa848 1,81,98,103,661
+mcp-server-haskell/src/HaskellFlows/Mcp/PathBootstrap.hs
+  c8d2b4a64f7aa848 2-4
+mcp-server-haskell/src/HaskellFlows/Tool/Suggest.hs
+  c8d2b4a64f7aa848 1,87,93,216,241,252
+mcp-server-haskell/src/HaskellFlows/Tool/Determinism.hs
+  c8d2b4a64f7aa848 1,5,32,68,98,102
+mcp-server-haskell/test-e2e/Scenarios/FlowDiskFull.hs
+  c8d2b4a64f7aa848 14,22,27,34,69,89,132-133,143-144
+docs/flows.md
+  c8d2b4a64f7aa848 27,29,32,36,41,61,64-66,69,73-74,132,177-180,182-191,194-195
+mcp-server-haskell/src/HaskellFlows/Refactor/Extract.hs
+  c8d2b4a64f7aa848 23
+mcp-server-haskell/src/HaskellFlows/Tool/Format.hs
+  c8d2b4a64f7aa848 1,52
+mcp-server-haskell/test-e2e/Scenarios/FlowFixWarning.hs
+  c8d2b4a64f7aa848 1,46,48,50,60,62-63
+mcp-server-haskell/src/HaskellFlows/Tool/Info.hs
+  c8d2b4a64f7aa848 1,52
+mcp-server-haskell/test-e2e/Scenarios/FlowRefactorAdversarial.hs
+  c8d2b4a64f7aa848 1,29-30,102,104,109,114,125,168,171,183,215,218,231,256,270
+.github/workflows/haskell-ci.yml
+  c8d2b4a64f7aa848 96,154,171,183
+mcp-server-haskell/src/HaskellFlows/Tool/Imports.hs
+  c8d2b4a64f7aa848 1,32,36
+mcp-server-haskell/src/HaskellFlows/Tool/Doc.hs
+  c8d2b4a64f7aa848 1,36
+docs/bench-cold-start.md
+  c8d2b4a64f7aa848 19-24,26,33,51,54,69
+mcp-server-haskell/src/HaskellFlows/Ghc/Sanitize.hs
+  c8d2b4a64f7aa848 4
+mcp-server-haskell/test-e2e/Scenarios/FlowScopeMgmt.hs
+  c8d2b4a64f7aa848 9-12,48,80,82,87,92,94-95,110,112-113,123,125-126,149,152-153
+mcp-server-haskell/src/HaskellFlows/Tool/ToolchainWarmup.hs
+  c8d2b4a64f7aa848 1,25
+mcp-server-haskell/test-e2e/Scenarios/FlowANSIEscape.hs
+  c8d2b4a64f7aa848 81,83,89,142-143,146
+mcp-server-haskell/src/HaskellFlows/Tool/Batch.hs
+  c8d2b4a64f7aa848 1,29,52,58,140,151,217
+mcp-server-haskell/src/HaskellFlows/Tool/CheckProject.hs
+  c8d2b4a64f7aa848 1-2,5,44,46,62,190-191,228
+mcp-server-haskell/test-e2e/Scenarios/FlowCrossValidation.hs
+  c8d2b4a64f7aa848 1,7,12,14,171,173,180
+mcp-server-haskell/test-e2e/E2E/Smoke.hs
+  c8d2b4a64f7aa848 64,70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "aeb5ddaafbde2257a97457b152ef82efb9edd451",
+  "prompts": {
+    "c8d2b4a64f7aa848": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7092f905-7cbc-4a3b-b227-1a451e49ea39",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 33043,
+      "total_deletions": 1573,
+      "accepted_lines": 33256,
+      "overriden_lines": 0
+    }
+  }
+}
