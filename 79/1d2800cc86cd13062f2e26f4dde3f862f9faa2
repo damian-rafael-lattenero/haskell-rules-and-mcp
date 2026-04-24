@@ -1,0 +1,47 @@
+mcp-server-haskell/test/Spec.hs
+  f348551e07c405c5 292-297,2970-3076
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheck.hs
+  f348551e07c405c5 38-42,244,249-258,261,404-469
+mcp-server-haskell/test-e2e/Scenarios/FlowDogfoodUxFixes.hs
+  f348551e07c405c5 1-235
+mcp-server-haskell/haskell-flows-mcp.cabal
+  f348551e07c405c5 193
+mcp-server-haskell/test-e2e/Scenarios/FlowGracefulMiss.hs
+  f348551e07c405c5 103-109,114,120-123
+mcp-server-haskell/src/HaskellFlows/Tool/CheckProject.hs
+  f348551e07c405c5 189-196,198-202,288
+mcp-server-haskell/test-e2e/Main.hs
+  f348551e07c405c5 48,162-163
+mcp-server-haskell/src/HaskellFlows/Tool/Deps.hs
+  f348551e07c405c5 30-31,238-243,671-696
+mcp-server-haskell/src/HaskellFlows/Mcp/NextStep.hs
+  f348551e07c405c5 421-441
+.gitignore
+  f348551e07c405c5 28-31
+mcp-server-haskell/src/HaskellFlows/Tool/AddModules.hs
+  f348551e07c405c5 2-5,11,13-14,31,39-46,69-80,87-90,96-98,172-242,248-251,253-258,261,263-264,268,293-294,298-306,308-332,334-344,347,349,356-357,359,370-372,374,377-378,383-385,388,391,414-415,418-420
+mcp-server-haskell/src/HaskellFlows/Tool/SwitchProject.hs
+  f348551e07c405c5 186-192,201,207-208,210-215
+mcp-server-haskell/src/HaskellFlows/Tool/CheckModule.hs
+  f348551e07c405c5 110-133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "791d2800cc86cd13062f2e26f4dde3f862f9faa2",
+  "prompts": {
+    "f348551e07c405c5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "16cff891-ee4f-4df2-a5fc-e9701b54cd79",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 5388,
+      "total_deletions": 170,
+      "accepted_lines": 5665,
+      "overriden_lines": 0
+    }
+  }
+}
