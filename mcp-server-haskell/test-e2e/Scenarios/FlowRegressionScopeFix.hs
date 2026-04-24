@@ -1,17 +1,17 @@
--- | Flow: the UX fixes to @ghci_quickcheck@ + @ghci_regression@ that
+-- | Flow: the UX fixes to @ghc_quickcheck@ + @ghc_regression@ that
 -- came out of the expr-evaluator dogfood.
 --
 -- Two bugs, one scenario:
 --
---   (a) @ghci_quickcheck(property="prop_x", module="src/Foo.hs")@
+--   (a) @ghc_quickcheck(property="prop_x", module="src/Foo.hs")@
 --       used to persist /src\/Foo.hs/ verbatim, even when the
 --       property actually lives in @test/Spec.hs@. The fix consults
 --       @:info prop_x@ and stores the resolved path. The oracle here
 --       calls quickcheck with a deliberately wrong hint and asserts
---       @ghci_regression list@ shows the corrected path.
+--       @ghc_regression list@ shows the corrected path.
 --
---   (b) @ghci_regression run@ used to leave the caller in whichever
---       module it touched last — a second @ghci_eval@ from the
+--   (b) @ghc_regression run@ used to leave the caller in whichever
+--       module it touched last — a second @ghc_eval@ from the
 --       caller would then fail with "Variable not in scope". The
 --       fix snapshots @:show modules@ before the replay loop and
 --       re-loads the same set afterwards. The oracle loads a module,
@@ -63,7 +63,7 @@ fooSrc = T.unlines
 
 -- | A test-suite Main with one named property. The property is an
 -- identifier (not a lambda) so the @:info@-based resolution kicks
--- in when @ghci_quickcheck@ persists it.
+-- in when @ghc_quickcheck@ persists it.
 specSrc :: Text
 specSrc = T.unlines
   [ "module Main where"
@@ -87,11 +87,11 @@ runFlow c projectDir = do
   -- (1) scaffold + deps + Foo + Spec
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold · project + QuickCheck dep + Foo + Spec"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("scope-fix-demo" :: Text) ])
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Foo"] :: [Text]) ])
-  _ <- Client.callTool c "ghci_deps" (object
+  _ <- Client.callTool c "ghc_deps" (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("QuickCheck" :: Text)
          , "stanza"  .= ("test-suite" :: Text)
@@ -100,7 +100,7 @@ runFlow c projectDir = do
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Foo.hs") fooSrc
   TIO.writeFile (projectDir </> "test" </> "Spec.hs") specSrc
-  _ <- Client.callTool c "ghci_load"
+  _ <- Client.callTool c "ghc_load"
          (object [ "module_path" .= ("test/Spec.hs" :: Text) ])
   stepFooter 1 t0
 
@@ -112,7 +112,7 @@ runFlow c projectDir = do
   -- used to silently poison the regression store.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "quickcheck · prop_trivial with module=\"src/Foo.hs\" (wrong!)"
-  qcR <- Client.callTool c "ghci_quickcheck" (object
+  qcR <- Client.callTool c "ghc_quickcheck" (object
     [ "property" .= ("prop_trivial" :: Text)
     , "module"   .= ("src/Foo.hs"    :: Text)  -- the BUG input
     ])
@@ -128,10 +128,10 @@ runFlow c projectDir = do
   -- (3) FIX #1 ORACLE — regression list must show the RESOLVED
   --     path (test/Spec.hs), not the wrong hint the caller passed
   ----------------------------------------------------------------
-  t2 <- stepHeader 3 "fix #1 · ghci_regression list reports resolved module"
-  listR <- Client.callTool c "ghci_regression"
+  t2 <- stepHeader 3 "fix #1 · ghc_regression list reports resolved module"
+  listR <- Client.callTool c "ghc_regression"
              (object [ "action" .= ("list" :: Text) ])
-  -- 'ghci_quickcheck' auto-resolves via ':info prop_trivial', which
+  -- 'ghc_quickcheck' auto-resolves via ':info prop_trivial', which
   -- returns the ABSOLUTE path to test/Spec.hs. Both the relative
   -- "test/Spec.hs" (as the caller might have hoped for) and the
   -- absolute "/tmp/.../test/Spec.hs" (what GHCi actually reports)
@@ -158,12 +158,12 @@ runFlow c projectDir = do
   -- (4) knock the caller's scope off test/Spec.hs on purpose
   --
   -- Load Foo.hs so the active scope is 'Foo', not 'Main'. Any
-  -- subsequent 'ghci_eval' of prop_trivial would fail at this
+  -- subsequent 'ghc_eval' of prop_trivial would fail at this
   -- point — that is the pre-fix state of affairs for a caller
   -- who loaded something else between quickcheck and regression.
   ----------------------------------------------------------------
-  t3 <- stepHeader 4 "scope shift · ghci_load src/Foo.hs (displaces Main)"
-  _ <- Client.callTool c "ghci_load"
+  t3 <- stepHeader 4 "scope shift · ghc_load src/Foo.hs (displaces Main)"
+  _ <- Client.callTool c "ghc_load"
          (object [ "module_path" .= ("src/Foo.hs" :: Text) ])
   stepFooter 4 t3
 
@@ -172,8 +172,8 @@ runFlow c projectDir = do
   --     Main knocked out of scope, because the runner auto-loads
   --     the stored module before each property
   ----------------------------------------------------------------
-  t4 <- stepHeader 5 "fix #2a · ghci_regression run passes 1/1 despite scope shift"
-  runR <- Client.callTool c "ghci_regression"
+  t4 <- stepHeader 5 "fix #2a · ghc_regression run passes 1/1 despite scope shift"
+  runR <- Client.callTool c "ghc_regression"
             (object [ "action" .= ("run" :: Text) ])
   let runPassed      = fieldInt "passed" runR == Just 1
       runTotal       = fieldInt "total"  runR == Just 1
@@ -194,14 +194,14 @@ runFlow c projectDir = do
   --     should have restored the pre-run module set)
   ----------------------------------------------------------------
   t5 <- stepHeader 6 "fix #2b · post-regression, 'answer' from Foo is still live"
-  evalR <- Client.callTool c "ghci_eval"
+  evalR <- Client.callTool c "ghc_eval"
              (object [ "expression" .= ("answer" :: Text) ])
   let answerOk = fieldBool "success" evalR == Just True
               && case fieldString "output" evalR of
                    Just s  -> "42" `T.isInfixOf` s
                    Nothing -> False
   cRestore <- liveCheck $ checkPure
-    "restored · ghci_eval 'answer' returns 42 (Foo still loaded)"
+    "restored · ghc_eval 'answer' returns 42 (Foo still loaded)"
     answerOk
     ("If this fails with 'Variable not in scope: answer', regression \
      \run did not restore the caller's pre-run :show modules state. \
@@ -215,7 +215,7 @@ runFlow c projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
--- | Pick the 'module' field of the FIRST entry in a 'ghci_regression list'
+-- | Pick the 'module' field of the FIRST entry in a 'ghc_regression list'
 -- response. The response shape is:
 --   { "properties": [ { "expression": ..., "module": ..., ... }, ... ] }
 firstPropertyModule :: Value -> Maybe Text

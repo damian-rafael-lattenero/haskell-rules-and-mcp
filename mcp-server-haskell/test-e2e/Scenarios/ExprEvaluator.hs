@@ -3,25 +3,25 @@
 --
 -- Exercises, in order:
 --
---    1. 'ghci_workflow(status)'       — initial state + phase classifier.
---    2. 'ghci_create_project'          — scaffold; nextStep chain (BUG-22).
---    3. 'ghci_deps(add, QuickCheck)'   — test-suite dep.
---    4. 'ghci_add_modules'             — register 4 Expr.* modules.
---    5. 'ghci_remove_modules' (BUG-16) — drop the default stub.
+--    1. 'ghc_workflow(status)'       — initial state + phase classifier.
+--    2. 'ghc_create_project'          — scaffold; nextStep chain (BUG-22).
+--    3. 'ghc_deps(add, QuickCheck)'   — test-suite dep.
+--    4. 'ghc_add_modules'             — register 4 Expr.* modules.
+--    5. 'ghc_remove_modules' (BUG-16) — drop the default stub.
 --    6. Direct file-IO              — write the 4 source files + test/Gen.
 --    7. Cabal other-modules wiring  — register Gen.
---    8. 'ghci_load(test/Gen.hs)'     — BUG-18's 5-module compile.
---    9. 'ghci_suggest("simplify")'   — BUG-03 sibling engine: asserts
+--    8. 'ghc_load(test/Gen.hs)'     — BUG-18's 5-module compile.
+--    9. 'ghc_suggest("simplify")'   — BUG-03 sibling engine: asserts
 --                                       Constant-folding soundness fires
 --                                       at High confidence.
---   10. 'ghci_quickcheck' x3         — idempotent / soundness / roundtrip.
---   11. 'ghci_determinism'           — BUG-06 stability.
---   12. 'ghci_regression(list)'      — 3 persisted; no store-cold FS crash
+--   10. 'ghc_quickcheck' x3         — idempotent / soundness / roundtrip.
+--   11. 'ghc_determinism'           — BUG-06 stability.
+--   12. 'ghc_regression(list)'      — 3 persisted; no store-cold FS crash
 --                                       (BUG-04).
---   13. 'ghci_regression(run)'       — all replay pass.
---   14. 'ghci_quickcheck_export'     — BUG-02 fixed: file contains
+--   13. 'ghc_regression(run)'       — all replay pass.
+--   14. 'ghc_quickcheck_export'     — BUG-02 fixed: file contains
 --                                       'import Gen', not 'import test.Gen'.
---   15. 'ghci_gate'                  — BUG-01 fixed: structured result,
+--   15. 'ghc_gate'                  — BUG-01 fixed: structured result,
 --                                       no connection-close.
 module Scenarios.ExprEvaluator
   ( runExprScenario
@@ -113,20 +113,20 @@ runExprScenario :: Client.McpClient -> FilePath -> IO [Check]
 runExprScenario c projectDir = do
   beginSection "Scenario: Arithmetic Expression Evaluator (15 steps)"
   s1  <- runStep 1  "initial workflow(status)"           (step1_initialStatus  c)
-  s2  <- runStep 2  "ghci_create_project"                 (step2_scaffold        c)
-  s3  <- runStep 3  "ghci_deps(add QuickCheck test-suite)" (step3_addQuickCheck   c)
-  s4  <- runStep 4  "ghci_add_modules (4 Expr.*)"          (step4_addModules      c)
-  s5  <- runStep 5  "ghci_remove_modules (BUG-16)"         (step5_removeStub      c)
+  s2  <- runStep 2  "ghc_create_project"                 (step2_scaffold        c)
+  s3  <- runStep 3  "ghc_deps(add QuickCheck test-suite)" (step3_addQuickCheck   c)
+  s4  <- runStep 4  "ghc_add_modules (4 Expr.*)"          (step4_addModules      c)
+  s5  <- runStep 5  "ghc_remove_modules (BUG-16)"         (step5_removeStub      c)
   s6  <- runStep 6  "write 5 source files"                 (step6_writeSources         projectDir)
   s7  <- runStep 7  "wire test-suite other-modules"        (step7_wireOtherModules     projectDir)
-  s8  <- runStep 8  "ghci_load(test/Gen.hs)"               (step8_loadAll         c)
-  s9  <- runStep 9  "ghci_suggest(simplify) — BUG-03"      (step9_suggestSimplify c)
-  s10 <- runStep 10 "ghci_quickcheck × 3 (BUG-04)"         (step10_runProperties  c)
-  s11 <- runStep 11 "ghci_determinism"                     (step11_determinism    c)
-  s12 <- runStep 12 "ghci_regression(list)"                (step12_regressionList c)
-  s13 <- runStep 13 "ghci_regression(run)"                 (step13_regressionRun  c)
-  s14 <- runStep 14 "ghci_quickcheck_export (BUG-02)"      (step14_export         c projectDir)
-  s15 <- runStep 15 "ghci_gate (BUG-01)"                   (step15_gate           c)
+  s8  <- runStep 8  "ghc_load(test/Gen.hs)"               (step8_loadAll         c)
+  s9  <- runStep 9  "ghc_suggest(simplify) — BUG-03"      (step9_suggestSimplify c)
+  s10 <- runStep 10 "ghc_quickcheck × 3 (BUG-04)"         (step10_runProperties  c)
+  s11 <- runStep 11 "ghc_determinism"                     (step11_determinism    c)
+  s12 <- runStep 12 "ghc_regression(list)"                (step12_regressionList c)
+  s13 <- runStep 13 "ghc_regression(run)"                 (step13_regressionRun  c)
+  s14 <- runStep 14 "ghc_quickcheck_export (BUG-02)"      (step14_export         c projectDir)
+  s15 <- runStep 15 "ghc_gate (BUG-01)"                   (step15_gate           c)
   pure (concat
     [ s1, s2, s3, s4, s5, s6, s7, s8, s9, s10
     , s11, s12, s13, s14, s15 ])
@@ -148,7 +148,7 @@ runStep n title body = do
 
 step1_initialStatus :: Client.McpClient -> IO [Check]
 step1_initialStatus c = do
-  r <- Client.callTool c "ghci_workflow" (object [ "action" .= ("status" :: Text) ])
+  r <- Client.callTool c "ghc_workflow" (object [ "action" .= ("status" :: Text) ])
   pure
     [ mkCheck "step 1 · status view carries phase field"
         (isJust (fieldString "phase" r))
@@ -173,7 +173,7 @@ objMap _          = KeyMap.empty
 
 step2_scaffold :: Client.McpClient -> IO [Check]
 step2_scaffold c = do
-  r <- Client.callTool c "ghci_create_project"
+  r <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("expr-evaluator" :: Text) ])
   let ok = fieldBool "success" r == Just True
       chain = fetchChain r
@@ -181,13 +181,13 @@ step2_scaffold c = do
   pure
     [ mkCheck "step 2 · create_project success"
         ok "expected success=true"
-    , mkCheck "step 2 · nextStep points at ghci_deps"
-        (fetchNextStepTool r == Just "ghci_deps")
-        "nextStep.tool should be ghci_deps (BUG-06)"
+    , mkCheck "step 2 · nextStep points at ghc_deps"
+        (fetchNextStepTool r == Just "ghc_deps")
+        "nextStep.tool should be ghc_deps (BUG-06)"
     , mkCheck "step 2 · nextStep chain carries bootstrap plan (BUG-22)"
-        (  "ghci_deps"        `elem` chainTools
-        && "ghci_add_modules" `elem` chainTools
-        && "ghci_load"        `elem` chainTools )
+        (  "ghc_deps"        `elem` chainTools
+        && "ghc_add_modules" `elem` chainTools
+        && "ghc_load"        `elem` chainTools )
         "chain must include deps + add_modules + load"
     ]
 
@@ -219,7 +219,7 @@ lookupPath v = foldl step (Just v)
 
 step3_addQuickCheck :: Client.McpClient -> IO [Check]
 step3_addQuickCheck c = do
-  r <- Client.callTool c "ghci_deps" (object
+  r <- Client.callTool c "ghc_deps" (object
     [ "action"  .= ("add" :: Text)
     , "package" .= ("QuickCheck" :: Text)
     , "version" .= (">= 2.14" :: Text)
@@ -227,10 +227,10 @@ step3_addQuickCheck c = do
     ])
   pure
     [ checkJsonField "step 3 · deps add success" r "success" (Bool True)
-    , mkCheck "step 3 · hint carries no phantom ghci_session (BUG-19)"
-        (not ("ghci_session" `T.isInfixOf`
+    , mkCheck "step 3 · hint carries no phantom ghc_session (BUG-19)"
+        (not ("ghc_session" `T.isInfixOf`
               fromMaybe "" (fieldString "hint" r)))
-        "deps add hint must not reference the removed ghci_session tool"
+        "deps add hint must not reference the removed ghc_session tool"
     ]
 
 --------------------------------------------------------------------------------
@@ -239,7 +239,7 @@ step3_addQuickCheck c = do
 
 step4_addModules :: Client.McpClient -> IO [Check]
 step4_addModules c = do
-  r <- Client.callTool c "ghci_add_modules" (object
+  r <- Client.callTool c "ghc_add_modules" (object
     [ "modules" .= (["Expr.Syntax", "Expr.Eval", "Expr.Simplify", "Expr.Pretty"] :: [Text])
     ])
   pure
@@ -255,7 +255,7 @@ step4_addModules c = do
 
 step5_removeStub :: Client.McpClient -> IO [Check]
 step5_removeStub c = do
-  r <- Client.callTool c "ghci_remove_modules" (object
+  r <- Client.callTool c "ghc_remove_modules" (object
     [ "modules"      .= (["ExprEvaluator"] :: [Text])
     , "delete_files" .= True
     ])
@@ -299,7 +299,7 @@ step6_writeSources projectDir = do
 --------------------------------------------------------------------------------
 -- step 7 — add Gen to the test-suite's other-modules so cabal
 -- includes it in the build graph. No MCP tool covers this yet
--- (future BUG: ghci_add_test_modules); direct edit via FS.
+-- (future BUG: ghc_add_test_modules); direct edit via FS.
 --------------------------------------------------------------------------------
 
 step7_wireOtherModules :: FilePath -> IO [Check]
@@ -326,7 +326,7 @@ step7_wireOtherModules projectDir = do
 
 step8_loadAll :: Client.McpClient -> IO [Check]
 step8_loadAll c = do
-  r <- Client.callTool c "ghci_load"
+  r <- Client.callTool c "ghc_load"
          (object [ "module_path" .= ("test/Gen.hs" :: Text) ])
   pure
     [ checkJsonField "step 8 · load success" r "success" (Bool True)
@@ -336,9 +336,9 @@ step8_loadAll c = do
     , mkCheck "step 8 · no warnings"
         (fieldArrayLen "warnings" r == Just 0)
         "warnings[] should be empty"
-    , mkCheck "step 8 · nextStep points at ghci_suggest"
-        (fetchNextStepTool r == Just "ghci_suggest")
-        "clean load should push the agent toward ghci_suggest"
+    , mkCheck "step 8 · nextStep points at ghc_suggest"
+        (fetchNextStepTool r == Just "ghc_suggest")
+        "clean load should push the agent toward ghc_suggest"
     ]
 
 --------------------------------------------------------------------------------
@@ -348,7 +348,7 @@ step8_loadAll c = do
 
 step9_suggestSimplify :: Client.McpClient -> IO [Check]
 step9_suggestSimplify c = do
-  r <- Client.callTool c "ghci_suggest"
+  r <- Client.callTool c "ghc_suggest"
          (object [ "function_name" .= ("simplify" :: Text) ])
   let suggestions = case lookupPath r ["suggestions"] of
         Just (Array a) -> V.toList a
@@ -400,7 +400,7 @@ step10_runProperties c = do
            "\\(x :: Expr) -> parseExpr (pretty x) == Just x")
         ]
   forM props $ \(label, prop) -> do
-    r <- Client.callTool c "ghci_quickcheck" (object
+    r <- Client.callTool c "ghc_quickcheck" (object
       [ "property" .= (prop :: Text)
       , "module"   .= ("test/Gen.hs" :: Text)
       ])
@@ -418,12 +418,12 @@ step10_runProperties c = do
 
 step11_determinism :: Client.McpClient -> IO [Check]
 step11_determinism c = do
-  r <- Client.callTool c "ghci_determinism" (object
+  r <- Client.callTool c "ghc_determinism" (object
     [ "property" .= (
         "\\(env :: Env) (x :: Expr) -> eval env (simplify x) == eval env x"
         :: Text)
     , "runs"     .= (3 :: Int)
-    -- Same module load-hint shape as step 10's 'ghci_quickcheck'
+    -- Same module load-hint shape as step 10's 'ghc_quickcheck'
     -- calls — the property references 'Env' and 'Expr' which
     -- live in the test-suite's Gen module, not in the default
     -- test-suite auto-load set.
@@ -432,7 +432,7 @@ step11_determinism c = do
   pure
     [ checkJsonField "step 11 · determinism success" r "success" (Bool True)
     , mkCheck "step 11 · nextStep points at regression(run)"
-        (fetchNextStepTool r == Just "ghci_regression")
+        (fetchNextStepTool r == Just "ghc_regression")
         "stable property should push the agent toward regression(run)"
     ]
 
@@ -442,7 +442,7 @@ step11_determinism c = do
 
 step12_regressionList :: Client.McpClient -> IO [Check]
 step12_regressionList c = do
-  r <- Client.callTool c "ghci_regression"
+  r <- Client.callTool c "ghc_regression"
          (object [ "action" .= ("list" :: Text) ])
   pure
     [ checkJsonField "step 12 · regression list success" r "success" (Bool True)
@@ -460,7 +460,7 @@ step12_regressionList c = do
 
 step13_regressionRun :: Client.McpClient -> IO [Check]
 step13_regressionRun c = do
-  r <- Client.callTool c "ghci_regression"
+  r <- Client.callTool c "ghc_regression"
          (object [ "action" .= ("run" :: Text) ])
   -- Dropped: "step 13 · regression run success" — 'no regressions' is
   -- strictly stronger and catches the real failure shape.
@@ -477,7 +477,7 @@ step13_regressionRun c = do
 
 step14_export :: Client.McpClient -> FilePath -> IO [Check]
 step14_export c projectDir = do
-  r <- Client.callTool c "ghci_quickcheck_export" (object [])
+  r <- Client.callTool c "ghc_quickcheck_export" (object [])
   let success = fieldBool "success" r == Just True
       specPath = projectDir </> "test" </> "Spec.hs"
   specExists <- doesFileExist specPath
@@ -504,12 +504,12 @@ step15_gate c = do
   -- Skip the expensive cabal test + cabal build subprocess steps:
   -- the E2E's point is that the tool's shape holds, not that
   -- cabal builds this particular test project under our environment.
-  r <- Client.callTool c "ghci_gate" (object
+  r <- Client.callTool c "ghc_gate" (object
     [ "skip_cabal_test"  .= True
     , "skip_cabal_build" .= True
     ])
   pure
-    [ checkPure "step 15 · ghci_gate returned a structured response (BUG-01)"
+    [ checkPure "step 15 · ghc_gate returned a structured response (BUG-01)"
         (case r of Object _ -> True; _ -> False)
         "gate must not tear down the connection — earlier dogfood (F-22) \
         \had this call return a 'Connection closed' instead of a tool \

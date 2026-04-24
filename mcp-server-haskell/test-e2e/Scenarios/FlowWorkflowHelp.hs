@@ -1,7 +1,7 @@
--- | Flow: @ghci_workflow(help|next)@ — state-aware guidance.
+-- | Flow: @ghc_workflow(help|next)@ — state-aware guidance.
 --
 -- Drives the server through a sequence of state-changing tool
--- calls, then asks @ghci_workflow(help)@ + @ghci_workflow(next)@
+-- calls, then asks @ghc_workflow(help)@ + @ghc_workflow(next)@
 -- for a state-aware nudge. Pins that:
 --
 --   * 'help' carries a non-empty @steps@ list + a 'phase' field
@@ -50,7 +50,7 @@ runFlow c projectDir = do
   -- help at t=0 (no state yet → phase = PhasePreScaffold)
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "help at t=0 — pre-scaffold phase"
-  r0 <- Client.callTool c "ghci_workflow" (object [ "action" .= ("help" :: Text) ])
+  r0 <- Client.callTool c "ghc_workflow" (object [ "action" .= ("help" :: Text) ])
   c1 <- liveCheck $ checkJsonFieldMatches
           "help has a 'steps' array"
           r0 "steps" isNonEmptyArray
@@ -65,11 +65,11 @@ runFlow c projectDir = do
   -- advance state: scaffold + load + add 3 passing properties
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "advance state: scaffold + load + 3 passing props"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("workflow-demo" :: Text) ])
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Calc"] :: [Text]) ])
-  _ <- Client.callTool c "ghci_deps" (object
+  _ <- Client.callTool c "ghc_deps" (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("QuickCheck" :: Text)
          , "stanza"  .= ("test-suite" :: Text)
@@ -77,7 +77,7 @@ runFlow c projectDir = do
          ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs") calcSrc
-  _ <- Client.callTool c "ghci_load"
+  _ <- Client.callTool c "ghc_load"
          (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
   -- 3 distinct passing properties to cross the wsPassedProperties
   -- >= 3 threshold in WorkflowState.renderHelp.
@@ -87,7 +87,7 @@ runFlow c projectDir = do
         , "\\(x :: Int) -> double (double x) == triple x + x"
         ]
   forM_ props $ \p ->
-    Client.callTool c "ghci_quickcheck" (object
+    Client.callTool c "ghc_quickcheck" (object
       [ "property" .= (p :: Text)
       , "module"   .= ("src/Calc.hs" :: Text)
       ])
@@ -97,7 +97,7 @@ runFlow c projectDir = do
   -- help at t=N (≥3 passing props → state hint mentions regression)
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "help after ≥3 passing props — history nudge"
-  rN <- Client.callTool c "ghci_workflow" (object [ "action" .= ("help" :: Text) ])
+  rN <- Client.callTool c "ghc_workflow" (object [ "action" .= ("help" :: Text) ])
   c3 <- liveCheck $ checkJsonFieldMatches
           "help now reports a non-preScaffold phase"
           rN "phase" (not . stringIs "PhasePreScaffold")
@@ -106,14 +106,14 @@ runFlow c projectDir = do
           "help surfaces 'stateHints' once thresholds trip (BUG-08)"
           rN "stateHints" (hintsMention "regression")
           "with 3+ passing properties, WorkflowState.renderHelp emits a \
-          \'consider ghci_regression(action=\"run\")' nudge"
+          \'consider ghc_regression(action=\"run\")' nudge"
   stepFooter 3 t2
 
   ----------------------------------------------------------------
   -- next — single tool recommendation
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "workflow(next) — single next tool"
-  rNext <- Client.callTool c "ghci_workflow" (object [ "action" .= ("next" :: Text) ])
+  rNext <- Client.callTool c "ghc_workflow" (object [ "action" .= ("next" :: Text) ])
   c5 <- liveCheck $ checkJsonFieldMatches
           "next · payload carries a 'tool' string"
           rNext "tool" isString

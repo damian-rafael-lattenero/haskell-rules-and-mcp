@@ -1,4 +1,4 @@
--- | @ghci_refactor@ — small-scope refactors with snapshot-and-compile
+-- | @ghc_refactor@ — small-scope refactors with snapshot-and-compile
 -- semantics.
 --
 -- Actions:
@@ -12,7 +12,7 @@
 --
 -- * We snapshot the current file contents before any edit.
 -- * We write the rewrite to disk.
--- * We call @ghci_load@ (strict mode) against the rewritten file.
+-- * We call @ghc_load@ (strict mode) against the rewritten file.
 -- * If GHCi surfaces any @error:@, we restore the snapshot verbatim
 --   and return the compile errors to the agent.
 -- * If compilation succeeds (or only has non-blocking warnings), the
@@ -74,7 +74,7 @@ import HaskellFlows.Types
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_refactor"
+    { tdName        = "ghc_refactor"
     , tdDescription =
         "Small-scope refactors with snapshot-and-compile safety. "
           <> "Actions: 'rename_local' (scoped identifier rename), "

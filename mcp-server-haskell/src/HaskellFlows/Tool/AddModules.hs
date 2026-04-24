@@ -1,4 +1,4 @@
--- | @ghci_add_modules@ — register new modules in the project's
+-- | @ghc_add_modules@ — register new modules in the project's
 -- @.cabal@ (library's @exposed-modules@ by default; test-suite,
 -- executable, or benchmark @other-modules@ when 'stanza' is
 -- supplied) AND scaffold empty @.hs@ stubs under the matching
@@ -34,7 +34,7 @@ import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath, unProjectDir)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_add_modules"
+    { tdName        = "ghc_add_modules"
     , tdDescription =
         "Register new modules in the project's .cabal and scaffold \
         \their empty .hs stubs. Default target is the library's \

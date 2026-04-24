@@ -4,7 +4,7 @@
 -- of what the MCP currently returns. The question it answers is:
 --
 --     "If I persist a QuickCheck law, then mutate the code so the law
---      must fail, does @ghci_regression(run)@ actually catch it?"
+--      must fail, does @ghc_regression(run)@ actually catch it?"
 --
 -- The only correct answer is /yes, the mutated property must surface
 -- in @regressions[]@/. If the MCP returns @regressions == []@ after
@@ -16,7 +16,7 @@
 --     silently deferred the failing assertion instead of reporting.
 --   * The property-store returned cached verdicts from the original
 --     pass instead of re-running.
---   * @ghci_regression(run)@ short-circuited the replay.
+--   * @ghc_regression(run)@ short-circuited the replay.
 --
 -- Every one of those is a real regression we want to catch. The test
 -- exists so those bugs cannot ship unnoticed, not because it documents
@@ -94,11 +94,11 @@ runFlow c projectDir = do
   -- (1) scaffold + QuickCheck dep + module + write CLEAN source
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + deps + Calc.hs (clean)"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("mutation-demo" :: Text) ])
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Calc"] :: [Text]) ])
-  _ <- Client.callTool c "ghci_deps" (object
+  _ <- Client.callTool c "ghc_deps" (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("QuickCheck" :: Text)
          , "stanza"  .= ("test-suite" :: Text)
@@ -106,7 +106,7 @@ runFlow c projectDir = do
          ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs") calcClean
-  _ <- Client.callTool c "ghci_load"
+  _ <- Client.callTool c "ghc_load"
          (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
   stepFooter 1 t0
 
@@ -114,7 +114,7 @@ runFlow c projectDir = do
   -- (2) persist two laws that PASS on the clean source
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "persist prop_commutative + prop_double2xEven (both pass)"
-  rCommClean <- Client.callTool c "ghci_quickcheck" (object
+  rCommClean <- Client.callTool c "ghc_quickcheck" (object
     [ "property" .= ("\\(x :: Int) (y :: Int) -> add x y == add y x" :: Text)
     , "module"   .= ("src/Calc.hs" :: Text)
     ])
@@ -126,7 +126,7 @@ runFlow c projectDir = do
      \'add' was supposed to be commutative initially. Raw: "
      <> truncRender rCommClean)
 
-  rScaleClean <- Client.callTool c "ghci_quickcheck" (object
+  rScaleClean <- Client.callTool c "ghc_quickcheck" (object
     [ "property" .= ("\\(x :: Int) -> even (double2x x)" :: Text)
     , "module"   .= ("src/Calc.hs" :: Text)
     ])
@@ -151,7 +151,7 @@ runFlow c projectDir = do
   -- catches up with the disk. If regression-run itself fails to
   -- reload, that is the bug we are hunting — but a conscientious
   -- client would reload first, so do that here.
-  rReload <- Client.callTool c "ghci_load"
+  rReload <- Client.callTool c "ghc_load"
                (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
   let reloadedCleanly = fieldBool "success" rReload == Just True
                      && fieldArrayLen "errors" rReload == Just 0
@@ -166,8 +166,8 @@ runFlow c projectDir = do
   -- (4) BUG-FINDING ORACLE — regression(run) MUST surface the
   --     broken commutativity law and MUST NOT flag double2x.
   ----------------------------------------------------------------
-  t3 <- stepHeader 4 "ghci_regression(run): must detect the mutated commutativity"
-  rReg <- Client.callTool c "ghci_regression"
+  t3 <- stepHeader 4 "ghc_regression(run): must detect the mutated commutativity"
+  rReg <- Client.callTool c "ghc_regression"
             (object [ "action" .= ("run" :: Text) ])
 
   let regs              = regressionExprs rReg

@@ -3,7 +3,7 @@
 # push doesn't surprise us with a red check for something we could have
 # caught at author time.
 #
-# Why this exists: `ghci_lint` (the MCP tool) runs hlint per-module and
+# Why this exists: `ghc_lint` (the MCP tool) runs hlint per-module and
 # it's easy to lint only the src/ files you just touched while forgetting
 # that CI runs `hlint mcp-server-haskell/` recursively — including test/.
 # Happened twice: `parseX ... == Nothing` slipped into the test suite

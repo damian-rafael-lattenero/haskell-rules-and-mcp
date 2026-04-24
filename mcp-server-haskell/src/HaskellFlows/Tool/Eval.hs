@@ -1,4 +1,4 @@
--- | @ghci_eval@ — Wave-5 full in-process.
+-- | @ghc_eval@ — Wave-5 full in-process.
 --
 -- Evaluates a Haskell expression. Tries the fast path first: wrap in
 -- @show@, 'compileExpr', @unsafeCoerce@ to 'String'. If that fails
@@ -60,7 +60,7 @@ import HaskellFlows.Mcp.Protocol
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_eval"
+    { tdName        = "ghc_eval"
     , tdDescription =
         "Evaluate a Haskell expression in-process via the GHC API. "
           <> "Tries @show@-wrapped compileExpr first (for pure expressions), "
@@ -101,7 +101,7 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
     case sanitizeExpression expr of
       Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
       Right safe -> do
-        -- Inner per-eval budget. 'ghci_eval' is the only tool that
+        -- Inner per-eval budget. 'ghc_eval' is the only tool that
         -- interprets user-supplied expressions; without a tighter
         -- inner cap, pathological inputs ('threadDelay 60000000',
         -- 'let go = go in go', a blocking foreign call) would ride
@@ -205,7 +205,7 @@ timeoutResult =
   let payload = object
         [ "success"    .= False
         , "error"      .=
-            ("ghci_eval exceeded inner budget ("
+            ("ghc_eval exceeded inner budget ("
              <> T.pack (show evalTimeoutSeconds)
              <> " s). GHC session evicted; next call boots fresh."
              :: Text)

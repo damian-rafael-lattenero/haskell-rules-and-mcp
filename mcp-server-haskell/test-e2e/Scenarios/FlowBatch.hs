@@ -1,4 +1,4 @@
--- | Flow: composition via @ghci_batch@.
+-- | Flow: composition via @ghc_batch@.
 --
 -- Exercises the tool that runs N sub-calls sequentially in a
 -- single request. This is the primitive that the multi-step
@@ -15,7 +15,7 @@
 --
 -- Tools exercised:
 --
---   ghci_batch  (composition primitive)
+--   ghc_batch  (composition primitive)
 -- Indirectly every tool that appears as a sub-action.
 module Scenarios.FlowBatch
   ( runFlow
@@ -49,22 +49,22 @@ runFlow c _projectDir = do
   -- operate on.
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("batch-demo" :: Text) ])
   stepFooter 1 t0
 
   ----------------------------------------------------------------
   -- (1) Happy composition: 3 legit actions in order.
   ----------------------------------------------------------------
-  t1 <- stepHeader 2 "ghci_batch(3 happy actions)"
+  t1 <- stepHeader 2 "ghc_batch(3 happy actions)"
   let happyActions =
         [ object
-            [ "tool" .= ("ghci_add_modules" :: Text)
+            [ "tool" .= ("ghc_add_modules" :: Text)
             , "args" .= object
                 [ "modules" .= (["Foo", "Bar"] :: [Text]) ]
             ]
         , object
-            [ "tool" .= ("ghci_deps" :: Text)
+            [ "tool" .= ("ghc_deps" :: Text)
             , "args" .= object
                 [ "action"  .= ("add" :: Text)
                 , "package" .= ("text" :: Text)
@@ -72,11 +72,11 @@ runFlow c _projectDir = do
                 ]
             ]
         , object
-            [ "tool" .= ("ghci_workflow" :: Text)
+            [ "tool" .= ("ghc_workflow" :: Text)
             , "args" .= object [ "action" .= ("status" :: Text) ]
             ]
         ]
-  happyR <- Client.callTool c "ghci_batch"
+  happyR <- Client.callTool c "ghc_batch"
               (object [ "actions" .= happyActions ])
   c1 <- liveCheck $ checkJsonField
           "happy · overall success"
@@ -109,7 +109,7 @@ runFlow c _projectDir = do
   -- still report ok=1, failed=1, skipped=1 if the emitter is buggy
   -- in the same direction.
   --
-  -- To close that hole we chain THREE 'ghci_deps(add)' actions with
+  -- To close that hole we chain THREE 'ghc_deps(add)' actions with
   -- distinct packages. Action #2 is deliberately invalid (validator
   -- refuses). With fail_fast=true, action #3 (bytestring) must
   -- NEVER run — the oracle is the .cabal on disk:
@@ -122,16 +122,16 @@ runFlow c _projectDir = do
   -- tells the truth.
   ----------------------------------------------------------------
   t2 <- stepHeader 3
-          "ghci_batch(fail_fast=true) · filesystem oracle"
+          "ghc_batch(fail_fast=true) · filesystem oracle"
   -- Use packages DISTINCT from the happy-case batch above so
   -- action #1 genuinely inserts (happy case already added 'text';
   -- re-adding it here returns "No change: already at desired
   -- state" which reads as failure, not success — that is the
-  -- correct ghci_deps behaviour but would be a false negative
+  -- correct ghc_deps behaviour but would be a false negative
   -- for the fail-fast oracle).
   let ffActions =
         [ object  -- action 1: genuinely new dep → success
-            [ "tool" .= ("ghci_deps" :: Text)
+            [ "tool" .= ("ghc_deps" :: Text)
             , "args" .= object
                 [ "action"  .= ("add" :: Text)
                 , "package" .= ("aeson" :: Text)
@@ -139,7 +139,7 @@ runFlow c _projectDir = do
                 ]
             ]
         , object  -- action 2: boundary-rejected (validator)
-            [ "tool" .= ("ghci_deps" :: Text)
+            [ "tool" .= ("ghc_deps" :: Text)
             , "args" .= object
                 [ "action"  .= ("add" :: Text)
                 , "package" .= ("has spaces and ! is invalid" :: Text)
@@ -147,7 +147,7 @@ runFlow c _projectDir = do
                 ]
             ]
         , object  -- action 3: MUST be skipped by fail_fast
-            [ "tool" .= ("ghci_deps" :: Text)
+            [ "tool" .= ("ghc_deps" :: Text)
             , "args" .= object
                 [ "action"  .= ("add" :: Text)
                 , "package" .= ("bytestring" :: Text)
@@ -155,7 +155,7 @@ runFlow c _projectDir = do
                 ]
             ]
         ]
-  ffR <- Client.callTool c "ghci_batch" (object
+  ffR <- Client.callTool c "ghc_batch" (object
     [ "actions"   .= ffActions
     , "fail_fast" .= True
     ])
@@ -182,7 +182,7 @@ runFlow c _projectDir = do
 
   -- The REAL oracle: what does the filesystem say?
   t3 <- stepHeader 4 "filesystem oracle · ls build_depends after batch"
-  ls <- Client.callTool c "ghci_deps"
+  ls <- Client.callTool c "ghc_deps"
           (object [ "action" .= ("list" :: Text) ])
   let deps = case lookupField "build_depends" ls of
         Just (Array xs) -> [ p | String p <- toListVec xs ]
@@ -194,7 +194,7 @@ runFlow c _projectDir = do
     , cOk     = hasAeson
     , cDetail = "If 'aeson' is missing, even the FIRST successful \
                 \batch action didn't persist — the batch short-circuit \
-                \also rolled back earlier successes, or ghci_deps is \
+                \also rolled back earlier successes, or ghc_deps is \
                 \broken. build_depends=" <> T.pack (show deps)
     }
   c12 <- liveCheck $ Check

@@ -1,4 +1,4 @@
--- | @ghci_format@ — run @fourmolu@ or @ormolu@ on a module.
+-- | @ghc_format@ — run @fourmolu@ or @ormolu@ on a module.
 --
 -- Mirrors the TS tool's resolution policy: try @fourmolu@ first, fall
 -- back to @ormolu@, report unavailable if neither is on @PATH@. With
@@ -49,7 +49,7 @@ import HaskellFlows.Types
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_format"
+    { tdName        = "ghc_format"
     , tdDescription =
         "Format a Haskell module with fourmolu (preferred) or ormolu "
           <> "(fallback). Default is check-only — pass write=true to "

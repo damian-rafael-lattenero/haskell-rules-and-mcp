@@ -7,17 +7,17 @@
 --
 -- Covered misses:
 --
---   (1) @ghci_deps(action="remove", package="not-a-dep")@ on a scaffold
+--   (1) @ghc_deps(action="remove", package="not-a-dep")@ on a scaffold
 --       that does not depend on it. A silent success would lie about
 --       having removed nothing; a structured refusal (or an explicit
 --       no-op with @removed=0@) lets the agent course-correct.
 --
---   (2) @ghci_hole@ on a module that has no holes. The tool must
+--   (2) @ghc_hole@ on a module that has no holes. The tool must
 --       return @hole_count: 0@ cleanly, not an error — a dev running
 --       the tool optimistically after a patch should not get a
 --       spurious failure just because the holes are already gone.
 --
---   (3) @ghci_quickcheck(property="42")@ — the property is not a
+--   (3) @ghc_quickcheck(property="42")@ — the property is not a
 --       predicate. GHCi would refuse to run @quickCheck (42)@ because
 --       @42@ doesn't satisfy @Testable@. The MCP must surface that as
 --       a structured failure, not let the GHCi panic bubble up as a
@@ -66,11 +66,11 @@ runFlow c projectDir = do
   -- setup
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Whole (a module with NO holes)"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("gracefulmiss-demo" :: Text) ])
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Whole"] :: [Text]) ])
-  _ <- Client.callTool c "ghci_deps" (object
+  _ <- Client.callTool c "ghc_deps" (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("QuickCheck" :: Text)
          , "stanza"  .= ("test-suite" :: Text)
@@ -78,7 +78,7 @@ runFlow c projectDir = do
          ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Whole.hs") noHolesSrc
-  _ <- Client.callTool c "ghci_load"
+  _ <- Client.callTool c "ghc_load"
          (object [ "module_path" .= ("src/Whole.hs" :: Text) ])
   stepFooter 1 t0
 
@@ -92,8 +92,8 @@ runFlow c projectDir = do
   -- WRONG:
   --   success=true with no signal — the agent thinks it worked.
   ----------------------------------------------------------------
-  t1 <- stepHeader 2 "ghci_deps(remove, 'not-a-real-dep') — package never existed"
-  r1 <- Client.callTool c "ghci_deps" (object
+  t1 <- stepHeader 2 "ghc_deps(remove, 'not-a-real-dep') — package never existed"
+  r1 <- Client.callTool c "ghc_deps" (object
     [ "action"  .= ("remove" :: Text)
     , "package" .= ("not-a-real-dep" :: Text)
     , "stanza"  .= ("library" :: Text)
@@ -124,14 +124,14 @@ runFlow c projectDir = do
   stepFooter 2 t1
 
   ----------------------------------------------------------------
-  -- (2) ghci_hole on a module that has no holes
+  -- (2) ghc_hole on a module that has no holes
   --
   -- Correct: success=true with hole_count=0 (or holes=[]).
   -- WRONG: success=false or hole_count missing — the agent has
   -- no way to distinguish "no holes" from "tool broke".
   ----------------------------------------------------------------
-  t2 <- stepHeader 3 "ghci_hole on Whole.hs (no holes present)"
-  r2 <- Client.callTool c "ghci_hole"
+  t2 <- stepHeader 3 "ghc_hole on Whole.hs (no holes present)"
+  r2 <- Client.callTool c "ghc_hole"
           (object [ "module_path" .= ("src/Whole.hs" :: Text) ])
   let succ2   = fieldBool "success" r2 == Just True
       countOk = fieldInt   "hole_count" r2 == Just 0
@@ -152,8 +152,8 @@ runFlow c projectDir = do
   -- payload. Important: the session MUST survive so subsequent
   -- tools still work.
   ----------------------------------------------------------------
-  t3 <- stepHeader 4 "ghci_quickcheck('42') — not a predicate"
-  r3 <- Client.callTool c "ghci_quickcheck" (object
+  t3 <- stepHeader 4 "ghc_quickcheck('42') — not a predicate"
+  r3 <- Client.callTool c "ghc_quickcheck" (object
     [ "property" .= ("42" :: Text)
     , "module"   .= ("src/Whole.hs" :: Text)
     ])
@@ -179,12 +179,12 @@ runFlow c projectDir = do
      \Raw: " <> truncRender r3)
 
   -- Critical liveness assert: session must still be alive after
-  -- the bad call. A follow-up ghci_eval should respond quickly.
-  r4 <- Client.callTool c "ghci_eval"
+  -- the bad call. A follow-up ghc_eval should respond quickly.
+  r4 <- Client.callTool c "ghc_eval"
           (object [ "expression" .= ("1 + 1" :: Text) ])
   let sessionAlive = fieldBool "success" r4 == Just True
   cLive <- liveCheck $ checkPure
-    "session survives · ghci_eval(1+1) still works after the failed QC"
+    "session survives · ghc_eval(1+1) still works after the failed QC"
     sessionAlive
     ("If this fails, the failed QuickCheck took the session down with \
      \it — an agent that hits a bad property could not recover. \

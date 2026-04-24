@@ -1,11 +1,11 @@
 -- | Flow: /documents/ the arbitrary-code-execution contract of
--- 'ghci_eval' — this scenario does not find a product bug, it
+-- 'ghc_eval' — this scenario does not find a product bug, it
 -- codifies the threat model so every future reader understands
 -- the trust boundary.
 --
 -- Contract
 -- --------
--- 'ghci_eval' evaluates an arbitrary Haskell expression in the
+-- 'ghc_eval' evaluates an arbitrary Haskell expression in the
 -- in-process GHC API session. That session is a full Haskell runtime
 -- — it can:
 --
@@ -14,7 +14,7 @@
 --   * exec subprocesses
 --   * allocate unbounded memory (subject to the RTS heap limit)
 --
--- In other words, any client that calls 'ghci_eval' inherits the
+-- In other words, any client that calls 'ghc_eval' inherits the
 -- MCP process's ambient authority. There is no sandbox, no
 -- whitelist of allowed modules, no seccomp layer. The only input
 -- guards are:
@@ -31,7 +31,7 @@
 --
 -- What this scenario asserts
 -- --------------------------
--- We PROVE the contract by observation: fire a 'ghci_eval' that
+-- We PROVE the contract by observation: fire a 'ghc_eval' that
 -- writes a file inside the temp project dir, then one that reads
 -- it back. Both succeed. A reviewer reading this test learns the
 -- threat model without having to dig through source comments.
@@ -65,11 +65,11 @@ import qualified E2E.Client as Client
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("sandbox-demo" :: Text) ])
 
   let canary = projectDir </> "sandbox-canary.txt"
-      -- Put the value literally in the expression; ghci_eval is
+      -- Put the value literally in the expression; ghc_eval is
       -- a Haskell evaluator, so writeFile from IO works directly.
       writeExpr = "System.IO.writeFile \"" <> T.pack canary
                   <> "\" \"sandbox-escape-evidence\""
@@ -77,14 +77,14 @@ runFlow c projectDir = do
 
   -- 1. Write. This is the canonical "I can touch the filesystem"
   -- capability.
-  t0 <- stepHeader 1 "write · ghci_eval can writeFile inside projectDir"
-  w <- Client.callTool c "ghci_eval"
+  t0 <- stepHeader 1 "write · ghc_eval can writeFile inside projectDir"
+  w <- Client.callTool c "ghc_eval"
          (object [ "expression" .= writeExpr ])
   onDisk <- doesFileExist canary
   cWrite <- liveCheck $ checkPure
-    "ghci_eval wrote a file · arbitrary IO is allowed by design"
+    "ghc_eval wrote a file · arbitrary IO is allowed by design"
     (fieldBool "success" w == Just True && onDisk)
-    ("ghci_eval should execute arbitrary IO. If this fails, either \
+    ("ghc_eval should execute arbitrary IO. If this fails, either \
      \writeFile threw (success=false) or the file wasn't on disk \
      \afterwards. Raw: " <> truncRender w)
   stepFooter 1 t0
@@ -92,8 +92,8 @@ runFlow c projectDir = do
   -- 2. Read. Closes the loop: what we wrote is what we read. If
   -- these differ the session is doing something weird (caching,
   -- chroot, whatever); not expected but worth catching.
-  t1 <- stepHeader 2 "read · ghci_eval readFile returns what we wrote"
-  r <- Client.callTool c "ghci_eval"
+  t1 <- stepHeader 2 "read · ghc_eval readFile returns what we wrote"
+  r <- Client.callTool c "ghc_eval"
          (object [ "expression" .= readExpr ])
   let roundtripped =
         fieldBool "success" r == Just True
@@ -103,7 +103,7 @@ runFlow c projectDir = do
   cRead <- liveCheck $ checkPure
     "readFile recovers what writeFile wrote"
     roundtripped
-    ("If this fails, ghci_eval is either silently sandboxing or \
+    ("If this fails, ghc_eval is either silently sandboxing or \
      \the file was truncated between write and read. Raw: "
       <> truncRender r)
   stepFooter 2 t1
@@ -114,7 +114,7 @@ runFlow c projectDir = do
   -- We pin the contract in the test message so a reader knows
   -- this is intentional.
   let cContract = checkPure
-        "contract · ghci_eval IS RCE-by-design; no MCP-level sandbox"
+        "contract · ghc_eval IS RCE-by-design; no MCP-level sandbox"
         True  -- always passes; the message is the assertion
         ""
 

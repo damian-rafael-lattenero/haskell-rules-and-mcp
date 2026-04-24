@@ -1,4 +1,4 @@
--- | @ghci_goto@ — Phase-2 tool (GHC-API migrated).
+-- | @ghc_goto@ — Phase-2 tool (GHC-API migrated).
 --
 -- Returns the source location where a name is defined. Pre-migration
 -- parsed "Defined at" / "Defined in" markers from @:info@ output;
@@ -6,7 +6,7 @@
 --
 -- Richer jump-to-definition (cross-module re-exports, macro-generated
 -- names) still belongs to HLS — a future phase will wrap an
--- @ghci_hls@ tool once that lands.
+-- @ghc_hls@ tool once that lands.
 module HaskellFlows.Tool.Goto
   ( descriptor
   , handle
@@ -49,11 +49,11 @@ import HaskellFlows.Mcp.Protocol
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_goto"
+    { tdName        = "ghc_goto"
     , tdDescription =
         "Return the source location where a name is defined, via the "
           <> "GHC API's SrcSpan. For cross-module precision you'll want "
-          <> "HLS (future ghci_hls tool)."
+          <> "HLS (future ghc_hls tool)."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

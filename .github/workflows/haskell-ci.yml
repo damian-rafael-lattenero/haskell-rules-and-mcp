@@ -93,7 +93,7 @@ jobs:
         run: cabal build all
 
       # HLint must be on PATH before `cabal test all`. The MCP's own
-      # `ghci_toolchain_status` and `ghci_lint` tools probe for hlint
+      # `ghc_toolchain_status` and `ghc_lint` tools probe for hlint
       # at runtime via `findExecutable`; absent it they report
       # `available=false` and `success=false`, which the FlowToolchain
       # + FlowQualityGates e2e scenarios legitimately flag as a red
@@ -151,7 +151,7 @@ jobs:
 
       - name: Set up HLint
         uses: haskell-actions/hlint-setup@v2
-        # 'latest' tracks the bundled hlint used by the local ghci_lint
+        # 'latest' tracks the bundled hlint used by the local ghc_lint
         # tool (currently 3.10). Pinning an older version here drifted
         # from the local zero-suggestions baseline because newer hlint
         # releases relax hints that older ones still emit.
@@ -168,7 +168,7 @@ jobs:
         with:
           path: mcp-server-haskell/
           # 'warning' (not 'suggestion') is the pragmatic threshold: we
-          # already block on hints locally via ghci_lint, and CI HLint
+          # already block on hints locally via ghc_lint, and CI HLint
           # version drift can surface stylistic suggestions that don't
           # warrant a merge block. Warnings and errors remain blocking.
           fail-on: warning
@@ -180,7 +180,7 @@ jobs:
   #  from Phase 1, which doesn't match any of fourmolu 0.16.x's built-in
   #  `import-export-style` presets exactly. Enabling the check would
   #  require a whole-tree rewrite that touches every module for no
-  #  semantic benefit. Local hlint (ghci_lint) already enforces style
+  #  semantic benefit. Local hlint (ghc_lint) already enforces style
   #  hygiene; re-adding fourmolu is a future decision once we're willing
   #  to commit one big reformat PR.
   # -------------------------------------------------------------------------

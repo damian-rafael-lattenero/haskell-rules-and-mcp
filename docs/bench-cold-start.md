@@ -16,21 +16,21 @@ Benchmark script: [`bench/bench-cold-start.py`](../bench/bench-cold-start.py).
 
 | Tool                   | Backend                         | best | avg  | worst |
 |------------------------|---------------------------------|-----:|-----:|------:|
-| `ghci_type`            | GhcSession (Phase 2, in-process)|   42 |   43 |    43 |
-| `ghci_complete`        | GhcSession                      |   36 |   36 |    37 |
-| `ghci_imports`         | GhcSession                      |   36 |   36 |    36 |
-| `ghci_goto`            | GhcSession                      |   36 |   37 |    38 |
-| `ghci_eval`            | GHC API fast path (Phase 4)     |  488 |  553 |   663 |
-| `ghci_quickcheck`      | subprocess ghci (legacy)        | 2944 | 2971 |  3006 |
+| `ghc_type`            | GhcSession (Phase 2, in-process)|   42 |   43 |    43 |
+| `ghc_complete`        | GhcSession                      |   36 |   36 |    37 |
+| `ghc_imports`         | GhcSession                      |   36 |   36 |    36 |
+| `ghc_goto`            | GhcSession                      |   36 |   37 |    38 |
+| `ghc_eval`            | GHC API fast path (Phase 4)     |  488 |  553 |   663 |
+| `ghc_quickcheck`      | subprocess ghci (legacy)        | 2944 | 2971 |  3006 |
 
-> Pre-Phase-4 `ghci_eval` ran at 2925–3147 ms. Phase 4 adds an
+> Pre-Phase-4 `ghc_eval` ran at 2925–3147 ms. Phase 4 adds an
 > in-process `compileExpr` path guarded by a legacy fallback for IO /
 > unshowable expressions — measured 5.5× speedup on the fast path.
 > The remaining ~500 ms is the actual bytecode compilation of the
 > expression (`show (userExpr)`); not HscEnv boot.
 
 Cold-cold (truly first server after power-on, no warmup): ~390 ms for
-`ghci_type`. Subsequent cold invocations hit the cabal/plan/db cache.
+`ghc_type`. Subsequent cold invocations hit the cabal/plan/db cache.
 
 ## Interpretation
 
@@ -48,10 +48,10 @@ Cold-cold (truly first server after power-on, no warmup): ~390 ms for
 
 ## Implications for Phase 4+
 
-Migrating `ghci_eval` in-process (Phase 4 of
+Migrating `ghc_eval` in-process (Phase 4 of
 [GHC-API-rewrite-plan.md](./GHC-API-rewrite-plan.md)) would shift eval
 from the ~3 s legacy path to the ~40 ms GhcSession path — the same
-80× win observed here. Same for `ghci_quickcheck` if/when the dual
+80× win observed here. Same for `ghc_quickcheck` if/when the dual
 path is ever retired.
 
 Phase 7's parallelism goal is also gated on these numbers: with
@@ -66,6 +66,6 @@ eval / quickcheck / regression / determinism now.
 * Single-module project. Larger projects raise the 390 ms warmup
   proportionally to compile time, but not the post-warmup ~40 ms
   per-tool latency.
-* `ghci_type` in this bench queries `map` against the session's
+* `ghc_type` in this bench queries `map` against the session's
   default Prelude context. Queries that reference project-local
   bindings pay a one-time setContext cost on first call.

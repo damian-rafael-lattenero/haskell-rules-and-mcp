@@ -5,12 +5,12 @@
 --
 -- Tools exercised:
 --
---   ghci_type      ghci_info      ghci_eval      ghci_complete
---   ghci_goto      ghci_doc
+--   ghc_type      ghc_info      ghc_eval      ghc_complete
+--   ghc_goto      ghc_doc
 --
 -- Side effects asserted through the pipeline:
 --
---   ghci_create_project   ghci_add_modules   ghci_load
+--   ghc_create_project   ghc_add_modules   ghc_load
 --
 -- A failure here means the query layer (the most commonly
 -- exercised half of the tool surface) has regressed. Under 1 s.
@@ -71,77 +71,77 @@ runFlow c projectDir = do
   -- setup — scaffold + write Calc.hs + register + load
   --------------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + add Calc + load"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("exploratory" :: Text) ])
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Calc"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs") calcSrc
-  loadR <- Client.callTool c "ghci_load"
+  loadR <- Client.callTool c "ghc_load"
             (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
   c1 <- liveCheck $ checkJsonField "setup · load success" loadR "success" (Bool True)
   stepFooter 1 t0
 
   --------------------------------------------------------------------
-  -- ghci_type — ask for the type of a local binding + a Prelude one
+  -- ghc_type — ask for the type of a local binding + a Prelude one
   --------------------------------------------------------------------
-  t1 <- stepHeader 2 "ghci_type local + Prelude"
-  tLocal   <- Client.callTool c "ghci_type"
+  t1 <- stepHeader 2 "ghc_type local + Prelude"
+  tLocal   <- Client.callTool c "ghc_type"
                (object [ "expression" .= ("double" :: Text) ])
-  tPrelude <- Client.callTool c "ghci_type"
+  tPrelude <- Client.callTool c "ghc_type"
                (object [ "expression" .= ("reverse" :: Text) ])
   c2a <- liveCheck $ mkContainsCheck
-           "ghci_type(double) mentions Int -> Int" tLocal "type" "Int -> Int"
+           "ghc_type(double) mentions Int -> Int" tLocal "type" "Int -> Int"
   c2b <- liveCheck $ mkContainsCheck
-           "ghci_type(reverse) mentions list signature" tPrelude "type" "[a] -> [a]"
+           "ghc_type(reverse) mentions list signature" tPrelude "type" "[a] -> [a]"
   stepFooter 2 t1
 
   --------------------------------------------------------------------
-  -- ghci_info — declaration for a TYPE
+  -- ghc_info — declaration for a TYPE
   --------------------------------------------------------------------
-  t2 <- stepHeader 3 "ghci_info on data Tree"
-  infoR <- Client.callTool c "ghci_info"
+  t2 <- stepHeader 3 "ghc_info on data Tree"
+  infoR <- Client.callTool c "ghc_info"
             (object [ "name" .= ("Tree" :: Text) ])
   c3 <- liveCheck $ checkJsonFieldMatches
-          "ghci_info(Tree) mentions 'data Tree' in definition"
+          "ghc_info(Tree) mentions 'data Tree' in definition"
           infoR "definition" (containsText "data Tree")
           "expected 'data Tree' declaration in the 'definition' field"
   stepFooter 2 t2
 
   --------------------------------------------------------------------
-  -- ghci_eval — evaluate a pure expression + a local call
+  -- ghc_eval — evaluate a pure expression + a local call
   --------------------------------------------------------------------
-  t3 <- stepHeader 4 "ghci_eval pure + local"
-  evalPure  <- Client.callTool c "ghci_eval"
+  t3 <- stepHeader 4 "ghc_eval pure + local"
+  evalPure  <- Client.callTool c "ghc_eval"
                  (object [ "expression" .= ("1 + 2" :: Text) ])
-  evalLocal <- Client.callTool c "ghci_eval"
+  evalLocal <- Client.callTool c "ghc_eval"
                  (object [ "expression" .= ("double 21" :: Text) ])
   c4a <- liveCheck $ mkContainsCheck
-           "ghci_eval(1 + 2) returns 3" evalPure "output" "3"
+           "ghc_eval(1 + 2) returns 3" evalPure "output" "3"
   c4b <- liveCheck $ mkContainsCheck
-           "ghci_eval(double 21) returns 42" evalLocal "output" "42"
+           "ghc_eval(double 21) returns 42" evalLocal "output" "42"
   stepFooter 4 t3
 
   --------------------------------------------------------------------
-  -- ghci_complete — completions for 'fold' prefix
+  -- ghc_complete — completions for 'fold' prefix
   --------------------------------------------------------------------
-  t4 <- stepHeader 5 "ghci_complete prefix=fold"
-  compR <- Client.callTool c "ghci_complete"
+  t4 <- stepHeader 5 "ghc_complete prefix=fold"
+  compR <- Client.callTool c "ghc_complete"
             (object [ "prefix" .= ("fold" :: Text), "limit" .= (20 :: Int) ])
   c5 <- liveCheck $ checkJsonFieldMatches
-          "ghci_complete returns ≥ 1 'fold*' candidate"
+          "ghc_complete returns ≥ 1 'fold*' candidate"
           compR "candidates" arrayNonEmpty
           "expected at least one completion in the 'candidates' array"
   stepFooter 5 t4
 
   --------------------------------------------------------------------
-  -- ghci_goto — source location of a local name
+  -- ghc_goto — source location of a local name
   --------------------------------------------------------------------
-  t5 <- stepHeader 6 "ghci_goto on local 'greet'"
-  gotoR <- Client.callTool c "ghci_goto"
+  t5 <- stepHeader 6 "ghc_goto on local 'greet'"
+  gotoR <- Client.callTool c "ghc_goto"
             (object [ "name" .= ("greet" :: Text) ])
   c6 <- liveCheck $ Check
-    { cName   = "ghci_goto(greet) returns a file location"
+    { cName   = "ghc_goto(greet) returns a file location"
     , cOk     = hasString "file"   gotoR
              || hasString "module" gotoR
     , cDetail = "expected a top-level 'file' or 'module' field on \
@@ -150,17 +150,17 @@ runFlow c projectDir = do
   stepFooter 6 t5
 
   --------------------------------------------------------------------
-  -- ghci_doc — Haddock lookup. Accept either real doc text or the
+  -- ghc_doc — Haddock lookup. Accept either real doc text or the
   -- "no doc" graceful fallback (older 'base' is built without
   -- Haddock on some distributions).
   --------------------------------------------------------------------
-  t6 <- stepHeader 7 "ghci_doc on Prelude.map"
-  docR <- Client.callTool c "ghci_doc"
+  t6 <- stepHeader 7 "ghc_doc on Prelude.map"
+  docR <- Client.callTool c "ghc_doc"
             (object [ "name" .= ("map" :: Text) ])
   c7 <- liveCheck $ checkJsonFieldMatches
-          "ghci_doc(map) returns success (with text OR graceful miss)"
+          "ghc_doc(map) returns success (with text OR graceful miss)"
           docR "success" (\v -> v == Bool True)
-          "ghci_doc should always answer 'success': true, even when the \
+          "ghc_doc should always answer 'success': true, even when the \
           \docs are unavailable (returns a 'hint' in that case)"
   stepFooter 7 t6
 

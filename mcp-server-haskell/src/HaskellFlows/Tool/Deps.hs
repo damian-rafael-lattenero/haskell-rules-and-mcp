@@ -1,4 +1,4 @@
--- | @ghci_deps@ — add / remove / list entries in the project's @.cabal@
+-- | @ghc_deps@ — add / remove / list entries in the project's @.cabal@
 -- file without the agent having to edit it by hand.
 --
 -- We deliberately keep the cabal-file parser line-oriented rather than
@@ -78,7 +78,7 @@ inProcessCabalLock = unsafePerformIO (newMVar ())
 -- the lock does its job.
 --
 -- Found-by: 'Scenarios.FlowConcurrentClients' in the e2e suite
--- (two McpClients firing ghci_deps(add) concurrently dropped one
+-- (two McpClients firing ghc_deps(add) concurrently dropped one
 -- of the writes with "resource busy (file is locked)" because the
 -- naive read + writeFile had no serialisation).
 withCabalLock :: FilePath -> IO a -> IO a
@@ -95,12 +95,12 @@ withCabalLock cabalPath action =
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_deps"
+    { tdName        = "ghc_deps"
     , tdDescription =
         "Manage build-depends in the project's .cabal file. Actions: "
           <> "'list' (current deps), 'add' (insert pkg + optional "
           <> "version constraint), 'remove' (delete by name). After "
-          <> "add/remove, the next ghci_load picks up the new "
+          <> "add/remove, the next ghc_load picks up the new "
           <> "package graph — no explicit session restart needed."
     , tdInputSchema =
         object
@@ -658,7 +658,7 @@ editResult file pkg verb =
           , "cabal_file" .= T.pack file
           , "package"    .= pkg
           , "hint"       .= ( "Dependency set changed. The next \
-                             \ghci_load reloads GHCi with the new \
+                             \ghc_load reloads GHCi with the new \
                              \package graph — no explicit session \
                              \restart tool is needed."
                             :: Text )

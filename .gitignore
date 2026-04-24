@@ -30,7 +30,7 @@ mcp-server-haskell/app/Main
 # the MCP against a realistic Haskell project.
 playground/*/
 
-# Property store (generated at runtime by ghci_quickcheck)
+# Property store (generated at runtime by ghc_quickcheck)
 **/.haskell-flows/
 
 # Local MCP config (may contain personal paths/env). Copy from .mcp.example.json

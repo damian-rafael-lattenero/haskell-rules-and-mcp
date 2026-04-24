@@ -205,7 +205,7 @@ bootstrapOne root shimPath tgt = do
   -- '--builddir' directs cabal's own pre-REPL build phase to a MCP-
   -- private tree so the poisoned '.hi'/'.o' produced under the defer
   -- flags below never land in the user's default 'dist-newstyle/'.
-  -- Without this, a user who runs 'ghci_check_project' (which
+  -- Without this, a user who runs 'ghc_check_project' (which
   -- triggers this bootstrap) and then their own 'cabal build' sees
   -- cabal skip recompilation of broken modules — their source had
   -- errors, but the shim-delegated ghc wrote an interface for them

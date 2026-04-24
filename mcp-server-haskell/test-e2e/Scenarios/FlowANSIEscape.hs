@@ -78,15 +78,15 @@ runFlow c projectDir = do
   oldTerm <- lookupEnv "TERM"
   setEnv "TERM" "xterm-256color"
 
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("ansi-demo" :: Text) ])
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Broken"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Broken.hs") brokenSrc
 
   t0 <- stepHeader 1 "load · trigger a type error (potential SGR output)"
-  loadR <- Client.callTool c "ghci_load"
+  loadR <- Client.callTool c "ghc_load"
             (object [ "module_path" .= ("src/Broken.hs" :: Text) ])
   -- Restore TERM immediately after the call so later scenarios
   -- don't inherit our override.
@@ -139,11 +139,11 @@ runFlow c projectDir = do
   stepFooter 3 t2
 
   -- Last: the session must still be alive.
-  t3 <- stepHeader 4 "session alive · ghci_eval(1+1) after the bad load"
-  alive <- Client.callTool c "ghci_eval"
+  t3 <- stepHeader 4 "session alive · ghc_eval(1+1) after the bad load"
+  alive <- Client.callTool c "ghc_eval"
              (object [ "expression" .= ("1 + 1" :: Text) ])
   cAlive <- liveCheck $ checkPure
-    "session alive · ghci_eval(1+1) returns 2"
+    "session alive · ghc_eval(1+1) returns 2"
     (fieldBool "success" alive == Just True)
     ("Raw: " <> truncRender alive)
   stepFooter 4 t3

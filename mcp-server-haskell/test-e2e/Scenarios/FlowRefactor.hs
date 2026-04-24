@@ -1,6 +1,6 @@
 -- | Flow: refactoring tools with snapshot-and-compile-verify.
 --
--- Exercises three paths through 'ghci_refactor':
+-- Exercises three paths through 'ghc_refactor':
 --
 --   * rename_local happy path: compile stays green → rewrite
 --     persists.
@@ -13,8 +13,8 @@
 --
 -- Tools exercised:
 --
---   ghci_refactor (rename_local, extract_binding)
---   ghci_load (to verify compile post-rewrite)
+--   ghc_refactor (rename_local, extract_binding)
+--   ghc_load (to verify compile post-rewrite)
 --
 -- This is the single most security-relevant test in the E2E
 -- suite: the snapshot invariant keeps an AST-unaware rewrite
@@ -77,19 +77,19 @@ runFlow c projectDir = do
   -- setup
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + add Refactor module"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("refactor-demo" :: Text) ])
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Refactor"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   let srcPath = projectDir </> "src" </> "Refactor.hs"
   TIO.writeFile srcPath initialSrc
-  loadR <- Client.callTool c "ghci_load"
+  loadR <- Client.callTool c "ghc_load"
              (object [ "module_path" .= ("src/Refactor.hs" :: Text) ])
   c1 <- liveCheck $ Check
     { cName   = "setup · Refactor compiles clean"
     , cOk     = fieldIsTrue "success" loadR
-    , cDetail = "expected success=true from ghci_load"
+    , cDetail = "expected success=true from ghc_load"
     }
   stepFooter 1 t0
 
@@ -98,7 +98,7 @@ runFlow c projectDir = do
   --    binding AND its use site (scope lines 5..6 cover both).
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "rename_local(msg → greeting) — happy path"
-  renameOk <- Client.callTool c "ghci_refactor" (object
+  renameOk <- Client.callTool c "ghc_refactor" (object
     [ "action"           .= ("rename_local" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "old_name"         .= ("msg" :: Text)
@@ -118,7 +118,7 @@ runFlow c projectDir = do
        && not ("msg " `T.isInfixOf` bodyAfterRename)
        && not (" msg" `T.isInfixOf` bodyAfterRename))
     "happy rename should have swapped msg → greeting in the scope"
-  reloadOk <- Client.callTool c "ghci_load"
+  reloadOk <- Client.callTool c "ghc_load"
                 (object [ "module_path" .= ("src/Refactor.hs" :: Text) ])
   c4 <- liveCheck $ Check
     { cName   = "post-rename compile is still clean"
@@ -138,7 +138,7 @@ runFlow c projectDir = do
   -- Capture the body BEFORE the rollback attempt so we can
   -- compare byte-for-byte after.
   bodyBefore <- TIO.readFile srcPath
-  rollbackR <- Client.callTool c "ghci_refactor" (object
+  rollbackR <- Client.callTool c "ghc_refactor" (object
     [ "action"           .= ("rename_local" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "old_name"         .= ("greeting" :: Text)
@@ -167,7 +167,7 @@ runFlow c projectDir = do
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "rename_local → Haskell keyword (boundary reject)"
   bodyBefore2 <- TIO.readFile srcPath
-  keywordR <- Client.callTool c "ghci_refactor" (object
+  keywordR <- Client.callTool c "ghc_refactor" (object
     [ "action"           .= ("rename_local" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "old_name"         .= ("greeting" :: Text)

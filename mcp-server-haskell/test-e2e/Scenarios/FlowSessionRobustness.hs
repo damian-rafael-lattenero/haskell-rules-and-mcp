@@ -55,13 +55,13 @@ hostileEvals =
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _pd = do
   -- Minimal scaffold so the GHCi session comes up with a package.
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("sessrob-demo" :: Text) ])
 
   -- Pre-flight: session must answer a trivial eval before we start
   -- throwing things at it. Catches unrelated setup failures.
-  t0 <- stepHeader 1 "pre-flight · ghci_eval(1+1) on a fresh session"
-  preflight <- Client.callTool c "ghci_eval"
+  t0 <- stepHeader 1 "pre-flight · ghc_eval(1+1) on a fresh session"
+  preflight <- Client.callTool c "ghc_eval"
                  (object [ "expression" .= ("1 + 1" :: Text) ])
   let preOk = fieldBool "success" preflight == Just True
   cPre <- liveCheck $ checkPure
@@ -80,7 +80,7 @@ runFlow c _pd = do
 
   pure (cPre : concat checks)
 
--- | One round trip: hostile eval, then a pilot 'ghci_eval "1+1"' to
+-- | One round trip: hostile eval, then a pilot 'ghc_eval "1+1"' to
 -- prove the session survived.
 oneHostileCycle
   :: Client.McpClient
@@ -89,7 +89,7 @@ oneHostileCycle
 oneHostileCycle c (label, expr) = do
   t <- stepHeader 2 ("hostile cycle · " <> label)
 
-  rHostile <- Client.callTool c "ghci_eval"
+  rHostile <- Client.callTool c "ghc_eval"
                 (object [ "expression" .= expr ])
   let hostileReturned =
         -- Either outcome is fine — we only care that the CALL
@@ -101,19 +101,19 @@ oneHostileCycle c (label, expr) = do
   cReturn <- liveCheck $ checkPure
     ("hostile · '" <> label <> "' returns a structured response (no hang)")
     hostileReturned
-    ("ghci_eval on a user-throwing expression must come back with \
+    ("ghc_eval on a user-throwing expression must come back with \
      \a payload. Any other shape (null, non-object) means the \
      \transport swallowed it. Raw: " <> truncRender rHostile)
 
   -- The critical one: prove the session is still alive.
-  rPilot <- Client.callTool c "ghci_eval"
+  rPilot <- Client.callTool c "ghc_eval"
               (object [ "expression" .= ("2 + 3" :: Text) ])
   let pilotOk = fieldBool "success" rPilot == Just True
              && case lookupField "output" rPilot of
                   Just (String s) -> "5" `T.isInfixOf` s
                   _ -> False
   cAlive <- liveCheck $ checkPure
-    ("alive after '" <> label <> "' · ghci_eval(2+3) returns 5")
+    ("alive after '" <> label <> "' · ghc_eval(2+3) returns 5")
     pilotOk
     ("After '" <> label <> "' the session must still evaluate 2+3 to \
      \5 cleanly. If this fails, the user throw took the session with \

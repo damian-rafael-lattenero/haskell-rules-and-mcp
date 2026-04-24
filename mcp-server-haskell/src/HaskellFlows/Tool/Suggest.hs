@@ -1,4 +1,4 @@
--- | @ghci_suggest@ — emit candidate QuickCheck laws for a function
+-- | @ghc_suggest@ — emit candidate QuickCheck laws for a function
 -- based on its type signature.
 --
 -- Flow:
@@ -84,13 +84,13 @@ import HaskellFlows.Suggest.Rules
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_suggest"
+    { tdName        = "ghc_suggest"
     , tdDescription =
         "Given a function name, propose QuickCheck properties that "
           <> "the function's type signature suggests. Each suggestion "
           <> "includes a ready-to-run property expression, a rationale, "
           <> "and a confidence score. Feed the property straight into "
-          <> "ghci_quickcheck."
+          <> "ghc_quickcheck."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -213,7 +213,7 @@ hintFor [] =
   \(IO / monadic), arity > 2, or return type is polymorphic in a way rules \
   \don't pattern-match on yet."
 hintFor xs =
-  "Try the highest-confidence suggestion first via ghci_quickcheck. "
+  "Try the highest-confidence suggestion first via ghc_quickcheck. "
   <> "Total: " <> T.pack (show (length xs))
   <> " candidate law(s). High-confidence: "
   <> T.pack (show (length (filter ((High ==) . sConfidence) xs)))
@@ -238,7 +238,7 @@ errorResult msg =
 -- exactly which tool to call next. 'success: false' is preserved
 -- so the MCP treats this as an error for metrics, but the
 -- @nextStep@ push in @Server.runTool@ still runs — steering the
--- agent straight at @ghci_load@ instead of letting it guess.
+-- agent straight at @ghc_load@ instead of letting it guess.
 outOfScopeResult :: Text -> Text -> ToolResult
 outOfScopeResult fn ghcOutput =
   ToolResult
@@ -249,7 +249,7 @@ outOfScopeResult fn ghcOutput =
         , "hint"     .=
             ( "`" <> fn <> "` is not in scope in the current GHCi \
               \session. Load the module that defines it first via \
-              \ghci_load(module_path=\"<path>\"), or pass a fully \
+              \ghc_load(module_path=\"<path>\"), or pass a fully \
               \qualified name (e.g. \"Data.List.sort\") if the \
               \definition lives in an already-loaded module under \
               \a qualified import."

@@ -26,10 +26,10 @@ feedback cycle is closed. What `0.1.0` contains:
   endomorphism, binary-op, list-endomorphism, roundtrip,
   evaluator-preservation, constant-folding-soundness, functor-laws.
 - **Property persistence** — every passing QuickCheck property auto-saves to
-  `.haskell-flows/properties.json`; `ghci_regression(action="run")` replays
-  the whole set; `ghci_quickcheck_export` materializes a runnable
+  `.haskell-flows/properties.json`; `ghc_regression(action="run")` replays
+  the whole set; `ghc_quickcheck_export` materializes a runnable
   `test/Spec.hs` with descriptive labels.
-- **Consolidated gate** — `ghci_workflow(action="gate")` orchestrates
+- **Consolidated gate** — `ghc_workflow(action="gate")` orchestrates
   regression + cabal_test + cabal_build in a single call with per-step
   durations and partial-success semantics.
 - **Path-traversal guard** — `HaskellFlows.Types.mkModulePath` smart
@@ -69,14 +69,14 @@ feedback cycle is closed. What `0.1.0` contains:
 
 ### Changed
 
-- **`ghci_load` scope semantics** — new `mode: "replace" | "additive"`
+- **`ghc_load` scope semantics** — new `mode: "replace" | "additive"`
   parameter; `additive` uses `:add` instead of `:l` so cross-module
   property tests preserve prior scope.
 - **`basic-lint-rules` fallback** reduced to lexically-safe rules
   (trailing whitespace, tabs-in-indentation, partial Prelude functions)
   after false-positives on module headers and nested constructor
   applications were found in real code.
-- **Test suite export** — `ghci_quickcheck_export` uses `label` →
+- **Test suite export** — `ghc_quickcheck_export` uses `label` →
   `law` → `functionName` → `property_N` priority; sanitizes unsafe
   characters; appends `_2`/`_3` on collision.
 - **Manifest env override** — new `HASKELL_FLOWS_MANIFEST_PATH` env var
@@ -122,23 +122,23 @@ Summaries kept for traceability; full commit history is in git.
   ghci-session health detection) + 3 ergonomic observations + 2
   refactors (+24 unit).
 - **Fase 4 (hyper-stabilization)** — centralized release manifest; URL
-  validation + CI gate; `ghci_format` degraded fallback;
-  `basic-lint-rules` false-positive cleanup; `ghci_load(mode="additive")`;
+  validation + CI gate; `ghc_format` degraded fallback;
+  `basic-lint-rules` false-positive cleanup; `ghc_load(mode="additive")`;
   `LawEngine` interface + 3 new engines; `label` field on
-  `ghci_quickcheck`; `ghci_workflow(action="gate")` aggregator.
+  `ghc_quickcheck`; `ghc_workflow(action="gate")` aggregator.
 - **Fase 3** — upstream fallback URLs, opt-in local telemetry, operator
   runbook for `tools-v1.0`, cross-module browse fix in
-  `ghci_suggest(analyze)`, `cabal_coverage` HTML report parser as a
+  `ghc_suggest(analyze)`, `cabal_coverage` HTML report parser as a
   third fallback.
 - **Fase 2** — toolchain warmup, global strict Zod validation via
   `registerStrictTool`, mass migration of ~42 tools, removal of 8
   peripheral tools, `cabal_coverage` tix fallback, publish-release
   script.
 - **Fase 1** — tautology law removal in `function-laws`;
-  `ghci_check_module` export-list awareness;
-  `ghci_toolchain_status` state propagation;
-  `ghci_create_project` + `ghci_add_modules` (replacing `ghci_init` +
-  `ghci_scaffold`); `ghci_lint` degraded fallback.
+  `ghc_check_module` export-list awareness;
+  `ghc_toolchain_status` state propagation;
+  `ghc_create_project` + `ghc_add_modules` (replacing `ghc_init` +
+  `ghc_scaffold`); `ghc_lint` degraded fallback.
 
 [Unreleased]: https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/tag/v0.1.0

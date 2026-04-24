@@ -1,4 +1,4 @@
--- | Flow: @ghci_deps@ is a /metadata/ tool, not a /resolver/. It
+-- | Flow: @ghc_deps@ is a /metadata/ tool, not a /resolver/. It
 -- edits the .cabal field and trusts the caller for the semantics of
 -- the name. This scenario pins that contract by round-tripping a
 -- bogus-but-syntactically-valid dep: add → list → remove → list.
@@ -6,14 +6,14 @@
 -- What we tested and DIDN'T find (contract documentation)
 -- -------------------------------------------------------
 -- An earlier version of this scenario asserted that
--- 'ghci_check_project' would fail after a bogus dep was added.
--- The oracle caught the mismatched expectation: 'ghci_check_project'
+-- 'ghc_check_project' would fail after a bogus dep was added.
+-- The oracle caught the mismatched expectation: 'ghc_check_project'
 -- does NOT do a cabal-configure / dep-resolve — it type-checks the
 -- modules currently loaded. An unused dep doesn't enter any module
 -- and therefore never trips the check. That is the correct contract;
 -- the earlier oracle was the wrong shape.
 --
--- Real-world motivation: an LLM host calling ghci_deps may pass a
+-- Real-world motivation: an LLM host calling ghc_deps may pass a
 -- misspelled or non-existent package name. The MCP happily accepts
 -- it (because validation would require a Hackage round-trip). This
 -- test keeps the accept / roundtrip / reject honest so a future
@@ -21,13 +21,13 @@
 --
 -- Invariants asserted:
 --
---   1. ghci_deps(add, "nonexistent-fake-pkg-xyzzy-2025") returns
+--   1. ghc_deps(add, "nonexistent-fake-pkg-xyzzy-2025") returns
 --      success=true. The MCP accepts any syntactically valid
 --      Hackage identifier and edits the .cabal.
---   2. The edit persists: ghci_deps(list) after add includes the
+--   2. The edit persists: ghc_deps(list) after add includes the
 --      fake dep in its build_depends[] field.
---   3. The session survives the bogus add — next ghci_eval works.
---   4. ghci_deps(remove) succeeds and the dep disappears from
+--   3. The session survives the bogus add — next ghc_eval works.
+--   4. ghc_deps(remove) succeeds and the dep disappears from
 --      build_depends[] on the next list call.
 --   5. After the round-trip the .cabal is indistinguishable from
 --      its pre-add shape (modulo whitespace ordering that the line
@@ -35,10 +35,10 @@
 --
 -- Failure modes the oracle catches:
 --
---   (a) ghci_deps silently drops the add (success=true but the
+--   (a) ghc_deps silently drops the add (success=true but the
 --       file isn't modified — the kind of bug that only surfaces
 --       under cabal build, long after the agent moved on).
---   (b) ghci_deps drops the REMOVE (file is still polluted by the
+--   (b) ghc_deps drops the REMOVE (file is still polluted by the
 --       fake dep the agent tried to clean up).
 --   (c) The add/remove pipeline wedges the session.
 module Scenarios.FlowDependencyConflict
@@ -69,12 +69,12 @@ bogusPkg = "nonexistent-fake-pkg-xyzzy-2025"
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _projectDir = do
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("depconflict-demo" :: Text) ])
 
   -- 1. Add the bogus dep. Contract: success=true (no Hackage probe).
-  t0 <- stepHeader 1 ("add · ghci_deps(add, \"" <> bogusPkg <> "\")")
-  add <- Client.callTool c "ghci_deps"
+  t0 <- stepHeader 1 ("add · ghc_deps(add, \"" <> bogusPkg <> "\")")
+  add <- Client.callTool c "ghc_deps"
            (object
              [ "action"  .= ("add" :: Text)
              , "package" .= bogusPkg
@@ -82,7 +82,7 @@ runFlow c _projectDir = do
   cAdd <- liveCheck $ checkPure
     "add returns success=true · MCP does not validate against Hackage"
     (fieldBool "success" add == Just True)
-    ("ghci_deps(add) with a syntactically-valid name must succeed — \
+    ("ghc_deps(add) with a syntactically-valid name must succeed — \
      \the documented contract is 'edits the .cabal, resolution is \
      \the caller's problem'. Got: " <> truncRender add)
   stepFooter 1 t0
@@ -92,7 +92,7 @@ runFlow c _projectDir = do
   -- still report success=true if the tool wasn't honest); the
   -- build_depends list is what disk actually says.
   t1 <- stepHeader 2 "list · build_depends must include the bogus entry"
-  ls <- Client.callTool c "ghci_deps"
+  ls <- Client.callTool c "ghc_deps"
           (object [ "action" .= ("list" :: Text) ])
   let depsAfterAdd = buildDeps ls
       includesBogus = any (bogusPkg `T.isInfixOf`) depsAfterAdd
@@ -105,7 +105,7 @@ runFlow c _projectDir = do
   stepFooter 2 t1
 
   -- No "session alive" step between add and remove on purpose. A
-  -- first version of this scenario tested ghci_eval(1+1) after the
+  -- first version of this scenario tested ghc_eval(1+1) after the
   -- bogus add and always failed: booting 'cabal repl' re-reads the
   -- .cabal, the resolver can't find 'nonexistent-fake-pkg-xyzzy-2025',
   -- and the GHCi child dies before our eval can run. That is the
@@ -116,8 +116,8 @@ runFlow c _projectDir = do
   -- once the bogus dep is gone, the project is usable again.
 
   -- 4. Remove and verify the dep really disappeared from the .cabal.
-  t3 <- stepHeader 3 ("remove · ghci_deps(remove, \"" <> bogusPkg <> "\")")
-  rm <- Client.callTool c "ghci_deps"
+  t3 <- stepHeader 3 ("remove · ghc_deps(remove, \"" <> bogusPkg <> "\")")
+  rm <- Client.callTool c "ghc_deps"
           (object
             [ "action"  .= ("remove" :: Text)
             , "package" .= bogusPkg
@@ -130,7 +130,7 @@ runFlow c _projectDir = do
   stepFooter 3 t3
 
   t4 <- stepHeader 4 "list · bogus pkg is gone after remove"
-  ls2 <- Client.callTool c "ghci_deps"
+  ls2 <- Client.callTool c "ghc_deps"
            (object [ "action" .= ("list" :: Text) ])
   let depsAfterRm   = buildDeps ls2
       bogusGone     = not (any (bogusPkg `T.isInfixOf`) depsAfterRm)
@@ -145,8 +145,8 @@ runFlow c _projectDir = do
   -- 6. The real "alive" oracle: after the bogus dep is REMOVED,
   -- the session must boot cleanly. If it doesn't, the remove
   -- didn't fully revert the .cabal.
-  t5 <- stepHeader 5 "session alive · ghci_eval(1+1) after remove"
-  alive <- Client.callTool c "ghci_eval"
+  t5 <- stepHeader 5 "session alive · ghc_eval(1+1) after remove"
+  alive <- Client.callTool c "ghc_eval"
              (object [ "expression" .= ("1 + 1" :: Text) ])
   cAlive <- liveCheck $ checkPure
     "session alive post-remove · project is buildable again"
@@ -155,7 +155,7 @@ runFlow c _projectDir = do
           Just (String s) -> "2" `T.isInfixOf` s
           _               -> False)
     ("After remove, cabal repl should resolve cleanly. If this \
-     \fails, ghci_deps(remove) didn't fully revert the edit. Raw: "
+     \fails, ghc_deps(remove) didn't fully revert the edit. Raw: "
       <> truncRender alive)
   stepFooter 5 t5
 
@@ -170,7 +170,7 @@ fieldBool k v = case lookupField k v of
   Just (Bool b) -> Just b
   _             -> Nothing
 
--- | Extract the build_depends array from a ghci_deps(list) response.
+-- | Extract the build_depends array from a ghc_deps(list) response.
 -- The field name the MCP returns is @build_depends@ (not @packages@);
 -- an earlier version of this scenario read the wrong field and
 -- always saw []. The rename is the correct semantic anchor.

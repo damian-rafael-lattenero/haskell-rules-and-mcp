@@ -58,7 +58,7 @@ body:
       label: Steps to reproduce
       description: Minimal sequence of tool calls or commands.
       placeholder: |
-        1. `ghci_create_project(name="x", modules=[...])`
+        1. `ghc_create_project(name="x", modules=[...])`
         2. ...
         3. Observe: ...
     validations:
@@ -67,7 +67,7 @@ body:
   - type: textarea
     id: session-status
     attributes:
-      label: Output of `ghci_session(status)`
+      label: Output of `ghc_session(status)`
       description: This includes `dist.buildTime` and runtime toolchain state — very useful for triage.
       render: json
     validations:

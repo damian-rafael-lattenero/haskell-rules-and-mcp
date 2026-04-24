@@ -1,4 +1,4 @@
--- | @ghci_load@ — full GhcSession (Wave 2).
+-- | @ghc_load@ — full GhcSession (Wave 2).
 --
 -- Loads the project via 'loadForTarget' (cabal-aware stanza flags)
 -- and returns parsed diagnostics (errors + warnings) sourced directly
@@ -7,7 +7,7 @@
 -- flavour so typed holes and deferred type errors surface as
 -- warnings.
 --
--- Response shape matches the legacy ghci_load for backward
+-- Response shape matches the legacy ghc_load for backward
 -- compatibility with existing e2e scenarios: success, errors,
 -- warnings, summary, raw.
 module HaskellFlows.Tool.Load
@@ -42,7 +42,7 @@ import HaskellFlows.Types
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_load"
+    { tdName        = "ghc_load"
     , tdDescription =
         "Load or reload Haskell modules via the in-process GHC API. "
           <> "Returns structured compilation errors and warnings. Pass "

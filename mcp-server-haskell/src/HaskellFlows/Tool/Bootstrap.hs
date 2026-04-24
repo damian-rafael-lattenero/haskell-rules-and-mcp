@@ -1,4 +1,4 @@
--- | @ghci_bootstrap@ — host-agnostic self-install surface.
+-- | @ghc_bootstrap@ — host-agnostic self-install surface.
 --
 -- The BUG-10 problem: 'initialize.instructions' ships agent
 -- guidance in the MCP handshake, but some hosts (Claude Code,
@@ -55,7 +55,7 @@ data Host
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_bootstrap"
+    { tdName        = "ghc_bootstrap"
     , tdDescription =
         "Self-install host-specific guidance files from content baked "
           <> "into the MCP binary. Hosts: \"claude-code\" (writes "

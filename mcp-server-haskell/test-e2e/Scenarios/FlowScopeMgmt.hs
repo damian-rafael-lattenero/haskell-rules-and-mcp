@@ -6,10 +6,10 @@
 --
 -- Tools exercised:
 --
---   ghci_browse        (list a module's exported bindings)
---   ghci_imports       (list the GHCi session's live imports)
---   ghci_apply_exports (rewrite the module header's export list)
---   ghci_add_import    (suggest import lines for a bare name;
+--   ghc_browse        (list a module's exported bindings)
+--   ghc_imports       (list the GHCi session's live imports)
+--   ghc_apply_exports (rewrite the module header's export list)
+--   ghc_add_import    (suggest import lines for a bare name;
 --                       Hoogle-backed — may be unavailable)
 --
 -- The add_import step gracefully accepts hoogle-unavailable
@@ -45,7 +45,7 @@ import qualified E2E.Client as Client
 --------------------------------------------------------------------------------
 
 -- | Module with NO explicit export list — starts in the
--- "everything is exported" default. 'ghci_apply_exports' is
+-- "everything is exported" default. 'ghc_apply_exports' is
 -- idempotent: if the module already has a list, it returns
 -- 'no_change=true' and does nothing. We want to exercise the
 -- rewrite branch, so we start without one and ask the tool to
@@ -77,22 +77,22 @@ runFlow c projectDir = do
   -- setup
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + write Widget + load"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("scope-demo" :: Text) ])
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Widget"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   let srcPath = projectDir </> "src" </> "Widget.hs"
   TIO.writeFile srcPath widgetSrc
-  _ <- Client.callTool c "ghci_load"
+  _ <- Client.callTool c "ghc_load"
          (object [ "module_path" .= ("src/Widget.hs" :: Text) ])
   stepFooter 1 t0
 
   ----------------------------------------------------------------
-  -- ghci_browse — enumerate Widget's exports
+  -- ghc_browse — enumerate Widget's exports
   ----------------------------------------------------------------
-  t1 <- stepHeader 2 "ghci_browse(Widget) — list exports"
-  browseR <- Client.callTool c "ghci_browse"
+  t1 <- stepHeader 2 "ghc_browse(Widget) — list exports"
+  browseR <- Client.callTool c "ghc_browse"
               (object [ "module" .= ("Widget" :: Text) ])
   c1 <- liveCheck $ checkJsonField
           "browse success" browseR "success" (Bool True)
@@ -107,10 +107,10 @@ runFlow c projectDir = do
   stepFooter 2 t1
 
   ----------------------------------------------------------------
-  -- ghci_imports — list the current in-scope imports
+  -- ghc_imports — list the current in-scope imports
   ----------------------------------------------------------------
-  t2 <- stepHeader 3 "ghci_imports — session imports"
-  importsR <- Client.callTool c "ghci_imports" (object [])
+  t2 <- stepHeader 3 "ghc_imports — session imports"
+  importsR <- Client.callTool c "ghc_imports" (object [])
   c4 <- liveCheck $ checkJsonField
           "imports success" importsR "success" (Bool True)
   c5 <- liveCheck $ checkJsonFieldMatches
@@ -120,10 +120,10 @@ runFlow c projectDir = do
   stepFooter 3 t2
 
   ----------------------------------------------------------------
-  -- ghci_apply_exports — trim Widget's header to just 'greet'
+  -- ghc_apply_exports — trim Widget's header to just 'greet'
   ----------------------------------------------------------------
-  t3 <- stepHeader 4 "ghci_apply_exports(Widget, [greet])"
-  applyR <- Client.callTool c "ghci_apply_exports" (object
+  t3 <- stepHeader 4 "ghc_apply_exports(Widget, [greet])"
+  applyR <- Client.callTool c "ghc_apply_exports" (object
     [ "module_path" .= ("src/Widget.hs" :: Text)
     , "exports"     .= (["greet"] :: [Text])
     ])
@@ -146,11 +146,11 @@ runFlow c projectDir = do
   stepFooter 4 t3
 
   ----------------------------------------------------------------
-  -- ghci_add_import — best-effort, gracefully skip if hoogle
+  -- ghc_add_import — best-effort, gracefully skip if hoogle
   -- is not installed on the machine running the E2E.
   ----------------------------------------------------------------
-  t4 <- stepHeader 5 "ghci_add_import(fromMaybe) — hoogle-backed"
-  addR <- Client.callTool c "ghci_add_import"
+  t4 <- stepHeader 5 "ghc_add_import(fromMaybe) — hoogle-backed"
+  addR <- Client.callTool c "ghc_add_import"
             (object [ "name" .= ("fromMaybe" :: Text) ])
   c8 <- liveCheck $ checkJsonFieldMatches
           "add_import returns a structured response"

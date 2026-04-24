@@ -21,11 +21,11 @@ itself cannot run them):
 
 Before writing any Haskell code, always:
 
-1. `ghci_workflow(action="status")` — verify MCP is alive, confirm
+1. `ghc_workflow(action="status")` — verify MCP is alive, confirm
    `projectDir`, confirm `toolsActive` lists all 25 tools. If it lists
    fewer, the binary is stale and the next reinstall will pick up new
    tools.
-2. `ghci_toolchain_status()` — confirm `cabal`, `ghc`, `hlint` are on
+2. `ghc_toolchain_status()` — confirm `cabal`, `ghc`, `hlint` are on
    PATH (blocking gates). `fourmolu`/`ormolu`/`hoogle`/`hls` are
    optional — tools that depend on them degrade gracefully.
 
@@ -40,65 +40,65 @@ MCP by writing code directly.
 
 | Tool                    | What it does                                                                         |
 |-------------------------|--------------------------------------------------------------------------------------|
-| `ghci_workflow`         | `status` (server inventory + GHCi liveness), `help` (next-step advice), `next`.      |
-| `ghci_toolchain_status` | Availability + version of every external binary the MCP delegates to.                |
-| `ghci_validate_cabal`   | `cabal check` + duplicate-dep / missing-field heuristics.                            |
+| `ghc_workflow`         | `status` (server inventory + GHCi liveness), `help` (next-step advice), `next`.      |
+| `ghc_toolchain_status` | Availability + version of every external binary the MCP delegates to.                |
+| `ghc_validate_cabal`   | `cabal check` + duplicate-dep / missing-field heuristics.                            |
 
 ### Read / inspect
 
 | Tool                | What it does                                                               |
 |---------------------|----------------------------------------------------------------------------|
-| `ghci_load`         | `:l <module>`; `diagnostics=true` enables a deferred-pass for typed holes. |
-| `ghci_type`         | `:t <expr>`.                                                               |
-| `ghci_info`         | `:i <name>`.                                                               |
-| `ghci_eval`         | Single-line expression eval (cap: 64 KiB).                                 |
-| `ghci_hole`         | Every typed hole in a module, with type + hole fits + in-scope bindings.   |
-| `ghci_complete`     | `:complete repl "<prefix>"`.                                               |
-| `ghci_goto`         | Parses "Defined at" marker; returns file + line for a name.                |
-| `ghci_doc`          | `:doc <name>`; Haddock text if `-haddock` built.                           |
+| `ghc_load`         | `:l <module>`; `diagnostics=true` enables a deferred-pass for typed holes. |
+| `ghc_type`         | `:t <expr>`.                                                               |
+| `ghc_info`         | `:i <name>`.                                                               |
+| `ghc_eval`         | Single-line expression eval (cap: 64 KiB).                                 |
+| `ghc_hole`         | Every typed hole in a module, with type + hole fits + in-scope bindings.   |
+| `ghc_complete`     | `:complete repl "<prefix>"`.                                               |
+| `ghc_goto`         | Parses "Defined at" marker; returns file + line for a name.                |
+| `ghc_doc`          | `:doc <name>`; Haddock text if `-haddock` built.                           |
 | `hoogle_search`     | Search by name or type signature (needs local `hoogle`).                   |
 
 ### Write / refactor
 
 | Tool                  | What it does                                                                    |
 |-----------------------|---------------------------------------------------------------------------------|
-| `ghci_create_project` | Scaffold `<name>.cabal` + `cabal.project` + `src/<Module>.hs` + `test/Spec.hs`. |
-| `ghci_deps`           | `list` / `add` / `remove` build-depends. Honours `stanza="library"` /
+| `ghc_create_project` | Scaffold `<name>.cabal` + `cabal.project` + `src/<Module>.hs` + `test/Spec.hs`. |
+| `ghc_deps`           | `list` / `add` / `remove` build-depends. Honours `stanza="library"` /
                           `"test-suite"` / `"test-suite:NAME"` / `"executable[:NAME]"` /
                           `"benchmark[:NAME]"` / `"foreign-library[:NAME]"`.                         |
-| `ghci_refactor`       | `rename_local` + `extract_binding`. Snapshot-and-compile-verify: if the rewrite
+| `ghc_refactor`       | `rename_local` + `extract_binding`. Snapshot-and-compile-verify: if the rewrite
                           fails to type-check, the file is restored from snapshot.                   |
-| `ghci_arbitrary`      | Generate `instance Arbitrary T` template from `:i` output. Polymorphic types
+| `ghc_arbitrary`      | Generate `instance Arbitrary T` template from `:i` output. Polymorphic types
                           get the correct `(Arbitrary a, Arbitrary b) =>` context.                   |
-| `ghci_format`         | fourmolu (preferred) or ormolu; check-only by default, `write=true` rewrites.
+| `ghc_format`         | fourmolu (preferred) or ormolu; check-only by default, `write=true` rewrites.
                           Reports `unavailable` cleanly if neither formatter is on PATH.             |
 
 ### Quality gates
 
 | Tool                 | What it does                                                                 |
 |----------------------|------------------------------------------------------------------------------|
-| `ghci_lint`          | HLint. `path` (recursive, matches CI) or `module_path` (fast inner loop).    |
-| `ghci_check_module`  | Compile + warnings + holes + property-store replay, aggregated per module.   |
-| `ghci_check_project` | `ghci_check_module` over every exposed-module + other-module in `.cabal`.    |
-| `ghci_coverage`      | `cabal test --enable-coverage` + `hpc report` — 8 metrics (expressions,
+| `ghc_lint`          | HLint. `path` (recursive, matches CI) or `module_path` (fast inner loop).    |
+| `ghc_check_module`  | Compile + warnings + holes + property-store replay, aggregated per module.   |
+| `ghc_check_project` | `ghc_check_module` over every exposed-module + other-module in `.cabal`.    |
+| `ghc_coverage`      | `cabal test --enable-coverage` + `hpc report` — 8 metrics (expressions,
                          boolean, alternatives, …) parsed from the HPC text summary.                   |
 
 ### Property-first testing
 
 | Tool              | What it does                                                                      |
 |-------------------|-----------------------------------------------------------------------------------|
-| `ghci_suggest`    | Given a function name, propose QuickCheck properties its signature implies. Each
+| `ghc_suggest`    | Given a function name, propose QuickCheck properties its signature implies. Each
                       suggestion has a confidence score; `[a] -> [a]` is dampened to `Low` unless the
                       name hints at canonicalisation.                                                   |
-| `ghci_quickcheck` | Run a property; on pass, auto-persist it to `.haskell-flows/properties.json`.
+| `ghc_quickcheck` | Run a property; on pass, auto-persist it to `.haskell-flows/properties.json`.
                       Accepts `module=` so the regression suite knows which file to reload.             |
-| `ghci_regression` | `list` or `run` the auto-persisted property set.                                  |
+| `ghc_regression` | `list` or `run` the auto-persisted property set.                                  |
 
 ### Composition
 
 | Tool          | What it does                                                                     |
 |---------------|----------------------------------------------------------------------------------|
-| `ghci_batch`  | N tool invocations sequentially in one request. Accepts both `{tool, args}` and
+| `ghc_batch`  | N tool invocations sequentially in one request. Accepts both `{tool, args}` and
                   `{name, arguments}` shapes. `fail_fast=true` (default) stops on first error;
                   `fail_fast=false` runs every action.                                                |
 
@@ -108,20 +108,20 @@ MCP by writing code directly.
 
 | Situation                                     | Use this                                                   |
 |-----------------------------------------------|------------------------------------------------------------|
-| New `data T = ...` declared                   | `ghci_arbitrary(type_name="T")`                            |
-| Function has a `_` hole or an empty stub      | `ghci_hole(module_path="src/X.hs")`                        |
-| Want properties from a function's signature   | `ghci_suggest(function_name="f")`                          |
-| Checking a law holds                          | `ghci_quickcheck(property="…", module_path="src/X.hs")`    |
-| Renaming a local identifier                   | `ghci_refactor(action="rename_local", scope_line_start=…)` |
-| Adding a dep (to the right stanza!)           | `ghci_deps(action="add", package="X", stanza="…")`         |
-| Not sure what to do next                      | `ghci_workflow(action="help")`                             |
-| Pushing soon                                  | `ghci_check_project()` + `scripts/ci-local.sh --fast`      |
+| New `data T = ...` declared                   | `ghc_arbitrary(type_name="T")`                            |
+| Function has a `_` hole or an empty stub      | `ghc_hole(module_path="src/X.hs")`                        |
+| Want properties from a function's signature   | `ghc_suggest(function_name="f")`                          |
+| Checking a law holds                          | `ghc_quickcheck(property="…", module_path="src/X.hs")`    |
+| Renaming a local identifier                   | `ghc_refactor(action="rename_local", scope_line_start=…)` |
+| Adding a dep (to the right stanza!)           | `ghc_deps(action="add", package="X", stanza="…")`         |
+| Not sure what to do next                      | `ghc_workflow(action="help")`                             |
+| Pushing soon                                  | `ghc_check_project()` + `scripts/ci-local.sh --fast`      |
 
 **Never** `sed`/`awk`/`find-and-replace` across Haskell files. Use
-`ghci_refactor`. The snapshot-and-compile-verify invariant rolls the file
+`ghc_refactor`. The snapshot-and-compile-verify invariant rolls the file
 back atomically on any failure.
 
-**Never** edit `.cabal` by hand for deps. Use `ghci_deps`. The post-edit
+**Never** edit `.cabal` by hand for deps. Use `ghc_deps`. The post-edit
 invariant check refuses to persist a write whose re-parsed dep list
 disagrees with the verb (added/removed).
 
@@ -175,7 +175,7 @@ payload:
   "success": true,
   "files_written": ["…"],
   "nextStep": {
-    "tool":  "ghci_deps",
+    "tool":  "ghc_deps",
     "why":   "Your scaffold has only `base`. Add deps before wiring up modules.",
     "example": { "action": "add", "package": "QuickCheck", "stanza": "test-suite" }
   }
@@ -189,7 +189,7 @@ verbatim.
 
 The hint is informational. Follow it when it fits; ignore it and
 pick your own path when it doesn't. It replaces the need to call
-`ghci_workflow(action="next")` after every successful tool.
+`ghc_workflow(action="next")` after every successful tool.
 
 Errors suppress the hint — when `success: false`, read the error
 and decide, don't look for a nextStep that is not there.
@@ -200,27 +200,27 @@ and decide, don't look for a nextStep that is not there.
 
 ```
 Need to add a library?
-  → ghci_deps(action="add", package="X", stanza="library"|"test-suite"|...)
+  → ghc_deps(action="add", package="X", stanza="library"|"test-suite"|...)
 
-See a typed hole warning after ghci_load?
-  → ghci_hole(module_path="src/X.hs")
+See a typed hole warning after ghc_load?
+  → ghc_hole(module_path="src/X.hs")
 
 Need to rename a local binding?
-  → ghci_refactor(action="rename_local",
+  → ghc_refactor(action="rename_local",
                   scope_line_start=.., scope_line_end=..)
   → If compile-verify fails, the file is restored automatically.
 
 Want properties for a new function?
-  → ghci_suggest(function_name="f")    # get candidate laws
-  → ghci_quickcheck(property="…", module_path="src/X.hs")
-  → ghci_regression(action="run")      # replay the saved set later
+  → ghc_suggest(function_name="f")    # get candidate laws
+  → ghc_quickcheck(property="…", module_path="src/X.hs")
+  → ghc_regression(action="run")      # replay the saved set later
 
 Module complete?
-  → ghci_check_module(module_path="src/X.hs")
+  → ghc_check_module(module_path="src/X.hs")
 
 Whole project ready?
-  → ghci_check_project() + scripts/ci-local.sh --fast
-  → ghci_coverage()  # 8 HPC metrics
+  → ghc_check_project() + scripts/ci-local.sh --fast
+  → ghc_coverage()  # 8 HPC metrics
 
 MCP tool misbehaves?
   → Find the bug → Edit mcp-server-haskell/ → add regression test →

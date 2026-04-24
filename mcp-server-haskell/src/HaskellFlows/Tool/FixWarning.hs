@@ -1,4 +1,4 @@
--- | @ghci_fix_warning@ — propose patches for common GHC warnings.
+-- | @ghc_fix_warning@ — propose patches for common GHC warnings.
 --
 -- Handles a short list of well-defined cases (unused imports,
 -- unused matches, missing top-level signatures). Other codes
@@ -31,7 +31,7 @@ import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_fix_warning"
+    { tdName        = "ghc_fix_warning"
     , tdDescription =
         "Propose a patch for a common GHC warning. Read-only by "
           <> "default; pass apply=true to write the file. Handles "
@@ -97,7 +97,7 @@ planForCode code = case code of
     { fpPatch = Nothing
     , fpDrop  = False
     , fpHint  = "Add a top-level type signature above the reported \
-               \definition. Use `ghci_type` on the bound name for \
+               \definition. Use `ghc_type` on the bound name for \
                \the inferred signature."
     }
   _ -> FixPlan

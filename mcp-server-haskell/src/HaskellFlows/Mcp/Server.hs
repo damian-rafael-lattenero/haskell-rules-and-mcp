@@ -12,9 +12,9 @@ module HaskellFlows.Mcp.Server
   ( Server
   , defaultServer
   , handleRequest
-    -- * Dispatch (re-exported so ghci_batch can recurse)
+    -- * Dispatch (re-exported so ghc_batch can recurse)
   , dispatchTool
-    -- * Canonical tool registry (shared with ghci_workflow's status view)
+    -- * Canonical tool registry (shared with ghc_workflow's status view)
   , allToolDescriptors
   , allToolNames
     -- * Per-tool timeout envelope (F-12 defence)
@@ -106,14 +106,14 @@ import qualified HaskellFlows.Tool.Workflow        as WorkflowTool
 --
 -- 'srvProjectDir' is an 'IORef' because Phase-1 doesn't yet support
 -- runtime project switching through a tool — we'll upgrade it to a TVar
--- the moment we port 'ghci_switch_project'.
+-- the moment we port 'ghc_switch_project'.
 --
 -- 'srvGhcSession' is held behind an 'MVar' so concurrent handlers
 -- cannot race on startup: the first caller wins, everyone else waits
 -- on the mutex.
 --
 -- 'srvBootPosix' + 'srvBinaryPath' wire BUG-07's staleness check:
--- @ghci_workflow(status)@ now compares the on-disk binary mtime
+-- @ghc_workflow(status)@ now compares the on-disk binary mtime
 -- with the boot time and flags the user if they rebuilt the MCP
 -- but forgot to relaunch the host.
 data Server = Server
@@ -135,16 +135,16 @@ data Server = Server
 -- Also captures two facts used by BUG-07's staleness check:
 -- the server's boot time (POSIX seconds) and the absolute path of
 -- the running binary. Both are deployment-level details —
--- 'getExecutablePath' is what @ghci_workflow(status)@ will later
+-- 'getExecutablePath' is what @ghc_workflow(status)@ will later
 -- stat to detect a rebuild the host hasn't relaunched against.
 defaultServer :: IO Server
 defaultServer = do
   -- BUG-04 fix: augment PATH before any subprocess-invoking tool
   -- touches the environment. Hosts launched from macOS Dock /
   -- Finder pass a minimal PATH that omits ~/.ghcup/bin and
-  -- ~/.cabal/bin; without this, 'ghci_lint', 'ghci_quickcheck',
-  -- 'ghci_regression', 'ghci_gate', 'ghci_coverage',
-  -- 'ghci_validate_cabal' all fail with
+  -- ~/.cabal/bin; without this, 'ghc_lint', 'ghc_quickcheck',
+  -- 'ghc_regression', 'ghc_gate', 'ghc_coverage',
+  -- 'ghc_validate_cabal' all fail with
   -- "posix_spawnp: does not exist".
   _ <- PathBootstrap.augmentPath
   envVal <- lookupEnv "HASKELL_PROJECT_DIR"
@@ -236,11 +236,11 @@ dispatch _ m _ rid =
 
 handleToolCall :: Server -> ToolCall -> RequestId -> IO Response
 handleToolCall srv call rid = case tcName call of
-  "ghci_batch" ->
+  "ghc_batch" ->
     -- Special case: batch has to be routed here (not inside
     -- dispatchTool) because it needs the dispatcher as a callback
     -- and dispatchTool would recurse with no termination on
-    -- ghci_batch-in-ghci_batch. The batch tool itself refuses
+    -- ghc_batch-in-ghc_batch. The batch tool itself refuses
     -- nesting but we also keep the top-level routing explicit.
     --
     -- Batch owns the slowest envelope: it's a bag of N tool calls,
@@ -256,51 +256,51 @@ handleToolCall srv call rid = case tcName call of
 -- | Pure (non-response-wrapping) tool dispatcher. Exposed so
 -- 'HaskellFlows.Tool.Batch' can recurse without pulling Server's
 -- Response envelope. Unknown tool names return a structured error
--- 'ToolResult' rather than raising — that way a ghci_batch run with
+-- 'ToolResult' rather than raising — that way a ghc_batch run with
 -- one bad action still completes the remaining good ones.
 dispatchTool :: Server -> ToolCall -> IO ToolResult
 dispatchTool srv call = case tcName call of
-  "ghci_load" -> do
+  "ghc_load" -> do
     -- Wave-2 full GhcSession: cabal-aware stanza compile via
     -- loadForTarget, diagnostics captured from the logger hook,
     -- rendered to GHCi-style text so agents still see 'raw' output.
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
     Load.handle ghcSess pd (tcArguments call)
-  "ghci_type" -> do
+  "ghc_type" -> do
     -- Phase-2 migrated: reads from the in-process GHC API session,
     -- not the legacy subprocess ghci. Auto-load on first call keeps
     -- the FlowExploratory 'type(localBinding)' scenario green.
     ghcSess <- getOrStartGhcSession srv
     TypeTool.handle ghcSess (tcArguments call)
-  "ghci_info" -> do
+  "ghc_info" -> do
     -- Phase-2 migrated: getInfo + TyThing classification.
     ghcSess <- getOrStartGhcSession srv
     InfoTool.handle ghcSess (tcArguments call)
-  "ghci_eval" -> do
+  "ghc_eval" -> do
     -- Wave-5 full in-process. Fast path: show-wrap + compileExpr.
     -- Fallback: evalIOString (for IO-typed expressions).
     ghcSess <- getOrStartGhcSession srv
     EvalTool.handle ghcSess (tcArguments call)
-  "ghci_quickcheck" -> do
+  "ghc_quickcheck" -> do
     -- Wave-3 full in-process: compileExpr + unsafeCoerce of a
     -- Test.QuickCheck.quickCheckWithResult invocation.
     ghcSess <- getOrStartGhcSession srv
     QcTool.handle (srvStore srv) ghcSess (tcArguments call)
-  "ghci_hole" -> do
+  "ghc_hole" -> do
     -- Wave-2 full GhcSession: Deferred compile via stanza flags,
     -- diagnostics captured through the logger hook, rendered to
     -- GHCi-style text for parseTypedHoles.
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
     HoleTool.handle ghcSess pd (tcArguments call)
-  "ghci_arbitrary" -> do
+  "ghc_arbitrary" -> do
     -- Wave-4 full GhcSession: parseName + getInfo + showPprUnsafe.
     ghcSess <- getOrStartGhcSession srv
     ArbitraryTool.handle ghcSess (tcArguments call)
   "hoogle_search" ->
     HoogleTool.handle (tcArguments call)
-  "ghci_workflow" -> do
+  "ghc_workflow" -> do
     ws        <- readState (srvWorkflowState srv)
     staleness <- checkStaleness (srvBinaryPath srv) (srvBootPosix srv)
     WorkflowTool.handle
@@ -310,124 +310,124 @@ dispatchTool srv call = case tcName call of
       ws
       staleness
       (tcArguments call)
-  "ghci_regression" -> do
+  "ghc_regression" -> do
     -- Wave-3 full in-process replay via evalIOString.
     ghcSess <- getOrStartGhcSession srv
     RegressionTool.handle (srvStore srv) ghcSess (tcArguments call)
-  "ghci_check_module" -> do
+  "ghc_check_module" -> do
     -- Wave-5 full GhcSession: compile/warnings/holes + in-process
     -- property replay via Regression.runOne.
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
     CheckModuleTool.handle ghcSess (srvStore srv) pd (tcArguments call)
-  "ghci_coverage" -> do
+  "ghc_coverage" -> do
     pd <- readIORef (srvProjectDir srv)
     CoverageTool.handle pd (tcArguments call)
-  "ghci_complete" -> do
+  "ghc_complete" -> do
     -- Phase-2 migrated: in-process getNamesInScope + prefix filter.
     ghcSess <- getOrStartGhcSession srv
     CompleteTool.handle ghcSess (tcArguments call)
-  "ghci_format" -> do
+  "ghc_format" -> do
     pd <- readIORef (srvProjectDir srv)
     r  <- FormatTool.handle pd (tcArguments call)
     invalidateGhcSessionIfPresent srv
     pure r
-  "ghci_deps" -> do
+  "ghc_deps" -> do
     pd <- readIORef (srvProjectDir srv)
     r  <- DepsTool.handle pd (tcArguments call)
-    -- Stanza flags hold the resolved package set; ghci_deps just
+    -- Stanza flags hold the resolved package set; ghc_deps just
     -- changed it, so re-bootstrap on next session use.
     invalidateStanzaFlagsIfPresent srv
     pure r
-  "ghci_create_project" -> do
+  "ghc_create_project" -> do
     pd <- readIORef (srvProjectDir srv)
     r  <- CreateProjectTool.handle pd (tcArguments call)
     -- New project = completely different stanza set.
     invalidateStanzaFlagsIfPresent srv
     pure r
-  "ghci_doc" -> do
+  "ghc_doc" -> do
     -- Phase-2 migrated: GHC.getDocs on the resolved Name.
     ghcSess <- getOrStartGhcSession srv
     DocTool.handle ghcSess (tcArguments call)
-  "ghci_goto" -> do
+  "ghc_goto" -> do
     -- Phase-2 migrated: in-process Name -> nameSrcSpan lookup.
     ghcSess <- getOrStartGhcSession srv
     GotoTool.handle ghcSess (tcArguments call)
-  "ghci_refactor" -> do
+  "ghc_refactor" -> do
     -- Wave-5 full GhcSession: compile-verify via loadForTarget.
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
     RefactorTool.handle ghcSess pd (tcArguments call)
-  "ghci_lint" -> do
+  "ghc_lint" -> do
     pd <- readIORef (srvProjectDir srv)
     LintTool.handle pd (tcArguments call)
-  "ghci_toolchain_status" ->
+  "ghc_toolchain_status" ->
     ToolchainStatusTool.handle (tcArguments call)
-  "ghci_validate_cabal" -> do
+  "ghc_validate_cabal" -> do
     pd <- readIORef (srvProjectDir srv)
     ValidateCabalTool.handle pd (tcArguments call)
-  "ghci_check_project" -> do
+  "ghc_check_project" -> do
     -- Wave-5 full GhcSession (delegates to check_module per file).
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
     CheckProjectTool.handle ghcSess (srvStore srv) pd (tcArguments call)
-  "ghci_suggest" -> do
+  "ghc_suggest" -> do
     -- Wave-5 full GhcSession: exprType + module-graph walk for siblings.
     ghcSess <- getOrStartGhcSession srv
     SuggestTool.handle ghcSess (tcArguments call)
-  "ghci_gate" -> do
+  "ghc_gate" -> do
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
     GateTool.handle (srvStore srv) ghcSess pd (tcArguments call)
-  "ghci_quickcheck_export" -> do
+  "ghc_quickcheck_export" -> do
     pd <- readIORef (srvProjectDir srv)
     QcExportTool.handle (srvStore srv) pd (tcArguments call)
-  "ghci_add_import" -> do
+  "ghc_add_import" -> do
     r <- AddImportTool.handle (tcArguments call)
     invalidateGhcSessionIfPresent srv
     pure r
-  "ghci_add_modules" -> do
+  "ghc_add_modules" -> do
     pd <- readIORef (srvProjectDir srv)
     r  <- AddModulesTool.handle pd (tcArguments call)
     -- Changes exposed-modules in .cabal, so stanza flags need
     -- re-bootstrap to capture the new unit-id / include path set.
     invalidateStanzaFlagsIfPresent srv
     pure r
-  "ghci_remove_modules" -> do
+  "ghc_remove_modules" -> do
     pd <- readIORef (srvProjectDir srv)
     r  <- RemoveModulesTool.handle pd (tcArguments call)
     invalidateStanzaFlagsIfPresent srv
     pure r
-  "ghci_apply_exports" -> do
+  "ghc_apply_exports" -> do
     pd <- readIORef (srvProjectDir srv)
     r  <- ApplyExportsTool.handle pd (tcArguments call)
     invalidateGhcSessionIfPresent srv
     pure r
-  "ghci_fix_warning" -> do
+  "ghc_fix_warning" -> do
     pd <- readIORef (srvProjectDir srv)
     r  <- FixWarningTool.handle pd (tcArguments call)
     invalidateGhcSessionIfPresent srv
     pure r
-  "ghci_imports" -> do
+  "ghc_imports" -> do
     -- Phase-6 migrated: reads from GhcSession's interactive context.
     ghcSess <- getOrStartGhcSession srv
     ImportsTool.handle ghcSess (tcArguments call)
-  "ghci_browse" -> do
+  "ghc_browse" -> do
     -- Phase-2 migrated: in-process getModuleInfo + modInfoExports.
     ghcSess <- getOrStartGhcSession srv
     BrowseTool.handle ghcSess (tcArguments call)
-  "ghci_determinism" -> do
+  "ghc_determinism" -> do
     -- Wave-3 full in-process via evalIOString.
     ghcSess <- getOrStartGhcSession srv
     DeterminismTool.handle ghcSess (tcArguments call)
-  "ghci_property_lifecycle" ->
+  "ghc_property_lifecycle" ->
     PropertyLifecycleTool.handle (srvStore srv) (tcArguments call)
-  "ghci_toolchain_warmup" ->
+  "ghc_toolchain_warmup" ->
     ToolchainWarmupTool.handle (tcArguments call)
-  "ghci_bootstrap" -> do
+  "ghc_bootstrap" -> do
     pd <- readIORef (srvProjectDir srv)
     BootstrapTool.handle pd allToolDescriptors (tcArguments call)
-  "ghci_switch_project" ->
+  "ghc_switch_project" ->
     -- SwitchProject is the one tool that mutates BOTH the
     -- project-dir ref AND the session MVar — it takes those
     -- handles directly instead of going through
@@ -445,7 +445,7 @@ dispatchTool srv call = case tcName call of
 
 --------------------------------------------------------------------------------
 -- tool registry — single source of truth for both tools/list and
--- ghci_workflow's status view. Keep additions in sync with the
+-- ghc_workflow's status view. Keep additions in sync with the
 -- dispatcher branch in 'dispatchTool'.
 --------------------------------------------------------------------------------
 

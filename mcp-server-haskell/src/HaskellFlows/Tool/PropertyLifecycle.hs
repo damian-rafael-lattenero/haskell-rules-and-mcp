@@ -1,4 +1,4 @@
--- | @ghci_property_lifecycle@ — inspect + prune the persisted
+-- | @ghc_property_lifecycle@ — inspect + prune the persisted
 -- property store. Lean: list every stored property with its pass
 -- count and last-updated timestamp, so an agent can reason about
 -- staleness or prune properties tied to removed functions.
@@ -18,7 +18,7 @@ import HaskellFlows.Mcp.Protocol
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_property_lifecycle"
+    { tdName        = "ghc_property_lifecycle"
     , tdDescription =
         "Inspect the persisted property store. Returns one entry per "
           <> "stored property with its expression, module, cumulative "

@@ -1,19 +1,19 @@
 -- | Flow: deliberately introduce a TYPE error and verify that
--- @ghci_check_module@ refuses to mark the module green.
+-- @ghc_check_module@ refuses to mark the module green.
 --
 -- This is the scenario that would have caught the F-08 regression
 -- (where the @Deferred@ @:unset@ leaked across calls and every
 -- compile-check silently deferred its type errors). It is the only
--- observable test for the invariant "@ghci_check_module@ fails a
+-- observable test for the invariant "@ghc_check_module@ fails a
 -- module that does not type-check, period".
 --
 -- Real user flow:
 --
 --   1. Dev writes 'f :: Int -> Int' and implements 'f x = x + 1'.
---   2. @ghci_check_module@ returns overall=true. Good.
+--   2. @ghc_check_module@ returns overall=true. Good.
 --   3. Dev edits the body to 'f x = show x' — now the body has type
 --      'Int -> String', contradicting the declared signature.
---   4. Dev asks @ghci_check_module@ again — must be RED.
+--   4. Dev asks @ghc_check_module@ again — must be RED.
 --
 -- Wrong answers (bugs we want to catch):
 --
@@ -67,13 +67,13 @@ runFlow c projectDir = do
   -- (1) scaffold + module that type-checks
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Arith.hs (typechecks)"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("typebreak-demo" :: Text) ])
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Arith"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Arith.hs") clean
-  _ <- Client.callTool c "ghci_load"
+  _ <- Client.callTool c "ghc_load"
          (object [ "module_path" .= ("src/Arith.hs" :: Text) ])
   stepFooter 1 t0
 
@@ -81,7 +81,7 @@ runFlow c projectDir = do
   -- (2) precondition — module gate is GREEN on the clean source
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "precondition · check_module is GREEN on clean source"
-  rClean <- Client.callTool c "ghci_check_module"
+  rClean <- Client.callTool c "ghc_check_module"
               (object [ "module_path" .= ("src/Arith.hs" :: Text) ])
   let cleanOverall = fieldBool "overall" rClean == Just True
   cPre <- liveCheck $ checkPure
@@ -97,7 +97,7 @@ runFlow c projectDir = do
   t2 <- stepHeader 3 "break the types: f :: Int -> Int but body returns String"
   TIO.writeFile (projectDir </> "src" </> "Arith.hs") broken
 
-  rBroken <- Client.callTool c "ghci_check_module"
+  rBroken <- Client.callTool c "ghc_check_module"
                (object [ "module_path" .= ("src/Arith.hs" :: Text) ])
 
   let overallBroken = fieldBool "overall" rBroken

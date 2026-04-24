@@ -1,4 +1,4 @@
--- | @ghci_toolchain_warmup@ — probe each optional binary the MCP
+-- | @ghc_toolchain_warmup@ — probe each optional binary the MCP
 -- delegates to and cache availability in the response. Lean vs
 -- the TS version (no background download infrastructure — we
 -- install via ghcup, which has its own concurrency model) but
@@ -22,7 +22,7 @@ import HaskellFlows.Mcp.Protocol
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_toolchain_warmup"
+    { tdName        = "ghc_toolchain_warmup"
     , tdDescription =
         "Probe every optional toolchain binary (fourmolu, ormolu, hls, "
           <> "hoogle) and return availability so subsequent calls do not "

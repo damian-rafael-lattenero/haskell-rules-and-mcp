@@ -1,7 +1,7 @@
--- | Flow: @ghci_property_lifecycle@ — inspect the property store.
+-- | Flow: @ghc_property_lifecycle@ — inspect the property store.
 --
--- After a successful @ghci_quickcheck@ auto-persists a property,
--- @ghci_property_lifecycle@ exposes the store's contents. Used
+-- After a successful @ghc_quickcheck@ auto-persists a property,
+-- @ghc_property_lifecycle@ exposes the store's contents. Used
 -- by agents to prune flaky / obsolete entries before a push.
 module Scenarios.FlowPropertyLifecycle
   ( runFlow
@@ -27,7 +27,7 @@ import E2E.Assert
   )
 import qualified E2E.Client as Client
 
--- | Tiny module so @ghci_quickcheck@ has something to test.
+-- | Tiny module so @ghc_quickcheck@ has something to test.
 calcSrc :: Text
 calcSrc = T.unlines
   [ "module Calc where"
@@ -42,11 +42,11 @@ runFlow c projectDir = do
   -- setup — scaffold + add QuickCheck + load a tiny module
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + add QuickCheck + load Calc"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("proplife-demo" :: Text) ])
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Calc"] :: [Text]) ])
-  _ <- Client.callTool c "ghci_deps" (object
+  _ <- Client.callTool c "ghc_deps" (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("QuickCheck" :: Text)
          , "stanza"  .= ("test-suite" :: Text)
@@ -54,7 +54,7 @@ runFlow c projectDir = do
          ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs") calcSrc
-  _ <- Client.callTool c "ghci_load"
+  _ <- Client.callTool c "ghc_load"
          (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
   stepFooter 1 t0
 
@@ -62,17 +62,17 @@ runFlow c projectDir = do
   -- seed: quickcheck a simple property so it persists.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "quickcheck (auto-persist on pass)"
-  _ <- Client.callTool c "ghci_quickcheck" (object
+  _ <- Client.callTool c "ghc_quickcheck" (object
     [ "property" .= ("\\(x :: Int) -> double x == x + x" :: Text)
     , "module"   .= ("src/Calc.hs" :: Text)
     ])
   stepFooter 2 t1
 
   ----------------------------------------------------------------
-  -- ghci_property_lifecycle — inspect the store.
+  -- ghc_property_lifecycle — inspect the store.
   ----------------------------------------------------------------
-  t2 <- stepHeader 3 "ghci_property_lifecycle (inspect store)"
-  r <- Client.callTool c "ghci_property_lifecycle" (object [])
+  t2 <- stepHeader 3 "ghc_property_lifecycle (inspect store)"
+  r <- Client.callTool c "ghc_property_lifecycle" (object [])
   c1 <- liveCheck $ checkJsonField "success" r "success" (Bool True)
   c2 <- liveCheck $ checkJsonFieldMatches
           "store has ≥ 1 property"

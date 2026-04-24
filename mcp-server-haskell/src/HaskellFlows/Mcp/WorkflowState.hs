@@ -1,5 +1,5 @@
 -- | @WorkflowState@ — light session-level tracker the Server
--- updates after every successful tool call. @ghci_workflow@'s
+-- updates after every successful tool call. @ghc_workflow@'s
 -- @help@ action reads this state to render context-aware advice
 -- ("you edited 4 times since last load, recompile"; "regression
 -- has N saved properties, consider running it") instead of a
@@ -34,7 +34,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 
 -- | Observable session counters + sliding history. Kept small so
--- JSON serialisation is cheap on every @ghci_workflow(status)@
+-- JSON serialisation is cheap on every @ghc_workflow(status)@
 -- call.
 data WorkflowState = WorkflowState
   { wsToolCalls          :: !Int
@@ -89,16 +89,16 @@ trackTool (WorkflowStateRef ref) toolName ok payload =
 
 applyToolUpdate :: WorkflowState -> Text -> Bool -> Value -> WorkflowState
 applyToolUpdate s toolName ok payload = case toolName of
-  "ghci_load" | ok ->
+  "ghc_load" | ok ->
     s { wsEditsSinceLastLoad = 0
       , wsLastLoadSuccess    = Just True
       , wsLastLoadWarnings   = warningCount payload
       }
-  "ghci_load" ->
+  "ghc_load" ->
     s { wsLastLoadSuccess = Just False }
-  "ghci_refactor" ->
+  "ghc_refactor" ->
     s { wsEditsSinceLastLoad = wsEditsSinceLastLoad s + 1 }
-  "ghci_quickcheck" | ok, isPassed payload ->
+  "ghc_quickcheck" | ok, isPassed payload ->
     s { wsPassedProperties = wsPassedProperties s + 1 }
   _ -> s
 
@@ -129,29 +129,29 @@ readState (WorkflowStateRef ref) = readMVar ref
 -- list means "nothing urgent".
 --
 -- BUG-08: now also inspects 'wsToolHistory' to catch *patterns*
--- the scalar counters miss — e.g. N consecutive @ghci_load@
--- calls (polling without progress), a @ghci_suggest@ that was
--- never followed by @ghci_quickcheck@, a @ghci_refactor@ that
+-- the scalar counters miss — e.g. N consecutive @ghc_load@
+-- calls (polling without progress), a @ghc_suggest@ that was
+-- never followed by @ghc_quickcheck@, a @ghc_refactor@ that
 -- was never re-loaded.
 renderHelp :: WorkflowState -> [Text]
 renderHelp s = concat
   [ -- Counter-based nudges (pre-BUG-08 behaviour).
     [ "You have " <> tshow (wsEditsSinceLastLoad s)
-      <> " edits since the last ghci_load — recompile to see fresh \
+      <> " edits since the last ghc_load — recompile to see fresh \
       \diagnostics."
     | wsEditsSinceLastLoad s >= 3
     ]
-  , [ "Last ghci_load reported " <> tshow (wsLastLoadWarnings s)
-      <> " warnings — fix or ghci_fix_warning before moving on."
+  , [ "Last ghc_load reported " <> tshow (wsLastLoadWarnings s)
+      <> " warnings — fix or ghc_fix_warning before moving on."
     | wsLastLoadWarnings s > 0
     ]
-  , [ "Last ghci_load failed — inspect errors before doing anything else."
+  , [ "Last ghc_load failed — inspect errors before doing anything else."
     | wsLastLoadSuccess s == Just False
     ]
   , [ "You've persisted " <> tshow (wsPassedProperties s) <> " \
       \passing properties in this session. Consider \
-      \ghci_regression(action=\"run\") to confirm none regressed, \
-      \then ghci_quickcheck_export to materialise them as a \
+      \ghc_regression(action=\"run\") to confirm none regressed, \
+      \then ghc_quickcheck_export to materialise them as a \
       \test/Spec.hs."
     | wsPassedProperties s >= 3
     ]
@@ -168,27 +168,27 @@ renderHelp s = concat
 -- missed follow-up.
 historyNudges :: [Text] -> [Text]
 historyNudges hist = concat
-  [ -- 5 consecutive ghci_load calls → the agent is polling
+  [ -- 5 consecutive ghc_load calls → the agent is polling
     -- rather than editing. Suggest a flakiness / stability
     -- check instead of another reload.
-    [ "The last 5 tool calls were all ghci_load — you're polling \
-      \rather than progressing. Try ghci_determinism on a recent \
-      \property for flakiness, or ghci_check_project to surface \
+    [ "The last 5 tool calls were all ghc_load — you're polling \
+      \rather than progressing. Try ghc_determinism on a recent \
+      \property for flakiness, or ghc_check_project to surface \
       \module-level gates you can knock out in parallel."
-    | length recent5 >= 5, all (== "ghci_load") recent5
+    | length recent5 >= 5, all (== "ghc_load") recent5
     ]
-    -- ghci_suggest recent, no ghci_quickcheck since.
-  , [ "You ran ghci_suggest but haven't tried any of the proposals \
-      \with ghci_quickcheck yet. Pick the highest-confidence law \
+    -- ghc_suggest recent, no ghc_quickcheck since.
+  , [ "You ran ghc_suggest but haven't tried any of the proposals \
+      \with ghc_quickcheck yet. Pick the highest-confidence law \
       \and feed it in — passes auto-persist to the regression store."
-    | "ghci_suggest" `elem` recent3, "ghci_quickcheck" `notElem` recent3
+    | "ghc_suggest" `elem` recent3, "ghc_quickcheck" `notElem` recent3
     ]
-    -- Last tool was ghci_refactor and there's been no load since.
-  , [ "Last tool was ghci_refactor. The refactor was snapshot-and-\
-      \compile-verified, but a fresh ghci_load(diagnostics=true) \
+    -- Last tool was ghc_refactor and there's been no load since.
+  , [ "Last tool was ghc_refactor. The refactor was snapshot-and-\
+      \compile-verified, but a fresh ghc_load(diagnostics=true) \
       \catches any new holes or warnings the rename surfaced."
     | case hist of
-        ("ghci_refactor" : rest) -> "ghci_load" `notElem` take 2 rest
+        ("ghc_refactor" : rest) -> "ghc_load" `notElem` take 2 rest
         _                        -> False
     ]
   ]
@@ -217,40 +217,40 @@ classifyPhase s
       && wsToolCalls s < 3              = PhasePreScaffold
   | wsLastLoadSuccess s == Just False   = PhaseBootstrap
   | wsPassedProperties s >= 3           = PhaseReadyToPush
-  | "ghci_quickcheck" `elem` recent3
-      || "ghci_suggest"   `elem` recent3 = PhaseTestingLaws
+  | "ghc_quickcheck" `elem` recent3
+      || "ghc_suggest"   `elem` recent3 = PhaseTestingLaws
   | otherwise                           = PhaseDeveloping
   where
     recent3 = take 3 (wsToolHistory s)
 
 -- | Render a phase-specific follow-up. Returned as a short
--- paragraph so the @ghci_workflow(help)@ view can concatenate it
+-- paragraph so the @ghc_workflow(help)@ view can concatenate it
 -- next to the counter-based nudges.
 renderPhaseHint :: SessionPhase -> Text
 renderPhaseHint p = case p of
   PhasePreScaffold ->
     "Phase: pre-scaffold. If this is a new project, start with \
-    \ghci_create_project(name=...); if you already have one, \
-    \ghci_load(module_path=\"src/<Entry>.hs\") boots GHCi and \
+    \ghc_create_project(name=...); if you already have one, \
+    \ghc_load(module_path=\"src/<Entry>.hs\") boots GHCi and \
     \gives you the cleanest error surface."
   PhaseBootstrap ->
     "Phase: bootstrap. The last load failed — likely a missing \
-    \dependency or an unregistered module. Chain ghci_deps(add,...) \
-    \+ ghci_add_modules(modules=[...]) + ghci_load; ghci_batch can \
+    \dependency or an unregistered module. Chain ghc_deps(add,...) \
+    \+ ghc_add_modules(modules=[...]) + ghc_load; ghc_batch can \
     \run the three as one round-trip."
   PhaseDeveloping ->
-    "Phase: developing. Modules load clean. ghci_suggest on a \
+    "Phase: developing. Modules load clean. ghc_suggest on a \
     \recently-edited binding gives you QuickCheck candidates; \
     \names that hint at normalisation (simplify / normalize / fold) \
     \automatically bump the evaluator-preservation law to High \
     \confidence if a paired interpreter is a sibling."
   PhaseTestingLaws ->
     "Phase: testing laws. Feed the highest-confidence proposal from \
-    \ghci_suggest into ghci_quickcheck; every pass auto-persists \
-    \to .haskell-flows/properties.json. Use ghci_determinism to \
+    \ghc_suggest into ghc_quickcheck; every pass auto-persists \
+    \to .haskell-flows/properties.json. Use ghc_determinism to \
     \check stability before adding to the regression suite."
   PhaseReadyToPush ->
-    "Phase: ready to push. ghci_regression(action=\"run\") replays \
-    \the full set; ghci_quickcheck_export materialises them as \
-    \test/Spec.hs; ghci_gate runs regression + cabal test + cabal \
+    "Phase: ready to push. ghc_regression(action=\"run\") replays \
+    \the full set; ghc_quickcheck_export materialises them as \
+    \test/Spec.hs; ghc_gate runs regression + cabal test + cabal \
     \build in one call — if green, push is safe."

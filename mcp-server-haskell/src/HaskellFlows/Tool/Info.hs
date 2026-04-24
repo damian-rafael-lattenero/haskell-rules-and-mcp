@@ -1,4 +1,4 @@
--- | @ghci_info@ — Phase-2 tool (GHC-API migrated).
+-- | @ghc_info@ — Phase-2 tool (GHC-API migrated).
 --
 -- Given a name, returns a structured @:info@ view: kind classification
 -- (class/data/newtype/function/…), rendered definition, and list of
@@ -49,7 +49,7 @@ import HaskellFlows.Parser.Type
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_info"
+    { tdName        = "ghc_info"
     , tdDescription =
         "Get detailed information about a Haskell name (function, type, "
           <> "typeclass) via the GHC API. Shows the definition, kind, "

@@ -118,7 +118,7 @@ areas I'd most like help with:
   Traversable laws. Add a new `Rule` to
   `HaskellFlows.Suggest.Rules.allRules` with a unit test covering the
   match shape and a false-positive counter-example.
-- **HLS integration**: `ghci_hls` is a stub. A real hover / goto /
+- **HLS integration**: `ghc_hls` is a stub. A real hover / goto /
   rename implementation via the LSP protocol would close a
   significant gap against `cross-module precision`.
 

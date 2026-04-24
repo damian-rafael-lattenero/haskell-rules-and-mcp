@@ -1,4 +1,4 @@
--- | @ghci_gate@ — pre-push finalizer.
+-- | @ghc_gate@ — pre-push finalizer.
 --
 -- Collapses the "is this ready to push?" check into a single call.
 -- Runs the three independent gates in order, collects per-step
@@ -70,7 +70,7 @@ import HaskellFlows.Types (ProjectDir, unProjectDir)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_gate"
+    { tdName        = "ghc_gate"
     , tdDescription =
         "Pre-push finalizer: runs regression + cabal test + cabal build "
           <> "in one call, returns per-step durations + pass/fail/skip + "
@@ -163,7 +163,7 @@ stepPassed _          = False
 -- wrapped 'body' in 'timeout' only. Any synchronous exception
 -- thrown by 'body' (cabal binary not on PATH, partial pattern on
 -- createProcess, resource exhaustion) would escape 'runStep',
--- propagate through 'ghci_gate''s handler, and only get caught
+-- propagate through 'ghc_gate''s handler, and only get caught
 -- by Server.runTool's outer 'try' — but by then the GHCi session
 -- had been evicted and the MCP client saw a bare \"Connection
 -- closed\" instead of a structured gate failure.

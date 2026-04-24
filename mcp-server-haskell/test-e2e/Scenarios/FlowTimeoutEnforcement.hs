@@ -6,14 +6,14 @@
 --   "Server.runTool wraps each handler in a 10-min outer timeout"
 --
 -- This scenario is the test that makes the FIRST claim honest. We fire
--- a deliberately slow 'ghci_eval' (a 60-second 'threadDelay') and
+-- a deliberately slow 'ghc_eval' (a 60-second 'threadDelay') and
 -- assert three things:
 --
 --   (a) The call RETURNED in less than 45 s — i.e. the inner 30 s
 --       'execute' budget tripped, didn't wait for the user's 60 s.
 --   (b) The response was structured-failed (success=false), NOT a
 --       silent timeout that looks indistinguishable from success.
---   (c) The session recovered: the very next 'ghci_eval' succeeded,
+--   (c) The session recovered: the very next 'ghc_eval' succeeded,
 --       proving 'Server.evictSession' replaces the dead session.
 --
 -- Failure modes the oracle catches:
@@ -50,12 +50,12 @@ import qualified E2E.Client as Client
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _pd = do
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("timeout-demo" :: Text) ])
 
   -- 1. Pre-flight: the session must be responsive before we poke it.
-  t0 <- stepHeader 1 "pre-flight · ghci_eval(1+1) on a fresh session"
-  pre <- Client.callTool c "ghci_eval"
+  t0 <- stepHeader 1 "pre-flight · ghc_eval(1+1) on a fresh session"
+  pre <- Client.callTool c "ghc_eval"
            (object [ "expression" .= ("1 + 1" :: Text) ])
   cPre <- liveCheck $ checkPure
     "pre-flight · session responds to 1+1"
@@ -70,7 +70,7 @@ runFlow c _pd = do
   -- as <<loop>> and come back early, which would mask a broken timer).
   t1 <- stepHeader 2 "slow eval · threadDelay 60 s must abort in < 45 s"
   startedAt <- getPOSIXTime
-  slow <- Client.callTool c "ghci_eval"
+  slow <- Client.callTool c "ghc_eval"
             (object [ "expression"
                     .= ("Control.Concurrent.threadDelay 60000000 :: IO ()"
                         :: Text) ])
@@ -84,7 +84,7 @@ runFlow c _pd = do
     ("aborted within inner budget · elapsed=" <> T.pack (show elapsedMs)
      <> " ms, success=false")
     (abortedStructurally && returnedInTime)
-    ("Expected: ghci_eval returns in < 45 s with success=false. \
+    ("Expected: ghc_eval returns in < 45 s with success=false. \
      \Got: elapsed=" <> T.pack (show elapsedMs) <> " ms, success="
      <> T.pack (show (fieldBool "success" slow))
      <> ". If elapsed ≥ 60 s, 'executeNoLock' timeoutMicros is not \
@@ -117,9 +117,9 @@ runFlow c _pd = do
   -- 3. Recovery. Must work, and must work promptly — the previous
   -- failure should have triggered 'evictSession' so this call boots
   -- a fresh GHCi child.
-  t2 <- stepHeader 4 "recovery · next ghci_eval(2+3) must succeed"
+  t2 <- stepHeader 4 "recovery · next ghc_eval(2+3) must succeed"
   recStart <- getPOSIXTime
-  recov <- Client.callTool c "ghci_eval"
+  recov <- Client.callTool c "ghc_eval"
              (object [ "expression" .= ("2 + 3" :: Text) ])
   recEnd <- getPOSIXTime
   let recMs        = round ((realToFrac (recEnd - recStart) :: Double)

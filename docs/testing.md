@@ -102,11 +102,11 @@ A typical shape:
 
 ```haskell
 runFlow c projectDir = do
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("demo" :: Text) ])
 
   t0 <- stepHeader 1 "short description of the step"
-  result <- Client.callTool c "ghci_some_tool" (object [...])
+  result <- Client.callTool c "ghc_some_tool" (object [...])
   c1 <- liveCheck $ checkPure
           "human-readable check name"
           (<predicate on result>)
@@ -135,7 +135,7 @@ checkJsonFieldMatches "type is Int -> Int" r "type"
 ### 2. Tautological oracles that match the code under test
 
 ```haskell
--- BAD: we called ghci_eval, we know it returned X, we check X
+-- BAD: we called ghc_eval, we know it returned X, we check X
 let expected = extractField "output" r
 in check expected (== "some value we just extracted")
 
@@ -158,7 +158,7 @@ with a type error (must be counted as `failed` by `check_project`).
 ### 4. Vacuous passes from mis-matched fields
 
 When you write an oracle based on the tool's output field, always
-verify against the raw response first. The cost of `ghci_deps list`
+verify against the raw response first. The cost of `ghc_deps list`
 returning `build_depends` not `packages` was two test-level bugs
 during development — the oracles always saw `[]` and reported false
 positives.
@@ -168,8 +168,8 @@ positives.
 The MCP is a shared-nothing server for everything EXCEPT two places
 where filesystem state is shared:
 
-- `.cabal` file edits via `ghci_deps(add/remove)`
-- `.haskell-flows/properties.json` via `ghci_quickcheck`
+- `.cabal` file edits via `ghc_deps(add/remove)`
+- `.haskell-flows/properties.json` via `ghc_quickcheck`
   persistence
 
 Both now use `withCabalLock` / `withGlobalStoreLock` patterns
@@ -235,7 +235,7 @@ Grep for the `═══ Flow: X` section header to isolate one scenario.
 - **BUG-D** — `sanitizeExpression` had no size cap; a 1 MB
   expression flew straight through to the child GHCi. CWE-400 DoS
   across 9 tools. Caught by `FlowOversizedInput`.
-- **BUG-G** — `ghci_deps(add/remove)` had no locking; two clients
+- **BUG-G** — `ghc_deps(add/remove)` had no locking; two clients
   editing concurrently dropped a write. Caught by
   `FlowConcurrentClients`.
 - Test-level bugs (false positives) caught by the scenarios'

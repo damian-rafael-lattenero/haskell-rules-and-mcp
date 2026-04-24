@@ -47,8 +47,8 @@ Response expectations (best-effort, single maintainer):
   - `mkModulePath` — path-traversal guard over every file-path
     argument the MCP accepts.
   - `sanitizeExpression` — rejects newlines + the GHCi framing
-    sentinel from any expression sent to `ghci_eval` / `ghci_type` /
-    `ghci_info` / `ghci_quickcheck`.
+    sentinel from any expression sent to `ghc_eval` / `ghc_type` /
+    `ghc_info` / `ghc_quickcheck`.
   - `validatePackageName`, `validateVersionConstraint`,
     `parseStanzaSelector` in `HaskellFlows.Tool.Deps` — strict
     identifier checks for every `.cabal` edit.
@@ -58,10 +58,10 @@ Response expectations (best-effort, single maintainer):
   - `maxBufferBytes` (16 MiB) DoS cap in `drainHandle`.
   - `SessionStatus` terminal-state detection (`Dead` on EOF) so a
     crashed GHCi cannot hold the server loop.
-- `ghci_refactor` snapshot-and-compile-verify — refactors must be
+- `ghc_refactor` snapshot-and-compile-verify — refactors must be
   atomic from the agent's perspective, rolling back on compile
   failure.
-- `ghci_deps` post-edit invariant check — refuses to persist a
+- `ghc_deps` post-edit invariant check — refuses to persist a
   `.cabal` edit when the re-parsed result disagrees with the
   requested verb (prevents silent `success=true` with broken file).
 
@@ -85,13 +85,13 @@ Two external trust decisions are explicit:
    install path is [`ghcup`](https://www.haskell.org/ghcup/), the
    canonical Haskell toolchain manager, which carries its own
    integrity guarantees (signed metadata + per-release checksums).
-   `ghci_toolchain_status` surfaces the resolved path + version of
+   `ghc_toolchain_status` surfaces the resolved path + version of
    every tool so auditors can inspect the chain of trust at runtime.
 2. **GHCi** runs as a local subprocess via `cabal repl
    --build-depends QuickCheck`. Any untrusted Haskell expression you
-   pass through `ghci_eval` is evaluated with the same privileges as
+   pass through `ghc_eval` is evaluated with the same privileges as
    your shell. This is documented in the tool's description; treat
-   `ghci_eval` like you treat `eval` in any scripting language.
+   `ghc_eval` like you treat `eval` in any scripting language.
 
 ## Disclosure philosophy
 

@@ -20,7 +20,7 @@
 --   return.
 --
 -- This is a minimum-viable extract. A proper AST-aware version lives
--- behind a future @ghci_refactor@ powered by @ghc-lib-parser@; for now
+-- behind a future @ghc_refactor@ powered by @ghc-lib-parser@; for now
 -- this lets an agent factor a repeated sub-expression out with the
 -- compiler enforcing correctness.
 module HaskellFlows.Refactor.Extract

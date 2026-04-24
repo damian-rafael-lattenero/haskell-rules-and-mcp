@@ -285,16 +285,16 @@ main = do
       , test "renderTemplate wraps polymorphic T a" testTemplatePolymorphic
       , test "renderTemplate multi-param context"   testTemplateMultiParam
       , test "server wraps runTool in timeout"      testServerOuterTimeout
-      , test "ghci_eval exposes Control.Concurrent"  testEvalContextHasControlConcurrent
-      , test "ghci_eval enforces inner per-call budget" testEvalInnerTimeoutBudget
+      , test "ghc_eval exposes Control.Concurrent"  testEvalContextHasControlConcurrent
+      , test "ghc_eval enforces inner per-call budget" testEvalInnerTimeoutBudget
       , test "load paths derive interactive imports from source" testLoadAutoImports
       , test "Deferred pass writes to MCP-private build dir"      testDeferredIsolatedOutputs
-      , test "ghci_deps add: idempotent no-op returns unchanged"  testDepsAddIdempotent
-      , test "ghci_switch_project: empty dir -> create_project"   testSwitchProjectEmptyDir
-      , test "ghci_check_module: filter diagnostics by file"     testCheckModuleDiagFilter
-      , test "ghci_add_modules: accepts stanza param"            testAddModulesStanzaParam
-      , test "ghci_check_project: also scans test/app/bench"     testCheckProjectTestDirs
-      , test "ghci_quickcheck: widens scope via :m +"            testQuickCheckScopeWidening
+      , test "ghc_deps add: idempotent no-op returns unchanged"  testDepsAddIdempotent
+      , test "ghc_switch_project: empty dir -> create_project"   testSwitchProjectEmptyDir
+      , test "ghc_check_module: filter diagnostics by file"     testCheckModuleDiagFilter
+      , test "ghc_add_modules: accepts stanza param"            testAddModulesStanzaParam
+      , test "ghc_check_project: also scans test/app/bench"     testCheckProjectTestDirs
+      , test "ghc_quickcheck: widens scope via :m +"            testQuickCheckScopeWidening
       , test "initialize emits instructions field"  testInitializeEmitsInstructions
       , test "instructions mention key tools+flows" testInstructionsMentionCore
       , test "nextStep: create_project -> deps"     testNextStepCreateProject
@@ -339,7 +339,7 @@ main = do
       , test "guidance: text lists every tool"      testGuidanceListsEveryTool
       , test "guidance: markdown lists every tool"  testGuidanceMarkdownListsEveryTool
       , test "guidance: situation table non-empty"  testGuidanceSituationNonEmpty
-      , test "guidance: no phantom ghci_session"    testGuidanceNoPhantomSession
+      , test "guidance: no phantom ghc_session"    testGuidanceNoPhantomSession
       , test "deps: description has no phantom"     testDepsDescriptorNoPhantom
       , test "deps: hint text has no phantom"       testDepsHintNoPhantom
       , test "qcexport: modulePathToModule src"     testExportPathSrc
@@ -384,7 +384,7 @@ main = do
       , test "nextStep: create_project carries chain" testNextStepCreateProjectChain
       , test "nextStep: every tool covered or whitelisted" testNextStepFullCoverage
       , test "staleness: wired into server (static)"  testStalenessWired
-      , test "workflow: history polls ghci_load"      testHistoryPolling
+      , test "workflow: history polls ghc_load"      testHistoryPolling
       , test "workflow: history missing quickcheck"   testHistoryMissingQc
       , test "workflow: history refactor unreloaded"  testHistoryRefactorNotReloaded
       , test "workflow: phase pre-scaffold"           testPhasePreScaffold
@@ -450,11 +450,11 @@ main = do
       , test "check_module: warnings_block default is True"      testCheckModuleWarningsBlockDefault
       , test "quickcheck: summariseStderr filters cabal noise"   testQcSummariseStderrFiltersNoise
       , test "quickcheck: summariseStderr caps at 1600 chars"    testQcSummariseStderrCaps
-      , test "nextStep: ghci_load with typed-hole warning \8594 ghci_hole"
+      , test "nextStep: ghc_load with typed-hole warning \8594 ghc_hole"
                                                                  testNextStepTypedHoleWarn
-      , test "nextStep: ghci_load with non-hole warning \8594 ghci_fix_warning"
+      , test "nextStep: ghc_load with non-hole warning \8594 ghc_fix_warning"
                                                                  testNextStepFixableWarn
-      , test "nextStep: ghci_load with no warnings \8594 ghci_suggest"
+      , test "nextStep: ghc_load with no warnings \8594 ghc_suggest"
                                                                  testNextStepCleanLoad
       ]
   if and results then exitSuccess else exitFailure
@@ -1171,7 +1171,7 @@ testSuggestNoMatch =
 -- Phase 12 regression tests: dogfood findings #22 / #23 / #24
 --------------------------------------------------------------------------------
 
--- | Issue #22: @ghci_batch@ advertises @{tool, args}@ via its
+-- | Issue #22: @ghc_batch@ advertises @{tool, args}@ via its
 -- @inputSchema@ — parsing must accept that shape. This pins the
 -- documented contract; a future regression flips this red instead
 -- of silently misleading agents following the tool's own schema.
@@ -1180,7 +1180,7 @@ testBatchParsesToolArgs =
   let raw = object
         [ "actions" .=
             [ object
-                [ "tool" .= ("ghci_type" :: Text)
+                [ "tool" .= ("ghc_type" :: Text)
                 , "args" .= object [ "expression" .= ("reverse" :: Text) ]
                 ]
             ]
@@ -1188,7 +1188,7 @@ testBatchParsesToolArgs =
   in case A.fromJSON raw :: A.Result BatchArgs of
        A.Success ba -> case baActions ba of
          [tc] -> pure
-           ( tcName tc == "ghci_type"
+           ( tcName tc == "ghc_type"
            && tcArguments tc
                 == object [ "expression" .= ("reverse" :: Text) ]
            )
@@ -1204,14 +1204,14 @@ testBatchParsesNameArgs =
   let raw = object
         [ "actions" .=
             [ object
-                [ "name"      .= ("ghci_eval" :: Text)
+                [ "name"      .= ("ghc_eval" :: Text)
                 , "arguments" .= object [ "expression" .= ("1+1" :: Text) ]
                 ]
             ]
         ]
   in case A.fromJSON raw :: A.Result BatchArgs of
        A.Success ba -> case baActions ba of
-         [tc] -> pure (tcName tc == "ghci_eval")
+         [tc] -> pure (tcName tc == "ghc_eval")
          _    -> pure False
        A.Error _ -> pure False
 
@@ -1243,7 +1243,7 @@ testSuggestNormalizeIdempotentMedium =
            [s] -> sConfidence s == Medium
            _   -> False
 
--- | Issue #24: @toolsActive@ in 'ghci_workflow' must enumerate the
+-- | Issue #24: @toolsActive@ in 'ghc_workflow' must enumerate the
 -- same set of tools as @tools/list@. The two used to drift because
 -- the list was hand-maintained in two places. Paranoia check: also
 -- confirm every name is non-empty and the server registers more
@@ -1255,10 +1255,10 @@ testWorkflowToolsParity = pure $
   && length allToolNames >= 20
 
 --------------------------------------------------------------------------------
--- Phase 11b regressions: ghci_deps F-01 / F-02 / F-03 fixes.
+-- Phase 11b regressions: ghc_deps F-01 / F-02 / F-03 fixes.
 --------------------------------------------------------------------------------
 
--- | F-01: @ghci_deps add@ previously wrote @,@-prefixed continuation
+-- | F-01: @ghc_deps add@ previously wrote @,@-prefixed continuation
 -- lines at the same column as the @build-depends:@ field. Cabal 3.0
 -- rejects that as a new field header and the file becomes
 -- unparseable. Pin the invariant: after add, the inserted line's
@@ -1420,7 +1420,7 @@ testParseStanzaRejects = pure $
       Left  _ -> True
       Right _ -> False
 
--- | Phase 11b F-09: @ghci_coverage@ always returned
+-- | Phase 11b F-09: @ghc_coverage@ always returned
 -- @summary="No coverage metrics parsed from the cabal output"@ under
 -- GHC 9.12 + cabal 3.14 because those versions of cabal no longer
 -- echo the HPC summary on stdout — they only write HTML. Fix wires
@@ -1447,10 +1447,10 @@ ellipticalOr = (||)
 testBajaRegistered :: IO Bool
 testBajaRegistered = pure $
   all (`elem` allToolNames)
-    [ "ghci_browse"
-    , "ghci_determinism"
-    , "ghci_property_lifecycle"
-    , "ghci_toolchain_warmup"
+    [ "ghc_browse"
+    , "ghc_determinism"
+    , "ghc_property_lifecycle"
+    , "ghc_toolchain_warmup"
     ]
 
 -- | Phase 11l: resources/read for the rules URI returns the
@@ -1511,37 +1511,37 @@ testGuidanceSituationNonEmpty = pure $
      not (null Guidance.situationTable)
   && all (\r -> Guidance.srTool r `elem` allToolNames) Guidance.situationTable
 
--- | BUG-19: @ghci_session@ is a TS-era tool name that does not
+-- | BUG-19: @ghc_session@ is a TS-era tool name that does not
 -- exist in the Haskell MCP. The phantom reference used to leak
--- into @ghci_deps@' description and hint. Pin that no guidance
+-- into @ghc_deps@' description and hint. Pin that no guidance
 -- text mentions the phantom tool.
 testGuidanceNoPhantomSession :: IO Bool
 testGuidanceNoPhantomSession = do
   let instructions = Guidance.sessionInstructionsText allToolDescriptors
       md           = Guidance.workflowRulesMarkdown   allToolDescriptors
-      phantom      = "ghci_session"
+      phantom      = "ghc_session"
   pure $ not (phantom `T.isInfixOf` instructions)
       && not (phantom `T.isInfixOf` md)
 
--- | BUG-19 companion: the @ghci_deps@ tool descriptor used to say
--- \"run ghci_session(action='restart')\". Pin that the description
+-- | BUG-19 companion: the @ghc_deps@ tool descriptor used to say
+-- \"run ghc_session(action='restart')\". Pin that the description
 -- no longer mentions the phantom tool.
 testDepsDescriptorNoPhantom :: IO Bool
 testDepsDescriptorNoPhantom = do
   let depsDesc = head [ tdDescription d | d <- allToolDescriptors
-                                        , tdName d == "ghci_deps" ]
-  pure (not ("ghci_session" `T.isInfixOf` depsDesc))
+                                        , tdName d == "ghc_deps" ]
+  pure (not ("ghc_session" `T.isInfixOf` depsDesc))
 
--- | BUG-19 companion: the @ghci_deps@ add/remove response carried
--- a @hint@ string instructing the agent to call @ghci_session@.
+-- | BUG-19 companion: the @ghc_deps@ add/remove response carried
+-- a @hint@ string instructing the agent to call @ghc_session@.
 -- Pin that the live Deps source no longer embeds the phantom.
 testDepsHintNoPhantom :: IO Bool
 testDepsHintNoPhantom = do
   src <- TIO.readFile "src/HaskellFlows/Tool/Deps.hs"
-  pure (not ("ghci_session" `T.isInfixOf` src))
+  pure (not ("ghc_session" `T.isInfixOf` src))
 
 --------------------------------------------------------------------------------
--- BUG-02 — ghci_quickcheck_export must generate valid Haskell
+-- BUG-02 — ghc_quickcheck_export must generate valid Haskell
 --------------------------------------------------------------------------------
 
 -- | The classic cases: 'src/Foo.hs' -> 'Foo', 'src/Foo/Bar.hs' -> 'Foo.Bar'.
@@ -1709,7 +1709,7 @@ testInvolutiveMediumForReverse =
            _   -> False
 
 --------------------------------------------------------------------------------
--- BUG-15 — ghci_suggest scope-error goes through a structured hint
+-- BUG-15 — ghc_suggest scope-error goes through a structured hint
 --------------------------------------------------------------------------------
 
 -- | BUG-15: the 'outOfScopeResult' helper returns a structured
@@ -1725,7 +1725,7 @@ testSuggestScopeStructuredHint =
   in pure $ trIsError tr
          && T.isInfixOf "\"reason\":\"function_not_in_scope\"" body
          && T.isInfixOf "\"function\":\"simplify\""            body
-         && T.isInfixOf "ghci_load"                             body
+         && T.isInfixOf "ghc_load"                             body
          && T.isInfixOf "not in scope" body
 
 --------------------------------------------------------------------------------
@@ -1848,95 +1848,95 @@ assertNext tool payload expected =
 testNextStepGatePass :: IO Bool
 testNextStepGatePass =
   let payload = A.object [ "success" .= True, "totalDurationSec" .= (1.0 :: Double) ]
-  in pure (assertNext "ghci_gate" payload "ghci_coverage")
+  in pure (assertNext "ghc_gate" payload "ghc_coverage")
 
 testNextStepGateFail :: IO Bool
 testNextStepGateFail =
   let payload = A.object [ "success" .= False, "totalDurationSec" .= (1.0 :: Double) ]
-  in pure (assertNext "ghci_gate" payload "ghci_check_project")
+  in pure (assertNext "ghc_gate" payload "ghc_check_project")
 
 testNextStepQcExport :: IO Bool
 testNextStepQcExport =
   let payload = A.object [ "success" .= True, "properties_written" .= (3 :: Int) ]
-  in pure (assertNext "ghci_quickcheck_export" payload "ghci_gate")
+  in pure (assertNext "ghc_quickcheck_export" payload "ghc_gate")
 
 testNextStepDeterminismPass :: IO Bool
 testNextStepDeterminismPass =
   let payload = A.object [ "success" .= True, "runs" .= (3 :: Int) ]
-  in pure (assertNext "ghci_determinism" payload "ghci_regression")
+  in pure (assertNext "ghc_determinism" payload "ghc_regression")
 
 testNextStepDeterminismFail :: IO Bool
 testNextStepDeterminismFail =
   let payload = A.object [ "success" .= False, "runs" .= (3 :: Int) ]
-  in pure (assertNext "ghci_determinism" payload "ghci_quickcheck")
+  in pure (assertNext "ghc_determinism" payload "ghc_quickcheck")
 
 testNextStepAddImport :: IO Bool
 testNextStepAddImport =
   let payload = A.object [ "success" .= True, "module" .= ("src/Foo.hs" :: Text) ]
-  in pure (assertNext "ghci_add_import" payload "ghci_load")
+  in pure (assertNext "ghc_add_import" payload "ghc_load")
 
 -- | BUG-22 — add_modules now emits a multi-step chain. The
--- primary next tool must be 'ghci_load' AND the chain must
--- include at least 'ghci_load' + 'ghci_check_project'.
+-- primary next tool must be 'ghc_load' AND the chain must
+-- include at least 'ghc_load' + 'ghc_check_project'.
 testNextStepAddModulesChain :: IO Bool
 testNextStepAddModulesChain =
   let payload = A.object [ "success" .= True, "cabal_added" .= (["Foo.Bar"] :: [Text]) ]
-  in case suggestNext "ghci_add_modules" True payload of
+  in case suggestNext "ghc_add_modules" True payload of
        Just ns ->
-         pure $ nsTool ns == "ghci_load"
+         pure $ nsTool ns == "ghc_load"
              && case nsChain ns of
                   Just steps ->
-                       any ((== "ghci_load")           . csTool) steps
-                    && any ((== "ghci_check_project")  . csTool) steps
+                       any ((== "ghc_load")           . csTool) steps
+                    && any ((== "ghc_check_project")  . csTool) steps
                   Nothing -> False
        Nothing -> pure False
 
 testNextStepApplyExports :: IO Bool
 testNextStepApplyExports =
   let payload = A.object [ "success" .= True, "module" .= ("src/Foo.hs" :: Text) ]
-  in pure (assertNext "ghci_apply_exports" payload "ghci_load")
+  in pure (assertNext "ghc_apply_exports" payload "ghc_load")
 
 testNextStepFixWarning :: IO Bool
 testNextStepFixWarning =
   let payload = A.object [ "success" .= True, "module" .= ("src/Foo.hs" :: Text) ]
-  in pure (assertNext "ghci_fix_warning" payload "ghci_load")
+  in pure (assertNext "ghc_fix_warning" payload "ghc_load")
 
 testNextStepBrowse :: IO Bool
 testNextStepBrowse =
   let payload = A.object [ "success" .= True, "count" .= (5 :: Int) ]
-  in pure (assertNext "ghci_browse" payload "ghci_suggest")
+  in pure (assertNext "ghc_browse" payload "ghc_suggest")
 
 testNextStepToolchainWarmup :: IO Bool
 testNextStepToolchainWarmup =
   let payload = A.object [ "success" .= True ]
-  in pure (assertNext "ghci_toolchain_warmup" payload "ghci_workflow")
+  in pure (assertNext "ghc_toolchain_warmup" payload "ghc_workflow")
 
 testNextStepPropertyLifecycleList :: IO Bool
 testNextStepPropertyLifecycleList =
   let payload = A.object [ "success" .= True, "action" .= ("list" :: Text) ]
-  in pure (assertNext "ghci_property_lifecycle" payload "ghci_regression")
+  in pure (assertNext "ghc_property_lifecycle" payload "ghc_regression")
 
 -- | BUG-22: create_project emits the canonical project-bootstrap
 -- chain (deps + add_modules + load). Pin that all three steps are
--- present so the agent can hand it off to ghci_batch.
+-- present so the agent can hand it off to ghc_batch.
 testNextStepCreateProjectChain :: IO Bool
 testNextStepCreateProjectChain =
   let payload = A.object [ "success" .= True, "files_written" .= ([] :: [Text]) ]
-  in case suggestNext "ghci_create_project" True payload of
+  in case suggestNext "ghc_create_project" True payload of
        Just ns ->
-         pure $ nsTool ns == "ghci_deps"
+         pure $ nsTool ns == "ghc_deps"
              && case nsChain ns of
                   Just steps ->
                     let tools = map csTool steps
-                    in "ghci_deps"        `elem` tools
-                    && "ghci_add_modules" `elem` tools
-                    && "ghci_load"        `elem` tools
+                    in "ghc_deps"        `elem` tools
+                    && "ghc_add_modules" `elem` tools
+                    && "ghc_load"        `elem` tools
                   Nothing -> False
        Nothing -> pure False
 
 -- | BUG-07 — static source check: the Server must (a) import
 -- Staleness, (b) capture boot time + binary path, (c) actually
--- invoke 'checkStaleness' when dispatching ghci_workflow, and
+-- invoke 'checkStaleness' when dispatching ghc_workflow, and
 -- (d) pass the report into Workflow.handle. Any of these missing
 -- means the Staleness module lapses back to dead code.
 testStalenessWired :: IO Bool
@@ -1948,27 +1948,27 @@ testStalenessWired = do
       && T.isInfixOf "checkStaleness (srvBinaryPath" src
       && T.isInfixOf "getExecutablePath"       src
 
--- | BUG-08 — 5 @ghci_load@ calls in a row must trigger the
--- polling nudge that points at ghci_determinism / check_project.
+-- | BUG-08 — 5 @ghc_load@ calls in a row must trigger the
+-- polling nudge that points at ghc_determinism / check_project.
 testHistoryPolling :: IO Bool
 testHistoryPolling =
-  let nudges = WS.historyNudges (replicate 5 "ghci_load")
+  let nudges = WS.historyNudges (replicate 5 "ghc_load")
   in pure $ any ("polling" `T.isInfixOf`) nudges
-         && any ("ghci_determinism" `T.isInfixOf`) nudges
+         && any ("ghc_determinism" `T.isInfixOf`) nudges
 
--- | BUG-08 — ghci_suggest followed by non-quickcheck activity
+-- | BUG-08 — ghc_suggest followed by non-quickcheck activity
 -- surfaces the "pick a law" nudge.
 testHistoryMissingQc :: IO Bool
 testHistoryMissingQc =
-  let hist = ["ghci_load", "ghci_suggest", "ghci_load"]
+  let hist = ["ghc_load", "ghc_suggest", "ghc_load"]
       nudges = WS.historyNudges hist
-  in pure $ any ("ghci_quickcheck" `T.isInfixOf`) nudges
+  in pure $ any ("ghc_quickcheck" `T.isInfixOf`) nudges
 
--- | BUG-08 — last tool was ghci_refactor with no ghci_load since
+-- | BUG-08 — last tool was ghc_refactor with no ghc_load since
 -- triggers the "reload after refactor" nudge.
 testHistoryRefactorNotReloaded :: IO Bool
 testHistoryRefactorNotReloaded =
-  let hist = ["ghci_refactor", "ghci_type"]
+  let hist = ["ghc_refactor", "ghc_type"]
       nudges = WS.historyNudges hist
   in pure $ any (\n -> "refactor" `T.isInfixOf` T.toLower n) nudges
 
@@ -1979,18 +1979,18 @@ testPhasePreScaffold = do
   s   <- WS.readState ref
   pure (WS.classifyPhase s == WS.PhasePreScaffold)
 
--- | BUG-24 — a failed ghci_load classifies as bootstrap. Verify
+-- | BUG-24 — a failed ghc_load classifies as bootstrap. Verify
 -- with a synthetic state update sequence.
 testPhaseBootstrap :: IO Bool
 testPhaseBootstrap = do
   ref <- WS.newWorkflowStateRef
   let failedLoad = A.object [ "success" .= False, "errors" .= ["broken" :: Text]
                             , "warnings" .= ([] :: [Text]) ]
-  WS.trackTool ref "ghci_load" False failedLoad
+  WS.trackTool ref "ghc_load" False failedLoad
   s <- WS.readState ref
   pure (WS.classifyPhase s == WS.PhaseBootstrap)
 
--- | BUG-24 — recent ghci_suggest or ghci_quickcheck classifies
+-- | BUG-24 — recent ghc_suggest or ghc_quickcheck classifies
 -- as testing-laws.
 testPhaseTestingLaws :: IO Bool
 testPhaseTestingLaws = do
@@ -1998,8 +1998,8 @@ testPhaseTestingLaws = do
   let okLoad   = A.object [ "success" .= True, "errors" .= ([] :: [Text])
                           , "warnings" .= ([] :: [Text]) ]
       suggest  = A.object [ "success" .= True, "count" .= (1 :: Int) ]
-  WS.trackTool ref "ghci_load"    True okLoad
-  WS.trackTool ref "ghci_suggest" True suggest
+  WS.trackTool ref "ghc_load"    True okLoad
+  WS.trackTool ref "ghc_suggest" True suggest
   s <- WS.readState ref
   pure (WS.classifyPhase s == WS.PhaseTestingLaws)
 
@@ -2011,10 +2011,10 @@ testPhaseReadyToPush = do
                          , "warnings" .= ([] :: [Text]) ]
       passQc  = A.object [ "success" .= True, "state"  .= ("passed" :: Text)
                          , "passed" .= (100 :: Int) ]
-  WS.trackTool ref "ghci_load"       True okLoad
-  WS.trackTool ref "ghci_quickcheck" True passQc
-  WS.trackTool ref "ghci_quickcheck" True passQc
-  WS.trackTool ref "ghci_quickcheck" True passQc
+  WS.trackTool ref "ghc_load"       True okLoad
+  WS.trackTool ref "ghc_quickcheck" True passQc
+  WS.trackTool ref "ghc_quickcheck" True passQc
+  WS.trackTool ref "ghc_quickcheck" True passQc
   s <- WS.readState ref
   pure (WS.classifyPhase s == WS.PhaseReadyToPush)
 
@@ -2027,7 +2027,7 @@ testPhaseHintNonEmpty = pure $
   in not (any (T.null . WS.renderPhaseHint) phases)
 
 --------------------------------------------------------------------------------
--- BUG-17 — ghci_arbitrary uses 'sized' for recursive types
+-- BUG-17 — ghc_arbitrary uses 'sized' for recursive types
 --------------------------------------------------------------------------------
 
 -- | Bit-level: 'hasRecursiveConstructor' flags the classic
@@ -2117,14 +2117,14 @@ testArbitraryRecursionTokens = pure $
   && not (isRecursiveArg "Tree" "String")
 
 --------------------------------------------------------------------------------
--- BUG-16 — ghci_remove_modules symmetric to ghci_add_modules
+-- BUG-16 — ghc_remove_modules symmetric to ghc_add_modules
 --------------------------------------------------------------------------------
 
 -- | Tool is registered in the canonical registry. If this
 -- fails, the tool exists as dead code (not dispatchable).
 testRemoveModulesRegistered :: IO Bool
 testRemoveModulesRegistered = pure $
-  "ghci_remove_modules" `elem` allToolNames
+  "ghc_remove_modules" `elem` allToolNames
 
 -- | Core behaviour: the exposed-modules entry for the named
 -- module disappears; the rest of the block survives.
@@ -2203,7 +2203,7 @@ testGateCabalStepBracket = do
       && T.isInfixOf "(Just hOut, Just hErr)"        src
       && not (T.isInfixOf "(_, Just hOut, Just hErr, ph) <- createProcess" src)
 
--- | BUG-06 nextStep coverage for the new tool: 'ghci_remove_modules'
+-- | BUG-06 nextStep coverage for the new tool: 'ghc_remove_modules'
 -- on success suggests project-wide check + reload chain so any
 -- dangling import surfaces immediately.
 testNextStepRemoveModules :: IO Bool
@@ -2212,25 +2212,25 @@ testNextStepRemoveModules =
         [ "success"      .= True
         , "cabal_removed".= (["Foo.Old"] :: [Text])
         ]
-  in case suggestNext "ghci_remove_modules" True payload of
+  in case suggestNext "ghc_remove_modules" True payload of
        Just ns ->
-         pure $ nsTool ns == "ghci_check_project"
+         pure $ nsTool ns == "ghc_check_project"
              && case nsChain ns of
                   Just steps ->
-                       any ((== "ghci_check_project") . csTool) steps
-                    && any ((== "ghci_load")          . csTool) steps
+                       any ((== "ghc_check_project") . csTool) steps
+                    && any ((== "ghc_load")          . csTool) steps
                   Nothing -> False
        Nothing -> pure False
 
 --------------------------------------------------------------------------------
--- BUG-10 — ghci_bootstrap writes host rules from the running binary
+-- BUG-10 — ghc_bootstrap writes host rules from the running binary
 --------------------------------------------------------------------------------
 
 -- | Tool is in the registry.
 testBootstrapRegistered :: IO Bool
-testBootstrapRegistered = pure ("ghci_bootstrap" `elem` allToolNames)
+testBootstrapRegistered = pure ("ghc_bootstrap" `elem` allToolNames)
 
--- | 'ghci_bootstrap(host="claude-code")' preview mode returns
+-- | 'ghc_bootstrap(host="claude-code")' preview mode returns
 -- the live workflow markdown body (dynamically derived) and
 -- does NOT write anything. The markdown is inlined as a JSON
 -- string field, so newlines etc. are escaped — we assert
@@ -2248,10 +2248,10 @@ testBootstrapPreview = withTempProject $ \pd -> do
       && T.isInfixOf "\"mode\":\"preview\""     body
       && T.isInfixOf "\"host\":\"claude-code\"" body
       && T.isInfixOf "haskell-flows"            body
-      && T.isInfixOf "ghci_workflow"            body
+      && T.isInfixOf "ghc_workflow"            body
       && not wrote          -- preview must NOT write
 
--- | 'ghci_bootstrap(host="claude-code", write=true)' persists the
+-- | 'ghc_bootstrap(host="claude-code", write=true)' persists the
 -- markdown under '.claude/rules/haskell-flows-mcp.md' inside the
 -- project dir and the file contents match workflowRulesMarkdown.
 testBootstrapWrite :: IO Bool
@@ -2292,15 +2292,15 @@ testBootstrapPathEnum = pure $
 --   * mention the Haskell install path (haskell-flows-mcp).
 --   * NOT reference the TS-only install (npm / mcp-server/).
 --   * NOT reference the broken APIs the README used to show
---     ('ghci_suggest(analyze)', 'ghci_workflow(action="gate")').
+--     ('ghc_suggest(analyze)', 'ghc_workflow(action="gate")').
 testDocsMainReadme :: IO Bool
 testDocsMainReadme = do
   readme <- TIO.readFile "../README.md"
   pure $ T.isInfixOf "haskell-flows-mcp"          readme
       && T.isInfixOf "cabal install"              readme
-      && T.isInfixOf "ghci_bootstrap"             readme
-      && not ("ghci_suggest(analyze)"             `T.isInfixOf` readme)
-      && not ("ghci_workflow(action=\"gate\")"    `T.isInfixOf` readme)
+      && T.isInfixOf "ghc_bootstrap"             readme
+      && not ("ghc_suggest(analyze)"             `T.isInfixOf` readme)
+      && not ("ghc_workflow(action=\"gate\")"    `T.isInfixOf` readme)
       && not ("npm install"                       `T.isInfixOf` readme)
       && not ("cd mcp-server\n"                   `T.isInfixOf` readme)
 
@@ -2310,10 +2310,10 @@ testDocsHaskellReadme :: IO Bool
 testDocsHaskellReadme = do
   readme <- TIO.readFile "README.md"
   pure $ T.isInfixOf "haskell-flows-mcp" readme
-      && T.isInfixOf "`ghci_bootstrap`"  readme
-      && T.isInfixOf "`ghci_gate`"       readme
-      && T.isInfixOf "`ghci_suggest`"    readme
-      && T.isInfixOf "`ghci_remove_modules`" readme
+      && T.isInfixOf "`ghc_bootstrap`"  readme
+      && T.isInfixOf "`ghc_gate`"       readme
+      && T.isInfixOf "`ghc_suggest`"    readme
+      && T.isInfixOf "`ghc_remove_modules`" readme
       && not ("Phase 1" `T.isInfixOf` readme)
 
 -- | BUG-14 — the release workflow must exist and wire up the
@@ -2352,19 +2352,19 @@ testNextStepFullCoverage = pure $
       --       @state@ field; covered by dedicated per-branch tests.
       whitelist =
         -- (a) exploratory / terminal
-        [ "ghci_type", "ghci_info", "ghci_eval", "ghci_goto"
-        , "ghci_doc", "ghci_complete", "hoogle_search"
-        , "ghci_coverage"    -- terminal: final report
-        , "ghci_workflow"    -- meta: would self-loop
-        , "ghci_batch"       -- result depends on inner tools
-        , "ghci_lint"        -- agent interprets per-hint
-        , "ghci_imports"     -- pure diagnostic aid
+        [ "ghc_type", "ghc_info", "ghc_eval", "ghc_goto"
+        , "ghc_doc", "ghc_complete", "hoogle_search"
+        , "ghc_coverage"    -- terminal: final report
+        , "ghc_workflow"    -- meta: would self-loop
+        , "ghc_batch"       -- result depends on inner tools
+        , "ghc_lint"        -- agent interprets per-hint
+        , "ghc_imports"     -- pure diagnostic aid
         -- (b) action-conditional — per-branch tests cover each action
-        , "ghci_deps"                 -- add/remove/list
-        , "ghci_regression"           -- list/run
-        , "ghci_property_lifecycle"   -- list/drop
-        , "ghci_validate_cabal"       -- errors > 0 vs clean
-        , "ghci_quickcheck"           -- state = passed/failed
+        , "ghc_deps"                 -- add/remove/list
+        , "ghc_regression"           -- list/run
+        , "ghc_property_lifecycle"   -- list/drop
+        , "ghc_validate_cabal"       -- errors > 0 vs clean
+        , "ghc_quickcheck"           -- state = passed/failed
         ]
       -- A wholly-generic success payload. Intentionally omits
       -- @action@/@state@ so action-conditional tools show up as
@@ -2392,17 +2392,17 @@ testWorkflowStateInitial = do
       && WS.wsEditsSinceLastLoad s == 0
       && null (WS.wsToolHistory s)
 
--- | Phase 11k: ghci_load resets edit counter; ghci_refactor increments it.
+-- | Phase 11k: ghc_load resets edit counter; ghc_refactor increments it.
 testWorkflowStateTracks :: IO Bool
 testWorkflowStateTracks = do
   ref <- WS.newWorkflowStateRef
   let okLoad = A.object [ "success" .= True, "errors" .= ([] :: [Text])
                         , "warnings" .= ([] :: [Text]) ]
       okRef  = A.object [ "success" .= True, "compile" .= ("ok" :: Text) ]
-  WS.trackTool ref "ghci_refactor" True okRef
-  WS.trackTool ref "ghci_refactor" True okRef
+  WS.trackTool ref "ghc_refactor" True okRef
+  WS.trackTool ref "ghc_refactor" True okRef
   s1 <- WS.readState ref
-  WS.trackTool ref "ghci_load"     True okLoad
+  WS.trackTool ref "ghc_load"     True okLoad
   s2 <- WS.readState ref
   pure $ WS.wsEditsSinceLastLoad s1 == 2
       && WS.wsEditsSinceLastLoad s2 == 0
@@ -2417,17 +2417,17 @@ testWorkflowStateHelp =
       nudgeLow  = WS.renderHelp lowEdits
       nudgeHigh = WS.renderHelp highEdits
   in pure $ null nudgeLow
-         && any (T.isInfixOf "edits since the last ghci_load") nudgeHigh
+         && any (T.isInfixOf "edits since the last ghc_load") nudgeHigh
 
 -- | Phase 11j: all 5 Code tools registered in the inventory.
 testCodeToolsRegistered :: IO Bool
 testCodeToolsRegistered = pure $
   all (`elem` allToolNames)
-    [ "ghci_add_import"
-    , "ghci_add_modules"
-    , "ghci_apply_exports"
-    , "ghci_fix_warning"
-    , "ghci_imports"
+    [ "ghc_add_import"
+    , "ghc_add_modules"
+    , "ghc_apply_exports"
+    , "ghc_fix_warning"
+    , "ghc_imports"
     ]
 
 testAddImportQualified :: IO Bool
@@ -2503,10 +2503,10 @@ testWarningBucketize =
        ((WcUnused, 3) : _) -> True
        _                   -> False
 
--- | Phase 11h: ghci_quickcheck_export must be in the canonical
+-- | Phase 11h: ghc_quickcheck_export must be in the canonical
 -- tool list.
 testQcExportRegistered :: IO Bool
-testQcExportRegistered = pure $ "ghci_quickcheck_export" `elem` allToolNames
+testQcExportRegistered = pure $ "ghc_quickcheck_export" `elem` allToolNames
 
 -- | Phase 11h: renderTestFile emits a valid-looking Main module
 -- with the expected structural pieces (main, imports, a prop_N
@@ -2547,12 +2547,12 @@ testQcExportSanitize = pure $
   && QcExport.sanitizeLabel "   "                    == "property"
   && QcExport.sanitizeLabel "weird@#$_chars"         == "weird____chars"
 
--- | Phase 11g: ghci_gate must be in the canonical tool list + the
+-- | Phase 11g: ghc_gate must be in the canonical tool list + the
 -- descriptor mentions its three sub-steps.
 testGateRegistered :: IO Bool
 testGateRegistered = pure $
-     "ghci_gate" `elem` allToolNames
-  && case filter (\td -> tdName td == "ghci_gate") allToolDescriptors of
+     "ghc_gate" `elem` allToolNames
+  && case filter (\td -> tdName td == "ghc_gate") allToolDescriptors of
        [td] ->
          let d = tdDescription td
          in T.isInfixOf "regression" d
@@ -2637,7 +2637,7 @@ testSuggestEvaluatorNoSibling =
 -- 'drainHandle' would see EOF and return silently; 'executeNoLock'
 -- would then STM-@retry@ forever waiting for a sentinel that could
 -- never arrive, and the MCP main loop blocked behind it. Even
--- read-only tools like 'ghci_workflow' froze. Static source check
+-- read-only tools like 'ghc_workflow' froze. Static source check
 -- pins the three guardrails the fix added:
 --   1. 'Dead' is a constructor of 'SessionStatus'.
 --   2. 'drainHandle' flips the status to 'Dead' on EOF.
@@ -2658,24 +2658,24 @@ testSuggestEvaluatorNoSibling =
 testNextStepCreateProject :: IO Bool
 testNextStepCreateProject =
   let payload = A.object [ "success" .= True, "files_written" .= ([] :: [Text]) ]
-  in pure $ case suggestNext "ghci_create_project" True payload of
-       Just ns -> nsTool ns == "ghci_deps"
+  in pure $ case suggestNext "ghc_create_project" True payload of
+       Just ns -> nsTool ns == "ghc_deps"
        Nothing -> False
 
--- | After ghci_deps(add), reload.
+-- | After ghc_deps(add), reload.
 testNextStepDepsAdd :: IO Bool
 testNextStepDepsAdd =
   let payload = A.object [ "success" .= True, "action" .= ("added" :: Text) ]
       -- depsAction probes "action" field for "add"/"remove".
-      -- The real ghci_deps response uses "added"/"removed" verbs; adjust
+      -- The real ghc_deps response uses "added"/"removed" verbs; adjust
       -- this test to pin the contract we actually see in the wild.
       payload2 = A.object [ "success" .= True, "action" .= ("add" :: Text) ]
-  in pure $ case suggestNext "ghci_deps" True payload2 of
-       Just ns -> nsTool ns == "ghci_load"
+  in pure $ case suggestNext "ghc_deps" True payload2 of
+       Just ns -> nsTool ns == "ghc_load"
        Nothing -> False
     &&
       -- Pin: no false positive on the query variant.
-      case suggestNext "ghci_deps" True payload of
+      case suggestNext "ghc_deps" True payload of
         Nothing -> True
         Just _  -> True  -- either behaviour is acceptable; the real
                          -- guard is that add/remove trigger load.
@@ -2688,19 +2688,19 @@ testNextStepLoadClean =
         , "errors"   .= ([] :: [Text])
         , "warnings" .= ([] :: [Text])
         ]
-  in pure $ case suggestNext "ghci_load" True payload of
-       Just ns -> nsTool ns == "ghci_suggest"
+  in pure $ case suggestNext "ghc_load" True payload of
+       Just ns -> nsTool ns == "ghc_suggest"
        Nothing -> False
 
 -- | Load with warnings → holes.
 testNextStepLoadWarnings :: IO Bool
 testNextStepLoadWarnings =
-  -- Post-BUG-PLUS-mediocre-3 the 'ghci_load' → 'ghci_hole'
+  -- Post-BUG-PLUS-mediocre-3 the 'ghc_load' → 'ghc_hole'
   -- route is reserved for typed-hole warnings specifically.
-  -- Other (fixable) warnings route to 'ghci_fix_warning'; clean
-  -- loads route to 'ghci_suggest'. This test fixture must
+  -- Other (fixable) warnings route to 'ghc_fix_warning'; clean
+  -- loads route to 'ghc_suggest'. This test fixture must
   -- emit a real typed-hole message so the dispatcher picks
-  -- 'ghci_hole'.
+  -- 'ghc_hole'.
   let payload = A.object
         [ "success"  .= True
         , "errors"   .= ([] :: [Text])
@@ -2711,56 +2711,56 @@ testNextStepLoadWarnings =
                 ]
             ]
         ]
-  in pure $ case suggestNext "ghci_load" True payload of
-       Just ns -> nsTool ns == "ghci_hole"
+  in pure $ case suggestNext "ghc_load" True payload of
+       Just ns -> nsTool ns == "ghc_hole"
        Nothing -> False
 
 -- | Suggest → quickcheck.
 testNextStepSuggest :: IO Bool
 testNextStepSuggest =
   let payload = A.object [ "success" .= True, "count" .= (3 :: Int) ]
-  in pure $ case suggestNext "ghci_suggest" True payload of
-       Just ns -> nsTool ns == "ghci_quickcheck"
+  in pure $ case suggestNext "ghc_suggest" True payload of
+       Just ns -> nsTool ns == "ghc_quickcheck"
        Nothing -> False
 
 -- | QuickCheck passed → check_module.
 testNextStepQcPassed :: IO Bool
 testNextStepQcPassed =
   let payload = A.object [ "success" .= True, "state" .= ("passed" :: Text) ]
-  in pure $ case suggestNext "ghci_quickcheck" True payload of
-       Just ns -> nsTool ns == "ghci_check_module"
+  in pure $ case suggestNext "ghc_quickcheck" True payload of
+       Just ns -> nsTool ns == "ghc_check_module"
        Nothing -> False
 
 -- | QuickCheck failed → eval for debugging.
 testNextStepQcFailed :: IO Bool
 testNextStepQcFailed =
   let payload = A.object [ "success" .= True, "state" .= ("failed" :: Text) ]
-  in pure $ case suggestNext "ghci_quickcheck" True payload of
-       Just ns -> nsTool ns == "ghci_eval"
+  in pure $ case suggestNext "ghc_quickcheck" True payload of
+       Just ns -> nsTool ns == "ghc_eval"
        Nothing -> False
 
--- | ghci_regression(list) → ghci_regression(run).
+-- | ghc_regression(list) → ghc_regression(run).
 testNextStepRegressionList :: IO Bool
 testNextStepRegressionList =
   let payload = A.object [ "success" .= True, "action" .= ("list" :: Text) ]
-  in pure $ case suggestNext "ghci_regression" True payload of
-       Just ns -> nsTool ns == "ghci_regression"
+  in pure $ case suggestNext "ghc_regression" True payload of
+       Just ns -> nsTool ns == "ghc_regression"
        Nothing -> False
 
 -- | Refactor landed → verify compile.
 testNextStepRefactor :: IO Bool
 testNextStepRefactor =
   let payload = A.object [ "success" .= True, "compile" .= ("ok" :: Text) ]
-  in pure $ case suggestNext "ghci_refactor" True payload of
-       Just ns -> nsTool ns == "ghci_load"
+  in pure $ case suggestNext "ghc_refactor" True payload of
+       Just ns -> nsTool ns == "ghc_load"
        Nothing -> False
 
 -- | Module gate → project gate.
 testNextStepCheckModule :: IO Bool
 testNextStepCheckModule =
   let payload = A.object [ "success" .= True, "overall" .= True ]
-  in pure $ case suggestNext "ghci_check_module" True payload of
-       Just ns -> nsTool ns == "ghci_check_project"
+  in pure $ case suggestNext "ghc_check_module" True payload of
+       Just ns -> nsTool ns == "ghc_check_project"
        Nothing -> False
 
 -- | Project gate → gate (pre-push finalizer). BUG-06 re-routed
@@ -2770,13 +2770,13 @@ testNextStepCheckModule =
 testNextStepCheckProject :: IO Bool
 testNextStepCheckProject =
   let payload = A.object [ "success" .= True, "overall" .= True ]
-  in pure $ case suggestNext "ghci_check_project" True payload of
+  in pure $ case suggestNext "ghc_check_project" True payload of
        Just ns ->
-            nsTool ns == "ghci_gate"
+            nsTool ns == "ghc_gate"
          && case nsChain ns of
               Just steps ->
-                   any ((== "ghci_gate")     . csTool) steps
-                && any ((== "ghci_coverage") . csTool) steps
+                   any ((== "ghc_gate")     . csTool) steps
+                && any ((== "ghc_coverage") . csTool) steps
               Nothing -> False
        Nothing -> False
 
@@ -2785,7 +2785,7 @@ testNextStepCheckProject =
 testNextStepErrorsSuppressed :: IO Bool
 testNextStepErrorsSuppressed =
   let payload = A.object [ "success" .= False, "error" .= ("oops" :: Text) ]
-  in pure $ case suggestNext "ghci_load" False payload of
+  in pure $ case suggestNext "ghc_load" False payload of
        Nothing -> True
        Just _  -> False
 
@@ -2794,14 +2794,14 @@ testNextStepErrorsSuppressed =
 testNextStepExploratoryNothing :: IO Bool
 testNextStepExploratoryNothing = pure $
   all nothing
-    [ suggestNext "ghci_type"     True (A.object [])
-    , suggestNext "ghci_info"     True (A.object [])
-    , suggestNext "ghci_eval"     True (A.object [])
-    , suggestNext "ghci_goto"     True (A.object [])
-    , suggestNext "ghci_doc"      True (A.object [])
-    , suggestNext "ghci_complete" True (A.object [])
-    , suggestNext "ghci_coverage" True (A.object [])
-    , suggestNext "ghci_workflow" True (A.object [])
+    [ suggestNext "ghc_type"     True (A.object [])
+    , suggestNext "ghc_info"     True (A.object [])
+    , suggestNext "ghc_eval"     True (A.object [])
+    , suggestNext "ghc_goto"     True (A.object [])
+    , suggestNext "ghc_doc"      True (A.object [])
+    , suggestNext "ghc_complete" True (A.object [])
+    , suggestNext "ghc_coverage" True (A.object [])
+    , suggestNext "ghc_workflow" True (A.object [])
     ]
   where
     nothing Nothing = True
@@ -2814,13 +2814,13 @@ testInjectSplices =
   let body = A.object [ "success" .= True, "data" .= (42 :: Int) ]
       txt  = TL.toStrict (TLE.decodeUtf8 (A.encode body))
       tr   = ToolResult { trContent = [ TextContent txt ], trIsError = False }
-      ns   = NextStep { nsTool = "ghci_foo", nsWhy = "because"
+      ns   = NextStep { nsTool = "ghc_foo", nsWhy = "because"
                       , nsExample = Nothing, nsChain = Nothing }
       tr'  = injectNextStep ns tr
   in case trContent tr' of
        [TextContent t] -> pure $
          T.isInfixOf "\"nextStep\"" t
-           && T.isInfixOf "\"ghci_foo\"" t
+           && T.isInfixOf "\"ghc_foo\"" t
            && T.isInfixOf "\"data\":42" t
            -- original field preserved
        _ -> pure False
@@ -2830,7 +2830,7 @@ testInjectSkipsNonJson :: IO Bool
 testInjectSkipsNonJson =
   let raw = "this is not json"
       tr  = ToolResult { trContent = [ TextContent raw ], trIsError = False }
-      ns  = NextStep { nsTool = "ghci_foo", nsWhy = "x"
+      ns  = NextStep { nsTool = "ghc_foo", nsWhy = "x"
                      , nsExample = Nothing, nsChain = Nothing }
       tr' = injectNextStep ns tr
   in case trContent tr' of
@@ -2846,8 +2846,8 @@ testInjectSkipsNonJson =
 -- MCP client) surfaced nothing at session start. The repo-level
 -- @.claude/rules/use-haskell-flows-mcp.md@ partially filled the gap
 -- but was itself stale — referencing tools that never existed in
--- the Haskell port (@ghci_session@, @ghci_trace@, @ghci_flags@,
--- @ghci_init@, …). Fix wires a non-empty @instructions@ string
+-- the Haskell port (@ghc_session@, @ghc_trace@, @ghc_flags@,
+-- @ghc_init@, …). Fix wires a non-empty @instructions@ string
 -- into the initialize response so the LLM always gets accurate
 -- tool guidance, even without the project file.
 --
@@ -2943,12 +2943,12 @@ testEvalInnerTimeoutBudget = do
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s
 
--- | Deferred-pass isolation regression. 'ghci_check_project' runs
+-- | Deferred-pass isolation regression. 'ghc_check_project' runs
 -- GHC with '-fdefer-type-errors' + '-fdefer-typed-holes', which
 -- produces '.hi'/'.o' artifacts for semantically-broken modules.
 -- Those MUST land in a MCP-private build tree, never in cabal's
 -- default 'dist-newstyle/' — otherwise a user running 'cabal build'
--- after 'ghci_check_project' sees the poisoned interfaces and
+-- after 'ghc_check_project' sees the poisoned interfaces and
 -- skips recompilation, falsely reporting success on a project MCP
 -- correctly flagged as broken (FlowCrossValidation · typeError).
 --
@@ -2971,7 +2971,7 @@ testDeferredIsolatedOutputs = do
 -- Dogfood-session feedback fixes — 6 polish probes.
 --------------------------------------------------------------------------------
 
--- | Fix 2. 'ghci_deps add' used to return
+-- | Fix 2. 'ghc_deps add' used to return
 -- @"No change: 'X' not found or already at desired state."@ when
 -- the package was already in the targeted stanza — a remove-path
 -- message on an add call. The correct behaviour is a structured
@@ -2990,8 +2990,8 @@ testDepsAddIdempotent = do
       let s = T.stripStart ln in "--" `T.isPrefixOf` s
 
 -- | Fix 6. Switching to an empty directory should point the agent
--- at 'ghci_create_project' (the canonical scaffold step), not at
--- 'ghci_workflow(status)'. The branching lives in 'NextStep.hs';
+-- at 'ghc_create_project' (the canonical scaffold step), not at
+-- 'ghc_workflow(status)'. The branching lives in 'NextStep.hs';
 -- the payload signal ('scaffolded' bool) is emitted by
 -- 'SwitchProject.successResult'.
 testSwitchProjectEmptyDir :: IO Bool
@@ -3000,14 +3000,14 @@ testSwitchProjectEmptyDir = do
   sp <- TIO.readFile "src/HaskellFlows/Tool/SwitchProject.hs"
   let nsCode = T.unlines (filter (not . isDocLine) (T.lines ns))
       spCode = T.unlines (filter (not . isDocLine) (T.lines sp))
-  pure $ T.isInfixOf "ghci_create_project" nsCode
+  pure $ T.isInfixOf "ghc_create_project" nsCode
       && T.isInfixOf "\"scaffolded\"" nsCode
       && T.isInfixOf "\"scaffolded\"" spCode
   where
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s
 
--- | Fix 4. 'ghci_check_module' used to attribute every diagnostic
+-- | Fix 4. 'ghc_check_module' used to attribute every diagnostic
 -- from the whole library load to every module — a warning in
 -- 'Expr.Pretty' would red-gate 'Expr.Syntax' too. The fix filters
 -- by 'geFile' suffix matching the checked module path.
@@ -3022,7 +3022,7 @@ testCheckModuleDiagFilter = do
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s
 
--- | Fix 1. 'ghci_add_modules' now accepts an optional 'stanza'
+-- | Fix 1. 'ghc_add_modules' now accepts an optional 'stanza'
 -- param so callers can register modules into a test-suite /
 -- executable / benchmark stanza (routed to 'other-modules') not
 -- just the library's 'exposed-modules'.
@@ -3041,7 +3041,7 @@ testAddModulesStanzaParam = do
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s
 
--- | Fix 5. 'ghci_check_project' used to search only 'src/', 'lib/',
+-- | Fix 5. 'ghc_check_project' used to search only 'src/', 'lib/',
 -- and project root for each declared module's .hs file, so a
 -- test-suite's 'other-modules: Gen' came back as @not_found@ even
 -- though 'test/Gen.hs' existed. Candidate list now includes
@@ -3058,7 +3058,7 @@ testCheckProjectTestDirs = do
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s
 
--- | Fix 3. 'ghci_quickcheck module=<file>' used to leave the
+-- | Fix 3. 'ghc_quickcheck module=<file>' used to leave the
 -- property running with only @file@'s own imports in scope, so
 -- a property that referenced library functions failed with
 -- 'Variable not in scope'. The fix widens the interactive context
@@ -3080,7 +3080,7 @@ testQuickCheckScopeWidening = do
 -- 'loadProjectWithFlavour', 'loadForTarget') must call
 -- 'projectInteractiveImports' so qualified + aliased imports in
 -- source files ('import qualified Data.Map.Strict as Map') reach
--- 'ghci_eval' verbatim. Without this, every new stdlib module
+-- 'ghc_eval' verbatim. Without this, every new stdlib module
 -- a scenario reaches for would require editing 'augmentEvalContext'.
 testLoadAutoImports :: IO Bool
 testLoadAutoImports = do
@@ -3098,7 +3098,7 @@ testLoadAutoImports = do
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s
 
--- | Phase 11c F-10: 'ghci_arbitrary' used to render
+-- | Phase 11c F-10: 'ghc_arbitrary' used to render
 -- @instance Arbitrary Run where@ for polymorphic types like
 -- @data Run a@. The template then refused to compile because the
 -- type expression @Run@ has kind @* -> *@ and Haskell needs the
@@ -3190,7 +3190,7 @@ testParseHpcReportText =
 -- @:unset@ is only for GHCi-level options (@+s@, @+t@, …) — NOT GHC
 -- flags. So the flags leaked across calls and every subsequent
 -- compile-check silently deferred its errors. This voided the
--- snapshot-and-compile-verify invariant of @ghci_refactor@: renames
+-- snapshot-and-compile-verify invariant of @ghc_refactor@: renames
 -- that left the module broken would still report compile=ok.
 --
 -- We can't spawn a real GHCi in a unit test, but we can pin the
@@ -3235,7 +3235,7 @@ testCtorsInlineRecord2Fields =
        [c] -> pure (cName c == "Run" && length (cArgs c) == 2)
        _   -> pure False
 
--- | Phase 11b F-05: @ghci_suggest@ used to emit false laws for
+-- | Phase 11b F-05: @ghc_suggest@ used to emit false laws for
 -- @encode :: [a] -> [Run a]@ because @ruleListLengthPreserving@ and
 -- @ruleListRoundtrip@ matched @([TyList _], TyList _)@ without
 -- checking the inner types. Both @Self-inverse on lists@ and
@@ -3252,7 +3252,7 @@ testSuggestEncodeShapeSkipsListRules =
              && "Length preserving / non-extending" `notElem` laws
 
 --------------------------------------------------------------------------------
--- ghci_quickcheck: store-module resolution (the "persist with the right file"
+-- ghc_quickcheck: store-module resolution (the "persist with the right file"
 -- UX fix). The dogfood of the expr-evaluator surfaced the bug: callers pass
 -- the module of the /function under test/ ('src/Foo.hs'), but the property
 -- itself lives in 'test/Spec.hs', and regression replay needs the latter to
@@ -3323,7 +3323,7 @@ testIsSimpleIdentClassifier = pure $ and
   ]
 
 --------------------------------------------------------------------------------
--- ghci_regression: parser for ':show modules' output. Used by the scope
+-- ghc_regression: parser for ':show modules' output. Used by the scope
 -- snapshot/restore path so a regression run doesn't clobber the caller's
 -- previously-loaded module set.
 --------------------------------------------------------------------------------
@@ -3426,7 +3426,7 @@ testHoleDiagnosticCapture = case mkProjectDir "/tmp/hole-fixture" of
 
 -- | Regression for the FlowArbitrary e2e failure: after
 -- 'invalidateStanzaFlags' (which the server fires after every
--- 'ghci_deps add'), the NEXT 'loadForTarget' must re-bootstrap
+-- 'ghc_deps add'), the NEXT 'loadForTarget' must re-bootstrap
 -- cabal flags AND successfully compile a module that references
 -- the newly-added dependency. Before the fix, the captured argv
 -- still held a stale @-hide-all-packages@ AFTER the
@@ -3472,7 +3472,7 @@ testLoadAfterDepsAdd = do
         , "  arbitrary = oneof [ pure Ok, Err <$> arbitrary ]"
         ]
       sess <- startGhcSession pd
-      -- 2. Mutate .cabal to add QuickCheck (simulates ghci_deps add).
+      -- 2. Mutate .cabal to add QuickCheck (simulates ghc_deps add).
       TIO.writeFile (dir </> "arb-repro.cabal") $ T.unlines
         [ "cabal-version: 2.4"
         , "name: arb-repro"
@@ -3497,7 +3497,7 @@ testLoadAfterDepsAdd = do
       pure (ok && not satisfy)
 
 --------------------------------------------------------------------------------
--- ghci_switch_project tests
+-- ghc_switch_project tests
 --------------------------------------------------------------------------------
 
 -- | Build a tempdir-scoped project with the given name and .cabal
@@ -3613,7 +3613,7 @@ testSwitchHandleSwaps = do
 --------------------------------------------------------------------------------
 
 -- | An empty directory should be a valid switch target so the
--- user can follow up with 'ghci_create_project' — the canonical
+-- user can follow up with 'ghc_create_project' — the canonical
 -- "I want to start a new project here" workflow. Before the fix
 -- the validator demanded an existing .cabal, forcing callers to
 -- pre-scaffold a stub just to unlock the tool.
@@ -3666,7 +3666,7 @@ testPathBootstrapIdempotent = do
   pure (first == second)
 
 --------------------------------------------------------------------------------
--- BUG-PLUS-01: ghci_add_modules string fallback
+-- BUG-PLUS-01: ghc_add_modules string fallback
 --------------------------------------------------------------------------------
 
 -- | The documented shape: @{"modules": ["A", "B"]}@.
@@ -3822,7 +3822,7 @@ testSuggestRoundtripNegative = do
 --------------------------------------------------------------------------------
 
 -- | Prove 'ensureStanzaFlags' picks up cabal-file changes made
--- OUTSIDE the MCP's ghci_deps pipeline. The sequence:
+-- OUTSIDE the MCP's ghc_deps pipeline. The sequence:
 --
 --   1. Scaffold a real cabal project.
 --   2. Call 'ensureStanzaFlags' — cache populates, mtime
@@ -3919,7 +3919,7 @@ testAddModulesPlainStringStillWorks =
   in pure (ok csv ["A","B"] && ok ws ["A","B"] && ok mixed ["A","B","C"])
 
 --------------------------------------------------------------------------------
--- BUG-PLUS-mediocre-1: warnings_block flag on ghci_check_module
+-- BUG-PLUS-mediocre-1: warnings_block flag on ghc_check_module
 --------------------------------------------------------------------------------
 
 -- | CheckArgs.warnings_block defaults to True (back-compat
@@ -3986,11 +3986,11 @@ testQcSummariseStderrCaps =
       )
 
 --------------------------------------------------------------------------------
--- BUG-PLUS-mediocre-3: nextStep from ghci_load based on warning kind
+-- BUG-PLUS-mediocre-3: nextStep from ghc_load based on warning kind
 --------------------------------------------------------------------------------
 
 -- | When the 'warnings' array is empty, 'dispatch' proposes
--- 'ghci_suggest' — the clean-compile follow-up.
+-- 'ghc_suggest' — the clean-compile follow-up.
 testNextStepCleanLoad :: IO Bool
 testNextStepCleanLoad =
   let payload = A.object
@@ -3998,11 +3998,11 @@ testNextStepCleanLoad =
         , "errors"   A..= ([] :: [Text])
         , "warnings" A..= ([] :: [Text])
         ]
-  in pure $ case suggestNext "ghci_load" True payload of
-       Just ns -> nsTool ns == "ghci_suggest"
+  in pure $ case suggestNext "ghc_load" True payload of
+       Just ns -> nsTool ns == "ghc_suggest"
        Nothing -> False
 
--- | A typed-hole warning routes to 'ghci_hole' (which knows how
+-- | A typed-hole warning routes to 'ghc_hole' (which knows how
 -- to surface expected types + in-scope fits).
 testNextStepTypedHoleWarn :: IO Bool
 testNextStepTypedHoleWarn =
@@ -4018,12 +4018,12 @@ testNextStepTypedHoleWarn =
                 ]
             ]
         ]
-  in pure $ case suggestNext "ghci_load" True payload of
-       Just ns -> nsTool ns == "ghci_hole"
+  in pure $ case suggestNext "ghc_load" True payload of
+       Just ns -> nsTool ns == "ghc_hole"
        Nothing -> False
 
 -- | A non-hole warning (unused-imports, type-defaults, …) routes
--- to 'ghci_fix_warning' — the auto-patch tool.
+-- to 'ghc_fix_warning' — the auto-patch tool.
 testNextStepFixableWarn :: IO Bool
 testNextStepFixableWarn =
   let payload = A.object
@@ -4038,8 +4038,8 @@ testNextStepFixableWarn =
                 ]
             ]
         ]
-  in pure $ case suggestNext "ghci_load" True payload of
-       Just ns -> nsTool ns == "ghci_fix_warning"
+  in pure $ case suggestNext "ghc_load" True payload of
+       Just ns -> nsTool ns == "ghc_fix_warning"
        Nothing -> False
 
 --------------------------------------------------------------------------------

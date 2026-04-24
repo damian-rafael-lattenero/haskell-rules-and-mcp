@@ -1,4 +1,4 @@
--- | @ghci_remove_modules@ — de-register modules from the project's
+-- | @ghc_remove_modules@ — de-register modules from the project's
 -- @.cabal@ exposed-modules list. Symmetric to
 -- 'HaskellFlows.Tool.AddModules' (BUG-16).
 --
@@ -11,7 +11,7 @@
 -- removed-module list compared to the list of modules no longer
 -- present in @exposed-modules@. If the post-parse disagrees with
 -- the verb ("removed"), the write is rolled back — the same
--- post-edit invariant discipline 'ghci_deps' uses.
+-- post-edit invariant discipline 'ghc_deps' uses.
 module HaskellFlows.Tool.RemoveModules
   ( descriptor
   , handle
@@ -38,12 +38,12 @@ import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath, unProjectDir)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_remove_modules"
+    { tdName        = "ghc_remove_modules"
     , tdDescription =
         "De-register modules from the project's .cabal exposed-modules "
           <> "list. Source files are NOT deleted by default — pass "
           <> "delete_files=true to also remove the .hs files. Symmetric "
-          <> "to ghci_add_modules; idempotent (no-op for modules that "
+          <> "to ghc_add_modules; idempotent (no-op for modules that "
           <> "were not present)."
     , tdInputSchema =
         object
@@ -63,7 +63,7 @@ descriptor =
                        \JSON array (e.g. [\"Expr.Old\"]) or a single \
                        \comma-/whitespace-separated string \
                        \(e.g. \"Expr.Old, Expr.Unused\"). Same lenient \
-                       \parsing as ghci_add_modules." :: Text)
+                       \parsing as ghc_add_modules." :: Text)
                   ]
               , "delete_files" .= object
                   [ "type"        .= ("boolean" :: Text)
@@ -147,7 +147,7 @@ tryRewriteCabal file mods = do
 -- it as an additional candidate, and splice it back if it was
 -- not a victim. If every module is gone we emit a bare
 -- @exposed-modules:@ header — cabal accepts that and
--- 'ghci_add_modules' re-populates it on the next call.
+-- 'ghc_add_modules' re-populates it on the next call.
 removeModulesFromBody :: Text -> [Text] -> (Text, [Text])
 removeModulesFromBody body mods =
   let lns              = T.lines body
@@ -271,8 +271,8 @@ successResult removedFromCabal deletedFiles =
         , "deleted_files"      .= map T.pack deletedFiles
         , "hint"               .=
             ( "Modules were de-registered from exposed-modules. The \
-              \next ghci_load picks up the new surface. Consider "
-              <> "ghci_check_project to confirm no downstream module "
+              \next ghc_load picks up the new surface. Consider "
+              <> "ghc_check_project to confirm no downstream module "
               <> "still imports what you just removed." :: Text )
         ]
   in ToolResult

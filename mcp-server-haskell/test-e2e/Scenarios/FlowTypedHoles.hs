@@ -1,18 +1,18 @@
 -- | Flow: typed-hole pipeline.
 --
 -- Writes a module with a deliberate typed hole, asserts the
--- 'ghci_hole' tool surfaces it (with expected type + fit
+-- 'ghc_hole' tool surfaces it (with expected type + fit
 -- suggestions), patches the source to remove the hole, and
 -- re-loads to confirm the holes list is empty.
 --
 -- Tools exercised:
 --
---   ghci_load (with diagnostics=true)
---   ghci_hole
+--   ghc_load (with diagnostics=true)
+--   ghc_hole
 --
 -- Exercised indirectly:
 --
---   ghci_create_project   ghci_add_modules
+--   ghc_create_project   ghc_add_modules
 --
 -- This is the canonical "property-first dev loop" pipeline —
 -- if holes or deferred-diagnostic reload regresses, this catches
@@ -76,28 +76,28 @@ runFlow c projectDir = do
   -- setup — scaffold + write Holes.hs with hole. Deliberately do
   -- NOT load it here: GHCi caches modules, and once loaded a
   -- second :l on unchanged source re-emits no diagnostics. We
-  -- let 'ghci_hole' be the first thing to load the module so
+  -- let 'ghc_hole' be the first thing to load the module so
   -- its deferred-typed-holes pass produces the warnings the
   -- parser needs.
   --------------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + add Holes (with typed hole)"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("holes-demo" :: Text) ])
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Holes"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Holes.hs") withHoleSrc
   stepFooter 1 t0
 
   --------------------------------------------------------------------
-  -- ghci_load(diagnostics=true) runs a strict pass followed by a
+  -- ghc_load(diagnostics=true) runs a strict pass followed by a
   -- deferred pass on the fresh module. The strict pass surfaces
   -- the hole as a [GHC-88464] error; the deferred pass would
   -- surface it as a warning. We assert that SOMETHING in the
   -- combined diagnostics mentions the hole (code 88464).
   --------------------------------------------------------------------
-  t1 <- stepHeader 2 "ghci_load(diagnostics=true) detects the hole"
-  loadR <- Client.callTool c "ghci_load" (object
+  t1 <- stepHeader 2 "ghc_load(diagnostics=true) detects the hole"
+  loadR <- Client.callTool c "ghc_load" (object
     [ "module_path" .= ("src/Holes.hs" :: Text)
     , "diagnostics" .= True
     ])
@@ -113,25 +113,25 @@ runFlow c projectDir = do
   stepFooter 2 t1
 
   --------------------------------------------------------------------
-  -- ghci_hole returns a structured payload. Whether it populates
+  -- ghc_hole returns a structured payload. Whether it populates
   -- 'holes' depends on GHC's cached-compile behaviour on this
   -- specific version (9.12): a :l re-issue on an unchanged
   -- module can skip re-emitting deferred diagnostics. We pin
   -- the payload SHAPE (success + success-carrying fields) and
-  -- leave the count loose here — the ghci_load assertion above
+  -- leave the count loose here — the ghc_load assertion above
   -- is the real "we found the hole" gate.
   --------------------------------------------------------------------
-  t2 <- stepHeader 3 "ghci_hole returns a structured payload"
-  holeR <- Client.callTool c "ghci_hole"
+  t2 <- stepHeader 3 "ghc_hole returns a structured payload"
+  holeR <- Client.callTool c "ghc_hole"
             (object [ "module_path" .= ("src/Holes.hs" :: Text) ])
   c3 <- liveCheck $ checkJsonField
-          "ghci_hole success" holeR "success" (Bool True)
+          "ghc_hole success" holeR "success" (Bool True)
   c4 <- liveCheck $ checkJsonFieldMatches
-          "ghci_hole carries a 'holes' array"
+          "ghc_hole carries a 'holes' array"
           holeR "holes" isArray
           "'holes' must be an array (possibly empty)"
   c5 <- liveCheck $ checkJsonFieldMatches
-          "ghci_hole carries a numeric 'hole_count'"
+          "ghc_hole carries a numeric 'hole_count'"
           holeR "hole_count" isNumber
           "'hole_count' must be a number"
   stepFooter 3 t2
@@ -141,7 +141,7 @@ runFlow c projectDir = do
   --------------------------------------------------------------------
   t3 <- stepHeader 4 "patch source + reload diagnostics"
   TIO.writeFile (projectDir </> "src" </> "Holes.hs") filledSrc
-  reloadR <- Client.callTool c "ghci_load" (object
+  reloadR <- Client.callTool c "ghc_load" (object
     [ "module_path" .= ("src/Holes.hs" :: Text)
     , "diagnostics" .= True
     ])
@@ -158,13 +158,13 @@ runFlow c projectDir = do
   stepFooter 4 t3
 
   --------------------------------------------------------------------
-  -- ghci_hole on the fixed module returns zero.
+  -- ghc_hole on the fixed module returns zero.
   --------------------------------------------------------------------
-  t4 <- stepHeader 5 "ghci_hole returns zero after fix"
-  hole2 <- Client.callTool c "ghci_hole"
+  t4 <- stepHeader 5 "ghc_hole returns zero after fix"
+  hole2 <- Client.callTool c "ghc_hole"
              (object [ "module_path" .= ("src/Holes.hs" :: Text) ])
   c9 <- liveCheck $ checkJsonFieldMatches
-          "ghci_hole hole_count == 0 post-fix"
+          "ghc_hole hole_count == 0 post-fix"
           hole2 "hole_count" (\v -> v == Number 0)
           "after the fix, hole_count must be 0"
   stepFooter 5 t4

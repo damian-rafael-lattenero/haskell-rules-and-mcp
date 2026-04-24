@@ -1,4 +1,4 @@
--- | @ghci_browse@ — Phase-2 tool (GHC-API migrated).
+-- | @ghc_browse@ — Phase-2 tool (GHC-API migrated).
 --
 -- Lists names exported by a loaded module and their types. Pre-migration
 -- parsed the raw line-per-entry output of @:browse Module@; post-migration
@@ -42,7 +42,7 @@ import HaskellFlows.Mcp.Protocol
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_browse"
+    { tdName        = "ghc_browse"
     , tdDescription =
         "List names exported by a loaded module + their types. "
           <> "Resolves against the auto-loaded project module graph."

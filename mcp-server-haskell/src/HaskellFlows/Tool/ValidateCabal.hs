@@ -1,4 +1,4 @@
--- | @ghci_validate_cabal@ — sanity check the project's @.cabal@ file.
+-- | @ghc_validate_cabal@ — sanity check the project's @.cabal@ file.
 --
 -- Two layers of validation:
 --
@@ -53,7 +53,7 @@ import HaskellFlows.Types (ProjectDir, unProjectDir)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_validate_cabal"
+    { tdName        = "ghc_validate_cabal"
     , tdDescription =
         "Validate the project's .cabal file. Runs `cabal check` + "
           <> "common-issue heuristics (duplicate deps, missing "

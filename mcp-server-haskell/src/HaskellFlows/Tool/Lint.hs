@@ -1,4 +1,4 @@
--- | @ghci_lint@ — HLint wrapper that matches CI semantics by default.
+-- | @ghc_lint@ — HLint wrapper that matches CI semantics by default.
 --
 -- Diseñado con la lección de `docs/ts-mcp-retrospective.md` § B3
 -- internalizada: el TS original sólo acepta un archivo individual,
@@ -53,7 +53,7 @@ import HaskellFlows.Types (ProjectDir, unProjectDir)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_lint"
+    { tdName        = "ghc_lint"
     , tdDescription =
         "Run HLint. Accepts either `path` (directory, recursive) or "
           <> "`module_path` (single file). `path` is the default form "

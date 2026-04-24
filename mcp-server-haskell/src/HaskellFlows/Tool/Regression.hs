@@ -1,4 +1,4 @@
--- | @ghci_regression@ — Wave-3 full in-process.
+-- | @ghc_regression@ — Wave-3 full in-process.
 --
 -- Replay every persisted QuickCheck property as a regression suite.
 -- For each stored property, pick the target that owns its recorded
@@ -43,12 +43,12 @@ import qualified HaskellFlows.Tool.QuickCheck as QcTool
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_regression"
+    { tdName        = "ghc_regression"
     , tdDescription =
         "Replay every persisted QuickCheck property as a regression "
           <> "suite. Actions: 'list' (inspect the store without running), "
           <> "'run' (execute all). Properties are auto-persisted by "
-          <> "ghci_quickcheck on first pass."
+          <> "ghc_quickcheck on first pass."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -81,7 +81,7 @@ instance FromJSON RegressionArgs where
       Just other  -> fail ("unknown action: " <> T.unpack other)
     pure (RegressionArgs a)
 
--- | 30 s per property replay, mirroring the ghci_quickcheck budget.
+-- | 30 s per property replay, mirroring the ghc_quickcheck budget.
 replayTimeoutMicros :: Int
 replayTimeoutMicros = 30_000_000
 
@@ -110,7 +110,7 @@ runOne :: GhcSession -> StoredProperty -> IO Replay
 runOne ghcSess sp = do
   let expr = spExpression sp
   -- Wave-6: route the replay through the same subprocess-cabal-repl
-  -- vehicle as ghci_quickcheck. The in-process evalIOString path
+  -- vehicle as ghc_quickcheck. The in-process evalIOString path
   -- depended on the GHC-API stanza-flag replay, which misresolved
   -- @-package-id QckChck-…@. cabal repl does that resolution
   -- natively and works every time.
@@ -129,7 +129,7 @@ runOne ghcSess sp = do
           -- Regression replay ignores stderr: if a stored property
           -- fails to compile the right escalation is "surface it
           -- as QcUnparsed and let the caller re-run via
-          -- ghci_quickcheck to see the hint".
+          -- ghc_quickcheck to see the hint".
           pure (parseQuickCheckOutput expr out)
   pure Replay { rpStored = sp, rpResult = qr }
 
@@ -200,7 +200,7 @@ isPass _              = False
 
 summarise :: Int -> Int -> Text
 summarise 0 _ =
-  "No stored properties. Run ghci_quickcheck and it'll auto-persist on pass."
+  "No stored properties. Run ghc_quickcheck and it'll auto-persist on pass."
 summarise total 0 =
   T.pack (show total) <> " / " <> T.pack (show total) <> " stored properties pass."
 summarise total regressed =

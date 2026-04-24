@@ -2,20 +2,20 @@
 -- @playground/expr-evaluator@ dogfood session. Each step pins one
 -- fix end-to-end through the MCP surface:
 --
---   Fix 2. 'ghci_deps add' on a package that's already present
+--   Fix 2. 'ghc_deps add' on a package that's already present
 --          returns 'action=unchanged' + 'success=true' + a
 --          verb-specific note (no more remove-shaped error).
---   Fix 6. 'ghci_switch_project' into an empty directory emits
+--   Fix 6. 'ghc_switch_project' into an empty directory emits
 --          'scaffolded=false' in the payload and its nextStep
---          points at 'ghci_create_project' instead of
---          'ghci_workflow(status)'.
---   Fix 1. 'ghci_add_modules' accepts 'stanza=test-suite', which
+--          points at 'ghc_create_project' instead of
+--          'ghc_workflow(status)'.
+--   Fix 1. 'ghc_add_modules' accepts 'stanza=test-suite', which
 --          routes to 'other-modules' in the test-suite stanza and
 --          scaffolds the stub under 'test/'.
---   Fix 4. 'ghci_check_module' on a clean module does NOT inherit
+--   Fix 4. 'ghc_check_module' on a clean module does NOT inherit
 --          warnings from broken siblings (each module gate is
 --          scoped to its own file).
---   Fix 5. 'ghci_check_project' finds test-suite 'other-modules'
+--   Fix 5. 'ghc_check_project' finds test-suite 'other-modules'
 --          under 'test/' (previously only 'src/', 'lib/', and the
 --          project root were searched).
 --   Fix 3. (checked at the schema / :m + wiring layer via the
@@ -56,8 +56,8 @@ runFlow c projectDir = do
 
   -- Step 1 — Fix 6: switch to empty dir.
   t1 <- stepHeader 1
-          "Fix 6 · switch to empty dir → nextStep points at ghci_create_project"
-  r1 <- Client.callTool c "ghci_switch_project"
+          "Fix 6 · switch to empty dir → nextStep points at ghc_create_project"
+  r1 <- Client.callTool c "ghc_switch_project"
           (object [ "path" .= T.pack emptyDir ])
   let c1a = checkPure
         "scaffolded=false in payload"
@@ -65,9 +65,9 @@ runFlow c projectDir = do
         ("Expected 'scaffolded' false for an empty dir. Raw: "
           <> truncRender r1)
       c1b = checkPure
-        "nextStep.tool == ghci_create_project"
-        (fetchNextStepTool r1 == Just "ghci_create_project")
-        ("Expected nextStep.tool to be 'ghci_create_project' \
+        "nextStep.tool == ghc_create_project"
+        (fetchNextStepTool r1 == Just "ghc_create_project")
+        ("Expected nextStep.tool to be 'ghc_create_project' \
          \when switching to an empty directory. Got: "
           <> T.pack (show (fetchNextStepTool r1))
           <> ". Raw: " <> truncRender r1)
@@ -75,18 +75,18 @@ runFlow c projectDir = do
   cc1b <- liveCheck c1b
   stepFooter 1 t1
 
-  -- Scaffold the empty slot into a real project. 'ghci_create_project'
+  -- Scaffold the empty slot into a real project. 'ghc_create_project'
   -- writes to whatever the server's projectDir is, which the
   -- previous switch already repointed at 'emptyDir'.
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("ux-demo" :: Text) ])
 
   -- Step 2 — Fix 2: adding an already-present dep is idempotent.
   -- 'base' is baked into every scaffolded library stanza by
-  -- 'ghci_create_project', so re-adding it is a guaranteed no-op.
+  -- 'ghc_create_project', so re-adding it is a guaranteed no-op.
   t2 <- stepHeader 2
-          "Fix 2 · ghci_deps add existing package → action=unchanged, success=true"
-  r2 <- Client.callTool c "ghci_deps"
+          "Fix 2 · ghc_deps add existing package → action=unchanged, success=true"
+  r2 <- Client.callTool c "ghc_deps"
           (object [ "action" .= ("add" :: Text)
                   , "package" .= ("base" :: Text)
                   , "stanza" .= ("library" :: Text)
@@ -117,8 +117,8 @@ runFlow c projectDir = do
 
   -- Step 3 — Fix 1: register a module into the test-suite stanza.
   t3 <- stepHeader 3
-          "Fix 1 · ghci_add_modules stanza=test-suite → other-modules + test/"
-  r3 <- Client.callTool c "ghci_add_modules"
+          "Fix 1 · ghc_add_modules stanza=test-suite → other-modules + test/"
+  r3 <- Client.callTool c "ghc_add_modules"
           (object [ "modules" .= ["Gen" :: Text]
                   , "stanza" .= ("test-suite" :: Text)
                   ])
@@ -152,7 +152,7 @@ runFlow c projectDir = do
     "module Gen where\n\ntrivial :: Int\ntrivial = 42\n"
   t4 <- stepHeader 4
           "Fix 5 · check_project resolves test-suite modules under test/"
-  r4 <- Client.callTool c "ghci_check_project" (object [])
+  r4 <- Client.callTool c "ghc_check_project" (object [])
   let c4 = checkPure
         "Gen not reported as not_found"
         (numberOf "not_found" r4 == Just 0)
@@ -167,7 +167,7 @@ runFlow c projectDir = do
   -- Scaffold a NEW library module and an adjacent broken one. The
   -- good module's check must not inherit the broken module's
   -- warnings.
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["UxDemo.Good", "UxDemo.Noisy"] :: [Text])
                  , "stanza" .= ("library" :: Text)
                  ])
@@ -185,7 +185,7 @@ runFlow c projectDir = do
     \noisy unused = 7\n"
   t5 <- stepHeader 5
           "Fix 4 · warning in Noisy does NOT red-gate Good"
-  r5 <- Client.callTool c "ghci_check_module"
+  r5 <- Client.callTool c "ghc_check_module"
           (object [ "module_path" .= ("src/UxDemo/Good.hs" :: Text)
                   , "warnings_block" .= True
                   ])

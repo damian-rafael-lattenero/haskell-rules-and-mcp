@@ -1,4 +1,4 @@
--- | @ghci_toolchain_status@ — single-call availability inventory for
+-- | @ghc_toolchain_status@ — single-call availability inventory for
 -- every external binary the MCP can delegate to.
 --
 -- The TS port solves this ad-hoc per tool (each one has its own
@@ -49,7 +49,7 @@ import HaskellFlows.Mcp.Protocol
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_toolchain_status"
+    { tdName        = "ghc_toolchain_status"
     , tdDescription =
         "Report availability + version of every external binary the "
           <> "MCP can delegate to (cabal, ghc, hlint, fourmolu, "

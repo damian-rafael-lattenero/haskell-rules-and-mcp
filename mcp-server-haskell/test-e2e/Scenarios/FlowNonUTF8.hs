@@ -2,7 +2,7 @@
 -- error, not crash the loader or smuggle garbled text back to the
 -- client.
 --
--- The MCP's 'ghci_load' drives @cabal repl@ which invokes GHC; GHC
+-- The MCP's 'ghc_load' drives @cabal repl@ which invokes GHC; GHC
 -- assumes UTF-8 source files. A pathological file (byte 0xFF somewhere
 -- mid-module) can make three different things happen, and only one
 -- of them is right:
@@ -64,24 +64,24 @@ evilSourceBytes = BS.concat
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("nonutf8-demo" :: Text) ])
 
   -- Plant the evil file directly on disk — we explicitly do not go
-  -- through ghci_add_modules because that scaffolds with a clean
+  -- through ghc_add_modules because that scaffolds with a clean
   -- stub. We want the raw bytes under the MCP's feet.
   let evilPath = projectDir </> "src" </> "Evil.hs"
   createDirectoryIfMissing True (projectDir </> "src")
   BS.writeFile evilPath evilSourceBytes
 
-  -- Also register the module in the cabal file so ghci_load tries
+  -- Also register the module in the cabal file so ghc_load tries
   -- to compile it. Uses the public MCP surface so we're still
   -- black-box.
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Evil"] :: [Text]) ])
 
-  t0 <- stepHeader 1 "load · ghci_load on a non-UTF-8 module"
-  r  <- Client.callTool c "ghci_load"
+  t0 <- stepHeader 1 "load · ghc_load on a non-UTF-8 module"
+  r  <- Client.callTool c "ghc_load"
           (object [ "module_path" .= ("src/Evil.hs" :: Text) ])
   let ok        = fieldBool "success" r
       errsField = lookupField "errors" r
@@ -113,11 +113,11 @@ runFlow c projectDir = do
 
   -- Session must still be alive. A parser desync from the 0xFF byte
   -- would make the next call hang.
-  t1 <- stepHeader 2 "session alive · next ghci_eval(1+1) works"
-  alive <- Client.callTool c "ghci_eval"
+  t1 <- stepHeader 2 "session alive · next ghc_eval(1+1) works"
+  alive <- Client.callTool c "ghc_eval"
              (object [ "expression" .= ("1 + 1" :: Text) ])
   cAlive <- liveCheck $ checkPure
-    "session alive · ghci_eval(1+1) returns 2"
+    "session alive · ghc_eval(1+1) returns 2"
     (fieldBool "success" alive == Just True
      && case lookupField "output" alive of
           Just (String s) -> "2" `T.isInfixOf` s

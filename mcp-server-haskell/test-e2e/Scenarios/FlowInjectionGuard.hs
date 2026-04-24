@@ -42,31 +42,31 @@ import qualified E2E.Client as Client
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _projectDir = do
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("injguard-demo" :: Text) ])
 
   ----------------------------------------------------------------
-  -- (1) Newline injection via ghci_eval.
+  -- (1) Newline injection via ghc_eval.
   --
   -- A newline in an eval expression would split one GHCi command
   -- into two and desync the <<<GHCi-DONE-...>>> sentinel. The
   -- sanitizer must refuse the input before it reaches the session.
   ----------------------------------------------------------------
-  t0 <- stepHeader 1 "newline injection · ghci_eval must refuse a \\n-laden expr"
-  r1 <- Client.callTool c "ghci_eval"
+  t0 <- stepHeader 1 "newline injection · ghc_eval must refuse a \\n-laden expr"
+  r1 <- Client.callTool c "ghc_eval"
           (object [ "expression" .= ("1 + 1\n:quit" :: Text) ])
   let r1Ok = errorShaped r1
   c1 <- liveCheck $ checkPure
     "newline injection refused · success=false + explanatory error"
     r1Ok
-    ("ghci_eval MUST sanitize expressions before dispatch. If the \
+    ("ghc_eval MUST sanitize expressions before dispatch. If the \
      \newline reached GHCi, the ':quit' after it would kill the \
      \session and subsequent tools would fail with \
      \SessionExhausted. Raw: " <> truncRender r1)
   stepFooter 1 t0
 
   ----------------------------------------------------------------
-  -- (2) Sentinel poisoning via ghci_eval.
+  -- (2) Sentinel poisoning via ghc_eval.
   --
   -- The framing sentinel is a shared secret between the session
   -- driver and the GHCi child. If a user expression contains a
@@ -74,8 +74,8 @@ runFlow c _projectDir = do
   -- could make GHCi emit "done" prematurely and confuse every
   -- subsequent read.
   ----------------------------------------------------------------
-  t1 <- stepHeader 2 "sentinel poisoning · ghci_eval must refuse the framing string"
-  r2 <- Client.callTool c "ghci_eval"
+  t1 <- stepHeader 2 "sentinel poisoning · ghc_eval must refuse the framing string"
+  r2 <- Client.callTool c "ghc_eval"
           (object [ "expression"
                   .= ("\"<<<GHCi-DONE-7f3a2b>>>\"" :: Text) ])
   let r2Ok = errorShaped r2
@@ -88,7 +88,7 @@ runFlow c _projectDir = do
   stepFooter 2 t1
 
   ----------------------------------------------------------------
-  -- (3) Path traversal via ghci_load.
+  -- (3) Path traversal via ghc_load.
   --
   -- The ModulePath smart constructor normalises + validates so no
   -- '..' segment survives. Arrive here through the JSON-RPC
@@ -96,8 +96,8 @@ runFlow c _projectDir = do
   -- guarantee holds for EVERY caller, not just direct-constructor
   -- callers inside the Haskell code.
   ----------------------------------------------------------------
-  t2 <- stepHeader 3 "path traversal · ghci_load must refuse '../..' escapes"
-  r3 <- Client.callTool c "ghci_load"
+  t2 <- stepHeader 3 "path traversal · ghc_load must refuse '../..' escapes"
+  r3 <- Client.callTool c "ghc_load"
           (object [ "module_path" .= ("../../etc/passwd" :: Text) ])
   let r3Ok = errorShaped r3
   c3 <- liveCheck $ checkPure

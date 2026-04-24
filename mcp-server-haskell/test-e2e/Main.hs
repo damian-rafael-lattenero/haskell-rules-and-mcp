@@ -137,7 +137,7 @@ scenarios =
     , False, FlowNU.runFlow )
   , ( "Flow: Dependency conflict (bogus dep · loud failure · clean remove)"
     , False, FlowDC.runFlow )
-  , ( "Flow: Sandbox escape / RCE contract (documents ghci_eval capabilities)"
+  , ( "Flow: Sandbox escape / RCE contract (documents ghc_eval capabilities)"
     , False, FlowSE.runFlow )
   , ( "Flow: Concurrent clients (two MCP clients, same project dir)"
     , True, FlowCC.runFlow )

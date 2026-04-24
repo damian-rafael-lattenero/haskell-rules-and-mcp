@@ -83,19 +83,19 @@ def main():
     print(f"Binary:  {os.path.basename(BIN)} ({os.path.getsize(BIN) // (1024*1024)} MB)")
     print()
     print("# Warmup (one hit so cabal planning + package db cache settle)")
-    tw, _ = bench("ghci_type", {"expression": "1"})
-    print(f"  warmup ghci_type                         {tw*1000:8.0f} ms")
+    tw, _ = bench("ghc_type", {"expression": "1"})
+    print(f"  warmup ghc_type                         {tw*1000:8.0f} ms")
     print()
     print("# 3 repeats of each tool — each spawns a fresh MCP server")
     print()
     trials = 3
     for label, tool, args in [
-        ("Phase-2 in-process · ghci_type",     "ghci_type",     {"expression": "map"}),
-        ("Phase-2 in-process · ghci_complete", "ghci_complete", {"prefix": "fold"}),
-        ("Phase-2 in-process · ghci_imports",  "ghci_imports",  {}),
-        ("Phase-2 in-process · ghci_goto",     "ghci_goto",     {"name": "double"}),
-        ("Legacy ghci subprocess · ghci_eval", "ghci_eval",     {"expression": "1 + 2"}),
-        ("Legacy ghci subprocess · ghci_quickcheck", "ghci_quickcheck", {"expression": "\\x -> x == (x :: Int)"}),
+        ("Phase-2 in-process · ghc_type",     "ghc_type",     {"expression": "map"}),
+        ("Phase-2 in-process · ghc_complete", "ghc_complete", {"prefix": "fold"}),
+        ("Phase-2 in-process · ghc_imports",  "ghc_imports",  {}),
+        ("Phase-2 in-process · ghc_goto",     "ghc_goto",     {"name": "double"}),
+        ("Legacy ghci subprocess · ghc_eval", "ghc_eval",     {"expression": "1 + 2"}),
+        ("Legacy ghci subprocess · ghc_quickcheck", "ghc_quickcheck", {"expression": "\\x -> x == (x :: Int)"}),
     ]:
         times = []
         for _ in range(trials):

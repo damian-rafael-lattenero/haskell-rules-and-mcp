@@ -1,4 +1,4 @@
--- | @ghci_quickcheck@ — Wave-3 full in-process.
+-- | @ghc_quickcheck@ — Wave-3 full in-process.
 --
 -- Runs a QuickCheck property against the project using the GHC API's
 -- @compileExpr@ + @unsafeCoerce@ path ('evalIOString'). No more
@@ -9,7 +9,7 @@
 -- because we ask QuickCheck for the same output).
 --
 -- On success the property expression + module are persisted to the
--- property store so @ghci_regression@ can replay it later.
+-- property store so @ghc_regression@ can replay it later.
 module HaskellFlows.Tool.QuickCheck
   ( descriptor
   , handle
@@ -73,7 +73,7 @@ import HaskellFlows.Parser.QuickCheck
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_quickcheck"
+    { tdName        = "ghc_quickcheck"
     , tdDescription =
         "Run a QuickCheck property against the current session. "
           <> "The property is passed directly to quickCheckWithResult, "
@@ -95,7 +95,7 @@ descriptor =
                   [ "type"        .= ("string" :: Text)
                   , "description" .=
                       ("Optional: module path to associate with the property \
-                       \in the regression store. Lets ghci_regression reload \
+                       \in the regression store. Lets ghc_regression reload \
                        \the right scope before re-running. Example: \
                        \\"src/Foo.hs\"." :: Text)
                   ]
@@ -139,7 +139,7 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
       -- parseName would legitimately fail.
       --
       -- This restores the pre-Wave-5 behaviour where
-      -- 'ghci_quickcheck prop_x module="src/Foo.hs"' — a common
+      -- 'ghc_quickcheck prop_x module="src/Foo.hs"' — a common
       -- caller mistake when the property actually lives in the
       -- test suite — still persisted test/Spec.hs in the
       -- regression store, so replay loaded the right scope.
@@ -177,7 +177,7 @@ resolvePropertyModule ghcSess nm
   | not (isSimpleIdent nm) = pure Nothing
   | otherwise = do
       -- Prime the session against the test-suite stanza first.
-      -- The cached env a prior 'ghci_load' left behind may reflect
+      -- The cached env a prior 'ghc_load' left behind may reflect
       -- a DIFFERENT target (e.g. library), in which case the test-
       -- suite's Main module is not in the graph and its
       -- 'prop_trivial' is invisible. 'firstTestSuiteOrLibrary'

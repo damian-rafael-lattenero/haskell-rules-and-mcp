@@ -1,4 +1,4 @@
--- | @ghci_doc@ — Phase-2 tool (GHC-API migrated).
+-- | @ghc_doc@ — Phase-2 tool (GHC-API migrated).
 --
 -- Looks up Haddock documentation for a name. Pre-migration wrapped
 -- @:doc@ over stdio; post-migration calls 'GHC.getDocs' directly.
@@ -33,7 +33,7 @@ import HaskellFlows.Mcp.Protocol
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_doc"
+    { tdName        = "ghc_doc"
     , tdDescription =
         "Look up Haddock documentation for a name via the GHC API. "
           <> "Returns the doc block as plain text. If the hosting "

@@ -11,7 +11,7 @@
 -- ENOSPC at the semantic layer we care about: the IO system call
 -- returned an error.
 --
--- What ghci_quickcheck does on success:
+-- What ghc_quickcheck does on success:
 --
 --   * Runs the property through the live GHCi session.
 --   * If it passes, appends a record to
@@ -19,19 +19,19 @@
 --
 -- Invariants asserted:
 --
---   1. With the store directory unwritable, ghci_quickcheck on a
+--   1. With the store directory unwritable, ghc_quickcheck on a
 --      passing property returns a tool-level response. The property
 --      still passed in-session (that's a pure eval), but the persist
 --      step failed — the response MUST surface that failure, not
 --      claim "stored for replay".
---   2. After restoring permissions, the next ghci_quickcheck persists
+--   2. After restoring permissions, the next ghc_quickcheck persists
 --      correctly — the tool has no sticky failure state.
 --   3. The session survives the failed persist.
 --
 -- Failure modes the oracle catches:
 --
 --   (a) Write error is swallowed — tool reports success, but the
---      store is silently stale. Next 'ghci_regression run' replays
+--      store is silently stale. Next 'ghc_regression run' replays
 --      whatever WAS on disk (which may be empty or outdated).
 --   (b) Write error crashes the tool, wedging the session.
 --   (c) The MCP leaves a half-written tmp file that poisons the
@@ -66,7 +66,7 @@ import qualified E2E.Client as Client
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("diskfull-demo" :: Text) ])
 
   let storeDir = projectDir </> ".haskell-flows"
@@ -86,7 +86,7 @@ runFlow c projectDir = do
   -- 2. Fire a passing property. The eval is a pure Haskell evaluation,
   -- it will pass. The persist step is what we want to see fail.
   t1 <- stepHeader 2 "quickcheck · property passes eval, persist must fail"
-  eRes <- try (Client.callTool c "ghci_quickcheck"
+  eRes <- try (Client.callTool c "ghc_quickcheck"
                  (object [ "property"
                          .= ("\\(xs :: [Int]) -> reverse (reverse xs) == xs"
                              :: Text) ]))
@@ -129,8 +129,8 @@ runFlow c projectDir = do
   stepFooter 2 t1
 
   -- 3. Session must still be alive.
-  t2 <- stepHeader 3 "session alive · ghci_eval(1+1) after failed persist"
-  alive <- Client.callTool c "ghci_eval"
+  t2 <- stepHeader 3 "session alive · ghc_eval(1+1) after failed persist"
+  alive <- Client.callTool c "ghc_eval"
              (object [ "expression" .= ("1 + 1" :: Text) ])
   cAlive <- liveCheck $ checkPure
     "session alive · failed persist didn't wedge the GHCi"
@@ -140,8 +140,8 @@ runFlow c projectDir = do
 
   -- 4. Second quickcheck with permissions restored should persist OK —
   -- the tool must not be in a sticky-failed state.
-  t3 <- stepHeader 4 "recovery · second ghci_quickcheck after chmod restore"
-  r2 <- Client.callTool c "ghci_quickcheck"
+  t3 <- stepHeader 4 "recovery · second ghc_quickcheck after chmod restore"
+  r2 <- Client.callTool c "ghc_quickcheck"
           (object [ "property"
                   .= ("\\(n :: Int) -> n + 0 == n" :: Text) ])
   storeExists <- doesDirectoryExist storeDir

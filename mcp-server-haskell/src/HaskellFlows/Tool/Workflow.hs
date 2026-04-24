@@ -1,4 +1,4 @@
--- | @ghci_workflow@ — meta-tool that summarises the state of the server
+-- | @ghc_workflow@ — meta-tool that summarises the state of the server
 -- and suggests the next action.
 --
 -- The TS port has a stateful workflow engine that tracks per-module
@@ -43,7 +43,7 @@ import HaskellFlows.Types (ProjectDir, unProjectDir)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_workflow"
+    { tdName        = "ghc_workflow"
     , tdDescription =
         "Query the server's workflow state. Actions: 'status' (server "
           <> "inventory), 'help' (what to do next, context-aware), 'next' "
@@ -175,16 +175,16 @@ helpPayload _pd alive stateHints staleness phase =
     steps :: [Text]
     steps
       | not alive =
-          [ "1. Call ghci_load with your entry module to boot GHCi."
-          , "2. For data types you'll test: ghci_arbitrary (type_name=...)."
-          , "3. For stubs with _ holes: ghci_hole (module_path=...)."
-          , "4. For properties: ghci_quickcheck (property=...)."
+          [ "1. Call ghc_load with your entry module to boot GHCi."
+          , "2. For data types you'll test: ghc_arbitrary (type_name=...)."
+          , "3. For stubs with _ holes: ghc_hole (module_path=...)."
+          , "4. For properties: ghc_quickcheck (property=...)."
           ]
       | otherwise =
-          [ "1. ghci_load (diagnostics=true) to catch holes + errors."
-          , "2. ghci_hole if holes surfaced."
-          , "3. ghci_type to confirm subexpressions compose."
-          , "4. ghci_quickcheck once a law is testable."
+          [ "1. ghc_load (diagnostics=true) to catch holes + errors."
+          , "2. ghc_hole if holes surfaced."
+          , "3. ghc_type to confirm subexpressions compose."
+          , "4. ghc_quickcheck once a law is testable."
           , "5. hoogle_search when stuck on which library function fits."
           ]
 
@@ -196,7 +196,7 @@ helpPayload _pd alive stateHints staleness phase =
              \external tools."
         else "No active GHCi session. Start by loading the module you \
              \want to work on — every other tool will auto-boot on first \
-             \use anyway, but ghci_load gives you the cleanest error \
+             \use anyway, but ghc_load gives you the cleanest error \
              \surface."
 
 nextPayload :: ProjectDir -> Bool -> Value
@@ -209,11 +209,11 @@ nextPayload _pd alive =
   where
     (tool :: Text, why :: Text) =
       if alive
-        then ( "ghci_load"
+        then ( "ghc_load"
              , "Re-check with diagnostics=true to surface any new holes \
                \or warnings introduced by the last edit." )
-        else ( "ghci_load"
-             , "No active session. ghci_load boots GHCi and is the \
+        else ( "ghc_load"
+             , "No active session. ghc_load boots GHCi and is the \
                \cheapest way to learn the project's current compile state." )
 
 errorResult :: Text -> ToolResult

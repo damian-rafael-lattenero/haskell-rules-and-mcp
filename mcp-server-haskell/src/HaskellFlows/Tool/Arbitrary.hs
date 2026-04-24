@@ -1,4 +1,4 @@
--- | @ghci_arbitrary@ — Wave-4 full GhcSession.
+-- | @ghc_arbitrary@ — Wave-4 full GhcSession.
 --
 -- Given a type name, the tool:
 --
@@ -77,7 +77,7 @@ import HaskellFlows.Parser.Type (isOutOfScope)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_arbitrary"
+    { tdName        = "ghc_arbitrary"
     , tdDescription =
         "Generate a QuickCheck Arbitrary instance template for a user-defined "
           <> "data type. Returns the instance text for the agent to paste — does "

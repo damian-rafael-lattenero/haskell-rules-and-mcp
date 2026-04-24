@@ -1,4 +1,4 @@
--- | @ghci_coverage@ — shell out to @cabal test --enable-coverage@ and
+-- | @ghc_coverage@ — shell out to @cabal test --enable-coverage@ and
 -- surface the HPC summary in a structured form.
 --
 -- Pattern follows 'HaskellFlows.Tool.Hoogle': external binary spawn
@@ -45,7 +45,7 @@ import HaskellFlows.Types (ProjectDir, unProjectDir)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_coverage"
+    { tdName        = "ghc_coverage"
     , tdDescription =
         "Run 'cabal test --enable-coverage' and parse the HPC report. "
           <> "Requires cabal on PATH. Coverage runs are slow; hard "

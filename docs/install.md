@@ -84,7 +84,7 @@ and edit paths:
 
 **Claude Code (CLI).** Save the config as `.mcp.json` at your repo
 root; Claude Code auto-discovers it. Verify with `/mcp` in the REPL
-and run `ghci_session(action="status")` to confirm the server is
+and run `ghc_session(action="status")` to confirm the server is
 alive.
 
 **Cursor / VS Code MCP extensions.** Config path depends on the
@@ -108,7 +108,7 @@ Code.
 Once the client is wired, ask the agent to run:
 
 ```
-ghci_toolchain_status
+ghc_toolchain_status
 ```
 
 That returns a structured inventory of every external binary the
@@ -119,8 +119,8 @@ as needed with `cabal install <tool>`.
 For a deeper smoke test:
 
 ```
-ghci_session(action="status")
-ghci_load(module_path="src/Main.hs")    # replace with a real module
+ghc_session(action="status")
+ghc_load(module_path="src/Main.hs")    # replace with a real module
 ```
 
 If both succeed, the install is working end-to-end.

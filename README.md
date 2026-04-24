@@ -22,11 +22,11 @@
 It solves the fundamental gap between "LLMs generate Haskell" and "LLMs generate **correct** Haskell": every step is compiler-verified, every property persists, every gate is honest.
 
 ```text
-ghci_create_project  →  ghci_add_modules / ghci_deps
-  →  ghci_load  →  ghci_suggest(function_name=…)
-  →  ghci_quickcheck(property=…, module=…)
-  →  ghci_regression(action="run")  →  ghci_quickcheck_export
-  →  ghci_gate                       # pre-push finalizer
+ghc_create_project  →  ghc_add_modules / ghc_deps
+  →  ghc_load  →  ghc_suggest(function_name=…)
+  →  ghc_quickcheck(property=…, module=…)
+  →  ghc_regression(action="run")  →  ghc_quickcheck_export
+  →  ghc_gate                       # pre-push finalizer
 ```
 
 See [`docs/flows.md`](docs/flows.md) for rendered Mermaid diagrams of
@@ -50,7 +50,7 @@ pipeline (add `haddock + cabal check + sdist`) takes ~5 min; drop
 One call creates a cabal project: `<name>.cabal`, `cabal.project`, `src/<Module>.hs` per module, `test/Spec.hs`. GHCi session starts automatically.
 
 ### 2 · Suggest properties from type signatures
-When you load a module with `simplify :: Expr -> Expr` **next to** `eval :: Env -> Expr -> r`, `ghci_suggest(function_name="simplify")` proposes:
+When you load a module with `simplify :: Expr -> Expr` **next to** `eval :: Env -> Expr -> r`, `ghc_suggest(function_name="simplify")` proposes:
 
 ```haskell
 -- constant-folding soundness · confidence: high
@@ -60,14 +60,14 @@ When you load a module with `simplify :: Expr -> Expr` **next to** `eval :: Env 
 with rationale and confidence. **Multiple engines** detect shapes: endomorphism (idempotent / involutive), binary-op (associative / commutative / identity), list-endomorphism, roundtrip, evaluator-preservation, constant-folding-soundness, functor-laws. The sibling-aware ones (preservation / soundness) walk the loaded module's other top-level bindings via `:browse` so the right law fires without hand-supplied siblings.
 
 ### 3 · Run + persist
-`ghci_quickcheck` runs the property, auto-saves passing ones to `.haskell-flows/properties.json`. `ghci_quickcheck_export` materialises the persisted set as a committable `test/Spec.hs` — `cabal test` then replays them in CI without the MCP in the loop. `ghci_determinism` re-runs a property N times to catch flakiness before it enters the regression suite.
+`ghc_quickcheck` runs the property, auto-saves passing ones to `.haskell-flows/properties.json`. `ghc_quickcheck_export` materialises the persisted set as a committable `test/Spec.hs` — `cabal test` then replays them in CI without the MCP in the loop. `ghc_determinism` re-runs a property N times to catch flakiness before it enters the regression suite.
 
 ### 4 · Quality gates that don't lie
-`ghci_lint` (real hlint) and `ghci_format` (real fourmolu/ormolu) run with a layered resolution chain (host PATH → bundled → auto-download). If no real linter is available, the fallback returns `gateEligible: false` so **a degraded pass can never unlock a module-complete gate**.
+`ghc_lint` (real hlint) and `ghc_format` (real fourmolu/ormolu) run with a layered resolution chain (host PATH → bundled → auto-download). If no real linter is available, the fallback returns `gateEligible: false` so **a degraded pass can never unlock a module-complete gate**.
 
 ### 5 · One-call finalizer
 ```text
-ghci_gate()
+ghc_gate()
   → regression · cabal test · cabal build · consolidated JSON
 ```
 
@@ -115,7 +115,7 @@ for the full per-host config shape.
 **No rules file needed on your machine.** The MCP handshake's
 `initialize.instructions` ships the situation→tool table dynamically
 derived from the live registry. If your host (Claude Code, Cursor)
-insists on a project-level rules file, call `ghci_bootstrap(host="claude-code", write=true)`
+insists on a project-level rules file, call `ghc_bootstrap(host="claude-code", write=true)`
 — the MCP writes `.claude/rules/haskell-flows-mcp.md` from content
 baked into the binary, always in sync with the tool surface you have.
 
@@ -127,11 +127,11 @@ baked into the binary, always in sync with the tool surface you have.
 
 | Tool | What it does |
 |---|---|
-| **`ghci_create_project`** | Scaffold a cabal project atomically — one call, no prompts. Emits a multi-step `chain` (deps + add_modules + load) the agent can `ghci_batch`. |
-| **`ghci_suggest(function_name=…)`** | Multi-engine law proposer with confidence + rationale. Sibling-aware: `simplify :: Expr -> Expr` next to `eval :: Env -> Expr -> r` auto-proposes evaluator preservation / constant-folding soundness at High confidence. |
-| **`ghci_quickcheck`** | Run a property, auto-persist on pass; `ghci_determinism` re-runs N times to catch flakiness before adopting. |
-| **`ghci_gate`** | Regression + `cabal test` + `cabal build` in a single call, per-step exception-safe. |
-| **`ghci_bootstrap`** | Emit host rules file from the running binary — no external repo clone needed to get Claude Code / Cursor guidance. |
+| **`ghc_create_project`** | Scaffold a cabal project atomically — one call, no prompts. Emits a multi-step `chain` (deps + add_modules + load) the agent can `ghc_batch`. |
+| **`ghc_suggest(function_name=…)`** | Multi-engine law proposer with confidence + rationale. Sibling-aware: `simplify :: Expr -> Expr` next to `eval :: Env -> Expr -> r` auto-proposes evaluator preservation / constant-folding soundness at High confidence. |
+| **`ghc_quickcheck`** | Run a property, auto-persist on pass; `ghc_determinism` re-runs N times to catch flakiness before adopting. |
+| **`ghc_gate`** | Regression + `cabal test` + `cabal build` in a single call, per-step exception-safe. |
+| **`ghc_bootstrap`** | Emit host rules file from the running binary — no external repo clone needed to get Claude Code / Cursor guidance. |
 
 See [`mcp-server-haskell/README.md`](mcp-server-haskell/README.md) for
 the full 38-tool catalogue by workflow phase.
@@ -158,7 +158,7 @@ Resolution chain: `host PATH → bundled → auto-download → unavailable`. Uns
 
 - **Bus factor of 1** — single maintainer, no SLA. See [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Suggestion engines use regex** on type strings — advanced types (higher-rank, type families, GADTs) silently return zero suggestions.
-- **Not an HLS replacement** — `ghci_hls` is a thin bridge; keep your native LSP client running in parallel.
+- **Not an HLS replacement** — `ghc_hls` is a thin bridge; keep your native LSP client running in parallel.
 
 ---
 

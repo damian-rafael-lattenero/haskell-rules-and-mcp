@@ -1,4 +1,4 @@
--- | Flow: @ghci_validate_cabal@ — cabal check + heuristics.
+-- | Flow: @ghc_validate_cabal@ — cabal check + heuristics.
 --
 -- Two passes:
 --   (1) Clean scaffold → success, no issues flagged.
@@ -33,15 +33,15 @@ runFlow c projectDir = do
   -- setup — fresh scaffold
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold validate-demo"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("validate-demo" :: Text) ])
   stepFooter 1 t0
 
   ----------------------------------------------------------------
   -- (1) clean validate
   ----------------------------------------------------------------
-  t1 <- stepHeader 2 "ghci_validate_cabal on clean scaffold"
-  r1 <- Client.callTool c "ghci_validate_cabal" (object [])
+  t1 <- stepHeader 2 "ghc_validate_cabal on clean scaffold"
+  r1 <- Client.callTool c "ghc_validate_cabal" (object [])
   c1 <- liveCheck $ checkJsonField "clean · success" r1 "success" (Bool True)
   c2 <- liveCheck $ checkJsonFieldMatches
           "clean · issues array (possibly empty)"
@@ -65,7 +65,7 @@ runFlow c projectDir = do
           body
   TIO.writeFile cabalPath body'
 
-  r2 <- Client.callTool c "ghci_validate_cabal" (object [])
+  r2 <- Client.callTool c "ghc_validate_cabal" (object [])
   c3 <- liveCheck $ checkJsonFieldMatches
           "duplicate · issues array mentions 'base'"
           r2 "issues" (issuesMention "base")

@@ -1,4 +1,4 @@
--- | @ghci_hole@ — full GhcSession (Wave 2).
+-- | @ghc_hole@ — full GhcSession (Wave 2).
 --
 -- Loads the project via 'loadForTarget' with 'Deferred' flavour, then
 -- renders the captured diagnostics in GHCi-style output so the
@@ -37,7 +37,7 @@ import HaskellFlows.Types
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_hole"
+    { tdName        = "ghc_hole"
     , tdDescription =
         "Load a module under -fdefer-typed-holes and return every typed "
           <> "hole with its expected type and relevant bindings. Use this "

@@ -24,21 +24,21 @@ are all green.
 
 ```mermaid
 flowchart TD
-    start([Agent starts]) --> load[ghci_load<br/>diagnostics=true]
+    start([Agent starts]) --> load[ghc_load<br/>diagnostics=true]
     load -->|errors| fix[Agent edits code]
-    load -->|holes detected| hole[ghci_hole]
+    load -->|holes detected| hole[ghc_hole]
     load -->|clean| qc
 
-    hole --> explore[ghci_type<br/>ghci_info<br/>hoogle_search<br/>ghci_doc]
+    hole --> explore[ghc_type<br/>ghc_info<br/>hoogle_search<br/>ghc_doc]
     explore --> impl[Agent implements hole]
     impl --> load
 
-    qc[ghci_quickcheck<br/>property=...] -->|QcPassed| persist[(PropertyStore<br/>auto-persist<br/>.haskell-flows/<br/>properties.json)]
+    qc[ghc_quickcheck<br/>property=...] -->|QcPassed| persist[(PropertyStore<br/>auto-persist<br/>.haskell-flows/<br/>properties.json)]
     qc -->|QcFailed / Exception| fix
     qc -->|QcGaveUp| relax[Agent relaxes<br/>precondition]
     relax --> qc
 
-    persist --> check[ghci_check_module]
+    persist --> check[ghc_check_module]
     check -->|compile OK<br/>no warnings<br/>no holes<br/>props pass| done([Module complete])
     check -->|any gate red| fix
 
@@ -58,20 +58,20 @@ to `.cabal`, no manual scaffolding.
 
 ```mermaid
 flowchart LR
-    empty([Empty directory]) --> create[ghci_create_project<br/>name=mypkg]
+    empty([Empty directory]) --> create[ghc_create_project<br/>name=mypkg]
     create --> files[/.cabal<br/>cabal.project<br/>src/Mypkg.hs<br/>test/Spec.hs/]
 
-    files --> deps[ghci_deps<br/>action=add<br/>package=text]
-    deps --> restart[ghci_session<br/>action=restart]
-    restart --> first[ghci_load<br/>src/Mypkg.hs]
+    files --> deps[ghc_deps<br/>action=add<br/>package=text]
+    deps --> restart[ghc_session<br/>action=restart]
+    restart --> first[ghc_load<br/>src/Mypkg.hs]
 
     first --> types[Agent defines<br/>data types]
-    types --> arb[ghci_arbitrary<br/>type_name=...]
+    types --> arb[ghc_arbitrary<br/>type_name=...]
     arb --> paste[Agent pastes<br/>Arbitrary instance]
     paste --> devloop((property-first<br/>dev loop))
 
-    devloop --> allgreen[ghci_regression<br/>action=run]
-    allgreen --> coverage[ghci_coverage]
+    devloop --> allgreen[ghc_regression<br/>action=run]
+    allgreen --> coverage[ghc_coverage]
     coverage --> ship([Shippable])
 
     style create fill:#fcf,stroke:#939
@@ -129,7 +129,7 @@ sequenceDiagram
 ## 4. GHCi session lifecycle (DoS + recovery model)
 
 The Phase-5 security invariant. An agent asking for
-`print [1..]` via `ghci_eval` will cause the child process to pipe
+`print [1..]` via `ghc_eval` will cause the child process to pipe
 unbounded output — the buffer cap + overflow state + MVar eviction
 turn that from a memory exhaustion vector into a self-healing recovery.
 
@@ -174,22 +174,22 @@ stateDiagram-v2
 
 | Tool                   | Appears in |
 |------------------------|------------|
-| `ghci_load`            | 1, 2       |
-| `ghci_hole`            | 1          |
-| `ghci_type`            | 1          |
-| `ghci_info`            | 1          |
+| `ghc_load`            | 1, 2       |
+| `ghc_hole`            | 1          |
+| `ghc_type`            | 1          |
+| `ghc_info`            | 1          |
 | `hoogle_search`        | 1          |
-| `ghci_doc`             | 1          |
-| `ghci_quickcheck`      | 1          |
-| `ghci_check_module`    | 1          |
-| `ghci_create_project`  | 2          |
-| `ghci_deps`            | 2          |
-| `ghci_session`         | 2, 4       |
-| `ghci_arbitrary`       | 2          |
-| `ghci_regression`      | 2          |
-| `ghci_coverage`        | 2          |
-| `ghci_refactor`        | 3          |
+| `ghc_doc`             | 1          |
+| `ghc_quickcheck`      | 1          |
+| `ghc_check_module`    | 1          |
+| `ghc_create_project`  | 2          |
+| `ghc_deps`            | 2          |
+| `ghc_session`         | 2, 4       |
+| `ghc_arbitrary`       | 2          |
+| `ghc_regression`      | 2          |
+| `ghc_coverage`        | 2          |
+| `ghc_refactor`        | 3          |
 
 Not shown because they're auxiliary / meta tools that don't anchor a
-distinct flow: `ghci_eval`, `ghci_complete`, `ghci_goto`, `ghci_format`,
-`ghci_workflow`.
+distinct flow: `ghc_eval`, `ghc_complete`, `ghc_goto`, `ghc_format`,
+`ghc_workflow`.

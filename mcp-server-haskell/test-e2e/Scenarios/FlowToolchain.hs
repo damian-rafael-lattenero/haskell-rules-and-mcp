@@ -2,8 +2,8 @@
 --
 -- Tools exercised:
 --
---   ghci_toolchain_status (cabal/ghc/hlint + optional bins)
---   ghci_toolchain_warmup (probe every optional binary once)
+--   ghc_toolchain_status (cabal/ghc/hlint + optional bins)
+--   ghc_toolchain_warmup (probe every optional binary once)
 --
 -- Both are pure-read, no GHCi session mutation.
 module Scenarios.FlowToolchain
@@ -28,9 +28,9 @@ import qualified E2E.Client as Client
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _pd = do
-  -- ghci_toolchain_status
-  t0 <- stepHeader 1 "ghci_toolchain_status"
-  r1 <- Client.callTool c "ghci_toolchain_status" (object [])
+  -- ghc_toolchain_status
+  t0 <- stepHeader 1 "ghc_toolchain_status"
+  r1 <- Client.callTool c "ghc_toolchain_status" (object [])
   -- Dropped: "status success" — the 'cabal/ghc/hlint available'
   -- check below is a stronger semantic oracle (fails if any of the
   -- three binaries are missing, which is the real failure mode).
@@ -50,9 +50,9 @@ runFlow c _pd = do
           \crashed earlier. Check your PATH and rerun."
   stepFooter 1 t0
 
-  -- ghci_toolchain_warmup
-  t1 <- stepHeader 2 "ghci_toolchain_warmup (probe + report)"
-  r2 <- Client.callTool c "ghci_toolchain_warmup" (object [])
+  -- ghc_toolchain_warmup
+  t1 <- stepHeader 2 "ghc_toolchain_warmup (probe + report)"
+  r2 <- Client.callTool c "ghc_toolchain_warmup" (object [])
   -- Dropped: "warmup success" — redundant with 'tools array non-empty'
   -- which is the shape the tool is actually producing.
   c6 <- liveCheck $ checkJsonFieldMatches

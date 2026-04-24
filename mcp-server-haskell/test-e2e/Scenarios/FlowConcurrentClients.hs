@@ -3,9 +3,9 @@
 --
 -- State shared at the filesystem level across clients:
 --
---   * the .cabal file                (ghci_deps edits)
+--   * the .cabal file                (ghc_deps edits)
 --   * the .haskell-flows/properties.json store
---   * any source file ghci_refactor / write-through tools touch
+--   * any source file ghc_refactor / write-through tools touch
 --
 -- State NOT shared (the in-process Server is per-client):
 --
@@ -24,7 +24,7 @@
 --      — no silent dropped-write race.
 --   3. The final property store contains BOTH properties
 --      persisted concurrently — last-writer-wins would be a bug
---      because both ghci_quickcheck calls succeeded.
+--      because both ghc_quickcheck calls succeeded.
 --   4. The session in each client is still responsive after the
 --      concurrent traffic.
 --
@@ -62,7 +62,7 @@ import qualified E2E.Client as Client
 -- the concurrent leg.
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("concurrency-demo" :: Text) ])
 
   -- Build a second client pointed at the same project dir. This
@@ -71,13 +71,13 @@ runFlow c projectDir = do
   d <- Client.newClient "" [ ("HASKELL_PROJECT_DIR", projectDir) ]
 
   t0 <- stepHeader 1 "concurrent · both clients add distinct deps"
-  let addA = Client.callTool c "ghci_deps"
+  let addA = Client.callTool c "ghc_deps"
                (object
                  [ "action"  .= ("add" :: Text)
                  , "package" .= ("text" :: Text)
                  , "version" .= (">= 1.2" :: Text)
                  ])
-      addB = Client.callTool d "ghci_deps"
+      addB = Client.callTool d "ghc_deps"
                (object
                  [ "action"  .= ("add" :: Text)
                  , "package" .= ("bytestring" :: Text)
@@ -98,13 +98,13 @@ runFlow c projectDir = do
   stepFooter 1 t0
 
   -- Ground truth: list the deps, confirm BOTH ended up persisted.
-  -- The ghci_deps tool exposes the parsed list under the
+  -- The ghc_deps tool exposes the parsed list under the
   -- 'build_depends' field (not 'packages'), so buildDeps uses
   -- that anchor — an earlier version of this scenario read the
   -- wrong field, saw [], and reported a false race. The oracle
   -- now checks the real data.
-  t1 <- stepHeader 2 "ground truth · ghci_deps(list) has both deps"
-  ls <- Client.callTool c "ghci_deps"
+  t1 <- stepHeader 2 "ground truth · ghc_deps(list) has both deps"
+  ls <- Client.callTool c "ghc_deps"
           (object [ "action" .= ("list" :: Text) ])
   let pkgs = buildDeps ls
       hasText = any ("text" `T.isInfixOf`) pkgs
@@ -121,9 +121,9 @@ runFlow c projectDir = do
   -- Both sessions must still be responsive. A wedge in one should
   -- not propagate to the other (they're separate GHCi children).
   t2 <- stepHeader 3 "sessions alive · both clients still eval"
-  aliveA <- Client.callTool c "ghci_eval"
+  aliveA <- Client.callTool c "ghc_eval"
               (object [ "expression" .= ("1 + 1" :: Text) ])
-  aliveB <- Client.callTool d "ghci_eval"
+  aliveB <- Client.callTool d "ghc_eval"
               (object [ "expression" .= ("2 + 2" :: Text) ])
   let aOk = fieldBool "success" aliveA == Just True
          && case lookupField "output" aliveA of

@@ -1,7 +1,7 @@
 -- | Self-augment the MCP process 'PATH' at startup so
--- subprocess-using tools ('ghci_lint', 'ghci_quickcheck',
--- 'ghci_regression.run', 'ghci_gate', 'ghci_coverage',
--- 'ghci_validate_cabal') keep working even when the host that
+-- subprocess-using tools ('ghc_lint', 'ghc_quickcheck',
+-- 'ghc_regression.run', 'ghc_gate', 'ghc_coverage',
+-- 'ghc_validate_cabal') keep working even when the host that
 -- spawned us (e.g. Claude for Desktop on macOS launched from the
 -- Dock) passes a minimal 'PATH' that lacks @ghcup@ / @cabal@ /
 -- @hlint@ / Homebrew.

@@ -179,7 +179,7 @@ sortByCount = sortOn' snd
 --
 -- Deliberately simple — we trade a little coverage for linear-time
 -- guarantees. The TS regex tries to also capture range ends; we do not
--- need that yet for @ghci_load@.
+-- need that yet for @ghc_load@.
 headerRegex :: String
 headerRegex =
   "^(.+):([0-9]+):([0-9]+): (error|warning)(:?)[[:space:]]*(\\[GHC-([0-9]+)\\])?"

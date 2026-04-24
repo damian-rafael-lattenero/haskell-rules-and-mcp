@@ -1,4 +1,4 @@
--- | @ghci_type@ — Phase-2 tool (GHC-API migrated).
+-- | @ghc_type@ — Phase-2 tool (GHC-API migrated).
 --
 -- Mirrors @mcp-server/src/tools/type-check.ts@: accepts a Haskell
 -- expression, returns a parsed @{ expression, type }@ JSON payload.
@@ -37,7 +37,7 @@ import HaskellFlows.Mcp.Protocol
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_type"
+    { tdName        = "ghc_type"
     , tdDescription =
         "Get the type of a Haskell expression via the GHC API. "
           <> "Use this to verify types of subexpressions before composing them, "
@@ -67,7 +67,7 @@ instance FromJSON TypeArgs where
   parseJSON = withObject "TypeArgs" $ \o ->
     TypeArgs <$> o .: "expression"
 
--- | Handle a @tools/call@ for @ghci_type@.
+-- | Handle a @tools/call@ for @ghc_type@.
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->

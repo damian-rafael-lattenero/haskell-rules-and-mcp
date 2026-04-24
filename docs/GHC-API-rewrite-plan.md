@@ -5,7 +5,7 @@
 
 ## Contexto
 
-**Qué es este repo**: [haskell-rules-and-mcp](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp) es un MCP server en Haskell para desarrollo Haskell con LLMs (Claude Code / Cursor / etc). Expone ~25 tools (ghci_load, ghci_eval, ghci_check_module, ghci_refactor, ghci_deps, ghci_quickcheck, etc.) que envuelven la toolchain Haskell (GHCi, cabal, hlint, hoogle).
+**Qué es este repo**: [haskell-rules-and-mcp](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp) es un MCP server en Haskell para desarrollo Haskell con LLMs (Claude Code / Cursor / etc). Expone ~25 tools (ghc_load, ghc_eval, ghc_check_module, ghc_refactor, ghc_deps, ghc_quickcheck, etc.) que envuelven la toolchain Haskell (GHCi, cabal, hlint, hoogle).
 
 **Estado actual (master @ 060caca+)**: 233 checks e2e verdes, 4 bugs reales cazados (A/D/G/H documentados en git log), 11 scenarios adversariales. Suite robusta. Dev loop: 127s con `HASKELL_FLOWS_E2E_SKIP_SLOW=1`; CI: ~200-220s. Intentamos paralelismo — fallido por limitaciones de cabal repl. Deuda documentada en `docs/TODO-parallel-e2e.md` (ese doc queda obsoleto cuando este plan se ejecute).
 
@@ -41,10 +41,10 @@
 │           ▲                                  │
 │           │ all 25 tools share 1 session    │
 │           │                                  │
-│  ghci_type → `:t expr` → parse stdout       │
-│  ghci_info → `:i name` → parse stdout       │
-│  ghci_load → `:l path` → parse diagnostics  │
-│  ghci_eval → `expr`    → parse output       │
+│  ghc_type → `:t expr` → parse stdout       │
+│  ghc_info → `:i name` → parse stdout       │
+│  ghc_load → `:l path` → parse diagnostics  │
+│  ghc_eval → `expr`    → parse output       │
 │  (etc.)                                      │
 └──────────────────────────────────────────────┘
            │ sentinel-framed over stdio
@@ -78,16 +78,16 @@
 │  │  │  IORef (Map ModuleName ModSummary)   ││      │
 │  │  │  MVar () (lock — still needed)       ││      │
 │  │  │  Optional: Session (fallback ghci    ││      │
-│  │  │    subprocess for ghci_quickcheck,   ││      │
-│  │  │    ghci_regression, ghci_determinism)││      │
+│  │  │    subprocess for ghc_quickcheck,   ││      │
+│  │  │    ghc_regression, ghc_determinism)││      │
 │  │  └──────────────────────────────────────┘│      │
 │  └──────────────────────────────────────────┘      │
 │                                                      │
-│  ghci_type → GHC.exprType → render PprStyle         │
-│  ghci_info → GHC.lookupName → structured JSON       │
-│  ghci_load → GHC.load → SourceError[] → JSON        │
-│  ghci_eval → GHC.compileParsedExpr + run → JSON     │
-│  ghci_quickcheck → subprocess ghci (dual path)      │
+│  ghc_type → GHC.exprType → render PprStyle         │
+│  ghc_info → GHC.lookupName → structured JSON       │
+│  ghc_load → GHC.load → SourceError[] → JSON        │
+│  ghc_eval → GHC.compileParsedExpr + run → JSON     │
+│  ghc_quickcheck → subprocess ghci (dual path)      │
 │  (etc.)                                              │
 └──────────────────────────────────────────────────────┘
 ```
@@ -196,7 +196,7 @@ Cada fase es **commiteable independiente** y deja master en estado verde. Las fa
 
 > **Finding (post-Fase-1 derisk, master @ e56bb58)**: portar un tool
 > "read-only" aislado rompe los scenarios e2e que encadenan
-> `ghci_load` → `ghci_type(localBinding)`. `ghci_load` sigue escribiendo
+> `ghc_load` → `ghc_type(localBinding)`. `ghc_load` sigue escribiendo
 > al `Session` legacy mientras que el tool migrado leería de
 > `GhcSession` — dos universos paralelos. **Opciones para resolver**:
 >
@@ -207,7 +207,7 @@ Cada fase es **commiteable independiente** y deja master en estado verde. Las fa
 >    extraer `exposed-modules`, correr `setTargets + load` al primer
 >    `withGhcSession`. Equivale al init script de `cabal repl`. Suma
 >    ~1-2h a Fase 2 y la desacopla de Fase 3.
-> 3. **Dual-write de load**: `ghci_load` invoca los dos sessions hasta
+> 3. **Dual-write de load**: `ghc_load` invoca los dos sessions hasta
 >    que Fase 3 migra. Simple pero añade coupling que hay que limpiar.
 >
 > El test unitario `ghc-api: HscEnv persists across withGhcSession calls`
@@ -217,12 +217,12 @@ Cada fase es **commiteable independiente** y deja master en estado verde. Las fa
 **Goal**: portar los 6 tools más simples (sólo lectura, sin state change) al `GhcSession`. El `Session` legacy sigue existiendo para las otras tools.
 
 **Tools a migrar** (en orden creciente de complejidad):
-1. `ghci_type` — `Tool.Type` — hoy parsea output de `:t`. Post: `GHC.exprType` + pretty-print.
-2. `ghci_info` — `Tool.Info` — hoy parsea output de `:i`. Post: `GHC.lookupName` + `tyThingToHsDecl` o similar para el decl, `GHC.lookupInstances` para las instancias.
-3. `ghci_complete` — `Tool.Complete` — hoy llama `:complete`. Post: `GHC.getNamesInScope` + filtro por prefijo.
-4. `ghci_doc` — `Tool.Doc` — hoy parsea `:doc`. Post: `GHC.getDocs` (API disponible desde GHC 8.6+).
-5. `ghci_browse` — `Tool.Browse` — hoy llama `:browse`. Post: `GHC.getModuleInfo` + `modInfoExports` + map a HsDecl.
-6. `ghci_goto` — `Tool.Goto` — hoy parsea "Defined at" marker. Post: `GHC.lookupName` + `nameSrcSpan` estructurado.
+1. `ghc_type` — `Tool.Type` — hoy parsea output de `:t`. Post: `GHC.exprType` + pretty-print.
+2. `ghc_info` — `Tool.Info` — hoy parsea output de `:i`. Post: `GHC.lookupName` + `tyThingToHsDecl` o similar para el decl, `GHC.lookupInstances` para las instancias.
+3. `ghc_complete` — `Tool.Complete` — hoy llama `:complete`. Post: `GHC.getNamesInScope` + filtro por prefijo.
+4. `ghc_doc` — `Tool.Doc` — hoy parsea `:doc`. Post: `GHC.getDocs` (API disponible desde GHC 8.6+).
+5. `ghc_browse` — `Tool.Browse` — hoy llama `:browse`. Post: `GHC.getModuleInfo` + `modInfoExports` + map a HsDecl.
+6. `ghc_goto` — `Tool.Goto` — hoy parsea "Defined at" marker. Post: `GHC.lookupName` + `nameSrcSpan` estructurado.
 
 **Patrón de migration por tool**:
 1. Mantener el schema JSON del tool (zero breaking change)
@@ -250,10 +250,10 @@ Cada fase es **commiteable independiente** y deja master en estado verde. Las fa
 **Goal**: portar los 4 tools que escriben al HscEnv (cargan módulos).
 
 **Tools a migrar**:
-1. `ghci_load` — `Tool.Load` — hoy llama `:l`. Post: `GHC.setTargets` + `GHC.load`. El output estructurado viene de `GHC.guessTarget` + errores capturados via `logAction` en DynFlags.
-2. `ghci_check_module` — `Tool.CheckModule` — hoy hace doble `:l` (strict + deferred). Post: `load` con distintos DynFlags.
-3. `ghci_check_project` — `Tool.CheckProject` — hoy itera sobre exposed-modules. Post: un solo `load LoadAllTargets` que compila todo.
-4. `ghci_hole` — `Tool.Hole` — hoy usa `-fdefer-typed-holes` + parsea warnings. Post: flag + recolectar diagnostics tipados.
+1. `ghc_load` — `Tool.Load` — hoy llama `:l`. Post: `GHC.setTargets` + `GHC.load`. El output estructurado viene de `GHC.guessTarget` + errores capturados via `logAction` en DynFlags.
+2. `ghc_check_module` — `Tool.CheckModule` — hoy hace doble `:l` (strict + deferred). Post: `load` con distintos DynFlags.
+3. `ghc_check_project` — `Tool.CheckProject` — hoy itera sobre exposed-modules. Post: un solo `load LoadAllTargets` que compila todo.
+4. `ghc_hole` — `Tool.Hole` — hoy usa `-fdefer-typed-holes` + parsea warnings. Post: flag + recolectar diagnostics tipados.
 
 **Clave técnica**: setear un `LogAction` custom en los DynFlags para **capturar los diagnósticos** en una lista en lugar de que vayan a stderr:
 ```haskell
@@ -271,25 +271,25 @@ collectDiagnostics ref dflags _ sev srcSpan msg =
 >
 > | Tool                 | Phase | Backend                                   |
 > |----------------------|-------|-------------------------------------------|
-> | ghci_type            | 2     | GHC API (exprType)                         |
-> | ghci_info            | 2     | GHC API (parseName + getInfo)              |
-> | ghci_complete        | 2     | GHC API (getNamesInScope)                  |
-> | ghci_doc             | 2     | GHC API (getDocs)                          |
-> | ghci_browse          | 2     | GHC API (getModuleInfo)                    |
-> | ghci_goto            | 2     | GHC API (nameSrcSpan)                      |
-> | ghci_imports         | 6     | GHC API (getContext)                       |
-> | ghci_load            | 3     | Hybrid — legacy load, GhcSession invalidate |
-> | ghci_hole            | 3     | Hybrid — legacy load, GhcSession invalidate |
-> | ghci_check_module    | 3     | Hybrid — legacy load, GhcSession invalidate |
-> | ghci_check_project   | 3     | Hybrid — legacy load, GhcSession invalidate |
-> | ghci_refactor        | 6     | Hybrid — legacy verify, GhcSession invalidate |
-> | ghci_add_import, ghci_add_modules, ghci_remove_modules, ghci_apply_exports, ghci_create_project, ghci_deps, ghci_fix_warning, ghci_format | — | File-mutation tools: dispatch now invalidates GhcSession cache so Phase-2 reads re-scan on next access |
-> | ghci_eval            | 4     | Legacy (in-process HValue/coerce deferred) |
-> | ghci_quickcheck      | 5     | Legacy (QC dual-path — intentional)        |
-> | ghci_regression      | 5     | Legacy (dual-path)                         |
-> | ghci_determinism     | 5     | Legacy (dual-path)                         |
-> | ghci_arbitrary       | 6     | Legacy (parses :i output; works fine)      |
-> | ghci_suggest         | 6     | Legacy (parses :i output; works fine)      |
+> | ghc_type            | 2     | GHC API (exprType)                         |
+> | ghc_info            | 2     | GHC API (parseName + getInfo)              |
+> | ghc_complete        | 2     | GHC API (getNamesInScope)                  |
+> | ghc_doc             | 2     | GHC API (getDocs)                          |
+> | ghc_browse          | 2     | GHC API (getModuleInfo)                    |
+> | ghc_goto            | 2     | GHC API (nameSrcSpan)                      |
+> | ghc_imports         | 6     | GHC API (getContext)                       |
+> | ghc_load            | 3     | Hybrid — legacy load, GhcSession invalidate |
+> | ghc_hole            | 3     | Hybrid — legacy load, GhcSession invalidate |
+> | ghc_check_module    | 3     | Hybrid — legacy load, GhcSession invalidate |
+> | ghc_check_project   | 3     | Hybrid — legacy load, GhcSession invalidate |
+> | ghc_refactor        | 6     | Hybrid — legacy verify, GhcSession invalidate |
+> | ghc_add_import, ghc_add_modules, ghc_remove_modules, ghc_apply_exports, ghc_create_project, ghc_deps, ghc_fix_warning, ghc_format | — | File-mutation tools: dispatch now invalidates GhcSession cache so Phase-2 reads re-scan on next access |
+> | ghc_eval            | 4     | Legacy (in-process HValue/coerce deferred) |
+> | ghc_quickcheck      | 5     | Legacy (QC dual-path — intentional)        |
+> | ghc_regression      | 5     | Legacy (dual-path)                         |
+> | ghc_determinism     | 5     | Legacy (dual-path)                         |
+> | ghc_arbitrary       | 6     | Legacy (parses :i output; works fine)      |
+> | ghc_suggest         | 6     | Legacy (parses :i output; works fine)      |
 >
 > **Net**: 7 tools fully in-process, 12 hybrid (legacy authoritative +
 > GhcSession cache sync), 6 still pure-legacy. 233/233 e2e green. The
@@ -298,7 +298,7 @@ collectDiagnostics ref dflags _ sev srcSpan msg =
 
 ## Status update post-Phase-4 + Phase-7-step-1 (master @ 05a69a0)
 
-- **Phase 4 landed** — `ghci_eval` now runs in-process via
+- **Phase 4 landed** — `ghc_eval` now runs in-process via
   `compileExpr` + `unsafeCoerce` when the expression wraps cleanly in
   `show`; falls back to the legacy subprocess ghci for IO /
   unshowable types. Lazy-Session shim means pure-eval workloads never
@@ -309,14 +309,14 @@ collectDiagnostics ref dflags _ sev srcSpan msg =
 - **Phase 7 parallel infrastructure landed, default still sequential** —
   `HASKELL_FLOWS_E2E_PARALLEL=N` opt-in is wired with fast/slow bucketing
   in `test-e2e/Main.hs` (a749f35 / a0aa80b). N≥2 still fails because
-  many scenarios drive `ghci_load`/`ghci_refactor`/`ghci_check_module`
+  many scenarios drive `ghc_load`/`ghc_refactor`/`ghc_check_module`
   which route through the legacy `Session`'s `cabal repl`. Fully
   unblocking parallel needs those tools to stop booting a per-scenario
   `cabal repl`.
 
 ### Two concrete blockers for further migration
 
-1. **Making `ghci_load` / `check_module` primary in-process**:
+1. **Making `ghc_load` / `check_module` primary in-process**:
    attempted in this session, but reverted. Root cause: test-suite /
    benchmark / example targets depend on packages (QuickCheck, etc.)
    that the legacy `cabal repl --build-depends QuickCheck` arranges
@@ -337,7 +337,7 @@ collectDiagnostics ref dflags _ sev srcSpan msg =
 
 - **80× speedup** on the 7 fully-in-process read-only tools (36–43 ms
   cold-start vs 3000 ms legacy).
-- **5.5× speedup** on `ghci_eval` pure path (553 ms vs 3059 ms).
+- **5.5× speedup** on `ghc_eval` pure path (553 ms vs 3059 ms).
 - **Lazy Session boot** — pure-eval + Phase-2 workloads never spawn
   `cabal repl` at all. Only QC / regression / determinism /
   IO-eval-fallback pay the legacy cost.
@@ -352,7 +352,7 @@ cabal-aware package resolution for test-suites.
 
 ### Fase 4 — Migrar `eval` (1 sesión, 5-8h, el más complejo)
 
-**Goal**: in-process evaluator para `ghci_eval`.
+**Goal**: in-process evaluator para `ghc_eval`.
 
 **Complejidad**: evaluar una expresión requiere (a) type-checkearla, (b) compilarla a bytecode, (c) ejecutarla en el runtime linker. GHC API expone esto pero con ceremony:
 ```haskell
@@ -396,13 +396,13 @@ handleQuickCheck srv args = do
 
 ### Fase 6 — Migrar tools restantes (1 sesión, 3-4h)
 
-**Tools aún legacy** al llegar acá: `ghci_arbitrary`, `ghci_suggest`, `ghci_imports`, `ghci_apply_exports`, `ghci_add_import`, `ghci_refactor`, `ghci_fix_warning`, `ghci_add_modules`, `ghci_remove_modules`.
+**Tools aún legacy** al llegar acá: `ghc_arbitrary`, `ghc_suggest`, `ghc_imports`, `ghc_apply_exports`, `ghc_add_import`, `ghc_refactor`, `ghc_fix_warning`, `ghc_add_modules`, `ghc_remove_modules`.
 
 La mayoría son compile-verify (reuse el migrated `load`). Sólo `refactor` tiene complexity extra por el snapshot-restore, pero el "verify" step es compile-only → usa el nuevo load.
 
 **Criterio de éxito**:
 - Todos los scenarios verdes
-- `srvSession` legacy **solo se spawnea** cuando el LLM llama ghci_quickcheck/regression/determinism
+- `srvSession` legacy **solo se spawnea** cuando el LLM llama ghc_quickcheck/regression/determinism
 
 ### Fase 7 — Cleanup + paralelismo default (1 sesión, 3-4h)
 
@@ -427,8 +427,8 @@ Una vez terminada la base, los 7 beneficios se vuelven realizables:
 - **Beneficio 2** (errores estructurados): exponer el `Diagnostic` tipado directo en el JSON response de los tools en vez de text parseado. Cambios en parsers internos.
 - **Beneficio 3** (tool calls paralelos): exponer en el protocol que N GhcSessions concurrentes son OK; el LLM agent puede paralelizar calls.
 - **Beneficio 4** (reload incremental): `GHC.load` ya hace incremental por defecto — solo documentar.
-- **Beneficio 5** (multi-session): nuevo tool `ghci_session new/switch/list` para manejar múltiples sessions. Feature UX.
-- **Beneficio 6** (introspección precisa): actualizar JSON schemas de `ghci_info`/`ghci_type` para exponer campos estructurados (packageName, moduleName, definedAt, etc.).
+- **Beneficio 5** (multi-session): nuevo tool `ghc_session new/switch/list` para manejar múltiples sessions. Feature UX.
+- **Beneficio 6** (introspección precisa): actualizar JSON schemas de `ghc_info`/`ghc_type` para exponer campos estructurados (packageName, moduleName, definedAt, etc.).
 
 Estas fases son opcionales — el refactor base (Fases 0-7) ya da beneficios 1/3/4/7 sin más trabajo.
 

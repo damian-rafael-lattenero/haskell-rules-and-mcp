@@ -1,17 +1,17 @@
--- | Flow: cross-validation of @ghci_check_project@ against @cabal build@.
+-- | Flow: cross-validation of @ghc_check_project@ against @cabal build@.
 --
 -- The oracle for every other scenario is "whatever the MCP returns".
 -- That works for describing behaviour but fails the user's lens —
 -- if the MCP and GHC disagree, no test currently catches it. The
 -- fix is to spawn @cabal build@ directly for each test project and
--- compare the exit code against the MCP's @ghci_check_project@
+-- compare the exit code against the MCP's @ghc_check_project@
 -- overall verdict. That gives us an independent oracle.
 --
 -- The flow per project:
 --
---   1. Scaffold via the MCP (ghci_create_project + add_modules).
+--   1. Scaffold via the MCP (ghc_create_project + add_modules).
 --   2. Write the source files directly to disk.
---   3. Ask the MCP: @ghci_check_project@.
+--   3. Ask the MCP: @ghc_check_project@.
 --   4. Ask cabal: @cabal build --ghc-options=-Werror all@ from the
 --      project directory.
 --   5. The two verdicts must AGREE:
@@ -168,16 +168,16 @@ runOneProject binary rootDir tp = do
     (Client.newClient binary [("HASKELL_PROJECT_DIR", subdir)])
     Client.close
     $ \c -> do
-      _ <- Client.callTool c "ghci_create_project"
+      _ <- Client.callTool c "ghc_create_project"
              (object [ "name" .= ("xv-demo" :: Text) ])
-      _ <- Client.callTool c "ghci_add_modules"
+      _ <- Client.callTool c "ghc_add_modules"
              (object [ "modules" .= tpModules tp ])
 
       createDirectoryIfMissing True (subdir </> "src")
       mapM_ (\(rel, body) -> TIO.writeFile (subdir </> rel) body)
             (tpFiles tp)
 
-      mcpR <- Client.callTool c "ghci_check_project" (object [])
+      mcpR <- Client.callTool c "ghc_check_project" (object [])
       let mcpOverall = fieldBool "overall" mcpR
 
       cabalExit <- runCabalBuild subdir

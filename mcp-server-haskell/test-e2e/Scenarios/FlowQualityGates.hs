@@ -9,17 +9,17 @@
 --   * Calc.hs      — clean module. check_module / check_project / lint
 --                    on this subset must stay green (regression anchor).
 --   * Hinty.hs     — triggers an HLint suggestion (redundant '+ 0').
---                    ghci_lint must return a non-empty suggestions[].
---   * Broken.hs    — has a type error. ghci_check_project must flag
+--                    ghc_lint must return a non-empty suggestions[].
+--   * Broken.hs    — has a type error. ghc_check_project must flag
 --                    overall=false AND failed ≥ 1.
 --
 -- Failure modes the oracle catches:
 --
---   (a) ghci_lint silently ignores the hint (suggestions=[]).
---   (b) ghci_check_project returns overall=true despite a module
+--   (a) ghc_lint silently ignores the hint (suggestions=[]).
+--   (b) ghc_check_project returns overall=true despite a module
 --       with a type error — would mean check_project is not actually
 --       compiling every listed module.
---   (c) ghci_check_module on the clean module reports 'compile' gate
+--   (c) ghc_check_module on the clean module reports 'compile' gate
 --       as ok=false — the happy-path anchor; regression indicator.
 module Scenarios.FlowQualityGates
   ( runFlow
@@ -84,26 +84,26 @@ runFlow c projectDir = do
   -- (so the happy-path check_project is genuinely green).
   --------------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Calc (clean) + Hinty (hint-worthy)"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("gates-demo" :: Text) ])
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Calc", "Hinty"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs")  calcSrc
   TIO.writeFile (projectDir </> "src" </> "Hinty.hs") hintySrc
-  _ <- Client.callTool c "ghci_load"
+  _ <- Client.callTool c "ghc_load"
          (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
   stepFooter 1 t0
 
   --------------------------------------------------------------------
-  -- ghci_lint on src/ — MUST find the Hinty redundancy.
+  -- ghc_lint on src/ — MUST find the Hinty redundancy.
   -- This is the oracle the old scenario was missing: if hlint
   -- silently ignored everything, suggestions=[] and the old test
   -- still passed (because it only checked 'suggestions' was an
   -- array). We now require at least one.
   --------------------------------------------------------------------
-  t1 <- stepHeader 2 "ghci_lint on src/ · MUST find Hinty redundancy"
-  lintR <- Client.callTool c "ghci_lint"
+  t1 <- stepHeader 2 "ghc_lint on src/ · MUST find Hinty redundancy"
+  lintR <- Client.callTool c "ghc_lint"
              (object [ "path" .= ("src/" :: Text) ])
   -- NOTE: no 'lint success == true' check here. With default
   -- fail_on=warning, the tool correctly reports success=false
@@ -122,12 +122,12 @@ runFlow c projectDir = do
   stepFooter 2 t1
 
   --------------------------------------------------------------------
-  -- ghci_check_module — on the CLEAN module. Happy-path anchor.
+  -- ghc_check_module — on the CLEAN module. Happy-path anchor.
   -- If this fails, the whole e2e is suspicious (something broke at
   -- the compile gate level, unrelated to our defect injections).
   --------------------------------------------------------------------
-  t2 <- stepHeader 3 "ghci_check_module(Calc.hs) · clean anchor"
-  cmR <- Client.callTool c "ghci_check_module"
+  t2 <- stepHeader 3 "ghc_check_module(Calc.hs) · clean anchor"
+  cmR <- Client.callTool c "ghc_check_module"
            (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
   c3 <- liveCheck $ checkJsonField "check_module overall=true"
                       cmR "overall" (Bool True)
@@ -143,20 +143,20 @@ runFlow c projectDir = do
   -- next check_project is meaningfully distinct from the first.
   --------------------------------------------------------------------
   t3 <- stepHeader 4 "inject Broken.hs (type error)"
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Broken"] :: [Text]) ])
   TIO.writeFile (projectDir </> "src" </> "Broken.hs") brokenSrc
   stepFooter 3 t3
 
   --------------------------------------------------------------------
-  -- ghci_check_project must now FLAG the broken module. The earlier
+  -- ghc_check_project must now FLAG the broken module. The earlier
   -- test only asserted green on a clean project — it couldn't tell
   -- you whether the tool was even visiting every module. Here,
   -- planting a type error in Broken and expecting failed=1 proves
   -- the tool is actually compiling each listed module.
   --------------------------------------------------------------------
-  t4 <- stepHeader 5 "ghci_check_project · MUST flag Broken"
-  cpR <- Client.callTool c "ghci_check_project" (object [])
+  t4 <- stepHeader 5 "ghc_check_project · MUST flag Broken"
+  cpR <- Client.callTool c "ghc_check_project" (object [])
   c5 <- liveCheck $ checkJsonField
           "check_project overall=false (Broken has a type error)"
           cpR "overall" (Bool False)

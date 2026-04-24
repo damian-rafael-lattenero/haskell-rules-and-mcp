@@ -1,4 +1,4 @@
--- | @ghci_imports@ — Phase-6 tool (GHC-API migrated).
+-- | @ghc_imports@ — Phase-6 tool (GHC-API migrated).
 --
 -- List the imports currently in the interactive context via
 -- 'GHC.getContext'. Pre-migration wrapped @:show imports@; post
@@ -29,11 +29,11 @@ import HaskellFlows.Mcp.Protocol
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_imports"
+    { tdName        = "ghc_imports"
     , tdDescription =
         "List the imports currently in the GHC session's interactive "
           <> "context. Useful for confirming which modules are already "
-          <> "available before suggesting an ghci_add_import."
+          <> "available before suggesting an ghc_add_import."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

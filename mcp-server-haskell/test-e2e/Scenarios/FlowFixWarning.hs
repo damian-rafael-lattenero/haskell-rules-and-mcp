@@ -1,4 +1,4 @@
--- | Flow: @ghci_fix_warning@ — propose patches for common GHC
+-- | Flow: @ghc_fix_warning@ — propose patches for common GHC
 -- warning codes.
 --
 -- Loads a module with a deliberate unused-import warning, asks
@@ -43,11 +43,11 @@ runFlow c projectDir = do
   -- add 'containers' dep so Data.Map is reachable.
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Warn module (unused import)"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("fixwarn-demo" :: Text) ])
-  _ <- Client.callTool c "ghci_add_modules"
+  _ <- Client.callTool c "ghc_add_modules"
          (object [ "modules" .= (["Warn"] :: [Text]) ])
-  _ <- Client.callTool c "ghci_deps" (object
+  _ <- Client.callTool c "ghc_deps" (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("containers" :: Text)
          , "stanza"  .= ("library" :: Text)
@@ -57,10 +57,10 @@ runFlow c projectDir = do
   stepFooter 1 t0
 
   ----------------------------------------------------------------
-  -- ghci_fix_warning — ask for a patch, apply=false.
+  -- ghc_fix_warning — ask for a patch, apply=false.
   ----------------------------------------------------------------
-  t1 <- stepHeader 2 "ghci_fix_warning(Warn.hs, line=3, GHC-66111)"
-  r <- Client.callTool c "ghci_fix_warning" (object
+  t1 <- stepHeader 2 "ghc_fix_warning(Warn.hs, line=3, GHC-66111)"
+  r <- Client.callTool c "ghc_fix_warning" (object
     [ "module_path" .= ("src/Warn.hs" :: Text)
     , "line"        .= (3 :: Int)
     , "code"        .= ("GHC-66111" :: Text)   -- -Wunused-imports

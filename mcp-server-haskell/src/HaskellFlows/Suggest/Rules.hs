@@ -3,7 +3,7 @@
 -- Each 'Rule' is a small closure: given a parsed type signature and
 -- the function name it belongs to, it decides whether the signature
 -- matches the law's shape and, if so, emits a property expression
--- the agent can feed straight into 'ghci_quickcheck'.
+-- the agent can feed straight into 'ghc_quickcheck'.
 --
 -- Adding a new rule is strictly additive — append it to 'allRules'
 -- and the tool surfaces it automatically. No registration ceremony,
@@ -130,7 +130,7 @@ allRules =
 -- functions share the shape @[a] -> [a]@ but are not idempotent —
 -- 'reverse', 'take', 'drop', 'rotate'. Emitting the Idempotent law
 -- at 'Medium' on those would mislead an agent into running the
--- property via 'ghci_quickcheck' and watching it fail, burning
+-- property via 'ghc_quickcheck' and watching it fail, burning
 -- trust in the suggestion engine.
 ruleIdempotent :: Rule
 ruleIdempotent = Rule
@@ -551,7 +551,7 @@ mkEvalLaw transformName interp conf =
 --   parser (printer x) == x          (total inverse)
 --
 -- This is the canonical roundtrip law for pretty-printer + parser
--- pairs. Without this rule, 'ghci_suggest' returned 0 candidates
+-- pairs. Without this rule, 'ghc_suggest' returned 0 candidates
 -- for @pretty :: Expr -> String@ + @parseExpr :: String -> Maybe
 -- Expr@ because existing rules only match same-type or
 -- container-shape transforms. Dogfood finding BUG-PLUS-06.

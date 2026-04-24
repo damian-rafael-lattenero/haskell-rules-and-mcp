@@ -1,4 +1,4 @@
--- | @ghci_create_project@ — scaffold a Haskell cabal project inside the
+-- | @ghc_create_project@ — scaffold a Haskell cabal project inside the
 -- current 'ProjectDir'.
 --
 -- Writes a minimal but complete project:
@@ -9,7 +9,7 @@
 -- > test/Spec.hs             -- runs the one example test
 --
 -- No @app\/Main.hs@ by default — most agents want a library first, and
--- the executable can be added later with 'ghci_deps'-style edits.
+-- the executable can be added later with 'ghc_deps'-style edits.
 --
 -- Security posture:
 --
@@ -48,7 +48,7 @@ import HaskellFlows.Types (ProjectDir, unProjectDir)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_create_project"
+    { tdName        = "ghc_create_project"
     , tdDescription =
         "Scaffold a minimal cabal project (library + test-suite) in the "
           <> "current project directory. Creates <name>.cabal, "
@@ -250,7 +250,7 @@ cabalProject = "packages: .\n"
 
 sourceFile :: Text -> Text
 sourceFile modName = T.unlines
-  [ "-- | Stub module scaffolded by ghci_create_project."
+  [ "-- | Stub module scaffolded by ghc_create_project."
   , "module " <> modName <> " (greet) where"
   , ""
   , "-- | Example function — replace with your own."
@@ -287,7 +287,7 @@ createdResult pkg modName plans =
           , "package"       .= pkg
           , "module"        .= modName
           , "files_written" .= map (T.pack . fpRelPath) plans
-          , "hint"          .= ( "Run ghci_load(module_path=\"src/"
+          , "hint"          .= ( "Run ghc_load(module_path=\"src/"
                               <> T.replace "." "/" modName
                               <> ".hs\") to verify the scaffold compiles."
                               :: Text )

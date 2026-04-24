@@ -87,14 +87,14 @@ close c = case mcPrevDir c of
 -- | @tools/call@ equivalent. Logs the call + duration so the
 -- scenario's progress stream shows each tool as it fires —
 -- if a call blocks (unlikely now but possible for e.g.
--- 'ghci_gate' spawning cabal), you still see which one.
+-- 'ghc_gate' spawning cabal), you still see which one.
 --
 -- Routes through 'handleRequest' (NOT 'dispatchTool' directly):
 -- that's the FULL dispatcher the stdio transport uses, so every
 -- tool that has special-case handling at the 'handleToolCall'
--- layer — notably 'ghci_batch' which recurses into the
+-- layer — notably 'ghc_batch' which recurses into the
 -- dispatcher via a callback — works end-to-end. Our earlier
--- 'dispatchTool'-only path silently mapped 'ghci_batch' to the
+-- 'dispatchTool'-only path silently mapped 'ghc_batch' to the
 -- "Unknown tool" fallback (it's not in the case-list there).
 callTool :: McpClient -> Text -> Value -> IO Value
 callTool c name args = do

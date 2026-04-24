@@ -1,8 +1,8 @@
--- | @ghci_determinism@ — Wave-3 full in-process.
+-- | @ghc_determinism@ — Wave-3 full in-process.
 --
 -- Re-run a QuickCheck property N times (default 3) with independent
 -- 'stdArgs' seeds and report whether every run passes. Uses the same
--- 'evalIOString' primitive as 'ghci_quickcheck' — compile the property
+-- 'evalIOString' primitive as 'ghc_quickcheck' — compile the property
 -- once per run, coerce the HValue to @IO String@, execute it, parse.
 module HaskellFlows.Tool.Determinism
   ( descriptor
@@ -29,7 +29,7 @@ import qualified HaskellFlows.Tool.QuickCheck as QcTool
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_determinism"
+    { tdName        = "ghc_determinism"
     , tdDescription =
         "Run a property 3 times (or `runs` param) to confirm every "
           <> "run passes. Any failing or non-passed run makes the tool "
@@ -65,7 +65,7 @@ instance FromJSON DeterminismArgs where
       <*> o .:? "runs" .!= 3
       <*> o .:? "module"
 
--- | 30 s per run, mirroring ghci_quickcheck's budget.
+-- | 30 s per run, mirroring ghc_quickcheck's budget.
 runTimeoutMicros :: Int
 runTimeoutMicros = 30_000_000
 
@@ -95,11 +95,11 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   where
     runOnce sess origExpr safe mModule = do
       -- Route through the same subprocess-cabal-repl vehicle as
-      -- ghci_quickcheck. The in-process evalIOString path was
+      -- ghc_quickcheck. The in-process evalIOString path was
       -- tripping on the GHC-API package-resolution bug even when
       -- the stanza flags had -package-id QuickCheck — cabal repl
       -- sidesteps that entirely. 'mModule' mirrors the
-      -- 'ghci_quickcheck' 'module' parameter — without it a
+      -- 'ghc_quickcheck' 'module' parameter — without it a
       -- property that references project-local types fails to
       -- compile since the test-suite stanza's auto-load set
       -- doesn't cover ad-hoc 'test/Gen.hs'-style helpers.

@@ -3,13 +3,13 @@
 Status: **infrastructure landed, default still sequential**. Parallel
 mode is wired (`HASKELL_FLOWS_E2E_PARALLEL=N`) but fails for N≥2
 because many scenarios still drive the legacy subprocess `Session`
-(ghci_load, ghci_refactor, ghci_quickcheck, ghci_check_module, …)
+(ghc_load, ghc_refactor, ghc_quickcheck, ghc_check_module, …)
 and parallel `cabal repl` spawns contend on `~/.cabal/store`.
 
 Estimated effort to fully unlock parallel default: migrate every
-compile-verify path (ghci_load/check_module/refactor) fully off
+compile-verify path (ghc_load/check_module/refactor) fully off
 `Session`, which requires Phase 4+ of the GHC-API rewrite plan to
-be done (currently ghci_load is hybrid with Session-authoritative).
+be done (currently ghc_load is hybrid with Session-authoritative).
 Owner: unassigned.
 
 ## Context
@@ -17,7 +17,7 @@ Owner: unassigned.
 The e2e test suite (`mcp-server-haskell/test-e2e/`) currently
 supports an opt-in parallel mode via `HASKELL_FLOWS_E2E_PARALLEL=N`
 that never landed. N=2 was flaky; N≥3 failed hard with a mix of
-`posix_spawnp: does not exist`, fake-green 30 ms `ghci_load`
+`posix_spawnp: does not exist`, fake-green 30 ms `ghc_load`
 responses, and `SessionExhausted` on already-booted sessions.
 
 After investigation (documented in the git log of master's
@@ -45,7 +45,7 @@ migrate off the subprocess path.
 
 ## Why the current approach is fundamentally limited
 
-Every `Scenarios.Flow*` scenario calls `ghci_create_project` +
+Every `Scenarios.Flow*` scenario calls `ghc_create_project` +
 drives the MCP. The MCP's `Session` layer (`startSession` in
 `src/HaskellFlows/Ghci/Session.hs`) spawns:
 
@@ -118,7 +118,7 @@ tool does.
 4. Drop `sessionCabalArgs`; the `--build-depends QuickCheck`
    injection was the biggest contention source (forces re-planning
    every spawn). Users who need QuickCheck add it to their `.cabal`
-   (which we already support via `ghci_deps`) OR install it to the
+   (which we already support via `ghc_deps`) OR install it to the
    user env once via `cabal install --lib QuickCheck`.
 
 ### Expected outcome
@@ -140,7 +140,7 @@ Roughly ordered by dependency:
 1. **Spike: prove hie-bios resolves our scaffolded projects.**
    In a throwaway branch, write a 30-line program that calls
    `HIE.Bios.loadCradle` on a tempdir created by
-   `ghci_create_project`, prints the resulting
+   `ghc_create_project`, prints the resulting
    `ComponentOptions`, and exits. Verify the options include
    what we need (a `-package-db` path, `-hide-all-packages`,
    module search paths). ~2 hours.
@@ -193,9 +193,9 @@ Roughly ordered by dependency:
   review the release notes before bumping.
 * **`--build-depends QuickCheck` users.** Today every MCP user
   implicitly gets QuickCheck in scope. Removing that breaks
-  `ghci_quickcheck` on projects that don't have QC in their
-  cabal. Mitigation: either auto-detect + suggest `ghci_deps add
-  QuickCheck` on first `ghci_quickcheck` call, or inject QC
+  `ghc_quickcheck` on projects that don't have QC in their
+  cabal. Mitigation: either auto-detect + suggest `ghc_deps add
+  QuickCheck` on first `ghc_quickcheck` call, or inject QC
   transparently into the cradle's package DB at boot.
 
 ## Why this is worth doing (beyond test speedup)

@@ -24,7 +24,7 @@
 --   @load LoadAllTargets@ once, then sets the interactive context to
 --   include every successfully-loaded module plus @Prelude@.
 --
--- * Diagnostic capture. Phase-3 tools (@ghci_load@, @check_module@,
+-- * Diagnostic capture. Phase-3 tools (@ghc_load@, @check_module@,
 --   @check_project@, @hole@) call 'loadAndCaptureDiagnostics' which
 --   installs a 'LogAction' hook on the session's 'Logger',
 --   invalidates the load cache, re-runs @load LoadAllTargets@, and
@@ -159,7 +159,7 @@ data GhcSession = GhcSession
     -- auto-invalidates when the file was touched externally
     -- (Edit tool / hand-editing the .cabal / @cabal gen-bounds@).
     -- Closes BUG-PLUS-03 where external edits left the stanza
-    -- cache stale and the next 'ghci_load' ran against a .cabal
+    -- cache stale and the next 'ghc_load' ran against a .cabal
     -- it hadn't re-read.
   }
 
@@ -200,7 +200,7 @@ killGhcSession sess = do
 -- discarded immediately afterwards).
 --
 -- Use this from a tool handler that wants the next call to start
--- fresh (e.g. 'ghci_eval' after an inner-budget timeout) while
+-- fresh (e.g. 'ghc_eval' after an inner-budget timeout) while
 -- keeping the 'GhcSession' object alive in the 'Server' 'MVar'.
 -- Keeps the cached stanza-flags + cabal mtime so the next call
 -- doesn't pay the ~5 s cabal v2-repl re-bootstrap.
@@ -221,8 +221,8 @@ invalidateLoadCache sess = writeIORef (gsLoadedRef sess) False
 -- | Expensive: next 'withGhcSession' re-bootstraps the stanza flags
 -- (re-runs @cabal v2-repl@ with the shim) AND re-loads the module
 -- graph. Use ONLY after a tool mutates the .cabal dep graph or
--- stanza layout (ghci_deps add/remove, ghci_add_modules,
--- ghci_remove_modules, ghci_create_project, ghci_apply_exports when
+-- stanza layout (ghc_deps add/remove, ghc_add_modules,
+-- ghc_remove_modules, ghc_create_project, ghc_apply_exports when
 -- it writes @exposed-modules:@).
 --
 -- The HscEnv is also dropped so the next session starts from a
@@ -265,7 +265,7 @@ withGhcSession sess act = withMVar (gsLock sess) $ \_ ->
     -- hash unit lookup and reports "cannot satisfy -package-id
     -- QckChck-..." even though the package is in the newly-provided
     -- db. Consumers that need cabal-aware resolution reach it via
-    -- 'withStanzaFlags'; consumers that don't (raw 'ghci_eval')
+    -- 'withStanzaFlags'; consumers that don't (raw 'ghc_eval')
     -- stay on the runGhc baseline where base / ghc-prim are
     -- visible, which is all a Prelude-only eval requires.
     loaded <- liftIO (readIORef (gsLoadedRef sess))
@@ -373,7 +373,7 @@ autoLoadProject pd = do
       -- Auto-import: propagate each source module's 'import …'
       -- declarations into the interactive context verbatim, so
       -- qualified + aliased imports ('import qualified Data.Map as Map')
-      -- reach 'ghci_eval' with the project's own naming. See
+      -- reach 'ghc_eval' with the project's own naming. See
       -- 'projectInteractiveImports'.
       projImports <- projectInteractiveImports searchDirs
       setContext (preludeImport : homeImports ++ projImports)
@@ -382,7 +382,7 @@ autoLoadProject pd = do
 -- @import …@ declarations, preserving qualifier + alias (so
 -- @import qualified Data.Map.Strict as Map@ in the project's source
 -- yields the same shape in the interactive context, and
--- @ghci_eval "Map.empty"@ resolves as the user expects).
+-- @ghc_eval "Map.empty"@ resolves as the user expects).
 --
 -- Motivation: 'augmentEvalContext'\'s hardcoded allowlist was a drift
 -- magnet — each new scenario that reaches for a stdlib module the
@@ -617,9 +617,9 @@ ensureStanzaFlags sess = do
   -- touched since the last bootstrap. External edits (Edit tool,
   -- the user's own shell, @cabal gen-bounds@) don't route through
   -- 'invalidateStanzaFlags', so the server used to serve a stale
-  -- cache until some tool happened to mutate via ghci_deps.
+  -- cache until some tool happened to mutate via ghc_deps.
   -- Auto-invalidation on mtime change means "edit the .cabal,
-  -- then ghci_load" just works.
+  -- then ghc_load" just works.
   stale <- cabalWasTouched sess
   when (Map.null existing || stale) $ do
     fresh <- Bootstrap.bootstrapProject (gsProject sess)
@@ -680,7 +680,7 @@ withStanzaFlags sess tgt act = do
     -- stanza flags). Tracking applied-target separately from
     -- env-presence avoids two regressions:
     --   * "cannot satisfy -package-id QckChck-..." after a
-    --     'ghci_deps add' + reload, because a second
+    --     'ghc_deps add' + reload, because a second
     --     setSessionDynFlags with the same package set corrupts
     --     GHC's UnitState (Arbitrary fix).
     --   * "findImportedModule: no home-unit" panic when a
@@ -954,7 +954,7 @@ targetForPath sess path = do
 
 -- | Compile and run an expression whose type must be @IO String@,
 -- returning the String. For QC/regression/determinism and for
--- ghci_eval's IO fallback path. The caller wraps the user
+-- ghc_eval's IO fallback path. The caller wraps the user
 -- expression (e.g. @"quickCheckResult (" ++ prop ++ ")"@) into an
 -- @IO String@-typed statement; this helper handles the compile +
 -- coerce + execute cycle.
@@ -983,7 +983,7 @@ evalIOString stmt = do
 -- captured argv's paths already point there, so 'withStanzaFlags'
 -- inherits the isolation without an extra DynFlags rewrite. The
 -- user's @dist-newstyle/@ stays pristine, so running @cabal build@
--- after @ghci_check_project@ no longer sees defer-poisoned
+-- after @ghc_check_project@ no longer sees defer-poisoned
 -- interfaces (the "check_project then cabal build false-green"
 -- class of bug).
 applyFlavour :: LoadFlavour -> Ghc ()

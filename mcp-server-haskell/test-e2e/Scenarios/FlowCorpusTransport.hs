@@ -93,11 +93,11 @@ corpus =
   , Payload "tools-call-name-null"
       "{\"jsonrpc\":\"2.0\",\"id\":301,\"method\":\"tools/call\",\"params\":{\"name\":null,\"arguments\":{}}}"
   , Payload "tools-call-unknown-tool"
-      "{\"jsonrpc\":\"2.0\",\"id\":302,\"method\":\"tools/call\",\"params\":{\"name\":\"ghci_not_a_real_tool\",\"arguments\":{}}}"
+      "{\"jsonrpc\":\"2.0\",\"id\":302,\"method\":\"tools/call\",\"params\":{\"name\":\"ghc_not_a_real_tool\",\"arguments\":{}}}"
   , Payload "tools-call-args-string"
-      "{\"jsonrpc\":\"2.0\",\"id\":303,\"method\":\"tools/call\",\"params\":{\"name\":\"ghci_workflow\",\"arguments\":\"not-an-object\"}}"
+      "{\"jsonrpc\":\"2.0\",\"id\":303,\"method\":\"tools/call\",\"params\":{\"name\":\"ghc_workflow\",\"arguments\":\"not-an-object\"}}"
   , Payload "tools-call-args-array"
-      "{\"jsonrpc\":\"2.0\",\"id\":304,\"method\":\"tools/call\",\"params\":{\"name\":\"ghci_workflow\",\"arguments\":[1,2,3]}}"
+      "{\"jsonrpc\":\"2.0\",\"id\":304,\"method\":\"tools/call\",\"params\":{\"name\":\"ghc_workflow\",\"arguments\":[1,2,3]}}"
   , Payload "params-string"
       "{\"jsonrpc\":\"2.0\",\"id\":305,\"method\":\"tools/call\",\"params\":\"not-an-object\"}"
   , Payload "params-array"
@@ -220,7 +220,7 @@ driveCorpus binary = do
 countToolEntries :: String -> Int
 countToolEntries = go 0
   where
-    needle = "\"name\":\"ghci_"
+    needle = "\"name\":\"ghc_"
     go !n s
       | null s                = n
       | needle `isInfixOf` s  = go (n + 1) (drop (length needle) (dropUntil needle s))

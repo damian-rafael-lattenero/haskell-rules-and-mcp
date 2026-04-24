@@ -7,20 +7,20 @@
 --
 -- Bugs closed (all 6 round-trips through this scenario):
 --
---   BUG-PLUS-07 ('ghci_switch_project' requires .cabal)
---     — 'ghci_switch_project' now accepts empty directories, so
+--   BUG-PLUS-07 ('ghc_switch_project' requires .cabal)
+--     — 'ghc_switch_project' now accepts empty directories, so
 --       the "switch to a fresh dir, then create_project" flow
 --       works in ONE call instead of three (stub-cabal +
 --       switch + remove-stub).
 --   BUG-PLUS-01 (array params rejected as string)
---     — 'ghci_add_modules' + 'ghci_remove_modules' accept either
+--     — 'ghc_add_modules' + 'ghc_remove_modules' accept either
 --       a JSON array or a comma/whitespace-separated string.
 --   BUG-PLUS-05 (cross-stanza 'base' flagged as duplicate)
---     — 'ghci_validate_cabal' only reports duplicates within the
+--     — 'ghc_validate_cabal' only reports duplicates within the
 --       SAME stanza and never harvests
 --       @hs-source-dirs:@ / @import:@ as phantom package names.
 --   BUG-PLUS-03 (external .cabal edit didn't invalidate cache)
---     — Hand-editing the .cabal then calling 'ghci_load' now
+--     — Hand-editing the .cabal then calling 'ghc_load' now
 --       picks up the new deps automatically via mtime-tracked
 --       re-bootstrap, closing the "my Edit didn't take" trap.
 --   BUG-PLUS-02 ('common' stanza extensions dropped)
@@ -28,7 +28,7 @@
 --       'default-extensions' from @import: shared@ make it to
 --       GHCi after a hand-edit, so 'deriving stock' and
 --       '\case' just work in scaffolded projects.
---   BUG-PLUS-06 ('ghci_suggest' blind to printer/parser pair)
+--   BUG-PLUS-06 ('ghc_suggest' blind to printer/parser pair)
 --     — 'pretty :: Expr -> String' alongside
 --       'parseExpr :: String -> Maybe Expr' now yields a High-
 --       confidence "Printer/parser roundtrip" suggestion.
@@ -221,7 +221,7 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "switch_project accepts an empty sibling dir"
   let emptySibling = projectDir </> "dogfood-v3"
   createDirectoryIfMissing True emptySibling
-  switchR <- Client.callTool c "ghci_switch_project"
+  switchR <- Client.callTool c "ghc_switch_project"
                (object [ "path" .= T.pack emptySibling ])
   cSwitchOk <- liveCheck $ checkJsonField
     "switch_project · empty dir accepted"
@@ -237,21 +237,21 @@ runFlow c projectDir = do
   -- comma-separated string form. BUG-PLUS-01 fix.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "create_project + add_modules accepts string fallback"
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object
            [ "name"   .= ("dogfood-v3" :: Text)
            , "module" .= ("Expr.Syntax" :: Text)
            ])
 
   -- Canonical array form.
-  addR1 <- Client.callTool c "ghci_add_modules"
+  addR1 <- Client.callTool c "ghc_add_modules"
              (object [ "modules" .= (["Expr.Eval"] :: [Text]) ])
   cArrayForm <- liveCheck $ checkJsonField
     "add_modules · JSON array form succeeds"
     addR1 "success" (Bool True)
 
   -- Comma-separated string fallback.
-  addR2 <- Client.callTool c "ghci_add_modules"
+  addR2 <- Client.callTool c "ghc_add_modules"
              (object [ "modules" .= ("Expr.Simplify" :: Text) ])
   cStringForm <- liveCheck $ checkJsonField
     "add_modules · comma-separated string form succeeds"
@@ -263,7 +263,7 @@ runFlow c projectDir = do
   -- the array into a string before dispatch. The handler must
   -- unwrap and land a proper @Expr.Pretty@ module (not
   -- @[\"Expr.Pretty\"]@).
-  addR3 <- Client.callTool c "ghci_add_modules"
+  addR3 <- Client.callTool c "ghc_add_modules"
              (object [ "modules" .= ("[\"Expr.Pretty\"]" :: Text) ])
   cJsonStringForm <- liveCheck $ checkJsonField
     "add_modules · stringified JSON-array unwraps cleanly (BUG-PLUS-08)"
@@ -276,7 +276,7 @@ runFlow c projectDir = do
   -- BUG-PLUS-05 fix.
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "validate_cabal · stanza-aware, no false duplicates"
-  valR <- Client.callTool c "ghci_validate_cabal" (object [])
+  valR <- Client.callTool c "ghc_validate_cabal" (object [])
   cNoFalseDup <- liveCheck $ checkPure
     "validate_cabal · no 'duplicate-dep' warnings for a clean scaffold"
     (countIssuesOfKind "duplicate-dep" valR == 0)
@@ -297,18 +297,18 @@ runFlow c projectDir = do
   -- (4) deps add QuickCheck + containers + write sources + load.
   -- The load after the hand-replaced Syntax.hs also exercises
   -- BUG-PLUS-03: external source edits + the mtime-tracked
-  -- stanza cache make subsequent ghci_load respect the new
+  -- stanza cache make subsequent ghc_load respect the new
   -- .cabal set without an explicit invalidation call.
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "deps + sources + load"
-  _ <- Client.callTool c "ghci_deps"
+  _ <- Client.callTool c "ghc_deps"
          (object
            [ "action"  .= ("add" :: Text)
            , "package" .= ("QuickCheck" :: Text)
            , "stanza"  .= ("test-suite" :: Text)
            , "version" .= (">= 2.14" :: Text)
            ])
-  _ <- Client.callTool c "ghci_deps"
+  _ <- Client.callTool c "ghc_deps"
          (object
            [ "action"  .= ("add" :: Text)
            , "package" .= ("containers" :: Text)
@@ -323,10 +323,10 @@ runFlow c projectDir = do
   TIO.writeFile (src </> "Expr" </> "Simplify.hs") simplifySrc
   TIO.writeFile (src </> "Expr" </> "Pretty.hs")   prettySrc
 
-  loadR <- Client.callTool c "ghci_load"
+  loadR <- Client.callTool c "ghc_load"
              (object [ "module_path" .= ("src/Expr/Syntax.hs" :: Text) ])
   cLoadOk <- liveCheck $ checkJsonField
-    "ghci_load · Syntax.hs compiles clean (common-stanza extensions \
+    "ghc_load · Syntax.hs compiles clean (common-stanza extensions \
     \propagate via mtime-tracked re-bootstrap)"
     loadR "success" (Bool True)
   stepFooter 4 t3
@@ -335,7 +335,7 @@ runFlow c projectDir = do
   -- (5) check_project — 4-gate green verdict for the full set.
   ----------------------------------------------------------------
   t4 <- stepHeader 5 "check_project · all 4 modules green"
-  cpR <- Client.callTool c "ghci_check_project" (object [])
+  cpR <- Client.callTool c "ghc_check_project" (object [])
   let cpTrace = "check_project raw response: " <> truncRender cpR
   -- We deliberately DON'T assert 'overall: true' here — the
   -- 4-gate check treats warnings as failures, and the
@@ -358,36 +358,36 @@ runFlow c projectDir = do
   stepFooter 5 t4
 
   ----------------------------------------------------------------
-  -- (6) ghci_arbitrary — Expr template generation.
+  -- (6) ghc_arbitrary — Expr template generation.
   ----------------------------------------------------------------
-  t5 <- stepHeader 6 "ghci_arbitrary Expr · sized template"
-  arbR <- Client.callTool c "ghci_arbitrary"
+  t5 <- stepHeader 6 "ghc_arbitrary Expr · sized template"
+  arbR <- Client.callTool c "ghc_arbitrary"
             (object [ "type_name" .= ("Expr" :: Text) ])
   cArbSuccess <- liveCheck $ checkJsonField
-    "ghci_arbitrary Expr · success"
+    "ghc_arbitrary Expr · success"
     arbR "success" (Bool True)
   cArbSized <- liveCheck $ checkJsonFieldMatches
-    "ghci_arbitrary Expr · uses sized go template"
+    "ghc_arbitrary Expr · uses sized go template"
     arbR "template" (containsStr "sized go")
     "Recursive ADT template must emit 'sized go'."
   cArbHalves <- liveCheck $ checkJsonFieldMatches
-    "ghci_arbitrary Expr · halves on recursive args"
+    "ghc_arbitrary Expr · halves on recursive args"
     arbR "template" (containsStr "go (n `div` 2)")
     "Recursive branches must halve to keep QC size bounded."
   stepFooter 6 t5
 
   ----------------------------------------------------------------
-  -- (7) ghci_suggest — printer/parser roundtrip law must fire.
+  -- (7) ghc_suggest — printer/parser roundtrip law must fire.
   -- BUG-PLUS-06 fix.
   ----------------------------------------------------------------
-  t6 <- stepHeader 7 "ghci_suggest pretty · emits printer/parser roundtrip"
-  sugR <- Client.callTool c "ghci_suggest"
+  t6 <- stepHeader 7 "ghc_suggest pretty · emits printer/parser roundtrip"
+  sugR <- Client.callTool c "ghc_suggest"
             (object [ "function_name" .= ("pretty" :: Text) ])
   cSugSuccess <- liveCheck $ checkJsonField
-    "ghci_suggest pretty · success"
+    "ghc_suggest pretty · success"
     sugR "success" (Bool True)
   cSugRoundtrip <- liveCheck $ checkPure
-    "ghci_suggest pretty · 'Printer/parser roundtrip' is one of the laws"
+    "ghc_suggest pretty · 'Printer/parser roundtrip' is one of the laws"
     (hasSuggestionLaw "Printer/parser roundtrip" sugR)
     ("The rule added in BUG-PLUS-06 must fire when a sibling \
      \'parseExpr :: String -> Maybe Expr' is present. \
@@ -404,9 +404,9 @@ runFlow c projectDir = do
   -- BUG-PLUS-mediocre-1 coverage.
   ----------------------------------------------------------------
   t7 <- stepHeader 8 "check_project · warnings_block (strict vs lax)"
-  cpStrict <- Client.callTool c "ghci_check_project"
+  cpStrict <- Client.callTool c "ghc_check_project"
                 (object [ "warnings_block" .= True ])
-  cpLax <- Client.callTool c "ghci_check_project"
+  cpLax <- Client.callTool c "ghc_check_project"
                 (object [ "warnings_block" .= False ])
   let strictBlocks = case lookupField "failed" cpStrict of
         Just (Number n) -> round n >= (1 :: Int)
@@ -427,12 +427,12 @@ runFlow c projectDir = do
   stepFooter 8 t7
 
   ----------------------------------------------------------------
-  -- (9) ghci_quickcheck with a BROKEN property — verify that the
+  -- (9) ghc_quickcheck with a BROKEN property — verify that the
   -- 'hint' field now carries the compile error instead of leaving
   -- raw="" and no explanation. BUG-PLUS-mediocre-2 coverage.
   ----------------------------------------------------------------
   t8 <- stepHeader 9 "quickcheck · broken property surfaces stderr as hint"
-  brokenR <- Client.callTool c "ghci_quickcheck"
+  brokenR <- Client.callTool c "ghc_quickcheck"
                (object
                  [ "property" .= ("nonexistent_property_xyzzy" :: Text)
                  , "module"   .= ("src/Expr/Simplify.hs"       :: Text)
@@ -453,23 +453,23 @@ runFlow c projectDir = do
   stepFooter 8 t8
 
   ----------------------------------------------------------------
-  -- (10) ghci_load on a file with a type-defaults warning — the
-  -- response's nextStep must now propose ghci_fix_warning (not
-  -- ghci_hole, which was the pre-fix catch-all). BUG-PLUS-
+  -- (10) ghc_load on a file with a type-defaults warning — the
+  -- response's nextStep must now propose ghc_fix_warning (not
+  -- ghc_hole, which was the pre-fix catch-all). BUG-PLUS-
   -- mediocre-3 coverage.
   ----------------------------------------------------------------
-  t9 <- stepHeader 10 "ghci_load warnings → nextStep = ghci_fix_warning"
-  loadForWarnR <- Client.callTool c "ghci_load"
+  t9 <- stepHeader 10 "ghc_load warnings → nextStep = ghc_fix_warning"
+  loadForWarnR <- Client.callTool c "ghc_load"
                     (object [ "module_path" .= ("src/Expr/Pretty.hs" :: Text) ])
   cNextStepFixWarn <- liveCheck $ checkPure
-    "ghci_load · nextStep.tool = 'ghci_fix_warning' when non-hole warnings present"
+    "ghc_load · nextStep.tool = 'ghc_fix_warning' when non-hole warnings present"
     (case lookupField "nextStep" loadForWarnR of
        Just (Object ns) -> case KeyMap.lookup (Key.fromText "tool") ns of
-         Just (String s) -> s == "ghci_fix_warning"
+         Just (String s) -> s == "ghc_fix_warning"
          _               -> False
        _                -> False)
     ("Warnings in the load response should route to fix_warning, \
-     \not fall through to ghci_hole. Raw: " <> truncRender loadForWarnR)
+     \not fall through to ghc_hole. Raw: " <> truncRender loadForWarnR)
   stepFooter 10 t9
 
   pure
@@ -502,7 +502,7 @@ pathEq expected (String actual) = normalize (T.pack expected) == normalize actua
       | otherwise                        = t
 pathEq _ _ = False
 
--- | Count issues of a particular kind in a 'ghci_validate_cabal'
+-- | Count issues of a particular kind in a 'ghc_validate_cabal'
 -- response. The response is @{issues: [{kind, message, severity}]}@.
 countIssuesOfKind :: Text -> Value -> Int
 countIssuesOfKind kind (Object o) =
@@ -531,7 +531,7 @@ issueMessagesMention fragment (Object o) =
     mentions _ = False
 issueMessagesMention _ _ = False
 
--- | Does a @ghci_suggest@ response contain a suggestion with
+-- | Does a @ghc_suggest@ response contain a suggestion with
 -- 'sLaw == lawName'? Looks into @suggestions[].law@.
 hasSuggestionLaw :: Text -> Value -> Bool
 hasSuggestionLaw lawName (Object o) =
@@ -554,7 +554,7 @@ lookupField :: Text -> Value -> Maybe Value
 lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
 lookupField _ _          = Nothing
 
--- | Walk a @ghci_check_project@ response and verify every
+-- | Walk a @ghc_check_project@ response and verify every
 -- per-module entry has @gates.compile.ok == true@. Warnings on
 -- other gates are ignored — we only care about real errors.
 -- The per_module 'result' field is the MCP envelope

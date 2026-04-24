@@ -1,4 +1,4 @@
--- | @ghci_check_module@ — Wave-5 full GhcSession.
+-- | @ghc_check_module@ — Wave-5 full GhcSession.
 --
 -- All four gates (compile / warnings / holes / regression) run
 -- in-process: 'loadForTarget' Strict → errors + warnings;
@@ -48,7 +48,7 @@ import HaskellFlows.Types
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_check_module"
+    { tdName        = "ghc_check_module"
     , tdDescription =
         "Aggregate module-complete gates into one report: compiles? "
           <> "no errors? no warnings? no holes? stored properties still "

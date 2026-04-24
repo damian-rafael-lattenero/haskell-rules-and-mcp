@@ -1,4 +1,4 @@
--- | @ghci_complete@ — Phase-2 tool (GHC-API migrated).
+-- | @ghc_complete@ — Phase-2 tool (GHC-API migrated).
 --
 -- Returns in-scope identifiers that start with the given prefix.
 -- Pre-migration this wrapped @:complete repl "prefix"@ and parsed
@@ -32,7 +32,7 @@ import HaskellFlows.Mcp.Protocol
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_complete"
+    { tdName        = "ghc_complete"
     , tdDescription =
         "Return in-scope identifiers that start with the given prefix, "
           <> "via the GHC API. Useful before calling :info or :type on a "

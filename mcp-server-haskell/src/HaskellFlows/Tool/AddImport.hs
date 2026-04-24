@@ -1,4 +1,4 @@
--- | @ghci_add_import@ — for \"not in scope\" errors, search via
+-- | @ghc_add_import@ — for \"not in scope\" errors, search via
 -- Hoogle and return candidate @import@ lines. Does NOT modify files
 -- — the agent chooses which line to apply.
 module HaskellFlows.Tool.AddImport
@@ -23,7 +23,7 @@ import qualified HaskellFlows.Tool.Hoogle as Hoogle
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_add_import"
+    { tdName        = "ghc_add_import"
     , tdDescription =
         "Suggest `import` lines for a name that is \"Not in scope\". "
           <> "Queries Hoogle for the name; returns candidate import "
@@ -79,7 +79,7 @@ handle rawArgs = case parseEither parseJSON rawArgs of
           , "hint"    .= ( "None of these are guaranteed correct — pick the \
                            \module whose context best fits your use case. \
                            \Then paste the line at the top of your .hs file \
-                           \and reload with ghci_load." :: Text )
+                           \and reload with ghc_load." :: Text )
           ]
     pure ToolResult
            { trContent = [ TextContent (encodeUtf8Text payload) ]

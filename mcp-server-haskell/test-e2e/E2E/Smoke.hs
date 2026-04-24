@@ -61,13 +61,13 @@ runSmoke binary = do
     }
 
 -- | Count how many tool entries the @tools/list@ response
--- advertises. We look for the @"name":"ghci_@ substring — one
+-- advertises. We look for the @"name":"ghc_@ substring — one
 -- per registered tool — which is a simpler and more
 -- robust-to-whitespace probe than full JSON parsing here.
 countToolEntries :: String -> Int
 countToolEntries = go 0
   where
-    needle = "\"name\":\"ghci_"
+    needle = "\"name\":\"ghc_"
     go !n s
       | null s                 = n
       | needle `isInfixOf` s   = go (n + 1) (drop (length needle) (dropUntil needle s))

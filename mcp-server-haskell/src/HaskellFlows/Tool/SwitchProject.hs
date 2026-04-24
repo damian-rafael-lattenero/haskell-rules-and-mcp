@@ -1,12 +1,12 @@
--- | @ghci_switch_project@ — repoint the MCP at a different cabal
+-- | @ghc_switch_project@ — repoint the MCP at a different cabal
 -- project at runtime.
 --
 -- Why this exists
 -- ---------------
 -- Until this tool landed, the only way to change 'HASKELL_PROJECT_DIR'
 -- was to restart Claude Code (or whichever host spawned the MCP) —
--- every path-bound tool ('ghci_load', 'ghci_check_module',
--- 'ghci_lint', 'ghci_quickcheck', …) validated its argument against
+-- every path-bound tool ('ghc_load', 'ghc_check_module',
+-- 'ghc_lint', 'ghc_quickcheck', …) validated its argument against
 -- the 'ProjectDir' captured at server boot and rejected siblings with
 -- @"target path escapes project directory"@. That friction surfaced
 -- during a real dogfood session where the operator wanted to build a
@@ -74,7 +74,7 @@ import HaskellFlows.Types
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_switch_project"
+    { tdName        = "ghc_switch_project"
     , tdDescription =
         "Repoint the MCP at a different cabal project without "
           <> "restarting the host. The new path must be absolute, "
@@ -143,7 +143,7 @@ renderValidationError = \case
 --   * Directory must exist.
 --   * Directory must EITHER contain at least one @.cabal@ file
 --     OR be empty. An empty directory is a valid target because
---     the canonical next step is @ghci_create_project@ — the
+--     the canonical next step is @ghc_create_project@ — the
 --     previous "must have .cabal" gate forced callers to pre-
 --     scaffold a stub just to unlock the tool, which is
 --     unnecessary friction. A non-empty directory without a

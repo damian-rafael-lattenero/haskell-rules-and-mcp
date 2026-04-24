@@ -1,8 +1,8 @@
--- | @ghci_check_project@ — enumerate every module declared in the
--- project's @.cabal@ file, run 'ghci_check_module' on each, and
+-- | @ghc_check_project@ — enumerate every module declared in the
+-- project's @.cabal@ file, run 'ghc_check_module' on each, and
 -- return an aggregated report.
 --
--- Innovation over 'ghci_check_module' (per-file): one call that
+-- Innovation over 'ghc_check_module' (per-file): one call that
 -- answers \"is the whole package green?\" without falling back to
 -- @cabal test@ (which doesn't run hlint / format / property gates).
 --
@@ -41,9 +41,9 @@ import HaskellFlows.Types (ProjectDir, unProjectDir)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_check_project"
+    { tdName        = "ghc_check_project"
     , tdDescription =
-        "Run ghci_check_module on every module declared in the "
+        "Run ghc_check_module on every module declared in the "
           <> "project's .cabal exposed-modules + other-modules. "
           <> "Returns per-module pass/fail + a single overall flag."
     , tdInputSchema =
@@ -59,7 +59,7 @@ descriptor =
               , "warnings_block" .= object
                   [ "type"        .= ("boolean" :: Text)
                   , "description" .=
-                      ("Forwarded verbatim to each 'ghci_check_module' \
+                      ("Forwarded verbatim to each 'ghc_check_module' \
                        \call. When false, warnings stay informational \
                        \— the project is considered green as long as \
                        \there are no compile errors, holes, or property \
@@ -187,8 +187,8 @@ resolveModulePaths pd = mapM locate
       let root    = unProjectDir pd
           relPath = T.unpack (T.replace "." "/" nm) <> ".hs"
           -- Source-dir candidates in order of specificity. The
-          -- first four match the conventional 'ghci_create_project'
-          -- + 'ghci_add_modules stanza=…' layout; 'relPath' is the
+          -- first four match the conventional 'ghc_create_project'
+          -- + 'ghc_add_modules stanza=…' layout; 'relPath' is the
           -- legacy fallback for projects that use the project root
           -- directly. Ordering matters: if a module happens to
           -- exist under more than one candidate (unusual), the
@@ -225,7 +225,7 @@ runChecks
   -> Store
   -> ProjectDir
   -> Bool                  -- fail_fast
-  -> Bool                  -- warnings_block — forwarded to ghci_check_module
+  -> Bool                  -- warnings_block — forwarded to ghc_check_module
   -> [(Text, Maybe Text)]
   -> IO [ModuleOutcome]
 runChecks _ _ _ _ _ [] = pure []

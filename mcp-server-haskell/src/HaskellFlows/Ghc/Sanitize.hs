@@ -1,7 +1,7 @@
 -- | Pure boundary sanitisation for tool arguments.
 --
 -- Single source of boundary-rejection logic for every tool that
--- accepts a user-supplied expression (ghci_eval / _type / _info /
+-- accepts a user-supplied expression (ghc_eval / _type / _info /
 -- _complete / _doc / _goto / _arbitrary / _quickcheck / _suggest).
 -- Pure — no session or subprocess dependency — so unit tests pin
 -- the contract without needing a live GHC API session.

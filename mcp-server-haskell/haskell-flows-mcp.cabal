@@ -171,7 +171,7 @@ test-suite haskell-flows-mcp-e2e
     type:             exitcode-stdio-1.0
     hs-source-dirs:   test-e2e
     main-is:          Main.hs
-    -- -threaded is MANDATORY for this suite: ghci_eval's inner budget
+    -- -threaded is MANDATORY for this suite: ghc_eval's inner budget
     -- uses 'System.Timeout.timeout', which registers its delay via
     -- 'registerDelay' on a TVar — a primitive that throws on the
     -- non-threaded RTS. Several scenarios (FlowTimeoutEnforcement,

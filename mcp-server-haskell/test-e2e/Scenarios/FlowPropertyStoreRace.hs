@@ -1,4 +1,4 @@
--- | Flow: 2 MCP clients + 1 project dir + 2 'ghci_quickcheck's.
+-- | Flow: 2 MCP clients + 1 project dir + 2 'ghc_quickcheck's.
 --
 -- What this scenario PROVES (product contract)
 -- --------------------------------------------
@@ -56,7 +56,7 @@ import qualified E2E.Client as Client
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("propstore-race-demo" :: Text) ])
 
   -- Second client pointed at the same project dir. Each client
@@ -67,11 +67,11 @@ runFlow c projectDir = do
   let propA = "\\(xs :: [Int]) -> reverse (reverse xs) == xs"
       propB = "\\(n :: Int) -> n + 0 == n"
 
-  t0 <- stepHeader 1 "contention · 2 × ghci_quickcheck against same dist-newstyle"
+  t0 <- stepHeader 1 "contention · 2 × ghc_quickcheck against same dist-newstyle"
   (rA, rB) <- concurrently
-    (Client.callTool c "ghci_quickcheck"
+    (Client.callTool c "ghc_quickcheck"
        (object [ "property" .= (propA :: Text) ]))
-    (Client.callTool d "ghci_quickcheck"
+    (Client.callTool d "ghc_quickcheck"
        (object [ "property" .= (propB :: Text) ]))
 
   let aSucc    = fieldBool "success" rA == Just True
@@ -87,7 +87,7 @@ runFlow c projectDir = do
       -- "exception" | "unparsed" (plus a non-empty 'error' /
       -- 'raw' field). The legacy subprocess-GHCi tag
       -- 'error_kind=session_exhausted' is no longer emitted —
-      -- that whole code path was retired when ghci_quickcheck
+      -- that whole code path was retired when ghc_quickcheck
       -- moved to the subprocess-cabal-repl vehicle.
       --
       -- The invariant we still want to pin: the loser does not
@@ -136,7 +136,7 @@ runFlow c projectDir = do
   cPersisted <- liveCheck $ checkPure
     "winner's property is in the store file"
     winnerPersisted
-    ("The winning client's ghci_quickcheck claimed success but its \
+    ("The winning client's ghc_quickcheck claimed success but its \
      \property is not on disk. expected=" <> expectedNeedle
      <> ", first 200 bytes=" <> T.take 200 diskBytes)
   cJsonShape <- liveCheck $ checkPure

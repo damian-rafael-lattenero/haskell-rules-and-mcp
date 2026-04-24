@@ -1,4 +1,4 @@
--- | @ghci_batch@ — run multiple tool invocations in a single request.
+-- | @ghc_batch@ — run multiple tool invocations in a single request.
 --
 -- Motivation documented in `docs/ts-mcp-retrospective.md` § A1/G1. The
 -- common dev loop is load → lint → format → check_module on a single
@@ -26,7 +26,7 @@
 --   (sanitizeExpression, mkModulePath, etc.) — batch adds no new
 --   trust boundary, just composes existing ones.
 -- * Arbitrary recursion guard: a batch inside a batch is refused at
---   the boundary (a nested 'ghci_batch' action returns a structured
+--   the boundary (a nested 'ghc_batch' action returns a structured
 --   error). Prevents pathological stack growth.
 module HaskellFlows.Tool.Batch
   ( descriptor
@@ -49,13 +49,13 @@ import HaskellFlows.Mcp.Protocol
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_batch"
+    { tdName        = "ghc_batch"
     , tdDescription =
         "Run a list of tool invocations sequentially in one request. "
           <> "Each action is `{tool: string, args: object}`. Returns "
           <> "an array of results in the same order. With fail_fast=true "
           <> "(default) stops on the first error; with fail_fast=false "
-          <> "runs every action. Nesting ghci_batch inside itself is "
+          <> "runs every action. Nesting ghc_batch inside itself is "
           <> "refused."
     , tdInputSchema =
         object
@@ -137,7 +137,7 @@ handle dispatch rawArgs = case parseEither parseJSON rawArgs of
 data ActionOutcome
   = AoOk      !Text !ToolResult   -- tool name + result
   | AoSkipped !Text                -- skipped because fail_fast tripped
-  | AoNested  !Text                -- refused (ghci_batch in ghci_batch)
+  | AoNested  !Text                -- refused (ghc_batch in ghc_batch)
   | AoThrew   !Text !Text          -- tool name + exception text
   deriving stock (Show)
 
@@ -148,7 +148,7 @@ runActions
   -> IO [ActionOutcome]
 runActions _ _ []          = pure []
 runActions dispatch ff (c:cs)
-  | tcName c == "ghci_batch" = do
+  | tcName c == "ghc_batch" = do
       -- Refuse nested batch. Continue (or stop) per fail_fast.
       rest <- if ff
                 then pure (map (AoSkipped . tcName) cs)
@@ -214,7 +214,7 @@ renderOutcome (AoNested nm) =
   object
     [ "tool"   .= nm
     , "status" .= ("refused" :: Text)
-    , "reason" .= ("ghci_batch cannot be nested inside ghci_batch" :: Text)
+    , "reason" .= ("ghc_batch cannot be nested inside ghc_batch" :: Text)
     ]
 renderOutcome (AoThrew nm msg) =
   object

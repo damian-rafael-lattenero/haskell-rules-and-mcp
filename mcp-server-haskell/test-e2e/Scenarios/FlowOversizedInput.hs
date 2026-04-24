@@ -16,8 +16,8 @@
 -- lands in 'compileExpr' which must parse + type-check + link it in
 -- the server's own HscEnv, and consumes memory roughly linear in the
 -- input size for every tool that routes through sanitizeExpression
--- (ghci_eval, ghci_type, ghci_info, ghci_complete, ghci_doc,
--- ghci_goto, ghci_arbitrary, ghci_quickcheck, ghci_suggest).
+-- (ghc_eval, ghc_type, ghc_info, ghc_complete, ghc_doc,
+-- ghc_goto, ghc_arbitrary, ghc_quickcheck, ghc_suggest).
 --
 -- Threat model
 -- ------------
@@ -30,11 +30,11 @@
 --
 -- Contract asserted here
 -- ----------------------
---   * ghci_eval with a 256 KiB expression returns structurally
+--   * ghc_eval with a 256 KiB expression returns structurally
 --     (success=false, error mentions size / length / oversize).
 --   * The call returns promptly (under 2 s) — because the MCP
 --     rejects at the boundary BEFORE writing to the child pipe.
---   * The session remains alive: the very next ghci_eval with a
+--   * The session remains alive: the very next ghc_eval with a
 --     small expression succeeds. The oversized input must not
 --     have poisoned the framing state.
 --
@@ -52,7 +52,7 @@
 --   (c) The size check fires after the input has already been
 --       written to the child's stdin (wrong order of checks) →
 --       the framing state may be left in a bad shape; the
---       follow-up ghci_eval would fail.
+--       follow-up ghc_eval would fail.
 module Scenarios.FlowOversizedInput
   ( runFlow
   ) where
@@ -82,13 +82,13 @@ oversizedExpression =
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _pd = do
-  _ <- Client.callTool c "ghci_create_project"
+  _ <- Client.callTool c "ghc_create_project"
          (object [ "name" .= ("oversize-demo" :: Text) ])
 
   -- 1. Pre-flight so an unrelated session-up error doesn't look
   -- like an oversize-reject failure.
-  t0 <- stepHeader 1 "pre-flight · ghci_eval(1+1) on a fresh session"
-  pre <- Client.callTool c "ghci_eval"
+  t0 <- stepHeader 1 "pre-flight · ghc_eval(1+1) on a fresh session"
+  pre <- Client.callTool c "ghc_eval"
            (object [ "expression" .= ("1 + 1" :: Text) ])
   cPre <- liveCheck $ checkPure
     "pre-flight · session responds to 1+1"
@@ -104,7 +104,7 @@ runFlow c _pd = do
   t1 <- stepHeader 2
           "oversize · 256 KiB expression must be refused at the boundary"
   bigStart <- getPOSIXTime
-  big <- Client.callTool c "ghci_eval"
+  big <- Client.callTool c "ghc_eval"
            (object [ "expression" .= oversizedExpression ])
   bigEnd <- getPOSIXTime
   let bigMs       = round ((realToFrac (bigEnd - bigStart) :: Double)
@@ -140,14 +140,14 @@ runFlow c _pd = do
   -- not have touched the child's stdin — the framing state must be
   -- pristine.
   t2 <- stepHeader 3 "alive · session still responds after the reject"
-  post <- Client.callTool c "ghci_eval"
+  post <- Client.callTool c "ghc_eval"
             (object [ "expression" .= ("2 + 3" :: Text) ])
   let aliveOk = fieldBool "success" post == Just True
              && case lookupField "output" post of
                   Just (String s) -> "5" `T.isInfixOf` s
                   _               -> False
   cAlive <- liveCheck $ checkPure
-    "session alive · next ghci_eval(2+3) returns 5"
+    "session alive · next ghc_eval(2+3) returns 5"
     aliveOk
     ("If the oversized input was partially written to the child, the \
      \next call's sentinel framing could desync. Raw: "

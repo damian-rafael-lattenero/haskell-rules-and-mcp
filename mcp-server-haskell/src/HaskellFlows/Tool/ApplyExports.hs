@@ -1,4 +1,4 @@
--- | @ghci_apply_exports@ — rewrite a module's header to include an
+-- | @ghc_apply_exports@ — rewrite a module's header to include an
 -- explicit export list. Idempotent; if the header already has one,
 -- returns @{no_change: true}@.
 module HaskellFlows.Tool.ApplyExports
@@ -23,7 +23,7 @@ import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghci_apply_exports"
+    { tdName        = "ghc_apply_exports"
     , tdDescription =
         "Rewrite a module's header to declare an explicit export list. "
           <> "Idempotent: if an export list is already present, "
