@@ -1,9 +1,23 @@
 **/dist-newstyle/
+# MCP's private cabal builddir — bootstrap writes here so the defer-
+# flag-poisoned .hi/.o never contaminate the user's dist-newstyle.
+# See 'CabalBootstrap.bootstrapOne' for the full rationale.
+**/dist-newstyle-mcp/
 .idea/
 *.hi
 *.o
 *.dyn_hi
 *.dyn_o
+
+# Stray direct-ghc artifact: running 'ghc app/Main.hs' produces an
+# unextensioned executable next to the source. The real binary is
+# built by cabal under dist-newstyle.
+mcp-server-haskell/app/Main
+
+# Claude Code session state (ephemeral; per-session lock + local
+# permission overrides).
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
 
 # cabal-generated, always local-only. `cabal freeze` is used by CI as a
 # cache-key input; we don't commit the resulting plan.
