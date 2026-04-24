@@ -54,10 +54,12 @@ jobs:
             label: darwin-arm64
             ghc: "9.12.2"
             cabal: "3.12.1.0"
-          - os: macos-13
-            label: darwin-x64
-            ghc: "9.12.2"
-            cabal: "3.12.1.0"
+          # darwin-x64 (Intel Mac) binary dropped — GitHub retired the
+          # `macos-13` runner (the last x64 macOS runner on hosted
+          # infrastructure). Apple stopped selling Intel Macs in
+          # 2023; the small remaining x64 macOS user base can build
+          # from source (`cabal install exe:haskell-flows-mcp`) or
+          # use the linux-x64 asset under Rosetta.
           - os: ubuntu-22.04
             label: linux-x64
             ghc: "9.12.2"

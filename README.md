@@ -91,10 +91,10 @@ The in-process `GhcSession` is guarded by an `MVar` (single-writer to the `HscEn
 
 ## Install + run
 
-**Option A — pre-built binary (fast path).** Each tagged release publishes stripped binaries + SHA256 checksums for `darwin-arm64`, `darwin-x64`, `linux-x64` ([Releases](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases)):
+**Option A — pre-built binary (fast path).** Each tagged release publishes stripped binaries + SHA256 checksums for `darwin-arm64` and `linux-x64` ([Releases](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases)). Intel-Mac users: build from source via Option B — GitHub retired the `macos-13` x64 runner, so we no longer ship a `darwin-x64` asset.
 
 ```bash
-PLATFORM=darwin-arm64   # or darwin-x64 / linux-x64
+PLATFORM=darwin-arm64   # or linux-x64
 VERSION=v0.1.0
 curl -L -o haskell-flows-mcp.tar.gz \
   "https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/$VERSION/haskell-flows-mcp-$PLATFORM.tar.gz"
@@ -197,9 +197,10 @@ Every response carries a `nextStep` hint pointing at the most probable next call
 
 | Platform | Status | Notes |
 |---|---|---|
-| `darwin-arm64` | ✅ **Supported** | Primary dev target, bundled binaries pinned by SHA256 |
-| `darwin-x64` · `linux-*` | ⚠️ Use host tools | Install via `ghcup install hlint fourmolu ormolu hls` |
-| `win32-*` | ❌ Untested | Not on short-term roadmap |
+| `darwin-arm64` | ✅ **Supported** | Primary dev target; release binary + SHA256 checksum published per tag |
+| `linux-x64` | ✅ **Supported** | Release binary + checksum published per tag |
+| `darwin-x64` | ⚠️ Build from source | GitHub retired the `macos-13` runner; use `cabal install exe:haskell-flows-mcp` or run the `linux-x64` asset under Rosetta |
+| `linux-arm64` · `win32-*` | ❌ Untested | Not on short-term roadmap |
 
 Resolution chain: `host PATH → bundled → auto-download → unavailable`. Unsupported platforms fall through cleanly.
 
