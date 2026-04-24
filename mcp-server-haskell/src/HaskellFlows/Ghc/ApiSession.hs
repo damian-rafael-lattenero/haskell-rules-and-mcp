@@ -1,8 +1,8 @@
--- | Phase-1/2/3 scaffolding for the GHC-API-in-process migration
--- (docs/GHC-API-rewrite-plan.md). Cohabits with the legacy
--- 'HaskellFlows.Ghci.Session.Session' during Phases 1-6; Phase 7
--- promotes it to primary and the subprocess-ghci implementation is
--- retired for the 22 tools that don't need runtime randomisation.
+-- | Persistent in-process GHC API session — the single source of
+-- compile-and-execute state for every tool (38 of them) that needs
+-- to inspect or mutate Haskell code. Replaced the original
+-- subprocess-ghci implementation in Wave 5; there is no subprocess
+-- component left in the runtime path.
 --
 -- Invariants, enforced by construction:
 --
@@ -279,8 +279,8 @@ withGhcSession sess act = withMVar (gsLock sess) $ \_ ->
 
 -- | Inject cabal's generated @.ghc.environment.*@ file into DynFlags
 -- via the 'packageEnv' field. Scoped to the GHC-API session only —
--- never mutates process env vars, so legacy 'Session' subprocess
--- spawns stay untouched.
+-- never mutates process env vars, so the parent host's environment
+-- stays pristine for sibling tools that spawn cabal / hlint.
 applyCabalPackageEnv :: ProjectDir -> DynFlags -> IO DynFlags
 applyCabalPackageEnv pd dflags = do
   mEnvFile <- findOrGenerateCabalEnvFile pd

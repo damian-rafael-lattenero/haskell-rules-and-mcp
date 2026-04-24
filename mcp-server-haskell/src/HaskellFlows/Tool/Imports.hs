@@ -76,8 +76,9 @@ errorResult msg = ToolResult
   , trIsError = True
   }
 
--- | Legacy parser kept for unit-test back-compat. Retired with the
--- subprocess-ghci backing in Phase 7.
+-- | Pre-migration parser kept for the unit-test scaffolding. Retained
+-- as a pure parser fixture so the tests can pin the text-shape
+-- contract without a live session.
 parseImportsOutput :: Text -> [Text]
 parseImportsOutput = filter keep . map T.strip . T.lines
   where

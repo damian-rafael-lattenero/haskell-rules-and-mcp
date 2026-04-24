@@ -1,20 +1,21 @@
 cabal-version:      3.0
 name:               haskell-flows-mcp
 version:            0.1.0.0
-synopsis:           MCP server for property-first Haskell development (Haskell rewrite)
+synopsis:           MCP server for property-first Haskell development
 description:
-  Progressive Haskell rewrite of the TypeScript haskell-flows MCP server.
+  Exposes 38 MCP tools over stdio JSON-RPC: compile + inspect + refactor +
+  quickcheck + regression + pre-push gate. Every tool routes through a
+  single in-process GHC API session (no subprocess REPL); cabal is invoked
+  only once per target to capture stanza flags, which are then applied to
+  the in-process compiler.
   .
-  Phase 1 status: scaffolding + a single working tool (ghci_load) that
-  spawns a persistent GHCi, loads a module, and returns parsed diagnostics.
-  Subsequent phases will port the remaining ~30 tools.
-  .
-  Design invariants locked in at this phase:
+  Design invariants enforced by construction:
   .
   * Path traversal impossible by construction (ModulePath smart constructor)
   * Regex engine is regex-tdfa (linear time, no ReDoS)
-  * GHCi child process is never invoked via shell; argv-form only
-  * Command serialization via STM (no silent races between concurrent tools)
+  * External subprocesses (cabal / hlint / formatter) are argv-form only —
+    no shell interpolation
+  * MVar-serialised writes to the HscEnv (GHC API is single-writer per session)
 license:            BSD-3-Clause
 author:             Damián Rafael Lattenero
 maintainer:         damian.lattenero@mercadolibre.com
@@ -121,10 +122,12 @@ executable haskell-flows-mcp
                     , haskell-flows-mcp
 
 -- --------------------------------------------------------------------------
---  Phase 0 spike — probe that the GHC API boots in-process with our
---  toolchain (GHC 9.12.2). Not part of the product binary; exists only
---  to prove the migration plan's foundation (docs/GHC-API-rewrite-plan.md).
---  Removed in Phase 1 when library code starts using `ghc` + `ghc-paths`.
+--  Standalone smoke test that the GHC API boots in-process with our
+--  toolchain (GHC 9.12.2) and can load + type-check a trivial module
+--  without the rest of the library. Retained as a regression guard
+--  against toolchain regressions that would silently break the main
+--  library's session bootstrap before any unit test had a chance to
+--  observe it.
 -- --------------------------------------------------------------------------
 executable spike-ghc-api
     import:           shared
@@ -152,9 +155,12 @@ test-suite haskell-flows-mcp-test
                     , QuickCheck        >= 2.14
 
 -- --------------------------------------------------------------------------
---  End-to-end test-suite. Spawns the real haskell-flows-mcp binary over
---  stdio JSON-RPC and drives the complete expr-evaluator scenario (37
---  tool calls, 15 assertions) the same way a live MCP client would.
+--  End-to-end test-suite. One subprocess smoke-test covers the stdio
+--  JSON-RPC transport against the real haskell-flows-mcp binary; the
+--  remaining scenarios drive 'dispatchTool' in-process against a fresh
+--  Server per scenario (same pattern as lsp-test for HLS). Pipe/flush
+--  behaviour on macOS + GHC 9.12 is flaky for multi-round-trip
+--  subprocess drivers, so we pay that cost exactly once.
 --
 --  NOT run by `cabal test` by default in most CI setups — invoke
 --  explicitly via `cabal test haskell-flows-mcp-e2e`. Slow (30+s) and
@@ -165,12 +171,13 @@ test-suite haskell-flows-mcp-e2e
     type:             exitcode-stdio-1.0
     hs-source-dirs:   test-e2e
     main-is:          Main.hs
-    -- -threaded is MANDATORY for this suite: it spawns a real
-    -- GHCi session via HaskellFlows.Ghci.Session which uses
-    -- 'registerDelay' for STM-bounded read timeouts; that
-    -- primitive throws on non-threaded RTS. The executable
-    -- target already ships with -threaded; the test-suite must
-    -- too so the in-process 'dispatchTool' path can boot GHCi.
+    -- -threaded is MANDATORY for this suite: ghci_eval's inner budget
+    -- uses 'System.Timeout.timeout', which registers its delay via
+    -- 'registerDelay' on a TVar — a primitive that throws on the
+    -- non-threaded RTS. Several scenarios (FlowTimeoutEnforcement,
+    -- FlowSessionRobustness) rely on that budget firing. The executable
+    -- target already ships with -threaded; the test-suite must too so
+    -- the in-process 'dispatchTool' path can run eval.
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
     other-modules:    E2E.Client
                       E2E.Assert

@@ -136,8 +136,9 @@ nameToLocation n = case nameSrcSpan n of
 
 -- | Kept for the existing unit tests that validate the pre-migration
 -- parser. The live code path no longer calls this — the GHC API
--- returns 'SrcSpan' directly. Retire when the subprocess-ghci backing
--- retires in Phase 7.
+-- returns 'SrcSpan' directly. Retained as a pure parser fixture so
+-- the unit tests can pin the text-shape contract without a live
+-- session.
 parseDefinedAt :: Text -> Maybe Location
 parseDefinedAt raw = firstJust tryLine (T.lines raw)
   where

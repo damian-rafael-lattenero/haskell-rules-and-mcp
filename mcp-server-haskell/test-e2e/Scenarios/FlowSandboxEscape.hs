@@ -6,7 +6,7 @@
 -- Contract
 -- --------
 -- 'ghci_eval' evaluates an arbitrary Haskell expression in the
--- persistent GHCi session. That session is a full Haskell runtime
+-- in-process GHC API session. That session is a full Haskell runtime
 -- — it can:
 --
 --   * read and write any file the MCP process has permission for

@@ -148,12 +148,16 @@ Every tool call is bounded and sandboxed:
   argv-form via `System.Process.proc "cmd" [args]`. Agent input never
   reaches a shell.
 - **Input sanitisation** — `sanitizeExpression` rejects newline +
-  internal-framing sentinel characters before any `:t` / `:i` / `:eval`.
-- **DoS cap** — GHCi stdout drain capped at 16 MiB; per-tool 10-minute
-  outer timeout as defence-in-depth.
-- **Session liveness** — `SessionStatus = Alive | Overflowed | Dead`;
-  GHCi death wakes every STM-blocked `executeNoLock` via a status-TVar
-  write so no call can hang indefinitely.
+  internal-framing sentinel characters + inputs over 64 KiB before any
+  `compileExpr` / `exprType` / `getInfo` call reaches the GHC API.
+- **DoS cap** — 64 KiB output cap on `ghci_eval`; 30 s inner per-eval
+  timeout trips a structured `error_kind=timeout` response and resets
+  the HscEnv in place; 10-minute outer per-tool timeout as final
+  defence.
+- **Session liveness** — in-process GHC API session held behind an
+  `MVar` (single-writer to the `HscEnv`); any uncaught exception in a
+  tool handler evicts the session and the next call boots a fresh one,
+  so no call can poison subsequent ones.
 - **Refactor atomicity** — `ghci_refactor` snapshots before every edit
   and compile-verifies after; rollback on any type-check failure.
 - **`.cabal` integrity** — `ghci_deps` / `ghci_add_modules` /
@@ -195,9 +199,10 @@ When a tool misbehaves, follow the **dogfood-fix-in-place** flow:
 | `HaskellFlows.Mcp.WorkflowState`       | Session counters + history-pattern nudges + phase classifier |
 | `HaskellFlows.Mcp.Resources`           | MCP `resources/list` advertising |
 | `HaskellFlows.Mcp.Staleness`           | Binary-vs-boot mtime diff surfaced on `ghci_workflow(status)` |
-| `HaskellFlows.Ghci.Sentinel`           | Framing + `:set` init script |
-| `HaskellFlows.Ghci.Session`            | Child process lifecycle + `SessionStatus` |
-| `HaskellFlows.Parser.{Error,Hole,Type,TypeSignature,QuickCheck,Coverage}` | Structured parsing of GHCi output |
+| `HaskellFlows.Ghc.ApiSession`          | In-process GHC API session (HscEnv lifecycle, MVar single-writer, diagnostic capture via log hook) |
+| `HaskellFlows.Ghc.CabalBootstrap`      | Per-target stanza-flag capture via a `cabal v2-repl --with-compiler` shim |
+| `HaskellFlows.Ghc.Sanitize`            | Pure boundary sanitisation (newline / sentinel / size caps) |
+| `HaskellFlows.Parser.{Error,Hole,Type,TypeSignature,QuickCheck,Coverage}` | Structured parsing of GHC diagnostics + subprocess tool output |
 | `HaskellFlows.Refactor.{Rename,Extract}` | Snapshot-and-compile-verify primitives |
 | `HaskellFlows.Suggest.Rules`           | 11+ law engines (sibling-aware) |
 | `HaskellFlows.Data.PropertyStore`      | JSON-backed regression store (MVar-serialised) |

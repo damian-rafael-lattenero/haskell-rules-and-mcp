@@ -1,9 +1,9 @@
 -- | Flow: an oversized expression must be rejected at the MCP boundary,
--- not forwarded to the child GHCi where it consumes parser memory.
+-- not forwarded to the in-process GHC API where it consumes parser memory.
 --
 -- Motivation
 -- ----------
--- 'HaskellFlows.Ghci.Session.sanitizeExpression' enforces three
+-- 'HaskellFlows.Ghc.Sanitize.sanitizeExpression' enforces three
 -- invariants today:
 --
 --   * non-empty after 'T.strip'         (avoids prompt-loop)
@@ -13,9 +13,9 @@
 -- What it does NOT enforce is a /size/ cap. 'maxEvalBytes = 64 KiB'
 -- bounds the OUTPUT that the MCP hands back to its client — but a
 -- 1 MB input expression flies straight through sanitizeExpression,
--- gets handed to the child GHCi which must now parse + type-check +
--- evaluate it, and consumes memory roughly linear in the input size
--- for every one of the 8 tools that route through sanitizeExpression
+-- lands in 'compileExpr' which must parse + type-check + link it in
+-- the server's own HscEnv, and consumes memory roughly linear in the
+-- input size for every tool that routes through sanitizeExpression
 -- (ghci_eval, ghci_type, ghci_info, ghci_complete, ghci_doc,
 -- ghci_goto, ghci_arbitrary, ghci_quickcheck, ghci_suggest).
 --

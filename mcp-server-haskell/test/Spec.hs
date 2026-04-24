@@ -3261,7 +3261,7 @@ testSuggestEncodeShapeSkipsListRules =
 --------------------------------------------------------------------------------
 
 -- | Wave-3: chooseStoreModule no longer consults ':info' output —
--- that plumbing sat on top of the subprocess ghci which is being
+-- that plumbing sat on top of the subprocess ghci which has been
 -- retired. Under the new contract it always returns the caller's
 -- hint verbatim, regardless of what ':info' would have said.
 testChooseStoreModuleIdentWithInfo :: IO Bool

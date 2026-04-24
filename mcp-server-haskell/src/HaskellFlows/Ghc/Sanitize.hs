@@ -1,10 +1,10 @@
 -- | Pure boundary sanitisation for tool arguments.
 --
--- These helpers originally lived in the legacy subprocess
--- 'HaskellFlows.Ghci.Session' module. They are pure — no
--- subprocess dependency — so after Wave 5 retired the subprocess
--- they live here as the single source of boundary-rejection
--- logic.
+-- Single source of boundary-rejection logic for every tool that
+-- accepts a user-supplied expression (ghci_eval / _type / _info /
+-- _complete / _doc / _goto / _arbitrary / _quickcheck / _suggest).
+-- Pure — no session or subprocess dependency — so unit tests pin
+-- the contract without needing a live GHC API session.
 module HaskellFlows.Ghc.Sanitize
   ( CommandError (..)
   , sanitizeExpression
@@ -16,11 +16,12 @@ module HaskellFlows.Ghc.Sanitize
 import Data.Text (Text)
 import qualified Data.Text as T
 
--- | The fixed end-of-output marker from the pre-Wave-5 subprocess
--- framing protocol. Kept as a literal constant so 'sanitizeExpression'
--- can reject user inputs that happen to contain it — defending
--- the one remaining use of the token (boundary rejection) without
--- pulling back the legacy transport.
+-- | Historical end-of-output marker from the original subprocess
+-- framing protocol (retired). Kept as a literal constant so
+-- 'sanitizeExpression' can reject user inputs that happen to contain
+-- it — belt-and-suspenders against any future reintroduction of
+-- framed transport plus a stable invariant in the injection-guard
+-- test suite.
 sentinel :: Text
 sentinel = "<<<GHCi-DONE-7f3a2b>>>"
 

@@ -115,7 +115,8 @@ renderExport n = do
 
 -- | Pre-migration parser kept for the unit-test scaffolding. The live
 -- path no longer calls this — the GHC API returns exports as 'Name'
--- directly. Retire alongside the subprocess-ghci backing in Phase 7.
+-- directly. Retained as a pure parser fixture so the unit tests can
+-- pin the text-shape contract without a live session.
 parseBrowseOutput :: Text -> [Text]
 parseBrowseOutput = filter (not . T.null) . map T.strip . T.lines
 
