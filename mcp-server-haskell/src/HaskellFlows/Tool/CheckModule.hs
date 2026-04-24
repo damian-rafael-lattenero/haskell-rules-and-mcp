@@ -107,8 +107,30 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
         Left ex ->
           pure (errorResult ("loadForTarget failed: " <> T.pack (show ex)))
         Right (strictOk, strictDiags) -> do
-          let errors    = filter ((== SevError)   . geSeverity) strictDiags
-              warnings  = filter ((== SevWarning) . geSeverity) strictDiags
+          -- 'loadForTarget' loads the whole target (library or
+          -- test-suite), so 'strictDiags' is the UNION of warnings
+          -- across every module in that target. Filter to this
+          -- module's file only: without the filter, a warning in
+          -- 'Expr.Pretty' would red-gate 'Expr.Syntax' too, and
+          -- 'check_project' would show the same warnings attributed
+          -- to N modules (one per module it iterated).
+          -- Diagnostic attribution: GHC reports absolute paths in
+          -- 'geFile' (e.g. @/tmp/proj/src/Foo.hs@); the user passed
+          -- a project-relative path (e.g. @src/Foo.hs@). A suffix
+          -- match on the relative path is enough to own/disown a
+          -- diag — the absolute path will always end with the
+          -- relative one when GHC is pointed at this project root.
+          let ownDiag d = raw `T.isSuffixOf` geFile d
+              ownDiags  = filter ownDiag strictDiags
+              errors    = filter ((== SevError)   . geSeverity) ownDiags
+              warnings  = filter ((== SevWarning) . geSeverity) ownDiags
+              -- 'compileOk' still takes the PROJECT-wide strictOk
+              -- flag: if any module failed to compile the whole
+              -- load reported Failed, and this module can't
+              -- legitimately be called green even if the specific
+              -- diag happens to have landed on a sibling. Errors
+              -- in OTHER modules still surface downstream via
+              -- their own check_module call.
               compileOk = strictOk && null errors
           holes <- if compileOk
                      then do

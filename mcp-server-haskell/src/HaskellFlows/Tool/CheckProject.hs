@@ -186,9 +186,20 @@ resolveModulePaths pd = mapM locate
     locate nm = do
       let root    = unProjectDir pd
           relPath = T.unpack (T.replace "." "/" nm) <> ".hs"
+          -- Source-dir candidates in order of specificity. The
+          -- first four match the conventional 'ghci_create_project'
+          -- + 'ghci_add_modules stanza=…' layout; 'relPath' is the
+          -- legacy fallback for projects that use the project root
+          -- directly. Ordering matters: if a module happens to
+          -- exist under more than one candidate (unusual), the
+          -- library's 'src/' wins — that's the behaviour tests
+          -- relied on before the test/app/bench extensions.
           candidates =
-            [ "src" </> relPath
-            , "lib" </> relPath
+            [ "src"   </> relPath
+            , "lib"   </> relPath
+            , "test"  </> relPath
+            , "app"   </> relPath
+            , "bench" </> relPath
             , relPath
             ]
       found <- firstExisting root candidates
@@ -274,7 +285,7 @@ renderOutcome (MoNotFound nm) =
   object
     [ "module" .= nm
     , "status" .= ("not_found" :: Text)
-    , "reason" .= ("no .hs file under src/, lib/, or project root" :: Text)
+    , "reason" .= ("no .hs file under src/, lib/, test/, app/, bench/, or project root" :: Text)
     ]
 renderOutcome (MoSkipped nm) =
   object

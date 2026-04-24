@@ -289,6 +289,12 @@ main = do
       , test "ghci_eval enforces inner per-call budget" testEvalInnerTimeoutBudget
       , test "load paths derive interactive imports from source" testLoadAutoImports
       , test "Deferred pass writes to MCP-private build dir"      testDeferredIsolatedOutputs
+      , test "ghci_deps add: idempotent no-op returns unchanged"  testDepsAddIdempotent
+      , test "ghci_switch_project: empty dir -> create_project"   testSwitchProjectEmptyDir
+      , test "ghci_check_module: filter diagnostics by file"     testCheckModuleDiagFilter
+      , test "ghci_add_modules: accepts stanza param"            testAddModulesStanzaParam
+      , test "ghci_check_project: also scans test/app/bench"     testCheckProjectTestDirs
+      , test "ghci_quickcheck: widens scope via :m +"            testQuickCheckScopeWidening
       , test "initialize emits instructions field"  testInitializeEmitsInstructions
       , test "instructions mention key tools+flows" testInstructionsMentionCore
       , test "nextStep: create_project -> deps"     testNextStepCreateProject
@@ -2961,6 +2967,113 @@ testDeferredIsolatedOutputs = do
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s
 
+--------------------------------------------------------------------------------
+-- Dogfood-session feedback fixes — 6 polish probes.
+--------------------------------------------------------------------------------
+
+-- | Fix 2. 'ghci_deps add' used to return
+-- @"No change: 'X' not found or already at desired state."@ when
+-- the package was already in the targeted stanza — a remove-path
+-- message on an add call. The correct behaviour is a structured
+-- idempotent no-op ('action=unchanged', 'success=true') with a
+-- verb-specific 'note'.
+testDepsAddIdempotent :: IO Bool
+testDepsAddIdempotent = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Deps.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  pure $ T.isInfixOf "unchangedResult" code
+      -- No lingering occurrence of the old misleading string in
+      -- live code (comments may still reference it via "--").
+      && not (T.isInfixOf "not found or already at desired state" code)
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- | Fix 6. Switching to an empty directory should point the agent
+-- at 'ghci_create_project' (the canonical scaffold step), not at
+-- 'ghci_workflow(status)'. The branching lives in 'NextStep.hs';
+-- the payload signal ('scaffolded' bool) is emitted by
+-- 'SwitchProject.successResult'.
+testSwitchProjectEmptyDir :: IO Bool
+testSwitchProjectEmptyDir = do
+  ns <- TIO.readFile "src/HaskellFlows/Mcp/NextStep.hs"
+  sp <- TIO.readFile "src/HaskellFlows/Tool/SwitchProject.hs"
+  let nsCode = T.unlines (filter (not . isDocLine) (T.lines ns))
+      spCode = T.unlines (filter (not . isDocLine) (T.lines sp))
+  pure $ T.isInfixOf "ghci_create_project" nsCode
+      && T.isInfixOf "\"scaffolded\"" nsCode
+      && T.isInfixOf "\"scaffolded\"" spCode
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- | Fix 4. 'ghci_check_module' used to attribute every diagnostic
+-- from the whole library load to every module — a warning in
+-- 'Expr.Pretty' would red-gate 'Expr.Syntax' too. The fix filters
+-- by 'geFile' suffix matching the checked module path.
+testCheckModuleDiagFilter :: IO Bool
+testCheckModuleDiagFilter = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/CheckModule.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  pure $ T.isInfixOf "ownDiag" code
+      && T.isInfixOf "isSuffixOf" code
+      && T.isInfixOf "geFile" code
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- | Fix 1. 'ghci_add_modules' now accepts an optional 'stanza'
+-- param so callers can register modules into a test-suite /
+-- executable / benchmark stanza (routed to 'other-modules') not
+-- just the library's 'exposed-modules'.
+testAddModulesStanzaParam :: IO Bool
+testAddModulesStanzaParam = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/AddModules.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  pure $ T.isInfixOf "amStanza" code
+      && T.isInfixOf "resolveStanzaTarget" code
+      && T.isInfixOf "other-modules" code
+      -- Source-dir routing covers the three non-library stanzas.
+      && T.isInfixOf "\"test\"" code
+      && T.isInfixOf "\"app\"" code
+      && T.isInfixOf "\"bench\"" code
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- | Fix 5. 'ghci_check_project' used to search only 'src/', 'lib/',
+-- and project root for each declared module's .hs file, so a
+-- test-suite's 'other-modules: Gen' came back as @not_found@ even
+-- though 'test/Gen.hs' existed. Candidate list now includes
+-- 'test/', 'app/', and 'bench/'.
+testCheckProjectTestDirs :: IO Bool
+testCheckProjectTestDirs = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/CheckProject.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  pure $ T.isInfixOf "\"src\"   </> relPath" code
+      && T.isInfixOf "\"test\"  </> relPath" code
+      && T.isInfixOf "\"app\"   </> relPath" code
+      && T.isInfixOf "\"bench\" </> relPath" code
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- | Fix 3. 'ghci_quickcheck module=<file>' used to leave the
+-- property running with only @file@'s own imports in scope, so
+-- a property that referenced library functions failed with
+-- 'Variable not in scope'. The fix widens the interactive context
+-- via @:m +@ over every library exposed-module.
+testQuickCheckScopeWidening :: IO Bool
+testQuickCheckScopeWidening = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/QuickCheck.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  pure $ T.isInfixOf "libraryExposedModules" code
+      && T.isInfixOf ":m + " code
+      && T.isInfixOf "scanLibraryExposedModules" code
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
 -- | Cure regression: the interactive context must be derived from
 -- the project's own @import …@ declarations, not from a hardcoded
 -- allowlist. Each of the three in-process load paths ('autoLoad',
@@ -3561,7 +3674,7 @@ testAddModulesArrayForm :: IO Bool
 testAddModulesArrayForm =
   let payload = A.object [ "modules" A..= (["Expr.Syntax", "Expr.Eval"] :: [Text]) ]
   in case A.fromJSON payload of
-       A.Success (AddModules.AddModulesArgs xs) ->
+       A.Success (AddModules.AddModulesArgs xs _) ->
          pure (xs == ["Expr.Syntax", "Expr.Eval"])
        _ -> pure False
 
@@ -3577,7 +3690,7 @@ testAddModulesStringFallback = do
       mixed = A.object [ "modules" A..= ("Expr.Syntax,Expr.Eval\tExpr.Pretty" :: Text) ]
       ok payload =
         case A.fromJSON payload of
-          A.Success (AddModules.AddModulesArgs xs) ->
+          A.Success (AddModules.AddModulesArgs xs _) ->
             xs == ["Expr.Syntax", "Expr.Eval"]
                || xs == ["Expr.Syntax", "Expr.Eval", "Expr.Pretty"]
           _ -> False
@@ -3786,7 +3899,7 @@ testAddModulesJsonArrayString =
       indented = A.object
         [ "modules" A..= ("  [ \"Expr.Syntax\" , \"Expr.Eval\" ] " :: Text) ]
       ok v = case A.fromJSON v of
-        A.Success (AddModules.AddModulesArgs xs) ->
+        A.Success (AddModules.AddModulesArgs xs _) ->
           xs == ["Expr.Syntax", "Expr.Eval"]
         _ -> False
   in pure (ok stringified && ok quotedNoSpaces && ok indented)
@@ -3801,7 +3914,7 @@ testAddModulesPlainStringStillWorks =
       ws    = A.object [ "modules" A..= ("A B"  :: Text) ]
       mixed = A.object [ "modules" A..= ("A,\tB\nC" :: Text) ]
       ok v expected = case A.fromJSON v of
-        A.Success (AddModules.AddModulesArgs xs) -> xs == expected
+        A.Success (AddModules.AddModulesArgs xs _) -> xs == expected
         _ -> False
   in pure (ok csv ["A","B"] && ok ws ["A","B"] && ok mixed ["A","B","C"])
 

@@ -183,6 +183,13 @@ handle pdRef sessRef rawArgs = case parseEither parseJSON rawArgs of
       Left ve -> pure (errorResult (renderValidationError ve))
       Right newPd -> do
         oldPd <- readIORef pdRef
+        -- Re-check scaffold state AFTER validation accepted the path
+        -- (empty-dir is allowed — see 'validateSwitchTarget'). The
+        -- flag lets the NextStep router distinguish \"scaffolded
+        -- project → run status\" from \"empty dir → run
+        -- create_project\" instead of always pointing at status.
+        entries <- listDirectory (unProjectDir newPd)
+        let scaffolded = any ((".cabal" ==) . takeExtension) entries
         -- Serialise the swap against any in-flight tool call that
         -- acquired the session mutex. The kill happens under the
         -- same lock that 'getOrStartGhcSession' takes, so nobody
@@ -191,20 +198,21 @@ handle pdRef sessRef rawArgs = case parseEither parseJSON rawArgs of
           mapM_ killGhcSession mSess
           atomicWriteIORef pdRef newPd
           pure Nothing
-        pure (successResult oldPd newPd)
+        pure (successResult oldPd newPd scaffolded)
 
 --------------------------------------------------------------------------------
 -- response shaping
 --------------------------------------------------------------------------------
 
-successResult :: ProjectDir -> ProjectDir -> ToolResult
-successResult oldPd newPd =
+successResult :: ProjectDir -> ProjectDir -> Bool -> ToolResult
+successResult oldPd newPd scaffolded =
   let payload = object
-        [ "success"  .= True
-        , "previous" .= T.pack (unProjectDir oldPd)
-        , "current"  .= T.pack (unProjectDir newPd)
-        , "message"  .= ("Project directory switched. Next tool call \
-                         \boots a fresh GhcSession." :: Text)
+        [ "success"    .= True
+        , "previous"   .= T.pack (unProjectDir oldPd)
+        , "current"    .= T.pack (unProjectDir newPd)
+        , "scaffolded" .= scaffolded
+        , "message"    .= ("Project directory switched. Next tool \
+                           \call boots a fresh GhcSession." :: Text)
         ]
   in ToolResult
        { trContent = [ TextContent (encodeUtf8Text payload) ]

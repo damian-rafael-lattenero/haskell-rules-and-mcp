@@ -418,16 +418,27 @@ dispatch name payload = case name of
   "hoogle_search" -> Nothing
   "ghci_coverage" -> Nothing
 
-  -- Just switched projects → the next useful action is almost
-  -- always a status check: 'ghci_workflow(status)' reports the
-  -- new project's phase, the 37 tool registry, and whether the
-  -- on-disk binary is newer than what's running — the canonical
-  -- orient-yourself step after a context change.
-  "ghci_switch_project" -> Just (simple "ghci_workflow"
-    "Project root swapped. Ask 'ghci_workflow(status)' to \
-    \orient yourself in the new project: phase classifier, \
-    \tools active, and staleness check against the new .cabal."
-    (Just (object [ "action" .= ("status" :: Text) ])))
+  -- Just switched projects. Branch on the payload's 'scaffolded'
+  -- flag (set by 'Tool.SwitchProject.successResult'):
+  --   * Scaffolded → 'ghci_workflow(status)' is the
+  --     orient-yourself step.
+  --   * Empty dir → 'ghci_create_project' is the canonical next
+  --     action; pointing at status would surface a PhasePreScaffold
+  --     with no actionable hint.
+  "ghci_switch_project" ->
+    case payload of
+      Object o | Just (Bool False) <- KeyMap.lookup "scaffolded" o ->
+        Just (simple "ghci_create_project"
+          "Switched to an empty directory. Scaffold a fresh cabal \
+          \package here with 'ghci_create_project' (library + \
+          \test-suite stub) before any other tool has something \
+          \to load."
+          (Just (object [ "name" .= ("<pkg-name>" :: Text) ])))
+      _ -> Just (simple "ghci_workflow"
+        "Project root swapped. Ask 'ghci_workflow(status)' to \
+        \orient yourself in the new project: phase classifier, \
+        \tools active, and staleness check against the new .cabal."
+        (Just (object [ "action" .= ("status" :: Text) ])))
 
   _ -> Nothing
 

@@ -100,18 +100,27 @@ runFlow c projectDir = do
     ])
   let succ1 = fieldBool "success" r1
       refused = succ1 == Just False
+      -- 'note' is the explainer emitted by 'Tool.Deps.unchangedResult'
+      -- for idempotent add/remove no-ops (verb-specific: "already
+      -- present" / "not listed in target stanza"). Accepting it here
+      -- keeps the "no silent success" oracle honest without
+      -- requiring remove-on-absent to be a structured FAILURE —
+      -- which was a remove-shaped error being reported on what's
+      -- actually a semantically-well-defined idempotent call.
       hinted  = hasField "hint"    r1
              || hasField "error"   r1
              || hasField "errors"  r1
              || hasField "message" r1
+             || hasField "note"    r1
       honest  = refused || hinted
   cMiss1 <- liveCheck $ checkPure
     "deps remove of absent package · structured signal (not silent)"
     honest
     ("The MCP must tell the caller the dep wasn't there. Either \
-     \success=false, OR success=true with a 'hint'/'error' that \
-     \explains the no-op. Silent success would let a stale removal \
-     \request look like it worked. Raw: " <> truncRender r1)
+     \success=false, OR success=true with a 'note'/'hint'/'error' \
+     \that explains the no-op. Silent success would let a stale \
+     \removal request look like it worked. Raw: "
+     <> truncRender r1)
   stepFooter 2 t1
 
   ----------------------------------------------------------------

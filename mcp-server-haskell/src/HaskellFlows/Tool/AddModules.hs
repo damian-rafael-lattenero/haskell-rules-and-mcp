@@ -1,12 +1,17 @@
 -- | @ghci_add_modules@ — register new modules in the project's
--- @.cabal@ exposed-modules list AND scaffold their empty @.hs@
--- files under @src/@. Idempotent (skips names already present).
+-- @.cabal@ (library's @exposed-modules@ by default; test-suite,
+-- executable, or benchmark @other-modules@ when 'stanza' is
+-- supplied) AND scaffold empty @.hs@ stubs under the matching
+-- @hs-source-dirs@. Idempotent (skips names already present).
 module HaskellFlows.Tool.AddModules
   ( descriptor
   , handle
   , AddModulesArgs (..)
   , moduleToPath
+  , moduleToPathForStanza
   , parseModuleList
+  , StanzaTarget (..)
+  , resolveStanzaTarget
   ) where
 
 import Control.Exception (SomeException, try)
@@ -23,6 +28,7 @@ import System.Directory (createDirectoryIfMissing, doesFileExist, listDirectory)
 import System.FilePath (takeDirectory, takeExtension, (</>))
 
 import HaskellFlows.Mcp.Protocol
+import qualified HaskellFlows.Tool.Deps as Deps
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath, unProjectDir)
 
 descriptor :: ToolDescriptor
@@ -30,8 +36,14 @@ descriptor =
   ToolDescriptor
     { tdName        = "ghci_add_modules"
     , tdDescription =
-        "Register new modules in the project's .cabal exposed-modules "
-          <> "and scaffold their empty .hs stubs under src/. Idempotent."
+        "Register new modules in the project's .cabal and scaffold \
+        \their empty .hs stubs. Default target is the library's \
+        \'exposed-modules' under 'src/'. Pass 'stanza' to target \
+        \another stanza: 'test-suite' / 'test-suite:NAME' / \
+        \'executable[:NAME]' / 'benchmark[:NAME]'. Non-library \
+        \stanzas route to 'other-modules' and scaffold under the \
+        \stanza's conventional source dir (test/, app/, bench/). \
+        \Idempotent."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -54,19 +66,36 @@ descriptor =
                        \for MCP clients whose deferred-tool wrapper \
                        \stringifies array arguments before dispatch." :: Text)
                   ]
+              , "stanza" .= object
+                  [ "type"        .= ("string" :: Text)
+                  , "description" .=
+                      ("Optional stanza selector. Omit or pass \
+                       \'library' to target the main library \
+                       \(exposed-modules + src/). Other valid \
+                       \values: 'test-suite', 'test-suite:NAME', \
+                       \'executable', 'executable:NAME', \
+                       \'benchmark', 'benchmark:NAME'. Non-library \
+                       \stanzas route to 'other-modules' and scaffold \
+                       \stubs under test/, app/, or bench/." :: Text)
+                  ]
               ]
           , "required"             .= ["modules" :: Text]
           , "additionalProperties" .= False
           ]
     }
 
-newtype AddModulesArgs = AddModulesArgs { amModules :: [Text] }
+data AddModulesArgs = AddModulesArgs
+  { amModules :: ![Text]
+  , amStanza  :: !(Maybe Text)
+  }
   deriving stock (Show)
 
 instance FromJSON AddModulesArgs where
   parseJSON = withObject "AddModulesArgs" $ \o -> do
     raw <- o .: "modules"
-    AddModulesArgs <$> parseModuleList raw
+    mods <- parseModuleList raw
+    st <- o .:? "stanza"
+    pure AddModulesArgs { amModules = mods, amStanza = st }
 
 -- | Parse the @modules@ field of an 'AddModulesArgs' payload.
 --
@@ -140,35 +169,103 @@ parseModuleList other =
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
-  Right (AddModulesArgs mods) -> do
-    mCabal <- findCabalFile pd
-    case mCabal of
-      Nothing -> pure (errorResult "No .cabal file found in project root")
-      Just file -> do
-        (createdFiles, existingFiles) <- scaffoldFiles pd mods
-        eCabal <- tryRewriteCabal file mods
-        case eCabal of
-          Left err -> pure (errorResult err)
-          Right addedToCabal ->
-            pure (successResult createdFiles existingFiles addedToCabal)
+  Right (AddModulesArgs mods mStanzaRaw) ->
+    case resolveStanzaTarget mStanzaRaw of
+      Left err -> pure (errorResult err)
+      Right tgt -> do
+        mCabal <- findCabalFile pd
+        case mCabal of
+          Nothing -> pure (errorResult "No .cabal file found in project root")
+          Just file -> do
+            (createdFiles, existingFiles) <- scaffoldFiles pd tgt mods
+            eCabal <- tryRewriteCabal file tgt mods
+            case eCabal of
+              Left err -> pure (errorResult err)
+              Right addedToCabal ->
+                pure (successResult tgt createdFiles existingFiles addedToCabal)
+
+--------------------------------------------------------------------------------
+-- stanza target
+--------------------------------------------------------------------------------
+
+-- | Resolved stanza destination. Distinguishes the (sourceDir,
+-- fieldHeader) pair so 'scaffoldFiles' and 'addModulesToBody'
+-- don't each have to re-implement the stanza → directory +
+-- stanza → field-keyword mapping.
+data StanzaTarget = StanzaTarget
+  { stSelector  :: !(Maybe (Text, Maybe Text))
+    -- ^ 'Nothing' for the library's first @exposed-modules@;
+    -- 'Just (kind, mName)' for a scoped stanza slice.
+  , stSourceDir :: !FilePath
+    -- ^ conventional @hs-source-dirs@ root for new stubs: "src",
+    -- "test", "app", or "bench".
+  , stFieldName :: !Text
+    -- ^ which cabal field to edit: "exposed-modules" for library,
+    -- "other-modules" for every other stanza kind.
+  , stLabel     :: !Text
+    -- ^ human-readable label for the success payload.
+  }
+  deriving stock (Show)
+
+-- | Parse the optional @stanza@ argument into a 'StanzaTarget'.
+-- 'Nothing' / @"library"@ / @"lib"@ all pick the library.
+resolveStanzaTarget :: Maybe Text -> Either Text StanzaTarget
+resolveStanzaTarget mRaw = case normalise mRaw of
+  Nothing -> Right libTarget
+  Just raw
+    | raw == "library" || raw == "lib" -> Right libTarget
+    | otherwise -> case Deps.parseStanzaSelector raw of
+        Left err        -> Left err
+        Right sel@(k,_) ->
+          let sourceDir = case k of
+                "test-suite"  -> "test"
+                "executable"  -> "app"
+                "benchmark"   -> "bench"
+                _             -> "src"
+          in Right StanzaTarget
+               { stSelector  = Just sel
+               , stSourceDir = sourceDir
+               , stFieldName = "other-modules"
+               , stLabel     = Deps.renderSelector sel
+               }
+  where
+    normalise = fmap T.strip . mfilter (not . T.null . T.strip)
+
+    libTarget = StanzaTarget
+      { stSelector  = Nothing
+      , stSourceDir = "src"
+      , stFieldName = "exposed-modules"
+      , stLabel     = "library"
+      }
+
+    mfilter p (Just x) | p x = Just x
+    mfilter _ _              = Nothing
 
 --------------------------------------------------------------------------------
 -- scaffolding
 --------------------------------------------------------------------------------
 
--- | Convert @Expr.Syntax@ to @src/Expr/Syntax.hs@.
+-- | Convert @Expr.Syntax@ to @src/Expr/Syntax.hs@. Library-first
+-- default — kept for backwards compatibility with the previous
+-- single-target API. New callers should prefer
+-- 'moduleToPathForStanza' which honours the stanza's source dir.
 moduleToPath :: Text -> FilePath
-moduleToPath m =
+moduleToPath = moduleToPathForStanza "src"
+
+-- | Like 'moduleToPath' but honours the stanza's source directory
+-- (e.g. @test/@ for a test-suite module).
+moduleToPathForStanza :: FilePath -> Text -> FilePath
+moduleToPathForStanza srcDir m =
   let parts = T.splitOn "." m
       joined = T.intercalate "/" parts
-  in "src/" <> T.unpack joined <> ".hs"
+  in srcDir <> "/" <> T.unpack joined <> ".hs"
 
-scaffoldFiles :: ProjectDir -> [Text] -> IO ([FilePath], [FilePath])
-scaffoldFiles pd = foldl' step (pure ([], []))
+scaffoldFiles :: ProjectDir -> StanzaTarget -> [Text] -> IO ([FilePath], [FilePath])
+scaffoldFiles pd tgt = foldl' step (pure ([], []))
   where
     step ioAcc m = do
       (c, ex) <- ioAcc
-      case mkModulePath pd (moduleToPath m) of
+      case mkModulePath pd (moduleToPathForStanza (stSourceDir tgt) m) of
         Left _   -> pure (c, ex)  -- skip malformed silently; caller sees count delta
         Right mp -> do
           let full = unModulePath mp
@@ -193,45 +290,73 @@ stubContent m = T.unlines
 -- cabal rewriting
 --------------------------------------------------------------------------------
 
-tryRewriteCabal :: FilePath -> [Text] -> IO (Either Text [Text])
-tryRewriteCabal file mods = do
+tryRewriteCabal :: FilePath -> StanzaTarget -> [Text] -> IO (Either Text [Text])
+tryRewriteCabal file tgt mods = do
   res <- try (TIO.readFile file) :: IO (Either SomeException Text)
   case res of
     Left e     -> pure (Left (T.pack ("Could not read: " <> show e)))
-    Right body -> do
-      let (newBody, added) = addModulesToBody body mods
-      if null added
-        then pure (Right [])
-        else do
-          wres <- try (TIO.writeFile file newBody) :: IO (Either SomeException ())
-          case wres of
-            Left e  -> pure (Left (T.pack ("Could not write: " <> show e)))
-            Right _ -> pure (Right added)
+    Right body -> case addModulesToBody tgt body mods of
+      Left err -> pure (Left err)
+      Right (newBody, added)
+        | null added -> pure (Right [])
+        | otherwise -> do
+            wres <- try (TIO.writeFile file newBody) :: IO (Either SomeException ())
+            case wres of
+              Left e  -> pure (Left (T.pack ("Could not write: " <> show e)))
+              Right _ -> pure (Right added)
 
--- | Insert each not-already-present module into the first
--- @exposed-modules:@ field. Preserves indentation by copying the
--- leading whitespace of the header line.
-addModulesToBody :: Text -> [Text] -> (Text, [Text])
-addModulesToBody body mods =
-  let lns   = T.lines body
-      (pre, headerAndRest) = break isExposedHeader lns
+-- | Insert each not-already-present module into the stanza's
+-- target field ('exposed-modules' for library; 'other-modules'
+-- otherwise). When the field doesn't exist in the targeted
+-- stanza, it's synthesised at the top of the stanza body with a
+-- 4-space indent.
+--
+-- Returns 'Left' on stanza-not-found — the caller surfaces that
+-- to the agent; the file is not touched.
+addModulesToBody :: StanzaTarget -> Text -> [Text] -> Either Text (Text, [Text])
+addModulesToBody tgt body mods = case stSelector tgt of
+  Nothing  -> Right (addWithinBody (stFieldName tgt) body mods)
+  Just sel -> case Deps.sliceStanza sel (T.lines body) of
+    Nothing -> Left ("stanza not found: " <> Deps.renderSelector sel)
+    Just (pre, stanzaLns, post) ->
+      let stanzaBody           = T.unlines stanzaLns
+          (newStanzaBody, add) = addWithinBody (stFieldName tgt) stanzaBody mods
+          newStanzaLns         = T.lines newStanzaBody
+      in Right (T.unlines (pre <> newStanzaLns <> post), add)
+
+-- | Single-stanza rewrite: add modules to the first occurrence of
+-- @<fieldName>:@ in @body@; synthesise the field if absent.
+addWithinBody :: Text -> Text -> [Text] -> (Text, [Text])
+addWithinBody fieldName body mods =
+  let lns = T.lines body
+      (pre, headerAndRest) = break (isFieldHeader fieldName) lns
   in case headerAndRest of
-       []  -> (body, [])
+       [] ->
+         -- Field absent: synthesise at the start of the stanza
+         -- body. Skips any leading blank lines so the field lands
+         -- just under the stanza header.
+         let (blanks, rest) = span (T.null . T.strip) lns
+             indent         = "    "
+             newField       = (indent <> fieldName <> ":") :
+                              [ indent <> "    " <> m | m <- mods ]
+         in if null mods
+              then (body, [])
+              else (T.unlines (blanks <> newField <> rest), mods)
        (h : rest) ->
          let (cont, tailLns) = break isNewField rest
-             existing = existingModules (h : cont)
+             existing = existingModules fieldName (h : cont)
              toAdd    = [ m | m <- mods, m `notElem` existing ]
-             indent   = continuationIndent h
+             indent   = continuationIndent fieldName h
              newCont  = cont <> [ indent <> m | m <- toAdd ]
              newBody  = T.unlines (pre <> (h : newCont) <> tailLns)
          in if null toAdd
               then (body, [])
               else (newBody, toAdd)
 
-isExposedHeader :: Text -> Bool
-isExposedHeader ln =
+isFieldHeader :: Text -> Text -> Bool
+isFieldHeader fieldName ln =
   let s = T.toLower (T.stripStart ln)
-  in "exposed-modules:" `T.isPrefixOf` s
+  in T.toLower (fieldName <> ":") `T.isPrefixOf` s
 
 -- | A continuation line is indented more than the header; a new
 -- field starts at column 0 or at the same indent as the header.
@@ -242,28 +367,28 @@ isNewField ln =
   || (T.null (T.takeWhile (== ' ') ln) && not (T.null stripped))
   || ":" `T.isInfixOf` T.takeWhile (/= ' ') stripped
 
--- | Parse existing module names from the exposed-modules block.
-existingModules :: [Text] -> [Text]
-existingModules = concatMap extract
+-- | Parse existing module names from the target field's block.
+existingModules :: Text -> [Text] -> [Text]
+existingModules fieldName = concatMap extract
   where
+    kw = T.toLower fieldName <> ":"
     extract ln =
       let stripped = T.strip ln
-          afterKw  = T.stripStart (T.drop (T.length "exposed-modules:")
-                                           (T.toLower ln))
-      in if "exposed-modules:" `T.isPrefixOf` T.toLower stripped
+          afterKw  = T.stripStart (T.drop (T.length kw) (T.toLower ln))
+      in if kw `T.isPrefixOf` T.toLower stripped
            then [T.strip (T.dropWhile (/= ' ') stripped) | not (T.null afterKw)]
            else [stripped]
 
 -- | Indentation to use for inserted lines — mirrors the column the
--- first module after "exposed-modules:" starts at.
-continuationIndent :: Text -> Text
-continuationIndent headerLine =
+-- first module after @<fieldName>:@ starts at on the header line.
+continuationIndent :: Text -> Text -> Text
+continuationIndent fieldName headerLine =
   let leading = T.takeWhile (== ' ') headerLine
       afterField =
-        T.drop (T.length leading + T.length "exposed-modules:") headerLine
+        T.drop (T.length leading + T.length fieldName + 1) headerLine
       spacesBeforeValue = T.takeWhile (== ' ') afterField
       cols = T.length leading
-           + T.length ("exposed-modules:" :: Text)
+           + T.length fieldName + 1
            + T.length spacesBeforeValue
   in T.replicate (max cols (T.length leading + 4)) " "
 
@@ -286,10 +411,13 @@ findCabalFile pd = do
 -- response shaping
 --------------------------------------------------------------------------------
 
-successResult :: [FilePath] -> [FilePath] -> [Text] -> ToolResult
-successResult created existed addedToCabal =
+successResult :: StanzaTarget -> [FilePath] -> [FilePath] -> [Text] -> ToolResult
+successResult tgt created existed addedToCabal =
   let payload = object
         [ "success"         .= True
+        , "stanza"          .= stLabel tgt
+        , "field"           .= stFieldName tgt
+        , "source_dir"      .= T.pack (stSourceDir tgt)
         , "created_files"   .= map T.pack created
         , "existing_files"  .= map T.pack existed
         , "cabal_added"     .= addedToCabal

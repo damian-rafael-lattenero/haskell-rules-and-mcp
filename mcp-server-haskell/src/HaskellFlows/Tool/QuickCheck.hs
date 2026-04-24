@@ -35,6 +35,11 @@ import System.Timeout (timeout)
 
 import qualified System.Process as Proc
 import System.Exit (ExitCode (..))
+import System.Directory (listDirectory)
+import System.FilePath (takeExtension, (</>))
+import qualified Data.Text.IO as TIO
+
+import qualified HaskellFlows.Tool.Deps as Deps
 
 import HaskellFlows.Data.PropertyStore (Store, save)
 import HaskellFlows.Ghc.ApiSession
@@ -236,12 +241,24 @@ resolvePropertyModule ghcSess nm
 -- and returns clean.
 runQuickCheckViaCabalRepl :: ProjectDir -> Maybe Text -> Text -> IO (Text, Text)
 runQuickCheckViaCabalRepl pd mModule safeProp = do
+  libMods <- libraryExposedModules pd
   let loadDirective = case mModule of
         Just modPath | not (T.null modPath) ->
           [":load " <> T.unpack modPath]
         _ -> []
+      -- ':m +' widens the interactive context to every library
+      -- exposed-module. Without this, a ':load test/Gen.hs' left
+      -- only Gen's own imports in scope — so properties that
+      -- referenced lib functions ('eval', 'simplify', …) failed
+      -- with 'Variable not in scope'. Now the full library surface
+      -- is reachable from any property body, matching the mental
+      -- model of \"run this law against the project\".
+      moduleImport
+        | null libMods = []
+        | otherwise    = [":m + " <> unwords (map T.unpack libMods)]
       input = unlines $
         loadDirective <>
+        moduleImport <>
         [ "import Test.QuickCheck"
         -- Record-update with unqualified field names — GHC 9.12
         -- panics on the fully-qualified @Test.QuickCheck.chatty@
@@ -383,6 +400,72 @@ renderResult qr mHint =
     -- nothing (suggests we have an explanation when we don't).
     maybeHintPair (Just h) | not (T.null (T.strip h)) = [ "hint" .= h ]
     maybeHintPair _                                    = []
+
+-- | Read the project's @.cabal@ file and return every module name
+-- listed under the library's @exposed-modules@. Used to widen the
+-- cabal-repl interactive context via @:m +@ so a property that
+-- references library functions can compile even when the user
+-- loaded only a test-helper module. Returns @[]@ on any parse or
+-- I/O failure — the caller falls back to whatever scope @:load@
+-- already provided.
+libraryExposedModules :: ProjectDir -> IO [Text]
+libraryExposedModules pd = do
+  let root = unProjectDir pd
+  ents <- try (listDirectory root) :: IO (Either SomeException [FilePath])
+  case ents of
+    Left _ -> pure []
+    Right es ->
+      case [root </> e | e <- es, takeExtension e == ".cabal"] of
+        []    -> pure []
+        (f:_) -> do
+          eBody <- try (TIO.readFile f) :: IO (Either SomeException Text)
+          case eBody of
+            Left _     -> pure []
+            Right body -> pure (scanLibraryExposedModules body)
+
+-- | Pure parser: given a full @.cabal@ body, return library
+-- exposed-module names. Scoped to the @library@ stanza via
+-- 'Deps.sliceStanza'; returns @[]@ when the project has no
+-- library (executable-only projects / benchmark-only projects).
+--
+-- A line-oriented parser lives here in-line — using the richer
+-- 'HaskellFlows.Tool.CheckProject.parseExposedModules' would
+-- introduce a module-graph cycle (CheckProject → CheckModule →
+-- Regression → QuickCheck).
+scanLibraryExposedModules :: Text -> [Text]
+scanLibraryExposedModules body =
+  case Deps.sliceStanza ("library", Nothing) (T.lines body) of
+    Nothing             -> []
+    Just (_, libLns, _) -> extractExposedModules libLns
+
+-- | Given the lines of a SINGLE @library@ stanza, return every
+-- module listed under @exposed-modules:@ — both inline on the
+-- header and on continuation lines. Stops at the next cabal
+-- field or stanza header.
+extractExposedModules :: [Text] -> [Text]
+extractExposedModules = go False
+  where
+    go _ [] = []
+    go inside (ln : rest)
+      | isExposedHeader ln =
+          let inlineTail = T.strip (T.dropWhile (/= ':') ln)
+              inlineNow  = T.strip (T.drop 1 inlineTail)
+              nameHere   = [ inlineNow | not (T.null inlineNow) ]
+          in nameHere <> go True rest
+      | inside && isContinuation ln =
+          let nm = T.strip ln
+              newField = ':' `T.elem` nm
+          in if newField
+               then go False rest
+               else [ nm | not (T.null nm) ] <> go True rest
+      | otherwise = go False rest
+
+    isExposedHeader ln =
+      "exposed-modules:" `T.isPrefixOf` T.toLower (T.stripStart ln)
+
+    -- A continuation is an indented line; blank lines also end the block.
+    isContinuation ln =
+      not (T.null (T.takeWhile (== ' ') ln)) && not (T.null (T.strip ln))
 
 -- | Compress the v2-repl stderr into the useful bits: drop
 -- cabal's own banner lines ("Warning: …", "[build-profile]",

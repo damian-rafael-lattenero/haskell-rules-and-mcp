@@ -45,6 +45,7 @@ import qualified Scenarios.FlowDependencyConflict as FlowDC
 import qualified Scenarios.FlowDiskFull          as FlowDF
 import qualified Scenarios.FlowExploratory      as FlowE
 import qualified Scenarios.FlowExprEvaluatorDogfood as FlowEED
+import qualified Scenarios.FlowDogfoodUxFixes   as FlowDUX
 import qualified Scenarios.FlowFixWarning       as FlowFW
 import qualified Scenarios.FlowGracefulMiss      as FlowGM
 import qualified Scenarios.FlowInjectionGuard   as FlowIG
@@ -158,6 +159,8 @@ scenarios =
     , False, FlowSwP.runFlow )
   , ( "Flow: Dogfood replay (7 MCP fixes round-tripped through one session)"
     , True, FlowDFR.runFlow )
+  , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"
+    , False, FlowDUX.runFlow )
   ]
 
 main :: IO ()

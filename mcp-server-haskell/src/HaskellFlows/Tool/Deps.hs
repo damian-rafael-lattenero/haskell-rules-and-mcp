@@ -27,6 +27,8 @@ module HaskellFlows.Tool.Deps
   , validatePackageName
   , validateVersionConstraint
   , parseStanzaSelector
+  , sliceStanza
+  , renderSelector
   , addDep
   , removeDep
   ) where
@@ -233,8 +235,12 @@ runEdit file pkg mStanza f verb = withCabalLock file $ do
       Left err -> pure (errorResult err)
       Right newBody
         | newBody == body ->
-            pure (errorResult ("No change: '" <> pkg
-                              <> "' not found or already at desired state."))
+            -- Idempotent no-op: the edit is already reflected in the
+            -- .cabal. Verb-specific message so the agent doesn't have
+            -- to re-parse a remove-shaped error on an add path. Still
+            -- a 'success=true' payload — the post-condition the caller
+            -- asked for ("pkg is [not] listed in stanza") holds.
+            pure (unchangedResult file pkg verb)
         | not (editAgreesWithVerb verb pkg mStanza newBody) ->
             -- Post-edit structural check: if the requested verb says
             -- \"added\" but the re-parsed body doesn't list the package
@@ -656,6 +662,32 @@ editResult file pkg verb =
                              \package graph — no explicit session \
                              \restart tool is needed."
                             :: Text )
+          ]
+  in ToolResult
+       { trContent = [ TextContent (encodeUtf8Text payload) ]
+       , trIsError = False
+       }
+
+-- | Idempotent no-op payload. Shape parallels 'editResult' but marks
+-- the action as \"unchanged\" with a verb-aware @note@ field so the
+-- agent gets a clear signal that the post-condition is already met
+-- (on @add@: package is present; on @remove@: package is absent)
+-- instead of the earlier remove-shaped \"not found or already at
+-- desired state\" error that fired on every idempotent add too.
+unchangedResult :: FilePath -> Text -> Text -> ToolResult
+unchangedResult file pkg verb =
+  let note = case verb of
+        "added"   -> "'" <> pkg <> "' already present in target stanza — no change written."
+        "removed" -> "'" <> pkg <> "' not listed in target stanza — no change written."
+        _         -> "no change written"
+      payload =
+        object
+          [ "success"    .= True
+          , "action"     .= ("unchanged" :: Text)
+          , "verb"       .= verb
+          , "cabal_file" .= T.pack file
+          , "package"    .= pkg
+          , "note"       .= (note :: Text)
           ]
   in ToolResult
        { trContent = [ TextContent (encodeUtf8Text payload) ]
