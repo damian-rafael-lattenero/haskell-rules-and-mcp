@@ -1,0 +1,23 @@
+docs/testing.md
+  f348551e07c405c5 63,242,246-250
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "d9fe12ddc9ab170244e49c72dcd39b351bcea754",
+  "prompts": {
+    "f348551e07c405c5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "16cff891-ee4f-4df2-a5fc-e9701b54cd79",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 349,
+      "total_deletions": 577,
+      "accepted_lines": 349,
+      "overriden_lines": 0
+    }
+  }
+}
