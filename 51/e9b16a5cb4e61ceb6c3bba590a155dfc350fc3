@@ -1,0 +1,39 @@
+mcp-server-haskell/src/HaskellFlows/Tool/CheckModule.hs
+  0288bbe3a485f322 67-77,84-86,91-94,100,134-135,149,151,153-160,166-169
+mcp-server-haskell/src/HaskellFlows/Tool/CheckProject.hs
+  0288bbe3a485f322 59-67,73-75,81-83,102-104,217,220-221,223,225-229,235
+mcp-server-haskell/src/HaskellFlows/Tool/Determinism.hs
+  0288bbe3a485f322 101-105
+mcp-server-haskell/test-e2e/Scenarios/FlowDogfoodReplay.hs
+  0288bbe3a485f322 253,255,259-270,397-474,477,483-485
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheck.hs
+  0288bbe3a485f322 22,148,150-151,156-162,219-230,237,270-273,275-281,324-330,367,372,380-409
+mcp-server-haskell/test/Spec.hs
+  0288bbe3a485f322 80,434-448,2688-2693,2697-2702,3676-3840
+mcp-server-haskell/src/HaskellFlows/Tool/AddModules.hs
+  0288bbe3a485f322 18,73,77-83,86-87,89-96,110-135
+mcp-server-haskell/src/HaskellFlows/Mcp/NextStep.hs
+  0288bbe3a485f322 45,168-182,184-192,484-515,517
+mcp-server-haskell/src/HaskellFlows/Tool/Regression.hs
+  0288bbe3a485f322 128-132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "51e9b16a5cb4e61ceb6c3bba590a155dfc350fc3",
+  "prompts": {
+    "0288bbe3a485f322": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6ad5c5e0-ae3e-4125-bb36-4c701ab5970f",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 3473,
+      "total_deletions": 1160,
+      "accepted_lines": 7502,
+      "overriden_lines": 0
+    }
+  }
+}
