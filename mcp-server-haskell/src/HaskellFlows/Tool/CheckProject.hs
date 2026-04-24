@@ -56,20 +56,31 @@ descriptor =
                       ("Stop on first red module. Default: false (full "
                        <> "coverage preferred over speed)." :: Text)
                   ]
+              , "warnings_block" .= object
+                  [ "type"        .= ("boolean" :: Text)
+                  , "description" .=
+                      ("Forwarded verbatim to each 'ghci_check_module' \
+                       \call. When false, warnings stay informational \
+                       \— the project is considered green as long as \
+                       \there are no compile errors, holes, or property \
+                       \regressions. Default: true (pre-push strictness)." :: Text)
+                  ]
               ]
           , "additionalProperties" .= False
           ]
     }
 
-newtype CheckProjectArgs = CheckProjectArgs
-  { cpFailFast :: Bool
+data CheckProjectArgs = CheckProjectArgs
+  { cpFailFast       :: !Bool
+  , cpWarningsBlock  :: !Bool
   }
   deriving stock (Show)
 
 instance FromJSON CheckProjectArgs where
   parseJSON = withObject "CheckProjectArgs" $ \o -> do
-    ff <- o .:? "fail_fast" .!= False
-    pure CheckProjectArgs { cpFailFast = ff }
+    ff <- o .:? "fail_fast"      .!= False
+    wb <- o .:? "warnings_block" .!= True
+    pure CheckProjectArgs { cpFailFast = ff, cpWarningsBlock = wb }
 
 handle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
@@ -88,7 +99,9 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
           Right body -> do
             let moduleNames = parseExposedModules body
             modulePaths   <- resolveModulePaths pd moduleNames
-            results       <- runChecks ghcSess store pd (cpFailFast args) modulePaths
+            results       <- runChecks ghcSess store pd
+                               (cpFailFast args) (cpWarningsBlock args)
+                               modulePaths
             pure (renderResult results)
 
 --------------------------------------------------------------------------------
@@ -201,20 +214,25 @@ runChecks
   -> Store
   -> ProjectDir
   -> Bool                  -- fail_fast
+  -> Bool                  -- warnings_block — forwarded to ghci_check_module
   -> [(Text, Maybe Text)]
   -> IO [ModuleOutcome]
-runChecks _ _ _ _ [] = pure []
-runChecks ghcSess store pd ff ((nm, mp) : rest) = case mp of
+runChecks _ _ _ _ _ [] = pure []
+runChecks ghcSess store pd ff wb ((nm, mp) : rest) = case mp of
   Nothing ->
-    (MoNotFound nm :) <$> runChecks ghcSess store pd ff rest
+    (MoNotFound nm :) <$> runChecks ghcSess store pd ff wb rest
   Just relPath -> do
-    tr <- CheckModule.handle ghcSess store pd (object ["module_path" .= relPath])
+    tr <- CheckModule.handle ghcSess store pd
+            (object
+              [ "module_path"    .= relPath
+              , "warnings_block" .= wb
+              ])
     let this = MoChecked nm tr
         stop = ff && trIsError tr
     cont <-
       if stop
         then pure (map (MoSkipped . fst) rest)
-        else runChecks ghcSess store pd ff rest
+        else runChecks ghcSess store pd ff wb rest
     pure (this : cont)
 
 --------------------------------------------------------------------------------

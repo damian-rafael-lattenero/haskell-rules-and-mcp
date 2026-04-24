@@ -77,6 +77,7 @@ import HaskellFlows.Mcp.NextStep
 import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescriptor (..), ToolResult (..))
 import HaskellFlows.Tool.Batch (BatchArgs (..))
 import qualified HaskellFlows.Tool.Gate as Gate
+import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import qualified HaskellFlows.Tool.Regression as RegTool
@@ -430,6 +431,21 @@ main = do
       , test "suggest: no roundtrip when sibling shape mismatches" testSuggestRoundtripNegative
       , test "ghc-api: external cabal edit invalidates stanza cache"
                                                                  testMtimeInvalidation
+      , test "add_modules: unwraps stringified JSON-array (BUG-PLUS-08)"
+                                                                 testAddModulesJsonArrayString
+      , test "add_modules: plain comma-split preserved for non-JSON strings"
+                                                                 testAddModulesPlainStringStillWorks
+      , test "check_module: warnings_block=false keeps warnings informational"
+                                                                 testCheckModuleWarningsBlockFalse
+      , test "check_module: warnings_block default is True"      testCheckModuleWarningsBlockDefault
+      , test "quickcheck: summariseStderr filters cabal noise"   testQcSummariseStderrFiltersNoise
+      , test "quickcheck: summariseStderr caps at 1600 chars"    testQcSummariseStderrCaps
+      , test "nextStep: ghci_load with typed-hole warning \8594 ghci_hole"
+                                                                 testNextStepTypedHoleWarn
+      , test "nextStep: ghci_load with non-hole warning \8594 ghci_fix_warning"
+                                                                 testNextStepFixableWarn
+      , test "nextStep: ghci_load with no warnings \8594 ghci_suggest"
+                                                                 testNextStepCleanLoad
       ]
   if and results then exitSuccess else exitFailure
 
@@ -2669,10 +2685,21 @@ testNextStepLoadClean =
 -- | Load with warnings → holes.
 testNextStepLoadWarnings :: IO Bool
 testNextStepLoadWarnings =
+  -- Post-BUG-PLUS-mediocre-3 the 'ghci_load' → 'ghci_hole'
+  -- route is reserved for typed-hole warnings specifically.
+  -- Other (fixable) warnings route to 'ghci_fix_warning'; clean
+  -- loads route to 'ghci_suggest'. This test fixture must
+  -- emit a real typed-hole message so the dispatcher picks
+  -- 'ghci_hole'.
   let payload = A.object
         [ "success"  .= True
         , "errors"   .= ([] :: [Text])
-        , "warnings" .= ["some warning" :: Text]
+        , "warnings" .=
+            [ A.object
+                [ "message"  .= ("Found hole: _ :: Int" :: Text)
+                , "severity" .= ("warning" :: Text)
+                ]
+            ]
         ]
   in pure $ case suggestNext "ghci_load" True payload of
        Just ns -> nsTool ns == "ghci_hole"
@@ -3645,6 +3672,171 @@ testMtimeInvalidation = do
         && isJust afterTouch
         && afterFirst < afterTouch
         )
+
+--------------------------------------------------------------------------------
+-- BUG-PLUS-08: add_modules unwraps stringified JSON arrays
+--------------------------------------------------------------------------------
+
+-- | The real trap: a client-side wrapper stringifies a JSON
+-- array before dispatch, so the server receives
+-- @{"modules": "[\"A\", \"B\"]"}@ — a String whose content is a
+-- rendered array. Earlier versions comma-split on the outer
+-- string and kept the @[@, @]@, @\"@ characters as part of the
+-- "module names", creating files like @src/[\"A\".hs@ on disk.
+-- Post-fix, 'parseModuleList' recognises the JSON-array shape,
+-- unwraps it via 'eitherDecodeStrict', and recurses into the
+-- Array branch — the caller observes the same result either way.
+testAddModulesJsonArrayString :: IO Bool
+testAddModulesJsonArrayString =
+  let stringified = A.object
+        [ "modules" A..= ("[\"Expr.Syntax\", \"Expr.Eval\"]" :: Text) ]
+      quotedNoSpaces = A.object
+        [ "modules" A..= ("[\"Expr.Syntax\",\"Expr.Eval\"]" :: Text) ]
+      indented = A.object
+        [ "modules" A..= ("  [ \"Expr.Syntax\" , \"Expr.Eval\" ] " :: Text) ]
+      ok v = case A.fromJSON v of
+        A.Success (AddModules.AddModulesArgs xs) ->
+          xs == ["Expr.Syntax", "Expr.Eval"]
+        _ -> False
+  in pure (ok stringified && ok quotedNoSpaces && ok indented)
+
+-- | The pre-BUG-PLUS-08 fallback must still work for plain
+-- strings — @"A, B"@ and @"A B"@ continue to normalise to
+-- @[\"A\", \"B\"]@. Guards against the aeson-first path
+-- regressing the commonplace case.
+testAddModulesPlainStringStillWorks :: IO Bool
+testAddModulesPlainStringStillWorks =
+  let csv   = A.object [ "modules" A..= ("A, B" :: Text) ]
+      ws    = A.object [ "modules" A..= ("A B"  :: Text) ]
+      mixed = A.object [ "modules" A..= ("A,\tB\nC" :: Text) ]
+      ok v expected = case A.fromJSON v of
+        A.Success (AddModules.AddModulesArgs xs) -> xs == expected
+        _ -> False
+  in pure (ok csv ["A","B"] && ok ws ["A","B"] && ok mixed ["A","B","C"])
+
+--------------------------------------------------------------------------------
+-- BUG-PLUS-mediocre-1: warnings_block flag on ghci_check_module
+--------------------------------------------------------------------------------
+
+-- | CheckArgs.warnings_block defaults to True (back-compat
+-- with the pre-fix pre-push-gate strictness).
+testCheckModuleWarningsBlockDefault :: IO Bool
+testCheckModuleWarningsBlockDefault =
+  let payload = A.object [ "module_path" A..= ("src/Foo.hs" :: Text) ]
+  in case A.fromJSON payload of
+       A.Success args -> pure (CheckModule.caWarningsBlock args)
+       _              -> pure False
+
+-- | Passing @warnings_block: false@ flips the gate: the field
+-- surfaces on the parsed args, and the handler uses it to stop
+-- warnings from turning overall into False when compile + holes
+-- + properties are green.
+testCheckModuleWarningsBlockFalse :: IO Bool
+testCheckModuleWarningsBlockFalse =
+  let payload = A.object
+        [ "module_path"    A..= ("src/Foo.hs" :: Text)
+        , "warnings_block" A..= False
+        ]
+  in case A.fromJSON payload of
+       A.Success args -> pure (not (CheckModule.caWarningsBlock args))
+       _              -> pure False
+
+--------------------------------------------------------------------------------
+-- BUG-PLUS-mediocre-2: summariseStderr cleans cabal noise, caps length
+--------------------------------------------------------------------------------
+
+-- | Real cabal stderr mixes signal ("Variable not in scope:
+-- foo") with noise ("Resolving dependencies…",
+-- "Build profile: -w ghc-9.12.2", cabal -W banner lines).
+-- The summariser must keep the signal and drop the noise.
+testQcSummariseStderrFiltersNoise :: IO Bool
+testQcSummariseStderrFiltersNoise =
+  let raw = T.unlines
+        [ "Resolving dependencies..."
+        , "Build profile: -w ghc-9.12.2 -O1"
+        , "Warning: The package list for 'hackage' is 15 days old."
+        , ""
+        , "<interactive>:3:17: error: [GHC-76037]"
+        , "    Variable not in scope: prop_trivial"
+        ]
+      summary = QcTool.summariseStderr raw
+  in pure
+      ( "prop_trivial" `T.isInfixOf` summary
+        && "Variable not in scope" `T.isInfixOf` summary
+        && not ("Resolving dependencies" `T.isInfixOf` summary)
+        && not ("Build profile"          `T.isInfixOf` summary)
+      )
+
+-- | A pathological stderr (e.g. a dep-resolve megaflood) must
+-- not blow the JSON-RPC envelope. summariseStderr caps at 1600
+-- chars + appends a '…(truncated)' marker.
+testQcSummariseStderrCaps :: IO Bool
+testQcSummariseStderrCaps =
+  let noisyLine = "<interactive>:1:1: error: [GHC-76037] not in scope — "
+                  <> T.replicate 50 "blah blah "
+      raw     = T.unlines (replicate 60 noisyLine)
+      summary = QcTool.summariseStderr raw
+  in pure
+      ( T.length summary <= 1700  -- 1600 + "…(truncated)" slack
+        && "…(truncated)" `T.isSuffixOf` summary
+      )
+
+--------------------------------------------------------------------------------
+-- BUG-PLUS-mediocre-3: nextStep from ghci_load based on warning kind
+--------------------------------------------------------------------------------
+
+-- | When the 'warnings' array is empty, 'dispatch' proposes
+-- 'ghci_suggest' — the clean-compile follow-up.
+testNextStepCleanLoad :: IO Bool
+testNextStepCleanLoad =
+  let payload = A.object
+        [ "success"  A..= True
+        , "errors"   A..= ([] :: [Text])
+        , "warnings" A..= ([] :: [Text])
+        ]
+  in pure $ case suggestNext "ghci_load" True payload of
+       Just ns -> nsTool ns == "ghci_suggest"
+       Nothing -> False
+
+-- | A typed-hole warning routes to 'ghci_hole' (which knows how
+-- to surface expected types + in-scope fits).
+testNextStepTypedHoleWarn :: IO Bool
+testNextStepTypedHoleWarn =
+  let payload = A.object
+        [ "success"  A..= True
+        , "errors"   A..= ([] :: [Text])
+        , "warnings" A..=
+            [ A.object
+                [ "message" A..=
+                    ("Found hole: _ :: Int\n  Valid hole fits include …"
+                     :: Text)
+                , "severity" A..= ("warning" :: Text)
+                ]
+            ]
+        ]
+  in pure $ case suggestNext "ghci_load" True payload of
+       Just ns -> nsTool ns == "ghci_hole"
+       Nothing -> False
+
+-- | A non-hole warning (unused-imports, type-defaults, …) routes
+-- to 'ghci_fix_warning' — the auto-patch tool.
+testNextStepFixableWarn :: IO Bool
+testNextStepFixableWarn =
+  let payload = A.object
+        [ "success"  A..= True
+        , "errors"   A..= ([] :: [Text])
+        , "warnings" A..=
+            [ A.object
+                [ "message" A..=
+                    ("Defaulting the type variable 'a0' to type 'Integer'"
+                     :: Text)
+                , "severity" A..= ("warning" :: Text)
+                ]
+            ]
+        ]
+  in pure $ case suggestNext "ghci_load" True payload of
+       Just ns -> nsTool ns == "ghci_fix_warning"
+       Nothing -> False
 
 --------------------------------------------------------------------------------
 

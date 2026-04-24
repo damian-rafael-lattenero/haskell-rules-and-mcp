@@ -98,7 +98,11 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
         Nothing -> pure (QcException origExpr "timeout")
         Just (Left (ex :: SomeException)) ->
           pure (QcException origExpr (T.pack (show ex)))
-        Just (Right out) ->
+        Just (Right (out, _err)) ->
+          -- Determinism runs the same property N times; the
+          -- stderr from each run is collapsed into QcUnparsed if
+          -- any invocation fails to compile. Stdout carries the
+          -- QC verdict; stderr is informational for this tool.
           pure (parseQuickCheckOutput origExpr out)
 
     isPassed QcPassed {} = True

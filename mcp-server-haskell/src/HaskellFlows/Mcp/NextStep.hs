@@ -42,6 +42,7 @@ import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.Aeson.Key as Key
 import qualified Data.ByteString.Lazy as BL
 import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
@@ -164,15 +165,31 @@ dispatch name payload = case name of
         (Just (object
             [ "module_path" .= ("<your entry module>" :: Text) ]))
 
-  -- Module loaded clean → propose laws next.
-  "ghci_load" -> case (loadHasWarnings payload, loadHasErrors payload) of
-    (_, True)     -> Nothing  -- errors speak for themselves
-    (True, False) -> Just (simple "ghci_hole"
-      "The load reported warnings — if they are typed holes, \
-      \'ghci_hole' gives you their expected types and in-scope \
-      \fits in one call."
+  -- Module loaded: dispatch on error + warning shape.
+  --   * errors present    → Nothing (errors speak for themselves)
+  --   * only typed holes  → ghci_hole (types + in-scope fits)
+  --   * other warnings    → ghci_fix_warning (it auto-patches
+  --                          unused-imports, type-defaults,
+  --                          incomplete-uni-patterns, redundant-
+  --                          constraints; rich error-category
+  --                          coverage that the agent would
+  --                          otherwise hand-fix)
+  --   * clean compile     → ghci_suggest for QuickCheck laws
+  "ghci_load" -> case (loadWarningKind payload, loadHasErrors payload) of
+    (_,            True) -> Nothing
+    (LWTypedHoles, False) -> Just (simple "ghci_hole"
+      "The load reported typed-hole warnings — 'ghci_hole' gives \
+      \you their expected types and in-scope fits in one call."
       Nothing)
-    (False, False) -> Just (simple "ghci_suggest"
+    (LWFixable,    False) -> Just (simple "ghci_fix_warning"
+      "The load reported warnings the fix-warning tool can auto-\
+      \patch (unused import, type-defaults, incomplete-uni-pattern, \
+      \redundant constraint, …). Feed the first warning's \
+      \file+line+hint in; it returns the rewritten file as a patch \
+      \the agent reviews before writing."
+      (Just (object
+          [ "module_path" .= ("<same module you just loaded>" :: Text) ])))
+    (LWNone,       False) -> Just (simple "ghci_suggest"
       "Module compiles clean. Ask 'ghci_suggest' for QuickCheck \
       \laws its type signatures imply; feed the High-confidence \
       \ones into 'ghci_quickcheck'."
@@ -464,12 +481,40 @@ intField k (Object o) = case KeyMap.lookup (Key.fromText k) o of
   _               -> Nothing
 intField _ _ = Nothing
 
--- | True if the payload's @warnings@ array is non-empty.
+-- | Classify the 'warnings' field of a 'ghci_load' response.
+-- Drives the fix_warning-vs-hole-vs-suggest fork in 'dispatch'.
+data LoadWarningKind
+  = LWNone          -- ^ no warnings
+  | LWTypedHoles    -- ^ every warning is a typed-hole
+  | LWFixable       -- ^ at least one warning is NOT a typed-hole,
+                    --   and is fixable by ghci_fix_warning
+  deriving (Eq, Show)
+
+loadWarningKind :: Value -> LoadWarningKind
+loadWarningKind (Object o) = case KeyMap.lookup "warnings" o of
+  Just (Array xs)
+    | null xs                      -> LWNone
+    | all isTypedHoleWarning xs    -> LWTypedHoles
+    | otherwise                    -> LWFixable
+  _                                -> LWNone
+loadWarningKind _ = LWNone
+
+-- | A warning entry counts as a typed-hole iff its 'message' text
+-- mentions "typed hole". GHC's diagnostic wording is stable on
+-- this phrase and is what 'ghci_hole' pattern-matches internally.
+isTypedHoleWarning :: Value -> Bool
+isTypedHoleWarning (Object o) = case KeyMap.lookup "message" o of
+  Just (String s) ->
+    "typed hole" `T.isInfixOf` T.toLower s
+    || "found hole" `T.isInfixOf` T.toLower s
+  _ -> False
+isTypedHoleWarning _ = False
+
+-- | Kept for callers that only need \"is there any warning at
+-- all\" semantics (pre-LWFixable code paths). New 'ghci_load'
+-- dispatch uses 'loadWarningKind' instead.
 loadHasWarnings :: Value -> Bool
-loadHasWarnings (Object o) = case KeyMap.lookup "warnings" o of
-  Just (Array a) -> not (null a)
-  _              -> False
-loadHasWarnings _ = False
+loadHasWarnings v = loadWarningKind v /= LWNone
 
 loadHasErrors :: Value -> Bool
 loadHasErrors (Object o) = case KeyMap.lookup "errors" o of

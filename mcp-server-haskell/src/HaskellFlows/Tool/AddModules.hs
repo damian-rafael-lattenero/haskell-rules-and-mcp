@@ -15,6 +15,7 @@ import Data.Aeson.Types (Parser, parseEither)
 import Data.List (foldl')
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
@@ -69,20 +70,30 @@ instance FromJSON AddModulesArgs where
 
 -- | Parse the @modules@ field of an 'AddModulesArgs' payload.
 --
--- Accepts two forms:
+-- Accepts three forms:
 --
 --   * JSON array of strings — the documented, canonical shape.
 --     @[\"Expr.Syntax\", \"Expr.Eval\"]@.
+--   * Single JSON string whose CONTENT is itself a rendered JSON
+--     array — e.g. @\"[\\\"Expr.Syntax\\\", \\\"Expr.Eval\\\"]\"@.
+--     Deferred-tool wrappers sometimes produce this shape by
+--     JSON-encoding the array twice. We try 'Data.Aeson.decode'
+--     on it first and recurse on the result — so the caller
+--     gets the same answer whether the array was passed
+--     natively or stringified.
 --   * Single JSON string — split on commas and/or whitespace.
 --     @\"Expr.Syntax, Expr.Eval\"@ or @\"Expr.Syntax Expr.Eval\"@
---     both normalise to the same two-module list.
+--     both normalise to the same two-module list. This is the
+--     last-resort fallback for plain-text input.
 --
--- Motivation: some MCP clients (observed in Claude for Desktop's
--- deferred-tool path) serialize array-valued arguments as strings
--- before dispatch, which then hit the server as 'String' and fail
--- the array parser. Accepting the string form as a fallback
--- eliminates an entire class of "my tool call is rejected but the
--- JSON looks fine" user reports.
+-- Motivation: BUG-PLUS-08 — Claude for Desktop's deferred-tool
+-- path serialises array arguments as the RENDERED JSON text
+-- (with brackets AND quotes), not as a comma-separated list.
+-- Earlier versions accepted strings via naive comma-split,
+-- which kept the @[@, @]@ and @\"@ delimiters as part of the
+-- "module names", producing files like @src/[\\\"Expr/Syntax\\\".hs@
+-- and corrupting the @.cabal@. The aeson-first path recognises
+-- and unwraps the legitimate shape cleanly.
 --
 -- Empty or whitespace-only entries are filtered. Empty input
 -- produces an empty list — the handler decides whether that's an
@@ -96,11 +107,32 @@ parseModuleList (Array xs) =
     parseString other      =
       fail ("expected module-name string, got: " <> show other)
 parseModuleList (String s) =
-  pure
-    . filter (not . T.null)
-    . map T.strip
-    . T.split (\c -> c == ',' || c == ' ' || c == '\t' || c == '\n')
-    $ s
+  let trimmed   = T.strip s
+      looksJson = case T.uncons trimmed of
+                    Just ('[', _) -> "]" `T.isSuffixOf` trimmed
+                    _             -> False
+  in if looksJson
+       then case eitherDecodeStrict (encodeUtf8 trimmed) of
+              Right (Array xs) ->
+                -- Recurse via the Array branch to reuse the
+                -- strict-string enforcement; anything else in
+                -- the array falls through to 'fail'.
+                parseModuleList (Array xs)
+              Right _ ->
+                -- Decoded to something that's not an array;
+                -- fall back to the comma/whitespace splitter on
+                -- the ORIGINAL string so we don't hide the
+                -- operator's intent.
+                pure (splitPlain s)
+              Left _ ->
+                -- Malformed inner JSON; same fallback as above.
+                pure (splitPlain s)
+       else pure (splitPlain s)
+  where
+    splitPlain =
+        filter (not . T.null)
+      . map T.strip
+      . T.split (\c -> c == ',' || c == ' ' || c == '\t' || c == '\n')
 parseModuleList other =
   fail ("modules must be an array of strings or a comma-/whitespace-\
         \separated string; got: " <> show other)

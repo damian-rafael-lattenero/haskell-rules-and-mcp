@@ -125,7 +125,11 @@ runOne ghcSess sp = do
         Nothing                      -> pure (QcException expr "timeout")
         Just (Left (ex :: SomeException)) ->
           pure (QcException expr (T.pack (show ex)))
-        Just (Right out)             ->
+        Just (Right (out, _err))     ->
+          -- Regression replay ignores stderr: if a stored property
+          -- fails to compile the right escalation is "surface it
+          -- as QcUnparsed and let the caller re-run via
+          -- ghci_quickcheck to see the hint".
           pure (parseQuickCheckOutput expr out)
   pure Replay { rpStored = sp, rpResult = qr }
 

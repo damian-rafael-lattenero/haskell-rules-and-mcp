@@ -250,13 +250,24 @@ runFlow c projectDir = do
     "add_modules · JSON array form succeeds"
     addR1 "success" (Bool True)
 
-  -- String fallback — the shape Claude for Desktop's wrapper
-  -- sometimes produces.
+  -- Comma-separated string fallback.
   addR2 <- Client.callTool c "ghci_add_modules"
-             (object [ "modules" .= ("Expr.Simplify, Expr.Pretty" :: Text) ])
+             (object [ "modules" .= ("Expr.Simplify" :: Text) ])
   cStringForm <- liveCheck $ checkJsonField
     "add_modules · comma-separated string form succeeds"
     addR2 "success" (Bool True)
+
+  -- BUG-PLUS-08: stringified JSON-array shape. Claude for
+  -- Desktop's deferred-tool path emits this when the client
+  -- sent @modules: ["Expr.Pretty"]@ — the wrapper JSON-encodes
+  -- the array into a string before dispatch. The handler must
+  -- unwrap and land a proper @Expr.Pretty@ module (not
+  -- @[\"Expr.Pretty\"]@).
+  addR3 <- Client.callTool c "ghci_add_modules"
+             (object [ "modules" .= ("[\"Expr.Pretty\"]" :: Text) ])
+  cJsonStringForm <- liveCheck $ checkJsonField
+    "add_modules · stringified JSON-array unwraps cleanly (BUG-PLUS-08)"
+    addR3 "success" (Bool True)
   stepFooter 2 t1
 
   ----------------------------------------------------------------
@@ -383,14 +394,95 @@ runFlow c projectDir = do
      \Raw: " <> truncRender sugR)
   stepFooter 7 t6
 
+  ----------------------------------------------------------------
+  -- (8) check_project warnings_block: strict vs informational.
+  -- Induce a type-defaults warning in Pretty.hs (harmless but
+  -- matches -Wall), then prove:
+  --   * warnings_block=true  → 'overall' = false (strict gate)
+  --   * warnings_block=false → 'overall' = true  (warnings
+  --     surface in diagnostics but don't block)
+  -- BUG-PLUS-mediocre-1 coverage.
+  ----------------------------------------------------------------
+  t7 <- stepHeader 8 "check_project · warnings_block (strict vs lax)"
+  cpStrict <- Client.callTool c "ghci_check_project"
+                (object [ "warnings_block" .= True ])
+  cpLax <- Client.callTool c "ghci_check_project"
+                (object [ "warnings_block" .= False ])
+  let strictBlocks = case lookupField "failed" cpStrict of
+        Just (Number n) -> round n >= (1 :: Int)
+        _               -> False
+      laxPasses    = case lookupField "overall" cpLax of
+        Just (Bool True) -> True
+        _                -> False
+  cWBstrict <- liveCheck $ checkPure
+    "check_project · warnings_block=true blocks on warnings"
+    strictBlocks
+    ("Strict mode should fail when warnings exist. Raw: "
+     <> truncRender cpStrict)
+  cWBlax <- liveCheck $ checkPure
+    "check_project · warnings_block=false passes (informational)"
+    laxPasses
+    ("Lax mode should pass when only warnings are present. Raw: "
+     <> truncRender cpLax)
+  stepFooter 8 t7
+
+  ----------------------------------------------------------------
+  -- (9) ghci_quickcheck with a BROKEN property — verify that the
+  -- 'hint' field now carries the compile error instead of leaving
+  -- raw="" and no explanation. BUG-PLUS-mediocre-2 coverage.
+  ----------------------------------------------------------------
+  t8 <- stepHeader 9 "quickcheck · broken property surfaces stderr as hint"
+  brokenR <- Client.callTool c "ghci_quickcheck"
+               (object
+                 [ "property" .= ("nonexistent_property_xyzzy" :: Text)
+                 , "module"   .= ("src/Expr/Simplify.hs"       :: Text)
+                 ])
+  cBrokenFails <- liveCheck $ checkJsonField
+    "quickcheck · broken property returns success=false"
+    brokenR "success" (Bool False)
+  cBrokenHint <- liveCheck $ checkPure
+    "quickcheck · response carries a non-empty 'hint' on unparsed"
+    (case lookupField "hint" brokenR of
+       Just (String s) -> not (T.null (T.strip s))
+       _               -> False)
+    ("Expected the response to carry a 'hint' string pulled from \
+     \cabal v2-repl's stderr. Without it, a QcUnparsed verdict \
+     \with raw=\"\" leaves the agent with zero information about \
+     \why the property failed to compile. Raw: "
+     <> truncRender brokenR)
+  stepFooter 8 t8
+
+  ----------------------------------------------------------------
+  -- (10) ghci_load on a file with a type-defaults warning — the
+  -- response's nextStep must now propose ghci_fix_warning (not
+  -- ghci_hole, which was the pre-fix catch-all). BUG-PLUS-
+  -- mediocre-3 coverage.
+  ----------------------------------------------------------------
+  t9 <- stepHeader 10 "ghci_load warnings → nextStep = ghci_fix_warning"
+  loadForWarnR <- Client.callTool c "ghci_load"
+                    (object [ "module_path" .= ("src/Expr/Pretty.hs" :: Text) ])
+  cNextStepFixWarn <- liveCheck $ checkPure
+    "ghci_load · nextStep.tool = 'ghci_fix_warning' when non-hole warnings present"
+    (case lookupField "nextStep" loadForWarnR of
+       Just (Object ns) -> case KeyMap.lookup (Key.fromText "tool") ns of
+         Just (String s) -> s == "ghci_fix_warning"
+         _               -> False
+       _                -> False)
+    ("Warnings in the load response should route to fix_warning, \
+     \not fall through to ghci_hole. Raw: " <> truncRender loadForWarnR)
+  stepFooter 10 t9
+
   pure
     [ cSwitchOk, cSwitchCur
-    , cArrayForm, cStringForm
+    , cArrayForm, cStringForm, cJsonStringForm
     , cNoFalseDup, cNoHsSourceDirsAsDep, cNoImportAsDep
     , cLoadOk
     , cCheckCount, cCheckNoCompileErr
     , cArbSuccess, cArbSized, cArbHalves
     , cSugSuccess, cSugRoundtrip
+    , cWBstrict, cWBlax
+    , cBrokenFails, cBrokenHint
+    , cNextStepFixWarn
     ]
 
 --------------------------------------------------------------------------------

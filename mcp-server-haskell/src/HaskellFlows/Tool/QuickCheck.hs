@@ -19,6 +19,7 @@ module HaskellFlows.Tool.QuickCheck
     -- * Pure helpers exposed for unit tests
   , chooseStoreModule
   , isSimpleIdent
+  , summariseStderr
   ) where
 
 import Control.Applicative ((<|>))
@@ -144,15 +145,21 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
       case mRes of
         Nothing ->
           pure (renderResult
-            (QcException prop "timeout: property exceeded 30s budget"))
+            (QcException prop "timeout: property exceeded 30s budget") Nothing)
         Just (Left (ex :: SomeException)) ->
-          pure (renderResult (QcException prop (T.pack (show ex))))
-        Just (Right out) -> do
+          pure (renderResult (QcException prop (T.pack (show ex))) Nothing)
+        Just (Right (out, stderrText)) -> do
           let qr = parseQuickCheckOutput prop out
           case qr of
             QcPassed _ _ -> save store prop loadHint
             _            -> pure ()
-          pure (renderResult qr)
+          -- Surface stderr on parse-failure so the caller sees
+          -- 'Variable not in scope: …' instead of a silent
+          -- "raw: \"\", state: unparsed".
+          let hintForAgent = case qr of
+                QcUnparsed {} -> Just (summariseStderr stderrText)
+                _             -> Nothing
+          pure (renderResult qr hintForAgent)
 
 -- | Resolve a property name to the source file it was defined in
 -- by asking the GHC API. Returns 'Nothing' when the input isn't a
@@ -209,15 +216,25 @@ resolvePropertyModule ghcSess nm
       UnhelpfulSpan _ -> Nothing
 
 -- | Run a QuickCheck property via @cabal v2-repl@ on the project's
--- test-suite target. Returns the raw @Result.output@ text so the
--- existing 'parseQuickCheckOutput' can consume it unchanged.
+-- test-suite target. Returns @(qcOutput, compileStderr)@:
+--
+--   * @qcOutput@  — the raw @Result.output@ text between our
+--     sentinels. Fed to 'parseQuickCheckOutput' for pass/fail
+--     classification. Empty when the load or compile failed
+--     before QC could run.
+--   * @compileStderr@ — the captured stderr from cabal v2-repl.
+--     Previously discarded ('@_errStr@'); now bubbled up so the
+--     handler can surface it as a 'hint' when parseQuickCheck
+--     returns 'Unparsed'. Closes BUG-PLUS-09: a property that
+--     references an out-of-scope name used to produce a
+--     @raw: "", state: "unparsed"@ response with no explanation.
 --
 -- The statement we pipe into repl is the same shape as the
 -- in-process Wave-3 one (show Result.output) — the only difference
 -- is the execution vehicle. cabal invokes ghci with the correct
 -- per-stanza flags, resolves deps (QuickCheck included) natively,
 -- and returns clean.
-runQuickCheckViaCabalRepl :: ProjectDir -> Maybe Text -> Text -> IO Text
+runQuickCheckViaCabalRepl :: ProjectDir -> Maybe Text -> Text -> IO (Text, Text)
 runQuickCheckViaCabalRepl pd mModule safeProp = do
   let loadDirective = case mModule of
         Just modPath | not (T.null modPath) ->
@@ -250,10 +267,18 @@ runQuickCheckViaCabalRepl pd mModule safeProp = do
              , Proc.std_out = Proc.CreatePipe
              , Proc.std_err = Proc.CreatePipe
              }
-  (ec, outStr, _errStr) <- Proc.readCreateProcessWithExitCode cp input
+  (ec, outStr, errStr) <- Proc.readCreateProcessWithExitCode cp input
+  let errText   = T.pack errStr
+      stdoutT   = T.pack outStr
+      qcSlice   = extractQcOutput stdoutT
   case ec of
-    ExitSuccess    -> pure (extractQcOutput (T.pack outStr))
-    ExitFailure _c -> pure (T.pack outStr)
+    ExitSuccess    -> pure (qcSlice, errText)
+    ExitFailure _c ->
+      -- Even on a non-zero exit, the repl may have emitted the
+      -- sentinels (e.g. the 'let qcArgs = ...' line failed after
+      -- QC already ran). Prefer the sliced output when present;
+      -- otherwise hand back the full stdout alongside stderr.
+      pure (if T.null qcSlice then stdoutT else qcSlice, errText)
 
 -- | Slice the chatty output between our sentinel markers. The
 -- rest of cabal's chatter (ghci prompt, module-load lines,
@@ -296,8 +321,13 @@ isSimpleIdent t = case T.uncons t of
 -- response shaping
 --------------------------------------------------------------------------------
 
-renderResult :: QuickCheckResult -> ToolResult
-renderResult qr =
+-- | Shape the tool response. The 'Maybe Text' is an optional
+-- @hint@ that only appears on 'QcUnparsed' (compile failed
+-- upstream of QC). It carries the condensed stderr from cabal
+-- v2-repl so the agent can read the error message directly
+-- instead of staring at an empty @raw@ field.
+renderResult :: QuickCheckResult -> Maybe Text -> ToolResult
+renderResult qr mHint =
   let payload = case qr of
         QcPassed p n ->
           object
@@ -334,12 +364,12 @@ renderResult qr =
                               \custom generator." :: Text)
             ]
         QcUnparsed p raw ->
-          object
+          object $
             [ "success"  .= False
             , "state"    .= ("unparsed" :: Text)
             , "property" .= p
             , "raw"      .= raw
-            ]
+            ] <> maybeHintPair mHint
       isErr = case qr of
         QcPassed _ _ -> False
         _            -> True
@@ -347,6 +377,36 @@ renderResult qr =
        { trContent = [ TextContent (encodeUtf8Text payload) ]
        , trIsError = isErr
        }
+  where
+    -- Attach the 'hint' key ONLY when the stderr actually carried
+    -- a diagnostic; empty or whitespace-only stderr is worse than
+    -- nothing (suggests we have an explanation when we don't).
+    maybeHintPair (Just h) | not (T.null (T.strip h)) = [ "hint" .= h ]
+    maybeHintPair _                                    = []
+
+-- | Compress the v2-repl stderr into the useful bits: drop
+-- cabal's own banner lines ("Warning: …", "[build-profile]",
+-- …) and cap the payload so the tool response stays JSON-RPC-
+-- friendly. Agents get the first GHC error plus at most a few
+-- lines of context.
+summariseStderr :: Text -> Text
+summariseStderr raw =
+  let ls           = T.lines raw
+      informative  = filter isInformative ls
+      kept         = take 20 informative
+      joined       = T.intercalate "\n" kept
+      capped       = T.strip joined
+  in if T.length capped > 1600
+       then T.take 1600 capped <> "\n…(truncated)"
+       else capped
+  where
+    isInformative ln =
+      let l = T.toLower (T.strip ln)
+      in not (T.null l)
+         && not ("warning:" `T.isPrefixOf` l
+                 && " -w" `T.isInfixOf` l)  -- cabal's own "-W" banner
+         && not ("resolving dependencies" `T.isPrefixOf` l)
+         && not ("build profile" `T.isPrefixOf` l)
 
 errorResult :: Text -> ToolResult
 errorResult msg =

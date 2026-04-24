@@ -64,26 +64,40 @@ descriptor =
                       ("Path to the module to check, relative to the \
                        \project directory." :: Text)
                   ]
+              , "warnings_block" .= object
+                  [ "type"        .= ("boolean" :: Text)
+                  , "description" .=
+                      ("When true (default), '-Wall' warnings count \
+                       \against 'overall' — the strict pre-push gate. \
+                       \Set false during early iteration to keep \
+                       \warnings informational; they still appear in \
+                       \'diagnostics.warnings' but don't fail the \
+                       \gate. Errors and hole/regression gates are \
+                       \always blocking." :: Text)
+                  ]
               ]
           , "required"             .= ["module_path" :: Text]
           , "additionalProperties" .= False
           ]
     }
 
-newtype CheckArgs = CheckArgs
-  { caModulePath :: Text
+data CheckArgs = CheckArgs
+  { caModulePath    :: !Text
+  , caWarningsBlock :: !Bool
   }
   deriving stock (Show)
 
 instance FromJSON CheckArgs where
-  parseJSON = withObject "CheckArgs" $ \o ->
-    CheckArgs <$> o .: "module_path"
+  parseJSON = withObject "CheckArgs" $ \o -> do
+    mp <- o .:  "module_path"
+    wb <- o .:? "warnings_block" .!= True
+    pure CheckArgs { caModulePath = mp, caWarningsBlock = wb }
 
 handle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
-  Right (CheckArgs raw) -> case mkModulePath pd (T.unpack raw) of
+  Right (CheckArgs raw warnBlock) -> case mkModulePath pd (T.unpack raw) of
     Left e -> pure (errorResult (formatPathError e))
     Right _ -> do
       invalidateLoadCache ghcSess
@@ -117,7 +131,8 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
                     _            -> True
                 ]
           pure $ renderResult
-            raw compileOk errors warnings holes regressions (length relevant)
+            raw compileOk errors warnings holes regressions
+            (length relevant) warnBlock
 
 --------------------------------------------------------------------------------
 -- response shaping
@@ -131,16 +146,27 @@ renderResult
   -> [a]
   -> [(StoredProperty, QuickCheckResult)]
   -> Int
+  -> Bool    -- ^ warnings_block — True (default) keeps warnings blocking.
   -> ToolResult
-renderResult mp compileOk errs warns holes regressions totalProps =
+renderResult mp compileOk errs warns holes regressions totalProps warnBlock =
   let gateCompile    = gate compileOk     "module compiles strictly"
-      gateNoWarnings = gate (null warns)  "no warnings (-Wall clean)"
+      gateNoWarnings = gate (null warns || not warnBlock) $
+        if null warns
+          then "no warnings (-Wall clean)"
+          else if warnBlock
+            then T.pack (show (length warns)) <> " warning(s) (blocking — "
+               <> "pass warnings_block=false to keep iterating)"
+            else T.pack (show (length warns))
+              <> " warning(s) (informational; warnings_block=false)"
       gateNoHoles    = gate (null holes)  "no deferred typed holes"
       gateProps      = gate (null regressions) $
         case totalProps of
           0 -> "no stored properties for this module (nothing to regress)"
           _ -> T.pack (show totalProps) <> " stored properties pass"
-      overall = compileOk && null warns && null holes && null regressions
+      overall = compileOk
+             && (null warns || not warnBlock)
+             && null holes
+             && null regressions
       payload =
         object
           [ "success"    .= overall
