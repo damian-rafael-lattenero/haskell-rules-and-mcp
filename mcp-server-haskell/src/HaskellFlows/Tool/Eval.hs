@@ -227,29 +227,27 @@ evalShowPure expr = do
   let s = unsafeCoerce hv :: String
   length s `seq` pure (Just (T.pack s))
 
--- | Augment the interactive context with the "convenience" imports
--- that subprocess GHCi would have had visible by default. 'setContext'
--- established by 'loadForTarget' holds Prelude plus the home modules;
--- eval users commonly reach for qualified IO (@System.IO.writeFile@,
--- @System.IO.readFile@) or timing primitives
--- (@Control.Concurrent.threadDelay@) — expose those by appending
--- 'System.IO' + IO-adjacent modules to the import set. Idempotent:
--- 'setContext' itself dedupes on the underlying ModuleName —
--- duplicate imports don't accumulate across repeated calls.
+-- | Fallback baseline for bare scaffolds with no source modules yet
+-- (so 'ApiSession.projectInteractiveImports' has nothing to derive
+-- from). The real cure for "module not in scope" lives at load time
+-- in 'ApiSession' — each of the three load paths now propagates
+-- every @import …@ declaration from the project's own sources into
+-- the interactive context verbatim, qualified + aliased and all.
+--
+-- This list covers:
+--   * 'Prelude' — so the 'show'-wrapped fast path ('Prelude.show …')
+--     compiles even when the project is empty, or 'withStanzaFlags'
+--     left the context in an Prelude-less state.
+--   * 'System.IO' / 'Data.List' / 'Control.Monad' / 'Control.Concurrent'
+--     — commonly-reached-for modules in eval one-liners that a
+--     bare-scaffold project (no source files yet) wouldn't auto-import.
+--
+-- With auto-import in place, this list is expected to *shrink* over
+-- time: every scenario that motivates an addition here is a sign the
+-- auto-import path missed a case, not a sign the list should grow.
 augmentEvalContext :: Ghc ()
 augmentEvalContext = do
   existing <- getContext
-  -- Prelude first: when we arrive here after a 'withStanzaFlags'
-  -- that had to re-apply (because the previous load failed and
-  -- the env cache was empty), the interactive context is fresh —
-  -- zero imports — and 'compileExpr "Prelude.show ..."' fails
-  -- with "No module named 'Prelude' is imported".
-  --
-  -- 'Control.Concurrent' is in the extras because qualified
-  -- references like @Control.Concurrent.threadDelay@ and @forkIO@
-  -- need the module imported (GHC requires the module be brought
-  -- into scope even for a fully-qualified reference). Tested by
-  -- 'Scenarios.FlowTimeoutEnforcement'.
   let extras =
         [ "Prelude"
         , "System.IO"

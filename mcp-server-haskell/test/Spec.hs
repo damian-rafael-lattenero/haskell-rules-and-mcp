@@ -287,6 +287,7 @@ main = do
       , test "server wraps runTool in timeout"      testServerOuterTimeout
       , test "ghci_eval exposes Control.Concurrent"  testEvalContextHasControlConcurrent
       , test "ghci_eval enforces inner per-call budget" testEvalInnerTimeoutBudget
+      , test "load paths derive interactive imports from source" testLoadAutoImports
       , test "initialize emits instructions field"  testInitializeEmitsInstructions
       , test "instructions mention key tools+flows" testInstructionsMentionCore
       , test "nextStep: create_project -> deps"     testNextStepCreateProject
@@ -2931,6 +2932,30 @@ testEvalInnerTimeoutBudget = do
       && T.isInfixOf "resetHscEnvInPlace" code
       && T.isInfixOf "\"error_kind\" .= (\"timeout\" :: Text)" code
       && T.isInfixOf "SomeAsyncException" code
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- | Cure regression: the interactive context must be derived from
+-- the project's own @import …@ declarations, not from a hardcoded
+-- allowlist. Each of the three in-process load paths ('autoLoad',
+-- 'loadProjectWithFlavour', 'loadForTarget') must call
+-- 'projectInteractiveImports' so qualified + aliased imports in
+-- source files ('import qualified Data.Map.Strict as Map') reach
+-- 'ghci_eval' verbatim. Without this, every new stdlib module
+-- a scenario reaches for would require editing 'augmentEvalContext'.
+testLoadAutoImports :: IO Bool
+testLoadAutoImports = do
+  src <- TIO.readFile "src/HaskellFlows/Ghc/ApiSession.hs"
+  let codeLines = filter (not . isDocLine) (T.lines src)
+      code      = T.unlines codeLines
+      -- Three setContext call sites, each must splice in projImports
+      callSites = T.count "projImports" code
+  pure $ T.isInfixOf "parseImportDecl" code
+      && T.isInfixOf "projectInteractiveImports" code
+      && T.isInfixOf "projectExternalImports" code
+      && T.isInfixOf "handleSourceError" code
+      && callSites >= 3
   where
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s

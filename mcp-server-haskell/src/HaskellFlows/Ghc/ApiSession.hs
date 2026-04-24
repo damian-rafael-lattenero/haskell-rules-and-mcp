@@ -68,6 +68,7 @@ import qualified Data.Foldable
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC
@@ -84,6 +85,8 @@ import GHC
   , mkModuleName
   , ms_mod
   , moduleName
+  , handleSourceError
+  , parseImportDecl
   , runGhc
   , setContext
   , setSession
@@ -361,13 +364,90 @@ autoLoadProject pd = do
       setTargets targets
       _ <- load LoadAllTargets
       mg <- getModuleGraph
-      let modImports =
+      let homeImports =
             [ IIDecl (simpleImportDecl (moduleName (ms_mod ms)))
             | ms <- mgModSummaries mg
             ]
           preludeImport =
             IIDecl (simpleImportDecl (mkModuleName "Prelude"))
-      setContext (preludeImport : modImports)
+      -- Auto-import: propagate each source module's 'import …'
+      -- declarations into the interactive context verbatim, so
+      -- qualified + aliased imports ('import qualified Data.Map as Map')
+      -- reach 'ghci_eval' with the project's own naming. See
+      -- 'projectInteractiveImports'.
+      projImports <- projectInteractiveImports searchDirs
+      setContext (preludeImport : homeImports ++ projImports)
+
+-- | Derive a list of 'InteractiveImport's from the project's own
+-- @import …@ declarations, preserving qualifier + alias (so
+-- @import qualified Data.Map.Strict as Map@ in the project's source
+-- yields the same shape in the interactive context, and
+-- @ghci_eval "Map.empty"@ resolves as the user expects).
+--
+-- Motivation: 'augmentEvalContext'\'s hardcoded allowlist was a drift
+-- magnet — each new scenario that reaches for a stdlib module the
+-- list didn't anticipate would fail "No module named X is imported"
+-- at compile time (FlowTimeoutEnforcement hit this for
+-- 'Control.Concurrent'; FlowExprEvaluatorDogfood pin #3 still hits
+-- it for 'Data.Map.Strict as Map'). This helper replaces curation-
+-- by-hand with derivation-from-source.
+--
+-- Implementation uses 'parseImportDecl' — GHC's own REPL-facing
+-- parser for a single import line — rather than the full
+-- 'parseModule' machinery:
+--
+--   * Cheaper (~ms per line, no CPP preprocessing).
+--   * Handles qualified / aliased / hiding / package-qualified
+--     imports by delegating to GHC's parser verbatim.
+--   * Tolerates malformed or CPP-guarded lines by catching the
+--     'SourceError'-class exception per line and skipping it.
+--
+-- Multi-line imports with parenthesised item lists still parse
+-- correctly from their first line because we only need the module
+-- name to come into scope — specific items are resolvable once the
+-- module is imported unqualified.
+projectExternalImports :: [FilePath] -> IO [String]
+projectExternalImports dirs = do
+  files <- enumerateHaskellSources dirs
+  linesBySrc <- traverse extractImportLinesIO files
+  pure (uniq (concat linesBySrc))
+  where
+    uniq = Set.toList . Set.fromList
+
+-- | Read one .hs file and return each line that opens with
+-- @import @ (the next char is whitespace or the next token).
+-- Best-effort; errors reading the file surface as @[]@.
+extractImportLinesIO :: FilePath -> IO [String]
+extractImportLinesIO fp = do
+  e <- try @SomeException (T.pack <$> readFile fp)
+  case e of
+    Left  _    -> pure []
+    Right body -> pure (importLines body)
+  where
+    importLines txt =
+      [ T.unpack (T.strip line)
+      | line <- T.lines txt
+      , "import " `T.isPrefixOf` T.stripStart line
+      ]
+
+-- | Lift 'projectExternalImports' into the 'Ghc' monad and parse each
+-- extracted line into an 'InteractiveImport'. Lines that don't parse
+-- (CPP, exotic extensions, …) are silently dropped — the convenience
+-- layer in 'augmentEvalContext' still covers the Prelude-plus-stdlib
+-- baseline.
+projectInteractiveImports :: [FilePath] -> Ghc [InteractiveImport]
+projectInteractiveImports dirs = do
+  rawLines <- liftIO (projectExternalImports dirs)
+  foldr step (pure []) rawLines
+  where
+    step ln acc = do
+      mIdecl <- handleSourceError (\_ -> pure Nothing)
+                                  (Just <$> parseImportDecl ln)
+      rest <- acc
+      case mIdecl of
+        Just idecl -> pure (IIDecl idecl : rest)
+        Nothing    -> pure rest
+
 
 enumerateHaskellSources :: [FilePath] -> IO [FilePath]
 enumerateHaskellSources = fmap concat . traverse enumerateOne
@@ -450,13 +530,14 @@ loadProjectWithFlavour pd flavour = do
       setTargets targets
       ok <- load LoadAllTargets
       mg <- getModuleGraph
-      let modImports =
+      let homeImports =
             [ IIDecl (simpleImportDecl (moduleName (ms_mod ms)))
             | ms <- mgModSummaries mg
             ]
           preludeImport =
             IIDecl (simpleImportDecl (mkModuleName "Prelude"))
-      setContext (preludeImport : modImports)
+      projImports <- projectInteractiveImports searchDirs
+      setContext (preludeImport : homeImports ++ projImports)
       pure (case ok of { Succeeded -> True; _ -> False })
 
 -- | Push a 'LogAction' wrapper onto the session's 'Logger' that
@@ -774,13 +855,14 @@ loadForTarget sess tgt flavour = do
           -- like 'exprType "double"' or 'getNamesInScope' after a
           -- successful load would see an empty scope.
           mg <- getModuleGraph
-          let modImports =
+          let homeImports =
                 [ IIDecl (simpleImportDecl (moduleName (ms_mod ms)))
                 | ms <- mgModSummaries mg
                 ]
               preludeImport =
                 IIDecl (simpleImportDecl (mkModuleName "Prelude"))
-          setContext (preludeImport : modImports)
+          projImports <- projectInteractiveImports searchDirs
+          setContext (preludeImport : homeImports ++ projImports)
           pure (case ok of { Succeeded -> True; _ -> False })
       success <- case eRes :: Either SomeException Bool of
         Left ex -> do
