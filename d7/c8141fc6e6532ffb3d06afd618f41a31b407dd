@@ -1,0 +1,25 @@
+mcp-server-haskell/test-e2e/Scenarios/FlowDogfoodUxFixes.hs
+  f348551e07c405c5 122
+scripts/ci-local.sh
+  f348551e07c405c5 30-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "d7c8141fc6e6532ffb3d06afd618f41a31b407dd",
+  "prompts": {
+    "f348551e07c405c5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "16cff891-ee4f-4df2-a5fc-e9701b54cd79",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 8011,
+      "total_deletions": 7,
+      "accepted_lines": 8445,
+      "overriden_lines": 0
+    }
+  }
+}
