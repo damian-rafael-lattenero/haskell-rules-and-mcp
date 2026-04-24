@@ -189,22 +189,47 @@ jobs:
   #  Advisory scan for stale dependency bounds. Runs on every push but is
   #  allowed to fail without blocking the merge — the goal is to surface
   #  drift, not to chase every Hackage bump on the critical path.
+  #
+  #  Why step-level `continue-on-error` instead of job-level:
+  #
+  #  A job with `continue-on-error: true` does not block the pipeline,
+  #  but it still renders as a red ❌ in the Actions UI when any step
+  #  fails — which is visually indistinguishable from a real regression.
+  #  `haskell-actions/setup@v2`'s ghcup install is a known flake source
+  #  (CDN hiccups surface as `Error: <No error message>` with no
+  #  actionable content), and a red badge on a non-actionable advisory
+  #  job trains everyone to ignore CI signal. Worse than useless.
+  #
+  #  Moving `continue-on-error` to each step keeps the outer job green
+  #  while surfacing per-step failures as ⚠️ warnings with annotations.
+  #  The drift signal we actually want from `cabal outdated` is still
+  #  visible (just not blocking), the toolchain flake is surfaced as a
+  #  warning, and the job badge is honest: green means "we ran it,
+  #  here's what we saw" rather than "definitely broken".
   # -------------------------------------------------------------------------
   outdated:
     name: Outdated dependencies (advisory)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
 
       - uses: haskell-actions/setup@v2
+        id: setup
+        continue-on-error: true
         with:
           ghc-version: "9.12.2"
           cabal-version: "3.12.1.0"
           cabal-update: true
 
       - name: Report outdated bounds
+        if: steps.setup.outcome == 'success'
+        continue-on-error: true
         run: cabal outdated --exit-code
+
+      - name: Note setup flake
+        if: steps.setup.outcome == 'failure'
+        run: |
+          echo "::warning title=Toolchain install flaked::haskell-actions/setup@v2 failed with no actionable message — typical ghcup CDN flake. The advisory scan was skipped for this run; re-run the workflow if you want a fresh drift report."
 
   # -------------------------------------------------------------------------
   #  Single aggregation job. Branch protection should require *only* this
@@ -214,7 +239,13 @@ jobs:
   required:
     name: Haskell CI required
     runs-on: ubuntu-latest
-    if: always() && github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/')
+    # Run on every trigger EXCEPT tag pushes (those go to the release
+    # job). The original form was `always() && X || Y` which relies on
+    # GitHub Actions precedence `(always() && X) || Y`; equivalent but
+    # hard to scan. The simplified form below is the same truth table
+    # across the four trigger shapes (push to master / PR / dispatch /
+    # tag push).
+    if: always() && !startsWith(github.ref, 'refs/tags/')
     needs: [build-and-test, hlint]
     permissions:
       contents: read
