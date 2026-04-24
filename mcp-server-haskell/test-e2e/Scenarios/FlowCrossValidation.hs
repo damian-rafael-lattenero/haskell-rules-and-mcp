@@ -212,22 +212,16 @@ runOneProject binary rootDir tp = do
 -- cabal oracle
 --------------------------------------------------------------------------------
 
--- | Run @cabal build all@ inside @dir@. Returns the exit code; the
--- oracle is isolated from MCP's own compilation cache via a
--- dedicated @--builddir@. MCP's @ghci_check_project@ runs with
--- deferred-type-errors enabled (to surface typed-hole diagnostics),
--- and that flavour produces @.hi@/@.o@ artifacts for modules that
--- are semantically broken. If cabal were to share MCP's
--- @dist-newstyle/@ tree, it would see those cached interfaces and
--- skip recompilation — falsely reporting success on a project MCP
--- correctly flagged as broken.
+-- | Run @cabal build all@ inside @dir@. Shares the default
+-- @dist-newstyle/@ with the ambient toolchain: the oracle doesn't
+-- need a private build dir because MCP's own compilation now
+-- lands in @dist-newstyle-mcp/@ (see 'CabalBootstrap.bootstrapOne'
+-- where @cabal v2-repl --builddir=dist-newstyle-mcp@ keeps the
+-- defer-flag-poisoned interfaces out of the user's build tree).
 runCabalBuild :: FilePath -> IO ExitCode
 runCabalBuild dir = do
   currentEnv <- getEnvironment
-  let cp = (proc "cabal"
-             [ "build", "all"
-             , "--builddir=dist-xv-oracle"
-             ])
+  let cp = (proc "cabal" ["build", "all"])
              { env = Just currentEnv
              , cwd = Just dir
              }

@@ -288,6 +288,7 @@ main = do
       , test "ghci_eval exposes Control.Concurrent"  testEvalContextHasControlConcurrent
       , test "ghci_eval enforces inner per-call budget" testEvalInnerTimeoutBudget
       , test "load paths derive interactive imports from source" testLoadAutoImports
+      , test "Deferred pass writes to MCP-private build dir"      testDeferredIsolatedOutputs
       , test "initialize emits instructions field"  testInitializeEmitsInstructions
       , test "instructions mention key tools+flows" testInstructionsMentionCore
       , test "nextStep: create_project -> deps"     testNextStepCreateProject
@@ -2932,6 +2933,30 @@ testEvalInnerTimeoutBudget = do
       && T.isInfixOf "resetHscEnvInPlace" code
       && T.isInfixOf "\"error_kind\" .= (\"timeout\" :: Text)" code
       && T.isInfixOf "SomeAsyncException" code
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- | Deferred-pass isolation regression. 'ghci_check_project' runs
+-- GHC with '-fdefer-type-errors' + '-fdefer-typed-holes', which
+-- produces '.hi'/'.o' artifacts for semantically-broken modules.
+-- Those MUST land in a MCP-private build tree, never in cabal's
+-- default 'dist-newstyle/' — otherwise a user running 'cabal build'
+-- after 'ghci_check_project' sees the poisoned interfaces and
+-- skips recompilation, falsely reporting success on a project MCP
+-- correctly flagged as broken (FlowCrossValidation · typeError).
+--
+-- Pins that 'applyFlavour' receives a 'ProjectDir', that the
+-- 'Deferred' branch calls 'redirectDeferredOutputs', and that the
+-- per-project MCP build dir is 'dist-newstyle-mcp/deferred' under
+-- the project root.
+testDeferredIsolatedOutputs :: IO Bool
+testDeferredIsolatedOutputs = do
+  src <- TIO.readFile "src/HaskellFlows/Ghc/CabalBootstrap.hs"
+  let codeLines = filter (not . isDocLine) (T.lines src)
+      code      = T.unlines codeLines
+  pure $ T.isInfixOf "dist-newstyle-mcp" code
+      && T.isInfixOf "--builddir=" code
   where
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s

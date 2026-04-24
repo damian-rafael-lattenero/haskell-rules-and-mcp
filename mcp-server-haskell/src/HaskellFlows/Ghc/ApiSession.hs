@@ -976,6 +976,16 @@ evalIOString stmt = do
 -- 'Strict' clears the defer flags; 'Deferred' enables them so
 -- type errors and typed holes become warnings rather than aborting
 -- the load.
+--
+-- The MCP's @.hi@/@.o@ artifacts land in @dist-newstyle-mcp/@ (a
+-- sibling of cabal's @dist-newstyle/@) because 'CabalBootstrap'
+-- now runs @cabal v2-repl --builddir=dist-newstyle-mcp@ — the
+-- captured argv's paths already point there, so 'withStanzaFlags'
+-- inherits the isolation without an extra DynFlags rewrite. The
+-- user's @dist-newstyle/@ stays pristine, so running @cabal build@
+-- after @ghci_check_project@ no longer sees defer-poisoned
+-- interfaces (the "check_project then cabal build false-green"
+-- class of bug).
 applyFlavour :: LoadFlavour -> Ghc ()
 applyFlavour flavour = do
   dflags <- getSessionDynFlags

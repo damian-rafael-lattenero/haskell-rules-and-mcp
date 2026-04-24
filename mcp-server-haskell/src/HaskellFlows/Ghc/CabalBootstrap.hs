@@ -202,10 +202,21 @@ bootstrapOne root shimPath tgt = do
   -- stanza flags. The flags aren't baked into the captured argv —
   -- our in-process compile re-applies them via 'applyFlavour
   -- Deferred' anyway when the Hole / diagnostics path wants them.
-  let cp = (Proc.proc "cabal"
+  -- '--builddir' directs cabal's own pre-REPL build phase to a MCP-
+  -- private tree so the poisoned '.hi'/'.o' produced under the defer
+  -- flags below never land in the user's default 'dist-newstyle/'.
+  -- Without this, a user who runs 'ghci_check_project' (which
+  -- triggers this bootstrap) and then their own 'cabal build' sees
+  -- cabal skip recompilation of broken modules — their source had
+  -- errors, but the shim-delegated ghc wrote an interface for them
+  -- anyway under the defers, and cabal trusts the cached interface
+  -- next time.
+  let mcpDist = root </> "dist-newstyle-mcp"
+      cp = (Proc.proc "cabal"
              ( ["v2-repl"]
                <> renderTarget tgt
                <> ["--with-compiler=" <> shimPath]
+               <> ["--builddir=" <> mcpDist]
                <> [ "--ghc-options=-fdefer-type-errors"
                   , "--ghc-options=-fdefer-typed-holes"
                   , "--ghc-options=-fdefer-out-of-scope-variables"
