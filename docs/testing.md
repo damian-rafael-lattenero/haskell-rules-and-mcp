@@ -60,7 +60,7 @@ Some scenarios dominate wall-time:
 - `FlowCrossValidation` (~30 s across 3 mini projects)
 - `FlowTimeoutEnforcement` (~35 s, the test itself is the 30 s
   inner-budget assertion)
-- `FlowGhciSigkill`, `FlowConcurrentClients`, `FlowDiskFull`,
+- `FlowConcurrentClients`, `FlowDiskFull`,
   `FlowExprEvaluator`, `FlowExprEvaluatorDogfood`,
   `FlowPropertyStoreRace` — each spins up multiple GHCi sessions
 
@@ -239,11 +239,15 @@ Grep for the `═══ Flow: X` section header to isolate one scenario.
   editing concurrently dropped a write. Caught by
   `FlowConcurrentClients`.
 - Test-level bugs (false positives) caught by the scenarios'
-  post-fix oracles: `exitWith` was trapped by GHCi (v1 of
-  `FlowGhciSigkill`), wrong field name `packages` vs `build_depends`
+  post-fix oracles: wrong field name `packages` vs `build_depends`
   (v1 of `FlowDependencyConflict` and `FlowConcurrentClients`), 0xFF
   planted inside a comment (v1 of `FlowNonUTF8`). Each was
   surfaced by an independent oracle step in the same scenario.
+  ('FlowGhciSigkill' was retired when the Wave-5 in-process GHCi
+  migration removed the subprocess-respawn code path it exercised —
+  its v1 / v2 exitWith + exitImmediately bugs are historical only.
+  In-process equivalents (user-space exceptions, uncaught 'error'
+  calls) remain covered by 'FlowSessionRobustness'.)
 
 ## References
 

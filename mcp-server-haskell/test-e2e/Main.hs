@@ -46,7 +46,6 @@ import qualified Scenarios.FlowDiskFull          as FlowDF
 import qualified Scenarios.FlowExploratory      as FlowE
 import qualified Scenarios.FlowExprEvaluatorDogfood as FlowEED
 import qualified Scenarios.FlowFixWarning       as FlowFW
-import qualified Scenarios.FlowGhciSigkill       as FlowSK
 import qualified Scenarios.FlowGracefulMiss      as FlowGM
 import qualified Scenarios.FlowInjectionGuard   as FlowIG
 import qualified Scenarios.FlowNonUTF8           as FlowNU
@@ -131,8 +130,6 @@ scenarios =
     , False, FlowSR.runFlow )
   , ( "Flow: Timeout enforcement (inner 30 s budget must trip)"
     , True, FlowTE.runFlow )
-  , ( "Flow: GHCi SIGKILL (child exitWith · recovery via evictSession)"
-    , True, FlowSK.runFlow )
   , ( "Flow: Oversized input (256 KiB expression rejected at boundary)"
     , False, FlowOI.runFlow )
   , ( "Flow: Non-UTF-8 source file (graceful load error)"
