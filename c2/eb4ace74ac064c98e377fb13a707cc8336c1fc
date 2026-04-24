@@ -1,0 +1,29 @@
+README.md
+  c8d2b4a64f7aa848 94,97,200-203
+.github/workflows/haskell-ci.yml
+  c8d2b4a64f7aa848 285
+.github/workflows/release.yml
+  c8d2b4a64f7aa848 57-62
+.github/workflows/nix-flake.yml
+  c8d2b4a64f7aa848 89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "c2eb4ace74ac064c98e377fb13a707cc8336c1fc",
+  "prompts": {
+    "c8d2b4a64f7aa848": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7092f905-7cbc-4a3b-b227-1a451e49ea39",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 20,
+      "total_deletions": 16,
+      "accepted_lines": 31760,
+      "overriden_lines": 0
+    }
+  }
+}
