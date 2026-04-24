@@ -16,7 +16,15 @@ on:
   workflow_dispatch: {}
 
 permissions:
+  # statuses:write lets the final step post a legacy commit status
+  # so the combined-status API (what the GitHub favicon reads) has
+  # at least one success entry on every push to master — even the
+  # docs-only pushes that skip the Haskell CI workflow via its
+  # path filter. Without this, the favicon sits on the "pending"
+  # state forever on doc commits because Nix flake alone emits
+  # check-runs (modern API) but not legacy statuses.
   contents: read
+  statuses: write
 
 concurrency:
   group: nix-${{ github.ref }}
@@ -47,10 +55,53 @@ jobs:
           fi
 
       - name: nix flake check
+        id: flake_check
         run: nix flake check --no-build
 
       - name: nix build .#fourmolu (smoke)
         # Building one small tool gives us end-to-end confidence the flake
         # evaluates AND the overlay resolves against nixpkgs. Cheap: fourmolu
         # builds in ~20 min on fresh runners and caches after.
+        id: flake_build
         run: nix build '.#fourmolu' --print-build-logs
+
+      # GitHub's repository favicon (the one in the browser tab) reads
+      # the *legacy* commit status API, not the newer check-runs API
+      # that Actions publishes through by default. On pushes that only
+      # touch docs, the Haskell CI workflow is skipped by its path
+      # filter — its aggregator job is what usually posts
+      # `ci/haskell-combined`. With no legacy status on the sha, the
+      # combined-status API returns `{state: "pending", total_count: 0}`
+      # and the favicon gets stuck on the amber in-progress glyph
+      # forever (confirmed 2026-04-24 after a README-only push).
+      #
+      # This step fixes that by posting a `ci/nix-flake` status
+      # independent of the Haskell CI workflow. On every push to
+      # master (or dispatch), regardless of which paths changed, at
+      # least one legacy status lands on the sha — combined-status
+      # resolves to success, favicon turns green.
+      #
+      # `if: always()` so we post `failure` honestly when the flake
+      # itself breaks. The target_url links back to this run so the
+      # reader can drill in.
+      - name: Publish Nix flake commit status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const check  = '${{ steps.flake_check.outcome }}';
+            const build  = '${{ steps.flake_build.outcome }}';
+            const allOk  = check === 'success' && build === 'success';
+            const state  = allOk ? 'success' : 'failure';
+            const desc   = allOk
+              ? `Nix flake green (check=${check}, build=${build})`
+              : `Nix flake red (check=${check}, build=${build})`;
+            const { owner, repo } = context.repo;
+            const sha = context.sha;
+            await github.rest.repos.createCommitStatus({
+              owner, repo, sha,
+              state,
+              context: 'ci/nix-flake',
+              description: desc.slice(0, 140),
+              target_url: `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`
+            });
