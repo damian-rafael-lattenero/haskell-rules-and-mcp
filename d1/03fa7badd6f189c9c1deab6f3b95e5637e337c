@@ -1,0 +1,23 @@
+.github/workflows/nix-flake.yml
+  c8d2b4a64f7aa848 19-25,27,58,65,67-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "d103fa7badd6f189c9c1deab6f3b95e5637e337c",
+  "prompts": {
+    "c8d2b4a64f7aa848": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7092f905-7cbc-4a3b-b227-1a451e49ea39",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 51,
+      "total_deletions": 0,
+      "accepted_lines": 31796,
+      "overriden_lines": 0
+    }
+  }
+}
