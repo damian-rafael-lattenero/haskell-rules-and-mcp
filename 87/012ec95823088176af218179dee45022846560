@@ -1,0 +1,23 @@
+.github/workflows/haskell-ci.yml
+  c8d2b4a64f7aa848 192-208,217-218,225-226,229-233,242-248
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "87012ec95823088176af218179dee45022846560",
+  "prompts": {
+    "c8d2b4a64f7aa848": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7092f905-7cbc-4a3b-b227-1a451e49ea39",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 33,
+      "total_deletions": 2,
+      "accepted_lines": 31738,
+      "overriden_lines": 0
+    }
+  }
+}
