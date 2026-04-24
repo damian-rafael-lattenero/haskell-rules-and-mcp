@@ -1,0 +1,29 @@
+mcp-server-haskell/test/Spec.hs
+  f348551e07c405c5 291,2940-2963
+mcp-server-haskell/src/HaskellFlows/Ghc/CabalBootstrap.hs
+  f348551e07c405c5 205-215,219
+mcp-server-haskell/src/HaskellFlows/Ghc/ApiSession.hs
+  f348551e07c405c5 979-988
+mcp-server-haskell/test-e2e/Scenarios/FlowCrossValidation.hs
+  f348551e07c405c5 215-220,224
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "687ee773cb13699eb7a5b45c9e28512c7dd7af3d",
+  "prompts": {
+    "f348551e07c405c5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "16cff891-ee4f-4df2-a5fc-e9701b54cd79",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 185,
+      "total_deletions": 145,
+      "accepted_lines": 402,
+      "overriden_lines": 0
+    }
+  }
+}
