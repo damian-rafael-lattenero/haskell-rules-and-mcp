@@ -37,6 +37,7 @@ module Scenarios.FlowPropertyStoreRace
 
 import Control.Concurrent.Async (concurrently)
 import Data.Aeson (Value (..), object, (.=))
+import Data.Maybe (isJust)
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Text (Text)
@@ -77,10 +78,24 @@ runFlow c projectDir = do
       bSucc    = fieldBool "success" rB == Just True
       aKind    = fieldText "error_kind" rA
       bKind    = fieldText "error_kind" rB
+      aState   = fieldText "state" rA
+      bState   = fieldText "state" rB
       anyWon   = aSucc || bSucc
+      -- Post-Wave-5 the loser's failure is rendered by
+      -- 'QuickCheck.renderResult' as a structured QcException /
+      -- QcUnparsed payload: 'success=false' with 'state' =
+      -- "exception" | "unparsed" (plus a non-empty 'error' /
+      -- 'raw' field). The legacy subprocess-GHCi tag
+      -- 'error_kind=session_exhausted' is no longer emitted —
+      -- that whole code path was retired when ghci_quickcheck
+      -- moved to the subprocess-cabal-repl vehicle.
+      --
+      -- The invariant we still want to pin: the loser does not
+      -- return success=true, and does not return a null/hang —
+      -- it returns a structured failure shape.
       loserIsStructured =
-        (aSucc && bKind == Just "session_exhausted")
-        || (bSucc && aKind == Just "session_exhausted")
+        (aSucc && not bSucc && isJust bState)
+        || (bSucc && not aSucc && isJust aState)
         || (aSucc && bSucc)   -- unlikely but not wrong
 
   cContention <- liveCheck $ checkPure
@@ -93,12 +108,12 @@ runFlow c projectDir = do
      <> ", B.kind=" <> T.pack (show bKind))
 
   cLoserShape <- liveCheck $ checkPure
-    "the loser (if any) failed with error_kind=session_exhausted"
+    "the loser (if any) failed structurally (state = exception | unparsed)"
     loserIsStructured
     ("When the cabal-lock race eats one client, the loser's response \
-     \must be structured (success=false, error_kind=session_exhausted) \
-     \— not a hang, not a half-null. A.kind=" <> T.pack (show aKind)
-     <> ", B.kind=" <> T.pack (show bKind)
+     \must carry a structured payload (success=false + non-null 'state') \
+     \— not a hang, not a half-null. A.state=" <> T.pack (show aState)
+     <> ", B.state=" <> T.pack (show bState)
      <> ". Raw A: " <> truncRender rA
      <> " | Raw B: " <> truncRender rB)
   stepFooter 1 t0

@@ -212,13 +212,22 @@ runOneProject binary rootDir tp = do
 -- cabal oracle
 --------------------------------------------------------------------------------
 
--- | Run @cabal build all@ inside @dir@. Returns the exit code; ignores
--- stdout/stderr on the passing path, keeps a tail on failure for the
--- Check's detail field if needed.
+-- | Run @cabal build all@ inside @dir@. Returns the exit code; the
+-- oracle is isolated from MCP's own compilation cache via a
+-- dedicated @--builddir@. MCP's @ghci_check_project@ runs with
+-- deferred-type-errors enabled (to surface typed-hole diagnostics),
+-- and that flavour produces @.hi@/@.o@ artifacts for modules that
+-- are semantically broken. If cabal were to share MCP's
+-- @dist-newstyle/@ tree, it would see those cached interfaces and
+-- skip recompilation — falsely reporting success on a project MCP
+-- correctly flagged as broken.
 runCabalBuild :: FilePath -> IO ExitCode
 runCabalBuild dir = do
   currentEnv <- getEnvironment
-  let cp = (proc "cabal" ["build", "all"])
+  let cp = (proc "cabal"
+             [ "build", "all"
+             , "--builddir=dist-xv-oracle"
+             ])
              { env = Just currentEnv
              , cwd = Just dir
              }

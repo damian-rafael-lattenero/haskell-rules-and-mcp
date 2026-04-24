@@ -34,13 +34,17 @@ descriptor =
         "Run a property 3 times (or `runs` param) to confirm every "
           <> "run passes. Any failing or non-passed run makes the tool "
           <> "return overall: false. Use to catch flakiness before "
-          <> "committing a property."
+          <> "committing a property. Pass `module` to load a project "
+          <> "source file before each run — required when the property "
+          <> "references types/instances that aren't in the test-suite "
+          <> "stanza's default auto-load set."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
           , "properties" .= object
               [ "property" .= object [ "type" .= ("string" :: Text) ]
               , "runs"     .= object [ "type" .= ("integer" :: Text) ]
+              , "module"   .= object [ "type" .= ("string" :: Text) ]
               ]
           , "required"             .= ["property" :: Text]
           , "additionalProperties" .= False
@@ -50,6 +54,7 @@ descriptor =
 data DeterminismArgs = DeterminismArgs
   { daProperty :: !Text
   , daRuns     :: !Int
+  , daModule   :: !(Maybe Text)
   }
   deriving stock (Show)
 
@@ -58,6 +63,7 @@ instance FromJSON DeterminismArgs where
     DeterminismArgs
       <$> o .:  "property"
       <*> o .:? "runs" .!= 3
+      <*> o .:? "module"
 
 -- | 30 s per run, mirroring ghci_quickcheck's budget.
 runTimeoutMicros :: Int
@@ -69,7 +75,8 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Right args -> case sanitizeExpression (daProperty args) of
     Left _ -> pure (errorResult "property is empty or contains forbidden characters")
     Right safe -> do
-      results <- replicateM (daRuns args) (runOnce ghcSess (daProperty args) safe)
+      results <- replicateM (daRuns args)
+                   (runOnce ghcSess (daProperty args) safe (daModule args))
       let allPassed = all isPassed results
           payload = object
             [ "success" .= allPassed
@@ -86,14 +93,18 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
              , trIsError = not allPassed
              }
   where
-    runOnce sess origExpr safe = do
+    runOnce sess origExpr safe mModule = do
       -- Route through the same subprocess-cabal-repl vehicle as
       -- ghci_quickcheck. The in-process evalIOString path was
       -- tripping on the GHC-API package-resolution bug even when
       -- the stanza flags had -package-id QuickCheck — cabal repl
-      -- sidesteps that entirely.
+      -- sidesteps that entirely. 'mModule' mirrors the
+      -- 'ghci_quickcheck' 'module' parameter — without it a
+      -- property that references project-local types fails to
+      -- compile since the test-suite stanza's auto-load set
+      -- doesn't cover ad-hoc 'test/Gen.hs'-style helpers.
       mRes <- timeout runTimeoutMicros $
-        try $ QcTool.runQuickCheckViaCabalRepl (gsProject sess) Nothing safe
+        try $ QcTool.runQuickCheckViaCabalRepl (gsProject sess) mModule safe
       case mRes of
         Nothing -> pure (QcException origExpr "timeout")
         Just (Left (ex :: SomeException)) ->

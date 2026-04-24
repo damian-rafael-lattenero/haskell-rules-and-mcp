@@ -423,6 +423,11 @@ step11_determinism c = do
         "\\(env :: Env) (x :: Expr) -> eval env (simplify x) == eval env x"
         :: Text)
     , "runs"     .= (3 :: Int)
+    -- Same module load-hint shape as step 10's 'ghci_quickcheck'
+    -- calls — the property references 'Env' and 'Expr' which
+    -- live in the test-suite's Gen module, not in the default
+    -- test-suite auto-load set.
+    , "module"   .= ("test/Gen.hs" :: Text)
     ])
   pure
     [ checkJsonField "step 11 · determinism success" r "success" (Bool True)
