@@ -1,0 +1,37 @@
+mcp-server-haskell/src/HaskellFlows/Tool/ApplyExports.hs
+  c46aa8100ae27abf 22,64-99,160-196
+mcp-server-haskell/test-e2e/Scenarios/FlowModuleNameGuard.hs
+  c46aa8100ae27abf 1-339
+mcp-server-haskell/src/HaskellFlows/Tool/AddModules.hs
+  c46aa8100ae27abf 31-35,178-197,450-485
+mcp-server-haskell/test/Spec.hs
+  c46aa8100ae27abf 14-17,20,158-165,415-471,3220-3698
+mcp-server-haskell/test-e2e/Main.hs
+  c46aa8100ae27abf 56,129-130
+mcp-server-haskell/src/HaskellFlows/Parser/ModuleName.hs
+  c46aa8100ae27abf 1-227
+mcp-server-haskell/src/HaskellFlows/Tool/RemoveModules.hs
+  c46aa8100ae27abf 36-40,104-130,311-344
+mcp-server-haskell/haskell-flows-mcp.cabal
+  c46aa8100ae27abf 62,154,161,215
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "aa72bd723d7bc82ebbf9e5540dd9f3bd45bafaea",
+  "prompts": {
+    "c46aa8100ae27abf": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "97fabd44-5134-4c93-ab79-a3edeace7f36",
+        "model": "claude-opus-4-7-thinking-max"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 1354,
+      "total_deletions": 74,
+      "accepted_lines": 1323,
+      "overriden_lines": 0
+    }
+  }
+}
