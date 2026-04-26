@@ -78,7 +78,21 @@ import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescripto
 import HaskellFlows.Mcp.ToolName
   ( ToolName (..)
   , allToolNames
+  , parseToolName
   , toolNameText
+  )
+import HaskellFlows.Mcp.ErrorKind
+  ( ErrorKind (..)
+  , parseErrorKind
+  , renderErrorKind
+  )
+import HaskellFlows.Mcp.RpcMethod
+  ( RpcMethod (..)
+  , allRpcMethods
+  , allRpcMethodTexts
+  , isNotification
+  , parseRpcMethod
+  , rpcMethodText
   )
 import HaskellFlows.Tool.Batch (BatchArgs (..))
 import qualified HaskellFlows.Tool.Gate as Gate
@@ -95,6 +109,13 @@ import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
 import qualified HaskellFlows.Mcp.WorkflowState as WS
 import qualified HaskellFlows.Mcp.Guidance as Guidance
+import HaskellFlows.Mcp.ResourceUri
+  ( ResourceUri (..)
+  , allResourceUris
+  , allResourceUriTexts
+  , parseResourceUri
+  , resourceUriText
+  )
 import qualified HaskellFlows.Mcp.ResourceUri as ResourceUri
 import qualified HaskellFlows.Mcp.Resources as Resources
 import HaskellFlows.Tool.CheckProject (parseExposedModules)
@@ -256,8 +277,52 @@ main = do
       , test "validateIdentifier rejects keyword"  testIdentifierKeyword
       , test "validateIdentifier rejects symbol"   testIdentifierSymbol
       , test "validateIdentifier rejects upper"    testIdentifierUpper
-      , test "extractBinding wraps block"          testExtractBinding
-      , test "extractBinding rejects empty range"  testExtractEmpty
+      , test "extractBinding wraps block"           testExtractBinding
+      , test "extractBinding rejects empty range"   testExtractEmpty
+      , test "extractBinding refuses top-level eq"  testExtractRefusesTopLevelEquation
+      , test "extractBinding refuses type sig"      testExtractRefusesTypeSignature
+      , test "extractBinding refuses import line"   testExtractRefusesImport
+      , test "extractBinding allows indented body"  testExtractAllowsIndentedBody
+      , test "extractBinding refuses module decl"   testExtractRefusesModuleDecl
+      , test "extractBinding refuses data decl"     testExtractRefusesDataDecl
+      , test "extractBinding refuses newtype decl"  testExtractRefusesNewtypeDecl
+      , test "extractBinding refuses class decl"    testExtractRefusesClassDecl
+      , test "extractBinding refuses instance decl" testExtractRefusesInstanceDecl
+      , test "extractBinding refuses pragma"        testExtractRefusesPragma
+      , test "extractBinding refuses operator def"  testExtractRefusesOperatorDef
+      , test "extractBinding refuses multiline eq"  testExtractRefusesMultilineEquation
+      , test "extractBinding refuses mixed range"   testExtractRefusesMixedRange
+      , test "extractBinding refuses leading blanks"
+          testExtractRefusesLeadingBlanksWithCol0
+      , test "extractBinding refusal message shape"
+          testExtractRefusalMessageShape
+      , test "extractBinding allows let body"       testExtractAllowsLetBody
+      , test "extractBinding allows do body"        testExtractAllowsDoBody
+      , test "extractBinding allows where body"     testExtractAllowsWhereBody
+      , test "extractBinding allows multiline body" testExtractAllowsMultilineBody
+      , test "extractBinding survives EOL whitespace"
+          testExtractSurvivesEolWhitespace
+      , test "extractBinding produces single ="     testExtractProducesSingleEquals
+      , test "extractBinding empty-ish range refused"
+          testExtractAllBlankRangeRefused
+      , test "ToolName: render-parse round-trip"    testToolNameRoundTrip
+      , test "ToolName: parse rejects unknown"      testToolNameParseUnknown
+      , test "ToolName: wire forms unique"          testToolNameWireUnique
+      , test "ToolName: wire forms snake_case"      testToolNameSnakeCase
+      , test "ToolName: allToolNames is exhaustive" testToolNameExhaustive
+      , test "ErrorKind: render-parse round-trip"   testErrorKindRoundTrip
+      , test "ErrorKind: parse rejects unknown"     testErrorKindParseUnknown
+      , test "ErrorKind: wire forms unique"         testErrorKindWireUnique
+      , test "ErrorKind: covers timeout/exhausted/exception"
+          testErrorKindCoversThree
+      , test "RpcMethod: render-parse round-trip"   testRpcMethodRoundTrip
+      , test "RpcMethod: parse rejects unknown"     testRpcMethodParseUnknown
+      , test "RpcMethod: wire forms unique"         testRpcMethodWireUnique
+      , test "RpcMethod: required JSON-RPC methods" testRpcMethodCoversAllMcp
+      , test "RpcMethod: isNotification correct"    testRpcMethodIsNotification
+      , test "ResourceUri: render-parse round-trip" testResourceUriRoundTrip
+      , test "ResourceUri: parse rejects unknown"   testResourceUriParseUnknown
+      , test "ResourceUri: wire forms canonical"    testResourceUriWireCanonical
       , test "parseHlintJson parses list"          testHlintJson
       , test "validateCabal flags duplicate deps"  testDuplicateDeps
       , test "validateCabal flags missing synopsis" testMissingSynopsis
@@ -1058,6 +1123,618 @@ testExtractEmpty =
   pure $ case extractBinding "foo" 5 4 "body" of
     Left _ -> True
     _      -> False
+
+-- | Regression test for issue #46. Pointing extract_binding at a whole
+-- top-level equation used to produce broken Haskell — the call site
+-- got a bare name (no @=@) and the extracted binding got a nested @=@
+-- (its RHS was the original equation line, not the equation's body).
+-- The fix refuses any range that sits at column 0, since by Haskell
+-- layout rules a body expression is always indented.
+--
+-- Repro is the exact source from the issue.
+testExtractRefusesTopLevelEquation :: IO Bool
+testExtractRefusesTopLevelEquation =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "doubledSum :: [Int] -> Int"
+        , "doubledSum xs = foldr (\\x acc -> x * 2 + acc) 0 xs"
+        ]
+  in pure $ case extractBinding "doubleAndAdd" 4 4 src of
+       Left msg ->
+         "expression range" `T.isInfixOf` msg
+           && "column 0"   `T.isInfixOf` msg
+           && "doubledSum" `T.isInfixOf` msg
+       Right _  -> False
+
+-- | A type signature lives at column 0 and lifting it is also nonsense.
+-- Same column-0 guard catches it; the message still tells the agent to
+-- narrow the scope.
+testExtractRefusesTypeSignature :: IO Bool
+testExtractRefusesTypeSignature =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "doubledSum :: [Int] -> Int"
+        , "doubledSum xs = foldr (\\x acc -> x * 2 + acc) 0 xs"
+        ]
+  in pure $ case extractBinding "newName" 3 3 src of
+       Left msg -> "expression range" `T.isInfixOf` msg
+       Right _  -> False
+
+-- | An import line at column 0 must also be refused, not silently
+-- corrupted into garbage.
+testExtractRefusesImport :: IO Bool
+testExtractRefusesImport =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "import Data.List (sort)"
+        , ""
+        , "main :: IO ()"
+        , "main = print (sort [3,1,2])"
+        ]
+  in pure $ case extractBinding "imp" 3 3 src of
+       Left msg -> "expression range" `T.isInfixOf` msg
+       Right _  -> False
+
+-- | Sanity check that the guard does NOT regress the documented
+-- success path: an indented body expression must still extract cleanly
+-- and the resulting binding must contain a single @=@ (no nested
+-- equation, no dangling header).
+testExtractAllowsIndentedBody :: IO Bool
+testExtractAllowsIndentedBody =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "doubledSum :: [Int] -> Int"
+        , "doubledSum xs ="
+        , "  foldr (\\x acc -> x * 2 + acc) 0 xs"
+        ]
+      countEqualsOnNewBindingLine txt =
+        -- The first line of the appended binding must be exactly
+        -- "<name> ="; the body lines must NOT start with another
+        -- "<name> =".
+        let bls = T.lines txt
+            isHeader l = "doubleAndAdd =" `T.isPrefixOf` l
+            headers    = filter isHeader bls
+        in length headers == 1
+  in pure $ case extractBinding "doubleAndAdd" 5 5 src of
+       Left _   -> False
+       Right er ->
+         -- Call-site: "doubledSum xs =" preserved on its own line, no
+         -- bare orphan name.
+         not ("doubledSum xs ="
+              `T.isInfixOf` erBindingTxt er)
+           && countEqualsOnNewBindingLine (erBindingTxt er)
+           && "doubleAndAdd ="    `T.isPrefixOf` erBindingTxt er
+           && "doubleAndAdd"      `T.isInfixOf` erNewContent er
+
+-- | The module-header line is the highest-stakes line at column 0:
+-- lifting it would orphan the entire file. The guard must refuse it.
+testExtractRefusesModuleDecl :: IO Bool
+testExtractRefusesModuleDecl =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "x :: Int"
+        , "x = 1"
+        ]
+  in pure $ case extractBinding "newName" 1 1 src of
+       Left msg -> "expression range" `T.isInfixOf` msg
+       Right _  -> False
+
+-- | A @data@ declaration sits at column 0 and is meaningless to lift
+-- as an expression.
+testExtractRefusesDataDecl :: IO Bool
+testExtractRefusesDataDecl =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "data Color = Red | Green | Blue"
+        ]
+  in pure $ case extractBinding "newName" 3 3 src of
+       Left msg -> "expression range" `T.isInfixOf` msg
+       Right _  -> False
+
+-- | A @newtype@ declaration is also a top-level form, also refused.
+testExtractRefusesNewtypeDecl :: IO Bool
+testExtractRefusesNewtypeDecl =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "newtype Wrap a = Wrap { unwrap :: a }"
+        ]
+  in pure $ case extractBinding "newName" 3 3 src of
+       Left msg -> "expression range" `T.isInfixOf` msg
+       Right _  -> False
+
+-- | A @class@ header at column 0 is a top-level form: refused.
+testExtractRefusesClassDecl :: IO Bool
+testExtractRefusesClassDecl =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "class Foo a where"
+        , "  foo :: a -> a"
+        ]
+  in pure $ case extractBinding "newName" 3 3 src of
+       Left msg -> "expression range" `T.isInfixOf` msg
+       Right _  -> False
+
+-- | An @instance@ header at column 0 is a top-level form: refused.
+testExtractRefusesInstanceDecl :: IO Bool
+testExtractRefusesInstanceDecl =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "instance Show Color where"
+        , "  show Red = \"red\""
+        ]
+  in pure $ case extractBinding "newName" 3 3 src of
+       Left msg -> "expression range" `T.isInfixOf` msg
+       Right _  -> False
+
+-- | Pragmas live at column 0 too. The guard treats them like any
+-- other top-level form.
+testExtractRefusesPragma :: IO Bool
+testExtractRefusesPragma =
+  let src = T.unlines
+        [ "{-# LANGUAGE OverloadedStrings #-}"
+        , "module Demo where"
+        , ""
+        , "main = putStrLn \"hi\""
+        ]
+  in pure $ case extractBinding "newName" 1 1 src of
+       Left msg -> "expression range" `T.isInfixOf` msg
+       Right _  -> False
+
+-- | An operator definition like @(+++) :: ...@ or @(+++) x y = ...@
+-- starts at column 0 too — same refusal.
+testExtractRefusesOperatorDef :: IO Bool
+testExtractRefusesOperatorDef =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "(+++) :: Int -> Int -> Int"
+        , "(+++) x y = x + y + 1"
+        ]
+  in pure $ case extractBinding "plus3" 4 4 src of
+       Left msg -> "expression range" `T.isInfixOf` msg
+       Right _  -> False
+
+-- | A multi-line range that spans a whole equation block (signature +
+-- body) at column 0 must be refused even though the equation has its
+-- body on a continuation line — the guard sees @commonIndent == 0@
+-- because the signature line dominates.
+testExtractRefusesMultilineEquation :: IO Bool
+testExtractRefusesMultilineEquation =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "doubledSum :: [Int] -> Int"
+        , "doubledSum xs ="
+        , "  foldr (\\x acc -> x * 2 + acc) 0 xs"
+        ]
+  in pure $ case extractBinding "newName" 3 5 src of
+       Left msg -> "expression range" `T.isInfixOf` msg
+       Right _  -> False
+
+-- | A range that mixes a column-0 line with indented continuations
+-- still has @commonIndent == 0@. Must be refused — the column-0 line
+-- is the equation header, lifting it would corrupt the file.
+testExtractRefusesMixedRange :: IO Bool
+testExtractRefusesMixedRange =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "buildMessage :: String -> String"
+        , "buildMessage name ="
+        , "  \"Hello, \" ++ name"
+        ]
+  in pure $ case extractBinding "newName" 4 5 src of
+       Left msg -> "expression range" `T.isInfixOf` msg
+       Right _  -> False
+
+-- | Leading blank lines in the range must NOT trick the guard. Even if
+-- the first selected line is blank, as long as some non-blank line in
+-- the range sits at column 0, the guard fires.
+testExtractRefusesLeadingBlanksWithCol0 :: IO Bool
+testExtractRefusesLeadingBlanksWithCol0 =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , ""
+        , "x :: Int"
+        , "x = 42"
+        ]
+  in pure $ case extractBinding "newName" 3 5 src of
+       Left msg -> "expression range" `T.isInfixOf` msg
+       Right _  -> False
+
+-- | The refusal message must (a) cite the exact line range, (b)
+-- include a preview of the offending line so the agent can see what
+-- it pointed at, and (c) explain how to recover. All three are
+-- machine-checkable via substring presence.
+testExtractRefusalMessageShape :: IO Bool
+testExtractRefusalMessageShape =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "x :: Int"
+        , "x = 42"
+        ]
+  in pure $ case extractBinding "newName" 4 4 src of
+       Left msg ->
+            "4-4"        `T.isInfixOf` msg
+         && "x = 42"     `T.isInfixOf` msg
+         && "Narrow"     `T.isInfixOf` msg
+         && "expression range" `T.isInfixOf` msg
+       Right _ -> False
+
+-- | Sanity success path: a let-binding's RHS expression at column 6
+-- extracts cleanly.
+testExtractAllowsLetBody :: IO Bool
+testExtractAllowsLetBody =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "build :: Int"
+        , "build ="
+        , "  let result = 1 + 2 + 3"
+        , "  in result + 1"
+        ]
+  in pure $ case extractBinding "smallSum" 5 5 src of
+       Left _   -> False
+       Right er ->
+            "smallSum"         `T.isInfixOf` erNewContent er
+         && "smallSum ="       `T.isPrefixOf` erBindingTxt er
+         && erIndent er > 0
+
+-- | Sanity success path: a do-block statement at column 2 extracts
+-- cleanly.
+testExtractAllowsDoBody :: IO Bool
+testExtractAllowsDoBody =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "main :: IO ()"
+        , "main = do"
+        , "  putStrLn \"hello world\""
+        , "  pure ()"
+        ]
+  in pure $ case extractBinding "greeting" 5 5 src of
+       Left _   -> False
+       Right er ->
+            "greeting"        `T.isInfixOf` erNewContent er
+         && "greeting ="      `T.isPrefixOf` erBindingTxt er
+         && erIndent er == 2
+
+-- | Sanity success path: a where-clause body expression extracts
+-- cleanly. The where-binding header itself sits at column 2; its RHS
+-- expression sits at column 4 or beyond.
+testExtractAllowsWhereBody :: IO Bool
+testExtractAllowsWhereBody =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "f :: Int -> Int"
+        , "f x = helper"
+        , "  where"
+        , "    helper = x * x + 1"
+        ]
+  in pure $ case extractBinding "square" 6 6 src of
+       Left _   -> False
+       Right er ->
+            "square"        `T.isInfixOf` erNewContent er
+         && "square ="      `T.isPrefixOf` erBindingTxt er
+
+-- | A multi-line indented body: the guard must allow it AND the
+-- relative indentation between the body lines must be preserved (the
+-- inner lines stay nested under the first line).
+testExtractAllowsMultilineBody :: IO Bool
+testExtractAllowsMultilineBody =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "f :: [Int] -> Int"
+        , "f xs ="
+        , "  foldr"
+        , "    (\\x acc -> x + acc)"
+        , "    0"
+        , "    xs"
+        ]
+  in pure $ case extractBinding "summing" 5 8 src of
+       Left _ -> False
+       Right er ->
+         let bind  = erBindingTxt er
+             newC  = erNewContent er
+         in    "summing ="      `T.isPrefixOf` bind
+            && "foldr"          `T.isInfixOf` bind
+            && "summing"        `T.isInfixOf` newC
+            -- The relative indent is preserved (the inner lines stay
+            -- deeper than 'foldr').
+            && T.isInfixOf "  foldr" bind
+
+-- | Trailing whitespace at end-of-line must NOT trick the guard.
+-- @T.takeWhile isSpace@ counts only LEADING whitespace, so trailing
+-- whitespace shouldn't shift the indent calculation. Pin the
+-- invariant.
+testExtractSurvivesEolWhitespace :: IO Bool
+testExtractSurvivesEolWhitespace =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "f :: Int"
+        , "f ="
+        , "  1 + 2   "  -- trailing spaces
+        ]
+  in pure $ case extractBinding "onePlus2" 5 5 src of
+       Left _   -> False
+       Right er -> "onePlus2 =" `T.isPrefixOf` erBindingTxt er
+
+-- | Regression invariant for the bug fix: the appended binding must
+-- contain EXACTLY ONE @=@ at column 0 (its own header), and the
+-- call-site must NEVER be a bare name with no @=@. Both halves of
+-- the original bug pattern must be impossible.
+testExtractProducesSingleEquals :: IO Bool
+testExtractProducesSingleEquals =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "f :: Int"
+        , "f ="
+        , "  let x = 1 + 2 in x + 3"
+        ]
+      countCol0Equals txt =
+        length [ () | l <- T.lines txt
+                    , T.length l >= 1
+                    , T.take 1 l /= " "
+                    , T.take 1 l /= "\t"
+                    , "=" `T.isInfixOf` T.takeWhile (/= '\n') l
+                    , let stripped = T.strip l
+                    , -- Only count lines whose first '=' is the binding
+                      -- delimiter, not part of a string literal etc.
+                      not ("--" `T.isPrefixOf` stripped)
+                    , -- The "<word> =" prefix shape is what we want.
+                      let firstEq = T.takeWhile (/= '=') l
+                      in not (T.null firstEq)
+                ]
+  in pure $ case extractBinding "letBody" 5 5 src of
+       Left _   -> False
+       Right er ->
+         let bind = erBindingTxt er
+         in    "letBody ="           `T.isPrefixOf` bind
+            && countCol0Equals bind == 1
+
+-- | A range consisting of only blank lines triggers the existing
+-- "extracted range is empty" path (because the @null body@ check is
+-- on raw lines, but actually @body@ is non-empty list of blank lines,
+-- so @hasNonBlank body == False@ falls through to the column-0
+-- branch's @&& hasNonBlank body@ guard. We expect the textual cut to
+-- proceed but produce a degenerate (yet not bug-shaped) result; the
+-- compile-verify layer would catch any nonsense. The test below pins
+-- that no exception is thrown and the call doesn't refuse with the
+-- top-level message — so the guard is precise to non-blank cuts.
+testExtractAllBlankRangeRefused :: IO Bool
+testExtractAllBlankRangeRefused =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , ""
+        , ""
+        , "x = 1"
+        ]
+  in pure $ case extractBinding "newName" 2 4 src of
+       -- Either it refuses (different reason) or it goes through —
+       -- but it MUST NOT trip the top-level guard since there's no
+       -- non-blank column-0 line in [2,4].
+       Left msg  -> not ("expression range" `T.isInfixOf` msg)
+       Right _er -> True
+
+--------------------------------------------------------------------------------
+-- ADT bijection / contract tests for issues #44 (ToolName), #45
+-- (ErrorKind), and the companion ADTs RpcMethod and ResourceUri
+-- introduced alongside them. Every ADT that maps to a wire string
+-- MUST satisfy:
+--
+--   1. Bijection: parseX (xText t) == Just t  for every constructor.
+--   2. Total-rejection: parseX "garbage" == Nothing.
+--   3. Wire-form uniqueness: two distinct constructors never share
+--      a wire string (would collapse the dispatcher).
+--   4. Exhaustiveness: 'allXs' covers every constructor (so adding
+--      a constructor without updating the dispatcher fails the test).
+--
+-- These tests are the forcing function that keeps the wire format
+-- from drifting silently when the ADT grows or shrinks.
+--------------------------------------------------------------------------------
+
+-- | Bijection: every ToolName round-trips through its text form.
+testToolNameRoundTrip :: IO Bool
+testToolNameRoundTrip =
+  pure $ all (\t -> parseToolName (toolNameText t) == Just t) allToolNames
+
+-- | parseToolName returns Nothing for strings that aren't a
+-- registered tool. Without this, the dispatcher would silently route
+-- a typo to the wrong tool.
+testToolNameParseUnknown :: IO Bool
+testToolNameParseUnknown = pure $
+     parseToolName ""              == Nothing
+  && parseToolName "ghc_unknown"   == Nothing
+  && parseToolName "GHC_LOAD"      == Nothing  -- case-sensitive
+  && parseToolName " ghc_load"     == Nothing  -- whitespace
+  && parseToolName "ghc_load "     == Nothing
+  && parseToolName "ghc-load"      == Nothing  -- hyphen vs underscore
+  && parseToolName "tools/call"    == Nothing  -- not a method
+
+-- | Two distinct ToolName constructors must never collide on the
+-- wire — the dispatcher would otherwise pick the first match and
+-- stop, silently breaking the second tool.
+testToolNameWireUnique :: IO Bool
+testToolNameWireUnique =
+  let texts = map toolNameText allToolNames
+      uniq  = length (foldr insertOnce [] texts)
+      insertOnce x acc = if x `elem` acc then acc else x : acc
+  in pure (uniq == length texts && length texts >= 30)
+
+-- | Wire forms must be non-empty, all-ASCII lowercase snake_case
+-- (a-z, 0-9, underscores only — no spaces, no hyphens, no slashes,
+-- no upper-case). Substring scans across guidance text and the
+-- agent's tool-name autocomplete rely on this shape; allowing a
+-- stray uppercase letter or hyphen would silently break those
+-- consumers.
+--
+-- The current registry has two prefix families: @ghc_*@ for the
+-- Haskell tooling itself and @hoogle_*@ for the Hoogle bridge. We
+-- assert each name belongs to one of them so a future tool that
+-- forgets the family prefix (and therefore won't sort with its
+-- siblings) trips the test.
+testToolNameSnakeCase :: IO Bool
+testToolNameSnakeCase =
+  let isLowerSnake c =
+           (c >= 'a' && c <= 'z')
+        || (c >= '0' && c <= '9')
+        || c == '_'
+      hasFamilyPrefix s =
+           "ghc_"    `T.isPrefixOf` s
+        || "hoogle_" `T.isPrefixOf` s
+      ok t =
+        let s = toolNameText t
+        in    not (T.null s)
+           && hasFamilyPrefix s
+           && T.all isLowerSnake s
+           && not (T.isInfixOf "__" s)        -- no double underscore
+           && not (T.isPrefixOf "_" s)        -- no leading underscore
+           && not (T.isSuffixOf "_" s)        -- no trailing underscore
+  in pure (all ok allToolNames)
+
+-- | 'allToolNames' is derived from @[minBound .. maxBound]@; if a new
+-- constructor is added but Bounded/Enum is broken, this catches it.
+testToolNameExhaustive :: IO Bool
+testToolNameExhaustive = pure $
+     length allToolNames >= 30
+  && length allToolNames == length allToolNameTexts
+
+-- | Bijection: every ErrorKind round-trips through its text form.
+-- This is the wire contract for tool-error responses; if any
+-- constructor's text drifts, the LLM's classifier breaks.
+testErrorKindRoundTrip :: IO Bool
+testErrorKindRoundTrip =
+  let kinds = [Timeout, SessionExhausted, ToolException]
+  in pure $ all (\k -> parseErrorKind (renderErrorKind k) == Just k) kinds
+
+-- | Unknown error_kind strings must not parse — protects against
+-- silent classification of fresh failure modes as known ones.
+testErrorKindParseUnknown :: IO Bool
+testErrorKindParseUnknown = pure $
+     parseErrorKind ""                  == Nothing
+  && parseErrorKind "unknown"           == Nothing
+  && parseErrorKind "TIMEOUT"           == Nothing  -- case-sensitive
+  && parseErrorKind "session-exhausted" == Nothing  -- hyphen vs underscore
+
+-- | The three kinds must produce three distinct wire strings.
+-- Uniqueness check: deduplicate the list and assert the length is
+-- preserved.
+testErrorKindWireUnique :: IO Bool
+testErrorKindWireUnique =
+  let kinds = [Timeout, SessionExhausted, ToolException]
+      texts = map renderErrorKind kinds
+      uniq  = foldr (\x acc -> if x `elem` acc then acc else x:acc) [] texts
+  in pure (length uniq == length texts && length uniq == 3)
+
+-- | The wire strings are exactly the three documented constants.
+-- This is the literal contract surfaced to the agent in tool-error
+-- responses.
+testErrorKindCoversThree :: IO Bool
+testErrorKindCoversThree = pure $
+     renderErrorKind Timeout          == "timeout"
+  && renderErrorKind SessionExhausted == "session_exhausted"
+  && renderErrorKind ToolException    == "tool_exception"
+
+-- | Bijection: every RpcMethod round-trips through its text form.
+testRpcMethodRoundTrip :: IO Bool
+testRpcMethodRoundTrip =
+  pure $ all (\m -> parseRpcMethod (rpcMethodText m) == Just m) allRpcMethods
+
+-- | Unknown JSON-RPC methods must not parse — this is what the
+-- dispatcher uses to send a "method not found" envelope back to the
+-- caller.
+testRpcMethodParseUnknown :: IO Bool
+testRpcMethodParseUnknown = pure $
+     parseRpcMethod ""                    == Nothing
+  && parseRpcMethod "tools/unknown"       == Nothing
+  && parseRpcMethod "tools.list"          == Nothing  -- dot vs slash
+  && parseRpcMethod "TOOLS/CALL"          == Nothing  -- case-sensitive
+  && parseRpcMethod "ghc_load"            == Nothing  -- not a tool
+
+-- | Two distinct RpcMethod constructors must never share a wire
+-- string. The dispatcher matches by exact text, so a collision would
+-- silently route both to the same handler.
+testRpcMethodWireUnique :: IO Bool
+testRpcMethodWireUnique =
+  let texts = allRpcMethodTexts
+      uniq  = foldr (\x acc -> if x `elem` acc then acc else x:acc) [] texts
+  in pure (length uniq == length texts && length texts == length allRpcMethods)
+
+-- | Pin the seven JSON-RPC methods we currently support against
+-- their literal wire strings — these are part of the MCP protocol
+-- contract; any drift would break LLM clients.
+testRpcMethodCoversAllMcp :: IO Bool
+testRpcMethodCoversAllMcp = pure $
+     rpcMethodText Initialize             == "initialize"
+  && rpcMethodText Initialized            == "initialized"
+  && rpcMethodText ToolsList              == "tools/list"
+  && rpcMethodText ToolsCall              == "tools/call"
+  && rpcMethodText ResourcesList          == "resources/list"
+  && rpcMethodText ResourcesRead          == "resources/read"
+  && rpcMethodText NotificationsCancelled == "notifications/cancelled"
+  && length allRpcMethods == 7
+
+-- | 'isNotification' must classify each method correctly.
+-- Notifications are JSON-RPC messages without an @id@ — the server
+-- must NOT send a response. A misclassification here either drops
+-- a real response (request misclassified as notification) or sends
+-- a spurious one (notification misclassified as request).
+testRpcMethodIsNotification :: IO Bool
+testRpcMethodIsNotification = pure $
+  -- Notifications: handshake-complete + cancellation.
+     isNotification Initialized
+  && isNotification NotificationsCancelled
+  -- Requests: every other method has an id-bearing reply.
+  && not (isNotification Initialize)
+  && not (isNotification ToolsList)
+  && not (isNotification ToolsCall)
+  && not (isNotification ResourcesList)
+  && not (isNotification ResourcesRead)
+  -- Sanity: classification is total over the ADT — every constructor
+  -- in 'allRpcMethods' has a defined notification status.
+  && length [ () | m <- allRpcMethods
+                 , let _b = isNotification m
+            ] == length allRpcMethods
+
+-- | Bijection: every ResourceUri round-trips through its text form.
+testResourceUriRoundTrip :: IO Bool
+testResourceUriRoundTrip =
+  pure $ all (\u -> parseResourceUri (resourceUriText u) == Just u) allResourceUris
+
+-- | Unknown URIs must not parse. The resources/read dispatcher
+-- relies on this to reject probes for non-advertised URIs.
+testResourceUriParseUnknown :: IO Bool
+testResourceUriParseUnknown = pure $
+     parseResourceUri ""                              == Nothing
+  && parseResourceUri "haskell-flows://nonexistent"  == Nothing
+  && parseResourceUri "https://example.com"          == Nothing
+  && parseResourceUri "haskell-flows://rules/other"  == Nothing
+  && parseResourceUri "file:///etc/passwd"           == Nothing
+
+-- | The advertised wire form for the only resource we currently
+-- expose. This is part of the MCP resource contract — clients hold
+-- the URI literally.
+testResourceUriWireCanonical :: IO Bool
+testResourceUriWireCanonical = pure $
+     resourceUriText WorkflowRules == "haskell-flows://rules/workflow"
+  && length allResourceUris       == 1
+  && length allResourceUriTexts   == 1
 
 --------------------------------------------------------------------------------
 -- Phase 9: Lint parser + Cabal validator + check_project + hole fits

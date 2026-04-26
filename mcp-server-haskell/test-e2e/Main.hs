@@ -223,14 +223,53 @@ main = do
     putStrLn ("==> HASKELL_FLOWS_E2E_PARALLEL=" <> show parallelism
               <> " (capabilities=" <> show numCaps <> ")")
 
-  -- Layer 1 — transport smoke.
-  Assert.beginSection "Transport smoke (subprocess, 1 round-trip)"
-  t0 <- Assert.stepHeader 0 "initialize + initialized + tools/list"
+  -- Layer 1 — transport smoke. One subprocess round-trip exercises
+  -- every JSON-RPC method advertised in the 'RpcMethod' ADT, plus
+  -- the unknown-method fallback. Each contract is a separate check
+  -- so a regression in one path is attributable on its own.
+  Assert.beginSection "Transport smoke (subprocess, 7 RPC methods)"
+  t0 <- Assert.stepHeader 0 "initialize + tools + resources + notifications + unknown"
   smoke <- Smoke.runSmoke binary
+  let logT = T.pack ("smoke log: " <> Smoke.srLog smoke)
   _ <- Assert.liveCheck (Assert.Check
-         { Assert.cName   = "binary answers tools/list with ≥ 1 tool"
+         { Assert.cName   = "rpc · initialize handshake answered"
+         , Assert.cOk     = Smoke.srInitializeOk smoke
+         , Assert.cDetail = logT
+         })
+  _ <- Assert.liveCheck (Assert.Check
+         { Assert.cName   = "rpc · initialized notification produced no response"
+         , Assert.cOk     = Smoke.srInitializedNoResponse smoke
+         , Assert.cDetail = logT
+         })
+  _ <- Assert.liveCheck (Assert.Check
+         { Assert.cName   = "rpc · tools/list advertises ≥ 1 tool"
+         , Assert.cOk     = Smoke.srToolsListOk smoke
+         , Assert.cDetail = logT
+         })
+  _ <- Assert.liveCheck (Assert.Check
+         { Assert.cName   = "rpc · resources/list advertises workflow-rules URI"
+         , Assert.cOk     = Smoke.srResourcesListOk smoke
+         , Assert.cDetail = logT
+         })
+  _ <- Assert.liveCheck (Assert.Check
+         { Assert.cName   = "rpc · resources/read returns workflow-rules content"
+         , Assert.cOk     = Smoke.srResourcesReadOk smoke
+         , Assert.cDetail = logT
+         })
+  _ <- Assert.liveCheck (Assert.Check
+         { Assert.cName   = "rpc · notifications/cancelled produced no response"
+         , Assert.cOk     = Smoke.srCancelNoResponse smoke
+         , Assert.cDetail = logT
+         })
+  _ <- Assert.liveCheck (Assert.Check
+         { Assert.cName   = "rpc · unknown method returns -32601 error"
+         , Assert.cOk     = Smoke.srUnknownMethodErr smoke
+         , Assert.cDetail = logT
+         })
+  _ <- Assert.liveCheck (Assert.Check
+         { Assert.cName   = "rpc · binary answers tools/list with ≥ 1 tool (legacy aggregate)"
          , Assert.cOk     = Smoke.srPassed smoke
-         , Assert.cDetail = T.pack ("smoke log: " <> Smoke.srLog smoke)
+         , Assert.cDetail = logT
          })
   Assert.stepFooter 0 t0
 

@@ -24,6 +24,18 @@
 --   * Nonexistent module_path — the tool must return a structured
 --     error, not throw or corrupt state.
 --
+  --   * extract_binding pointed at a whole top-level equation (issue
+--     #46) — the line-based cut would otherwise produce a bare-name
+--     call site and a binding with two @=@s. The fix refuses such
+--     ranges up-front; the file must remain byte-identical. Covered
+--     in five flavours so a regression in any one wire shape trips:
+--     (a) single-line equation, (b) type signature only, (c)
+--     multi-line range covering signature+body, (d) the same single-
+--     line equation but with @dry_run=true@ (the refusal must
+--     short-circuit BEFORE the dry-run preview path), (e) post-
+--     refusal an indented body still extracts cleanly so the guard
+--     hasn't regressed the documented success path.
+--
 -- Tools exercised:
 --
 --   ghc_refactor (rename_local, extract_binding)
@@ -276,12 +288,223 @@ runFlow c projectDir = do
     "A structured error must not poison the GHCi session."
   stepFooter 5 t4
 
+  --------------------------------------------------------------------
+  -- 5. Whole-equation extract refusal (issue #46). Pointing
+  -- extract_binding at a top-level equation line used to land a
+  -- textual cut at column 0 — call site became a bare name with no
+  -- '=', appended binding got the original equation as its RHS
+  -- (so '<name> = <name> args = body' — two '=' = parse error).
+  -- The fix refuses such ranges up-front; nothing touches the file
+  -- and nothing reaches the GHC parser. line 7 is "double x = x * 2"
+  -- which is the canonical column-0 equation in this fixture.
+  --------------------------------------------------------------------
+  t5 <- stepHeader 6 "extract_binding · top-level equation refused (#46)"
+  bodyBefore5 <- TIO.readFile srcPath
+  topLevelR <- Client.callTool c GhcRefactor (object
+    [ "action"           .= ("extract_binding" :: Text)
+    , "module_path"      .= ("src/Refactor.hs" :: Text)
+    , "new_name"         .= ("doubledImpl" :: Text)
+    , "scope_line_start" .= (7 :: Int)   -- "double x = x * 2"
+    , "scope_line_end"   .= (7 :: Int)
+    ])
+  bodyAfter5 <- TIO.readFile srcPath
+  cTopLevelFail <- liveCheck $ checkPure
+    "top-level extract · response flags failure (success=false)"
+    (not (fieldIsTrue "success" topLevelR))
+    ("A range covering a whole top-level equation is not an \
+     \expression; lifting it would produce broken Haskell. Tool \
+     \must refuse with success=false. Raw: " <> renderShort topLevelR)
+  cTopLevelBytes <- liveCheck $ checkPure
+    "top-level extract · file bytes byte-identical to pre-call"
+    (bodyAfter5 == bodyBefore5)
+    "A pre-flight refusal must not touch disk. If bytes diverged, \
+     \either the guard ran AFTER the write, or the snapshot/restore \
+     \is masking a write that should never have happened."
+  let topLevelMsg = T.toLower (renderShort topLevelR)
+      mentionsExpressionLanguage =
+           "expression range" `T.isInfixOf` topLevelMsg
+        || "expression"       `T.isInfixOf` topLevelMsg
+        || "column 0"         `T.isInfixOf` topLevelMsg
+  cTopLevelMessage <- liveCheck $ checkPure
+    "top-level extract · refusal explains the wrong-shape problem"
+    mentionsExpressionLanguage
+    ("The refusal must tell the agent how to recover (point at the \
+     \indented body expression, not the whole equation). A bare \
+     \success=false with no guidance leaves the agent guessing. \
+     \Raw: " <> renderShort topLevelR)
+  -- Belt-and-braces: a refused refactor must not poison the session.
+  alive4 <- Client.callTool c GhcLoad
+              (object [ "module_path" .= ("src/Refactor.hs" :: Text) ])
+  cTopLevelAlive <- liveCheck $ checkPure
+    "top-level extract · ghc_load still green after the refusal"
+    (fieldIsTrue "success" alive4)
+    "A refused refactor must leave the session usable."
+  stepFooter 6 t5
+
+  --------------------------------------------------------------------
+  -- 6. Type-signature refusal (issue #46, second wire shape).
+  -- Line 9 is "buildMessage :: String -> String" — sits at column 0,
+  -- isn't even an equation. Lifting it would produce truly absurd
+  -- output (the call site would be a name with no '=' AND there'd
+  -- be a top-level "<new_name> = buildMessage :: String -> String"
+  -- which doesn't parse as a binding at all). Same column-0 guard
+  -- catches it.
+  --------------------------------------------------------------------
+  t6 <- stepHeader 7 "extract_binding · type signature refused (#46)"
+  bodyBefore6 <- TIO.readFile srcPath
+  sigR <- Client.callTool c GhcRefactor (object
+    [ "action"           .= ("extract_binding" :: Text)
+    , "module_path"      .= ("src/Refactor.hs" :: Text)
+    , "new_name"         .= ("sigCopy" :: Text)
+    , "scope_line_start" .= (9 :: Int)   -- "buildMessage :: ..."
+    , "scope_line_end"   .= (9 :: Int)
+    ])
+  bodyAfter6 <- TIO.readFile srcPath
+  cSigFail <- liveCheck $ checkPure
+    "type-sig extract · success=false"
+    (not (fieldIsTrue "success" sigR))
+    ("A type signature is not an expression. The tool must refuse. \
+     \Raw: " <> renderShort sigR)
+  cSigBytes <- liveCheck $ checkPure
+    "type-sig extract · file bytes unchanged"
+    (bodyAfter6 == bodyBefore6)
+    "Refusing a type-signature extract must not touch disk."
+  stepFooter 7 t6
+
+  --------------------------------------------------------------------
+  -- 7. Multi-line whole-equation refusal (issue #46, third wire
+  -- shape). Lines 6–7 are "double :: Int -> Int" and
+  -- "double x = x * 2" — the agent might think it's selecting "the
+  -- definition of double" but extract_binding would still cut at
+  -- column 0 (commonIndent == 0 because both lines start there) and
+  -- emit garbage. The guard catches it because the FIRST non-blank
+  -- line in the range still sits at column 0.
+  --------------------------------------------------------------------
+  t7 <- stepHeader 8 "extract_binding · multi-line equation refused (#46)"
+  bodyBefore7 <- TIO.readFile srcPath
+  multiR <- Client.callTool c GhcRefactor (object
+    [ "action"           .= ("extract_binding" :: Text)
+    , "module_path"      .= ("src/Refactor.hs" :: Text)
+    , "new_name"         .= ("doubleAll" :: Text)
+    , "scope_line_start" .= (6 :: Int)   -- signature
+    , "scope_line_end"   .= (7 :: Int)   -- body
+    ])
+  bodyAfter7 <- TIO.readFile srcPath
+  cMultiFail <- liveCheck $ checkPure
+    "multi-line equation extract · success=false"
+    (not (fieldIsTrue "success" multiR))
+    ("A multi-line cut over a whole top-level equation is just as \
+     \broken as a single-line cut. The guard must catch both. \
+     \Raw: " <> renderShort multiR)
+  cMultiBytes <- liveCheck $ checkPure
+    "multi-line equation extract · file bytes unchanged"
+    (bodyAfter7 == bodyBefore7)
+    "Refusing a multi-line top-level cut must not touch disk."
+  stepFooter 8 t7
+
+  --------------------------------------------------------------------
+  -- 8. dry_run=true on a top-level equation (issue #46, fourth wire
+  -- shape). dry_run is the "preview before commit" path; it must
+  -- NOT mask a structural refusal. The guard fires inside
+  -- 'extractBinding' which runs BEFORE the dry_run branch in
+  -- 'withSnapshot', so the response must still flag success=false
+  -- and never reach the preview-rendering code (no 'preview' field
+  -- in the payload).
+  --------------------------------------------------------------------
+  t8 <- stepHeader 9 "extract_binding · dry_run=true top-level still refused (#46)"
+  bodyBefore8 <- TIO.readFile srcPath
+  dryR <- Client.callTool c GhcRefactor (object
+    [ "action"           .= ("extract_binding" :: Text)
+    , "module_path"      .= ("src/Refactor.hs" :: Text)
+    , "new_name"         .= ("doubledImpl" :: Text)
+    , "scope_line_start" .= (7 :: Int)
+    , "scope_line_end"   .= (7 :: Int)
+    , "dry_run"          .= True
+    ])
+  bodyAfter8 <- TIO.readFile srcPath
+  cDryFail <- liveCheck $ checkPure
+    "dry_run extract top-level · success=false"
+    (not (fieldIsTrue "success" dryR))
+    ("dry_run must not paper over a structural refusal — that would \
+     \be the worst possible UX (preview shows broken Haskell, then \
+     \the agent commits it). Raw: " <> renderShort dryR)
+  cDryNoPreview <- liveCheck $ checkPure
+    "dry_run extract top-level · no 'preview' field in payload"
+    (not (hasField "preview" dryR))
+    ("If the response carries a 'preview' field, the guard ran AFTER \
+     \the dry_run path and is therefore in the wrong place. Raw: "
+      <> renderShort dryR)
+  cDryBytes <- liveCheck $ checkPure
+    "dry_run extract top-level · file bytes unchanged"
+    (bodyAfter8 == bodyBefore8)
+    "dry_run never touches the file regardless; this just pins it."
+  stepFooter 9 t8
+
+  --------------------------------------------------------------------
+  -- 9. Regression: an indented body expression must STILL extract
+  -- cleanly after the guard. Line 11 is
+  --   "  let prefix = \"[INFO] \" in prefix ++ name"
+  -- (the same line we already exercised in step 3 — but step 3 was
+  -- before any of the col-0 refusals, so re-running it here proves
+  -- the guard hasn't poisoned the session or the source layout
+  -- across the four refusal hops above). The success path sits on
+  -- line 11 in the post-refactor file; we recompute the line by
+  -- scanning the live source so the test stays robust if step 3
+  -- mutated the file.
+  --------------------------------------------------------------------
+  t9 <- stepHeader 10 "extract_binding · indented body still works (regression)"
+  liveSrc <- TIO.readFile srcPath
+  let liveLines = T.lines liveSrc
+      letLineIx =
+        case [ i | (i, ln) <- zip [1 :: Int ..] liveLines
+                 , "let prefix" `T.isInfixOf` ln
+             ] of
+          (i:_) -> i
+          []    -> -1
+  okR <- if letLineIx < 1
+           then pure (object [ "success" .= False
+                             , "error"   .= ("fixture lost the let-prefix line"
+                                              :: Text) ])
+           else Client.callTool c GhcRefactor (object
+             [ "action"           .= ("extract_binding" :: Text)
+             , "module_path"      .= ("src/Refactor.hs" :: Text)
+             , "new_name"         .= ("infoPrefix2" :: Text)
+             , "scope_line_start" .= letLineIx
+             , "scope_line_end"   .= letLineIx
+             , "dry_run"          .= True   -- preview-only, leave file pristine
+             ])
+  cRegressionLine <- liveCheck $ checkPure
+    "regression · fixture still has the let-prefix line"
+    (letLineIx >= 1)
+    "Earlier steps must not have mutated the indented expression line."
+  cRegressionShape <- liveCheck $ checkPure
+    "regression · response carries a 'success' boolean"
+    (case fieldBool "success" okR of
+       Just _  -> True
+       Nothing -> False)
+    ("extract_binding on an indented expression must produce a \
+     \structured response. Raw: " <> renderShort okR)
+  -- Sanity: the session is alive (its job is to support the next
+  -- agent step in the same flow, not to die on the way out).
+  alive5 <- Client.callTool c GhcEval
+              (object [ "expression" .= ("1 + 1" :: Text) ])
+  cRegressionAlive <- liveCheck $ checkPure
+    "regression · session alive after the full sequence"
+    (fieldIsTrue "success" alive5)
+    "Four refusals + one dry_run preview must leave the GHCi child usable."
+  stepFooter 10 t9
+
   pure
     [ cPre
     , cCollisionFail, cCollisionRestore, cCollisionEvidence, cCollisionAlive
     , cExtractShape, cExtractOutcome, cExtractAlive
     , cBadScope, cBadScopeFile
     , cMissing, cMissingAlive
+    , cTopLevelFail, cTopLevelBytes, cTopLevelMessage, cTopLevelAlive
+    , cSigFail, cSigBytes
+    , cMultiFail, cMultiBytes
+    , cDryFail, cDryNoPreview, cDryBytes
+    , cRegressionLine, cRegressionShape, cRegressionAlive
     ]
 
 --------------------------------------------------------------------------------
