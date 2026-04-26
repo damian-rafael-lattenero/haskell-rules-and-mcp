@@ -33,6 +33,11 @@ import System.FilePath (takeExtension, (</>))
 
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Parser.ModuleName
+  ( ModuleNameError
+  , renderModuleNameError
+  , validateModuleNames
+  )
 import HaskellFlows.Tool.AddModules (moduleToPath, parseModuleList)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath, unProjectDir)
 
@@ -96,19 +101,33 @@ instance FromJSON RemoveModulesArgs where
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
-  Right (RemoveModulesArgs mods deleteFiles) -> do
-    mCabal <- findCabalFile pd
-    case mCabal of
-      Nothing -> pure (errorResult "No .cabal file found in project root")
-      Just file -> do
-        eCabal <- tryRewriteCabal file mods
-        case eCabal of
-          Left err -> pure (errorResult err)
-          Right removedFromCabal -> do
-            deleted <- if deleteFiles
-                         then deleteSourceFiles pd removedFromCabal
-                         else pure []
-            pure (successResult removedFromCabal deleted)
+  Right (RemoveModulesArgs mods deleteFiles) ->
+    -- ISSUE-47: refuse names that violate the module-name grammar
+    -- symmetrically with 'ghc_add_modules'. Two motivations:
+    --   (1) typo-defence — agents calling remove with a malformed
+    --       name are almost certainly buggy, and proceeding would
+    --       corrupt-then-rewrite the .cabal in confusing ways;
+    --   (2) consistency — the grammar contract is owned at the tool
+    --       boundary, not duplicated per-callsite.
+    --
+    -- Recovery from a manually-corrupted .cabal (rare; pre-fix or
+    -- hand-edited) requires direct file editing — by construction,
+    -- post-fix add_modules/remove_modules cannot create that state.
+    case validateModuleNames mods of
+      (rejected@(_:_), _) -> pure (rejectionResult rejected)
+      ([], validated) -> do
+        mCabal <- findCabalFile pd
+        case mCabal of
+          Nothing -> pure (errorResult "No .cabal file found in project root")
+          Just file -> do
+            eCabal <- tryRewriteCabal file validated
+            case eCabal of
+              Left err -> pure (errorResult err)
+              Right removedFromCabal -> do
+                deleted <- if deleteFiles
+                             then deleteSourceFiles pd removedFromCabal
+                             else pure []
+                pure (successResult removedFromCabal deleted)
 
 --------------------------------------------------------------------------------
 -- cabal rewriting
@@ -288,6 +307,40 @@ errorResult msg =
         [ "success" .= False, "error" .= msg ])) ]
     , trIsError = True
     }
+
+-- | Mirror of 'HaskellFlows.Tool.AddModules.rejectionResult' (kept
+-- in this module to avoid a one-helper export from AddModules and
+-- to let the two tools diverge if we ever need different hint
+-- copy). See ISSUE-47.
+rejectionResult :: [(Text, ModuleNameError)] -> ToolResult
+rejectionResult entries =
+  let n        = length entries
+      summary  = "rejected " <> tshow n <> " invalid module name"
+                              <> (if n == 1 then "" else "s")
+                              <> "; see 'rejected' for details"
+      rendered = [ object
+                     [ "name"   .= name
+                     , "reason" .= renderModuleNameError err
+                     ]
+                 | (name, err) <- entries
+                 ]
+      payload = object
+        [ "success"  .= False
+        , "error"    .= summary
+        , "rejected" .= rendered
+        , "hint"     .= ("Haskell module names follow conid('.'conid)*, \
+                         \where each conid starts with an uppercase \
+                         \ASCII letter and may contain A-Z, a-z, 0-9, \
+                         \underscore, and apostrophe. Reserved keywords \
+                         \(module, where, class, ...) are rejected." :: Text)
+        ]
+  in ToolResult
+       { trContent = [ TextContent (encodeUtf8Text payload) ]
+       , trIsError = True
+       }
+
+tshow :: Show a => a -> Text
+tshow = T.pack . show
 
 encodeUtf8Text :: Value -> Text
 encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

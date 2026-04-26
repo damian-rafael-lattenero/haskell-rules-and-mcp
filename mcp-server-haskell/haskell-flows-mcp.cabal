@@ -59,6 +59,7 @@ library
                       HaskellFlows.Parser.Coverage
                       HaskellFlows.Parser.Error
                       HaskellFlows.Parser.Hole
+                      HaskellFlows.Parser.ModuleName
                       HaskellFlows.Parser.QuickCheck
                       HaskellFlows.Parser.Type
                       HaskellFlows.Parser.TypeSignature
@@ -150,12 +151,14 @@ test-suite haskell-flows-mcp-test
     build-depends:    base              >= 4.20 && < 5
                     , haskell-flows-mcp
                     , aeson             >= 2.2  && < 2.3
+                    , bytestring        >= 0.11 && < 0.13
                     , containers        >= 0.6  && < 0.9
                     , text
                     , directory         >= 1.3  && < 1.4
                     , filepath          >= 1.4  && < 1.6
                     , ghc               >= 9.10 && < 9.15
                     , time              >= 1.12 && < 1.16
+                    , vector            >= 0.13 && < 0.14
                     , QuickCheck        >= 2.14
 
 -- --------------------------------------------------------------------------
@@ -209,6 +212,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowOversizedInput
                       Scenarios.FlowSandboxEscape
                       Scenarios.FlowTimeoutEnforcement
+                      Scenarios.FlowModuleNameGuard
                       Scenarios.FlowMutation
                       Scenarios.FlowPropertyLifecycle
                       Scenarios.FlowPropertyStoreRace

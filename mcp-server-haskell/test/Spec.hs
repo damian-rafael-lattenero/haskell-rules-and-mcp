@@ -11,8 +11,13 @@ module Main where
 
 import qualified Data.Aeson as A
 import Data.Aeson (object, (.=))
+import qualified Data.Aeson.Key as AKey
+import qualified Data.Aeson.KeyMap as AKM
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.Set as Set
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import qualified Data.Vector as Vector
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -149,6 +154,14 @@ import HaskellFlows.Parser.Coverage
   ( CoverageReport (..)
   , Metric (..)
   , parseCoverage
+  )
+import HaskellFlows.Parser.ModuleName
+  ( ModuleNameError (..)
+  , isReservedKeyword
+  , renderModuleNameError
+  , reservedKeywords
+  , validateModuleName
+  , validateModuleNames
   )
 import HaskellFlows.Tool.Deps
   ( addDep
@@ -399,6 +412,63 @@ main = do
       , test "add_modules: moduleToPath mapping"   testAddModulesPath
       , test "apply_exports: rewriteHeader idempotent" testApplyExportsIdempotent
       , test "apply_exports: injects exports"      testApplyExportsInjects
+      -- ISSUE-47: module-name validator unit tests
+      , test "modname: valid single segment"        testValidModuleNameSingle
+      , test "modname: valid dotted name"           testValidModuleNameDotted
+      , test "modname: valid underscores"           testValidModuleNameUnderscore
+      , test "modname: valid apostrophes"           testValidModuleNameApostrophe
+      , test "modname: valid digits after first"    testValidModuleNameDigits
+      , test "modname: trims whitespace"            testValidModuleNameTrim
+      , test "modname: rejects 'lowercase.module'"  testInvalidLowercaseModule
+      , test "modname: rejects bare reserved 'module'"
+          testInvalidReservedBare
+      , test "modname: rejects reserved second segment"
+          testInvalidReservedSecond
+      , test "modname: rejects empty input"         testInvalidEmpty
+      , test "modname: rejects whitespace-only"     testInvalidWhitespace
+      , test "modname: rejects trailing dot"        testInvalidTrailingDot
+      , test "modname: rejects leading dot"         testInvalidLeadingDot
+      , test "modname: rejects double dot"          testInvalidDoubleDot
+      , test "modname: rejects leading digit"       testInvalidLeadingDigit
+      , test "modname: rejects hyphen"              testInvalidHyphen
+      , test "modname: rejects space"               testInvalidSpace
+      , test "modname: bulk preserves order"        testValidateBulkOrderPreserved
+      , test "modname: bulk all-good"               testValidateBulkAllGood
+      , test "modname: bulk all-bad"                testValidateBulkAllBad
+      , test "modname: bulk trims accepted"         testValidateBulkTrimsAccepted
+      , test "modname: every reserved keyword refused"
+          testReservedKeywordsAllRejected
+      , test "modname: keyword set covers issue list"
+          testReservedKeywordsCoverIssueList
+      , test "modname: isReservedKeyword case-sensitive"
+          testReservedKeywordsCaseSensitive
+      , test "modname: rendered error is actionable"
+          testRenderErrorActionable
+      , test "modname: rendered keyword error suggests fix"
+          testRenderErrorReservedSuggests
+      , test "modname: rendered empty-segment error"
+          testRenderErrorEmptySegment
+      , test "modname: rendered invalid-char error"
+          testRenderErrorInvalidChar
+      , test "modname: every error renders non-empty"
+          testRenderErrorAllNonEmpty
+      -- ISSUE-47: handler-boundary E2E tests
+      , test "add_modules: refuses lowercase.module (handler)"
+          testHandleAddModulesRefusesLowercaseModule
+      , test "add_modules: atomic refusal on mixed batch"
+          testHandleAddModulesAtomicRefusal
+      , test "add_modules: lists every offender"
+          testHandleAddModulesAllOffendersListed
+      , test "add_modules: happy path still works"
+          testHandleAddModulesHappyPathStillWorks
+      , test "remove_modules: refuses invalid name"
+          testHandleRemoveModulesRefuses
+      , test "remove_modules: happy path still works"
+          testHandleRemoveModulesHappyPath
+      , test "apply_exports: refuses reserved keyword"
+          testHandleApplyExportsRefusesKeyword
+      , test "apply_exports: accepts lowercase function"
+          testHandleApplyExportsAcceptsLowercase
       , test "fix_warning: plan for unused imports" testFixWarningUnusedImports
       , test "workflow-state: initial empty"       testWorkflowStateInitial
       , test "workflow-state: tracks load + edits" testWorkflowStateTracks
@@ -3146,6 +3216,485 @@ testApplyExportsInjects =
   in case ApplyExports.rewriteHeader ["a", "b"] body of
        Just newBody -> pure (T.isInfixOf "module Foo (a, b) where" newBody)
        Nothing      -> pure False
+
+--------------------------------------------------------------------------------
+-- ISSUE-47 — Module-name validator (Parser.ModuleName)
+--
+-- The validator is the single boundary that prevents @ghc_add_modules@
+-- and @ghc_remove_modules@ from corrupting the project's @.cabal@.
+-- These tests pin BOTH the happy paths (so we don't accidentally
+-- start rejecting valid Haskell module names) AND every documented
+-- rejection shape (so a future refactor can't silently weaken the
+-- guard).
+--
+-- Tested invariants:
+--
+--   * @validateModuleName@ accepts every legal Haskell 2010 module
+--     identifier shape we expect from real-world callers.
+--   * It rejects every shape that would corrupt the @.cabal@ when
+--     written verbatim into @exposed-modules@.
+--   * Errors carry actionable diagnostics — the rendered message
+--     names the input AND suggests a fix.
+--   * 'validateModuleNames' is order-preserving and partitions the
+--     input cleanly into rejected/accepted, so the handler can
+--     refuse the whole batch atomically.
+--   * Every keyword in 'reservedKeywords' is actually rejected when
+--     used as a single-segment name.
+--------------------------------------------------------------------------------
+
+-- | Happy path: simplest single-segment uppercase name.
+testValidModuleNameSingle :: IO Bool
+testValidModuleNameSingle = pure $
+  validateModuleName "Foo" == Right "Foo"
+
+-- | Happy path: dotted multi-segment name.
+testValidModuleNameDotted :: IO Bool
+testValidModuleNameDotted = pure $
+  validateModuleName "Foo.Bar.Baz" == Right "Foo.Bar.Baz"
+
+-- | Happy path: underscores AFTER the first letter are legal.
+testValidModuleNameUnderscore :: IO Bool
+testValidModuleNameUnderscore = pure $
+  validateModuleName "Foo_Bar.Baz_Qux" == Right "Foo_Bar.Baz_Qux"
+
+-- | Happy path: apostrophes (Haskell prime convention) are legal.
+testValidModuleNameApostrophe :: IO Bool
+testValidModuleNameApostrophe = pure $
+  validateModuleName "Foo'.Bar''" == Right "Foo'.Bar''"
+
+-- | Happy path: digits AFTER the first character are legal.
+testValidModuleNameDigits :: IO Bool
+testValidModuleNameDigits = pure $
+  validateModuleName "Foo123.B4r" == Right "Foo123.B4r"
+
+-- | The validator trims surrounding whitespace and returns the
+-- canonicalised form — the handler uses the returned 'Text', so a
+-- trailing space can't survive into the @.cabal@.
+testValidModuleNameTrim :: IO Bool
+testValidModuleNameTrim = pure $
+  validateModuleName "  Foo.Bar  " == Right "Foo.Bar"
+
+-- | The exact bug from issue #47: lowercase first segment leaks
+-- through line-based handlers and parse-corrupts the @.cabal@.
+-- The first failure encountered is the lowercase first segment;
+-- the second segment ('module', a reserved keyword) is also bad
+-- but the validator stops at the first error, which is the more
+-- actionable diagnostic for the LLM.
+testInvalidLowercaseModule :: IO Bool
+testInvalidLowercaseModule = case validateModuleName "lowercase.module" of
+  Left (MNESegmentLeadingNotUpper raw seg) ->
+    pure (raw == "lowercase.module" && seg == "lowercase")
+  _ -> pure False
+
+-- | Reserved-keyword rejection: 'module' as a bare name fires the
+-- keyword check, NOT the lowercase-leading check (the keyword check
+-- is intentionally first so the agent sees the more actionable
+-- error message).
+testInvalidReservedBare :: IO Bool
+testInvalidReservedBare = case validateModuleName "module" of
+  Left (MNESegmentReserved raw seg) ->
+    pure (raw == "module" && seg == "module")
+  _ -> pure False
+
+-- | Reserved keyword in the SECOND segment ('Foo.module') — the
+-- canonical second-segment-keyword case the issue calls out.
+testInvalidReservedSecond :: IO Bool
+testInvalidReservedSecond = case validateModuleName "Foo.module" of
+  Left (MNESegmentReserved raw seg) ->
+    pure (raw == "Foo.module" && seg == "module")
+  _ -> pure False
+
+-- | Empty input.
+testInvalidEmpty :: IO Bool
+testInvalidEmpty = pure (validateModuleName "" == Left MNEEmpty)
+
+-- | Whitespace-only input — same behaviour as empty (after strip).
+testInvalidWhitespace :: IO Bool
+testInvalidWhitespace = pure (validateModuleName "   \t\n  " == Left MNEEmpty)
+
+-- | Trailing dot produces an empty segment.
+testInvalidTrailingDot :: IO Bool
+testInvalidTrailingDot = case validateModuleName "Foo." of
+  Left (MNESegmentEmpty raw) -> pure (raw == "Foo.")
+  _                          -> pure False
+
+-- | Leading dot produces an empty segment.
+testInvalidLeadingDot :: IO Bool
+testInvalidLeadingDot = case validateModuleName ".Foo" of
+  Left (MNESegmentEmpty raw) -> pure (raw == ".Foo")
+  _                          -> pure False
+
+-- | Doubled dot produces an empty segment in the middle.
+testInvalidDoubleDot :: IO Bool
+testInvalidDoubleDot = case validateModuleName "Foo..Bar" of
+  Left (MNESegmentEmpty raw) -> pure (raw == "Foo..Bar")
+  _                          -> pure False
+
+-- | Leading digit on the first segment.
+testInvalidLeadingDigit :: IO Bool
+testInvalidLeadingDigit = case validateModuleName "1Foo" of
+  Left (MNESegmentLeadingDigit raw seg) ->
+    pure (raw == "1Foo" && seg == "1Foo")
+  _ -> pure False
+
+-- | Hyphen in name — common mistake porting Cabal package names
+-- (which DO use hyphens) into module names (which don't).
+testInvalidHyphen :: IO Bool
+testInvalidHyphen = case validateModuleName "Foo-Bar" of
+  Left (MNESegmentInvalidChar raw seg c) ->
+    pure (raw == "Foo-Bar" && seg == "Foo-Bar" && c == '-')
+  _ -> pure False
+
+-- | Space in name — almost always a copy-paste accident.
+testInvalidSpace :: IO Bool
+testInvalidSpace = case validateModuleName "Foo Bar" of
+  Left (MNESegmentInvalidChar raw _ c) ->
+    pure (raw == "Foo Bar" && c == ' ')
+  _ -> pure False
+
+-- | Bulk validator preserves order in BOTH partitions.
+testValidateBulkOrderPreserved :: IO Bool
+testValidateBulkOrderPreserved =
+  let (rejected, accepted) = validateModuleNames
+        ["A", "lowercase", "B", "Foo.module", "C"]
+      rejectedNames = map fst rejected
+  in pure
+       (  accepted == ["A", "B", "C"]
+       && rejectedNames == ["lowercase", "Foo.module"]
+       )
+
+-- | Bulk validator on all-good input yields no rejections.
+testValidateBulkAllGood :: IO Bool
+testValidateBulkAllGood =
+  let (rejected, accepted) = validateModuleNames ["Foo", "Foo.Bar", "Baz"]
+  in pure (null rejected && accepted == ["Foo", "Foo.Bar", "Baz"])
+
+-- | Bulk validator on all-bad input yields no acceptances.
+testValidateBulkAllBad :: IO Bool
+testValidateBulkAllBad =
+  let (rejected, accepted) = validateModuleNames ["1Foo", "lowercase", ""]
+      rejectedNames        = map fst rejected
+  in pure
+       (  null accepted
+       && rejectedNames == ["1Foo", "lowercase", ""]
+       )
+
+-- | Bulk validator preserves trim-canonicalisation on accepted entries.
+testValidateBulkTrimsAccepted :: IO Bool
+testValidateBulkTrimsAccepted =
+  let (rejected, accepted) = validateModuleNames ["  Foo  ", " Bar "]
+  in pure (null rejected && accepted == ["Foo", "Bar"])
+
+-- | Every keyword in 'reservedKeywords' is rejected when used as a
+-- bare single-segment name. Pins the keyword set: a future change
+-- that adds (e.g.) 'forall' must also extend this assertion.
+testReservedKeywordsAllRejected :: IO Bool
+testReservedKeywordsAllRejected =
+  pure $ all rejected (Set.toList reservedKeywords)
+  where
+    rejected kw = case validateModuleName kw of
+      Left (MNESegmentReserved _ seg) -> seg == kw
+      _ -> False
+
+-- | The keyword list specifically covers the names called out in
+-- issue #47. We pin them explicitly so a refactor that drops one
+-- (e.g. dropping 'instance' by accident) is caught here, not in
+-- production via a corrupted .cabal.
+testReservedKeywordsCoverIssueList :: IO Bool
+testReservedKeywordsCoverIssueList =
+  pure $ all isReservedKeyword
+    [ "module", "where", "let", "case", "do", "if", "then", "else"
+    , "class", "instance", "data", "type", "newtype", "default"
+    , "deriving", "import", "infix", "infixl", "infixr"
+    ]
+
+-- | Predicate: 'isReservedKeyword' is case-sensitive — uppercase
+-- 'Module' is a legal module name (and indeed common for utility
+-- modules).
+testReservedKeywordsCaseSensitive :: IO Bool
+testReservedKeywordsCaseSensitive = pure $
+     not (isReservedKeyword "Module")
+  && not (isReservedKeyword "Where")
+  &&     isReservedKeyword "module"
+
+-- | Rendered error mentions the offending input + a suggested fix
+-- so the LLM can self-correct without another round-trip.
+testRenderErrorActionable :: IO Bool
+testRenderErrorActionable =
+  let msg = renderModuleNameError
+              (MNESegmentLeadingNotUpper "lowercase.module" "lowercase")
+  in pure
+       (  T.isInfixOf "lowercase.module" msg
+       && T.isInfixOf "lowercase"        msg
+       && (T.isInfixOf "Did you mean"     msg
+           || T.isInfixOf "uppercase"      msg)
+       )
+
+-- | Rendered keyword error names the keyword AND offers a renamed
+-- suggestion (e.g. 'moduleMod') so the agent has a concrete fix.
+testRenderErrorReservedSuggests :: IO Bool
+testRenderErrorReservedSuggests =
+  let msg = renderModuleNameError (MNESegmentReserved "Foo.module" "module")
+  in pure
+       (  T.isInfixOf "module"          msg
+       && T.isInfixOf "reserved"        msg
+       && (T.isInfixOf "Mod"            msg
+           || T.isInfixOf "rename"      (T.toLower msg))
+       )
+
+-- | Rendered empty-segment error mentions the canonical fix shape
+-- "Foo.Bar" so the agent doesn't have to look up the grammar.
+testRenderErrorEmptySegment :: IO Bool
+testRenderErrorEmptySegment =
+  let msg = renderModuleNameError (MNESegmentEmpty "Foo..Bar")
+  in pure
+       (  T.isInfixOf "Foo..Bar"     msg
+       && T.isInfixOf "empty segment" msg
+       && T.isInfixOf "Foo.Bar"       msg
+       )
+
+-- | Rendered invalid-char error names the offending character so
+-- the LLM doesn't need to scan the input to find it.
+testRenderErrorInvalidChar :: IO Bool
+testRenderErrorInvalidChar =
+  let msg = renderModuleNameError (MNESegmentInvalidChar "Foo-Bar" "Foo-Bar" '-')
+  in pure
+       (  T.isInfixOf "Foo-Bar" msg
+       && T.isInfixOf "'-'"     msg
+       )
+
+-- | Property-shaped: the rendered error message is non-empty for
+-- every error constructor — guards against future refactors that
+-- might leave a constructor unhandled in 'renderModuleNameError'.
+testRenderErrorAllNonEmpty :: IO Bool
+testRenderErrorAllNonEmpty =
+  let inputs =
+        [ MNEEmpty
+        , MNESegmentEmpty "Foo."
+        , MNESegmentReserved "module" "module"
+        , MNESegmentLeadingNotUpper "foo" "foo"
+        , MNESegmentLeadingDigit "1Foo" "1Foo"
+        , MNESegmentInvalidChar "Foo-" "Foo-" '-'
+        ]
+  in pure (all (not . T.null . renderModuleNameError) inputs)
+
+--------------------------------------------------------------------------------
+-- ISSUE-47 — End-to-end @ghc_add_modules@ refusal at the handler boundary
+--
+-- These tests drive the FULL handler against a tempdir-backed
+-- @.cabal@. They prove:
+--
+--   (a) the validator is wired into the handler — bad input is
+--       refused before any IO.
+--   (b) the @.cabal@ is byte-identical pre/post call when at least
+--       one name is invalid (atomic refusal — no partial writes).
+--   (c) the rejection payload is structured exactly as the issue
+--       specifies: success=false, error, rejected[{name,reason}].
+--   (d) symmetric behaviour for @ghc_remove_modules@.
+--   (e) @ghc_apply_exports@ rejects reserved keywords.
+--   (f) regression: the happy path still succeeds and writes to
+--       both the @.cabal@ AND the filesystem.
+--------------------------------------------------------------------------------
+
+-- | Minimal scaffolded .cabal a tempdir flow can write/read.
+fixtureCabal :: Text
+fixtureCabal = T.unlines
+  [ "cabal-version: 3.0"
+  , "name:          fixture"
+  , "version:       0.0.0"
+  , "library"
+  , "    default-language: GHC2024"
+  , "    hs-source-dirs:   src"
+  , "    exposed-modules:  Foo"
+  , "    build-depends:    base"
+  ]
+
+-- | Drive 'AddModules.handle' against a tempdir @ProjectDir@ with
+-- a freshly-written fixture .cabal. Returns (cabal-after, payload).
+withFixture :: (ProjectDir -> FilePath -> IO a) -> IO a
+withFixture k = do
+  tmp <- getTemporaryDirectory
+  ts  <- show <$> getTestTimestamp
+  let dir       = tmp </> ("haskell-flows-mn-" <> ts)
+      cabalFile = dir </> "fixture.cabal"
+  createDirectoryIfMissing True dir
+  TIO.writeFile cabalFile fixtureCabal
+  res <- case mkProjectDir dir of
+    Left _   -> error "fixture: mkProjectDir failed"
+    Right pd -> k pd cabalFile
+  removePathForcibly dir
+  pure res
+
+-- | The exact bug from issue #47 — driven through the handler.
+-- AFTER the fix the handler MUST refuse the call AND leave the
+-- .cabal unmodified.
+testHandleAddModulesRefusesLowercaseModule :: IO Bool
+testHandleAddModulesRefusesLowercaseModule = withFixture $ \pd cabalFile -> do
+  let args = A.object [ "modules" A..= (["lowercase.module"] :: [Text]) ]
+  before <- TIO.readFile cabalFile
+  result <- AddModules.handle pd args
+  after  <- TIO.readFile cabalFile
+  let isErr   = trIsError result
+      payload = extractPayload result
+  pure
+    (  isErr
+    && before == after
+    && hasField "rejected" payload
+    && fieldEquals "success" (A.Bool False) payload
+    )
+
+-- | Atomic refusal: ANY bad name in the batch MUST refuse the
+-- entire call. The good name is NOT registered. (Without atomic
+-- refusal the agent's worldview drifts from disk reality.)
+testHandleAddModulesAtomicRefusal :: IO Bool
+testHandleAddModulesAtomicRefusal = withFixture $ \pd cabalFile -> do
+  let args = A.object
+        [ "modules" A..= (["GoodOne", "lowercase.module", "GoodTwo"] :: [Text]) ]
+  before <- TIO.readFile cabalFile
+  _      <- AddModules.handle pd args
+  after  <- TIO.readFile cabalFile
+  pure
+    (  before == after
+    && not ("GoodOne" `T.isInfixOf` after)
+    && not ("GoodTwo" `T.isInfixOf` after)
+    )
+
+-- | The rejection payload MUST list every offender so the LLM can
+-- fix all bad names in one round-trip (not N round-trips, one per
+-- bad name).
+testHandleAddModulesAllOffendersListed :: IO Bool
+testHandleAddModulesAllOffendersListed = withFixture $ \pd _ -> do
+  let args = A.object
+        [ "modules" A..= (["1Foo", "lowercase", "Foo.module"] :: [Text]) ]
+  result <- AddModules.handle pd args
+  let payload   = extractPayload result
+      rejected  = lookupField "rejected" payload
+      names     = case rejected of
+        Just (A.Array xs) -> map (lookupField "name") (Vector.toList xs)
+        _                 -> []
+  pure $ Just (A.String "1Foo")        `elem` names
+      && Just (A.String "lowercase")   `elem` names
+      && Just (A.String "Foo.module")  `elem` names
+
+-- | Regression: the happy path still works post-fix. We write a
+-- valid module and verify both the .cabal and a stub source file
+-- get created.
+testHandleAddModulesHappyPathStillWorks :: IO Bool
+testHandleAddModulesHappyPathStillWorks = withFixture $ \pd cabalFile -> do
+  let args = A.object [ "modules" A..= (["NewMod"] :: [Text]) ]
+  result <- AddModules.handle pd args
+  after  <- TIO.readFile cabalFile
+  -- Stub file exists at the conventional location.
+  stubExists <- doesFileExist
+                  (HaskellFlows.Types.unProjectDir pd </> "src" </> "NewMod.hs")
+  pure
+    (  not (trIsError result)
+    && "NewMod" `T.isInfixOf` after
+    && stubExists
+    )
+
+-- | Symmetric: 'ghc_remove_modules' refuses the same shape. Even
+-- though removal is "destructive" (the bad name was never legal in
+-- the first place), the handler refuses on principle so a typo
+-- can't propagate.
+testHandleRemoveModulesRefuses :: IO Bool
+testHandleRemoveModulesRefuses = withFixture $ \pd cabalFile -> do
+  let args = A.object [ "modules" A..= (["lowercase.module"] :: [Text]) ]
+  before <- TIO.readFile cabalFile
+  result <- RM.handle pd args
+  after  <- TIO.readFile cabalFile
+  pure
+    (  trIsError result
+    && before == after
+    && hasField "rejected" (extractPayload result)
+    )
+
+-- | Symmetric regression: 'ghc_remove_modules' still removes when
+-- given a valid name.
+testHandleRemoveModulesHappyPath :: IO Bool
+testHandleRemoveModulesHappyPath = withFixture $ \pd cabalFile -> do
+  let args = A.object [ "modules" A..= (["Foo"] :: [Text]) ]
+  result <- RM.handle pd args
+  after  <- TIO.readFile cabalFile
+  -- The fixture starts with 'Foo' on the exposed-modules header
+  -- line; after the call that line should no longer carry 'Foo'
+  -- as a value (the bare 'exposed-modules:' header survives).
+  let exposedLines =
+        [ ln | ln <- T.lines after
+             , "exposed-modules:" `T.isInfixOf` T.toLower (T.stripStart ln) ]
+      headerStripped = case exposedLines of
+        (ln:_) -> T.strip (T.drop (T.length "exposed-modules:")
+                          (T.dropWhile (/= ':') ln))
+        []     -> "no-exposed-modules-line"
+  pure (not (trIsError result) && headerStripped /= "Foo")
+
+-- | 'ghc_apply_exports' refuses a reserved keyword as an export.
+-- The module file is NOT modified — same atomic-refusal contract.
+testHandleApplyExportsRefusesKeyword :: IO Bool
+testHandleApplyExportsRefusesKeyword = withFixture $ \pd _ -> do
+  let projectDir = HaskellFlows.Types.unProjectDir pd
+      modulePath = projectDir </> "src" </> "Widget.hs"
+      original   = T.unlines
+        [ "module Widget where"
+        , "greet :: String"
+        , "greet = \"hi\""
+        ]
+  createDirectoryIfMissing True (projectDir </> "src")
+  TIO.writeFile modulePath original
+  let args = A.object
+        [ "module_path" A..= ("src/Widget.hs" :: Text)
+        , "exports"     A..= (["greet", "module"] :: [Text])
+        ]
+  result <- ApplyExports.handle pd args
+  bodyAfter <- TIO.readFile modulePath
+  pure
+    (  trIsError result
+    && bodyAfter == original
+    && hasField "rejected" (extractPayload result)
+    )
+
+-- | 'ghc_apply_exports' regression: lowercase function-name exports
+-- are still legal (exports != module names).
+testHandleApplyExportsAcceptsLowercase :: IO Bool
+testHandleApplyExportsAcceptsLowercase = withFixture $ \pd _ -> do
+  let projectDir = HaskellFlows.Types.unProjectDir pd
+      modulePath = projectDir </> "src" </> "Widget.hs"
+  createDirectoryIfMissing True (projectDir </> "src")
+  TIO.writeFile modulePath (T.unlines ["module Widget where", "greet = \"hi\""])
+  let args = A.object
+        [ "module_path" A..= ("src/Widget.hs" :: Text)
+        , "exports"     A..= (["greet"] :: [Text])
+        ]
+  result <- ApplyExports.handle pd args
+  bodyAfter <- TIO.readFile modulePath
+  pure (not (trIsError result) && "(greet) where" `T.isInfixOf` bodyAfter)
+
+--------------------------------------------------------------------------------
+-- helpers shared by the handler-boundary tests
+--------------------------------------------------------------------------------
+
+-- | Decode a 'ToolResult' content payload back into a JSON 'Value'
+-- so the tests can pattern-match on field shape (success, error,
+-- rejected[]). Mirrors what an MCP client would do.
+extractPayload :: ToolResult -> A.Value
+extractPayload tr = case trContent tr of
+  (TextContent t : _) -> case A.eitherDecodeStrict (encodeUtf8Strict t) of
+    Right v -> v
+    Left _  -> A.Null
+  _ -> A.Null
+  where
+    encodeUtf8Strict = BL.toStrict . TLE.encodeUtf8 . TL.fromStrict
+
+hasField :: Text -> A.Value -> Bool
+hasField k (A.Object o) = AKM.member (AKey.fromText k) o
+hasField _ _            = False
+
+lookupField :: Text -> A.Value -> Maybe A.Value
+lookupField k (A.Object o) = AKM.lookup (AKey.fromText k) o
+lookupField _ _            = Nothing
+
+fieldEquals :: Text -> A.Value -> A.Value -> Bool
+fieldEquals k expected v = lookupField k v == Just expected
 
 testFixWarningUnusedImports :: IO Bool
 testFixWarningUnusedImports =

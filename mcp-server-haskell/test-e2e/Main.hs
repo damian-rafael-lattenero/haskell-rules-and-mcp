@@ -53,6 +53,7 @@ import qualified Scenarios.FlowNonUTF8           as FlowNU
 import qualified Scenarios.FlowOversizedInput   as FlowOI
 import qualified Scenarios.FlowSandboxEscape     as FlowSE
 import qualified Scenarios.FlowTimeoutEnforcement as FlowTE
+import qualified Scenarios.FlowModuleNameGuard   as FlowMNG
 import qualified Scenarios.FlowMutation          as FlowMut
 import qualified Scenarios.FlowPropertyLifecycle as FlowPL
 import qualified Scenarios.FlowPropertyStoreRace as FlowPSR
@@ -125,6 +126,8 @@ scenarios =
     , False, FlowTB.runFlow )
   , ( "Flow: Injection guard (newline / sentinel / path traversal)"
     , False, FlowIG.runFlow )
+  , ( "Flow: Module-name guard (ISSUE-47 · invalid module / export names refused)"
+    , False, FlowMNG.runFlow )
   , ( "Flow: Graceful miss (deps remove / hole-free / non-predicate QC)"
     , False, FlowGM.runFlow )
   , ( "Flow: Session robustness (user throws don't kill GHCi)"

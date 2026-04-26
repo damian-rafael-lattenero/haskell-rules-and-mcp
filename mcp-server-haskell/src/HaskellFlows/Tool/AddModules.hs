@@ -17,7 +17,6 @@ module HaskellFlows.Tool.AddModules
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
-import Data.List (foldl')
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
@@ -29,6 +28,11 @@ import System.FilePath (takeDirectory, takeExtension, (</>))
 
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Parser.ModuleName
+  ( ModuleNameError
+  , renderModuleNameError
+  , validateModuleNames
+  )
 import qualified HaskellFlows.Tool.Deps as Deps
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath, unProjectDir)
 
@@ -171,19 +175,26 @@ handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
   Right (AddModulesArgs mods mStanzaRaw) ->
-    case resolveStanzaTarget mStanzaRaw of
-      Left err -> pure (errorResult err)
-      Right tgt -> do
-        mCabal <- findCabalFile pd
-        case mCabal of
-          Nothing -> pure (errorResult "No .cabal file found in project root")
-          Just file -> do
-            (createdFiles, existingFiles) <- scaffoldFiles pd tgt mods
-            eCabal <- tryRewriteCabal file tgt mods
-            case eCabal of
-              Left err -> pure (errorResult err)
-              Right addedToCabal ->
-                pure (successResult tgt createdFiles existingFiles addedToCabal)
+    -- ISSUE-47: validate module names BEFORE any IO. Refuse the
+    -- entire batch on the first invalid name — partial registration
+    -- would leave the .cabal mid-corruption and the agent has no
+    -- way to know which entries succeeded vs which were rejected.
+    case validateModuleNames mods of
+      (rejected@(_:_), _) -> pure (rejectionResult rejected)
+      ([], validated) ->
+        case resolveStanzaTarget mStanzaRaw of
+          Left err -> pure (errorResult err)
+          Right tgt -> do
+            mCabal <- findCabalFile pd
+            case mCabal of
+              Nothing -> pure (errorResult "No .cabal file found in project root")
+              Just file -> do
+                (createdFiles, existingFiles) <- scaffoldFiles pd tgt validated
+                eCabal <- tryRewriteCabal file tgt validated
+                case eCabal of
+                  Left err -> pure (errorResult err)
+                  Right addedToCabal ->
+                    pure (successResult tgt createdFiles existingFiles addedToCabal)
 
 --------------------------------------------------------------------------------
 -- stanza target
@@ -435,6 +446,42 @@ errorResult msg =
         [ "success" .= False, "error" .= msg ])) ]
     , trIsError = True
     }
+
+-- | Structured rejection payload (ISSUE-47). Each entry pairs the
+-- offending input with the rendered diagnostic so the agent can
+-- (a) see exactly which name was rejected and (b) self-correct in
+-- one round-trip. The top-level @error@ field summarises the count
+-- so a curious LLM can decide between \"fix one typo\" and
+-- \"reconsider the whole list\".
+rejectionResult :: [(Text, ModuleNameError)] -> ToolResult
+rejectionResult entries =
+  let n        = length entries
+      summary  = "rejected " <> tshow n <> " invalid module name"
+                              <> (if n == 1 then "" else "s")
+                              <> "; see 'rejected' for details"
+      rendered = [ object
+                     [ "name"   .= name
+                     , "reason" .= renderModuleNameError err
+                     ]
+                 | (name, err) <- entries
+                 ]
+      payload = object
+        [ "success"  .= False
+        , "error"    .= summary
+        , "rejected" .= rendered
+        , "hint"     .= ("Haskell module names follow conid('.'conid)*, \
+                         \where each conid starts with an uppercase \
+                         \ASCII letter and may contain A-Z, a-z, 0-9, \
+                         \underscore, and apostrophe. Reserved keywords \
+                         \(module, where, class, ...) are rejected." :: Text)
+        ]
+  in ToolResult
+       { trContent = [ TextContent (encodeUtf8Text payload) ]
+       , trIsError = True
+       }
+
+tshow :: Show a => a -> Text
+tshow = T.pack . show
 
 encodeUtf8Text :: Value -> Text
 encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
