@@ -39,21 +39,21 @@ import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString.Lazy as BL
 import Data.Maybe (fromMaybe)
-import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
-import System.IO (hFlush, hPutStrLn, stdout)
+import System.IO (hFlush, stdout)
 import System.Process (readProcessWithExitCode)
 import qualified Data.Vector as V
 
 import HaskellFlows.Mcp.Protocol
   ( Request (..)
   , Response (..)
-  , ToolContent (..)
   )
+import HaskellFlows.Mcp.RpcMethod (RpcMethod (..), rpcMethodText)
 import HaskellFlows.Mcp.Server (Server, defaultServer, handleRequest)
+import HaskellFlows.Mcp.ToolName (ToolName, toolNameText)
 
 -- | Minimal client handle. Holds a live 'Server' plus the
 -- previous value of @HASKELL_PROJECT_DIR@ so 'close' can
@@ -96,14 +96,15 @@ close c = case mcPrevDir c of
 -- dispatcher via a callback — works end-to-end. Our earlier
 -- 'dispatchTool'-only path silently mapped 'ghc_batch' to the
 -- "Unknown tool" fallback (it's not in the case-list there).
-callTool :: McpClient -> Text -> Value -> IO Value
-callTool c name args = do
+callTool :: McpClient -> ToolName -> Value -> IO Value
+callTool c tool args = do
+  let name = toolNameText tool
   putStrLn ("    [mcp] → " <> show name <> " …")
   hFlush stdout
   t0 <- getPOSIXTime
   let req = Request
         { reqJsonrpc = "2.0"
-        , reqMethod  = "tools/call"
+        , reqMethod  = rpcMethodText ToolsCall
         , reqParams  = Just (object
             [ "name"      .= name
             , "arguments" .= args

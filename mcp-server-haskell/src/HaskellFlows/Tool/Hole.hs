@@ -25,6 +25,7 @@ import HaskellFlows.Ghc.ApiSession
   , targetForPath
   )
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error (GhcError, renderGhciStyle)
 import HaskellFlows.Parser.Hole
   ( HoleFit (..)
@@ -37,7 +38,7 @@ import HaskellFlows.Types
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_hole"
+    { tdName        = toolNameText GhcHole
     , tdDescription =
         "Load a module under -fdefer-typed-holes and return every typed "
           <> "hole with its expected type and relevant bindings. Use this "

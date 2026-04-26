@@ -32,13 +32,14 @@ import System.Directory (doesFileExist, listDirectory, removeFile)
 import System.FilePath (takeExtension, (</>))
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Tool.AddModules (moduleToPath, parseModuleList)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath, unProjectDir)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_remove_modules"
+    { tdName        = toolNameText GhcRemoveModules
     , tdDescription =
         "De-register modules from the project's .cabal exposed-modules "
           <> "list. Source files are NOT deleted by default — pass "

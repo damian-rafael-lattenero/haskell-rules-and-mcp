@@ -56,13 +56,14 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | Main client 'c' is the one that comes in via runFlow — we
 -- spawn a second client pointing at the same project dir for
 -- the concurrent leg.
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("concurrency-demo" :: Text) ])
 
   -- Build a second client pointed at the same project dir. This
@@ -71,13 +72,13 @@ runFlow c projectDir = do
   d <- Client.newClient "" [ ("HASKELL_PROJECT_DIR", projectDir) ]
 
   t0 <- stepHeader 1 "concurrent · both clients add distinct deps"
-  let addA = Client.callTool c "ghc_deps"
+  let addA = Client.callTool c GhcDeps
                (object
                  [ "action"  .= ("add" :: Text)
                  , "package" .= ("text" :: Text)
                  , "version" .= (">= 1.2" :: Text)
                  ])
-      addB = Client.callTool d "ghc_deps"
+      addB = Client.callTool d GhcDeps
                (object
                  [ "action"  .= ("add" :: Text)
                  , "package" .= ("bytestring" :: Text)
@@ -104,7 +105,7 @@ runFlow c projectDir = do
   -- wrong field, saw [], and reported a false race. The oracle
   -- now checks the real data.
   t1 <- stepHeader 2 "ground truth · ghc_deps(list) has both deps"
-  ls <- Client.callTool c "ghc_deps"
+  ls <- Client.callTool c GhcDeps
           (object [ "action" .= ("list" :: Text) ])
   let pkgs = buildDeps ls
       hasText = any ("text" `T.isInfixOf`) pkgs
@@ -121,9 +122,9 @@ runFlow c projectDir = do
   -- Both sessions must still be responsive. A wedge in one should
   -- not propagate to the other (they're separate GHCi children).
   t2 <- stepHeader 3 "sessions alive · both clients still eval"
-  aliveA <- Client.callTool c "ghc_eval"
+  aliveA <- Client.callTool c GhcEval
               (object [ "expression" .= ("1 + 1" :: Text) ])
-  aliveB <- Client.callTool d "ghc_eval"
+  aliveB <- Client.callTool d GhcEval
               (object [ "expression" .= ("2 + 2" :: Text) ])
   let aOk = fieldBool "success" aliveA == Just True
          && case lookupField "output" aliveA of

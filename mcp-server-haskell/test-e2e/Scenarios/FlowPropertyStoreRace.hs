@@ -53,10 +53,11 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("propstore-race-demo" :: Text) ])
 
   -- Second client pointed at the same project dir. Each client
@@ -69,9 +70,9 @@ runFlow c projectDir = do
 
   t0 <- stepHeader 1 "contention · 2 × ghc_quickcheck against same dist-newstyle"
   (rA, rB) <- concurrently
-    (Client.callTool c "ghc_quickcheck"
+    (Client.callTool c GhcQuickCheck
        (object [ "property" .= (propA :: Text) ]))
-    (Client.callTool d "ghc_quickcheck"
+    (Client.callTool d GhcQuickCheck
        (object [ "property" .= (propB :: Text) ]))
 
   let aSucc    = fieldBool "success" rA == Just True

@@ -16,7 +16,7 @@ module HaskellFlows.Mcp.Server
   , dispatchTool
     -- * Canonical tool registry (shared with ghc_workflow's status view)
   , allToolDescriptors
-  , allToolNames
+  , allToolNameTexts
     -- * Per-tool timeout envelope (F-12 defence)
   , toolTimeoutMicros
     -- * GHC-API session (Phase-1 scaffolding, docs/GHC-API-rewrite-plan.md)
@@ -49,11 +49,24 @@ import HaskellFlows.Ghc.ApiSession
   , killGhcSession
   , startGhcSession
   )
+import HaskellFlows.Mcp.ErrorKind (ErrorKind (..), renderErrorKind)
 import HaskellFlows.Mcp.Guidance (sessionInstructionsText, workflowRulesMarkdown)
 import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ResourceUri (ResourceUri (..), parseResourceUri)
 import HaskellFlows.Mcp.Resources (allResources)
+import HaskellFlows.Mcp.RpcMethod
+  ( RpcMethod (..)
+  , isNotification
+  , parseRpcMethod
+  )
 import HaskellFlows.Mcp.Staleness (checkStaleness)
+import HaskellFlows.Mcp.ToolName
+  ( ToolName (..)
+  , allToolNameTexts
+  , parseToolName
+  , toolNameText
+  )
 import HaskellFlows.Mcp.WorkflowState
   ( WorkflowStateRef
   , newWorkflowStateRef
@@ -171,17 +184,33 @@ defaultServer = do
 -- | Dispatch a single parsed request. 'Nothing' means the input was a
 -- notification (e.g. @initialized@) and the caller should not write a
 -- reply.
+--
+-- Method routing goes through 'parseRpcMethod' first: any wire-string
+-- outside the closed 'RpcMethod' enumeration short-circuits to either
+-- a silent drop (for notifications shaped requests with no id) or
+-- @methodNotFoundErr@. After the parse, 'dispatch' is exhaustive over
+-- 'RpcMethod' so a new method requires a new handler clause — typos
+-- can not silently degrade to "method not found".
 handleRequest :: Server -> Request -> IO (Maybe Response)
-handleRequest srv req = case (reqMethod req, reqId req) of
-  -- notifications — no id, no reply
-  ("initialized",          Nothing)  -> pure Nothing
-  ("notifications/cancelled", Nothing) -> pure Nothing
-  -- requests — always have an id
-  (_, Nothing) -> pure Nothing  -- notification to an unknown method
-  (method, Just rid) -> Just <$> dispatch srv method (reqParams req) rid
+handleRequest srv req = case parseRpcMethod (reqMethod req) of
+  Just m
+    | isNotification m, Nothing <- reqId req ->
+        -- spec-compliant notification — no reply
+        pure Nothing
+    | otherwise -> case reqId req of
+        Nothing  ->
+          -- request shaped as notification (no id) for a non-notification
+          -- method; MCP spec says ignore silently
+          pure Nothing
+        Just rid -> Just <$> dispatch srv m (reqParams req) rid
+  Nothing -> case reqId req of
+    -- unknown method without an id is a notification we don't understand;
+    -- spec says ignore (don't reply with an error)
+    Nothing  -> pure Nothing
+    Just rid -> pure (Just (err_ rid (methodNotFoundErr (reqMethod req))))
 
-dispatch :: Server -> Text -> Maybe Value -> RequestId -> IO Response
-dispatch _ "initialize" _ rid =
+dispatch :: Server -> RpcMethod -> Maybe Value -> RequestId -> IO Response
+dispatch _ Initialize _ rid =
   pure $ ok rid $ toJSON $
     InitializeResult
       { irProtocolVersion = "2024-11-05"
@@ -193,23 +222,25 @@ dispatch _ "initialize" _ rid =
       , irInstructions    =
           Just (sessionInstructionsText allToolDescriptors)
       }
-dispatch _ "tools/list" _ rid =
+dispatch _ ToolsList _ rid =
   pure $ ok rid $ object [ "tools" .= allToolDescriptors ]
-dispatch _ "resources/list" _ rid =
+dispatch _ ResourcesList _ rid =
   pure $ ok rid $ object [ "resources" .= allResources ]
-dispatch _ "resources/read" (Just params) rid =
+dispatch _ ResourcesRead (Just params) rid =
   case parseEither parseJSON params :: Either String Value of
     Left err -> pure (err_ rid (invalidParamsErr (T.pack err)))
     Right v  -> case v of
       Object o -> case KeyMap.lookup "uri" o of
-        Just (String u) -> case renderResource u of
-          Just contents -> pure $ ok rid $ object
-            [ "contents" .= [ object
-                [ "uri"      .= u
-                , "mimeType" .= ("text/markdown" :: Text)
-                , "text"     .= contents
-                ] ]
-            ]
+        Just (String u) -> case parseResourceUri u of
+          Just uri ->
+            let contents = renderResource uri
+            in pure $ ok rid $ object
+                 [ "contents" .= [ object
+                     [ "uri"      .= u
+                     , "mimeType" .= ("text/markdown" :: Text)
+                     , "text"     .= contents
+                     ] ]
+                 ]
           Nothing -> pure (err_ rid (invalidParamsErr ("unknown resource uri: " <> u)))
         _ -> pure (err_ rid (invalidParamsErr "resources/read requires a `uri` string"))
       _ -> pure (err_ rid (invalidParamsErr "resources/read params must be an object"))
@@ -218,25 +249,37 @@ dispatch _ "resources/read" (Just params) rid =
     -- Keeping this inline (not in Resources.hs) avoids a cyclic
     -- import: Resources advertises URI metadata; Server owns the
     -- renderer because it has access to 'allToolDescriptors'.
-    renderResource :: Text -> Maybe Text
-    renderResource uri = case uri of
-      "haskell-flows://rules/workflow" ->
-        Just (workflowRulesMarkdown allToolDescriptors)
-      _ -> Nothing
-dispatch _ "resources/read" Nothing rid =
+    --
+    -- Exhaustive over 'ResourceUri': adding a new resource here is a
+    -- compile-time obligation, not a runtime "unknown URI" surprise.
+    renderResource :: ResourceUri -> Text
+    renderResource = \case
+      WorkflowRules -> workflowRulesMarkdown allToolDescriptors
+dispatch _ ResourcesRead Nothing rid =
   pure (err_ rid (invalidParamsErr "resources/read requires params"))
-dispatch srv "tools/call" (Just params) rid =
+dispatch srv ToolsCall (Just params) rid =
   case parseEither parseJSON params of
     Left err -> pure (err_ rid (invalidParamsErr (T.pack err)))
     Right call -> handleToolCall srv call rid
-dispatch _ "tools/call" Nothing rid =
+dispatch _ ToolsCall Nothing rid =
   pure (err_ rid (invalidParamsErr "tools/call requires params"))
-dispatch _ m _ rid =
-  pure (err_ rid (methodNotFoundErr m))
+-- Notifications should never reach 'dispatch' (filtered by 'handleRequest'
+-- before we get an id). If they do, treat as a protocol violation: the
+-- client sent an id alongside a notification-shaped method.
+dispatch _ Initialized _ rid =
+  pure (err_ rid (invalidParamsErr "'initialized' is a notification and must not carry an id"))
+dispatch _ NotificationsCancelled _ rid =
+  pure (err_ rid (invalidParamsErr "'notifications/cancelled' is a notification and must not carry an id"))
 
 handleToolCall :: Server -> ToolCall -> RequestId -> IO Response
-handleToolCall srv call rid = case tcName call of
-  "ghc_batch" ->
+handleToolCall srv call rid = case parseToolName (tcName call) of
+  Nothing ->
+    -- Wire sent a tool name we don't have a constructor for. Synthesize
+    -- the same shape 'dispatchTool' would have emitted via its old
+    -- catch-all branch. We skip 'runTool' (no state tracking, no
+    -- nextStep injection — there is no canonical ToolName to key by).
+    pure (ok rid (toJSON (unknownToolResult (tcName call))))
+  Just GhcBatch ->
     -- Special case: batch has to be routed here (not inside
     -- dispatchTool) because it needs the dispatcher as a callback
     -- and dispatchTool would recurse with no termination on
@@ -248,10 +291,10 @@ handleToolCall srv call rid = case tcName call of
     -- 'dispatchTool' -> 'runTool'. A global 6-minute bound here is
     -- the defence of last resort against a pathological batch, not
     -- the per-action cap.
-    runTool srv (tcName call) rid
+    runTool srv GhcBatch rid
       (BatchTool.handle (dispatchTool srv) (tcArguments call))
-  _ ->
-    runTool srv (tcName call) rid (dispatchTool srv call)
+  Just tn ->
+    runTool srv tn rid (dispatchByName srv (tcArguments call) tn)
 
 -- | Pure (non-response-wrapping) tool dispatcher. Exposed so
 -- 'HaskellFlows.Tool.Batch' can recurse without pulling Server's
@@ -259,175 +302,184 @@ handleToolCall srv call rid = case tcName call of
 -- 'ToolResult' rather than raising — that way a ghc_batch run with
 -- one bad action still completes the remaining good ones.
 dispatchTool :: Server -> ToolCall -> IO ToolResult
-dispatchTool srv call = case tcName call of
-  "ghc_load" -> do
+dispatchTool srv call = case parseToolName (tcName call) of
+  Nothing -> pure (unknownToolResult (tcName call))
+  Just tn -> dispatchByName srv (tcArguments call) tn
+
+-- | Exhaustive dispatch from 'ToolName' to the corresponding handler.
+-- @-Wincomplete-patterns@ guarantees that adding a constructor to
+-- 'ToolName' without wiring its handler is a compile error — pre-ADT
+-- the same omission silently fell through to "Unknown tool".
+dispatchByName :: Server -> Value -> ToolName -> IO ToolResult
+dispatchByName srv args = \case
+  GhcLoad -> do
     -- Wave-2 full GhcSession: cabal-aware stanza compile via
     -- loadForTarget, diagnostics captured from the logger hook,
     -- rendered to GHCi-style text so agents still see 'raw' output.
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
-    Load.handle ghcSess pd (tcArguments call)
-  "ghc_type" -> do
+    Load.handle ghcSess pd args
+  GhcType -> do
     -- Phase-2 migrated: reads from the in-process GHC API session,
     -- not the legacy subprocess ghci. Auto-load on first call keeps
     -- the FlowExploratory 'type(localBinding)' scenario green.
     ghcSess <- getOrStartGhcSession srv
-    TypeTool.handle ghcSess (tcArguments call)
-  "ghc_info" -> do
+    TypeTool.handle ghcSess args
+  GhcInfo -> do
     -- Phase-2 migrated: getInfo + TyThing classification.
     ghcSess <- getOrStartGhcSession srv
-    InfoTool.handle ghcSess (tcArguments call)
-  "ghc_eval" -> do
+    InfoTool.handle ghcSess args
+  GhcEval -> do
     -- Wave-5 full in-process. Fast path: show-wrap + compileExpr.
     -- Fallback: evalIOString (for IO-typed expressions).
     ghcSess <- getOrStartGhcSession srv
-    EvalTool.handle ghcSess (tcArguments call)
-  "ghc_quickcheck" -> do
+    EvalTool.handle ghcSess args
+  GhcQuickCheck -> do
     -- Wave-3 full in-process: compileExpr + unsafeCoerce of a
     -- Test.QuickCheck.quickCheckWithResult invocation.
     ghcSess <- getOrStartGhcSession srv
-    QcTool.handle (srvStore srv) ghcSess (tcArguments call)
-  "ghc_hole" -> do
+    QcTool.handle (srvStore srv) ghcSess args
+  GhcHole -> do
     -- Wave-2 full GhcSession: Deferred compile via stanza flags,
     -- diagnostics captured through the logger hook, rendered to
     -- GHCi-style text for parseTypedHoles.
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
-    HoleTool.handle ghcSess pd (tcArguments call)
-  "ghc_arbitrary" -> do
+    HoleTool.handle ghcSess pd args
+  GhcArbitrary -> do
     -- Wave-4 full GhcSession: parseName + getInfo + showPprUnsafe.
     ghcSess <- getOrStartGhcSession srv
-    ArbitraryTool.handle ghcSess (tcArguments call)
-  "hoogle_search" ->
-    HoogleTool.handle (tcArguments call)
-  "ghc_workflow" -> do
+    ArbitraryTool.handle ghcSess args
+  HoogleSearch ->
+    HoogleTool.handle args
+  GhcWorkflow -> do
     ws        <- readState (srvWorkflowState srv)
     staleness <- checkStaleness (srvBinaryPath srv) (srvBootPosix srv)
     WorkflowTool.handle
       (srvProjectDir srv)
       (srvGhcSession srv)
-      allToolNames
+      allToolNameTexts
       ws
       staleness
-      (tcArguments call)
-  "ghc_regression" -> do
+      args
+  GhcRegression -> do
     -- Wave-3 full in-process replay via evalIOString.
     ghcSess <- getOrStartGhcSession srv
-    RegressionTool.handle (srvStore srv) ghcSess (tcArguments call)
-  "ghc_check_module" -> do
+    RegressionTool.handle (srvStore srv) ghcSess args
+  GhcCheckModule -> do
     -- Wave-5 full GhcSession: compile/warnings/holes + in-process
     -- property replay via Regression.runOne.
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
-    CheckModuleTool.handle ghcSess (srvStore srv) pd (tcArguments call)
-  "ghc_coverage" -> do
+    CheckModuleTool.handle ghcSess (srvStore srv) pd args
+  GhcCoverage -> do
     pd <- readIORef (srvProjectDir srv)
-    CoverageTool.handle pd (tcArguments call)
-  "ghc_complete" -> do
+    CoverageTool.handle pd args
+  GhcComplete -> do
     -- Phase-2 migrated: in-process getNamesInScope + prefix filter.
     ghcSess <- getOrStartGhcSession srv
-    CompleteTool.handle ghcSess (tcArguments call)
-  "ghc_format" -> do
+    CompleteTool.handle ghcSess args
+  GhcFormat -> do
     pd <- readIORef (srvProjectDir srv)
-    r  <- FormatTool.handle pd (tcArguments call)
+    r  <- FormatTool.handle pd args
     invalidateGhcSessionIfPresent srv
     pure r
-  "ghc_deps" -> do
+  GhcDeps -> do
     pd <- readIORef (srvProjectDir srv)
-    r  <- DepsTool.handle pd (tcArguments call)
+    r  <- DepsTool.handle pd args
     -- Stanza flags hold the resolved package set; ghc_deps just
     -- changed it, so re-bootstrap on next session use.
     invalidateStanzaFlagsIfPresent srv
     pure r
-  "ghc_create_project" -> do
+  GhcCreateProject -> do
     pd <- readIORef (srvProjectDir srv)
-    r  <- CreateProjectTool.handle pd (tcArguments call)
+    r  <- CreateProjectTool.handle pd args
     -- New project = completely different stanza set.
     invalidateStanzaFlagsIfPresent srv
     pure r
-  "ghc_doc" -> do
+  GhcDoc -> do
     -- Phase-2 migrated: GHC.getDocs on the resolved Name.
     ghcSess <- getOrStartGhcSession srv
-    DocTool.handle ghcSess (tcArguments call)
-  "ghc_goto" -> do
+    DocTool.handle ghcSess args
+  GhcGoto -> do
     -- Phase-2 migrated: in-process Name -> nameSrcSpan lookup.
     ghcSess <- getOrStartGhcSession srv
-    GotoTool.handle ghcSess (tcArguments call)
-  "ghc_refactor" -> do
+    GotoTool.handle ghcSess args
+  GhcRefactor -> do
     -- Wave-5 full GhcSession: compile-verify via loadForTarget.
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
-    RefactorTool.handle ghcSess pd (tcArguments call)
-  "ghc_lint" -> do
+    RefactorTool.handle ghcSess pd args
+  GhcLint -> do
     pd <- readIORef (srvProjectDir srv)
-    LintTool.handle pd (tcArguments call)
-  "ghc_toolchain_status" ->
-    ToolchainStatusTool.handle (tcArguments call)
-  "ghc_validate_cabal" -> do
+    LintTool.handle pd args
+  GhcToolchainStatus ->
+    ToolchainStatusTool.handle args
+  GhcValidateCabal -> do
     pd <- readIORef (srvProjectDir srv)
-    ValidateCabalTool.handle pd (tcArguments call)
-  "ghc_check_project" -> do
+    ValidateCabalTool.handle pd args
+  GhcCheckProject -> do
     -- Wave-5 full GhcSession (delegates to check_module per file).
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
-    CheckProjectTool.handle ghcSess (srvStore srv) pd (tcArguments call)
-  "ghc_suggest" -> do
+    CheckProjectTool.handle ghcSess (srvStore srv) pd args
+  GhcSuggest -> do
     -- Wave-5 full GhcSession: exprType + module-graph walk for siblings.
     ghcSess <- getOrStartGhcSession srv
-    SuggestTool.handle ghcSess (tcArguments call)
-  "ghc_gate" -> do
+    SuggestTool.handle ghcSess args
+  GhcGate -> do
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
-    GateTool.handle (srvStore srv) ghcSess pd (tcArguments call)
-  "ghc_quickcheck_export" -> do
+    GateTool.handle (srvStore srv) ghcSess pd args
+  GhcQuickCheckExport -> do
     pd <- readIORef (srvProjectDir srv)
-    QcExportTool.handle (srvStore srv) pd (tcArguments call)
-  "ghc_add_import" -> do
-    r <- AddImportTool.handle (tcArguments call)
+    QcExportTool.handle (srvStore srv) pd args
+  GhcAddImport -> do
+    r <- AddImportTool.handle args
     invalidateGhcSessionIfPresent srv
     pure r
-  "ghc_add_modules" -> do
+  GhcAddModules -> do
     pd <- readIORef (srvProjectDir srv)
-    r  <- AddModulesTool.handle pd (tcArguments call)
+    r  <- AddModulesTool.handle pd args
     -- Changes exposed-modules in .cabal, so stanza flags need
     -- re-bootstrap to capture the new unit-id / include path set.
     invalidateStanzaFlagsIfPresent srv
     pure r
-  "ghc_remove_modules" -> do
+  GhcRemoveModules -> do
     pd <- readIORef (srvProjectDir srv)
-    r  <- RemoveModulesTool.handle pd (tcArguments call)
+    r  <- RemoveModulesTool.handle pd args
     invalidateStanzaFlagsIfPresent srv
     pure r
-  "ghc_apply_exports" -> do
+  GhcApplyExports -> do
     pd <- readIORef (srvProjectDir srv)
-    r  <- ApplyExportsTool.handle pd (tcArguments call)
+    r  <- ApplyExportsTool.handle pd args
     invalidateGhcSessionIfPresent srv
     pure r
-  "ghc_fix_warning" -> do
+  GhcFixWarning -> do
     pd <- readIORef (srvProjectDir srv)
-    r  <- FixWarningTool.handle pd (tcArguments call)
+    r  <- FixWarningTool.handle pd args
     invalidateGhcSessionIfPresent srv
     pure r
-  "ghc_imports" -> do
+  GhcImports -> do
     -- Phase-6 migrated: reads from GhcSession's interactive context.
     ghcSess <- getOrStartGhcSession srv
-    ImportsTool.handle ghcSess (tcArguments call)
-  "ghc_browse" -> do
+    ImportsTool.handle ghcSess args
+  GhcBrowse -> do
     -- Phase-2 migrated: in-process getModuleInfo + modInfoExports.
     ghcSess <- getOrStartGhcSession srv
-    BrowseTool.handle ghcSess (tcArguments call)
-  "ghc_determinism" -> do
+    BrowseTool.handle ghcSess args
+  GhcDeterminism -> do
     -- Wave-3 full in-process via evalIOString.
     ghcSess <- getOrStartGhcSession srv
-    DeterminismTool.handle ghcSess (tcArguments call)
-  "ghc_property_lifecycle" ->
-    PropertyLifecycleTool.handle (srvStore srv) (tcArguments call)
-  "ghc_toolchain_warmup" ->
-    ToolchainWarmupTool.handle (tcArguments call)
-  "ghc_bootstrap" -> do
+    DeterminismTool.handle ghcSess args
+  GhcPropertyLifecycle ->
+    PropertyLifecycleTool.handle (srvStore srv) args
+  GhcToolchainWarmup ->
+    ToolchainWarmupTool.handle args
+  GhcBootstrap -> do
     pd <- readIORef (srvProjectDir srv)
-    BootstrapTool.handle pd allToolDescriptors (tcArguments call)
-  "ghc_switch_project" ->
+    BootstrapTool.handle pd allToolDescriptors args
+  GhcSwitchProject ->
     -- SwitchProject is the one tool that mutates BOTH the
     -- project-dir ref AND the session MVar — it takes those
     -- handles directly instead of going through
@@ -436,12 +488,22 @@ dispatchTool srv call = case tcName call of
     SwitchProjectTool.handle
       (srvProjectDir srv)
       (srvGhcSession srv)
-      (tcArguments call)
-  other ->
-    pure ToolResult
-      { trContent = [ TextContent ("Unknown tool: " <> other) ]
-      , trIsError = True
-      }
+      args
+  GhcBatch ->
+    -- Reachable only via 'dispatchTool' (e.g. when 'BatchTool.handle'
+    -- ever recursed into the dispatcher). 'BatchTool' itself rejects
+    -- nesting; this arm exists to keep the case exhaustive.
+    BatchTool.handle (dispatchTool srv) args
+
+-- | Synthesize an error 'ToolResult' for an unknown tool name.
+-- Pulled out so 'handleToolCall' and 'dispatchTool' produce the
+-- exact same shape on the wire.
+unknownToolResult :: Text -> ToolResult
+unknownToolResult name =
+  ToolResult
+    { trContent = [ TextContent ("Unknown tool: " <> name) ]
+    , trIsError = True
+    }
 
 --------------------------------------------------------------------------------
 -- tool registry — single source of truth for both tools/list and
@@ -492,8 +554,13 @@ allToolDescriptors =
   , ToolchainWarmupTool.descriptor
   ]
 
-allToolNames :: [Text]
-allToolNames = map tdName allToolDescriptors
+-- 'allToolNames :: [ToolName]' / 'allToolNameTexts :: [Text]' both
+-- live in 'HaskellFlows.Mcp.ToolName' and are re-exported through
+-- this module's export list. That module derives both from
+-- @[minBound..maxBound]@ — adding a new constructor automatically
+-- adds it to @tools/list@ (vs. the pre-ADT design where the
+-- canonical list was a hand-curated literal list of descriptors
+-- that could silently drift from the dispatcher case-arms).
 
 -- Dynamic @initialize.instructions@ + @resources/read@ rendering
 -- lives in 'HaskellFlows.Mcp.Guidance'; the Server only wires them
@@ -533,7 +600,7 @@ toolTimeoutMicros = 10 * 60 * 1_000_000
 -- next call starts fresh) and return a structured timeout error.
 -- The primary F-12 fix lives in 'Session.hs'; this envelope catches
 -- whatever that fix misses.
-runTool :: Server -> Text -> RequestId -> IO ToolResult -> IO Response
+runTool :: Server -> ToolName -> RequestId -> IO ToolResult -> IO Response
 runTool srv toolName rid action = do
   out <- try (timeout toolTimeoutMicros action)
            :: IO (Either SomeException (Maybe ToolResult))
@@ -543,10 +610,10 @@ runTool srv toolName rid action = do
       -- so the next call starts with a fresh HscEnv, then surface as
       -- a structured error.
       evictGhcSession srv
-      pure (ok rid (toJSON (toolException "tool_exception" (T.pack (show ex)))))
+      pure (ok rid (toJSON (toolException ToolException (T.pack (show ex)))))
     Right Nothing -> do
       evictGhcSession srv
-      pure (ok rid (toJSON (toolException "timeout" (timeoutMsg toolName))))
+      pure (ok rid (toJSON (toolException Timeout (timeoutMsg toolName))))
     Right (Just tr) -> do
       let payload = firstJsonContent tr
       trackTool (srvWorkflowState srv) toolName (not (trIsError tr)) payload
@@ -558,7 +625,7 @@ runTool srv toolName rid action = do
 -- 'suggestNext', and — if it returns 'Just' — splice the
 -- @nextStep@ object in. On any shape mismatch (non-JSON payload,
 -- missing success flag, etc.) the result is returned unchanged.
-enrichWithNextStep :: Text -> ToolResult -> ToolResult
+enrichWithNextStep :: ToolName -> ToolResult -> ToolResult
 enrichWithNextStep toolName tr =
   let payload = firstJsonContent tr
       isOk    = not (trIsError tr)
@@ -577,9 +644,9 @@ firstJsonContent tr = case trContent tr of
   _ -> Null
 
 -- | Human-readable timeout error message for agents.
-timeoutMsg :: Text -> Text
+timeoutMsg :: ToolName -> Text
 timeoutMsg tool =
-  "Tool '" <> tool <> "' exceeded the server's 10-minute hard \
+  "Tool '" <> toolNameText tool <> "' exceeded the server's 10-minute hard \
   \ceiling. The GHCi session has been evicted; the next call will \
   \spawn a fresh one. This is a defence-in-depth trip, not the \
   \normal timeout surface — most tools have tighter internal \
@@ -649,12 +716,12 @@ err_ rid e = Response { respId = rid, respPayload = Left e }
 --                  @"timeout"@, or @"tool_exception"@.
 --
 -- Found by 'Scenarios.FlowTimeoutEnforcement' in the e2e suite.
-toolException :: Text -> Text -> ToolResult
+toolException :: ErrorKind -> Text -> ToolResult
 toolException kind msg =
   let payload = object
         [ "success"    .= False
         , "error"      .= ("Tool threw an exception: " <> msg)
-        , "error_kind" .= kind
+        , "error_kind" .= renderErrorKind kind
         ]
       encoded = TE.decodeUtf8 (BL.toStrict (encode payload))
   in ToolResult

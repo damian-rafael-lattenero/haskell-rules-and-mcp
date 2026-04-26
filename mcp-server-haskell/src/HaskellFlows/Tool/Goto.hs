@@ -45,11 +45,12 @@ import GHC.Utils.Outputable (showPprUnsafe)
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Ghc.Sanitize (CommandError (..), sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_goto"
+    { tdName        = toolNameText GhcGoto
     , tdDescription =
         "Return the source location where a name is defined, via the "
           <> "GHC API's SrcSpan. For cross-module precision you'll want "

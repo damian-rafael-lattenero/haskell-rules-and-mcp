@@ -32,12 +32,13 @@ import GHC.Utils.Outputable (showPprUnsafe)
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Ghc.Sanitize (CommandError (..), sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 -- | The schema surfaced to clients via @tools/list@.
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_type"
+    { tdName        = toolNameText GhcType
     , tdDescription =
         "Get the type of a Haskell expression via the GHC API. "
           <> "Use this to verify types of subexpressions before composing them, "

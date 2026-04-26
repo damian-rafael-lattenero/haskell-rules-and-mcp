@@ -60,6 +60,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | A package name that does not exist on Hackage but is
 -- syntactically valid (lowercase, hyphens, numbers) so
@@ -69,12 +70,12 @@ bogusPkg = "nonexistent-fake-pkg-xyzzy-2025"
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _projectDir = do
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("depconflict-demo" :: Text) ])
 
   -- 1. Add the bogus dep. Contract: success=true (no Hackage probe).
   t0 <- stepHeader 1 ("add · ghc_deps(add, \"" <> bogusPkg <> "\")")
-  add <- Client.callTool c "ghc_deps"
+  add <- Client.callTool c GhcDeps
            (object
              [ "action"  .= ("add" :: Text)
              , "package" .= bogusPkg
@@ -92,7 +93,7 @@ runFlow c _projectDir = do
   -- still report success=true if the tool wasn't honest); the
   -- build_depends list is what disk actually says.
   t1 <- stepHeader 2 "list · build_depends must include the bogus entry"
-  ls <- Client.callTool c "ghc_deps"
+  ls <- Client.callTool c GhcDeps
           (object [ "action" .= ("list" :: Text) ])
   let depsAfterAdd = buildDeps ls
       includesBogus = any (bogusPkg `T.isInfixOf`) depsAfterAdd
@@ -117,7 +118,7 @@ runFlow c _projectDir = do
 
   -- 4. Remove and verify the dep really disappeared from the .cabal.
   t3 <- stepHeader 3 ("remove · ghc_deps(remove, \"" <> bogusPkg <> "\")")
-  rm <- Client.callTool c "ghc_deps"
+  rm <- Client.callTool c GhcDeps
           (object
             [ "action"  .= ("remove" :: Text)
             , "package" .= bogusPkg
@@ -130,7 +131,7 @@ runFlow c _projectDir = do
   stepFooter 3 t3
 
   t4 <- stepHeader 4 "list · bogus pkg is gone after remove"
-  ls2 <- Client.callTool c "ghc_deps"
+  ls2 <- Client.callTool c GhcDeps
            (object [ "action" .= ("list" :: Text) ])
   let depsAfterRm   = buildDeps ls2
       bogusGone     = not (any (bogusPkg `T.isInfixOf`) depsAfterRm)
@@ -146,7 +147,7 @@ runFlow c _projectDir = do
   -- the session must boot cleanly. If it doesn't, the remove
   -- didn't fully revert the .cabal.
   t5 <- stepHeader 5 "session alive · ghc_eval(1+1) after remove"
-  alive <- Client.callTool c "ghc_eval"
+  alive <- Client.callTool c GhcEval
              (object [ "expression" .= ("1 + 1" :: Text) ])
   cAlive <- liveCheck $ checkPure
     "session alive post-remove · project is buildable again"

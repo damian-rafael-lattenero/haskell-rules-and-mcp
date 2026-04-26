@@ -45,6 +45,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
@@ -57,7 +58,7 @@ runFlow c projectDir = do
   -- Step 1 — Fix 6: switch to empty dir.
   t1 <- stepHeader 1
           "Fix 6 · switch to empty dir → nextStep points at ghc_create_project"
-  r1 <- Client.callTool c "ghc_switch_project"
+  r1 <- Client.callTool c GhcSwitchProject
           (object [ "path" .= T.pack emptyDir ])
   let c1a = checkPure
         "scaffolded=false in payload"
@@ -78,7 +79,7 @@ runFlow c projectDir = do
   -- Scaffold the empty slot into a real project. 'ghc_create_project'
   -- writes to whatever the server's projectDir is, which the
   -- previous switch already repointed at 'emptyDir'.
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("ux-demo" :: Text) ])
 
   -- Step 2 — Fix 2: adding an already-present dep is idempotent.
@@ -86,7 +87,7 @@ runFlow c projectDir = do
   -- 'ghc_create_project', so re-adding it is a guaranteed no-op.
   t2 <- stepHeader 2
           "Fix 2 · ghc_deps add existing package → action=unchanged, success=true"
-  r2 <- Client.callTool c "ghc_deps"
+  r2 <- Client.callTool c GhcDeps
           (object [ "action" .= ("add" :: Text)
                   , "package" .= ("base" :: Text)
                   , "stanza" .= ("library" :: Text)
@@ -118,7 +119,7 @@ runFlow c projectDir = do
   -- Step 3 — Fix 1: register a module into the test-suite stanza.
   t3 <- stepHeader 3
           "Fix 1 · ghc_add_modules stanza=test-suite → other-modules + test/"
-  r3 <- Client.callTool c "ghc_add_modules"
+  r3 <- Client.callTool c GhcAddModules
           (object [ "modules" .= ["Gen" :: Text]
                   , "stanza" .= ("test-suite" :: Text)
                   ])
@@ -152,7 +153,7 @@ runFlow c projectDir = do
     "module Gen where\n\ntrivial :: Int\ntrivial = 42\n"
   t4 <- stepHeader 4
           "Fix 5 · check_project resolves test-suite modules under test/"
-  r4 <- Client.callTool c "ghc_check_project" (object [])
+  r4 <- Client.callTool c GhcCheckProject (object [])
   let c4 = checkPure
         "Gen not reported as not_found"
         (numberOf "not_found" r4 == Just 0)
@@ -167,7 +168,7 @@ runFlow c projectDir = do
   -- Scaffold a NEW library module and an adjacent broken one. The
   -- good module's check must not inherit the broken module's
   -- warnings.
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["UxDemo.Good", "UxDemo.Noisy"] :: [Text])
                  , "stanza" .= ("library" :: Text)
                  ])
@@ -185,7 +186,7 @@ runFlow c projectDir = do
     \noisy unused = 7\n"
   t5 <- stepHeader 5
           "Fix 4 · warning in Noisy does NOT red-gate Good"
-  r5 <- Client.callTool c "ghc_check_module"
+  r5 <- Client.callTool c GhcCheckModule
           (object [ "module_path" .= ("src/UxDemo/Good.hs" :: Text)
                   , "warnings_block" .= True
                   ])

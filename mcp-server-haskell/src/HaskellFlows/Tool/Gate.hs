@@ -63,6 +63,7 @@ import System.Timeout (timeout)
 import HaskellFlows.Data.PropertyStore (Store, loadAll)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Parser.QuickCheck as QC
 import HaskellFlows.Tool.Regression (Replay (..), runOne)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
@@ -70,7 +71,7 @@ import HaskellFlows.Types (ProjectDir, unProjectDir)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_gate"
+    { tdName        = toolNameText GhcGate
     , tdDescription =
         "Pre-push finalizer: runs regression + cabal test + cabal build "
           <> "in one call, returns per-step durations + pass/fail/skip + "

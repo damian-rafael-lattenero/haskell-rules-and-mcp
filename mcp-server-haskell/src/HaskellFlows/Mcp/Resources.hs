@@ -20,17 +20,25 @@ module HaskellFlows.Mcp.Resources
 import Data.Aeson
 import Data.Text (Text)
 
+import HaskellFlows.Mcp.ResourceUri
+  ( ResourceUri (..)
+  , allResourceUriTexts
+  , resourceUriText
+  )
+
 data ResourceDescriptor = ResourceDescriptor
-  { rdUri         :: !Text
+  { rdUri         :: !ResourceUri
   , rdName        :: !Text
   , rdDescription :: !Text
   , rdMimeType    :: !Text
   }
   deriving stock (Eq, Show)
 
+-- | The wire format keeps using the canonical URI literal — clients
+-- never see the 'ResourceUri' constructor, only its textual rendering.
 instance ToJSON ResourceDescriptor where
   toJSON rd = object
-    [ "uri"         .= rdUri rd
+    [ "uri"         .= resourceUriText (rdUri rd)
     , "name"        .= rdName rd
     , "description" .= rdDescription rd
     , "mimeType"    .= rdMimeType rd
@@ -42,7 +50,7 @@ instance ToJSON ResourceDescriptor where
 allResources :: [ResourceDescriptor]
 allResources =
   [ ResourceDescriptor
-      { rdUri         = "haskell-flows://rules/workflow"
+      { rdUri         = WorkflowRules
       , rdName        = "Haskell-flows agent workflow rules"
       , rdDescription =
           "Canonical rules describing every registered tool, the \
@@ -54,7 +62,12 @@ allResources =
       }
   ]
 
--- | Convenience list of advertised URIs, used by regression tests
--- that pin the resource inventory.
+-- | Convenience list of advertised URIs in their wire-format shape,
+-- used by regression tests that pin the resource inventory.
+--
+-- Equal to @map resourceUriText (map rdUri allResources)@; we delegate
+-- to 'allResourceUriTexts' directly so 'ResourceUri' stays the single
+-- source of truth (a constructor added there shows up in tests
+-- automatically).
 knownResourceUris :: [Text]
-knownResourceUris = map rdUri allResources
+knownResourceUris = allResourceUriTexts

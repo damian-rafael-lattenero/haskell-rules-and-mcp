@@ -39,6 +39,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
 -- source
@@ -77,14 +78,14 @@ runFlow c projectDir = do
   -- setup
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + write Widget + load"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("scope-demo" :: Text) ])
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Widget"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   let srcPath = projectDir </> "src" </> "Widget.hs"
   TIO.writeFile srcPath widgetSrc
-  _ <- Client.callTool c "ghc_load"
+  _ <- Client.callTool c GhcLoad
          (object [ "module_path" .= ("src/Widget.hs" :: Text) ])
   stepFooter 1 t0
 
@@ -92,7 +93,7 @@ runFlow c projectDir = do
   -- ghc_browse — enumerate Widget's exports
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "ghc_browse(Widget) — list exports"
-  browseR <- Client.callTool c "ghc_browse"
+  browseR <- Client.callTool c GhcBrowse
               (object [ "module" .= ("Widget" :: Text) ])
   c1 <- liveCheck $ checkJsonField
           "browse success" browseR "success" (Bool True)
@@ -110,7 +111,7 @@ runFlow c projectDir = do
   -- ghc_imports — list the current in-scope imports
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "ghc_imports — session imports"
-  importsR <- Client.callTool c "ghc_imports" (object [])
+  importsR <- Client.callTool c GhcImports (object [])
   c4 <- liveCheck $ checkJsonField
           "imports success" importsR "success" (Bool True)
   c5 <- liveCheck $ checkJsonFieldMatches
@@ -123,7 +124,7 @@ runFlow c projectDir = do
   -- ghc_apply_exports — trim Widget's header to just 'greet'
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "ghc_apply_exports(Widget, [greet])"
-  applyR <- Client.callTool c "ghc_apply_exports" (object
+  applyR <- Client.callTool c GhcApplyExports (object
     [ "module_path" .= ("src/Widget.hs" :: Text)
     , "exports"     .= (["greet"] :: [Text])
     ])
@@ -150,7 +151,7 @@ runFlow c projectDir = do
   -- is not installed on the machine running the E2E.
   ----------------------------------------------------------------
   t4 <- stepHeader 5 "ghc_add_import(fromMaybe) — hoogle-backed"
-  addR <- Client.callTool c "ghc_add_import"
+  addR <- Client.callTool c GhcAddImport
             (object [ "name" .= ("fromMaybe" :: Text) ])
   c8 <- liveCheck $ checkJsonFieldMatches
           "add_import returns a structured response"

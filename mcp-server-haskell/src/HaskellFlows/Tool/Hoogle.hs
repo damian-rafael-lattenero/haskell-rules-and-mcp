@@ -47,11 +47,12 @@ import System.Process
 import System.Timeout (timeout)
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "hoogle_search"
+    { tdName        = toolNameText HoogleSearch
     , tdDescription =
         "Search the local Hoogle index for functions, types, and classes. "
           <> "Accepts either a name (\"filter\") or a type signature "

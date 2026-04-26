@@ -40,6 +40,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
 -- source
@@ -77,14 +78,14 @@ runFlow c projectDir = do
   -- setup
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + add Refactor module"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("refactor-demo" :: Text) ])
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Refactor"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   let srcPath = projectDir </> "src" </> "Refactor.hs"
   TIO.writeFile srcPath initialSrc
-  loadR <- Client.callTool c "ghc_load"
+  loadR <- Client.callTool c GhcLoad
              (object [ "module_path" .= ("src/Refactor.hs" :: Text) ])
   c1 <- liveCheck $ Check
     { cName   = "setup · Refactor compiles clean"
@@ -98,7 +99,7 @@ runFlow c projectDir = do
   --    binding AND its use site (scope lines 5..6 cover both).
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "rename_local(msg → greeting) — happy path"
-  renameOk <- Client.callTool c "ghc_refactor" (object
+  renameOk <- Client.callTool c GhcRefactor (object
     [ "action"           .= ("rename_local" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "old_name"         .= ("msg" :: Text)
@@ -118,7 +119,7 @@ runFlow c projectDir = do
        && not ("msg " `T.isInfixOf` bodyAfterRename)
        && not (" msg" `T.isInfixOf` bodyAfterRename))
     "happy rename should have swapped msg → greeting in the scope"
-  reloadOk <- Client.callTool c "ghc_load"
+  reloadOk <- Client.callTool c GhcLoad
                 (object [ "module_path" .= ("src/Refactor.hs" :: Text) ])
   c4 <- liveCheck $ Check
     { cName   = "post-rename compile is still clean"
@@ -138,7 +139,7 @@ runFlow c projectDir = do
   -- Capture the body BEFORE the rollback attempt so we can
   -- compare byte-for-byte after.
   bodyBefore <- TIO.readFile srcPath
-  rollbackR <- Client.callTool c "ghc_refactor" (object
+  rollbackR <- Client.callTool c GhcRefactor (object
     [ "action"           .= ("rename_local" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "old_name"         .= ("greeting" :: Text)
@@ -167,7 +168,7 @@ runFlow c projectDir = do
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "rename_local → Haskell keyword (boundary reject)"
   bodyBefore2 <- TIO.readFile srcPath
-  keywordR <- Client.callTool c "ghc_refactor" (object
+  keywordR <- Client.callTool c GhcRefactor (object
     [ "action"           .= ("rename_local" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "old_name"         .= ("greeting" :: Text)

@@ -48,12 +48,13 @@ import System.FilePath (takeDirectory)
 
 import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath, unProjectDir)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_quickcheck_export"
+    { tdName        = toolNameText GhcQuickCheckExport
     , tdDescription =
         "Emit a runnable test/Spec.hs materialising every property "
           <> "persisted to .haskell-flows/properties.json. After a commit "

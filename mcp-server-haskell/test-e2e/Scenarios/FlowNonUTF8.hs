@@ -47,6 +47,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | Haskell source with raw 0xFF bytes planted OUTSIDE any comment
 -- or string literal — specifically in the middle of a numeric
@@ -64,7 +65,7 @@ evilSourceBytes = BS.concat
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("nonutf8-demo" :: Text) ])
 
   -- Plant the evil file directly on disk — we explicitly do not go
@@ -77,11 +78,11 @@ runFlow c projectDir = do
   -- Also register the module in the cabal file so ghc_load tries
   -- to compile it. Uses the public MCP surface so we're still
   -- black-box.
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Evil"] :: [Text]) ])
 
   t0 <- stepHeader 1 "load · ghc_load on a non-UTF-8 module"
-  r  <- Client.callTool c "ghc_load"
+  r  <- Client.callTool c GhcLoad
           (object [ "module_path" .= ("src/Evil.hs" :: Text) ])
   let ok        = fieldBool "success" r
       errsField = lookupField "errors" r
@@ -114,7 +115,7 @@ runFlow c projectDir = do
   -- Session must still be alive. A parser desync from the 0xFF byte
   -- would make the next call hang.
   t1 <- stepHeader 2 "session alive · next ghc_eval(1+1) works"
-  alive <- Client.callTool c "ghc_eval"
+  alive <- Client.callTool c GhcEval
              (object [ "expression" .= ("1 + 1" :: Text) ])
   cAlive <- liveCheck $ checkPure
     "session alive · ghc_eval(1+1) returns 2"

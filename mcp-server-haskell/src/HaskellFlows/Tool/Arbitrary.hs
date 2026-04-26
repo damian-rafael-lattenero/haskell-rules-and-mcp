@@ -71,13 +71,14 @@ import HaskellFlows.Ghc.Sanitize
   , sanitizeExpression
   )
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error (GhcError)
 import HaskellFlows.Parser.Type (isOutOfScope)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_arbitrary"
+    { tdName        = toolNameText GhcArbitrary
     , tdDescription =
         "Generate a QuickCheck Arbitrary instance template for a user-defined "
           <> "data type. Returns the instance text for the agent to paste — does "

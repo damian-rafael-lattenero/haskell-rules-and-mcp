@@ -56,6 +56,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 import Scenarios.ExprEvaluatorDogfoodSources
   ( evalSrc
   , facadeSrc
@@ -71,24 +72,24 @@ runFlow c projectDir = do
   -- step 1 · scaffold (create_project + deps + add_modules)
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold · ghc_create_project + 2 deps + 4 modules"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object
             [ "name"   .= ("expr-dogfood" :: Text)
             , "module" .= ("Expr"         :: Text)
             ])
-  _ <- Client.callTool c "ghc_deps" (object
+  _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("containers" :: Text)
          , "stanza"  .= ("library" :: Text)
          , "version" .= (">= 0.6 && < 0.9" :: Text)
          ])
-  _ <- Client.callTool c "ghc_deps" (object
+  _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("QuickCheck" :: Text)
          , "stanza"  .= ("test-suite" :: Text)
          , "version" .= (">= 2.14" :: Text)
          ])
-  _ <- Client.callTool c "ghc_add_modules" (object
+  _ <- Client.callTool c GhcAddModules (object
     [ "modules" .= (["Expr.Syntax", "Expr.Eval", "Expr.Simplify", "Expr.Pretty"]
                       :: [Text])
     ])
@@ -111,7 +112,7 @@ runFlow c projectDir = do
   -- step 3 · check_project — all 5 library modules must be green
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "gate · ghc_check_project 5/5 green, -Wall clean"
-  cpR <- Client.callTool c "ghc_check_project" (object [])
+  cpR <- Client.callTool c GhcCheckProject (object [])
   let cpOverall = fieldBool "overall" cpR == Just True
       cpPassed  = fieldInt "passed" cpR == Just 5
       cpFailed  = fieldInt "failed" cpR == Just 0
@@ -128,7 +129,7 @@ runFlow c projectDir = do
   -- in scope for the next steps
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "load · test/Spec.hs (brings prop_* symbols into scope)"
-  loadR <- Client.callTool c "ghc_load"
+  loadR <- Client.callTool c GhcLoad
              (object [ "module_path" .= ("test/Spec.hs" :: Text) ])
   let loadOk = fieldBool "success" loadR == Just True
             && fieldArrayLen "errors" loadR == Just 0
@@ -150,7 +151,7 @@ runFlow c projectDir = do
   -- is exactly what the scenario's next step guards against.
   ----------------------------------------------------------------
   t4 <- stepHeader 5 "properties · 3 × ghc_quickcheck @ 100 tests each"
-  rRT <- Client.callTool c "ghc_quickcheck" (object
+  rRT <- Client.callTool c GhcQuickCheck (object
     [ "property" .= ("prop_prettyRoundtrip" :: Text)
     , "module"   .= ("test/Spec.hs"          :: Text)
     ])
@@ -162,7 +163,7 @@ runFlow c projectDir = do
      \OR 'pInsideParens' went greedy on a leading '-digits' without the \
      \isSoleNegLit guard. Raw: " <> truncRender rRT)
 
-  rSPM <- Client.callTool c "ghc_quickcheck" (object
+  rSPM <- Client.callTool c GhcQuickCheck (object
     [ "property" .= ("prop_simplifyPreservesMeaning" :: Text)
     , "module"   .= ("test/Spec.hs"                    :: Text)
     ])
@@ -174,7 +175,7 @@ runFlow c projectDir = do
      \new errors (bad) or changing defined values (very bad). Raw: "
      <> truncRender rSPM)
 
-  rSI <- Client.callTool c "ghc_quickcheck" (object
+  rSI <- Client.callTool c GhcQuickCheck (object
     [ "property" .= ("prop_simplifyIdempotent" :: Text)
     , "module"   .= ("test/Spec.hs"              :: Text)
     ])
@@ -191,7 +192,7 @@ runFlow c projectDir = do
   -- end-to-end when the persisted module path is correct
   ----------------------------------------------------------------
   t5 <- stepHeader 6 "regression · store has 3 props, all replay green"
-  regR <- Client.callTool c "ghc_regression"
+  regR <- Client.callTool c GhcRegression
             (object [ "action" .= ("run" :: Text) ])
   let regPassed = fieldInt "passed" regR == Just 3
       regTotal  = fieldInt "total"  regR == Just 3
@@ -218,7 +219,7 @@ runFlow c projectDir = do
   --               parse reads back as Neg (Lit 0) — a single Neg.
   --   After fix:  pretty (Neg (Neg (Lit 0))) == "--0", parse is
   --               faithful.
-  rPin1 <- Client.callTool c "ghc_eval" (object
+  rPin1 <- Client.callTool c GhcEval (object
     [ "expression" .=
         ("pretty (Neg (Neg (Lit 0))) == \"--0\"" :: Text)
     ])
@@ -232,7 +233,7 @@ runFlow c projectDir = do
 
   -- Pin #2: pInsideParens does NOT eat a leading '-digits' when
   -- more expression follows before the closing ')'.
-  rPin2 <- Client.callTool c "ghc_eval" (object
+  rPin2 <- Client.callTool c GhcEval (object
     [ "expression" .=
         ("parse (pretty (Mul (Lit 0) (Add (Neg (Lit 0)) (Var \"abc\")))) \
           \== Just (Mul (Lit 0) (Add (Neg (Lit 0)) (Var \"abc\")))" :: Text)
@@ -250,7 +251,7 @@ runFlow c projectDir = do
 -- the types but not the value-level 'emptyEnv'. It /does/ import
 -- 'Data.Map.Strict as Map', so 'Map.empty' is the in-scope way to
 -- spell an empty env at this point.
-  rPin3 <- Client.callTool c "ghc_eval" (object
+  rPin3 <- Client.callTool c GhcEval (object
     [ "expression" .=
         ("eval Map.empty (simplify (Mul (Lit 0) (Var \"noSuchVar\"))) \
           \== Right 0" :: Text)

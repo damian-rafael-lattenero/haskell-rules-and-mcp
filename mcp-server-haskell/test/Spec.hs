@@ -67,7 +67,7 @@ import HaskellFlows.Suggest.Rules
   , applyRulesCtx
   , mkRuleContext
   )
-import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNames)
+import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNameTexts)
 import HaskellFlows.Mcp.NextStep
   ( ChainStep (..)
   , NextStep (..)
@@ -75,6 +75,11 @@ import HaskellFlows.Mcp.NextStep
   , suggestNext
   )
 import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescriptor (..), ToolResult (..))
+import HaskellFlows.Mcp.ToolName
+  ( ToolName (..)
+  , allToolNames
+  , toolNameText
+  )
 import HaskellFlows.Tool.Batch (BatchArgs (..))
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
@@ -90,6 +95,7 @@ import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
 import qualified HaskellFlows.Mcp.WorkflowState as WS
 import qualified HaskellFlows.Mcp.Guidance as Guidance
+import qualified HaskellFlows.Mcp.ResourceUri as ResourceUri
 import qualified HaskellFlows.Mcp.Resources as Resources
 import HaskellFlows.Tool.CheckProject (parseExposedModules)
 import HaskellFlows.Tool.Lint (parseHlintJson)
@@ -1250,9 +1256,9 @@ testSuggestNormalizeIdempotentMedium =
 -- than the 9-tool Phase-5 baseline.
 testWorkflowToolsParity :: IO Bool
 testWorkflowToolsParity = pure $
-     length allToolNames == length allToolDescriptors
-  && not (any T.null allToolNames)
-  && length allToolNames >= 20
+     length allToolNameTexts == length allToolDescriptors
+  && not (any T.null allToolNameTexts)
+  && length allToolNameTexts >= 20
 
 --------------------------------------------------------------------------------
 -- Phase 11b regressions: ghc_deps F-01 / F-02 / F-03 fixes.
@@ -1446,7 +1452,7 @@ ellipticalOr = (||)
 -- | Phase 11n: 4 BAJA bundle tools registered in the inventory.
 testBajaRegistered :: IO Bool
 testBajaRegistered = pure $
-  all (`elem` allToolNames)
+  all (`elem` allToolNameTexts)
     [ "ghc_browse"
     , "ghc_determinism"
     , "ghc_property_lifecycle"
@@ -1463,7 +1469,8 @@ testResourcesRulesRead :: IO Bool
 testResourcesRulesRead = pure $
   let md = Guidance.workflowRulesMarkdown allToolDescriptors
       advertised =
-        "haskell-flows://rules/workflow" `elem` Resources.knownResourceUris
+        ResourceUri.resourceUriText ResourceUri.WorkflowRules
+          `elem` Resources.knownResourceUris
   in advertised
      && T.isInfixOf "haskell-flows" md
      && T.isInfixOf "situation" (T.toLower md)
@@ -1493,7 +1500,7 @@ testGuidanceDynamicCount = do
 testGuidanceListsEveryTool :: IO Bool
 testGuidanceListsEveryTool = do
   let instructions = Guidance.sessionInstructionsText allToolDescriptors
-  pure (all (`T.isInfixOf` instructions) allToolNames)
+  pure (all (`T.isInfixOf` instructions) allToolNameTexts)
 
 -- | BUG-09: the markdown resource must match the plain-text
 -- instructions in tool coverage — both are derived from the same
@@ -1501,11 +1508,13 @@ testGuidanceListsEveryTool = do
 testGuidanceMarkdownListsEveryTool :: IO Bool
 testGuidanceMarkdownListsEveryTool = do
   let md = Guidance.workflowRulesMarkdown allToolDescriptors
-  pure (all (`T.isInfixOf` md) allToolNames)
+  pure (all (`T.isInfixOf` md) allToolNameTexts)
 
 -- | BUG-05: the situation-tool table is the curated map from
 -- "user intent" to tool. Must be non-empty and every row's tool
--- must actually be in the registry.
+-- must actually be in the registry. Post-issue-#44 the @srTool@
+-- field is a 'ToolName' constructor, so this is now a pure
+-- ADT-membership check (the wire form is impossible to typo).
 testGuidanceSituationNonEmpty :: IO Bool
 testGuidanceSituationNonEmpty = pure $
      not (null Guidance.situationTable)
@@ -1839,7 +1848,7 @@ testSuggestSiblingsEnableSoundness =
 
 -- | Helper: assert the nextStep for a (tool, payload) pair points
 -- at a specific follow-up tool.
-assertNext :: Text -> A.Value -> Text -> Bool
+assertNext :: ToolName -> A.Value -> ToolName -> Bool
 assertNext tool payload expected =
   case suggestNext tool True payload of
     Just ns -> nsTool ns == expected
@@ -1848,32 +1857,32 @@ assertNext tool payload expected =
 testNextStepGatePass :: IO Bool
 testNextStepGatePass =
   let payload = A.object [ "success" .= True, "totalDurationSec" .= (1.0 :: Double) ]
-  in pure (assertNext "ghc_gate" payload "ghc_coverage")
+  in pure (assertNext GhcGate payload GhcCoverage)
 
 testNextStepGateFail :: IO Bool
 testNextStepGateFail =
   let payload = A.object [ "success" .= False, "totalDurationSec" .= (1.0 :: Double) ]
-  in pure (assertNext "ghc_gate" payload "ghc_check_project")
+  in pure (assertNext GhcGate payload GhcCheckProject)
 
 testNextStepQcExport :: IO Bool
 testNextStepQcExport =
   let payload = A.object [ "success" .= True, "properties_written" .= (3 :: Int) ]
-  in pure (assertNext "ghc_quickcheck_export" payload "ghc_gate")
+  in pure (assertNext GhcQuickCheckExport payload GhcGate)
 
 testNextStepDeterminismPass :: IO Bool
 testNextStepDeterminismPass =
   let payload = A.object [ "success" .= True, "runs" .= (3 :: Int) ]
-  in pure (assertNext "ghc_determinism" payload "ghc_regression")
+  in pure (assertNext GhcDeterminism payload GhcRegression)
 
 testNextStepDeterminismFail :: IO Bool
 testNextStepDeterminismFail =
   let payload = A.object [ "success" .= False, "runs" .= (3 :: Int) ]
-  in pure (assertNext "ghc_determinism" payload "ghc_quickcheck")
+  in pure (assertNext GhcDeterminism payload GhcQuickCheck)
 
 testNextStepAddImport :: IO Bool
 testNextStepAddImport =
   let payload = A.object [ "success" .= True, "module" .= ("src/Foo.hs" :: Text) ]
-  in pure (assertNext "ghc_add_import" payload "ghc_load")
+  in pure (assertNext GhcAddImport payload GhcLoad)
 
 -- | BUG-22 — add_modules now emits a multi-step chain. The
 -- primary next tool must be 'ghc_load' AND the chain must
@@ -1881,40 +1890,40 @@ testNextStepAddImport =
 testNextStepAddModulesChain :: IO Bool
 testNextStepAddModulesChain =
   let payload = A.object [ "success" .= True, "cabal_added" .= (["Foo.Bar"] :: [Text]) ]
-  in case suggestNext "ghc_add_modules" True payload of
+  in case suggestNext GhcAddModules True payload of
        Just ns ->
-         pure $ nsTool ns == "ghc_load"
+         pure $ nsTool ns == GhcLoad
              && case nsChain ns of
                   Just steps ->
-                       any ((== "ghc_load")           . csTool) steps
-                    && any ((== "ghc_check_project")  . csTool) steps
+                       any ((== GhcLoad)         . csTool) steps
+                    && any ((== GhcCheckProject) . csTool) steps
                   Nothing -> False
        Nothing -> pure False
 
 testNextStepApplyExports :: IO Bool
 testNextStepApplyExports =
   let payload = A.object [ "success" .= True, "module" .= ("src/Foo.hs" :: Text) ]
-  in pure (assertNext "ghc_apply_exports" payload "ghc_load")
+  in pure (assertNext GhcApplyExports payload GhcLoad)
 
 testNextStepFixWarning :: IO Bool
 testNextStepFixWarning =
   let payload = A.object [ "success" .= True, "module" .= ("src/Foo.hs" :: Text) ]
-  in pure (assertNext "ghc_fix_warning" payload "ghc_load")
+  in pure (assertNext GhcFixWarning payload GhcLoad)
 
 testNextStepBrowse :: IO Bool
 testNextStepBrowse =
   let payload = A.object [ "success" .= True, "count" .= (5 :: Int) ]
-  in pure (assertNext "ghc_browse" payload "ghc_suggest")
+  in pure (assertNext GhcBrowse payload GhcSuggest)
 
 testNextStepToolchainWarmup :: IO Bool
 testNextStepToolchainWarmup =
   let payload = A.object [ "success" .= True ]
-  in pure (assertNext "ghc_toolchain_warmup" payload "ghc_workflow")
+  in pure (assertNext GhcToolchainWarmup payload GhcWorkflow)
 
 testNextStepPropertyLifecycleList :: IO Bool
 testNextStepPropertyLifecycleList =
   let payload = A.object [ "success" .= True, "action" .= ("list" :: Text) ]
-  in pure (assertNext "ghc_property_lifecycle" payload "ghc_regression")
+  in pure (assertNext GhcPropertyLifecycle payload GhcRegression)
 
 -- | BUG-22: create_project emits the canonical project-bootstrap
 -- chain (deps + add_modules + load). Pin that all three steps are
@@ -1922,15 +1931,15 @@ testNextStepPropertyLifecycleList =
 testNextStepCreateProjectChain :: IO Bool
 testNextStepCreateProjectChain =
   let payload = A.object [ "success" .= True, "files_written" .= ([] :: [Text]) ]
-  in case suggestNext "ghc_create_project" True payload of
+  in case suggestNext GhcCreateProject True payload of
        Just ns ->
-         pure $ nsTool ns == "ghc_deps"
+         pure $ nsTool ns == GhcDeps
              && case nsChain ns of
                   Just steps ->
                     let tools = map csTool steps
-                    in "ghc_deps"        `elem` tools
-                    && "ghc_add_modules" `elem` tools
-                    && "ghc_load"        `elem` tools
+                    in GhcDeps       `elem` tools
+                    && GhcAddModules `elem` tools
+                    && GhcLoad       `elem` tools
                   Nothing -> False
        Nothing -> pure False
 
@@ -1952,7 +1961,7 @@ testStalenessWired = do
 -- polling nudge that points at ghc_determinism / check_project.
 testHistoryPolling :: IO Bool
 testHistoryPolling =
-  let nudges = WS.historyNudges (replicate 5 "ghc_load")
+  let nudges = WS.historyNudges (replicate 5 GhcLoad)
   in pure $ any ("polling" `T.isInfixOf`) nudges
          && any ("ghc_determinism" `T.isInfixOf`) nudges
 
@@ -1960,7 +1969,7 @@ testHistoryPolling =
 -- surfaces the "pick a law" nudge.
 testHistoryMissingQc :: IO Bool
 testHistoryMissingQc =
-  let hist = ["ghc_load", "ghc_suggest", "ghc_load"]
+  let hist = [GhcLoad, GhcSuggest, GhcLoad]
       nudges = WS.historyNudges hist
   in pure $ any ("ghc_quickcheck" `T.isInfixOf`) nudges
 
@@ -1968,7 +1977,7 @@ testHistoryMissingQc =
 -- triggers the "reload after refactor" nudge.
 testHistoryRefactorNotReloaded :: IO Bool
 testHistoryRefactorNotReloaded =
-  let hist = ["ghc_refactor", "ghc_type"]
+  let hist = [GhcRefactor, GhcType]
       nudges = WS.historyNudges hist
   in pure $ any (\n -> "refactor" `T.isInfixOf` T.toLower n) nudges
 
@@ -1986,7 +1995,7 @@ testPhaseBootstrap = do
   ref <- WS.newWorkflowStateRef
   let failedLoad = A.object [ "success" .= False, "errors" .= ["broken" :: Text]
                             , "warnings" .= ([] :: [Text]) ]
-  WS.trackTool ref "ghc_load" False failedLoad
+  WS.trackTool ref GhcLoad False failedLoad
   s <- WS.readState ref
   pure (WS.classifyPhase s == WS.PhaseBootstrap)
 
@@ -1998,8 +2007,8 @@ testPhaseTestingLaws = do
   let okLoad   = A.object [ "success" .= True, "errors" .= ([] :: [Text])
                           , "warnings" .= ([] :: [Text]) ]
       suggest  = A.object [ "success" .= True, "count" .= (1 :: Int) ]
-  WS.trackTool ref "ghc_load"    True okLoad
-  WS.trackTool ref "ghc_suggest" True suggest
+  WS.trackTool ref GhcLoad    True okLoad
+  WS.trackTool ref GhcSuggest True suggest
   s <- WS.readState ref
   pure (WS.classifyPhase s == WS.PhaseTestingLaws)
 
@@ -2011,10 +2020,10 @@ testPhaseReadyToPush = do
                          , "warnings" .= ([] :: [Text]) ]
       passQc  = A.object [ "success" .= True, "state"  .= ("passed" :: Text)
                          , "passed" .= (100 :: Int) ]
-  WS.trackTool ref "ghc_load"       True okLoad
-  WS.trackTool ref "ghc_quickcheck" True passQc
-  WS.trackTool ref "ghc_quickcheck" True passQc
-  WS.trackTool ref "ghc_quickcheck" True passQc
+  WS.trackTool ref GhcLoad       True okLoad
+  WS.trackTool ref GhcQuickCheck True passQc
+  WS.trackTool ref GhcQuickCheck True passQc
+  WS.trackTool ref GhcQuickCheck True passQc
   s <- WS.readState ref
   pure (WS.classifyPhase s == WS.PhaseReadyToPush)
 
@@ -2124,7 +2133,7 @@ testArbitraryRecursionTokens = pure $
 -- fails, the tool exists as dead code (not dispatchable).
 testRemoveModulesRegistered :: IO Bool
 testRemoveModulesRegistered = pure $
-  "ghc_remove_modules" `elem` allToolNames
+  "ghc_remove_modules" `elem` allToolNameTexts
 
 -- | Core behaviour: the exposed-modules entry for the named
 -- module disappears; the rest of the block survives.
@@ -2212,13 +2221,13 @@ testNextStepRemoveModules =
         [ "success"      .= True
         , "cabal_removed".= (["Foo.Old"] :: [Text])
         ]
-  in case suggestNext "ghc_remove_modules" True payload of
+  in case suggestNext GhcRemoveModules True payload of
        Just ns ->
-         pure $ nsTool ns == "ghc_check_project"
+         pure $ nsTool ns == GhcCheckProject
              && case nsChain ns of
                   Just steps ->
-                       any ((== "ghc_check_project") . csTool) steps
-                    && any ((== "ghc_load")          . csTool) steps
+                       any ((== GhcCheckProject) . csTool) steps
+                    && any ((== GhcLoad)         . csTool) steps
                   Nothing -> False
        Nothing -> pure False
 
@@ -2228,7 +2237,7 @@ testNextStepRemoveModules =
 
 -- | Tool is in the registry.
 testBootstrapRegistered :: IO Bool
-testBootstrapRegistered = pure ("ghc_bootstrap" `elem` allToolNames)
+testBootstrapRegistered = pure ("ghc_bootstrap" `elem` allToolNameTexts)
 
 -- | 'ghc_bootstrap(host="claude-code")' preview mode returns
 -- the live workflow markdown body (dynamically derived) and
@@ -2380,7 +2389,7 @@ testNextStepFullCoverage = pure $
         ]
       covered t = case suggestNext t True payload of
         Just _  -> True
-        Nothing -> t `elem` whitelist
+        Nothing -> toolNameText t `elem` whitelist
   in all covered allToolNames
 
 -- | Phase 11k: WorkflowState tracker starts at zero counters + empty history.
@@ -2399,10 +2408,10 @@ testWorkflowStateTracks = do
   let okLoad = A.object [ "success" .= True, "errors" .= ([] :: [Text])
                         , "warnings" .= ([] :: [Text]) ]
       okRef  = A.object [ "success" .= True, "compile" .= ("ok" :: Text) ]
-  WS.trackTool ref "ghc_refactor" True okRef
-  WS.trackTool ref "ghc_refactor" True okRef
+  WS.trackTool ref GhcRefactor True okRef
+  WS.trackTool ref GhcRefactor True okRef
   s1 <- WS.readState ref
-  WS.trackTool ref "ghc_load"     True okLoad
+  WS.trackTool ref GhcLoad     True okLoad
   s2 <- WS.readState ref
   pure $ WS.wsEditsSinceLastLoad s1 == 2
       && WS.wsEditsSinceLastLoad s2 == 0
@@ -2422,7 +2431,7 @@ testWorkflowStateHelp =
 -- | Phase 11j: all 5 Code tools registered in the inventory.
 testCodeToolsRegistered :: IO Bool
 testCodeToolsRegistered = pure $
-  all (`elem` allToolNames)
+  all (`elem` allToolNameTexts)
     [ "ghc_add_import"
     , "ghc_add_modules"
     , "ghc_apply_exports"
@@ -2506,7 +2515,7 @@ testWarningBucketize =
 -- | Phase 11h: ghc_quickcheck_export must be in the canonical
 -- tool list.
 testQcExportRegistered :: IO Bool
-testQcExportRegistered = pure $ "ghc_quickcheck_export" `elem` allToolNames
+testQcExportRegistered = pure $ "ghc_quickcheck_export" `elem` allToolNameTexts
 
 -- | Phase 11h: renderTestFile emits a valid-looking Main module
 -- with the expected structural pieces (main, imports, a prop_N
@@ -2551,7 +2560,7 @@ testQcExportSanitize = pure $
 -- descriptor mentions its three sub-steps.
 testGateRegistered :: IO Bool
 testGateRegistered = pure $
-     "ghc_gate" `elem` allToolNames
+     "ghc_gate" `elem` allToolNameTexts
   && case filter (\td -> tdName td == "ghc_gate") allToolDescriptors of
        [td] ->
          let d = tdDescription td
@@ -2658,8 +2667,8 @@ testSuggestEvaluatorNoSibling =
 testNextStepCreateProject :: IO Bool
 testNextStepCreateProject =
   let payload = A.object [ "success" .= True, "files_written" .= ([] :: [Text]) ]
-  in pure $ case suggestNext "ghc_create_project" True payload of
-       Just ns -> nsTool ns == "ghc_deps"
+  in pure $ case suggestNext GhcCreateProject True payload of
+       Just ns -> nsTool ns == GhcDeps
        Nothing -> False
 
 -- | After ghc_deps(add), reload.
@@ -2670,12 +2679,12 @@ testNextStepDepsAdd =
       -- The real ghc_deps response uses "added"/"removed" verbs; adjust
       -- this test to pin the contract we actually see in the wild.
       payload2 = A.object [ "success" .= True, "action" .= ("add" :: Text) ]
-  in pure $ case suggestNext "ghc_deps" True payload2 of
-       Just ns -> nsTool ns == "ghc_load"
+  in pure $ case suggestNext GhcDeps True payload2 of
+       Just ns -> nsTool ns == GhcLoad
        Nothing -> False
     &&
       -- Pin: no false positive on the query variant.
-      case suggestNext "ghc_deps" True payload of
+      case suggestNext GhcDeps True payload of
         Nothing -> True
         Just _  -> True  -- either behaviour is acceptable; the real
                          -- guard is that add/remove trigger load.
@@ -2688,8 +2697,8 @@ testNextStepLoadClean =
         , "errors"   .= ([] :: [Text])
         , "warnings" .= ([] :: [Text])
         ]
-  in pure $ case suggestNext "ghc_load" True payload of
-       Just ns -> nsTool ns == "ghc_suggest"
+  in pure $ case suggestNext GhcLoad True payload of
+       Just ns -> nsTool ns == GhcSuggest
        Nothing -> False
 
 -- | Load with warnings → holes.
@@ -2711,56 +2720,56 @@ testNextStepLoadWarnings =
                 ]
             ]
         ]
-  in pure $ case suggestNext "ghc_load" True payload of
-       Just ns -> nsTool ns == "ghc_hole"
+  in pure $ case suggestNext GhcLoad True payload of
+       Just ns -> nsTool ns == GhcHole
        Nothing -> False
 
 -- | Suggest → quickcheck.
 testNextStepSuggest :: IO Bool
 testNextStepSuggest =
   let payload = A.object [ "success" .= True, "count" .= (3 :: Int) ]
-  in pure $ case suggestNext "ghc_suggest" True payload of
-       Just ns -> nsTool ns == "ghc_quickcheck"
+  in pure $ case suggestNext GhcSuggest True payload of
+       Just ns -> nsTool ns == GhcQuickCheck
        Nothing -> False
 
 -- | QuickCheck passed → check_module.
 testNextStepQcPassed :: IO Bool
 testNextStepQcPassed =
   let payload = A.object [ "success" .= True, "state" .= ("passed" :: Text) ]
-  in pure $ case suggestNext "ghc_quickcheck" True payload of
-       Just ns -> nsTool ns == "ghc_check_module"
+  in pure $ case suggestNext GhcQuickCheck True payload of
+       Just ns -> nsTool ns == GhcCheckModule
        Nothing -> False
 
 -- | QuickCheck failed → eval for debugging.
 testNextStepQcFailed :: IO Bool
 testNextStepQcFailed =
   let payload = A.object [ "success" .= True, "state" .= ("failed" :: Text) ]
-  in pure $ case suggestNext "ghc_quickcheck" True payload of
-       Just ns -> nsTool ns == "ghc_eval"
+  in pure $ case suggestNext GhcQuickCheck True payload of
+       Just ns -> nsTool ns == GhcEval
        Nothing -> False
 
 -- | ghc_regression(list) → ghc_regression(run).
 testNextStepRegressionList :: IO Bool
 testNextStepRegressionList =
   let payload = A.object [ "success" .= True, "action" .= ("list" :: Text) ]
-  in pure $ case suggestNext "ghc_regression" True payload of
-       Just ns -> nsTool ns == "ghc_regression"
+  in pure $ case suggestNext GhcRegression True payload of
+       Just ns -> nsTool ns == GhcRegression
        Nothing -> False
 
 -- | Refactor landed → verify compile.
 testNextStepRefactor :: IO Bool
 testNextStepRefactor =
   let payload = A.object [ "success" .= True, "compile" .= ("ok" :: Text) ]
-  in pure $ case suggestNext "ghc_refactor" True payload of
-       Just ns -> nsTool ns == "ghc_load"
+  in pure $ case suggestNext GhcRefactor True payload of
+       Just ns -> nsTool ns == GhcLoad
        Nothing -> False
 
 -- | Module gate → project gate.
 testNextStepCheckModule :: IO Bool
 testNextStepCheckModule =
   let payload = A.object [ "success" .= True, "overall" .= True ]
-  in pure $ case suggestNext "ghc_check_module" True payload of
-       Just ns -> nsTool ns == "ghc_check_project"
+  in pure $ case suggestNext GhcCheckModule True payload of
+       Just ns -> nsTool ns == GhcCheckProject
        Nothing -> False
 
 -- | Project gate → gate (pre-push finalizer). BUG-06 re-routed
@@ -2770,13 +2779,13 @@ testNextStepCheckModule =
 testNextStepCheckProject :: IO Bool
 testNextStepCheckProject =
   let payload = A.object [ "success" .= True, "overall" .= True ]
-  in pure $ case suggestNext "ghc_check_project" True payload of
+  in pure $ case suggestNext GhcCheckProject True payload of
        Just ns ->
-            nsTool ns == "ghc_gate"
+            nsTool ns == GhcGate
          && case nsChain ns of
               Just steps ->
-                   any ((== "ghc_gate")     . csTool) steps
-                && any ((== "ghc_coverage") . csTool) steps
+                   any ((== GhcGate)     . csTool) steps
+                && any ((== GhcCoverage) . csTool) steps
               Nothing -> False
        Nothing -> False
 
@@ -2785,7 +2794,7 @@ testNextStepCheckProject =
 testNextStepErrorsSuppressed :: IO Bool
 testNextStepErrorsSuppressed =
   let payload = A.object [ "success" .= False, "error" .= ("oops" :: Text) ]
-  in pure $ case suggestNext "ghc_load" False payload of
+  in pure $ case suggestNext GhcLoad False payload of
        Nothing -> True
        Just _  -> False
 
@@ -2794,14 +2803,14 @@ testNextStepErrorsSuppressed =
 testNextStepExploratoryNothing :: IO Bool
 testNextStepExploratoryNothing = pure $
   all nothing
-    [ suggestNext "ghc_type"     True (A.object [])
-    , suggestNext "ghc_info"     True (A.object [])
-    , suggestNext "ghc_eval"     True (A.object [])
-    , suggestNext "ghc_goto"     True (A.object [])
-    , suggestNext "ghc_doc"      True (A.object [])
-    , suggestNext "ghc_complete" True (A.object [])
-    , suggestNext "ghc_coverage" True (A.object [])
-    , suggestNext "ghc_workflow" True (A.object [])
+    [ suggestNext GhcType     True (A.object [])
+    , suggestNext GhcInfo     True (A.object [])
+    , suggestNext GhcEval     True (A.object [])
+    , suggestNext GhcGoto     True (A.object [])
+    , suggestNext GhcDoc      True (A.object [])
+    , suggestNext GhcComplete True (A.object [])
+    , suggestNext GhcCoverage True (A.object [])
+    , suggestNext GhcWorkflow True (A.object [])
     ]
   where
     nothing Nothing = True
@@ -2814,13 +2823,13 @@ testInjectSplices =
   let body = A.object [ "success" .= True, "data" .= (42 :: Int) ]
       txt  = TL.toStrict (TLE.decodeUtf8 (A.encode body))
       tr   = ToolResult { trContent = [ TextContent txt ], trIsError = False }
-      ns   = NextStep { nsTool = "ghc_foo", nsWhy = "because"
+      ns   = NextStep { nsTool = GhcLoad, nsWhy = "because"
                       , nsExample = Nothing, nsChain = Nothing }
       tr'  = injectNextStep ns tr
   in case trContent tr' of
        [TextContent t] -> pure $
          T.isInfixOf "\"nextStep\"" t
-           && T.isInfixOf "\"ghc_foo\"" t
+           && T.isInfixOf "\"ghc_load\"" t
            && T.isInfixOf "\"data\":42" t
            -- original field preserved
        _ -> pure False
@@ -2830,7 +2839,7 @@ testInjectSkipsNonJson :: IO Bool
 testInjectSkipsNonJson =
   let raw = "this is not json"
       tr  = ToolResult { trContent = [ TextContent raw ], trIsError = False }
-      ns  = NextStep { nsTool = "ghc_foo", nsWhy = "x"
+      ns  = NextStep { nsTool = GhcLoad, nsWhy = "x"
                      , nsExample = Nothing, nsChain = Nothing }
       tr' = injectNextStep ns tr
   in case trContent tr' of
@@ -2883,7 +2892,7 @@ testInstructionsMentionCore = do
         , "situation"       , "invariant"
         , "nextStep"
         ]
-      toolMarkers = allToolNames
+      toolMarkers = allToolNameTexts
       lowerInstructions = T.toLower instructions
   pure $ all (`T.isInfixOf` instructions) toolMarkers
       && all ((`T.isInfixOf` lowerInstructions) . T.toLower) staticMarkers
@@ -2937,7 +2946,10 @@ testEvalInnerTimeoutBudget = do
       && T.isInfixOf "evalTimeoutMicros" code
       && T.isInfixOf "timeout evalTimeoutMicros" code
       && T.isInfixOf "resetHscEnvInPlace" code
-      && T.isInfixOf "\"error_kind\" .= (\"timeout\" :: Text)" code
+      -- post-issue-#45: payload routes through the ErrorKind ADT
+      -- ('Timeout' constructor + 'renderErrorKind') instead of a
+      -- bare string literal. The wire string is still "timeout".
+      && T.isInfixOf "\"error_kind\" .= renderErrorKind Timeout" code
       && T.isInfixOf "SomeAsyncException" code
   where
     isDocLine ln =
@@ -3998,8 +4010,8 @@ testNextStepCleanLoad =
         , "errors"   A..= ([] :: [Text])
         , "warnings" A..= ([] :: [Text])
         ]
-  in pure $ case suggestNext "ghc_load" True payload of
-       Just ns -> nsTool ns == "ghc_suggest"
+  in pure $ case suggestNext GhcLoad True payload of
+       Just ns -> nsTool ns == GhcSuggest
        Nothing -> False
 
 -- | A typed-hole warning routes to 'ghc_hole' (which knows how
@@ -4018,8 +4030,8 @@ testNextStepTypedHoleWarn =
                 ]
             ]
         ]
-  in pure $ case suggestNext "ghc_load" True payload of
-       Just ns -> nsTool ns == "ghc_hole"
+  in pure $ case suggestNext GhcLoad True payload of
+       Just ns -> nsTool ns == GhcHole
        Nothing -> False
 
 -- | A non-hole warning (unused-imports, type-defaults, …) routes
@@ -4038,8 +4050,8 @@ testNextStepFixableWarn =
                 ]
             ]
         ]
-  in pure $ case suggestNext "ghc_load" True payload of
-       Just ns -> nsTool ns == "ghc_fix_warning"
+  in pure $ case suggestNext GhcLoad True payload of
+       Just ns -> nsTool ns == GhcFixWarning
        Nothing -> False
 
 --------------------------------------------------------------------------------

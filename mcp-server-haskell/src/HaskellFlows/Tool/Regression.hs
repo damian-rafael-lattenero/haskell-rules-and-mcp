@@ -34,6 +34,7 @@ import HaskellFlows.Data.PropertyStore
 import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.QuickCheck
   ( QuickCheckResult (..)
   , parseQuickCheckOutput
@@ -43,7 +44,7 @@ import qualified HaskellFlows.Tool.QuickCheck as QcTool
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_regression"
+    { tdName        = toolNameText GhcRegression
     , tdDescription =
         "Replay every persisted QuickCheck property as a regression "
           <> "suite. Actions: 'list' (inspect the store without running), "

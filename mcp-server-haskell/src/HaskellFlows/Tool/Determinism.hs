@@ -23,13 +23,14 @@ import System.Timeout (timeout)
 import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..), parseQuickCheckOutput)
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_determinism"
+    { tdName        = toolNameText GhcDeterminism
     , tdDescription =
         "Run a property 3 times (or `runs` param) to confirm every "
           <> "run passes. Any failing or non-passed run makes the tool "

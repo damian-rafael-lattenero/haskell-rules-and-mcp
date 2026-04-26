@@ -39,11 +39,15 @@ library
     hs-source-dirs:   src
     exposed-modules:  HaskellFlows
                       HaskellFlows.Types
+                      HaskellFlows.Mcp.ErrorKind
                       HaskellFlows.Mcp.Guidance
                       HaskellFlows.Mcp.NextStep
+                      HaskellFlows.Mcp.ToolName
                       HaskellFlows.Mcp.PathBootstrap
                       HaskellFlows.Mcp.Protocol
+                      HaskellFlows.Mcp.ResourceUri
                       HaskellFlows.Mcp.Resources
+                      HaskellFlows.Mcp.RpcMethod
                       HaskellFlows.Mcp.Staleness
                       HaskellFlows.Mcp.WorkflowState
                       HaskellFlows.Mcp.Transport

@@ -30,6 +30,7 @@ import qualified Data.Text.Lazy.Encoding as TLE
 
 import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Mcp.Staleness (StalenessReport (..))
 import HaskellFlows.Mcp.WorkflowState
   ( SessionPhase
@@ -43,7 +44,7 @@ import HaskellFlows.Types (ProjectDir, unProjectDir)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_workflow"
+    { tdName        = toolNameText GhcWorkflow
     , tdDescription =
         "Query the server's workflow state. Actions: 'status' (server "
           <> "inventory), 'help' (what to do next, context-aware), 'next' "

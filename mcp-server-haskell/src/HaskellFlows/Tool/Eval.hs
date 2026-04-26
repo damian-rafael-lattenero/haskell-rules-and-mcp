@@ -55,12 +55,14 @@ import HaskellFlows.Ghc.Sanitize
   , maxEvalBytes
   , sanitizeExpression
   )
+import HaskellFlows.Mcp.ErrorKind (ErrorKind (..), renderErrorKind)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_eval"
+    { tdName        = toolNameText GhcEval
     , tdDescription =
         "Evaluate a Haskell expression in-process via the GHC API. "
           <> "Tries @show@-wrapped compileExpr first (for pure expressions), "
@@ -209,7 +211,7 @@ timeoutResult =
              <> T.pack (show evalTimeoutSeconds)
              <> " s). GHC session evicted; next call boots fresh."
              :: Text)
-        , "error_kind" .= ("timeout" :: Text)
+        , "error_kind" .= renderErrorKind Timeout
         ]
   in ToolResult
        { trContent = [ TextContent (encodeUtf8Text payload) ]

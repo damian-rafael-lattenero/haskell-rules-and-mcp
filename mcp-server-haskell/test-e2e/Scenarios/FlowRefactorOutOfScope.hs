@@ -44,6 +44,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | Module with exactly one local binding we /could/ rename. The
 -- scenario asks for a different name, so the rewrite must no-op.
@@ -61,14 +62,14 @@ runFlow c projectDir = do
   -- (1) scaffold + write a module with a known binding
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Foo.hs (fooBar is the only local)"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("oos-demo" :: Text) ])
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Foo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   let srcPath = projectDir </> "src" </> "Foo.hs"
   TIO.writeFile srcPath srcModule
-  _ <- Client.callTool c "ghc_load"
+  _ <- Client.callTool c GhcLoad
          (object [ "module_path" .= ("src/Foo.hs" :: Text) ])
   stepFooter 1 t0
 
@@ -83,7 +84,7 @@ runFlow c projectDir = do
   -- wrong is that 'fooBarz' is not a binding in that scope.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "rename_local(fooBarz → fooBarzzz) — target missing"
-  r <- Client.callTool c "ghc_refactor" (object
+  r <- Client.callTool c GhcRefactor (object
     [ "action"            .= ("rename_local" :: Text)
     , "module_path"       .= ("src/Foo.hs"   :: Text)
     , "old_name"          .= ("fooBarz"      :: Text)
@@ -123,7 +124,7 @@ runFlow c projectDir = do
   --     failure state behind).
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "sanity · rename_local(fooBar → foobaz) after refusal works"
-  r2 <- Client.callTool c "ghc_refactor" (object
+  r2 <- Client.callTool c GhcRefactor (object
     [ "action"            .= ("rename_local" :: Text)
     , "module_path"       .= ("src/Foo.hs"   :: Text)
     , "old_name"          .= ("fooBar"       :: Text)

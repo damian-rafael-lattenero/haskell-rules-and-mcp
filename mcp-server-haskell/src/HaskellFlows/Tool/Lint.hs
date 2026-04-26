@@ -48,12 +48,13 @@ import System.Process
 import System.Timeout (timeout)
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_lint"
+    { tdName        = toolNameText GhcLint
     , tdDescription =
         "Run HLint. Accepts either `path` (directory, recursive) or "
           <> "`module_path` (single file). `path` is the default form "

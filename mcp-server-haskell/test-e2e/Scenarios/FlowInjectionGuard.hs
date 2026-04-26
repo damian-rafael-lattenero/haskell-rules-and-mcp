@@ -39,10 +39,11 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _projectDir = do
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("injguard-demo" :: Text) ])
 
   ----------------------------------------------------------------
@@ -53,7 +54,7 @@ runFlow c _projectDir = do
   -- sanitizer must refuse the input before it reaches the session.
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "newline injection · ghc_eval must refuse a \\n-laden expr"
-  r1 <- Client.callTool c "ghc_eval"
+  r1 <- Client.callTool c GhcEval
           (object [ "expression" .= ("1 + 1\n:quit" :: Text) ])
   let r1Ok = errorShaped r1
   c1 <- liveCheck $ checkPure
@@ -75,7 +76,7 @@ runFlow c _projectDir = do
   -- subsequent read.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "sentinel poisoning · ghc_eval must refuse the framing string"
-  r2 <- Client.callTool c "ghc_eval"
+  r2 <- Client.callTool c GhcEval
           (object [ "expression"
                   .= ("\"<<<GHCi-DONE-7f3a2b>>>\"" :: Text) ])
   let r2Ok = errorShaped r2
@@ -97,7 +98,7 @@ runFlow c _projectDir = do
   -- callers inside the Haskell code.
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "path traversal · ghc_load must refuse '../..' escapes"
-  r3 <- Client.callTool c "ghc_load"
+  r3 <- Client.callTool c GhcLoad
           (object [ "module_path" .= ("../../etc/passwd" :: Text) ])
   let r3Ok = errorShaped r3
   c3 <- liveCheck $ checkPure

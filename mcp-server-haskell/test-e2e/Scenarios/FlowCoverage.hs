@@ -43,6 +43,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 calcSrc :: Text
 calcSrc =
@@ -82,9 +83,9 @@ runFlow c projectDir = do
   -- setup — scaffold + module + trivial test
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Calc + Spec.hs"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("coverage-demo" :: Text) ])
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Calc"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   createDirectoryIfMissing True (projectDir </> "test")
@@ -103,7 +104,7 @@ runFlow c projectDir = do
   -- ("success is a Bool") passed on literally any response shape.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "happy · passing Spec.hs"
-  r <- Client.callTool c "ghc_coverage" (object [])
+  r <- Client.callTool c GhcCoverage (object [])
   c1 <- liveCheck $ checkJsonFieldMatches
           "coverage returns a structured payload"
           r "success" (\case Bool _ -> True; _ -> False)
@@ -138,7 +139,7 @@ runFlow c projectDir = do
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "failing · cabal test exits nonzero"
   TIO.writeFile (projectDir </> "test" </> "Spec.hs") specSrcFailing
-  r2 <- Client.callTool c "ghc_coverage" (object [])
+  r2 <- Client.callTool c GhcCoverage (object [])
   let failSuccess = fieldBool "success" r2
   c4 <- liveCheck $ checkPure
           "failing · success=false (cabal test's exitFailure surfaced)"
@@ -176,7 +177,7 @@ runFlow c projectDir = do
   -- than juggling cabal file surgery.
   TIO.writeFile specPath
     "module Main where\nimport DoesNotExist\nmain = undefined\n"
-  r3 <- Client.callTool c "ghc_coverage" (object [])
+  r3 <- Client.callTool c GhcCoverage (object [])
   c6 <- liveCheck $ checkPure
           "empty · structured response on unbuildable test-suite"
           (case fieldBool "success" r3 of

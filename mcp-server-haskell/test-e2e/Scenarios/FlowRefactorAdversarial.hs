@@ -55,6 +55,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
 -- source
@@ -99,14 +100,14 @@ runFlow c projectDir = do
   -- setup
   --------------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Refactor module (greet, double, buildMessage)"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("refactor-adv-demo" :: Text) ])
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Refactor"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   let srcPath = projectDir </> "src" </> "Refactor.hs"
   TIO.writeFile srcPath initialSrc
-  loadR <- Client.callTool c "ghc_load"
+  loadR <- Client.callTool c GhcLoad
              (object [ "module_path" .= ("src/Refactor.hs" :: Text) ])
   cPre <- liveCheck $ checkPure
     "setup · Refactor compiles clean"
@@ -122,7 +123,7 @@ runFlow c projectDir = do
   --------------------------------------------------------------------
   t1 <- stepHeader 2 "collision · rename greet → double (duplicate)"
   bodyBefore <- TIO.readFile srcPath
-  collisionR <- Client.callTool c "ghc_refactor" (object
+  collisionR <- Client.callTool c GhcRefactor (object
     [ "action"           .= ("rename_local" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "old_name"         .= ("greet" :: Text)
@@ -165,7 +166,7 @@ runFlow c projectDir = do
      \contract is actually untested. Raw: " <> renderShort collisionR)
   -- And the session should still work — a failed refactor must not
   -- wedge the GHCi child.
-  alive1 <- Client.callTool c "ghc_load"
+  alive1 <- Client.callTool c GhcLoad
               (object [ "module_path" .= ("src/Refactor.hs" :: Text) ])
   cCollisionAlive <- liveCheck $ checkPure
     "collision · ghc_load of the restored file still green"
@@ -180,7 +181,7 @@ runFlow c projectDir = do
   -- Compile must stay green.
   --------------------------------------------------------------------
   t2 <- stepHeader 3 "extract_binding · lift prefix into top-level"
-  extractR <- Client.callTool c "ghc_refactor" (object
+  extractR <- Client.callTool c GhcRefactor (object
     [ "action"           .= ("extract_binding" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "new_name"         .= ("infoPrefix" :: Text)
@@ -212,7 +213,7 @@ runFlow c projectDir = do
      \Observed: success=" <> T.pack (show extractSucceeded)
      <> ", mentionsTopLevel=" <> T.pack (show mentionsTopLevel))
   -- Either way, the session must still be usable.
-  alive2 <- Client.callTool c "ghc_load"
+  alive2 <- Client.callTool c GhcLoad
               (object [ "module_path" .= ("src/Refactor.hs" :: Text) ])
   cExtractAlive <- liveCheck $ checkPure
     "extract · ghc_load after the refactor still green"
@@ -228,7 +229,7 @@ runFlow c projectDir = do
   --------------------------------------------------------------------
   t3 <- stepHeader 4 "invalid scope · start > end must be refused"
   bodyBefore3 <- TIO.readFile srcPath
-  badScopeR <- Client.callTool c "ghc_refactor" (object
+  badScopeR <- Client.callTool c GhcRefactor (object
     [ "action"           .= ("rename_local" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "old_name"         .= ("greet" :: Text)
@@ -253,7 +254,7 @@ runFlow c projectDir = do
   -- alive.
   --------------------------------------------------------------------
   t4 <- stepHeader 5 "nonexistent file · src/DoesNotExist.hs"
-  missingR <- Client.callTool c "ghc_refactor" (object
+  missingR <- Client.callTool c GhcRefactor (object
     [ "action"           .= ("rename_local" :: Text)
     , "module_path"      .= ("src/DoesNotExist.hs" :: Text)
     , "old_name"         .= ("x" :: Text)
@@ -267,7 +268,7 @@ runFlow c projectDir = do
     ("A module_path that doesn't exist must surface as success=false \
      \with an error field, not as a crash or a silent success. Raw: "
       <> renderShort missingR)
-  alive3 <- Client.callTool c "ghc_eval"
+  alive3 <- Client.callTool c GhcEval
               (object [ "expression" .= ("1 + 1" :: Text) ])
   cMissingAlive <- liveCheck $ checkPure
     "missing file · session still alive after the error"

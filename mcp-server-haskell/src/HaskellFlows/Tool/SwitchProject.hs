@@ -64,6 +64,7 @@ import System.FilePath (takeExtension)
 
 import HaskellFlows.Ghc.ApiSession (GhcSession, killGhcSession)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types
   ( PathError (..)
   , ProjectDir
@@ -74,7 +75,7 @@ import HaskellFlows.Types
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_switch_project"
+    { tdName        = toolNameText GhcSwitchProject
     , tdDescription =
         "Repoint the MCP at a different cabal project without "
           <> "restarting the host. The new path must be absolute, "

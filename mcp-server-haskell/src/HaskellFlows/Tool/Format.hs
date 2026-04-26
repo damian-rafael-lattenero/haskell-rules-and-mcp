@@ -37,6 +37,7 @@ import System.Process
 import System.Timeout (timeout)
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types
   ( ModulePath
   , PathError (..)
@@ -49,7 +50,7 @@ import HaskellFlows.Types
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_format"
+    { tdName        = toolNameText GhcFormat
     , tdDescription =
         "Format a Haskell module with fourmolu (preferred) or ormolu "
           <> "(fallback). Default is check-only — pass write=true to "

@@ -29,11 +29,12 @@ import GHC.Utils.Outputable (showPprUnsafe)
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Ghc.Sanitize (CommandError (..), sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_doc"
+    { tdName        = toolNameText GhcDoc
     , tdDescription =
         "Look up Haddock documentation for a name via the GHC API. "
           <> "Returns the doc block as plain text. If the hosting "

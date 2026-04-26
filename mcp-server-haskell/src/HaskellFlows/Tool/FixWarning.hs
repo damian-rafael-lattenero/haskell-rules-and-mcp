@@ -26,12 +26,13 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_fix_warning"
+    { tdName        = toolNameText GhcFixWarning
     , tdDescription =
         "Propose a patch for a common GHC warning. Read-only by "
           <> "default; pass apply=true to write the file. Handles "

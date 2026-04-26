@@ -25,12 +25,13 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _pd = do
   -- ghc_toolchain_status
   t0 <- stepHeader 1 "ghc_toolchain_status"
-  r1 <- Client.callTool c "ghc_toolchain_status" (object [])
+  r1 <- Client.callTool c GhcToolchainStatus (object [])
   -- Dropped: "status success" — the 'cabal/ghc/hlint available'
   -- check below is a stronger semantic oracle (fails if any of the
   -- three binaries are missing, which is the real failure mode).
@@ -52,7 +53,7 @@ runFlow c _pd = do
 
   -- ghc_toolchain_warmup
   t1 <- stepHeader 2 "ghc_toolchain_warmup (probe + report)"
-  r2 <- Client.callTool c "ghc_toolchain_warmup" (object [])
+  r2 <- Client.callTool c GhcToolchainWarmup (object [])
   -- Dropped: "warmup success" — redundant with 'tools array non-empty'
   -- which is the shape the tool is actually producing.
   c6 <- liveCheck $ checkJsonFieldMatches

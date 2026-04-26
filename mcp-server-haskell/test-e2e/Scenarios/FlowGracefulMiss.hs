@@ -47,6 +47,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | Simple module with no holes — used by the no-holes miss test.
 noHolesSrc :: Text
@@ -66,11 +67,11 @@ runFlow c projectDir = do
   -- setup
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Whole (a module with NO holes)"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("gracefulmiss-demo" :: Text) ])
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Whole"] :: [Text]) ])
-  _ <- Client.callTool c "ghc_deps" (object
+  _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("QuickCheck" :: Text)
          , "stanza"  .= ("test-suite" :: Text)
@@ -78,7 +79,7 @@ runFlow c projectDir = do
          ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Whole.hs") noHolesSrc
-  _ <- Client.callTool c "ghc_load"
+  _ <- Client.callTool c GhcLoad
          (object [ "module_path" .= ("src/Whole.hs" :: Text) ])
   stepFooter 1 t0
 
@@ -93,7 +94,7 @@ runFlow c projectDir = do
   --   success=true with no signal — the agent thinks it worked.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "ghc_deps(remove, 'not-a-real-dep') — package never existed"
-  r1 <- Client.callTool c "ghc_deps" (object
+  r1 <- Client.callTool c GhcDeps (object
     [ "action"  .= ("remove" :: Text)
     , "package" .= ("not-a-real-dep" :: Text)
     , "stanza"  .= ("library" :: Text)
@@ -131,7 +132,7 @@ runFlow c projectDir = do
   -- no way to distinguish "no holes" from "tool broke".
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "ghc_hole on Whole.hs (no holes present)"
-  r2 <- Client.callTool c "ghc_hole"
+  r2 <- Client.callTool c GhcHole
           (object [ "module_path" .= ("src/Whole.hs" :: Text) ])
   let succ2   = fieldBool "success" r2 == Just True
       countOk = fieldInt   "hole_count" r2 == Just 0
@@ -153,7 +154,7 @@ runFlow c projectDir = do
   -- tools still work.
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "ghc_quickcheck('42') — not a predicate"
-  r3 <- Client.callTool c "ghc_quickcheck" (object
+  r3 <- Client.callTool c GhcQuickCheck (object
     [ "property" .= ("42" :: Text)
     , "module"   .= ("src/Whole.hs" :: Text)
     ])
@@ -180,7 +181,7 @@ runFlow c projectDir = do
 
   -- Critical liveness assert: session must still be alive after
   -- the bad call. A follow-up ghc_eval should respond quickly.
-  r4 <- Client.callTool c "ghc_eval"
+  r4 <- Client.callTool c GhcEval
           (object [ "expression" .= ("1 + 1" :: Text) ])
   let sessionAlive = fieldBool "success" r4 == Just True
   cLive <- liveCheck $ checkPure

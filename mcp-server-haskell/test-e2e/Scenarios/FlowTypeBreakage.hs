@@ -44,6 +44,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 clean :: Text
 clean = T.unlines
@@ -67,13 +68,13 @@ runFlow c projectDir = do
   -- (1) scaffold + module that type-checks
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Arith.hs (typechecks)"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("typebreak-demo" :: Text) ])
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Arith"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Arith.hs") clean
-  _ <- Client.callTool c "ghc_load"
+  _ <- Client.callTool c GhcLoad
          (object [ "module_path" .= ("src/Arith.hs" :: Text) ])
   stepFooter 1 t0
 
@@ -81,7 +82,7 @@ runFlow c projectDir = do
   -- (2) precondition — module gate is GREEN on the clean source
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "precondition · check_module is GREEN on clean source"
-  rClean <- Client.callTool c "ghc_check_module"
+  rClean <- Client.callTool c GhcCheckModule
               (object [ "module_path" .= ("src/Arith.hs" :: Text) ])
   let cleanOverall = fieldBool "overall" rClean == Just True
   cPre <- liveCheck $ checkPure
@@ -97,7 +98,7 @@ runFlow c projectDir = do
   t2 <- stepHeader 3 "break the types: f :: Int -> Int but body returns String"
   TIO.writeFile (projectDir </> "src" </> "Arith.hs") broken
 
-  rBroken <- Client.callTool c "ghc_check_module"
+  rBroken <- Client.callTool c GhcCheckModule
                (object [ "module_path" .= ("src/Arith.hs" :: Text) ])
 
   let overallBroken = fieldBool "overall" rBroken

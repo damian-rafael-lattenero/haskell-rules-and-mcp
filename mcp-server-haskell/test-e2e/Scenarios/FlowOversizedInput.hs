@@ -73,6 +73,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | 256 KiB of 'A' wrapped in a Haskell String literal. 4× the
 -- proposed 64 KiB cap so the check is unambiguous on both sides.
@@ -82,13 +83,13 @@ oversizedExpression =
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _pd = do
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("oversize-demo" :: Text) ])
 
   -- 1. Pre-flight so an unrelated session-up error doesn't look
   -- like an oversize-reject failure.
   t0 <- stepHeader 1 "pre-flight · ghc_eval(1+1) on a fresh session"
-  pre <- Client.callTool c "ghc_eval"
+  pre <- Client.callTool c GhcEval
            (object [ "expression" .= ("1 + 1" :: Text) ])
   cPre <- liveCheck $ checkPure
     "pre-flight · session responds to 1+1"
@@ -104,7 +105,7 @@ runFlow c _pd = do
   t1 <- stepHeader 2
           "oversize · 256 KiB expression must be refused at the boundary"
   bigStart <- getPOSIXTime
-  big <- Client.callTool c "ghc_eval"
+  big <- Client.callTool c GhcEval
            (object [ "expression" .= oversizedExpression ])
   bigEnd <- getPOSIXTime
   let bigMs       = round ((realToFrac (bigEnd - bigStart) :: Double)
@@ -140,7 +141,7 @@ runFlow c _pd = do
   -- not have touched the child's stdin — the framing state must be
   -- pristine.
   t2 <- stepHeader 3 "alive · session still responds after the reject"
-  post <- Client.callTool c "ghc_eval"
+  post <- Client.callTool c GhcEval
             (object [ "expression" .= ("2 + 3" :: Text) ])
   let aliveOk = fieldBool "success" post == Just True
              && case lookupField "output" post of

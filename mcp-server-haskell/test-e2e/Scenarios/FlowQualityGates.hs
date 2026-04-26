@@ -43,6 +43,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | Clean module: no hints, compiles cleanly. Anchor for happy-path
 -- assertions.
@@ -84,14 +85,14 @@ runFlow c projectDir = do
   -- (so the happy-path check_project is genuinely green).
   --------------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Calc (clean) + Hinty (hint-worthy)"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("gates-demo" :: Text) ])
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Calc", "Hinty"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs")  calcSrc
   TIO.writeFile (projectDir </> "src" </> "Hinty.hs") hintySrc
-  _ <- Client.callTool c "ghc_load"
+  _ <- Client.callTool c GhcLoad
          (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
   stepFooter 1 t0
 
@@ -103,7 +104,7 @@ runFlow c projectDir = do
   -- array). We now require at least one.
   --------------------------------------------------------------------
   t1 <- stepHeader 2 "ghc_lint on src/ · MUST find Hinty redundancy"
-  lintR <- Client.callTool c "ghc_lint"
+  lintR <- Client.callTool c GhcLint
              (object [ "path" .= ("src/" :: Text) ])
   -- NOTE: no 'lint success == true' check here. With default
   -- fail_on=warning, the tool correctly reports success=false
@@ -127,7 +128,7 @@ runFlow c projectDir = do
   -- the compile gate level, unrelated to our defect injections).
   --------------------------------------------------------------------
   t2 <- stepHeader 3 "ghc_check_module(Calc.hs) · clean anchor"
-  cmR <- Client.callTool c "ghc_check_module"
+  cmR <- Client.callTool c GhcCheckModule
            (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
   c3 <- liveCheck $ checkJsonField "check_module overall=true"
                       cmR "overall" (Bool True)
@@ -143,7 +144,7 @@ runFlow c projectDir = do
   -- next check_project is meaningfully distinct from the first.
   --------------------------------------------------------------------
   t3 <- stepHeader 4 "inject Broken.hs (type error)"
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Broken"] :: [Text]) ])
   TIO.writeFile (projectDir </> "src" </> "Broken.hs") brokenSrc
   stepFooter 3 t3
@@ -156,7 +157,7 @@ runFlow c projectDir = do
   -- the tool is actually compiling each listed module.
   --------------------------------------------------------------------
   t4 <- stepHeader 5 "ghc_check_project · MUST flag Broken"
-  cpR <- Client.callTool c "ghc_check_project" (object [])
+  cpR <- Client.callTool c GhcCheckProject (object [])
   c5 <- liveCheck $ checkJsonField
           "check_project overall=false (Broken has a type error)"
           cpR "overall" (Bool False)

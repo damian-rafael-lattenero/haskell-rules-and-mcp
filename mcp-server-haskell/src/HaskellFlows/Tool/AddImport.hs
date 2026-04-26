@@ -18,12 +18,13 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.Hoogle as Hoogle
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_add_import"
+    { tdName        = toolNameText GhcAddImport
     , tdDescription =
         "Suggest `import` lines for a name that is \"Not in scope\". "
           <> "Queries Hoogle for the name; returns candidate import "

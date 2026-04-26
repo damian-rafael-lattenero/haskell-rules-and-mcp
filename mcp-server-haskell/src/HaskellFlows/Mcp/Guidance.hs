@@ -35,13 +35,18 @@ import Data.Text (Text)
 import qualified Data.Text as T
 
 import HaskellFlows.Mcp.Protocol (ToolDescriptor (..))
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 -- | One row in the situation-to-tool mapping. 'srExample' is a
 -- one-line argument hint the agent can paraphrase into a real
 -- call; kept short so the rendered table stays grep-able.
+--
+-- 'srTool' carries 'ToolName' (issue #44) — a typo in the table
+-- (e.g. 'ghc_creat_project') was previously a runtime mismatch
+-- between guidance + dispatcher; now it's a compile error.
 data SituationRow = SituationRow
   { srSituation :: !Text
-  , srTool      :: !Text
+  , srTool      :: !ToolName
   , srExample   :: !Text
   }
   deriving stock (Eq, Show)
@@ -52,94 +57,94 @@ data SituationRow = SituationRow
 situationTable :: [SituationRow]
 situationTable =
   [ SituationRow "new data T declared"
-                 "ghc_arbitrary"
+                 GhcArbitrary
                  "type_name=\"T\""
   , SituationRow "typed hole or empty stub"
-                 "ghc_hole"
+                 GhcHole
                  "module_path=\"src/X.hs\""
   , SituationRow "want QuickCheck laws from a signature"
-                 "ghc_suggest"
+                 GhcSuggest
                  "function_name=\"f\""
   , SituationRow "check a property"
-                 "ghc_quickcheck"
+                 GhcQuickCheck
                  "property=\"\\\\x -> ...\", module=\"src/X.hs\""
   , SituationRow "check property stability"
-                 "ghc_determinism"
+                 GhcDeterminism
                  "property=\"...\", runs=5"
   , SituationRow "replay persisted properties"
-                 "ghc_regression"
+                 GhcRegression
                  "action=\"run\""
   , SituationRow "materialize test/Spec.hs"
-                 "ghc_quickcheck_export"
+                 GhcQuickCheckExport
                  "(no args)"
   , SituationRow "property store lifecycle (list/drop)"
-                 "ghc_property_lifecycle"
+                 GhcPropertyLifecycle
                  "action=\"list\""
   , SituationRow "rename a local binding"
-                 "ghc_refactor"
+                 GhcRefactor
                  "action=\"rename_local\", scope_line_start=, scope_line_end="
   , SituationRow "add a dependency"
-                 "ghc_deps"
+                 GhcDeps
                  "action=\"add\", package=\"X\", stanza=\"library\"|\"test-suite\""
   , SituationRow "register new modules"
-                 "ghc_add_modules"
+                 GhcAddModules
                  "modules=[\"Foo.Bar\"]"
   , SituationRow "de-register modules"
-                 "ghc_remove_modules"
+                 GhcRemoveModules
                  "modules=[\"Foo.Old\"], delete_files=false"
   , SituationRow "add a missing import"
-                 "ghc_add_import"
+                 GhcAddImport
                  "name=\"Data.Map\""
   , SituationRow "apply a module export list"
-                 "ghc_apply_exports"
+                 GhcApplyExports
                  "module_path=\"src/X.hs\", exports=[\"foo\"]"
   , SituationRow "list live imports in GHCi"
-                 "ghc_imports"
+                 GhcImports
                  "(no args)"
   , SituationRow "browse a module"
-                 "ghc_browse"
+                 GhcBrowse
                  "module=\"Foo.Bar\""
   , SituationRow "fix a GHC warning"
-                 "ghc_fix_warning"
+                 GhcFixWarning
                  "module_path=\"src/X.hs\""
   , SituationRow "coverage report"
-                 "ghc_coverage"
+                 GhcCoverage
                  "(no args, 8 HPC metrics)"
   , SituationRow "lint (matches CI)"
-                 "ghc_lint"
+                 GhcLint
                  "path=\"src/\""
   , SituationRow "format source"
-                 "ghc_format"
+                 GhcFormat
                  "module_path=\"src/X.hs\", write=true"
   , SituationRow "module gate"
-                 "ghc_check_module"
+                 GhcCheckModule
                  "module_path=\"src/X.hs\""
   , SituationRow "project-wide gate"
-                 "ghc_check_project"
+                 GhcCheckProject
                  "(no args)"
   , SituationRow "pre-push finalizer"
-                 "ghc_gate"
+                 GhcGate
                  "(regression + cabal test + cabal build)"
   , SituationRow "scaffold a new project"
-                 "ghc_create_project"
+                 GhcCreateProject
                  "name=\"my-pkg\""
   , SituationRow "validate .cabal"
-                 "ghc_validate_cabal"
+                 GhcValidateCabal
                  "(no args)"
   , SituationRow "toolchain gates (cabal/ghc/hlint)"
-                 "ghc_toolchain_status"
+                 GhcToolchainStatus
                  "(no args)"
   , SituationRow "toolchain warmup (probe optional bins)"
-                 "ghc_toolchain_warmup"
+                 GhcToolchainWarmup
                  "(no args)"
   , SituationRow "batch N tool calls"
-                 "ghc_batch"
+                 GhcBatch
                  "actions=[{tool,args},...]"
   , SituationRow "install host rules (no repo clone)"
-                 "ghc_bootstrap"
+                 GhcBootstrap
                  "host=\"claude-code\"|\"cursor\"|\"generic\", write=false"
   , SituationRow "what should I do next"
-                 "ghc_workflow"
+                 GhcWorkflow
                  "action=\"help\""
   ]
 
@@ -209,7 +214,7 @@ sessionInstructionsText descriptors =
   where
     renderRow r =
       "  " <> padR 40 (srSituation r) <> " -> "
-            <> srTool r <> "(" <> srExample r <> ")"
+            <> toolNameText (srTool r) <> "(" <> srExample r <> ")"
     padR n t = t <> T.replicate (max 0 (n - T.length t)) " "
 
 --------------------------------------------------------------------------------
@@ -295,7 +300,7 @@ workflowRulesMarkdown descriptors =
   where
     rowMd r =
       "| " <> srSituation r
-      <> " | `" <> srTool r <> "`"
+      <> " | `" <> toolNameText (srTool r) <> "`"
       <> " | `" <> srExample r <> "` |"
 
 tshow :: Int -> Text

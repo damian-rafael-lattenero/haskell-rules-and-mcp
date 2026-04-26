@@ -18,11 +18,12 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (findExecutable)
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_toolchain_warmup"
+    { tdName        = toolNameText GhcToolchainWarmup
     , tdDescription =
         "Probe every optional toolchain binary (fourmolu, ormolu, hls, "
           <> "hoogle) and return availability so subsequent calls do not "

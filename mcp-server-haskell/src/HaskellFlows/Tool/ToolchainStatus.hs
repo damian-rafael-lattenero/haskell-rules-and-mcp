@@ -45,11 +45,12 @@ import System.Process
 import System.Timeout (timeout)
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_toolchain_status"
+    { tdName        = toolNameText GhcToolchainStatus
     , tdDescription =
         "Report availability + version of every external binary the "
           <> "MCP can delegate to (cabal, ghc, hlint, fourmolu, "

@@ -28,11 +28,12 @@ import GHC.Types.Name.Occurrence (occNameString)
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Ghc.Sanitize (CommandError (..), sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_complete"
+    { tdName        = toolNameText GhcComplete
     , tdDescription =
         "Return in-scope identifiers that start with the given prefix, "
           <> "via the GHC API. Useful before calling :info or :type on a "

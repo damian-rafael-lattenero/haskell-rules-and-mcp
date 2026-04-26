@@ -26,6 +26,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 unusedImportSrc :: Text
 unusedImportSrc =
@@ -43,11 +44,11 @@ runFlow c projectDir = do
   -- add 'containers' dep so Data.Map is reachable.
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Warn module (unused import)"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("fixwarn-demo" :: Text) ])
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Warn"] :: [Text]) ])
-  _ <- Client.callTool c "ghc_deps" (object
+  _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("containers" :: Text)
          , "stanza"  .= ("library" :: Text)
@@ -60,7 +61,7 @@ runFlow c projectDir = do
   -- ghc_fix_warning — ask for a patch, apply=false.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "ghc_fix_warning(Warn.hs, line=3, GHC-66111)"
-  r <- Client.callTool c "ghc_fix_warning" (object
+  r <- Client.callTool c GhcFixWarning (object
     [ "module_path" .= ("src/Warn.hs" :: Text)
     , "line"        .= (3 :: Int)
     , "code"        .= ("GHC-66111" :: Text)   -- -Wunused-imports

@@ -41,6 +41,7 @@ import GHC.Utils.Outputable (showPprUnsafe)
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Ghc.Sanitize (CommandError (..), sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Type
   ( InfoKind (..)
   , ParsedInfo (..)
@@ -49,7 +50,7 @@ import HaskellFlows.Parser.Type
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_info"
+    { tdName        = toolNameText GhcInfo
     , tdDescription =
         "Get detailed information about a Haskell name (function, type, "
           <> "typeclass) via the GHC API. Shows the definition, kind, "

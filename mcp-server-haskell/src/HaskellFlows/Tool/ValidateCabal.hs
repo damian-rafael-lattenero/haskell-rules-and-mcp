@@ -48,12 +48,13 @@ import System.Process
 import System.Timeout (timeout)
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_validate_cabal"
+    { tdName        = toolNameText GhcValidateCabal
     , tdDescription =
         "Validate the project's .cabal file. Runs `cabal check` + "
           <> "common-issue heuristics (duplicate deps, missing "

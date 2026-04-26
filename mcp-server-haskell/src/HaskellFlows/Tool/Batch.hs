@@ -45,11 +45,12 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_batch"
+    { tdName        = toolNameText GhcBatch
     , tdDescription =
         "Run a list of tool invocations sequentially in one request. "
           <> "Each action is `{tool: string, args: object}`. Returns "

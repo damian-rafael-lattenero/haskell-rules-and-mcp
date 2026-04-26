@@ -68,12 +68,13 @@ import HaskellFlows.Ghc.Sanitize
   , sanitizeExpression
   )
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.QuickCheck
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_quickcheck"
+    { tdName        = toolNameText GhcQuickCheck
     , tdDescription =
         "Run a QuickCheck property against the current session. "
           <> "The property is passed directly to quickCheckWithResult, "

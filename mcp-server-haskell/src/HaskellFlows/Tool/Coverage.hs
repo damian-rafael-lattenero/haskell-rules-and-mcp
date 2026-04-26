@@ -35,6 +35,7 @@ import System.Process
 import System.Timeout (timeout)
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Coverage
   ( CoverageReport (..)
   , Metric (..)
@@ -45,7 +46,7 @@ import HaskellFlows.Types (ProjectDir, unProjectDir)
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_coverage"
+    { tdName        = toolNameText GhcCoverage
     , tdDescription =
         "Run 'cabal test --enable-coverage' and parse the HPC report. "
           <> "Requires cabal on PATH. Coverage runs are slow; hard "

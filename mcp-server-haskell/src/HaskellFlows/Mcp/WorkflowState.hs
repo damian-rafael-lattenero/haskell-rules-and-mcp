@@ -33,16 +33,24 @@ import Data.Maybe (isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+
 -- | Observable session counters + sliding history. Kept small so
 -- JSON serialisation is cheap on every @ghc_workflow(status)@
 -- call.
+--
+-- 'wsToolHistory' is keyed by the 'ToolName' ADT (issue #44) — that
+-- way pattern-matching against history elements ('historyNudges',
+-- 'classifyPhase') is checked exhaustively at compile time. The
+-- wire format is preserved by the 'ToJSON' instance (renders each
+-- name via 'toolNameText').
 data WorkflowState = WorkflowState
   { wsToolCalls          :: !Int
   , wsEditsSinceLastLoad :: !Int
   , wsLastLoadSuccess    :: !(Maybe Bool)
   , wsLastLoadWarnings   :: !Int
   , wsPassedProperties   :: !Int
-  , wsToolHistory        :: ![Text]   -- ^ most recent first, bounded at 'historyLimit'
+  , wsToolHistory        :: ![ToolName]   -- ^ most recent first, bounded at 'historyLimit'
   }
   deriving stock (Eq, Show)
 
@@ -53,7 +61,7 @@ instance ToJSON WorkflowState where
     , "lastLoadSuccess"    .= wsLastLoadSuccess s
     , "lastLoadWarnings"   .= wsLastLoadWarnings s
     , "passedProperties"   .= wsPassedProperties s
-    , "toolHistory"        .= wsToolHistory s
+    , "toolHistory"        .= map toolNameText (wsToolHistory s)
     ]
 
 -- | Handle used by the Server layer to mutate the state from
@@ -79,7 +87,7 @@ historyLimit = 20
 -- The payload is the tool's result JSON; we look at well-known
 -- fields to derive counters. Unknown payloads only bump the
 -- tool-call counter + history — we never fail.
-trackTool :: WorkflowStateRef -> Text -> Bool -> Value -> IO ()
+trackTool :: WorkflowStateRef -> ToolName -> Bool -> Value -> IO ()
 trackTool (WorkflowStateRef ref) toolName ok payload =
   modifyMVar_ ref $ \s ->
     let calls  = wsToolCalls s + 1
@@ -87,18 +95,23 @@ trackTool (WorkflowStateRef ref) toolName ok payload =
         base   = s { wsToolCalls = calls, wsToolHistory = hist }
     in pure (applyToolUpdate base toolName ok payload)
 
-applyToolUpdate :: WorkflowState -> Text -> Bool -> Value -> WorkflowState
+-- The catch-all @_ -> s@ keeps this O(1) for the bulk of tools that
+-- have no counter-specific update — we still get a non-exhaustive
+-- warning if a future ToolName is supposed to mutate state and is
+-- forgotten, because callers that *care* (e.g. 'ghc_load') match by
+-- constructor explicitly.
+applyToolUpdate :: WorkflowState -> ToolName -> Bool -> Value -> WorkflowState
 applyToolUpdate s toolName ok payload = case toolName of
-  "ghc_load" | ok ->
+  GhcLoad | ok ->
     s { wsEditsSinceLastLoad = 0
       , wsLastLoadSuccess    = Just True
       , wsLastLoadWarnings   = warningCount payload
       }
-  "ghc_load" ->
+  GhcLoad ->
     s { wsLastLoadSuccess = Just False }
-  "ghc_refactor" ->
+  GhcRefactor ->
     s { wsEditsSinceLastLoad = wsEditsSinceLastLoad s + 1 }
-  "ghc_quickcheck" | ok, isPassed payload ->
+  GhcQuickCheck | ok, isPassed payload ->
     s { wsPassedProperties = wsPassedProperties s + 1 }
   _ -> s
 
@@ -165,8 +178,10 @@ renderHelp s = concat
 -- | Pattern-based nudges derived from the sliding tool-call
 -- history. Each case inspects a small prefix (typically 3..5
 -- entries) and looks for a known anti-pattern or an obvious
--- missed follow-up.
-historyNudges :: [Text] -> [Text]
+-- missed follow-up. Each comparison is by 'ToolName' constructor
+-- so renaming a tool's wire string only changes 'toolNameText',
+-- never the nudge logic.
+historyNudges :: [ToolName] -> [Text]
 historyNudges hist = concat
   [ -- 5 consecutive ghc_load calls → the agent is polling
     -- rather than editing. Suggest a flakiness / stability
@@ -175,21 +190,21 @@ historyNudges hist = concat
       \rather than progressing. Try ghc_determinism on a recent \
       \property for flakiness, or ghc_check_project to surface \
       \module-level gates you can knock out in parallel."
-    | length recent5 >= 5, all (== "ghc_load") recent5
+    | length recent5 >= 5, all (== GhcLoad) recent5
     ]
     -- ghc_suggest recent, no ghc_quickcheck since.
   , [ "You ran ghc_suggest but haven't tried any of the proposals \
       \with ghc_quickcheck yet. Pick the highest-confidence law \
       \and feed it in — passes auto-persist to the regression store."
-    | "ghc_suggest" `elem` recent3, "ghc_quickcheck" `notElem` recent3
+    | GhcSuggest `elem` recent3, GhcQuickCheck `notElem` recent3
     ]
     -- Last tool was ghc_refactor and there's been no load since.
   , [ "Last tool was ghc_refactor. The refactor was snapshot-and-\
       \compile-verified, but a fresh ghc_load(diagnostics=true) \
       \catches any new holes or warnings the rename surfaced."
     | case hist of
-        ("ghc_refactor" : rest) -> "ghc_load" `notElem` take 2 rest
-        _                        -> False
+        (GhcRefactor : rest) -> GhcLoad `notElem` take 2 rest
+        _                    -> False
     ]
   ]
   where
@@ -214,12 +229,12 @@ data SessionPhase
 classifyPhase :: WorkflowState -> SessionPhase
 classifyPhase s
   | isNothing (wsLastLoadSuccess s)
-      && wsToolCalls s < 3              = PhasePreScaffold
-  | wsLastLoadSuccess s == Just False   = PhaseBootstrap
-  | wsPassedProperties s >= 3           = PhaseReadyToPush
-  | "ghc_quickcheck" `elem` recent3
-      || "ghc_suggest"   `elem` recent3 = PhaseTestingLaws
-  | otherwise                           = PhaseDeveloping
+      && wsToolCalls s < 3            = PhasePreScaffold
+  | wsLastLoadSuccess s == Just False = PhaseBootstrap
+  | wsPassedProperties s >= 3         = PhaseReadyToPush
+  | GhcQuickCheck `elem` recent3
+      || GhcSuggest `elem` recent3    = PhaseTestingLaws
+  | otherwise                         = PhaseDeveloping
   where
     recent3 = take 3 (wsToolHistory s)
 

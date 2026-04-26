@@ -39,6 +39,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
 -- source with 3 data types — one per template variant
@@ -82,13 +83,13 @@ runFlow c projectDir = do
   -- setup
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + write Shapes + load"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("arbitrary-demo" :: Text) ])
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Shapes"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Shapes.hs") shapesSrc
-  _ <- Client.callTool c "ghc_load"
+  _ <- Client.callTool c GhcLoad
          (object [ "module_path" .= ("src/Shapes.hs" :: Text) ])
   stepFooter 1 t0
 
@@ -96,7 +97,7 @@ runFlow c projectDir = do
   -- (1) Status: flat ADT → classical oneof template
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "ghc_arbitrary(Status) — flat oneof"
-  r1 <- Client.callTool c "ghc_arbitrary"
+  r1 <- Client.callTool c GhcArbitrary
           (object [ "type_name" .= ("Status" :: Text) ])
   c1 <- liveCheck $ checkJsonField
           "Status · success" r1 "success" (Bool True)
@@ -122,7 +123,7 @@ runFlow c projectDir = do
   -- (2) Expr: recursive → sized template (BUG-17 core)
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "ghc_arbitrary(Expr) — sized recursive (BUG-17)"
-  r2 <- Client.callTool c "ghc_arbitrary"
+  r2 <- Client.callTool c GhcArbitrary
           (object [ "type_name" .= ("Expr" :: Text) ])
   c6 <- liveCheck $ checkJsonField
           "Expr · success" r2 "success" (Bool True)
@@ -149,7 +150,7 @@ runFlow c projectDir = do
   -- (3) Tree a: polymorphic recursive → Arbitrary constraint
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "ghc_arbitrary(Tree) — polymorphic + sized"
-  r3 <- Client.callTool c "ghc_arbitrary"
+  r3 <- Client.callTool c GhcArbitrary
           (object [ "type_name" .= ("Tree" :: Text) ])
   c11 <- liveCheck $ checkJsonField
           "Tree · success" r3 "success" (Bool True)
@@ -205,20 +206,20 @@ runFlow c projectDir = do
         ]
   TIO.writeFile (projectDir </> "src" </> "ShapesGen.hs") genSrc
 
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["ShapesGen"] :: [Text]) ])
   -- The session needs QuickCheck in scope to resolve 'Arbitrary',
   -- 'arbitrary', 'oneof', 'sized', 'frequency'. It's already a
   -- build-depends in the library stanza (cabal repl injects it),
   -- but we add it to the library explicitly so the generated
   -- module loads under its own power, not via the test-only scope.
-  _ <- Client.callTool c "ghc_deps"
+  _ <- Client.callTool c GhcDeps
          (object
            [ "action"  .= ("add" :: Text)
            , "package" .= ("QuickCheck" :: Text)
            , "stanza"  .= ("library" :: Text)
            ])
-  loadGen <- Client.callTool c "ghc_load"
+  loadGen <- Client.callTool c GhcLoad
                (object [ "module_path" .= ("src/ShapesGen.hs" :: Text) ])
   c15 <- liveCheck $ Check
     { cName   = "3 generated Arbitrary instances compile together"

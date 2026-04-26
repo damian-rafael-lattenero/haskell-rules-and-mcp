@@ -47,15 +47,16 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _pd = do
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("timeout-demo" :: Text) ])
 
   -- 1. Pre-flight: the session must be responsive before we poke it.
   t0 <- stepHeader 1 "pre-flight · ghc_eval(1+1) on a fresh session"
-  pre <- Client.callTool c "ghc_eval"
+  pre <- Client.callTool c GhcEval
            (object [ "expression" .= ("1 + 1" :: Text) ])
   cPre <- liveCheck $ checkPure
     "pre-flight · session responds to 1+1"
@@ -70,7 +71,7 @@ runFlow c _pd = do
   -- as <<loop>> and come back early, which would mask a broken timer).
   t1 <- stepHeader 2 "slow eval · threadDelay 60 s must abort in < 45 s"
   startedAt <- getPOSIXTime
-  slow <- Client.callTool c "ghc_eval"
+  slow <- Client.callTool c GhcEval
             (object [ "expression"
                     .= ("Control.Concurrent.threadDelay 60000000 :: IO ()"
                         :: Text) ])
@@ -119,7 +120,7 @@ runFlow c _pd = do
   -- a fresh GHCi child.
   t2 <- stepHeader 4 "recovery · next ghc_eval(2+3) must succeed"
   recStart <- getPOSIXTime
-  recov <- Client.callTool c "ghc_eval"
+  recov <- Client.callTool c GhcEval
              (object [ "expression" .= ("2 + 3" :: Text) ])
   recEnd <- getPOSIXTime
   let recMs        = round ((realToFrac (recEnd - recStart) :: Double)

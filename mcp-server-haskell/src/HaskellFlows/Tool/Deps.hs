@@ -51,6 +51,7 @@ import System.IO (IOMode (..), openFile, hClose)
 import System.IO.Unsafe (unsafePerformIO)
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 -- | Serialise concurrent .cabal edits across every call originating
@@ -95,7 +96,7 @@ withCabalLock cabalPath action =
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_deps"
+    { tdName        = toolNameText GhcDeps
     , tdDescription =
         "Manage build-depends in the project's .cabal file. Actions: "
           <> "'list' (current deps), 'add' (insert pkg + optional "

@@ -43,12 +43,13 @@ import System.Directory
 import System.FilePath ((</>), takeDirectory)
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_create_project"
+    { tdName        = toolNameText GhcCreateProject
     , tdDescription =
         "Scaffold a minimal cabal project (library + test-suite) in the "
           <> "current project directory. Creates <name>.cabal, "

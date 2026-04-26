@@ -45,6 +45,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
 -- sources
@@ -87,11 +88,11 @@ runFlow c projectDir = do
   -- (1) scaffold + deps + Foo + Spec
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold · project + QuickCheck dep + Foo + Spec"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("scope-fix-demo" :: Text) ])
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Foo"] :: [Text]) ])
-  _ <- Client.callTool c "ghc_deps" (object
+  _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("QuickCheck" :: Text)
          , "stanza"  .= ("test-suite" :: Text)
@@ -100,7 +101,7 @@ runFlow c projectDir = do
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Foo.hs") fooSrc
   TIO.writeFile (projectDir </> "test" </> "Spec.hs") specSrc
-  _ <- Client.callTool c "ghc_load"
+  _ <- Client.callTool c GhcLoad
          (object [ "module_path" .= ("test/Spec.hs" :: Text) ])
   stepFooter 1 t0
 
@@ -112,7 +113,7 @@ runFlow c projectDir = do
   -- used to silently poison the regression store.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "quickcheck · prop_trivial with module=\"src/Foo.hs\" (wrong!)"
-  qcR <- Client.callTool c "ghc_quickcheck" (object
+  qcR <- Client.callTool c GhcQuickCheck (object
     [ "property" .= ("prop_trivial" :: Text)
     , "module"   .= ("src/Foo.hs"    :: Text)  -- the BUG input
     ])
@@ -129,7 +130,7 @@ runFlow c projectDir = do
   --     path (test/Spec.hs), not the wrong hint the caller passed
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "fix #1 · ghc_regression list reports resolved module"
-  listR <- Client.callTool c "ghc_regression"
+  listR <- Client.callTool c GhcRegression
              (object [ "action" .= ("list" :: Text) ])
   -- 'ghc_quickcheck' auto-resolves via ':info prop_trivial', which
   -- returns the ABSOLUTE path to test/Spec.hs. Both the relative
@@ -163,7 +164,7 @@ runFlow c projectDir = do
   -- who loaded something else between quickcheck and regression.
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "scope shift · ghc_load src/Foo.hs (displaces Main)"
-  _ <- Client.callTool c "ghc_load"
+  _ <- Client.callTool c GhcLoad
          (object [ "module_path" .= ("src/Foo.hs" :: Text) ])
   stepFooter 4 t3
 
@@ -173,7 +174,7 @@ runFlow c projectDir = do
   --     the stored module before each property
   ----------------------------------------------------------------
   t4 <- stepHeader 5 "fix #2a · ghc_regression run passes 1/1 despite scope shift"
-  runR <- Client.callTool c "ghc_regression"
+  runR <- Client.callTool c GhcRegression
             (object [ "action" .= ("run" :: Text) ])
   let runPassed      = fieldInt "passed" runR == Just 1
       runTotal       = fieldInt "total"  runR == Just 1
@@ -194,7 +195,7 @@ runFlow c projectDir = do
   --     should have restored the pre-run module set)
   ----------------------------------------------------------------
   t5 <- stepHeader 6 "fix #2b · post-regression, 'answer' from Foo is still live"
-  evalR <- Client.callTool c "ghc_eval"
+  evalR <- Client.callTool c GhcEval
              (object [ "expression" .= ("answer" :: Text) ])
   let answerOk = fieldBool "success" evalR == Just True
               && case fieldString "output" evalR of

@@ -62,10 +62,11 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("sandbox-demo" :: Text) ])
 
   let canary = projectDir </> "sandbox-canary.txt"
@@ -78,7 +79,7 @@ runFlow c projectDir = do
   -- 1. Write. This is the canonical "I can touch the filesystem"
   -- capability.
   t0 <- stepHeader 1 "write · ghc_eval can writeFile inside projectDir"
-  w <- Client.callTool c "ghc_eval"
+  w <- Client.callTool c GhcEval
          (object [ "expression" .= writeExpr ])
   onDisk <- doesFileExist canary
   cWrite <- liveCheck $ checkPure
@@ -93,7 +94,7 @@ runFlow c projectDir = do
   -- these differ the session is doing something weird (caching,
   -- chroot, whatever); not expected but worth catching.
   t1 <- stepHeader 2 "read · ghc_eval readFile returns what we wrote"
-  r <- Client.callTool c "ghc_eval"
+  r <- Client.callTool c GhcEval
          (object [ "expression" .= readExpr ])
   let roundtripped =
         fieldBool "success" r == Just True

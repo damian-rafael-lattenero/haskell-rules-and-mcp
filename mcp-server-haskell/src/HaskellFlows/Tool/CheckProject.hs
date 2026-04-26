@@ -35,13 +35,14 @@ import System.FilePath (takeExtension, (</>))
 import HaskellFlows.Data.PropertyStore (Store)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_check_project"
+    { tdName        = toolNameText GhcCheckProject
     , tdDescription =
         "Run ghc_check_module on every module declared in the "
           <> "project's .cabal exposed-modules + other-modules. "

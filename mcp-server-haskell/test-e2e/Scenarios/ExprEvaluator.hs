@@ -53,6 +53,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 import Scenarios.ExprSources
   ( evalSrc
   , genSrc
@@ -148,7 +149,7 @@ runStep n title body = do
 
 step1_initialStatus :: Client.McpClient -> IO [Check]
 step1_initialStatus c = do
-  r <- Client.callTool c "ghc_workflow" (object [ "action" .= ("status" :: Text) ])
+  r <- Client.callTool c GhcWorkflow (object [ "action" .= ("status" :: Text) ])
   pure
     [ mkCheck "step 1 · status view carries phase field"
         (isJust (fieldString "phase" r))
@@ -173,7 +174,7 @@ objMap _          = KeyMap.empty
 
 step2_scaffold :: Client.McpClient -> IO [Check]
 step2_scaffold c = do
-  r <- Client.callTool c "ghc_create_project"
+  r <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("expr-evaluator" :: Text) ])
   let ok = fieldBool "success" r == Just True
       chain = fetchChain r
@@ -219,7 +220,7 @@ lookupPath v = foldl step (Just v)
 
 step3_addQuickCheck :: Client.McpClient -> IO [Check]
 step3_addQuickCheck c = do
-  r <- Client.callTool c "ghc_deps" (object
+  r <- Client.callTool c GhcDeps (object
     [ "action"  .= ("add" :: Text)
     , "package" .= ("QuickCheck" :: Text)
     , "version" .= (">= 2.14" :: Text)
@@ -239,7 +240,7 @@ step3_addQuickCheck c = do
 
 step4_addModules :: Client.McpClient -> IO [Check]
 step4_addModules c = do
-  r <- Client.callTool c "ghc_add_modules" (object
+  r <- Client.callTool c GhcAddModules (object
     [ "modules" .= (["Expr.Syntax", "Expr.Eval", "Expr.Simplify", "Expr.Pretty"] :: [Text])
     ])
   pure
@@ -255,7 +256,7 @@ step4_addModules c = do
 
 step5_removeStub :: Client.McpClient -> IO [Check]
 step5_removeStub c = do
-  r <- Client.callTool c "ghc_remove_modules" (object
+  r <- Client.callTool c GhcRemoveModules (object
     [ "modules"      .= (["ExprEvaluator"] :: [Text])
     , "delete_files" .= True
     ])
@@ -326,7 +327,7 @@ step7_wireOtherModules projectDir = do
 
 step8_loadAll :: Client.McpClient -> IO [Check]
 step8_loadAll c = do
-  r <- Client.callTool c "ghc_load"
+  r <- Client.callTool c GhcLoad
          (object [ "module_path" .= ("test/Gen.hs" :: Text) ])
   pure
     [ checkJsonField "step 8 · load success" r "success" (Bool True)
@@ -348,7 +349,7 @@ step8_loadAll c = do
 
 step9_suggestSimplify :: Client.McpClient -> IO [Check]
 step9_suggestSimplify c = do
-  r <- Client.callTool c "ghc_suggest"
+  r <- Client.callTool c GhcSuggest
          (object [ "function_name" .= ("simplify" :: Text) ])
   let suggestions = case lookupPath r ["suggestions"] of
         Just (Array a) -> V.toList a
@@ -400,7 +401,7 @@ step10_runProperties c = do
            "\\(x :: Expr) -> parseExpr (pretty x) == Just x")
         ]
   forM props $ \(label, prop) -> do
-    r <- Client.callTool c "ghc_quickcheck" (object
+    r <- Client.callTool c GhcQuickCheck (object
       [ "property" .= (prop :: Text)
       , "module"   .= ("test/Gen.hs" :: Text)
       ])
@@ -418,7 +419,7 @@ step10_runProperties c = do
 
 step11_determinism :: Client.McpClient -> IO [Check]
 step11_determinism c = do
-  r <- Client.callTool c "ghc_determinism" (object
+  r <- Client.callTool c GhcDeterminism (object
     [ "property" .= (
         "\\(env :: Env) (x :: Expr) -> eval env (simplify x) == eval env x"
         :: Text)
@@ -442,7 +443,7 @@ step11_determinism c = do
 
 step12_regressionList :: Client.McpClient -> IO [Check]
 step12_regressionList c = do
-  r <- Client.callTool c "ghc_regression"
+  r <- Client.callTool c GhcRegression
          (object [ "action" .= ("list" :: Text) ])
   pure
     [ checkJsonField "step 12 · regression list success" r "success" (Bool True)
@@ -460,7 +461,7 @@ step12_regressionList c = do
 
 step13_regressionRun :: Client.McpClient -> IO [Check]
 step13_regressionRun c = do
-  r <- Client.callTool c "ghc_regression"
+  r <- Client.callTool c GhcRegression
          (object [ "action" .= ("run" :: Text) ])
   -- Dropped: "step 13 · regression run success" — 'no regressions' is
   -- strictly stronger and catches the real failure shape.
@@ -477,7 +478,7 @@ step13_regressionRun c = do
 
 step14_export :: Client.McpClient -> FilePath -> IO [Check]
 step14_export c projectDir = do
-  r <- Client.callTool c "ghc_quickcheck_export" (object [])
+  r <- Client.callTool c GhcQuickCheckExport (object [])
   let success = fieldBool "success" r == Just True
       specPath = projectDir </> "test" </> "Spec.hs"
   specExists <- doesFileExist specPath
@@ -504,7 +505,7 @@ step15_gate c = do
   -- Skip the expensive cabal test + cabal build subprocess steps:
   -- the E2E's point is that the tool's shape holds, not that
   -- cabal builds this particular test project under our environment.
-  r <- Client.callTool c "ghc_gate" (object
+  r <- Client.callTool c GhcGate (object
     [ "skip_cabal_test"  .= True
     , "skip_cabal_build" .= True
     ])

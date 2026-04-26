@@ -37,6 +37,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
 -- runFlow
@@ -49,7 +50,7 @@ runFlow c _projectDir = do
   -- operate on.
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("batch-demo" :: Text) ])
   stepFooter 1 t0
 
@@ -76,7 +77,7 @@ runFlow c _projectDir = do
             , "args" .= object [ "action" .= ("status" :: Text) ]
             ]
         ]
-  happyR <- Client.callTool c "ghc_batch"
+  happyR <- Client.callTool c GhcBatch
               (object [ "actions" .= happyActions ])
   c1 <- liveCheck $ checkJsonField
           "happy · overall success"
@@ -155,7 +156,7 @@ runFlow c _projectDir = do
                 ]
             ]
         ]
-  ffR <- Client.callTool c "ghc_batch" (object
+  ffR <- Client.callTool c GhcBatch (object
     [ "actions"   .= ffActions
     , "fail_fast" .= True
     ])
@@ -182,7 +183,7 @@ runFlow c _projectDir = do
 
   -- The REAL oracle: what does the filesystem say?
   t3 <- stepHeader 4 "filesystem oracle · ls build_depends after batch"
-  ls <- Client.callTool c "ghc_deps"
+  ls <- Client.callTool c GhcDeps
           (object [ "action" .= ("list" :: Text) ])
   let deps = case lookupField "build_depends" ls of
         Just (Array xs) -> [ p | String p <- toListVec xs ]

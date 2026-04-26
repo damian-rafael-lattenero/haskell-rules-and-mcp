@@ -26,6 +26,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | Tiny module so @ghc_quickcheck@ has something to test.
 calcSrc :: Text
@@ -42,11 +43,11 @@ runFlow c projectDir = do
   -- setup — scaffold + add QuickCheck + load a tiny module
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + add QuickCheck + load Calc"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("proplife-demo" :: Text) ])
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Calc"] :: [Text]) ])
-  _ <- Client.callTool c "ghc_deps" (object
+  _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("QuickCheck" :: Text)
          , "stanza"  .= ("test-suite" :: Text)
@@ -54,7 +55,7 @@ runFlow c projectDir = do
          ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs") calcSrc
-  _ <- Client.callTool c "ghc_load"
+  _ <- Client.callTool c GhcLoad
          (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
   stepFooter 1 t0
 
@@ -62,7 +63,7 @@ runFlow c projectDir = do
   -- seed: quickcheck a simple property so it persists.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "quickcheck (auto-persist on pass)"
-  _ <- Client.callTool c "ghc_quickcheck" (object
+  _ <- Client.callTool c GhcQuickCheck (object
     [ "property" .= ("\\(x :: Int) -> double x == x + x" :: Text)
     , "module"   .= ("src/Calc.hs" :: Text)
     ])
@@ -72,7 +73,7 @@ runFlow c projectDir = do
   -- ghc_property_lifecycle — inspect the store.
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "ghc_property_lifecycle (inspect store)"
-  r <- Client.callTool c "ghc_property_lifecycle" (object [])
+  r <- Client.callTool c GhcPropertyLifecycle (object [])
   c1 <- liveCheck $ checkJsonField "success" r "success" (Bool True)
   c2 <- liveCheck $ checkJsonFieldMatches
           "store has ≥ 1 property"

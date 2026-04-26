@@ -31,6 +31,7 @@ import HaskellFlows.Ghc.ApiSession
   , targetForPath
   )
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error
   ( GhcError (..)
   , Severity (..)
@@ -48,7 +49,7 @@ import HaskellFlows.Types
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_check_module"
+    { tdName        = toolNameText GhcCheckModule
     , tdDescription =
         "Aggregate module-complete gates into one report: compiles? "
           <> "no errors? no warnings? no holes? stored properties still "

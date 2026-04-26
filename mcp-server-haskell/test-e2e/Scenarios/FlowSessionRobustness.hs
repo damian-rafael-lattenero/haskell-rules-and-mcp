@@ -40,6 +40,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | Expressions we expect GHCi to reject at RUNTIME (not at compile
 -- time). Each pairs (label, expression).
@@ -55,13 +56,13 @@ hostileEvals =
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _pd = do
   -- Minimal scaffold so the GHCi session comes up with a package.
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("sessrob-demo" :: Text) ])
 
   -- Pre-flight: session must answer a trivial eval before we start
   -- throwing things at it. Catches unrelated setup failures.
   t0 <- stepHeader 1 "pre-flight · ghc_eval(1+1) on a fresh session"
-  preflight <- Client.callTool c "ghc_eval"
+  preflight <- Client.callTool c GhcEval
                  (object [ "expression" .= ("1 + 1" :: Text) ])
   let preOk = fieldBool "success" preflight == Just True
   cPre <- liveCheck $ checkPure
@@ -89,7 +90,7 @@ oneHostileCycle
 oneHostileCycle c (label, expr) = do
   t <- stepHeader 2 ("hostile cycle · " <> label)
 
-  rHostile <- Client.callTool c "ghc_eval"
+  rHostile <- Client.callTool c GhcEval
                 (object [ "expression" .= expr ])
   let hostileReturned =
         -- Either outcome is fine — we only care that the CALL
@@ -106,7 +107,7 @@ oneHostileCycle c (label, expr) = do
      \transport swallowed it. Raw: " <> truncRender rHostile)
 
   -- The critical one: prove the session is still alive.
-  rPilot <- Client.callTool c "ghc_eval"
+  rPilot <- Client.callTool c GhcEval
               (object [ "expression" .= ("2 + 3" :: Text) ])
   let pilotOk = fieldBool "success" rPilot == Just True
              && case lookupField "output" rPilot of

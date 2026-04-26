@@ -71,6 +71,7 @@ import HaskellFlows.Ghc.Sanitize
   , sanitizeExpression
   )
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error (GhcError)
 import HaskellFlows.Parser.Type (isOutOfScope)
 import HaskellFlows.Parser.TypeSignature (ParsedSig, parseSignature)
@@ -84,7 +85,7 @@ import HaskellFlows.Suggest.Rules
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_suggest"
+    { tdName        = toolNameText GhcSuggest
     , tdDescription =
         "Given a function name, propose QuickCheck properties that "
           <> "the function's type signature suggests. Each suggestion "

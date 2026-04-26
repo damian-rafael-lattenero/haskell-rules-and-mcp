@@ -48,6 +48,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 -- | Structured next-step hint. 'nsExample' is an optional sample
 -- arguments object the agent can use verbatim. 'nsChain' (BUG-22)
@@ -55,8 +56,14 @@ import HaskellFlows.Mcp.Protocol
 -- single @ghc_batch@ call, or walk the steps one by one. The
 -- primary @tool@ + @why@ are always the first step's intent, so
 -- an agent that ignores @chain@ still gets the right first call.
+--
+-- 'nsTool' / 'csTool' carry the 'ToolName' ADT (issue #44). The
+-- on-the-wire string is produced by 'toolNameText' inside the
+-- 'ToJSON' instances below — so renaming a tool's wire string is
+-- a single-site edit in 'HaskellFlows.Mcp.ToolName' that ripples
+-- here automatically.
 data NextStep = NextStep
-  { nsTool    :: !Text
+  { nsTool    :: !ToolName
   , nsWhy     :: !Text
   , nsExample :: !(Maybe Value)
   , nsChain   :: !(Maybe [ChainStep])
@@ -67,21 +74,21 @@ data NextStep = NextStep
 -- @ghc_batch@ accepts (@{tool, args}@) so the agent can pass
 -- @chain@ straight to @ghc_batch(actions=chain)@.
 data ChainStep = ChainStep
-  { csTool :: !Text
+  { csTool :: !ToolName
   , csArgs :: !Value
   }
   deriving stock (Eq, Show)
 
 instance ToJSON ChainStep where
   toJSON cs = object
-    [ "tool" .= csTool cs
+    [ "tool" .= toolNameText (csTool cs)
     , "args" .= csArgs cs
     ]
 
 instance ToJSON NextStep where
   toJSON ns =
     object $
-      [ "tool" .= nsTool ns
+      [ "tool" .= toolNameText (nsTool ns)
       , "why"  .= nsWhy ns
       ]
       <> maybe [] (\e -> ["example" .= e]) (nsExample ns)
@@ -92,7 +99,7 @@ instance ToJSON NextStep where
 --------------------------------------------------------------------------------
 
 -- | Shorthand: single-step hint, no chain.
-simple :: Text -> Text -> Maybe Value -> NextStep
+simple :: ToolName -> Text -> Maybe Value -> NextStep
 simple tool why ex = NextStep
   { nsTool    = tool
   , nsWhy     = why
@@ -103,11 +110,11 @@ simple tool why ex = NextStep
 -- | Multi-step hint: the first step is the primary suggestion;
 -- 'chain' carries the full bundle the agent can batch via
 -- @ghc_batch(actions=chain)@.
-chained :: Text -> Text -> Maybe Value -> [ChainStep] -> NextStep
+chained :: ToolName -> Text -> Maybe Value -> [ChainStep] -> NextStep
 chained tool why ex chain = (simple tool why ex) { nsChain = Just chain }
 
 -- | Build a chain step from (tool, args object).
-step :: Text -> Value -> ChainStep
+step :: ToolName -> Value -> ChainStep
 step tool args = ChainStep { csTool = tool, csArgs = args }
 
 --------------------------------------------------------------------------------
@@ -118,20 +125,25 @@ step tool args = ChainStep { csTool = tool, csArgs = args }
 -- recommended tool. 'Nothing' means no strong suggestion — the
 -- agent should fall back to 'ghc_workflow(action="help")' if
 -- genuinely unsure.
-suggestNext :: Text -> Bool -> Value -> Maybe NextStep
+suggestNext :: ToolName -> Bool -> Value -> Maybe NextStep
 suggestNext toolName ok payload
   | not ok    = Nothing   -- errors speak for themselves; let the agent parse them
   | otherwise = dispatch toolName payload
 
-dispatch :: Text -> Value -> Maybe NextStep
+-- The exhaustive case below makes adding a new 'ToolName'
+-- constructor a compile error here until you've decided whether it
+-- has a follow-up hint or not — i.e. you can't accidentally ship a
+-- new tool whose successes silently miss 'nextStep' (the original
+-- rationale for issue #44).
+dispatch :: ToolName -> Value -> Maybe NextStep
 dispatch name payload = case name of
 
   -- New scaffold → project-bootstrap chain: add the most common
   -- test-suite dep, register the first module, load to confirm.
   -- The agent can execute the three steps one by one OR hand the
   -- chain to ghc_batch for a single round-trip.
-  "ghc_create_project" -> Just (chained
-    "ghc_deps"
+  GhcCreateProject -> Just (chained
+    GhcDeps
     "Your scaffold has only `base`. Add the deps you need (QuickCheck \
     \for tests, runtime libraries for the library stanza) before \
     \wiring up modules. The attached chain is the canonical \
@@ -142,24 +154,24 @@ dispatch name payload = case name of
         , "version" .= (">= 2.14" :: Text)
         , "stanza"  .= ("test-suite" :: Text)
         ]))
-    [ step "ghc_deps" (object
+    [ step GhcDeps (object
         [ "action"  .= ("add" :: Text)
         , "package" .= ("QuickCheck" :: Text)
         , "version" .= (">= 2.14" :: Text)
         , "stanza"  .= ("test-suite" :: Text) ])
-    , step "ghc_add_modules" (object
+    , step GhcAddModules (object
         [ "modules" .= (["<Module.Name>"] :: [Text]) ])
-    , step "ghc_load" (object
+    , step GhcLoad (object
         [ "module_path" .= ("<path to your entry module>" :: Text) ])
     ])
 
   -- After editing deps, reload to pick up the new package graph.
-  "ghc_deps" -> case depsAction payload of
+  GhcDeps -> case depsAction payload of
     Just "add"    -> Just loadAfterDepsEdit
     Just "remove" -> Just loadAfterDepsEdit
     _             -> Nothing
     where
-      loadAfterDepsEdit = simple "ghc_load"
+      loadAfterDepsEdit = simple GhcLoad
         "Dependency set changed. Reload your entry module so the \
         \GHCi session sees the new package graph."
         (Just (object
@@ -175,13 +187,13 @@ dispatch name payload = case name of
   --                          coverage that the agent would
   --                          otherwise hand-fix)
   --   * clean compile     → ghc_suggest for QuickCheck laws
-  "ghc_load" -> case (loadWarningKind payload, loadHasErrors payload) of
+  GhcLoad -> case (loadWarningKind payload, loadHasErrors payload) of
     (_,            True) -> Nothing
-    (LWTypedHoles, False) -> Just (simple "ghc_hole"
+    (LWTypedHoles, False) -> Just (simple GhcHole
       "The load reported typed-hole warnings — 'ghc_hole' gives \
       \you their expected types and in-scope fits in one call."
       Nothing)
-    (LWFixable,    False) -> Just (simple "ghc_fix_warning"
+    (LWFixable,    False) -> Just (simple GhcFixWarning
       "The load reported warnings the fix-warning tool can auto-\
       \patch (unused import, type-defaults, incomplete-uni-pattern, \
       \redundant constraint, …). Feed the first warning's \
@@ -189,7 +201,7 @@ dispatch name payload = case name of
       \the agent reviews before writing."
       (Just (object
           [ "module_path" .= ("<same module you just loaded>" :: Text) ])))
-    (LWNone,       False) -> Just (simple "ghc_suggest"
+    (LWNone,       False) -> Just (simple GhcSuggest
       "Module compiles clean. Ask 'ghc_suggest' for QuickCheck \
       \laws its type signatures imply; feed the High-confidence \
       \ones into 'ghc_quickcheck'."
@@ -197,7 +209,7 @@ dispatch name payload = case name of
           [ "function_name" .= ("<pick one from the module>" :: Text) ])))
 
   -- Typed holes listed → implementation work, then reload.
-  "ghc_hole" -> Just (simple "ghc_load"
+  GhcHole -> Just (simple GhcLoad
     "Implement the holes using the fits listed above, then reload \
     \with diagnostics=true to confirm the types now line up."
     (Just (object
@@ -206,13 +218,13 @@ dispatch name payload = case name of
         ])))
 
   -- Arbitrary template generated → paste + reload.
-  "ghc_arbitrary" -> Just (simple "ghc_load"
+  GhcArbitrary -> Just (simple GhcLoad
     "Paste the instance into the module that declares the type, \
     \then reload to confirm it compiles."
     Nothing)
 
   -- Suggestions → run them via quickcheck, pick highest confidence.
-  "ghc_suggest" -> Just (simple "ghc_quickcheck"
+  GhcSuggest -> Just (simple GhcQuickCheck
     "Feed the highest-confidence suggestion into quickcheck. \
     \Passing properties auto-persist to .haskell-flows/properties.json \
     \for the next regression run."
@@ -222,32 +234,32 @@ dispatch name payload = case name of
         ])))
 
   -- QuickCheck passed → keep chaining, or gate.
-  "ghc_quickcheck" -> case qcState payload of
-    Just "passed" -> Just (simple "ghc_check_module"
+  GhcQuickCheck -> case qcState payload of
+    Just "passed" -> Just (simple GhcCheckModule
       "Law holds. Either run 'ghc_suggest' for the next candidate, \
       \or roll up into a per-module gate. For flakiness confidence, \
       \ghc_determinism re-runs the property 3+ times."
       (Just (object [ "module_path" .= ("<same module>" :: Text) ])))
-    Just "failed" -> Just (simple "ghc_eval"
+    Just "failed" -> Just (simple GhcEval
       "Property failed. Evaluate the reported counter-example with \
       \'ghc_eval' to see intermediate values before editing."
       Nothing)
     _ -> Nothing
 
   -- Regression list → run the set.
-  "ghc_regression" -> case regressionAction payload of
-    Just "list" -> Just (simple "ghc_regression"
+  GhcRegression -> case regressionAction payload of
+    Just "list" -> Just (simple GhcRegression
       "You now know the persisted set. Run it to confirm every \
       \property still holds after recent edits."
       (Just (object [ "action" .= ("run" :: Text) ])))
-    Just "run"  -> Just (simple "ghc_check_project"
+    Just "run"  -> Just (simple GhcCheckProject
       "All persisted properties re-played. Roll into the project-wide \
       \gate for pre-push readiness."
       Nothing)
     _ -> Nothing
 
   -- Refactor landed → verify compile + rerun regressions.
-  "ghc_refactor" -> Just (simple "ghc_load"
+  GhcRefactor -> Just (simple GhcLoad
     "Refactor was snapshot-and-compile-verified, but a reload with \
     \diagnostics=true surfaces new holes or warnings in one shot."
     (Just (object
@@ -256,31 +268,31 @@ dispatch name payload = case name of
         ])))
 
   -- Per-module gate passed → project-wide gate.
-  "ghc_check_module" -> Just (simple "ghc_check_project"
+  GhcCheckModule -> Just (simple GhcCheckProject
     "Module-complete. Run the project-wide gate to confirm every \
     \other module still compiles cleanly with your changes."
     Nothing)
 
   -- Project gate green → pre-push finalizer chain.
-  "ghc_check_project" -> Just (chained "ghc_gate"
+  GhcCheckProject -> Just (chained GhcGate
     "Project-wide gate is green. Run ghc_gate for the pre-push \
     \finalizer (regression + cabal test + cabal build in one call). \
     \Coverage is the optional follow-up."
     Nothing
-    [ step "ghc_gate"     (object [])
-    , step "ghc_coverage" (object [])
+    [ step GhcGate     (object [])
+    , step GhcCoverage (object [])
     ])
 
   -- Toolchain — if everything green, go build.
-  "ghc_toolchain_status" -> Just (simple "ghc_workflow"
+  GhcToolchainStatus -> Just (simple GhcWorkflow
     "With the toolchain confirmed, 'ghc_workflow(action=\"help\")' \
     \gives you the next action tailored to the session's current \
     \state (alive GHCi, loaded modules, etc)."
     (Just (object [ "action" .= ("help" :: Text) ])))
 
   -- Cabal validated → if clean, proceed with deps / build.
-  "ghc_validate_cabal" -> case cabalErrors payload of
-    Just n | n > 0 -> Just (simple "ghc_deps"
+  GhcValidateCabal -> case cabalErrors payload of
+    Just n | n > 0 -> Just (simple GhcDeps
       "The .cabal file has errors. Fix them via 'ghc_deps' rather \
       \than editing by hand — the post-edit invariant check catches \
       \shape bugs before they land."
@@ -288,17 +300,17 @@ dispatch name payload = case name of
     _ -> Nothing
 
   -- Lint surface → interpret yourself; no one-shot fix.
-  "ghc_lint" -> Nothing
+  GhcLint -> Nothing
 
   -- Format → reload to confirm no behaviour change.
-  "ghc_format" -> Just (simple "ghc_load"
+  GhcFormat -> Just (simple GhcLoad
     "Formatter rewrote the module. Reload to confirm it still \
     \compiles and no whitespace-sensitive construct broke."
     Nothing)
 
   -- Batch → no single next step (depends on what the batch did); let
   -- the agent look at the individual results.
-  "ghc_batch" -> Nothing
+  GhcBatch -> Nothing
 
   --------------------------------------------------------------------
   -- BUG-06: Phase 11f..11n tools — positive entries so the "every
@@ -307,11 +319,11 @@ dispatch name payload = case name of
   --------------------------------------------------------------------
 
   -- Gate passed → green to push. On fail, drill in per module.
-  "ghc_gate" -> Just (gateNext payload)
+  GhcGate -> Just (gateNext payload)
 
   -- test/Spec.hs materialised → run ghc_gate to exercise it through
   -- cabal test (same semantics as CI without the MCP in the loop).
-  "ghc_quickcheck_export" -> Just (simple "ghc_gate"
+  GhcQuickCheckExport -> Just (simple GhcGate
     "test/Spec.hs is now materialised. Run ghc_gate to replay the \
     \persisted properties the same way cabal test will in CI — this \
     \is the regression check that catches a property breaking between \
@@ -321,57 +333,57 @@ dispatch name payload = case name of
   -- Determinism check → if stable, propagate to regression; if
   -- flaky, ask for a fresh ghc_quickcheck run to see counter-
   -- example before deleting.
-  "ghc_determinism" -> Just (determinismNext payload)
+  GhcDeterminism -> Just (determinismNext payload)
 
   -- Adding an import resolves a \"not in scope\" error; reload to
   -- confirm the fix.
-  "ghc_add_import" -> Just (simple "ghc_load"
+  GhcAddImport -> Just (simple GhcLoad
     "The import was added to the module header. Reload the module \
     \to confirm the \"not in scope\" error is gone."
     (Just (object [ "module_path" .= ("<same module>" :: Text) ])))
 
   -- New modules registered + scaffolded — fill them in, add deps if
   -- they need any new libraries, then load.
-  "ghc_add_modules" -> Just (chained "ghc_load"
+  GhcAddModules -> Just (chained GhcLoad
     "New modules are registered in the .cabal and scaffolded as empty \
     \stubs under src/. Implement them, then reload an entry module \
     \to pick the new layout up. The chain is the canonical \
     \\"scaffolded → loaded\" sequence."
     (Just (object [ "module_path" .= ("<pick an entry module>" :: Text) ]))
-    [ step "ghc_load" (object
+    [ step GhcLoad (object
         [ "module_path" .= ("<your entry module>" :: Text) ])
-    , step "ghc_check_project" (object [])
+    , step GhcCheckProject (object [])
     ])
 
   -- Modules de-registered — reload + project-wide gate so any
   -- downstream import left dangling surfaces immediately.
-  "ghc_remove_modules" -> Just (chained "ghc_check_project"
+  GhcRemoveModules -> Just (chained GhcCheckProject
     "Modules were de-registered from exposed-modules. Run \
     \ghc_check_project to surface any remaining import of the \
     \removed surface; chained ghc_load follows to reload the \
     \resulting layout."
     Nothing
-    [ step "ghc_check_project" (object [])
-    , step "ghc_load" (object
+    [ step GhcCheckProject (object [])
+    , step GhcLoad (object
         [ "module_path" .= ("<your entry module>" :: Text) ])
     ])
 
   -- Applied an export list — reload confirms nothing external broke.
-  "ghc_apply_exports" -> Just (simple "ghc_load"
+  GhcApplyExports -> Just (simple GhcLoad
     "Module export list was rewritten. Reload to confirm the new \
     \export set still type-checks and every consumer can still \
     \see what it needs."
     (Just (object [ "module_path" .= ("<same module>" :: Text) ])))
 
   -- Fix-warning emitted a plan — apply it, then reload to confirm.
-  "ghc_fix_warning" -> Just (simple "ghc_load"
+  GhcFixWarning -> Just (simple GhcLoad
     "The fix plan has been written to disk (apply=true) or returned \
     \as a diff (apply=false — inspect before applying). Reload to \
     \confirm the warning is gone and nothing downstream broke."
     (Just (object [ "module_path" .= ("<same module>" :: Text) ])))
 
   -- Browse listed bindings — pick one and suggest laws for it.
-  "ghc_browse" -> Just (simple "ghc_suggest"
+  GhcBrowse -> Just (simple GhcSuggest
     "You now have the full top-level surface of the module. Pick an \
     \interesting binding and ask ghc_suggest for QuickCheck laws \
     \its signature implies. Names that hint at optimisation \
@@ -380,12 +392,12 @@ dispatch name payload = case name of
     (Just (object [ "function_name" .= ("<one of the browsed names>" :: Text) ])))
 
   -- Imports list is a diagnostic aid — no forced next step.
-  "ghc_imports" -> Nothing
+  GhcImports -> Nothing
 
   -- Lifecycle mgmt of the property store — if action=list the
   -- next natural step is to prune or run; leave the choice open.
-  "ghc_property_lifecycle" -> case regressionAction payload of
-    Just "list" -> Just (simple "ghc_regression"
+  GhcPropertyLifecycle -> case regressionAction payload of
+    Just "list" -> Just (simple GhcRegression
       "Now that you can see the store, run the regression to \
       \confirm every entry still passes — flaky / broken properties \
       \should be pruned before the next push."
@@ -393,30 +405,30 @@ dispatch name payload = case name of
     _ -> Nothing
 
   -- Optional toolchain warmup — next step is the status/help router.
-  "ghc_toolchain_warmup" -> Just (simple "ghc_workflow"
+  GhcToolchainWarmup -> Just (simple GhcWorkflow
     "Optional binaries probed. Ask 'ghc_workflow(action=\"help\")' \
     \for a session-state-aware pointer at the next action."
     (Just (object [ "action" .= ("help" :: Text) ])))
 
   -- Bootstrap — previewed content; suggest writing or moving on.
-  "ghc_bootstrap" -> Just (simple "ghc_workflow"
+  GhcBootstrap -> Just (simple GhcWorkflow
     "Host rules preview emitted. Re-run with write=true to persist \
     \them under .claude/ or .cursor/, then 'ghc_workflow(help)' for \
     \the next project-level step."
     (Just (object [ "action" .= ("help" :: Text) ])))
 
   -- Workflow meta — would loop if we suggested itself.
-  "ghc_workflow" -> Nothing
+  GhcWorkflow -> Nothing
 
   -- Exploratory / terminal tools — no strong suggestion.
-  "ghc_type"     -> Nothing
-  "ghc_info"     -> Nothing
-  "ghc_eval"     -> Nothing
-  "ghc_goto"     -> Nothing
-  "ghc_doc"      -> Nothing
-  "ghc_complete" -> Nothing
-  "hoogle_search" -> Nothing
-  "ghc_coverage" -> Nothing
+  GhcType     -> Nothing
+  GhcInfo     -> Nothing
+  GhcEval     -> Nothing
+  GhcGoto     -> Nothing
+  GhcDoc      -> Nothing
+  GhcComplete -> Nothing
+  HoogleSearch -> Nothing
+  GhcCoverage -> Nothing
 
   -- Just switched projects. Branch on the payload's 'scaffolded'
   -- flag (set by 'Tool.SwitchProject.successResult'):
@@ -425,33 +437,31 @@ dispatch name payload = case name of
   --   * Empty dir → 'ghc_create_project' is the canonical next
   --     action; pointing at status would surface a PhasePreScaffold
   --     with no actionable hint.
-  "ghc_switch_project" ->
+  GhcSwitchProject ->
     case payload of
       Object o | Just (Bool False) <- KeyMap.lookup "scaffolded" o ->
-        Just (simple "ghc_create_project"
+        Just (simple GhcCreateProject
           "Switched to an empty directory. Scaffold a fresh cabal \
           \package here with 'ghc_create_project' (library + \
           \test-suite stub) before any other tool has something \
           \to load."
           (Just (object [ "name" .= ("<pkg-name>" :: Text) ])))
-      _ -> Just (simple "ghc_workflow"
+      _ -> Just (simple GhcWorkflow
         "Project root swapped. Ask 'ghc_workflow(status)' to \
         \orient yourself in the new project: phase classifier, \
         \tools active, and staleness check against the new .cabal."
         (Just (object [ "action" .= ("status" :: Text) ])))
 
-  _ -> Nothing
-
 -- | 'ghc_gate' payload carries per-step status. On green, push is
 -- unblocked; on red, the agent should narrow down per module.
 gateNext :: Value -> NextStep
 gateNext payload
-  | gatePassed payload = simple "ghc_coverage"
+  | gatePassed payload = simple GhcCoverage
       "ghc_gate is green — regression + cabal test + cabal build \
       \all passed. Optional: run ghc_coverage for the HPC summary. \
       \Otherwise you're clear to git commit + push."
       Nothing
-  | otherwise = simple "ghc_check_project"
+  | otherwise = simple GhcCheckProject
       "At least one gate step failed. Drop one level down into \
       \ghc_check_project to isolate the red module, then drill in \
       \with ghc_check_module + ghc_load(diagnostics=true)."
@@ -461,12 +471,12 @@ gateNext payload
 -- Stable → trust for regression; flaky → show the counter-example.
 determinismNext :: Value -> NextStep
 determinismNext payload
-  | determinismPassed payload = simple "ghc_regression"
+  | determinismPassed payload = simple GhcRegression
       "Property passed every run — safe to add to the regression \
       \set. 'ghc_regression(action=\"run\")' confirms none of \
       \the stored set regressed after your recent changes."
       (Just (object [ "action" .= ("run" :: Text) ]))
-  | otherwise = simple "ghc_quickcheck"
+  | otherwise = simple GhcQuickCheck
       "Property was flaky (failed at least one run). Re-run \
       \ghc_quickcheck to get a counter-example you can evaluate \
       \with ghc_eval, then fix the underlying code."

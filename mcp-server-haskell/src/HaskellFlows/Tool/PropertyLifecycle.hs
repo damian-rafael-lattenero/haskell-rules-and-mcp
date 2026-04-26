@@ -14,11 +14,12 @@ import qualified Data.Text.Lazy.Encoding as TLE
 
 import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_property_lifecycle"
+    { tdName        = toolNameText GhcPropertyLifecycle
     , tdDescription =
         "Inspect the persisted property store. Returns one entry per "
           <> "stored property with its expression, module, cumulative "

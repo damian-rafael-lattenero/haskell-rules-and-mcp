@@ -41,6 +41,7 @@ import System.FilePath (takeDirectory)
 
 import HaskellFlows.Mcp.Guidance (workflowRulesMarkdown)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
 
 -- | Supported host targets. The enum is closed — adding a new
@@ -55,7 +56,7 @@ data Host
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_bootstrap"
+    { tdName        = toolNameText GhcBootstrap
     , tdDescription =
         "Self-install host-specific guidance files from content baked "
           <> "into the MCP binary. Hosts: \"claude-code\" (writes "

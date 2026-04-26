@@ -40,6 +40,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
 -- source variants
@@ -81,9 +82,9 @@ runFlow c projectDir = do
   -- parser needs.
   --------------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + add Holes (with typed hole)"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("holes-demo" :: Text) ])
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Holes"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Holes.hs") withHoleSrc
@@ -97,7 +98,7 @@ runFlow c projectDir = do
   -- combined diagnostics mentions the hole (code 88464).
   --------------------------------------------------------------------
   t1 <- stepHeader 2 "ghc_load(diagnostics=true) detects the hole"
-  loadR <- Client.callTool c "ghc_load" (object
+  loadR <- Client.callTool c GhcLoad (object
     [ "module_path" .= ("src/Holes.hs" :: Text)
     , "diagnostics" .= True
     ])
@@ -122,7 +123,7 @@ runFlow c projectDir = do
   -- is the real "we found the hole" gate.
   --------------------------------------------------------------------
   t2 <- stepHeader 3 "ghc_hole returns a structured payload"
-  holeR <- Client.callTool c "ghc_hole"
+  holeR <- Client.callTool c GhcHole
             (object [ "module_path" .= ("src/Holes.hs" :: Text) ])
   c3 <- liveCheck $ checkJsonField
           "ghc_hole success" holeR "success" (Bool True)
@@ -141,7 +142,7 @@ runFlow c projectDir = do
   --------------------------------------------------------------------
   t3 <- stepHeader 4 "patch source + reload diagnostics"
   TIO.writeFile (projectDir </> "src" </> "Holes.hs") filledSrc
-  reloadR <- Client.callTool c "ghc_load" (object
+  reloadR <- Client.callTool c GhcLoad (object
     [ "module_path" .= ("src/Holes.hs" :: Text)
     , "diagnostics" .= True
     ])
@@ -161,7 +162,7 @@ runFlow c projectDir = do
   -- ghc_hole on the fixed module returns zero.
   --------------------------------------------------------------------
   t4 <- stepHeader 5 "ghc_hole returns zero after fix"
-  hole2 <- Client.callTool c "ghc_hole"
+  hole2 <- Client.callTool c GhcHole
              (object [ "module_path" .= ("src/Holes.hs" :: Text) ])
   c9 <- liveCheck $ checkJsonFieldMatches
           "ghc_hole hole_count == 0 post-fix"

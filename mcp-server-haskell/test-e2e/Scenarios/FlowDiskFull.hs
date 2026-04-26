@@ -63,10 +63,11 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("diskfull-demo" :: Text) ])
 
   let storeDir = projectDir </> ".haskell-flows"
@@ -86,7 +87,7 @@ runFlow c projectDir = do
   -- 2. Fire a passing property. The eval is a pure Haskell evaluation,
   -- it will pass. The persist step is what we want to see fail.
   t1 <- stepHeader 2 "quickcheck · property passes eval, persist must fail"
-  eRes <- try (Client.callTool c "ghc_quickcheck"
+  eRes <- try (Client.callTool c GhcQuickCheck
                  (object [ "property"
                          .= ("\\(xs :: [Int]) -> reverse (reverse xs) == xs"
                              :: Text) ]))
@@ -130,7 +131,7 @@ runFlow c projectDir = do
 
   -- 3. Session must still be alive.
   t2 <- stepHeader 3 "session alive · ghc_eval(1+1) after failed persist"
-  alive <- Client.callTool c "ghc_eval"
+  alive <- Client.callTool c GhcEval
              (object [ "expression" .= ("1 + 1" :: Text) ])
   cAlive <- liveCheck $ checkPure
     "session alive · failed persist didn't wedge the GHCi"
@@ -141,7 +142,7 @@ runFlow c projectDir = do
   -- 4. Second quickcheck with permissions restored should persist OK —
   -- the tool must not be in a sticky-failed state.
   t3 <- stepHeader 4 "recovery · second ghc_quickcheck after chmod restore"
-  r2 <- Client.callTool c "ghc_quickcheck"
+  r2 <- Client.callTool c GhcQuickCheck
           (object [ "property"
                   .= ("\\(n :: Int) -> n + 0 == n" :: Text) ])
   storeExists <- doesDirectoryExist storeDir

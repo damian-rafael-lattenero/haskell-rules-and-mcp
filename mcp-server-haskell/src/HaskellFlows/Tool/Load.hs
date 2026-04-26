@@ -32,6 +32,7 @@ import HaskellFlows.Ghc.ApiSession
   , firstTestSuiteOrLibrary
   )
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error
   ( GhcError (..)
   , Severity (..)
@@ -42,7 +43,7 @@ import HaskellFlows.Types
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_load"
+    { tdName        = toolNameText GhcLoad
     , tdDescription =
         "Load or reload Haskell modules via the in-process GHC API. "
           <> "Returns structured compilation errors and warnings. Pass "

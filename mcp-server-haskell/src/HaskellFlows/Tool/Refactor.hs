@@ -50,6 +50,7 @@ import HaskellFlows.Ghc.ApiSession
   , targetForPath
   )
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error
   ( GhcError (..)
   , Severity (..)
@@ -74,7 +75,7 @@ import HaskellFlows.Types
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_refactor"
+    { tdName        = toolNameText GhcRefactor
     , tdDescription =
         "Small-scope refactors with snapshot-and-compile safety. "
           <> "Actions: 'rename_local' (scoped identifier rename), "

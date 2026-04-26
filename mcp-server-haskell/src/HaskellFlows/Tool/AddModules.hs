@@ -28,13 +28,14 @@ import System.Directory (createDirectoryIfMissing, doesFileExist, listDirectory)
 import System.FilePath (takeDirectory, takeExtension, (</>))
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.Deps as Deps
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath, unProjectDir)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_add_modules"
+    { tdName        = toolNameText GhcAddModules
     , tdDescription =
         "Register new modules in the project's .cabal and scaffold \
         \their empty .hs stubs. Default target is the library's \

@@ -18,12 +18,13 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_apply_exports"
+    { tdName        = toolNameText GhcApplyExports
     , tdDescription =
         "Rewrite a module's header to declare an explicit export list. "
           <> "Idempotent: if an export list is already present, "

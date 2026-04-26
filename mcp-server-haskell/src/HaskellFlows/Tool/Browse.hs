@@ -38,11 +38,12 @@ import GHC.Utils.Outputable (showPprUnsafe)
 
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_browse"
+    { tdName        = toolNameText GhcBrowse
     , tdDescription =
         "List names exported by a loaded module + their types. "
           <> "Resolves against the auto-loaded project module graph."

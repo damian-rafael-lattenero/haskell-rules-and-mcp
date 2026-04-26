@@ -25,11 +25,12 @@ import GHC.Utils.Outputable (showPprUnsafe)
 
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
-    { tdName        = "ghc_imports"
+    { tdName        = toolNameText GhcImports
     , tdDescription =
         "List the imports currently in the GHC session's interactive "
           <> "context. Useful for confirming which modules are already "

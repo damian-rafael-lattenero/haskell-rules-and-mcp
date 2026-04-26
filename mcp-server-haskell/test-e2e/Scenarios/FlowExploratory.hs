@@ -38,6 +38,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
 -- source the flow writes into the scenario's projectDir
@@ -71,13 +72,13 @@ runFlow c projectDir = do
   -- setup — scaffold + write Calc.hs + register + load
   --------------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + add Calc + load"
-  _ <- Client.callTool c "ghc_create_project"
+  _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("exploratory" :: Text) ])
-  _ <- Client.callTool c "ghc_add_modules"
+  _ <- Client.callTool c GhcAddModules
          (object [ "modules" .= (["Calc"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs") calcSrc
-  loadR <- Client.callTool c "ghc_load"
+  loadR <- Client.callTool c GhcLoad
             (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
   c1 <- liveCheck $ checkJsonField "setup · load success" loadR "success" (Bool True)
   stepFooter 1 t0
@@ -86,9 +87,9 @@ runFlow c projectDir = do
   -- ghc_type — ask for the type of a local binding + a Prelude one
   --------------------------------------------------------------------
   t1 <- stepHeader 2 "ghc_type local + Prelude"
-  tLocal   <- Client.callTool c "ghc_type"
+  tLocal   <- Client.callTool c GhcType
                (object [ "expression" .= ("double" :: Text) ])
-  tPrelude <- Client.callTool c "ghc_type"
+  tPrelude <- Client.callTool c GhcType
                (object [ "expression" .= ("reverse" :: Text) ])
   c2a <- liveCheck $ mkContainsCheck
            "ghc_type(double) mentions Int -> Int" tLocal "type" "Int -> Int"
@@ -100,7 +101,7 @@ runFlow c projectDir = do
   -- ghc_info — declaration for a TYPE
   --------------------------------------------------------------------
   t2 <- stepHeader 3 "ghc_info on data Tree"
-  infoR <- Client.callTool c "ghc_info"
+  infoR <- Client.callTool c GhcInfo
             (object [ "name" .= ("Tree" :: Text) ])
   c3 <- liveCheck $ checkJsonFieldMatches
           "ghc_info(Tree) mentions 'data Tree' in definition"
@@ -112,9 +113,9 @@ runFlow c projectDir = do
   -- ghc_eval — evaluate a pure expression + a local call
   --------------------------------------------------------------------
   t3 <- stepHeader 4 "ghc_eval pure + local"
-  evalPure  <- Client.callTool c "ghc_eval"
+  evalPure  <- Client.callTool c GhcEval
                  (object [ "expression" .= ("1 + 2" :: Text) ])
-  evalLocal <- Client.callTool c "ghc_eval"
+  evalLocal <- Client.callTool c GhcEval
                  (object [ "expression" .= ("double 21" :: Text) ])
   c4a <- liveCheck $ mkContainsCheck
            "ghc_eval(1 + 2) returns 3" evalPure "output" "3"
@@ -126,7 +127,7 @@ runFlow c projectDir = do
   -- ghc_complete — completions for 'fold' prefix
   --------------------------------------------------------------------
   t4 <- stepHeader 5 "ghc_complete prefix=fold"
-  compR <- Client.callTool c "ghc_complete"
+  compR <- Client.callTool c GhcComplete
             (object [ "prefix" .= ("fold" :: Text), "limit" .= (20 :: Int) ])
   c5 <- liveCheck $ checkJsonFieldMatches
           "ghc_complete returns ≥ 1 'fold*' candidate"
@@ -138,7 +139,7 @@ runFlow c projectDir = do
   -- ghc_goto — source location of a local name
   --------------------------------------------------------------------
   t5 <- stepHeader 6 "ghc_goto on local 'greet'"
-  gotoR <- Client.callTool c "ghc_goto"
+  gotoR <- Client.callTool c GhcGoto
             (object [ "name" .= ("greet" :: Text) ])
   c6 <- liveCheck $ Check
     { cName   = "ghc_goto(greet) returns a file location"
@@ -155,7 +156,7 @@ runFlow c projectDir = do
   -- Haddock on some distributions).
   --------------------------------------------------------------------
   t6 <- stepHeader 7 "ghc_doc on Prelude.map"
-  docR <- Client.callTool c "ghc_doc"
+  docR <- Client.callTool c GhcDoc
             (object [ "name" .= ("map" :: Text) ])
   c7 <- liveCheck $ checkJsonFieldMatches
           "ghc_doc(map) returns success (with text OR graceful miss)"

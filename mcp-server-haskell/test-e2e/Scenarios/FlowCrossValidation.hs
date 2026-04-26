@@ -52,6 +52,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
 -- test projects
@@ -168,16 +169,16 @@ runOneProject binary rootDir tp = do
     (Client.newClient binary [("HASKELL_PROJECT_DIR", subdir)])
     Client.close
     $ \c -> do
-      _ <- Client.callTool c "ghc_create_project"
+      _ <- Client.callTool c GhcCreateProject
              (object [ "name" .= ("xv-demo" :: Text) ])
-      _ <- Client.callTool c "ghc_add_modules"
+      _ <- Client.callTool c GhcAddModules
              (object [ "modules" .= tpModules tp ])
 
       createDirectoryIfMissing True (subdir </> "src")
       mapM_ (\(rel, body) -> TIO.writeFile (subdir </> rel) body)
             (tpFiles tp)
 
-      mcpR <- Client.callTool c "ghc_check_project" (object [])
+      mcpR <- Client.callTool c GhcCheckProject (object [])
       let mcpOverall = fieldBool "overall" mcpR
 
       cabalExit <- runCabalBuild subdir
