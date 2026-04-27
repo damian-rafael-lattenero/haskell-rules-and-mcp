@@ -138,8 +138,12 @@ renderBinding newName indent body =
 -- | True if @body@ has at least one non-blank line. We use this to
 -- distinguish \"top-level cut\" (at least one line at column 0) from
 -- \"all-blank range\" (handled separately as the empty case).
+--
+-- HLint prefers the hoisted form @not . all (T.null . T.strip)@ over
+-- @any (not . T.null . T.strip)@ (\"Hoist not\"). Both are pointwise
+-- equivalent by De Morgan; we use the hoisted form to keep CI hint-free.
 hasNonBlank :: [Text] -> Bool
-hasNonBlank = any (not . T.null . T.strip)
+hasNonBlank = not . all (T.null . T.strip)
 
 -- | Refusal message for a column-0 (top-level) range. Names the first
 -- non-blank line so the agent can see exactly which line tripped the

@@ -33,6 +33,7 @@ module E2E.Smoke
   , SmokeResult (..)
   ) where
 
+import Data.Char (isAsciiUpper)
 import Data.List (isInfixOf)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
@@ -179,5 +180,5 @@ lowerNoSpaces :: String -> String
 lowerNoSpaces = map toLowerAscii . filter (`notElem` (" \t\n\r" :: String))
   where
     toLowerAscii c
-      | c >= 'A' && c <= 'Z' = toEnum (fromEnum c + 32)
-      | otherwise            = c
+      | isAsciiUpper c = toEnum (fromEnum c + 32)
+      | otherwise      = c

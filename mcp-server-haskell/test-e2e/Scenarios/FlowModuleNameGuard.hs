@@ -84,9 +84,9 @@ runFlow c projectDir = do
   cBugCabalIntact <- liveCheck $ checkPure
     "add_modules · .cabal byte-identical after refusal"
     (beforeBug == afterBug)
-    ("ISSUE-47: the .cabal must NOT change when the call is refused. \
-     \Any change here means a partial write slipped through and the \
-     \next ghc_load will fail with a stanza-flag parse error.")
+    "ISSUE-47: the .cabal must NOT change when the call is refused. \
+    \Any change here means a partial write slipped through and the \
+    \next ghc_load will fail with a stanza-flag parse error."
   cBugNamesQuoted <- liveCheck $ checkPure
     "add_modules · rejected payload names the offending input"
     (rejectedListContainsName "lowercase.module" bugR)
@@ -315,7 +315,7 @@ rejectionReasonMentions fragments v =
     reasonHas (Object o) = case KeyMap.lookup (Key.fromText "reason") o of
       Just (String s) ->
         let lo = T.toLower s
-        in any (`T.isInfixOf` lo) (map T.toLower fragments)
+        in any ((`T.isInfixOf` lo) . T.toLower) fragments
       _ -> False
     reasonHas _ = False
 

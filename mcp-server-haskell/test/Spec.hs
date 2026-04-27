@@ -18,6 +18,7 @@ import qualified Data.Set as Set
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.Vector as Vector
+import Data.Char (isAsciiLower, isDigit)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -1629,13 +1630,13 @@ testToolNameRoundTrip =
 -- a typo to the wrong tool.
 testToolNameParseUnknown :: IO Bool
 testToolNameParseUnknown = pure $
-     parseToolName ""              == Nothing
-  && parseToolName "ghc_unknown"   == Nothing
-  && parseToolName "GHC_LOAD"      == Nothing  -- case-sensitive
-  && parseToolName " ghc_load"     == Nothing  -- whitespace
-  && parseToolName "ghc_load "     == Nothing
-  && parseToolName "ghc-load"      == Nothing  -- hyphen vs underscore
-  && parseToolName "tools/call"    == Nothing  -- not a method
+     isNothing (parseToolName "")
+  && isNothing (parseToolName "ghc_unknown")
+  && isNothing (parseToolName "GHC_LOAD")      -- case-sensitive
+  && isNothing (parseToolName " ghc_load")     -- whitespace
+  && isNothing (parseToolName "ghc_load ")
+  && isNothing (parseToolName "ghc-load")      -- hyphen vs underscore
+  && isNothing (parseToolName "tools/call")    -- not a method
 
 -- | Two distinct ToolName constructors must never collide on the
 -- wire — the dispatcher would otherwise pick the first match and
@@ -1662,8 +1663,8 @@ testToolNameWireUnique =
 testToolNameSnakeCase :: IO Bool
 testToolNameSnakeCase =
   let isLowerSnake c =
-           (c >= 'a' && c <= 'z')
-        || (c >= '0' && c <= '9')
+           isAsciiLower c
+        || isDigit c
         || c == '_'
       hasFamilyPrefix s =
            "ghc_"    `T.isPrefixOf` s
@@ -1697,10 +1698,10 @@ testErrorKindRoundTrip =
 -- silent classification of fresh failure modes as known ones.
 testErrorKindParseUnknown :: IO Bool
 testErrorKindParseUnknown = pure $
-     parseErrorKind ""                  == Nothing
-  && parseErrorKind "unknown"           == Nothing
-  && parseErrorKind "TIMEOUT"           == Nothing  -- case-sensitive
-  && parseErrorKind "session-exhausted" == Nothing  -- hyphen vs underscore
+     isNothing (parseErrorKind "")
+  && isNothing (parseErrorKind "unknown")
+  && isNothing (parseErrorKind "TIMEOUT")           -- case-sensitive
+  && isNothing (parseErrorKind "session-exhausted") -- hyphen vs underscore
 
 -- | The three kinds must produce three distinct wire strings.
 -- Uniqueness check: deduplicate the list and assert the length is
@@ -1731,11 +1732,11 @@ testRpcMethodRoundTrip =
 -- caller.
 testRpcMethodParseUnknown :: IO Bool
 testRpcMethodParseUnknown = pure $
-     parseRpcMethod ""                    == Nothing
-  && parseRpcMethod "tools/unknown"       == Nothing
-  && parseRpcMethod "tools.list"          == Nothing  -- dot vs slash
-  && parseRpcMethod "TOOLS/CALL"          == Nothing  -- case-sensitive
-  && parseRpcMethod "ghc_load"            == Nothing  -- not a tool
+     isNothing (parseRpcMethod "")
+  && isNothing (parseRpcMethod "tools/unknown")
+  && isNothing (parseRpcMethod "tools.list")          -- dot vs slash
+  && isNothing (parseRpcMethod "TOOLS/CALL")          -- case-sensitive
+  && isNothing (parseRpcMethod "ghc_load")            -- not a tool
 
 -- | Two distinct RpcMethod constructors must never share a wire
 -- string. The dispatcher matches by exact text, so a collision would
@@ -1791,11 +1792,11 @@ testResourceUriRoundTrip =
 -- relies on this to reject probes for non-advertised URIs.
 testResourceUriParseUnknown :: IO Bool
 testResourceUriParseUnknown = pure $
-     parseResourceUri ""                              == Nothing
-  && parseResourceUri "haskell-flows://nonexistent"  == Nothing
-  && parseResourceUri "https://example.com"          == Nothing
-  && parseResourceUri "haskell-flows://rules/other"  == Nothing
-  && parseResourceUri "file:///etc/passwd"           == Nothing
+     isNothing (parseResourceUri "")
+  && isNothing (parseResourceUri "haskell-flows://nonexistent")
+  && isNothing (parseResourceUri "https://example.com")
+  && isNothing (parseResourceUri "haskell-flows://rules/other")
+  && isNothing (parseResourceUri "file:///etc/passwd")
 
 -- | The advertised wire form for the only resource we currently
 -- expose. This is part of the MCP resource contract — clients hold
@@ -3476,7 +3477,7 @@ testRenderErrorAllNonEmpty =
         , MNESegmentLeadingDigit "1Foo" "1Foo"
         , MNESegmentInvalidChar "Foo-" "Foo-" '-'
         ]
-  in pure (all (not . T.null . renderModuleNameError) inputs)
+  in pure (not (any (T.null . renderModuleNameError) inputs))
 
 --------------------------------------------------------------------------------
 -- ISSUE-47 — End-to-end @ghc_add_modules@ refusal at the handler boundary
