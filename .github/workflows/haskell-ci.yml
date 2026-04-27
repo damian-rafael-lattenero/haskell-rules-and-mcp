@@ -282,7 +282,7 @@ jobs:
       # favicon to be honest about red runs too, not only green ones.
       - name: Publish combined commit status
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const state = '${{ steps.assert.outputs.agg_state }}' || 'failure';
