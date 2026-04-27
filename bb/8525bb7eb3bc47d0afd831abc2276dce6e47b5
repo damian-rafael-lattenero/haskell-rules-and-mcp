@@ -1,0 +1,29 @@
+mcp-server-haskell/test/Spec.hs
+  c46aa8100ae27abf 21,1633-1639,1666-1667,1701-1704,1735-1739,1795-1799,3480
+mcp-server-haskell/test-e2e/E2E/Smoke.hs
+  c46aa8100ae27abf 36,183-184
+mcp-server-haskell/test-e2e/Scenarios/FlowModuleNameGuard.hs
+  c46aa8100ae27abf 87-89,318
+mcp-server-haskell/src/HaskellFlows/Refactor/Extract.hs
+  c46aa8100ae27abf 141-144,146
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "bb8525bb7eb3bc47d0afd831abc2276dce6e47b5",
+  "prompts": {
+    "c46aa8100ae27abf": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "97fabd44-5134-4c93-ab79-a3edeace7f36",
+        "model": "claude-opus-4-7-thinking-max"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 37,
+      "total_deletions": 31,
+      "accepted_lines": 37,
+      "overriden_lines": 0
+    }
+  }
+}
