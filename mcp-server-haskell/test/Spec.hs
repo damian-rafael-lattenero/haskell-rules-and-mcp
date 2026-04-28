@@ -3591,11 +3591,10 @@ testCreateValidateEmpty = pure $
     Right _ -> False
 
 testCreateValidateUpper :: IO Bool
-testCreateValidateUpper = pure $ and
-  [ isLeft (CreateProject.validateName "Invalid-Name")
-  , isLeft (CreateProject.validateName "camelCase")
-  , isLeft (CreateProject.validateName "ALLCAPS")
-  ]
+testCreateValidateUpper = pure $
+     isLeft (CreateProject.validateName "Invalid-Name")
+  && isLeft (CreateProject.validateName "camelCase")
+  && isLeft (CreateProject.validateName "ALLCAPS")
   where
     isLeft (Left _) = True
     isLeft _        = False
@@ -3619,13 +3618,12 @@ testCreateValidateLeadingDigit = pure $
     Right _  -> False
 
 testCreateValidateSymbols :: IO Bool
-testCreateValidateSymbols = pure $ and
-  [ isLeft (CreateProject.validateName "with_underscore")
-  , isLeft (CreateProject.validateName "with.dot")
-  , isLeft (CreateProject.validateName "with space")
-  , isLeft (CreateProject.validateName "leading-")  -- this is a leading-digit-likeerror? Actually it's a leading hyphen
-  , isLeft (CreateProject.validateName "-leading")
-  ]
+testCreateValidateSymbols = pure $
+     isLeft (CreateProject.validateName "with_underscore")
+  && isLeft (CreateProject.validateName "with.dot")
+  && isLeft (CreateProject.validateName "with space")
+  && isLeft (CreateProject.validateName "leading-")
+  && isLeft (CreateProject.validateName "-leading")
   where
     isLeft (Left _) = True
     isLeft _        = False
