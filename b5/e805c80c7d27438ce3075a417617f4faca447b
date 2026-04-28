@@ -1,0 +1,33 @@
+mcp-server-haskell/test-e2e/Main.hs
+  e759bc5a1ffc634e 74,185-186
+mcp-server-haskell/haskell-flows-mcp.cabal
+  e759bc5a1ffc634e 233
+mcp-server-haskell/src/HaskellFlows/Tool/Info.hs
+  e759bc5a1ffc634e 15-17,36-40,46,48-50,113-114,118-127,138-201,278-294
+scripts/ci-local.sh
+  e759bc5a1ffc634e 68-75
+mcp-server-haskell/test/Spec.hs
+  e759bc5a1ffc634e 137-139,187,429-432,3442-3508
+mcp-server-haskell/test-e2e/Scenarios/FlowInfoConstructors.hs
+  e759bc5a1ffc634e 1-137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "b5e805c80c7d27438ce3075a417617f4faca447b",
+  "prompts": {
+    "e759bc5a1ffc634e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9dcb7642-cab8-48eb-8095-963a2ce3ddd7",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 1204,
+      "total_deletions": 7180,
+      "accepted_lines": 6683,
+      "overriden_lines": 0
+    }
+  }
+}
