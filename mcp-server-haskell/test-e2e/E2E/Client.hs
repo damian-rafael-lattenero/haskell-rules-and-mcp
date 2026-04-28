@@ -33,7 +33,6 @@ module E2E.Client
   ) where
 
 import Control.Exception (SomeException, throwIO, try)
-import Data.Foldable (traverse_)
 import qualified Data.Aeson as A
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson.KeyMap as KeyMap
@@ -42,7 +41,7 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import System.Environment (lookupEnv, setEnv, unsetEnv)
+import System.Environment (lookupEnv)
 import System.IO (hFlush, stdout)
 import System.Process (readProcessWithExitCode)
 import qualified Data.Vector as V
@@ -52,37 +51,36 @@ import HaskellFlows.Mcp.Protocol
   , Response (..)
   )
 import HaskellFlows.Mcp.RpcMethod (RpcMethod (..), rpcMethodText)
-import HaskellFlows.Mcp.Server (Server, defaultServer, handleRequest)
+import HaskellFlows.Mcp.Server (Server, defaultServer, serverFor, handleRequest)
 import HaskellFlows.Mcp.ToolName (ToolName, toolNameText)
 
--- | Minimal client handle. Holds a live 'Server' plus the
--- previous value of @HASKELL_PROJECT_DIR@ so 'close' can
--- restore it.
-data McpClient = McpClient
-  { mcServer    :: !Server
-  , mcPrevDir   :: !(Maybe String)
+-- | Minimal client handle. Holds a live 'Server'. Pre-fix this
+-- also stashed the previous @HASKELL_PROJECT_DIR@ env var so
+-- 'close' could restore it, but that approach was inherently
+-- racy under parallel scenarios — two threads' 'setEnv' calls
+-- would interleave and one server would read the wrong dir.
+-- Now each client constructs its server via 'serverFor' which
+-- takes the path explicitly; the global env var stays untouched.
+newtype McpClient = McpClient
+  { mcServer :: Server
   }
 
--- | Construct a client. The second argument mirrors the
--- subprocess API shape ('extraEnv') — only @HASKELL_PROJECT_DIR@
--- is honoured because the server reads it at 'defaultServer'
--- time. We set it before 'defaultServer' runs and restore it
--- on 'close'.
+-- | Construct a client anchored at the supplied project dir.
+-- The second argument mirrors the subprocess API shape
+-- ('extraEnv') — only @HASKELL_PROJECT_DIR@ is honoured because
+-- it's the only path the server cares about. Falls back to
+-- @defaultServer@ if no dir is supplied (preserves the historical
+-- single-process behaviour for callers that never spelled out
+-- a dir).
 newClient :: FilePath -> [(String, String)] -> IO McpClient
 newClient _unusedBinary extraEnv = do
-  let newProjectDir = lookup "HASKELL_PROJECT_DIR" extraEnv
-  prev <- lookupEnv "HASKELL_PROJECT_DIR"
-  traverse_ (setEnv "HASKELL_PROJECT_DIR") newProjectDir
-  srv <- defaultServer
-  pure McpClient { mcServer = srv, mcPrevDir = prev }
+  srv <- maybe defaultServer serverFor (lookup "HASKELL_PROJECT_DIR" extraEnv)
+  pure McpClient { mcServer = srv }
 
--- | Close the client. Restores the prior @HASKELL_PROJECT_DIR@
--- so subsequent clients (or the host process) don't inherit
--- the scenario's tempdir path.
+-- | Close the client. No-op now that the constructor doesn't
+-- mutate the global env.
 close :: McpClient -> IO ()
-close c = case mcPrevDir c of
-  Just d  -> setEnv   "HASKELL_PROJECT_DIR" d
-  Nothing -> unsetEnv "HASKELL_PROJECT_DIR"
+close _ = pure ()
 
 -- | @tools/call@ equivalent. Logs the call + duration so the
 -- scenario's progress stream shows each tool as it fires —

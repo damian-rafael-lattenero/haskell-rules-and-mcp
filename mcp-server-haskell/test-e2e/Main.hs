@@ -20,7 +20,9 @@ import Control.Exception (bracket, bracket_, try, SomeException)
 import Control.Monad (when)
 import qualified Data.List as List
 import qualified Data.Text as T
+import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import System.IO.Unsafe (unsafePerformIO)
 import GHC.Conc (getNumCapabilities)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import qualified System.Environment
@@ -397,21 +399,34 @@ runScenario binary (label, _slow, go) = do
              ]
       Right cs -> pure cs
 
--- | Fresh temp project dir per scenario. Suffix mixes POSIX time
--- AND 'ThreadId' so parallel scenarios that land on the same
--- microsecond still get distinct paths — without that, two parallel
--- scenarios would collide, stomp on each other's fixtures, and
--- surface as "file does not exist" mid-run.
+-- | Fresh temp project dir per scenario. Suffix mixes POSIX time,
+-- 'ThreadId', AND a process-global atomic counter so parallel
+-- scenarios that land on the same microsecond still get distinct
+-- paths — without the counter, two parallel scenarios could
+-- collide, stomp on each other's fixtures, and surface as
+-- "file does not exist" mid-run under HASKELL_FLOWS_E2E_PARALLEL>=2.
 withTempProjectDir :: (FilePath -> IO a) -> IO a
 withTempProjectDir k = do
   base <- getTemporaryDirectory
   ts   <- getPOSIXTime
   tid  <- Control.Concurrent.myThreadId
+  n    <- atomicTempCounter
   let tidTag = filter (\c -> c /= ' ' && c /= '(' && c /= ')')
                       (show tid)   -- e.g. "ThreadId42"
       dir = base </> ("haskell-flows-e2e-" <> show (floor (ts * 1000000) :: Int)
-                       <> "-" <> tidTag)
+                       <> "-" <> tidTag <> "-" <> show n)
   bracket
     (createDirectoryIfMissing True dir >> pure dir)
     removePathForcibly
     k
+
+-- | Process-global counter used to break tempdir-name ties. Each
+-- 'withTempProjectDir' call bumps the counter atomically, so two
+-- scenarios that land in the same microsecond AND somehow share a
+-- 'ThreadId' (shouldn't happen but defensive) still get unique paths.
+{-# NOINLINE tempCounter #-}
+tempCounter :: IORef Int
+tempCounter = unsafePerformIO (newIORef 0)
+
+atomicTempCounter :: IO Int
+atomicTempCounter = atomicModifyIORef' tempCounter (\n -> (n + 1, n))

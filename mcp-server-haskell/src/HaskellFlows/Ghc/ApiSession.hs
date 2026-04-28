@@ -675,26 +675,50 @@ ensureStanzaFlags sess = do
     fresh <- Bootstrap.bootstrapProject (gsProject sess)
     writeIORef (gsStanzaFlags sess) fresh
     -- Record the mtime so the next call doesn't re-bootstrap
-    -- gratuitously. Also wipe the applied-target tracker; the
-    -- new flags may differ and any cached HscEnv is now suspect.
+    -- gratuitously.
     mtime <- currentCabalMtime (unProjectDir (gsProject sess))
     writeIORef (gsCabalMtime sess) mtime
-    when stale $ do
-      writeIORef (gsEnvRef sess) Nothing
+    -- Issue #43 / parallel-e2e residual: when the cache was
+    -- INVALIDATED (stale=True), reset 'gsAppliedTarget' so the
+    -- next 'withStanzaFlags' re-applies the flag set, but DO
+    -- NOT touch 'gsEnvRef' or 'gsLoadedRef'. Pre-fix this also
+    -- nuked the cached HscEnv + load flag, which left non-load
+    -- tools (ghc_eval, ghc_arbitrary, ghc_info) running through
+    -- 'autoLoadProject' WITHOUT stanza flags — the resulting
+    -- partial env produced "findImportedModule: no home-unit"
+    -- panics under PARALLEL=4. The targeted invalidation is
+    -- enough: any tool that genuinely needs a re-applied env
+    -- routes through 'loadForTarget' which re-runs the apply
+    -- step explicitly.
+    when stale $
       writeIORef (gsAppliedTarget sess) Nothing
-      writeIORef (gsLoadedRef sess) False
 
 -- | Has the project's @.cabal@ file been modified since the last
--- bootstrap? Returns 'True' on first call (cache empty), on
--- cabal-missing (safer to retry bootstrap), or when the mtime
--- strictly advanced.
+-- bootstrap? Returns 'True' only when the on-disk mtime strictly
+-- advanced past the cached one.
+--
+-- Edge cases:
+--
+--   * Cache empty ('Nothing', _) → 'False'. The first bootstrap is
+--     handled by the @Map.null@ check upstream; nothing to compare.
+--   * Cache present, cabal currently missing ('Just _, Nothing')
+--     → 'False'. The @.cabal@ is allowed to be transiently absent
+--     while another step rewrites it (atomic-write replaces the
+--     file, so 'listDirectory' can momentarily not see it). Pre-fix
+--     we returned 'True' here, which retriggered bootstrap, which
+--     itself saw no @.cabal@, returned empty stanza flags, and the
+--     next load failed with \"no errors but GHC reported failure\"
+--     under parallel e2e — exactly the symptom of #43's residual
+--     races. The cache is rebuilt explicitly via
+--     'invalidateStanzaFlags' or via a real mtime advance — both
+--     safer signals than \"file briefly missing\".
 cabalWasTouched :: GhcSession -> IO Bool
 cabalWasTouched sess = do
   cachedMtime <- readIORef (gsCabalMtime sess)
   nowMtime    <- currentCabalMtime (unProjectDir (gsProject sess))
   pure $ case (cachedMtime, nowMtime) of
-    (Nothing, _)           -> False   -- first bootstrap handled by Map.null check
-    (Just _,  Nothing)     -> True    -- cabal disappeared — bootstrap will surface it
+    (Nothing, _)           -> False
+    (Just _,  Nothing)     -> False
     (Just old, Just fresh) -> fresh > old
 
 -- | 'POSIXTime' mtime of the first @*.cabal@ file in the project

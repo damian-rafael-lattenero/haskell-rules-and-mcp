@@ -11,6 +11,7 @@
 module HaskellFlows.Mcp.Server
   ( Server
   , defaultServer
+  , serverFor
   , handleRequest
     -- * Dispatch (re-exported so ghc_batch can recurse)
   , dispatchTool
@@ -159,6 +160,23 @@ data Server = Server
 -- stat to detect a rebuild the host hasn't relaunched against.
 defaultServer :: IO Server
 defaultServer = do
+  envVal <- lookupEnv "HASKELL_PROJECT_DIR"
+  cwd    <- getCurrentDirectory
+  let raw = fromMaybe cwd envVal
+  serverForRaw raw
+
+-- | Construct a server explicitly anchored at the given project
+-- directory, bypassing the @HASKELL_PROJECT_DIR@ env var. Used by
+-- the e2e test harness where multiple in-process Servers run
+-- concurrently — mutating the global env var to communicate the
+-- target dir is a race (two threads' setEnv calls would interleave
+-- and the second 'defaultServer' would read the wrong value).
+-- Production callers keep using 'defaultServer'.
+serverFor :: FilePath -> IO Server
+serverFor = serverForRaw
+
+serverForRaw :: FilePath -> IO Server
+serverForRaw raw = do
   -- BUG-04 fix: augment PATH before any subprocess-invoking tool
   -- touches the environment. Hosts launched from macOS Dock /
   -- Finder pass a minimal PATH that omits ~/.ghcup/bin and
@@ -167,9 +185,6 @@ defaultServer = do
   -- 'ghc_validate_cabal' all fail with
   -- "posix_spawnp: does not exist".
   _ <- PathBootstrap.augmentPath
-  envVal <- lookupEnv "HASKELL_PROJECT_DIR"
-  cwd    <- getCurrentDirectory
-  let raw = fromMaybe cwd envVal
   case mkProjectDir raw of
     Left err -> error ("Could not build ProjectDir: " <> show err)
     Right pd -> do

@@ -65,13 +65,15 @@ step "[4/9] cabal build"
 cabal build all
 
 step "[5/9] cabal test"
-# E2E parallelism opt-in: post-#43 the session layer is concurrent-safe,
-# but several scenarios (FlowBootstrap, FlowConcurrentClients, …) still
-# contain state-isolation bugs that surface under HASKELL_FLOWS_E2E_PARALLEL>=2.
-# Sequential by default keeps CI stable; opt in for the dev inner loop:
-#   HASKELL_FLOWS_E2E_PARALLEL=4 scripts/ci-local.sh --fast
-# Combine with HASKELL_FLOWS_E2E_SKIP_SLOW=1 for the fastest run.
-: "${HASKELL_FLOWS_E2E_PARALLEL:=1}"
+# Parallelise the e2e suite by default. Post-#43 the session layer is
+# concurrent-safe, and the residual scenario-state race (a global
+# 'HASKELL_PROJECT_DIR' env-var mutation in 'E2E.Client.newClient' that
+# leaked one scenario's tempdir into another's in-process server) was
+# fixed by routing each client through 'serverFor <dir>' instead of
+# setEnv. PARALLEL=4 is safe AND ~2× faster than sequential
+# (~150 s vs ~294 s on local hardware). Override for sequential CI:
+#   HASKELL_FLOWS_E2E_PARALLEL=1 scripts/ci-local.sh --fast
+: "${HASKELL_FLOWS_E2E_PARALLEL:=4}"
 export HASKELL_FLOWS_E2E_PARALLEL
 printf '   (HASKELL_FLOWS_E2E_PARALLEL=%s)\n' "$HASKELL_FLOWS_E2E_PARALLEL"
 cabal test all --test-show-details=direct
