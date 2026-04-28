@@ -58,6 +58,9 @@ module HaskellFlows.Ghc.ApiSession
   , firstLibraryOrTestSuite
     -- * Test-only introspection
   , readCabalMtimeForTest
+    -- * Issue #43 — absolutize stanza-flag paths
+  , absolutizePathArg
+  , absolutizeStanzaFlags
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)
@@ -124,7 +127,6 @@ import System.Directory
   , doesFileExist
   , getModificationTime
   , listDirectory
-  , withCurrentDirectory
   )
 import Data.Time.Clock.POSIX (POSIXTime, utcTimeToPOSIXSeconds)
 import System.FilePath ((</>), takeExtension)
@@ -257,14 +259,18 @@ withGhcSession sess act = withMVar (gsLock sess) $ \_ -> do
   -- negligible. Idempotent against concurrent calls — the outer
   -- 'withMVar' already serialises us.
   ensureStanzaFlags sess
-  -- Run with CWD pinned to the project root so the stanza flags'
-  -- relative paths (@-outputdir dist-newstyle/...@, @-isrc@, …)
-  -- resolve correctly regardless of the MCP process's own CWD.
-  -- Cabal always writes the captured @ghc --interactive@ argv with
-  -- paths relative to the project root, matching its own invocation
-  -- environment.
-  withCurrentDirectory (unProjectDir (gsProject sess)) $
-    runGhc (Just (gsLibdir sess)) $ do
+  -- Issue #43: dropped 'withCurrentDirectory' here. Mutating the
+  -- process-level POSIX CWD inside a session was a shortcut for
+  -- making relative tokens in the captured cabal argv resolve
+  -- correctly, but it raced catastrophically with parallel e2e
+  -- ('HASKELL_FLOWS_E2E_PARALLEL >= 2'): one thread @chdir@s into
+  -- a tempdir, finishes, the @bracket@ rmtree's the dir; another
+  -- thread mid-flight calls @getCurrentDirectory@ via GHC and
+  -- gets EINVAL on the dead inode. Now 'absolutizeStanzaFlags'
+  -- rewrites every path-bearing token to absolute form before
+  -- 'parseDynamicFlagsCmdLine' sees them, so flag resolution
+  -- doesn't depend on the live CWD at all.
+  runGhc (Just (gsLibdir sess)) $ do
     mEnv <- liftIO (readIORef (gsEnvRef sess))
     Data.Foldable.for_ mEnv setSession
     -- No 'setSessionDynFlags dflags' baseline here. runGhc has
@@ -715,7 +721,11 @@ withStanzaFlags sess tgt act = do
           -- "cannot satisfy -package-id X" even though the package
           -- is resolvable in the package-db.
           rawArgs = filter (/= "--interactive") (Bootstrap.sfArgs sf)
-          cleaned = map (absolutizePathArg root)
+          -- Issue #43: 'absolutizeStanzaFlags' is the list-aware
+          -- pass; 'absolutizePathArg' (still used inside it)
+          -- handles single-token forms. Together they cover
+          -- @-isrc@, @-package-db DIR@, @-outputdir=DIR@, etc.
+          cleaned = absolutizeStanzaFlags root
                   . stripPositionalModuleNames
                   $ dedupHideAllPackages rawArgs
           -- Zero the package-related fields on the baseline dflags
@@ -771,26 +781,45 @@ stripPositionalModuleNames = filter (not . isModuleNameToken)
         | otherwise -> False
 
 
--- | Convert a likely-path-shaped argv token to an absolute path
--- under the given root. Leaves flag names (starting with @-@) and
--- non-path-looking tokens untouched.
+-- | Convert a likely-path-shaped single argv token to an absolute
+-- path under the given root. Leaves flag names (starting with
+-- @-@) and non-path-looking tokens untouched.
 --
--- Handles both bare path tokens ("dist-newstyle/…") and
--- flag-embedded paths ("-isrc", "-idist-newstyle/…"). The flag
--- letters we expand — @-i@, @-I@, @-L@, @-outputdir@, @-odir@,
--- @-hidir@, @-hiedir@, @-stubdir@, @-package-db@ — are the ones
--- cabal's @v2-repl@ routinely emits with relative values.
+-- Handles three single-token shapes:
+--
+--   * Flag-embedded letters: @-isrc@, @-IFoo@, @-LDir@.
+--   * Flag-embedded with @=@: @-outputdir=dist-newstyle/…@.
+--   * Bare paths in the argv stream: @dist-newstyle/…@.
+--
+-- Two-token forms (@-package-db DIR@) are NOT handled here — see
+-- 'absolutizeStanzaFlags' which walks the argv list to pair the
+-- flag with its operand.
 absolutizePathArg :: FilePath -> String -> String
 absolutizePathArg root arg = case arg of
   ('-' : rest)
+    -- Single-letter flags glued to their value: -isrc, -IFoo, -LDir.
     | Just path <- stripPrefix "i" rest, not (null path), isRel path -> "-i" <> makeAbs path
     | Just path <- stripPrefix "I" rest, not (null path), isRel path -> "-I" <> makeAbs path
     | Just path <- stripPrefix "L" rest, not (null path), isRel path -> "-L" <> makeAbs path
+    -- =-form: -outputdir=DIR / -odir=DIR / -hidir=DIR / etc.
+    -- Issue #43: GHC accepts this shape and cabal occasionally
+    -- emits it. Splitting on the FIRST '=' keeps any nested '='
+    -- in the path (paths typically don't contain '=' anyway).
+    | '=' `elem` rest ->
+        let (lhs, eqRhs) = break (== '=') rest
+            path         = drop 1 eqRhs
+            isPathFlag   = lhs `elem` pathishLongFlags
+        in if isPathFlag && not (null path) && isRel path
+             then "-" <> lhs <> "=" <> makeAbs path
+             else arg
     | otherwise -> arg
   _ | looksLikePath arg && isRel arg -> makeAbs arg
     | otherwise -> arg
   where
-    isRel path = not (null path) && head path /= '/'
+    isRel path = case path of
+      ('/' : _) -> False
+      []        -> False
+      _         -> True
     makeAbs p = root <> "/" <> p
     stripPrefix p s = if take (length p) s == p
                         then Just (drop (length p) s)
@@ -800,6 +829,53 @@ absolutizePathArg root arg = case arg of
     -- module names (e.g. "Shapes") or package-ids.
     looksLikePath s = '/' `elem` s
                    || take 3 s == "dist"
+
+-- | The long-form GHC flags that take a path operand. Used by
+-- both 'absolutizePathArg' (=-form recognition) and
+-- 'absolutizeStanzaFlags' (two-token recognition). Kept in one
+-- place so the two recognisers can never drift apart.
+pathishLongFlags :: [String]
+pathishLongFlags =
+  [ "outputdir"
+  , "odir"
+  , "hidir"
+  , "hiedir"
+  , "stubdir"
+  , "tmpdir"
+  , "o"          -- '-o FILE'
+  , "package-db"
+  , "package-env"
+  , "include-pkg-deps"  -- not strictly path-bearing, but cabal sometimes pairs it with a value
+  ]
+
+-- | Issue #43: list-aware companion to 'absolutizePathArg'.
+-- Walks the argv looking for two-token flag/operand pairs and
+-- absolutizes the operand when the flag is in
+-- 'pathishLongFlags'. Single-token tokens (bare paths,
+-- flag-embedded forms) are forwarded to 'absolutizePathArg'.
+--
+-- The walk is order-preserving and idempotent — applying it to
+-- an already-absolutized argv is a no-op.
+absolutizeStanzaFlags :: FilePath -> [String] -> [String]
+absolutizeStanzaFlags root = go
+  where
+    go [] = []
+    go (flag : rest)
+      | Just name <- stripDash flag
+      , name `elem` pathishLongFlags
+      , (operand : tl) <- rest
+      , isRel operand
+      , not (null operand)
+      = flag : makeAbs operand : go tl
+    go (x : xs) = absolutizePathArg root x : go xs
+
+    stripDash ('-' : s) = Just s
+    stripDash _         = Nothing
+    isRel path = case path of
+      ('/' : _) -> False
+      []        -> False
+      _         -> True
+    makeAbs p = root <> "/" <> p
 
 --------------------------------------------------------------------------------
 -- Wave-2 — compile via stanza flags

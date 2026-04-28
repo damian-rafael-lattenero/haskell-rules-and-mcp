@@ -599,6 +599,14 @@ main = do
                                                                  testMtimeInvalidation
       , test "ghc-api: withGhcSession ensures stanza flags (#49)"
                                                                  testWithGhcSessionEnsuresStanza
+      , test "ghc-api: absolutizePathArg single-token shapes (#43)"
+                                                                 testAbsolutizePathArgSingleToken
+      , test "ghc-api: absolutizePathArg eq-form (#43)"           testAbsolutizePathArgEqForm
+      , test "ghc-api: absolutizeStanzaFlags two-token pairs (#43)"
+                                                                 testAbsolutizeStanzaFlagsTwoToken
+      , test "ghc-api: absolutizeStanzaFlags idempotent (#43)"    testAbsolutizeStanzaFlagsIdempotent
+      , test "ghc-api: absolutizeStanzaFlags preserves order (#43)"
+                                                                 testAbsolutizeStanzaFlagsPreservesOrder
       , test "add_modules: unwraps stringified JSON-array (BUG-PLUS-08)"
                                                                  testAddModulesJsonArrayString
       , test "add_modules: plain comma-split preserved for non-JSON strings"
@@ -5353,6 +5361,99 @@ testWithGhcSessionEnsuresStanza = do
        && isJust afterTouch
        && afterFirst < afterTouch
         )
+
+-- | Issue #43: 'absolutizePathArg' must absolutize the
+-- single-token flag-embedded forms ('-isrc', '-IFoo', '-LDir')
+-- and bare paths ('dist-newstyle/...') while leaving non-path
+-- tokens, flag-only tokens, and already-absolute paths
+-- untouched.
+testAbsolutizePathArgSingleToken :: IO Bool
+testAbsolutizePathArgSingleToken = pure $ and
+  [ ApiSession.absolutizePathArg "/r" "-isrc"            == "-i/r/src"
+  , ApiSession.absolutizePathArg "/r" "-IFoo"            == "-I/r/Foo"
+  , ApiSession.absolutizePathArg "/r" "-LDir"            == "-L/r/Dir"
+  , ApiSession.absolutizePathArg "/r" "dist-newstyle/x"  == "/r/dist-newstyle/x"
+    -- already-absolute → untouched
+  , ApiSession.absolutizePathArg "/r" "-i/abs/src"       == "-i/abs/src"
+  , ApiSession.absolutizePathArg "/r" "/abs/path"        == "/abs/path"
+    -- non-path tokens → untouched
+  , ApiSession.absolutizePathArg "/r" "Shapes"           == "Shapes"
+  , ApiSession.absolutizePathArg "/r" "-package-id=qux"  == "-package-id=qux"
+    -- flag-only (no value glued) → untouched
+  , ApiSession.absolutizePathArg "/r" "-package-db"      == "-package-db"
+  ]
+
+-- | Issue #43: '=' form ('-outputdir=DIR') is what GHC accepts
+-- when paths come glued with '=' rather than space.
+testAbsolutizePathArgEqForm :: IO Bool
+testAbsolutizePathArgEqForm = pure $ and
+  [ ApiSession.absolutizePathArg "/r" "-outputdir=dist-newstyle/build"
+      == "-outputdir=/r/dist-newstyle/build"
+  , ApiSession.absolutizePathArg "/r" "-hidir=hi"
+      == "-hidir=/r/hi"
+  , ApiSession.absolutizePathArg "/r" "-package-db=pkgs"
+      == "-package-db=/r/pkgs"
+  , ApiSession.absolutizePathArg "/r" "-odir=/already/abs"
+      == "-odir=/already/abs"
+    -- non-pathish long flags must NOT trigger the =-rewrite
+  , ApiSession.absolutizePathArg "/r" "-funknown=value"
+      == "-funknown=value"
+  ]
+
+-- | Issue #43: 'absolutizeStanzaFlags' walks the argv list and
+-- pairs path-bearing flags with their next-token operand.
+testAbsolutizeStanzaFlagsTwoToken :: IO Bool
+testAbsolutizeStanzaFlagsTwoToken = pure $ and
+  [ ApiSession.absolutizeStanzaFlags "/r"
+      [ "-package-db", "dist-newstyle/store" ]
+      == [ "-package-db", "/r/dist-newstyle/store" ]
+  , ApiSession.absolutizeStanzaFlags "/r"
+      [ "-hidir", "hi", "-odir", "obj" ]
+      == [ "-hidir", "/r/hi", "-odir", "/r/obj" ]
+  , ApiSession.absolutizeStanzaFlags "/r"
+      [ "-package-env", ".ghc.environment.x" ]
+      == [ "-package-env", "/r/.ghc.environment.x" ]
+    -- absolute operand → leave alone
+  , ApiSession.absolutizeStanzaFlags "/r"
+      [ "-package-db", "/already/abs" ]
+      == [ "-package-db", "/already/abs" ]
+  ]
+
+-- | Issue #43: applying 'absolutizeStanzaFlags' twice must be a
+-- no-op. Idempotence keeps the function safe to call from
+-- multiple code paths without double-rewrites.
+testAbsolutizeStanzaFlagsIdempotent :: IO Bool
+testAbsolutizeStanzaFlagsIdempotent =
+  let raw =
+        [ "-isrc"
+        , "-package-db", "dist-newstyle/store"
+        , "-outputdir=dist-newstyle/build"
+        , "-this-unit-id", "demo-0.1.0.0-inplace"
+        ]
+      once  = ApiSession.absolutizeStanzaFlags "/r" raw
+      twice = ApiSession.absolutizeStanzaFlags "/r" once
+  in pure (once == twice)
+
+-- | Issue #43: order of the input argv must be preserved
+-- exactly (GHC's flag parser is order-sensitive — late
+-- 'package-id' tokens depend on earlier 'package-db' tokens).
+testAbsolutizeStanzaFlagsPreservesOrder :: IO Bool
+testAbsolutizeStanzaFlagsPreservesOrder =
+  let raw =
+        [ "-package-db", "dist-newstyle/store"
+        , "-hide-all-packages"
+        , "-package-id", "QckChck-2.16-abc"
+        , "-isrc"
+        , "Shapes"
+        ]
+      out = ApiSession.absolutizeStanzaFlags "/r" raw
+  in pure $ out ==
+        [ "-package-db", "/r/dist-newstyle/store"
+        , "-hide-all-packages"
+        , "-package-id", "QckChck-2.16-abc"
+        , "-i/r/src"
+        , "Shapes"
+        ]
 
 testMtimeInvalidation :: IO Bool
 testMtimeInvalidation = do
