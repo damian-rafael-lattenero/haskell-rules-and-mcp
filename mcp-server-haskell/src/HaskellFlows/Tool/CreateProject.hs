@@ -25,12 +25,14 @@ module HaskellFlows.Tool.CreateProject
   ( descriptor
   , handle
   , CreateArgs (..)
+    -- * Issue #58 — Hackage-conformant package-name validation
+  , validateName
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import Data.Char (isAlphaNum, isAsciiUpper, isDigit, toUpper)
+import Data.Char (isAlphaNum, isAsciiLower, isAsciiUpper, isDigit, toUpper)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -116,16 +118,54 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
 -- boundary validation
 --------------------------------------------------------------------------------
 
+-- | Issue #58: validate the package name against the Hackage
+-- conventions Cabal enforces:
+--
+--   * Non-empty.
+--   * First character is a (lowercase) letter — digit / hyphen
+--     leading characters are rejected.
+--   * Body characters are lowercase letters, digits, or hyphens.
+--   * No two consecutive hyphens (Cabal forbids @--@).
+--   * No trailing hyphen.
+--   * No uppercase characters (lowercase-by-convention; @cabal
+--     check@ warns and downstream tools normalise inconsistently).
+--
+-- Pre-fix the validator only checked \"alnum + hyphen\", so
+-- @ghc_create_project(name=\"Invalid-Name\")@ slipped through and
+-- failed downstream for the wrong reason (overwrite check). The
+-- new error messages name the actual violation.
 validateName :: Text -> Either Text Text
 validateName raw
-  | T.null raw                      = Left "name is empty"
-  | not (T.all okChar raw)          = Left ("invalid character in package name: " <> raw)
-  | not (startsWithLetter raw)      = Left "package name must start with a letter"
-  | otherwise                       = Right raw
+  | T.null raw =
+      Left "package name is empty"
+  | not (firstIsLowerLetter raw) =
+      Left ("package name '" <> raw
+              <> "' must start with a lowercase letter")
+  | T.any (not . isLowerHackageChar) raw =
+      Left ("package name '" <> raw
+              <> "' may only contain lowercase letters, digits, and hyphens")
+  | "--" `T.isInfixOf` raw =
+      Left ("package name '" <> raw
+              <> "' may not contain consecutive hyphens")
+  | endsWithHyphen raw =
+      Left ("package name '" <> raw
+              <> "' may not end in a hyphen")
+  | T.any isAsciiUpper raw =
+      Left ("package name '" <> raw
+              <> "' must be lowercase by Hackage convention; \
+                 \use hyphens between segments rather than CamelCase")
+  | otherwise = Right raw
   where
-    okChar c = isAlphaNum c || c == '-'
-    startsWithLetter t = case T.uncons t of
-      Just (c, _) -> isAlphaNum c && not (isDigit c)
+    firstIsLowerLetter t = case T.uncons t of
+      Just (c, _) -> isAsciiLower c
+      Nothing     -> False
+    -- Lowercase letter, digit, or hyphen. Uppercase is checked
+    -- as a separate condition below so the error message can
+    -- name the convention specifically.
+    isLowerHackageChar c =
+      isAsciiLower c || isDigit c || c == '-' || isAsciiUpper c
+    endsWithHyphen t = case T.unsnoc t of
+      Just (_, c) -> c == '-'
       Nothing     -> False
 
 validateModule :: Text -> Either Text Text

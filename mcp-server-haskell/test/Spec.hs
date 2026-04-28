@@ -104,6 +104,7 @@ import HaskellFlows.Mcp.RpcMethod
 import HaskellFlows.Tool.Batch (BatchArgs (..))
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
+import qualified HaskellFlows.Tool.CreateProject as CreateProject
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import qualified HaskellFlows.Tool.Regression as RegTool
@@ -435,6 +436,14 @@ main = do
       , test "check: propertiesGate regressed -> ok=false (#42)" testCheckGateRegressed
       , test "check: propertiesGate skipped -> ok=false (#42)" testCheckGateSkipped
       , test "check: propertiesGate reason matches ok flag (#42)" testCheckGateReasonMatchesOk
+      , test "create_project: validateName accepts canonical (#58)"  testCreateValidateAccept
+      , test "create_project: validateName rejects empty (#58)"      testCreateValidateEmpty
+      , test "create_project: validateName rejects uppercase (#58)"  testCreateValidateUpper
+      , test "create_project: validateName rejects double hyphen (#58)" testCreateValidateDoubleHyphen
+      , test "create_project: validateName rejects trailing hyphen (#58)" testCreateValidateTrailing
+      , test "create_project: validateName rejects leading digit (#58)"  testCreateValidateLeadingDigit
+      , test "create_project: validateName rejects symbols (#58)"    testCreateValidateSymbols
+      , test "create_project: validateName error names violation (#58)" testCreateValidateErrorMsg
       , test "nextStep: add_import count=0 suppresses load (#53)"     testNextStepAddImportZero
       , test "nextStep: add_import count>0 nudges load (#53)"         testNextStepAddImportNonZero
       , test "add_modules: moduleToPath mapping"   testAddModulesPath
@@ -3563,6 +3572,76 @@ testCheckGateSkipped =
 -- | Issue #42 core invariant: ok=false MUST imply the reason
 -- text does NOT claim properties pass. Table-drive a few
 -- (total, passed, regressed, skipped) tuples.
+-- | Issue #58: full Hackage-conformant package-name validator.
+-- Each test pins one violation class so a regression in any
+-- single rule is attributable on its own.
+
+testCreateValidateAccept :: IO Bool
+testCreateValidateAccept = pure $ and
+  [ CreateProject.validateName "haskell-flows-mcp" == Right "haskell-flows-mcp"
+  , CreateProject.validateName "x"                 == Right "x"
+  , CreateProject.validateName "abc-123-def"       == Right "abc-123-def"
+  , CreateProject.validateName "single"            == Right "single"
+  ]
+
+testCreateValidateEmpty :: IO Bool
+testCreateValidateEmpty = pure $
+  case CreateProject.validateName "" of
+    Left _  -> True
+    Right _ -> False
+
+testCreateValidateUpper :: IO Bool
+testCreateValidateUpper = pure $ and
+  [ isLeft (CreateProject.validateName "Invalid-Name")
+  , isLeft (CreateProject.validateName "camelCase")
+  , isLeft (CreateProject.validateName "ALLCAPS")
+  ]
+  where
+    isLeft (Left _) = True
+    isLeft _        = False
+
+testCreateValidateDoubleHyphen :: IO Bool
+testCreateValidateDoubleHyphen = pure $
+  case CreateProject.validateName "with--double" of
+    Left msg -> "consecutive hyphens" `T.isInfixOf` msg
+    Right _  -> False
+
+testCreateValidateTrailing :: IO Bool
+testCreateValidateTrailing = pure $
+  case CreateProject.validateName "ends-" of
+    Left msg -> "end in a hyphen" `T.isInfixOf` msg
+    Right _  -> False
+
+testCreateValidateLeadingDigit :: IO Bool
+testCreateValidateLeadingDigit = pure $
+  case CreateProject.validateName "1leading-digit" of
+    Left msg -> "lowercase letter" `T.isInfixOf` msg
+    Right _  -> False
+
+testCreateValidateSymbols :: IO Bool
+testCreateValidateSymbols = pure $ and
+  [ isLeft (CreateProject.validateName "with_underscore")
+  , isLeft (CreateProject.validateName "with.dot")
+  , isLeft (CreateProject.validateName "with space")
+  , isLeft (CreateProject.validateName "leading-")  -- this is a leading-digit-likeerror? Actually it's a leading hyphen
+  , isLeft (CreateProject.validateName "-leading")
+  ]
+  where
+    isLeft (Left _) = True
+    isLeft _        = False
+
+-- | Issue #58: error messages must NAME the violation so the agent
+-- can rename appropriately instead of guessing what \"invalid name\"
+-- meant. Pin that the rejected name and the rule both appear.
+testCreateValidateErrorMsg :: IO Bool
+testCreateValidateErrorMsg = pure $
+  case CreateProject.validateName "Bad-Name" of
+    Left msg ->
+         "Bad-Name" `T.isInfixOf` msg
+      && ("lowercase" `T.isInfixOf` msg
+            || "Hackage" `T.isInfixOf` msg)
+    Right _ -> False
+
 testCheckGateReasonMatchesOk :: IO Bool
 testCheckGateReasonMatchesOk =
   let cases =
