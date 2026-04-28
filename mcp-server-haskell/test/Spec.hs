@@ -578,6 +578,8 @@ main = do
       , test "switch_project: accepts a valid cabal project"     testSwitchAcceptsValid
       , test "switch_project: handle swaps project + kills session"
                                                                  testSwitchHandleSwaps
+      , test "switch_project: handle reopens store at new root (#39)"
+                                                                 testSwitchHandleReopensStore
       , test "switch_project: empty dir accepted (scaffold-ready)"
                                                                  testSwitchAcceptsEmpty
       , test "path-bootstrap: hard-coded candidates are absolute"
@@ -4995,13 +4997,15 @@ testSwitchHandleSwaps = do
     (Right pdA, Right pdB) -> do
       pdRef    <- newIORef pdA
       sessRef  <- newMVar Nothing
+      storeA   <- openStore pdA
+      storeRef <- newIORef storeA
       -- Prime the session so we can observe the kill semantics:
       -- handle must wipe whatever Session was there.
       primed   <- startGhcSession pdA
       _        <- readMVar sessRef
       sessRef' <- newMVar (Just primed)
       let args = A.object [ "path" A..= T.pack dirB ]
-      result  <- SwitchProject.handle pdRef sessRef' args
+      result  <- SwitchProject.handle pdRef sessRef' storeRef args
       newPd   <- readIORef pdRef
       mSess   <- readMVar sessRef'
       removePathForcibly dirA
@@ -5011,6 +5015,54 @@ testSwitchHandleSwaps = do
             && HaskellFlows.Types.unProjectDir newPd ==
                  HaskellFlows.Types.unProjectDir pdB
             && isNothing mSess
+        )
+    _ -> do
+      removePathForcibly dirA
+      removePathForcibly dirB
+      pure False
+
+-- | Issue #39: a successful 'switch_project' must atomically
+-- swap the property store ref so subsequent 'loadAll' goes
+-- against the NEW project's @.haskell-flows/properties.json@.
+-- Pre-fix the ref kept pointing at the boot-time store, so a
+-- property saved into A leaked into B's regression list.
+--
+-- Setup:
+--   * Project A scaffolded + a single property saved to its store.
+--   * Project B scaffolded with NO properties.
+--   * SwitchProject.handle (A → B).
+-- Assertion:
+--   * The post-switch storeRef opened against B reads as empty.
+--   * The pre-switch storeRef (storeA, captured before the swap)
+--     still reads A's property — proves we returned a NEW
+--     'Store' instead of mutating the old one in place (which
+--     would have been correct but fragile).
+testSwitchHandleReopensStore :: IO Bool
+testSwitchHandleReopensStore = do
+  dirA <- scaffoldTmpProject "with-prop"
+  dirB <- scaffoldTmpProject "no-prop"
+  case (mkProjectDir dirA, mkProjectDir dirB) of
+    (Right pdA, Right pdB) -> do
+      pdRef    <- newIORef pdA
+      sessRef  <- newMVar Nothing
+      storeA   <- openStore pdA
+      save storeA "\\x -> x == (x :: Int)" (Just "src/Foo.hs")
+      preProps <- loadAll storeA
+      storeRef <- newIORef storeA
+      let args = A.object [ "path" A..= T.pack dirB ]
+      _ <- SwitchProject.handle pdRef sessRef storeRef args
+      storeAfter  <- readIORef storeRef
+      postProps   <- loadAll storeAfter
+      -- After the swap, the OLD Store handle should still point
+      -- at A's file (immutability invariant) — read it again to
+      -- confirm A's property wasn't somehow purged.
+      stillInA    <- loadAll storeA
+      removePathForcibly dirA
+      removePathForcibly dirB
+      pure
+        ( length preProps  == 1
+            && null postProps
+            && length stillInA == 1
         )
     _ -> do
       removePathForcibly dirA

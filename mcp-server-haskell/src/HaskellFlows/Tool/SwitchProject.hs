@@ -62,6 +62,7 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath (takeExtension)
 
+import HaskellFlows.Data.PropertyStore (Store, openStore)
 import HaskellFlows.Ghc.ApiSession (GhcSession, killGhcSession)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -171,12 +172,22 @@ validateSwitchTarget raw =
 -- | Side-effecting handler. Takes the mutable refs the server
 -- already owns — we don't import 'Server' here to keep
 -- 'Tool.SwitchProject' free of a layering cycle.
+--
+-- Issue #39: the third parameter ('IORef Store') is the property
+-- store handle the server keeps in 'srvStore'. The handler
+-- atomically opens a fresh 'Store' rooted at the new project's
+-- @.haskell-flows/properties.json@ and swaps it in. Without
+-- that, every subsequent @ghc_check_module@ / @ghc_regression@
+-- after a switch would still consult the previous project's
+-- stored properties — the surprising behaviour that motivated
+-- the bug report.
 handle
   :: IORef ProjectDir
   -> MVar (Maybe GhcSession)
+  -> IORef Store
   -> Value
   -> IO ToolResult
-handle pdRef sessRef rawArgs = case parseEither parseJSON rawArgs of
+handle pdRef sessRef storeRef rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
   Right (SwitchProjectArgs raw) -> do
     res <- validateSwitchTarget raw
@@ -191,13 +202,18 @@ handle pdRef sessRef rawArgs = case parseEither parseJSON rawArgs of
         -- create_project\" instead of always pointing at status.
         entries <- listDirectory (unProjectDir newPd)
         let scaffolded = any ((".cabal" ==) . takeExtension) entries
-        -- Serialise the swap against any in-flight tool call that
-        -- acquired the session mutex. The kill happens under the
-        -- same lock that 'getOrStartGhcSession' takes, so nobody
-        -- observes a half-switched server.
+        -- Open the new project's store BEFORE we take the session
+        -- lock. 'openStore' is a stat + IORef new-MVar — quick and
+        -- never throws — so doing it outside the critical section
+        -- keeps the swap window tight. Then serialise the
+        -- (kill-session, swap-pdRef, swap-storeRef) trio under the
+        -- session MVar so concurrent tool handlers either see the
+        -- complete old triple or the complete new one.
+        newStore <- openStore newPd
         modifyMVar_ sessRef $ \mSess -> do
           mapM_ killGhcSession mSess
-          atomicWriteIORef pdRef newPd
+          atomicWriteIORef pdRef    newPd
+          atomicWriteIORef storeRef newStore
           pure Nothing
         pure (successResult oldPd newPd scaffolded)
 

@@ -135,7 +135,14 @@ data Server = Server
     -- ^ In-process GHC-API session — the single source of compile
     -- and execute state after Wave 5 landed. All 25 tools route
     -- through this; the legacy subprocess ghci module is gone.
-  , srvStore         :: !Store
+  , srvStore         :: !(IORef Store)
+    -- ^ Issue #39: 'IORef Store' (not bare 'Store') because
+    -- 'ghc_switch_project' must be able to reopen the property
+    -- store against the new project root. Without this, the
+    -- previous project's @.haskell-flows/properties.json@ would
+    -- still drive 'ghc_check_module' / 'ghc_regression' / gates
+    -- after a switch — surfacing ghost regressions for properties
+    -- that don't even live in the new project.
   , srvWorkflowState :: !WorkflowStateRef
   , srvBootPosix     :: !Double
   , srvBinaryPath    :: !FilePath
@@ -169,13 +176,14 @@ defaultServer = do
       pdRef    <- newIORef pd
       ghcSess  <- newMVar Nothing
       store    <- openStore pd
+      storeRef <- newIORef store
       ws       <- newWorkflowStateRef
       bootPos  <- realToFrac <$> getPOSIXTime
       binPath  <- getExecutablePath
       pure Server
         { srvProjectDir    = pdRef
         , srvGhcSession    = ghcSess
-        , srvStore         = store
+        , srvStore         = storeRef
         , srvWorkflowState = ws
         , srvBootPosix     = bootPos
         , srvBinaryPath    = binPath
@@ -338,7 +346,8 @@ dispatchByName srv args = \case
     -- Wave-3 full in-process: compileExpr + unsafeCoerce of a
     -- Test.QuickCheck.quickCheckWithResult invocation.
     ghcSess <- getOrStartGhcSession srv
-    QcTool.handle (srvStore srv) ghcSess args
+    store   <- readIORef (srvStore srv)
+    QcTool.handle store ghcSess args
   GhcHole -> do
     -- Wave-2 full GhcSession: Deferred compile via stanza flags,
     -- diagnostics captured through the logger hook, rendered to
@@ -365,13 +374,15 @@ dispatchByName srv args = \case
   GhcRegression -> do
     -- Wave-3 full in-process replay via evalIOString.
     ghcSess <- getOrStartGhcSession srv
-    RegressionTool.handle (srvStore srv) ghcSess args
+    store   <- readIORef (srvStore srv)
+    RegressionTool.handle store ghcSess args
   GhcCheckModule -> do
     -- Wave-5 full GhcSession: compile/warnings/holes + in-process
     -- property replay via Regression.runOne.
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
-    CheckModuleTool.handle ghcSess (srvStore srv) pd args
+    store   <- readIORef (srvStore srv)
+    CheckModuleTool.handle ghcSess store pd args
   GhcCoverage -> do
     pd <- readIORef (srvProjectDir srv)
     CoverageTool.handle pd args
@@ -422,7 +433,8 @@ dispatchByName srv args = \case
     -- Wave-5 full GhcSession (delegates to check_module per file).
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
-    CheckProjectTool.handle ghcSess (srvStore srv) pd args
+    store   <- readIORef (srvStore srv)
+    CheckProjectTool.handle ghcSess store pd args
   GhcSuggest -> do
     -- Wave-5 full GhcSession: exprType + module-graph walk for siblings.
     ghcSess <- getOrStartGhcSession srv
@@ -430,10 +442,12 @@ dispatchByName srv args = \case
   GhcGate -> do
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
-    GateTool.handle (srvStore srv) ghcSess pd args
+    store   <- readIORef (srvStore srv)
+    GateTool.handle store ghcSess pd args
   GhcQuickCheckExport -> do
-    pd <- readIORef (srvProjectDir srv)
-    QcExportTool.handle (srvStore srv) pd args
+    pd    <- readIORef (srvProjectDir srv)
+    store <- readIORef (srvStore srv)
+    QcExportTool.handle store pd args
   GhcAddImport -> do
     r <- AddImportTool.handle args
     invalidateGhcSessionIfPresent srv
@@ -472,22 +486,24 @@ dispatchByName srv args = \case
     -- Wave-3 full in-process via evalIOString.
     ghcSess <- getOrStartGhcSession srv
     DeterminismTool.handle ghcSess args
-  GhcPropertyLifecycle ->
-    PropertyLifecycleTool.handle (srvStore srv) args
+  GhcPropertyLifecycle -> do
+    store <- readIORef (srvStore srv)
+    PropertyLifecycleTool.handle store args
   GhcToolchainWarmup ->
     ToolchainWarmupTool.handle args
   GhcBootstrap -> do
     pd <- readIORef (srvProjectDir srv)
     BootstrapTool.handle pd allToolDescriptors args
   GhcSwitchProject ->
-    -- SwitchProject is the one tool that mutates BOTH the
-    -- project-dir ref AND the session MVar — it takes those
-    -- handles directly instead of going through
-    -- getOrStartGhcSession, which would boot a fresh session
-    -- against the OLD path right before we tear it down.
+    -- SwitchProject is the one tool that mutates the project-dir
+    -- ref, the session MVar, AND (issue #39) the property store
+    -- ref — it takes those handles directly instead of going
+    -- through getOrStartGhcSession, which would boot a fresh
+    -- session against the OLD path right before we tear it down.
     SwitchProjectTool.handle
       (srvProjectDir srv)
       (srvGhcSession srv)
+      (srvStore srv)
       args
   GhcBatch ->
     -- Reachable only via 'dispatchTool' (e.g. when 'BatchTool.handle'
