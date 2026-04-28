@@ -68,6 +68,7 @@ import qualified Scenarios.FlowSessionRobustness as FlowSR
 import qualified Scenarios.FlowSwitchProject    as FlowSwP
 import qualified Scenarios.FlowSwitchProjectStore as FlowSwPS
 import qualified Scenarios.FlowCabalRecovery     as FlowCR
+import qualified Scenarios.FlowRefactorPreExistingError as FlowRPE
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
@@ -172,6 +173,8 @@ scenarios =
     , False, FlowSwPS.runFlow )
   , ( "Flow: Cabal recovery (#49 · external edit picked up by non-load tool)"
     , False, FlowCR.runFlow )
+  , ( "Flow: Refactor pre-existing-error (#50 · diagnostic-diff verify)"
+    , False, FlowRPE.runFlow )
   , ( "Flow: Dogfood replay (7 MCP fixes round-tripped through one session)"
     , True, FlowDFR.runFlow )
   , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"

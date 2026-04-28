@@ -180,6 +180,7 @@ import HaskellFlows.Refactor.Rename
   , renameInScope
   , validateIdentifier
   )
+import qualified HaskellFlows.Tool.Refactor as RefactorTool
 import HaskellFlows.Tool.Goto
   ( Location (..)
   , parseDefinedAt
@@ -296,6 +297,11 @@ main = do
       , test "validateIdentifier rejects symbol"   testIdentifierSymbol
       , test "validateIdentifier rejects upper"    testIdentifierUpper
       , test "extractBinding wraps block"           testExtractBinding
+      , test "refactor: errorKey identifies same diag (#50)"      testRefactorErrorKeySame
+      , test "refactor: errorKey distinguishes msgs (#50)"        testRefactorErrorKeyDistinct
+      , test "refactor: signatures filter only errors (#50)"      testRefactorSignaturesErrorsOnly
+      , test "refactor: post ⊆ pre means no new errors (#50)"     testRefactorPostSubsetPre
+      , test "refactor: new error not in pre is detected (#50)"   testRefactorNewErrorDetected
       , test "extractBinding rejects empty range"   testExtractEmpty
       , test "extractBinding refuses top-level eq"  testExtractRefusesTopLevelEquation
       , test "extractBinding refuses type sig"      testExtractRefusesTypeSignature
@@ -1257,6 +1263,74 @@ testExtractEmpty =
   pure $ case extractBinding "foo" 5 4 "body" of
     Left _ -> True
     _      -> False
+
+-- | Issue #50: structural-key helpers for the diagnostic-diff
+-- accept criterion. Two diagnostics with identical (file, line,
+-- column, message) are considered the same — that's what makes
+-- the post ⊆ pre test mean "the rewrite introduced no new errors".
+
+testRefactorErrorKeySame :: IO Bool
+testRefactorErrorKeySame =
+  let a = mkErr "F.hs" 10 5 "Found hole: _x :: Int"
+      b = mkErr "F.hs" 10 5 "Found hole: _x :: Int"
+  in pure (RefactorTool.errorKey a == RefactorTool.errorKey b)
+
+testRefactorErrorKeyDistinct :: IO Bool
+testRefactorErrorKeyDistinct =
+  let a = mkErr "F.hs" 10 5 "Variable not in scope: foo"
+      b = mkErr "F.hs" 10 5 "Variable not in scope: bar"
+  in pure (RefactorTool.errorKey a /= RefactorTool.errorKey b)
+
+testRefactorSignaturesErrorsOnly :: IO Bool
+testRefactorSignaturesErrorsOnly =
+  let err  = mkErr  "F.hs" 1 1 "boom"
+      warn = mkWarn "F.hs" 2 2 "unused"
+  in pure (RefactorTool.errorSignatures [err, warn]
+             == [RefactorTool.errorKey err])
+
+-- | Issue #50: a rename that leaves an unrelated pre-existing
+-- error in place must NOT be rolled back. Model the diff
+-- check directly: post is identical to pre → no new errors.
+testRefactorPostSubsetPre :: IO Bool
+testRefactorPostSubsetPre =
+  let pre  = [mkErr "F.hs" 23 1 "Found hole: _holeArg :: [a]"]
+      post = pre  -- rename touched line 13, hole at line 23 unchanged
+      preSigs  = RefactorTool.errorSignatures pre
+      postSigs = RefactorTool.errorSignatures post
+      newErrSigs = filter (`notElem` preSigs) postSigs
+  in pure (null newErrSigs)
+
+-- | Issue #50: a rename that introduces a NEW error must be
+-- rejected — that's the conservative side of the diff.
+testRefactorNewErrorDetected :: IO Bool
+testRefactorNewErrorDetected =
+  let pre  = [mkErr "F.hs" 23 1 "Found hole: _holeArg :: [a]"]
+      post = pre <> [mkErr "F.hs" 13 5 "Variable not in scope: greeting"]
+      preSigs  = RefactorTool.errorSignatures pre
+      postSigs = RefactorTool.errorSignatures post
+      newErrSigs = filter (`notElem` preSigs) postSigs
+  in pure (length newErrSigs == 1)
+
+-- | Tiny ctor helpers for the diagnostic tests above.
+mkErr :: Text -> Int -> Int -> Text -> GhcError
+mkErr file ln col msg = GhcError
+  { geFile     = file
+  , geLine     = ln
+  , geColumn   = col
+  , geSeverity = SevError
+  , geCode     = Nothing
+  , geMessage  = msg
+  }
+
+mkWarn :: Text -> Int -> Int -> Text -> GhcError
+mkWarn file ln col msg = GhcError
+  { geFile     = file
+  , geLine     = ln
+  , geColumn   = col
+  , geSeverity = SevWarning
+  , geCode     = Nothing
+  , geMessage  = msg
+  }
 
 -- | Regression test for issue #46. Pointing extract_binding at a whole
 -- top-level equation used to produce broken Haskell — the call site

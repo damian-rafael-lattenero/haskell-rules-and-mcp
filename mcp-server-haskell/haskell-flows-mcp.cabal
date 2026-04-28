@@ -227,6 +227,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowSwitchProject
                       Scenarios.FlowSwitchProjectStore
                       Scenarios.FlowCabalRecovery
+                      Scenarios.FlowRefactorPreExistingError
                       Scenarios.FlowDogfoodReplay
                       Scenarios.FlowTypeBreakage
                       Scenarios.FlowScopeMgmt

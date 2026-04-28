@@ -29,6 +29,9 @@ module HaskellFlows.Tool.Refactor
   , handle
   , RefactorArgs (..)
   , Action (..)
+    -- * Diagnostic-diff helpers (#50)
+  , errorKey
+  , errorSignatures
   ) where
 
 import Control.Exception (SomeException, try)
@@ -281,6 +284,18 @@ commitWithVerify
   -> Value          -- base success payload (augmented with compile info)
   -> IO ToolResult
 commitWithVerify ghcSess mp orig newContent baseSuccess = do
+  -- Issue #50: diagnostic-diff verify. Before we write the new
+  -- content, load the file as-is and snapshot the *pre-existing*
+  -- error set. The accept criterion then becomes \"the rewrite
+  -- introduced no NEW errors\" rather than \"there are no errors
+  -- at all\". A clean rename in a module that already has an
+  -- unrelated typed hole used to be rolled back because the hole
+  -- showed up post-edit too — that's exactly the symptom the bug
+  -- describes.
+  invalidateLoadCache ghcSess
+  preDiags <- loadAndDiagnose ghcSess mp
+  let preErrSigs = errorSignatures preDiags
+
   writeRes <- try (TIO.writeFile (unModulePath mp) newContent)
               :: IO (Either SomeException ())
   case writeRes of
@@ -289,28 +304,97 @@ commitWithVerify ghcSess mp orig newContent baseSuccess = do
       -- Drop the auto-load cache so loadForTarget re-scans the
       -- freshly-written file instead of reusing a stale HscEnv.
       invalidateLoadCache ghcSess
-      tgt <- targetForPath ghcSess (unModulePath mp)
-      eLoad <- try (loadForTarget ghcSess tgt Strict)
-               :: IO (Either SomeException (Bool, [GhcError]))
-      let (ok, diags) = case eLoad of
-            Left ex   -> (False,
-                          [GhcError { geFile = T.pack (unModulePath mp)
-                                    , geLine = 0, geColumn = 0
-                                    , geSeverity = SevError
-                                    , geCode = Nothing
-                                    , geMessage = T.pack (show ex)
-                                    }])
-            Right res -> res
-          errs = filter ((== SevError) . geSeverity) diags
-      if not (null errs) || not ok
+      postDiags <- loadAndDiagnose ghcSess mp
+      let postErrs    = filter ((== SevError) . geSeverity) postDiags
+          postErrSigs = errorSignatures postDiags
+          newErrSigs  = filter (`notElem` preErrSigs) postErrSigs
+          -- An error is \"new\" iff its (file, line, column, message)
+          -- key wasn't in preDiags. The rewrite is rejected only
+          -- when at least one such entry exists.
+          regressed   = not (null newErrSigs)
+      if regressed
         then do
           restored <- try (TIO.writeFile (unModulePath mp) orig)
                       :: IO (Either SomeException ())
           let restoreMsg = case restored of
                 Left _  -> " — AND snapshot restore ALSO failed, file is dirty"
                 Right _ -> " — snapshot restored"
-          pure (compileFailResult errs (renderDiags diags) restoreMsg)
-        else pure (commitResult baseSuccess)
+              -- Re-render the post-edit error set so the agent
+              -- sees what tripped the rollback. We attach the new-
+              -- only subset as 'new_errors' for clarity.
+              newErrs = filter (\e -> errorKey e `elem` newErrSigs) postErrs
+          pure (compileFailResult newErrs (renderDiags postDiags) restoreMsg)
+        else
+          pure (commitResultWithDiff baseSuccess preDiags postDiags)
+
+-- | Issue #50: structural key for an error diagnostic. Two
+-- diagnostics are \"the same\" if they refer to the same
+-- (file, line, column, message). Severity is intentionally
+-- excluded — a warning becoming an error at the same location
+-- still counts as \"already there\". Code is also excluded:
+-- typed holes carry a stable \"GHC-88464\" code but their
+-- message text is what matters.
+errorKey :: GhcError -> (Text, Int, Int, Text)
+errorKey e = (geFile e, geLine e, geColumn e, geMessage e)
+
+errorSignatures :: [GhcError] -> [(Text, Int, Int, Text)]
+errorSignatures = map errorKey . filter ((== SevError) . geSeverity)
+
+-- | Run @loadForTarget@ for the file's owning stanza and capture
+-- whatever diagnostics come back. Exception during load → synthetic
+-- error diagnostic (so the diff still works against a baseline).
+loadAndDiagnose :: GhcSession -> ModulePath -> IO [GhcError]
+loadAndDiagnose ghcSess mp = do
+  tgt <- targetForPath ghcSess (unModulePath mp)
+  eLoad <- try (loadForTarget ghcSess tgt Strict)
+           :: IO (Either SomeException (Bool, [GhcError]))
+  pure $ case eLoad of
+    Left ex ->
+      [ GhcError { geFile = T.pack (unModulePath mp)
+                 , geLine = 0, geColumn = 0
+                 , geSeverity = SevError
+                 , geCode = Nothing
+                 , geMessage = T.pack (show ex)
+                 } ]
+    Right (_ok, diags) -> diags
+
+-- | Issue #50: extended success result. When the rewrite is
+-- accepted, surface the pre-existing error set (if any) so the
+-- agent knows the module still has known issues — distinct from
+-- \"all green\".
+commitResultWithDiff :: Value -> [GhcError] -> [GhcError] -> ToolResult
+commitResultWithDiff base preDiags postDiags =
+  let preErrs  = filter ((== SevError) . geSeverity) preDiags
+      postErrs = filter ((== SevError) . geSeverity) postDiags
+      compileTag :: Text
+      compileTag
+        | null postErrs && null preErrs = "ok"
+        | null postErrs                 = "ok"  -- rewrite fixed every pre-existing error
+        | otherwise                     = "ok-with-pre-existing-errors"
+  in case base of
+       Object o ->
+         let extended = foldr (uncurry insertKV) o
+               [ ("success"             :: Text, toJSON True)
+               , ("dry_run",                     toJSON False)
+               , ("compile",                     toJSON compileTag)
+               , ("pre_existing_errors",         toJSON preErrs)
+               , ("new_errors",                  toJSON ([] :: [GhcError]))
+               ]
+         in ToolResult
+              { trContent = [ TextContent (encodeUtf8Text (Object extended)) ]
+              , trIsError = False
+              }
+       _ ->
+         ToolResult
+           { trContent = [ TextContent (encodeUtf8Text
+               (object [ "success"             .= True
+                       , "summary"             .= base
+                       , "compile"             .= compileTag
+                       , "pre_existing_errors" .= preErrs
+                       , "new_errors"          .= ([] :: [GhcError])
+                       ])) ]
+           , trIsError = False
+           }
 
 -- | Render a list of diagnostics into a single text blob matching
 -- the legacy @grOutput@ shape (file:line:col: message, blank line
@@ -347,29 +431,6 @@ dryRunResult base preview =
                     , "dry_run" .= True
                     , "preview" .= preview
                     , "summary" .= base
-                    ])) ]
-        , trIsError = False
-        }
-
-commitResult :: Value -> ToolResult
-commitResult base =
-  case base of
-    Object o ->
-      let extended = foldr (uncurry insertKV) o
-            [ ("success" :: Text, toJSON True)
-            , ("dry_run",         toJSON False)
-            , ("compile",         toJSON ("ok" :: Text))
-            ]
-      in ToolResult
-           { trContent = [ TextContent (encodeUtf8Text (Object extended)) ]
-           , trIsError = False
-           }
-    _ ->
-      ToolResult
-        { trContent = [ TextContent (encodeUtf8Text
-            (object [ "success" .= True
-                    , "summary" .= base
-                    , "compile" .= ("ok" :: Text)
                     ])) ]
         , trIsError = False
         }
