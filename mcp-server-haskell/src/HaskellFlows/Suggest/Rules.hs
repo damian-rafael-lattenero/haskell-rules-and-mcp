@@ -228,7 +228,14 @@ ruleInvolutive = Rule
           , sCategory   = "algebraic"
           }
 
--- | @op :: a -> a -> a@ ⇒ check @(x `op` y) `op` z == x `op` (y `op` z)@.
+-- | @op :: a -> a -> a@ ⇒ check @op (op x y) z == op x (op y z)@.
+--
+-- Issue #52: the legacy template emitted a malformed LHS —
+-- @(op x y) z@ — which type-checks as
+-- \"apply the result of @op x y :: a@ to @z@\", a type error
+-- when @a@ is not a function type. The corrected shape applies
+-- @op@ to the inner result, giving the canonical associativity
+-- law for binary operators.
 ruleAssociative :: Rule
 ruleAssociative = Rule
   { rId = "associative"
@@ -237,7 +244,7 @@ ruleAssociative = Rule
         then Just Suggestion
           { sLaw        = "Associative"
           , sProperty   =
-              "\\x y z -> " <> infixed nm "(" nm <> " x y) z == "
+              "\\x y z -> " <> nm <> " (" <> nm <> " x y) z == "
               <> nm <> " x (" <> nm <> " y z)"
           , sRationale  = "Type is `a -> a -> a`; associativity is a core \
                           \law for monoids / semigroups."
@@ -621,10 +628,3 @@ mkRoundtripLaw printer srcTy parser needsJust =
     }
   where
     _ = srcTy  -- retained in signature for clarity; unused in output today
-
---------------------------------------------------------------------------------
--- tiny formatter
---------------------------------------------------------------------------------
-
-infixed :: Text -> Text -> Text -> Text
-infixed _ opener nm = opener <> nm

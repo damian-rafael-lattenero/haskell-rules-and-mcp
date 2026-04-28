@@ -357,6 +357,7 @@ main = do
       , test "parseSignature list"                  testSigList
       , test "suggest matches involutive on a->a"   testSuggestInvolutive
       , test "suggest matches associative on a->a->a" testSuggestAssoc
+      , test "suggest associative template applies fn at outer (#52)" testSuggestAssocTemplate
       , test "suggest skips unmatched shapes"       testSuggestNoMatch
       , test "batch parses documented {tool,args}"  testBatchParsesToolArgs
       , test "batch accepts MCP {name,arguments}"   testBatchParsesNameArgs
@@ -2049,6 +2050,34 @@ testSuggestAssoc =
       let suggestions = applyRules "op" sig
       in pure (any ((== "Associative") . sLaw) suggestions
              && any ((== "Commutative") . sLaw) suggestions)
+
+-- | Issue #52: the legacy Associative template emitted
+-- @\\x y z -> (op x y) z == op x (op y z)@ — the LHS is
+-- @(op x y) z@, which type-checks as \"apply the result of
+-- @op x y :: a@ to @z@\" and is a type error whenever @a@ is
+-- not a function. Pin that the corrected template applies the
+-- outer @op@ on the LHS.
+testSuggestAssocTemplate :: IO Bool
+testSuggestAssocTemplate =
+  case parseSignature "a -> a -> a" of
+    Nothing  -> pure False
+    Just sig ->
+      let assoc = [ s | s <- applyRules "combineSorted" sig
+                      , sLaw s == "Associative" ]
+      in case assoc of
+           [s] ->
+             let prop = sProperty s
+             in pure $
+                  -- Outer call on the LHS must be present.
+                  T.isInfixOf "combineSorted (combineSorted x y) z" prop
+                  -- And the RHS shape stays the same.
+               && T.isInfixOf "combineSorted x (combineSorted y z)" prop
+                  -- The malformed bug shape was
+                  -- "\\x y z -> (combineSorted x y) z ==" — the
+                  -- LHS opening '(' immediately after '-> '. That
+                  -- whole prefix must be absent now.
+               && not (T.isInfixOf "-> (combineSorted x y) z" prop)
+           _   -> pure False
 
 testSuggestNoMatch :: IO Bool
 testSuggestNoMatch =

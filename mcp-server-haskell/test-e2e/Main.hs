@@ -69,6 +69,7 @@ import qualified Scenarios.FlowSwitchProject    as FlowSwP
 import qualified Scenarios.FlowSwitchProjectStore as FlowSwPS
 import qualified Scenarios.FlowCabalRecovery     as FlowCR
 import qualified Scenarios.FlowRefactorPreExistingError as FlowRPE
+import qualified Scenarios.FlowSuggestAssocOuter  as FlowSAO
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
@@ -175,6 +176,8 @@ scenarios =
     , False, FlowCR.runFlow )
   , ( "Flow: Refactor pre-existing-error (#50 · diagnostic-diff verify)"
     , False, FlowRPE.runFlow )
+  , ( "Flow: Suggest Associative outer call (#52 · template type-checks)"
+    , False, FlowSAO.runFlow )
   , ( "Flow: Dogfood replay (7 MCP fixes round-tripped through one session)"
     , True, FlowDFR.runFlow )
   , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"
