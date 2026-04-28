@@ -185,7 +185,6 @@ import HaskellFlows.Refactor.Rename
   )
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
 import qualified HaskellFlows.Tool.Info as InfoTool
-import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import HaskellFlows.Tool.Goto
   ( Location (..)
   , parseDefinedAt
@@ -3469,10 +3468,10 @@ testInfoCtorBlockMaybe =
         && hasName "Nothing" block
         && hasName "Just"    block
   where
-    hasName n vs = any (\v -> case v of
-                           A.Object o -> AKM.lookup (AKey.fromText "name") o
-                                           == Just (A.String n)
-                           _          -> False) vs
+    hasName n = any $ \case
+      A.Object o -> AKM.lookup (AKey.fromText "name") o
+                      == Just (A.String n)
+      _          -> False
 
 -- | Issue #54: 'successResult' must embed the @constructors@
 -- field when the type is algebraic, so JSON consumers see the
@@ -3513,7 +3512,7 @@ testInfoSuccessDropsCtorField =
        [TextContent t] ->
          case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
            Just (A.Object o) ->
-             AKM.lookup (AKey.fromText "constructors") o == Nothing
+             isNothing (AKM.lookup (AKey.fromText "constructors") o)
            _                  -> False
        _ -> False
 
@@ -3635,7 +3634,7 @@ testNextStepAddImportZero =
         , "count"   A..= (0 :: Int)
         , "imports" A..= ([] :: [T.Text])
         ]
-  in pure (suggestNext GhcAddImport True payload == Nothing)
+  in pure (isNothing (suggestNext GhcAddImport True payload))
 
 -- | Issue #53: nextStep dispatch on a ghc_add_import payload
 -- with @count: 3@ must return 'Just (...GhcLoad...)' so the
@@ -5099,7 +5098,7 @@ testRegressionClassifyPassedPassthrough =
   let parsed   = QcPassed "\\x -> True" 200
       stderr_  = "Variable not in scope: foo"  -- noise, not load failure
       result   = RegTool.classifyLoadFailure parsed stderr_
-  in pure (result == Nothing)
+  in pure (isNothing result)
 
 -- | Issue #51: an unparsed result with NO load-failure marker in
 -- stderr (e.g. a property that printed unrecognised text) must
@@ -5109,7 +5108,7 @@ testRegressionClassifyQuiet =
   let parsed   = QcUnparsed "\\x -> True" ""
       stderr_  = "" -- nothing actionable
       result   = RegTool.classifyLoadFailure parsed stderr_
-  in pure (result == Nothing)
+  in pure (isNothing result)
 
 -- | Issue #51: cabal-repl can dump several KB of build-plan
 -- noise on a load failure; the response payload caps it at

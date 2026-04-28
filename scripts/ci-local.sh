@@ -65,12 +65,13 @@ step "[4/9] cabal build"
 cabal build all
 
 step "[5/9] cabal test"
-# Parallelise the e2e suite by default — post-#43 the session
-# layer is safe under concurrent withGhcSession calls so the
-# scenarios run cleanly with N=4. Override by setting
-# HASKELL_FLOWS_E2E_PARALLEL=<N> before invoking this script
-# (set 1 to fall back to the historical sequential mode).
-: "${HASKELL_FLOWS_E2E_PARALLEL:=4}"
+# E2E parallelism opt-in: post-#43 the session layer is concurrent-safe,
+# but several scenarios (FlowBootstrap, FlowConcurrentClients, …) still
+# contain state-isolation bugs that surface under HASKELL_FLOWS_E2E_PARALLEL>=2.
+# Sequential by default keeps CI stable; opt in for the dev inner loop:
+#   HASKELL_FLOWS_E2E_PARALLEL=4 scripts/ci-local.sh --fast
+# Combine with HASKELL_FLOWS_E2E_SKIP_SLOW=1 for the fastest run.
+: "${HASKELL_FLOWS_E2E_PARALLEL:=1}"
 export HASKELL_FLOWS_E2E_PARALLEL
 printf '   (HASKELL_FLOWS_E2E_PARALLEL=%s)\n' "$HASKELL_FLOWS_E2E_PARALLEL"
 cabal test all --test-show-details=direct

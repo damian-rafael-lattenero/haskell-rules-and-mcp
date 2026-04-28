@@ -29,6 +29,7 @@ module Scenarios.FlowInfoConstructors
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -65,7 +66,7 @@ runFlow c _projectDir = do
       && "Just"    `elem` ctorsMaybe)
     ( "Expected definition to contain 'Nothing'+'Just' AND \
       \constructors=[Nothing, Just …]. \
-      \Got definition=" <> maybe "<missing>" id mDefMaybe
+      \Got definition=" <> fromMaybe "<missing>" mDefMaybe
       <> ", constructors=" <> T.pack (show ctorsMaybe) )
   stepFooter 1 t0
 
@@ -84,7 +85,7 @@ runFlow c _projectDir = do
       && "Right" `elem` ctorsEither)
     ( "Expected definition to contain 'Left'+'Right' AND \
       \constructors=[Left, Right]. \
-      \Got definition=" <> maybe "<missing>" id mDefEither
+      \Got definition=" <> fromMaybe "<missing>" mDefEither
       <> ", constructors=" <> T.pack (show ctorsEither) )
   stepFooter 2 t1
 

@@ -23,7 +23,7 @@ module HaskellFlows.Tool.Regression
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
@@ -324,7 +324,7 @@ renderLoadFailed r =
     , "module"     .= spModule (rpStored r)
     , "outcome"    .= object
         [ "state" .= ("load_failed" :: Text)
-        , "error" .= maybe ("(no captured stderr)" :: Text) id
+        , "error" .= fromMaybe ("(no captured stderr)" :: Text)
                        (rpLoadFailure r)
         ]
     ]

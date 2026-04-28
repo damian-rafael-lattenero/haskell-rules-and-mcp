@@ -180,4 +180,5 @@ truncRender v =
 
 -- Suppress unused-import warning if V/Number aren't used downstream:
 _useImports :: ()
-_useImports = const () (V.empty :: V.Vector ())
+_useImports = ()
+  where _ = V.empty :: V.Vector ()

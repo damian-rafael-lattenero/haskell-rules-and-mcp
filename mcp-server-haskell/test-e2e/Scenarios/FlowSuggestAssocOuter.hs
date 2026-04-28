@@ -23,6 +23,7 @@ module Scenarios.FlowSuggestAssocOuter
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -82,7 +83,7 @@ runFlow c projectDir = do
     (hasOuter && noBugLhs)
     ( "Expected: 'combineSorted (combineSorted x y) z' on LHS, NOT \
       \'-> (combineSorted x y) z'. \
-      \Got property: " <> maybe "<no Associative suggestion>" id assocProp
+      \Got property: " <> fromMaybe "<no Associative suggestion>" assocProp
       <> ". Raw: " <> truncRender r )
   stepFooter 1 t0
 
