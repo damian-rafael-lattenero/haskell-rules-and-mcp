@@ -25,6 +25,7 @@ import qualified Data.Text.IO as TIO
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (exitFailure, exitSuccess)
+import qualified System.Environment
 import System.Timeout (timeout)
 import qualified Test.QuickCheck as QC
 import Test.QuickCheck
@@ -421,6 +422,9 @@ main = do
       , test "warnings: bucketize orders by count" testWarningBucketize
       , test "code tools: all 5 registered"        testCodeToolsRegistered
       , test "add_import: qualified renderImportLine" testAddImportQualified
+      , test "add_import: missing hoogle returns success=false (#53)" testAddImportMissingHoogle
+      , test "nextStep: add_import count=0 suppresses load (#53)"     testNextStepAddImportZero
+      , test "nextStep: add_import count>0 nudges load (#53)"         testNextStepAddImportNonZero
       , test "add_modules: moduleToPath mapping"   testAddModulesPath
       , test "apply_exports: rewriteHeader idempotent" testApplyExportsIdempotent
       , test "apply_exports: injects exports"      testApplyExportsInjects
@@ -2856,7 +2860,14 @@ testNextStepDeterminismFail =
 
 testNextStepAddImport :: IO Bool
 testNextStepAddImport =
-  let payload = A.object [ "success" .= True, "module" .= ("src/Foo.hs" :: Text) ]
+  -- Issue #53: count>0 must accompany the success payload for the
+  -- nudge to fire. A payload without 'count' is interpreted as
+  -- \"nothing was added\" and the nextStep is suppressed.
+  let payload = A.object
+        [ "success" .= True
+        , "module"  .= ("src/Foo.hs" :: Text)
+        , "count"   .= (3 :: Int)
+        ]
   in pure (assertNext GhcAddImport payload GhcLoad)
 
 -- | BUG-22 — add_modules now emits a multi-step chain. The
@@ -3420,6 +3431,74 @@ testAddImportQualified = pure $
        == "import Data.Map"
   && AddImport.renderImportLine True  "Data.Map"
        == "import qualified Data.Map as M"
+
+-- | Issue #53: when @hoogle@ is not on PATH, ghc_add_import must
+-- mirror @hoogle_search@ and return success=false with a
+-- remediation string. This used to silently return @count: 0@
+-- with @success: true@ and a lying @nextStep@.
+--
+-- Test strategy: monkey-patch PATH to drop everything that
+-- could resolve 'hoogle', invoke handle, parse the response.
+testAddImportMissingHoogle :: IO Bool
+testAddImportMissingHoogle = do
+  origPath <- System.Environment.lookupEnv "PATH"
+  System.Environment.setEnv "PATH" "/nonexistent/path-for-test-only"
+  -- Use a dedicated tempdir as PATH so hoogle is guaranteed missing
+  let args = A.object [ "name" A..= ("fromMaybe" :: T.Text) ]
+  result <- AddImport.handle args
+  -- Restore PATH so other tests aren't affected.
+  case origPath of
+    Just p  -> System.Environment.setEnv "PATH" p
+    Nothing -> System.Environment.unsetEnv "PATH"
+  case trContent result of
+    [TextContent t] ->
+      let parsed = A.decode (TLE.encodeUtf8 (TL.fromStrict t)) :: Maybe A.Value
+      in pure $ case parsed of
+           Just v -> fieldBool "success" v == Just False
+                  && trIsError result
+                  && case lookupField "error" v of
+                       Just (A.String e) -> "hoogle" `T.isInfixOf` T.toLower e
+                       _                 -> False
+                  && case lookupField "remediation" v of
+                       Just (A.String _) -> True
+                       _                 -> False
+           Nothing -> False
+    _ -> pure False
+  where
+    fieldBool k (A.Object o) = case AKM.lookup (AKey.fromText k) o of
+      Just (A.Bool b) -> Just b
+      _               -> Nothing
+    fieldBool _ _ = Nothing
+    lookupField k (A.Object o) = AKM.lookup (AKey.fromText k) o
+    lookupField _ _            = Nothing
+
+-- | Issue #53: nextStep dispatch on a ghc_add_import payload
+-- with @count: 0@ must return 'Nothing' (no \"reload to confirm\"
+-- nudge), since nothing was added.
+testNextStepAddImportZero :: IO Bool
+testNextStepAddImportZero =
+  let payload = A.object
+        [ "success" A..= True
+        , "name"    A..= ("ghostFn" :: T.Text)
+        , "count"   A..= (0 :: Int)
+        , "imports" A..= ([] :: [T.Text])
+        ]
+  in pure (suggestNext GhcAddImport True payload == Nothing)
+
+-- | Issue #53: nextStep dispatch on a ghc_add_import payload
+-- with @count: 3@ must return 'Just (...GhcLoad...)' so the
+-- reload nudge fires when there's something to reload.
+testNextStepAddImportNonZero :: IO Bool
+testNextStepAddImportNonZero =
+  let payload = A.object
+        [ "success" A..= True
+        , "name"    A..= ("fromMaybe" :: T.Text)
+        , "count"   A..= (3 :: Int)
+        , "imports" A..= (["import Data.Maybe"] :: [T.Text])
+        ]
+  in pure $ case suggestNext GhcAddImport True payload of
+       Just ns -> nsTool ns == GhcLoad
+       Nothing -> False
 
 testAddModulesPath :: IO Bool
 testAddModulesPath = pure $

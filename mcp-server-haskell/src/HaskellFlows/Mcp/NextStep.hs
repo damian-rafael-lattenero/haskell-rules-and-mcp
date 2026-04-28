@@ -335,12 +335,18 @@ dispatch name payload = case name of
   -- example before deleting.
   GhcDeterminism -> Just (determinismNext payload)
 
-  -- Adding an import resolves a \"not in scope\" error; reload to
-  -- confirm the fix.
-  GhcAddImport -> Just (simple GhcLoad
-    "The import was added to the module header. Reload the module \
-    \to confirm the \"not in scope\" error is gone."
-    (Just (object [ "module_path" .= ("<same module>" :: Text) ])))
+  -- Issue #53: only nudge towards 'ghc_load' when ghc_add_import
+  -- actually returned candidate imports. The legacy nextStep ran
+  -- unconditionally, so a hoogle-missing or zero-hits response
+  -- still claimed \"the import was added\" — a lie that wasted
+  -- a follow-up round-trip.
+  GhcAddImport -> case importCount payload of
+    Just n | n > 0 -> Just (simple GhcLoad
+      "Pick one of the candidate imports above and paste it at the \
+      \top of your .hs file, then reload to confirm the \
+      \\"not in scope\" error is gone."
+      (Just (object [ "module_path" .= ("<same module>" :: Text) ])))
+    _              -> Nothing
 
   -- New modules registered + scaffolded — fill them in, add deps if
   -- they need any new libraries, then load.
@@ -501,6 +507,11 @@ intField k (Object o) = case KeyMap.lookup (Key.fromText k) o of
   Just (Number n) -> Just (round n)
   _               -> Nothing
 intField _ _ = Nothing
+
+-- | Issue #53: count of candidate imports in a 'ghc_add_import'
+-- response. Drives the suppress-nextStep-on-zero-hits gate.
+importCount :: Value -> Maybe Int
+importCount = intField "count"
 
 -- | Classify the 'warnings' field of a 'ghc_load' response.
 -- Drives the fix_warning-vs-hole-vs-suggest fork in 'dispatch'.
