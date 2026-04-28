@@ -61,6 +61,8 @@ module HaskellFlows.Ghc.ApiSession
     -- * Issue #43 — absolutize stanza-flag paths
   , absolutizePathArg
   , absolutizeStanzaFlags
+    -- * Issue #57 — diagnostic artifact filter
+  , filterArtifacts
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)
@@ -524,9 +526,39 @@ loadAndCaptureDiagnostics sess flavour = do
     Left _   -> pure False
     Right ok -> pure ok
   diags <- readIORef diagRef
-  let orderedDiags = reverse diags
+  -- Issue #57: drop the GHC-58427 \"is not loaded\" artifact GHC's
+  -- deferred-pass emits as a side-effect of typed-hole reporting.
+  -- The artifact is only spurious when ANOTHER diagnostic was
+  -- emitted in the same load — the typed hole is the real reason
+  -- the module didn't load, and the second entry adds no
+  -- information. When the artifact is the ONLY entry it stays
+  -- (that case really is a \"module not in graph\" situation).
+  let orderedDiags = filterArtifacts (reverse diags)
       anyErrors    = any ((== SevError) . geSeverity) orderedDiags
   pure (success && not anyErrors, orderedDiags)
+
+-- | Issue #57: filter out spurious GHC-58427 \"is not loaded\"
+-- artifacts when at least one other real diagnostic accompanies
+-- them. Pure helper exposed for unit-test coverage.
+--
+-- Detection key: the diagnostic message contains @"GHC-58427"@
+-- AND the substring @"is not loaded"@. We do NOT key on
+-- 'geCode' because the capture path stores the GHC code as part
+-- of the message prefix rather than the structured 'geCode'
+-- field. (Belt + suspenders: if either of the two substrings is
+-- ever phrased differently we'd rather under-filter than
+-- over-filter.)
+filterArtifacts :: [GhcError] -> [GhcError]
+filterArtifacts diags =
+  let realDiags    = filter (not . isGhc58427Artifact) diags
+      onlyArtifact = null realDiags && not (null diags)
+  in if onlyArtifact then diags else realDiags
+
+isGhc58427Artifact :: GhcError -> Bool
+isGhc58427Artifact e =
+  let msg = geMessage e
+  in T.isInfixOf "GHC-58427" msg
+   && T.isInfixOf "is not loaded" msg
 
 -- | The replacement for 'autoLoadProject' used by
 -- 'loadAndCaptureDiagnostics'. Same layout discovery, but parameterised
@@ -971,7 +1003,10 @@ loadForTarget sess tgt flavour = do
           pure False
         Right ok -> pure ok
       diags <- readIORef diagRef
-      let ordered   = reverse diags
+      -- Issue #57: drop the GHC-58427 "is not loaded" artifact that
+      -- the deferred pass emits as a follow-up to typed-hole
+      -- diagnostics. See 'filterArtifacts' for the exact rule.
+      let ordered   = filterArtifacts (reverse diags)
           anyErrors = any ((== SevError) . geSeverity) ordered
       pure (success && not anyErrors, ordered)
 

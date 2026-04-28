@@ -625,6 +625,11 @@ main = do
       , test "ghc-api: absolutizeStanzaFlags idempotent (#43)"    testAbsolutizeStanzaFlagsIdempotent
       , test "ghc-api: absolutizeStanzaFlags preserves order (#43)"
                                                                  testAbsolutizeStanzaFlagsPreservesOrder
+      , test "ghc-api: filterArtifacts drops GHC-58427 with peer (#57)"
+                                                                 testFilterArtifactsDropsWithPeer
+      , test "ghc-api: filterArtifacts keeps lone GHC-58427 (#57)"
+                                                                 testFilterArtifactsKeepsLone
+      , test "ghc-api: filterArtifacts noop on empty (#57)"      testFilterArtifactsEmpty
       , test "add_modules: unwraps stringified JSON-array (BUG-PLUS-08)"
                                                                  testAddModulesJsonArrayString
       , test "add_modules: plain comma-split preserved for non-JSON strings"
@@ -5710,6 +5715,53 @@ testAbsolutizeStanzaFlagsPreservesOrder =
         , "-i/r/src"
         , "Shapes"
         ]
+
+-- | Issue #57: when GHC's deferred-pass emits a real diagnostic
+-- (typed hole) AND a "GHC-58427 ... is not loaded" follow-up,
+-- 'filterArtifacts' must drop the artifact. The agent then sees
+-- one error, not two.
+testFilterArtifactsDropsWithPeer :: IO Bool
+testFilterArtifactsDropsWithPeer =
+  let hole = GhcError
+        { geFile     = "src/Demo.hs"
+        , geLine     = 24
+        , geColumn   = 35
+        , geSeverity = SevError
+        , geCode     = Nothing
+        , geMessage  = "[GHC-88464] • Found hole: _holeArg :: [a]"
+        }
+      artifact = GhcError
+        { geFile     = ""
+        , geLine     = 0
+        , geColumn   = 0
+        , geSeverity = SevError
+        , geCode     = Nothing
+        , geMessage  = "<interactive>:1:1: error: [GHC-58427]\n    \
+                       \attempting to use module 'Foo' which is not loaded"
+        }
+      out = ApiSession.filterArtifacts [hole, artifact]
+  in pure (out == [hole])
+
+-- | Issue #57: when the GHC-58427 entry is the ONLY diagnostic,
+-- it stays — that case is a real \"module not in graph\"
+-- situation and the agent should see the message.
+testFilterArtifactsKeepsLone :: IO Bool
+testFilterArtifactsKeepsLone =
+  let lone = GhcError
+        { geFile     = ""
+        , geLine     = 0
+        , geColumn   = 0
+        , geSeverity = SevError
+        , geCode     = Nothing
+        , geMessage  = "<interactive>:1:1: error: [GHC-58427] not loaded"
+        }
+      out = ApiSession.filterArtifacts [lone]
+  in pure (out == [lone])
+
+-- | Issue #57: empty input is a no-op (no false drops).
+testFilterArtifactsEmpty :: IO Bool
+testFilterArtifactsEmpty =
+  pure (null (ApiSession.filterArtifacts []))
 
 testMtimeInvalidation :: IO Bool
 testMtimeInvalidation = do

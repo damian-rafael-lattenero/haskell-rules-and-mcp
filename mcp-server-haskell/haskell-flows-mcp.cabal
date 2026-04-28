@@ -231,6 +231,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowSuggestAssocOuter
                       Scenarios.FlowAddImportNoHoogle
                       Scenarios.FlowInfoConstructors
+                      Scenarios.FlowLoadHoleDiagnostics
                       Scenarios.FlowDogfoodReplay
                       Scenarios.FlowTypeBreakage
                       Scenarios.FlowScopeMgmt
