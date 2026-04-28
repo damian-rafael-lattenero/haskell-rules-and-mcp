@@ -28,6 +28,7 @@ module HaskellFlows.Tool.QuickCheckExport
   , handle
   , ExportArgs (..)
   , renderTestFile
+  , renderTestFileWith
   , sanitizeLabel
   , modulePathToModule
   ) where
@@ -49,6 +50,7 @@ import System.FilePath (takeDirectory)
 import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import qualified HaskellFlows.Tool.QuickCheck as Qc
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath, unProjectDir)
 
 descriptor :: ToolDescriptor
@@ -109,8 +111,18 @@ handle store pd rawArgs = case parseEither parseJSON rawArgs of
     case mkModulePath pd outRel of
       Left err -> pure (errorResult (T.pack ("Invalid output path: " <> show err)))
       Right mp -> do
-        let full  = unModulePath mp
-            body  = renderTestFile filtered
+        -- Resolve the project's library exposed-modules so a property
+        -- whose 'spModule' was a test scope (e.g. 'test/Spec.hs') can
+        -- still reference library symbols (issue #40). 'libraryExposedModules'
+        -- returns @[]@ on any I/O / parse failure so a corrupt or
+        -- absent .cabal degrades to the historical behaviour.
+        libMods <- Qc.libraryExposedModules pd
+        -- Identify the would-be module name for the output file. Any
+        -- inferred import that matches it is the file importing
+        -- itself — circular and invalid (#40).
+        let selfHint = modulePathToModule (T.pack outRel)
+            full     = unModulePath mp
+            body     = renderTestFileWith selfHint libMods filtered
         eRes <- try (do
           createDirectoryIfMissing True (takeDirectory full)
           TIO.writeFile full body) :: IO (Either SomeException ())
@@ -128,15 +140,42 @@ handle store pd rawArgs = case parseEither parseJSON rawArgs of
 -- properties. Imports are derived from the unique set of
 -- 'spModule' values that look like source paths
 -- (@src/Foo/Bar.hs@) — those are mapped to module names
--- (@Foo.Bar@) and imported qualified-imported.
+-- (@Foo.Bar@) and imported.
 --
 -- Each property becomes one numbered @prop_N@ binding + one line
 -- in @main@'s list.
+--
+-- Compatibility wrapper. Equivalent to
+-- @renderTestFileWith Nothing []@. Live callers go through
+-- 'renderTestFileWith' so they can pass the project's library
+-- exposed-modules + output self-module hint (issue #40).
 renderTestFile :: [StoredProperty] -> Text
-renderTestFile props =
-  let modules = nub . sort $ mapMaybe (spModule >=> modulePathToModule) props
+renderTestFile = renderTestFileWith Nothing []
+
+-- | Issue #40: extended renderer that takes the project's library
+-- exposed-modules ('libMods') and the output file's would-be
+-- module name ('selfHint').
+--
+--   * 'libMods' are unioned with the property-derived modules so
+--     properties authored in test scope (whose 'spModule' is e.g.
+--     @"test/Spec.hs"@) still see every library symbol they
+--     reference at compile time.
+--   * 'selfHint' (when 'Just') is filtered out of the import list
+--     so the generated file never tries to @import Spec@ when it
+--     IS @test/Spec.hs@ — that produced the broken circular
+--     header reported in the bug.
+--
+-- 'libMods' empty + 'selfHint' 'Nothing' reproduces the legacy
+-- behaviour byte-for-byte; preserved by 'renderTestFile' above.
+renderTestFileWith :: Maybe Text -> [Text] -> [StoredProperty] -> Text
+renderTestFileWith selfHint libMods props =
+  let propMods    = mapMaybe (spModule >=> modulePathToModule) props
+      combined    = nub . sort $ libMods <> propMods
+      withoutSelf = case selfHint of
+        Just sm -> filter (/= sm) combined
+        Nothing -> combined
       importLines =
-        [ "import " <> m | m <- modules ]
+        [ "import " <> m | m <- withoutSelf ]
       propLines =
         zipWith renderPropBinding [1 :: Int ..] props
       runLines =

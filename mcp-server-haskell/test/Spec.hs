@@ -495,6 +495,9 @@ main = do
       , test "qcexport: modulePathToModule lowercase rejected" testExportPathLowercaseRejected
       , test "qcexport: modulePathToModule no .hs"  testExportPathNoSuffix
       , test "qcexport: render emits valid imports" testExportRenderValidImports
+      , test "qcexport: render drops self-import (#40)" testExportRenderDropsSelfImport
+      , test "qcexport: render unions library mods (#40)" testExportRenderUnionsLibMods
+      , test "qcexport: render dedupes lib + props (#40)" testExportRenderDedupesLibAndProps
       , test "propstore: save auto-creates dir"     testPropStoreCreatesDir
       , test "propstore: save after rm -rf dir"     testPropStoreResurrectsDir
       , test "propstore: concurrent saves no loss"  testPropStoreConcurrentSaves
@@ -2404,6 +2407,67 @@ testExportRenderValidImports = do
   pure $ T.isInfixOf "import Gen"         rendered
       && not (T.isInfixOf "import test."  rendered)
       && not (T.isInfixOf "import test_"  rendered)
+
+-- | Issue #40: when properties are persisted with @spModule =
+-- "test/Spec.hs"@ — exactly the path the export writes — the
+-- legacy renderer emitted a self-referential @import Spec@ in a
+-- file that uses @module Main where@. The new renderer takes the
+-- output's module-name hint and filters it out of the import set.
+testExportRenderDropsSelfImport :: IO Bool
+testExportRenderDropsSelfImport = do
+  let props =
+        [ StoredProperty
+            { spExpression = "\\x -> x == (x :: Int)"
+            , spModule     = Just "test/Spec.hs"
+            , spPassed     = 1
+            , spUpdated    = 0
+            }
+        ]
+      -- The output will live at @test/Spec.hs@ → module hint "Spec".
+      rendered = QcExport.renderTestFileWith (Just "Spec") [] props
+  pure $ not (T.isInfixOf "import Spec" rendered)
+      && T.isInfixOf "module Main where" rendered
+
+-- | Issue #40 — properties authored at test scope reference
+-- library identifiers ('simplify', 'eval', …) but their
+-- 'spModule' carries no library-module trail. The renderer must
+-- pick up the slack by importing every @exposed-modules:@ entry
+-- from the project's library stanza so the emitted file compiles
+-- standalone.
+testExportRenderUnionsLibMods :: IO Bool
+testExportRenderUnionsLibMods = do
+  let props =
+        [ StoredProperty
+            { spExpression = "\\e -> eval emptyEnv (simplify e) == eval emptyEnv e"
+            , spModule     = Just "test/Spec.hs"
+            , spPassed     = 1
+            , spUpdated    = 0
+            }
+        ]
+      libMods = ["Expr.Syntax", "Expr.Simplify", "Expr.Eval"]
+      rendered = QcExport.renderTestFileWith (Just "Spec") libMods props
+  pure $ T.isInfixOf "import Expr.Syntax"   rendered
+      && T.isInfixOf "import Expr.Simplify" rendered
+      && T.isInfixOf "import Expr.Eval"     rendered
+      && not (T.isInfixOf "import Spec" rendered)
+
+-- | Issue #40: a library module that ALSO appears as a
+-- property's @spModule@ must not be imported twice. The renderer
+-- dedupes after sorting, so 'nub' on a sorted list does the job.
+testExportRenderDedupesLibAndProps :: IO Bool
+testExportRenderDedupesLibAndProps = do
+  let props =
+        [ StoredProperty
+            { spExpression = "\\x -> simplify x == simplify (simplify x)"
+            , spModule     = Just "src/Expr/Simplify.hs"
+            , spPassed     = 1
+            , spUpdated    = 0
+            }
+        ]
+      libMods  = ["Expr.Simplify"]  -- already covered by spModule
+      rendered = QcExport.renderTestFileWith Nothing libMods props
+      occurrences = T.count "import Expr.Simplify" rendered
+  pure (occurrences == 1)
 
 --------------------------------------------------------------------------------
 -- BUG-04 — PropertyStore cold-start resilience

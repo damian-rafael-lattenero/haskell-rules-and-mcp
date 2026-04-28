@@ -20,6 +20,9 @@ module HaskellFlows.Tool.QuickCheck
   , chooseStoreModule
   , isSimpleIdent
   , summariseStderr
+    -- * Cabal library introspection (re-used by 'Tool.QuickCheckExport')
+  , libraryExposedModules
+  , scanLibraryExposedModules
   ) where
 
 import Control.Applicative ((<|>))

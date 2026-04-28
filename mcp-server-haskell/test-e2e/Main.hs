@@ -57,6 +57,7 @@ import qualified Scenarios.FlowModuleNameGuard   as FlowMNG
 import qualified Scenarios.FlowMutation          as FlowMut
 import qualified Scenarios.FlowPropertyLifecycle as FlowPL
 import qualified Scenarios.FlowPropertyStoreRace as FlowPSR
+import qualified Scenarios.FlowQuickCheckExportImports as FlowQcExp
 import qualified Scenarios.FlowQualityGates     as FlowQG
 import qualified Scenarios.FlowRefactor         as FlowR
 import qualified Scenarios.FlowRefactorAdversarial as FlowRAdv
@@ -140,6 +141,8 @@ scenarios =
     , False, FlowNU.runFlow )
   , ( "Flow: Dependency conflict (bogus dep · loud failure · clean remove)"
     , False, FlowDC.runFlow )
+  , ( "Flow: QuickCheck export imports (#40 · self-import + lib widen)"
+    , False, FlowQcExp.runFlow )
   , ( "Flow: Sandbox escape / RCE contract (documents ghc_eval capabilities)"
     , False, FlowSE.runFlow )
   , ( "Flow: Concurrent clients (two MCP clients, same project dir)"
