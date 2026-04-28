@@ -597,6 +597,8 @@ main = do
       , test "suggest: no roundtrip when sibling shape mismatches" testSuggestRoundtripNegative
       , test "ghc-api: external cabal edit invalidates stanza cache"
                                                                  testMtimeInvalidation
+      , test "ghc-api: withGhcSession ensures stanza flags (#49)"
+                                                                 testWithGhcSessionEnsuresStanza
       , test "add_modules: unwraps stringified JSON-array (BUG-PLUS-08)"
                                                                  testAddModulesJsonArrayString
       , test "add_modules: plain comma-split preserved for non-JSON strings"
@@ -5292,6 +5294,66 @@ testSuggestRoundtripNegative = do
 --   4. Call 'ensureStanzaFlags' again — 'cabalWasTouched'
 --      returns True, bootstrap re-runs, and the env ref / applied
 --      target are invalidated.
+-- | Issue #49: every entry to 'withGhcSession' must re-run
+-- 'ensureStanzaFlags' so external @.cabal@ edits picked up by
+-- the next non-load tool ('ghc_type', 'ghc_eval', 'ghc_info', …)
+-- without forcing the agent to issue an unrelated 'ghc_load'
+-- first. Pre-fix the bootstrap was wired only to
+-- 'loadForTarget'; tools that took the bare 'withGhcSession'
+-- path served stale flags after a corruption-and-restore cycle.
+--
+-- Setup:
+--   * Scaffold a real cabal project.
+--   * One 'withGhcSession' call — populates mtime cache.
+--   * Touch the @.cabal@ externally so mtime strictly advances.
+--   * Another 'withGhcSession' call — must observe the bump.
+testWithGhcSessionEnsuresStanza :: IO Bool
+testWithGhcSessionEnsuresStanza = do
+  base <- getTemporaryDirectory
+  ts   <- getPOSIXTime
+  let dir = base </> ("withghc-ensure-" <> show (floor (ts * 1000000) :: Int))
+  createDirectoryIfMissing True dir
+  TIO.writeFile (dir </> "demo.cabal") $ T.unlines
+    [ "cabal-version: 2.4"
+    , "name: demo"
+    , "version: 0.1.0.0"
+    , ""
+    , "library"
+    , "  build-depends: base"
+    , "  default-language: Haskell2010"
+    ]
+  TIO.writeFile (dir </> "cabal.project") "packages: .\n"
+  case mkProjectDir dir of
+    Left _ -> do removePathForcibly dir; pure False
+    Right pd -> do
+      sess <- startGhcSession pd
+      -- First withGhcSession — runs the auto-load + bootstrap.
+      _ <- withGhcSession sess $ pure ()
+      afterFirst <- ApiSession.readCabalMtimeForTest sess
+      -- macOS fs mtime has 1-sec resolution; sleep past it.
+      threadDelay 1_100_000
+      TIO.writeFile (dir </> "demo.cabal") $ T.unlines
+        [ "cabal-version: 2.4"
+        , "name: demo"
+        , "version: 0.2.0.0"
+        , ""
+        , "library"
+        , "  build-depends: base, containers"
+        , "  default-language: Haskell2010"
+        ]
+      -- Second withGhcSession with NO explicit ensureStanzaFlags
+      -- must still bump the cached mtime. This is exactly the
+      -- scenario non-load tools encounter.
+      _ <- withGhcSession sess $ pure ()
+      afterTouch <- ApiSession.readCabalMtimeForTest sess
+      killGhcSession sess
+      removePathForcibly dir
+      pure
+        ( isJust afterFirst
+       && isJust afterTouch
+       && afterFirst < afterTouch
+        )
+
 testMtimeInvalidation :: IO Bool
 testMtimeInvalidation = do
   base <- getTemporaryDirectory

@@ -244,7 +244,19 @@ readCabalMtimeForTest = readIORef . gsCabalMtime
 
 
 withGhcSession :: GhcSession -> Ghc a -> IO a
-withGhcSession sess act = withMVar (gsLock sess) $ \_ ->
+withGhcSession sess act = withMVar (gsLock sess) $ \_ -> do
+  -- Issue #49: refresh the per-target stanza-flag cache against
+  -- the on-disk @.cabal@ before every session use, not only on
+  -- @loadForTarget@. Tools that go through @withGhcSession@
+  -- directly ('ghc_type', 'ghc_eval', 'ghc_info', 'ghc_complete',
+  -- 'ghc_doc', 'ghc_browse', 'ghc_imports', 'ghc_goto') used to
+  -- serve stale flags after an external @.cabal@ edit + restore,
+  -- requiring an unrelated @ghc_load@ to recover. The mtime check
+  -- inside 'ensureStanzaFlags' short-circuits when nothing changed
+  -- (one stat + one IORef read), so the cost on the hot path is
+  -- negligible. Idempotent against concurrent calls — the outer
+  -- 'withMVar' already serialises us.
+  ensureStanzaFlags sess
   -- Run with CWD pinned to the project root so the stanza flags'
   -- relative paths (@-outputdir dist-newstyle/...@, @-isrc@, …)
   -- resolve correctly regardless of the MCP process's own CWD.
