@@ -31,6 +31,9 @@ module HaskellFlows.Tool.Deps
   , renderSelector
   , addDep
   , removeDep
+    -- * #48 — post-edit verification of dep resolvability
+  , verifyResolvable
+  , extractErrorSummary
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
@@ -46,9 +49,11 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.IO.Handle.Lock (hLock, hUnlock, LockMode (..))
 import System.Directory (doesDirectoryExist, listDirectory)
-import System.FilePath (takeExtension, (</>))
+import System.Exit (ExitCode (..))
+import System.FilePath (takeDirectory, takeExtension, (</>))
 import System.IO (IOMode (..), openFile, hClose)
 import System.IO.Unsafe (unsafePerformIO)
+import qualified System.Process as Proc
 
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -201,14 +206,23 @@ handleAction file args = case daAction args of
         Left err -> pure (errorResult err)
         Right safeVer -> case traverse parseStanzaSelector (daStanza args) of
           Left err   -> pure (errorResult err)
-          Right mSel -> runEdit file safePkg mSel (addDep safeVer) "added"
+          -- 'verifyAfter=True' on add: spawn `cabal v2-build --dry-run`
+          -- after the edit to confirm the new dep set is solvable;
+          -- rollback the .cabal if cabal refuses (#48).
+          Right mSel -> runEdit file safePkg mSel (addDep safeVer) "added" True
   ActRemove -> case daPackage args of
     Nothing  -> pure (errorResult "'package' is required for remove")
     Just pkg -> case validatePackageName pkg of
       Left err       -> pure (errorResult err)
       Right safePkg  -> case traverse parseStanzaSelector (daStanza args) of
         Left err   -> pure (errorResult err)
-        Right mSel -> runEdit file safePkg mSel removeDep "removed"
+        -- Remove can never make the dep set unsolvable from the
+        -- agent's perspective — if cabal fails after a remove, it's
+        -- because some other module still imports the dropped
+        -- package (a downstream issue surfaced by ghc_load, not by
+        -- the resolver). Skip verify on remove to keep the call
+        -- cheap.
+        Right mSel -> runEdit file safePkg mSel removeDep "removed" False
 
 -- | Resolve a stanza selector at @list@ time by scoping the body to
 -- that stanza's lines. Errors (unknown selector / stanza not found)
@@ -227,8 +241,9 @@ runEdit
   -> Maybe (Text, Maybe Text)                -- parsed stanza selector, if any
   -> (Text -> Text -> Text)                  -- (pkg -> body -> newBody)
   -> Text                                    -- verb for the success message
+  -> Bool                                    -- verifyAfter: run cabal dry-run + rollback
   -> IO ToolResult
-runEdit file pkg mStanza f verb = withCabalLock file $ do
+runEdit file pkg mStanza f verb verifyAfter = withCabalLock file $ do
   res <- try (TIO.readFile file) :: IO (Either SomeException Text)
   case res of
     Left e -> pure (errorResult (T.pack ("Could not read cabal file: " <> show e)))
@@ -257,7 +272,103 @@ runEdit file pkg mStanza f verb = withCabalLock file $ do
             wres <- try (TIO.writeFile file newBody) :: IO (Either SomeException ())
             case wres of
               Left e  -> pure (errorResult (T.pack ("Could not write cabal file: " <> show e)))
-              Right _ -> pure (editResult file pkg verb)
+              Right _
+                | verifyAfter -> verifyAndCommit file body pkg verb
+                | otherwise   -> pure (editResult file pkg verb)
+
+-- | Post-write verification step (#48): run @cabal v2-build all
+-- --dry-run --only-dependencies@ in the project root. If cabal
+-- accepts the new dep set, return the success payload. If cabal
+-- rejects it (e.g. the package doesn't exist on Hackage, version
+-- bounds unsolvable), restore the @.cabal@ to its pre-edit body
+-- and return a structured 'error_kind: \"unresolvable_dep\"'.
+--
+-- Held inside 'withCabalLock' (caller's responsibility) so the
+-- subprocess sees the version we just wrote, and so a rollback
+-- can't race with a concurrent add.
+verifyAndCommit :: FilePath -> Text -> Text -> Text -> IO ToolResult
+verifyAndCommit file originalBody pkg verb = do
+  verified <- verifyResolvable file pkg
+  case verified of
+    Right () -> pure (editResult file pkg verb)
+    Left err -> do
+      -- Roll back the .cabal to its pre-edit state.
+      rbres <- try (TIO.writeFile file originalBody)
+                :: IO (Either SomeException ())
+      case rbres of
+        Right _ -> pure (verifyFailedResult file pkg err)
+        Left rbErr ->
+          -- Catastrophic: verify failed AND rollback failed. The
+          -- .cabal is now in the post-edit state but cabal won't
+          -- accept it. Surface BOTH errors so the agent can decide
+          -- whether to manually restore from VCS.
+          pure (errorResult
+            ( "FATAL: cabal could not solve the dep set after adding '"
+              <> pkg <> "', AND the rollback write failed. The .cabal "
+              <> "is in an inconsistent state. Cabal error: " <> err
+              <> " | Rollback error: " <> T.pack (show rbErr) ))
+
+-- | Spawn @cabal v2-build all --dry-run --only-dependencies@ in
+-- the project root. Argv-form, no shell. Returns 'Right ()' on
+-- exit 0; 'Left summary' otherwise (exec failure or non-zero
+-- exit).
+--
+-- We pick @v2-build all --dry-run --only-dependencies@ rather
+-- than @v2-repl@ because:
+--
+--   * @--dry-run@ runs the solver without compiling, ~1–3 s.
+--   * @--only-dependencies@ stops cabal from chasing the home
+--     package's source tree (which may legitimately have errors
+--     unrelated to the dep change we just made).
+--   * @v2-build all@ exercises every stanza's deps (lib, test,
+--     bench), catching cross-stanza solver conflicts the agent
+--     wouldn't see otherwise.
+verifyResolvable :: FilePath -> Text -> IO (Either Text ())
+verifyResolvable cabalPath pkg = do
+  let root = takeDirectory cabalPath
+      cp = (Proc.proc "cabal"
+              [ "v2-build", "all"
+              , "--dry-run"
+              , "--only-dependencies"
+              ])
+              { Proc.cwd      = Just root
+              , Proc.std_in   = Proc.NoStream
+              , Proc.std_out  = Proc.CreatePipe
+              , Proc.std_err  = Proc.CreatePipe
+              }
+  result <- try (Proc.readCreateProcessWithExitCode cp "")
+              :: IO (Either SomeException (ExitCode, String, String))
+  pure $ case result of
+    Left e ->
+      Left ("could not invoke cabal for verification: " <> T.pack (show e))
+    Right (ExitSuccess, _, _) ->
+      Right ()
+    Right (ExitFailure _, stdout, stderr) ->
+      Left (extractErrorSummary pkg (T.pack (stderr <> "\n" <> stdout)))
+
+-- | Pull the lines from cabal's failure output that mention the
+-- package or look like a solver verdict. Falls back to a truncated
+-- raw output if no relevant line is found. Pure (no IO) so it's
+-- unit-testable in isolation.
+extractErrorSummary :: Text -> Text -> Text
+extractErrorSummary pkg combinedOutput =
+  let lns      = T.lines combinedOutput
+      pkgLower = T.toLower pkg
+      relevant = filter
+        (\l ->
+          let lower = T.toLower l
+          in pkgLower                  `T.isInfixOf` lower
+             || "could not resolve"    `T.isInfixOf` lower
+             || "unknown package"      `T.isInfixOf` lower
+             || "rejecting"            `T.isInfixOf` lower
+             || "no solution"          `T.isInfixOf` lower
+             || "backjump"             `T.isInfixOf` lower
+        )
+        lns
+      summary = case relevant of
+        [] -> T.take 800 combinedOutput
+        xs -> T.unlines (take 8 xs)
+  in T.strip summary
 
 -- | Structural self-check run on the in-memory newBody before it hits
 -- disk. Uses the same line-oriented parser the tool ships with — if
@@ -667,6 +778,30 @@ editResult file pkg verb =
   in ToolResult
        { trContent = [ TextContent (encodeUtf8Text payload) ]
        , trIsError = False
+       }
+
+-- | Structured failure when post-edit cabal verification rejects
+-- the new dep set (#48). The .cabal has already been restored to
+-- its pre-edit body; the response carries 'error_kind:
+-- \"unresolvable_dep\"' so agents can match on the kind without
+-- parsing the message.
+verifyFailedResult :: FilePath -> Text -> Text -> ToolResult
+verifyFailedResult file pkg err =
+  let payload =
+        object
+          [ "success"     .= False
+          , "action"      .= ("rejected" :: Text)
+          , "cabal_file"  .= T.pack file
+          , "package"     .= pkg
+          , "error"       .=
+              ( "cabal could not solve the dep set after adding '"
+                <> pkg <> "': " <> err )
+          , "error_kind"  .= ("unresolvable_dep" :: Text)
+          , "rolled_back" .= True
+          ]
+  in ToolResult
+       { trContent = [ TextContent (encodeUtf8Text payload) ]
+       , trIsError = True
        }
 
 -- | Idempotent no-op payload. Shape parallels 'editResult' but marks
