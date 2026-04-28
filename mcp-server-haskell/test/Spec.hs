@@ -185,6 +185,7 @@ import HaskellFlows.Refactor.Rename
   )
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
 import qualified HaskellFlows.Tool.Info as InfoTool
+import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import HaskellFlows.Tool.Goto
   ( Location (..)
   , parseDefinedAt
@@ -430,6 +431,11 @@ main = do
       , test "info: renderConstructorsBlock Maybe (#54)"  testInfoCtorBlockMaybe
       , test "info: successResult includes constructors (#54)" testInfoSuccessIncludesCtors
       , test "info: successResult drops field when none (#54)" testInfoSuccessDropsCtorField
+      , test "check: propertiesGate empty -> ok=true (#42)"   testCheckGateEmpty
+      , test "check: propertiesGate all pass -> ok=true (#42)" testCheckGatePass
+      , test "check: propertiesGate regressed -> ok=false (#42)" testCheckGateRegressed
+      , test "check: propertiesGate skipped -> ok=false (#42)" testCheckGateSkipped
+      , test "check: propertiesGate reason matches ok flag (#42)" testCheckGateReasonMatchesOk
       , test "nextStep: add_import count=0 suppresses load (#53)"     testNextStepAddImportZero
       , test "nextStep: add_import count>0 nudges load (#53)"         testNextStepAddImportNonZero
       , test "add_modules: moduleToPath mapping"   testAddModulesPath
@@ -3510,6 +3516,73 @@ testInfoSuccessDropsCtorField =
              AKM.lookup (AKey.fromText "constructors") o == Nothing
            _                  -> False
        _ -> False
+
+-- | Issue #42: empty store → status="empty", ok=true.
+testCheckGateEmpty :: IO Bool
+testCheckGateEmpty =
+  let g = CheckModule.propertiesGate 0 0 0 0
+  in pure $ gateField "ok" g == Just (A.Bool True)
+        && gateField "status" g == Just (A.String "empty")
+
+-- | Issue #42: every stored prop passed → status="pass", ok=true,
+-- reason matches.
+testCheckGatePass :: IO Bool
+testCheckGatePass =
+  let g = CheckModule.propertiesGate 3 3 0 0
+  in pure $ gateField "ok" g == Just (A.Bool True)
+        && gateField "status" g == Just (A.String "pass")
+        && case gateField "reason" g of
+             Just (A.String r) -> "pass" `T.isInfixOf` r
+             _                 -> False
+
+-- | Issue #42: at least one regressed → status="regressed", ok=false,
+-- reason contains "regressed". The bug shape was reason="N pass"
+-- with ok=false; pin the new contract.
+testCheckGateRegressed :: IO Bool
+testCheckGateRegressed =
+  let g = CheckModule.propertiesGate 3 1 2 0
+  in pure $ gateField "ok" g == Just (A.Bool False)
+        && gateField "status" g == Just (A.String "regressed")
+        && case gateField "reason" g of
+             Just (A.String r) ->
+                  "regressed" `T.isInfixOf` r
+               && not ("pass" `T.isInfixOf` r)
+             _ -> False
+
+-- | Issue #42 + #51: load-failures → status="skipped", ok=false,
+-- reason calls out the load failure (not "regressed").
+testCheckGateSkipped :: IO Bool
+testCheckGateSkipped =
+  let g = CheckModule.propertiesGate 2 0 0 2
+  in pure $ gateField "ok" g == Just (A.Bool False)
+        && gateField "status" g == Just (A.String "skipped")
+        && case gateField "reason" g of
+             Just (A.String r) ->
+               "load" `T.isInfixOf` T.toLower r
+             _ -> False
+
+-- | Issue #42 core invariant: ok=false MUST imply the reason
+-- text does NOT claim properties pass. Table-drive a few
+-- (total, passed, regressed, skipped) tuples.
+testCheckGateReasonMatchesOk :: IO Bool
+testCheckGateReasonMatchesOk =
+  let cases =
+        [ (1, 0, 1, 0)  -- one regressed
+        , (1, 0, 0, 1)  -- one skipped
+        , (3, 1, 1, 1)  -- mixed
+        ]
+      check (total, passed, regressed, skipped) =
+        let g = CheckModule.propertiesGate total passed regressed skipped
+        in case (gateField "ok" g, gateField "reason" g) of
+             (Just (A.Bool False), Just (A.String r))
+               | not ("stored properties pass" `T.isInfixOf` r)
+                 && r /= "" -> True
+             _ -> False
+  in pure (all check cases)
+
+gateField :: Text -> A.Value -> Maybe A.Value
+gateField k (A.Object o) = AKM.lookup (AKey.fromText k) o
+gateField _ _            = Nothing
 
 -- | Issue #53: when @hoogle@ is not on PATH, ghc_add_import must
 -- mirror @hoogle_search@ and return success=false with a

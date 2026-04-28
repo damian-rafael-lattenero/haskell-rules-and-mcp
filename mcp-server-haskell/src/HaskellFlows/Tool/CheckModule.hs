@@ -8,6 +8,8 @@ module HaskellFlows.Tool.CheckModule
   ( descriptor
   , handle
   , CheckArgs (..)
+    -- * Issue #42 — properties-gate computation
+  , propertiesGate
   ) where
 
 import Control.Exception (SomeException, try)
@@ -146,16 +148,25 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
           -- Reuse the Wave-3 Regression.runOne — it's already
           -- in-process via evalIOString.
           replays <- mapM (RegTool.runOne ghcSess) relevant
-          let regressions =
+          -- Issue #42 + #51: split replays into three buckets:
+          --   * load_failed — module didn't compile, replay never ran;
+          --   * regressed   — replay ran, found a counterexample;
+          --   * passed      — implicit (everything else).
+          let isLoadFailed r = case RegTool.rpLoadFailure r of
+                                 Just _  -> True
+                                 Nothing -> False
+              loadFailedReplays = filter isLoadFailed replays
+              evaluatedReplays  = filter (not . isLoadFailed) replays
+              regressions =
                 [ (RegTool.rpStored r, RegTool.rpResult r)
-                | r <- replays
+                | r <- evaluatedReplays
                 , case RegTool.rpResult r of
                     QcPassed _ _ -> False
                     _            -> True
                 ]
           pure $ renderResult
             raw compileOk errors warnings holes regressions
-            (length relevant) warnBlock
+            (length relevant) (length loadFailedReplays) warnBlock
 
 --------------------------------------------------------------------------------
 -- response shaping
@@ -168,10 +179,11 @@ renderResult
   -> [GhcError]
   -> [a]
   -> [(StoredProperty, QuickCheckResult)]
-  -> Int
-  -> Bool    -- ^ warnings_block — True (default) keeps warnings blocking.
+  -> Int      -- ^ total stored properties for this module.
+  -> Int      -- ^ count of replays that failed to load (#51 + #42).
+  -> Bool     -- ^ warnings_block — True (default) keeps warnings blocking.
   -> ToolResult
-renderResult mp compileOk errs warns holes regressions totalProps warnBlock =
+renderResult mp compileOk errs warns holes regressions totalProps loadFailed warnBlock =
   let gateCompile    = gate compileOk     "module compiles strictly"
       gateNoWarnings = gate (null warns || not warnBlock) $
         if null warns
@@ -182,14 +194,20 @@ renderResult mp compileOk errs warns holes regressions totalProps warnBlock =
             else T.pack (show (length warns))
               <> " warning(s) (informational; warnings_block=false)"
       gateNoHoles    = gate (null holes)  "no deferred typed holes"
-      gateProps      = gate (null regressions) $
-        case totalProps of
-          0 -> "no stored properties for this module (nothing to regress)"
-          _ -> T.pack (show totalProps) <> " stored properties pass"
+      -- Issue #42: gates.properties used to say
+      -- '"reason": "1 stored properties pass"' even when ok=false,
+      -- because the reason text was computed independently of
+      -- whether 'regressions' was empty. Now the reason flows
+      -- from the (totalProps, regressed, loadFailed) triple, so
+      -- ok and reason can never disagree.
+      regressed      = length regressions
+      passed         = totalProps - regressed - loadFailed
+      gateProps      = propertiesGate totalProps passed regressed loadFailed
       overall = compileOk
              && (null warns || not warnBlock)
              && null holes
              && null regressions
+             && loadFailed == 0
       payload =
         object
           [ "success"    .= overall
@@ -211,6 +229,52 @@ renderResult mp compileOk errs warns holes regressions totalProps warnBlock =
        { trContent = [ TextContent (encodeUtf8Text payload) ]
        , trIsError = not overall
        }
+
+-- | Issue #42: structured properties-gate value with a status
+-- discriminator and per-bucket counts. Four states:
+--
+--   * @"empty"@     — no stored properties; nothing to verify.
+--   * @"pass"@      — every stored property replayed and passed.
+--   * @"regressed"@ — at least one stored property changed semantics.
+--   * @"skipped"@   — at least one stored property couldn't replay
+--                     because the module failed to load (#51 sibling).
+--
+-- The @reason@ text now matches the status, so consumers that
+-- pattern-match on the text never see \"N stored properties pass\"
+-- on a red gate.
+propertiesGate :: Int -> Int -> Int -> Int -> Value
+propertiesGate total passed regressed loadFailed =
+  let (ok, status, reason) =
+        case (total, regressed, loadFailed) of
+          (0, _, _) ->
+            ( True, "empty" :: Text
+            , "no stored properties for this module (nothing to regress)" )
+          (_, 0, 0) ->
+            ( True, "pass"
+            , T.pack (show total) <> " stored properties pass" )
+          (_, r, 0) ->
+            ( False, "regressed"
+            , T.pack (show r) <> "/" <> T.pack (show total)
+                <> " stored properties regressed" )
+          (_, 0, lf) ->
+            ( False, "skipped"
+            , T.pack (show lf) <> "/" <> T.pack (show total)
+                <> " stored properties could not replay — \
+                   \module failed to load" )
+          (_, r, lf) ->
+            ( False, "regressed"
+            , T.pack (show r) <> " regressed, "
+                <> T.pack (show lf) <> " skipped (load failed) of "
+                <> T.pack (show total) <> " stored properties" )
+  in object
+       [ "ok"         .= ok
+       , "status"     .= status
+       , "total"      .= total
+       , "passed"     .= passed
+       , "regressed"  .= regressed
+       , "skipped"    .= loadFailed
+       , "reason"     .= reason
+       ]
 
 gate :: Bool -> Text -> Value
 gate ok reason =
