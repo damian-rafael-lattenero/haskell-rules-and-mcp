@@ -509,6 +509,11 @@ main = do
       , test "regression: parseShowModulesPaths simple"        testParseShowModulesPathsSimple
       , test "regression: parseShowModulesPaths multi-module"  testParseShowModulesPathsMulti
       , test "regression: parseShowModulesPaths tolerates garbage" testParseShowModulesPathsGarbage
+      , test "regression: classifyLoadFailure detects scope (#51)" testRegressionClassifyScope
+      , test "regression: classifyLoadFailure detects missing mod (#51)" testRegressionClassifyMissing
+      , test "regression: classifyLoadFailure ignores quiet stderr (#51)" testRegressionClassifyQuiet
+      , test "regression: classifyLoadFailure passthrough on QcPassed (#51)" testRegressionClassifyPassedPassthrough
+      , test "regression: summariseLoadError caps at 600 chars (#51)" testRegressionSummariseCap
       , test "suggest: involutive Low for normalizer" testInvolutiveLowForNormalizer
       , test "suggest: involutive Medium for reverse" testInvolutiveMediumForReverse
       , test "suggest: scope error -> structured hint" testSuggestScopeStructuredHint
@@ -4712,6 +4717,64 @@ testParseShowModulesPathsGarbage = pure $ and
           ]
       ) == ["src/Bar.hs"]
   ]
+
+-- | Issue #51: a stored property whose recorded module is no
+-- longer in scope (e.g. @ghc_quickcheck_export@ overwrote
+-- @test/Spec.hs@) used to be reported as a regression with
+-- @raw: ""@. The classifier now sees the empty parsed result
+-- + @"Variable not in scope"@ stderr and tags it as
+-- 'load_failed'.
+testRegressionClassifyScope :: IO Bool
+testRegressionClassifyScope =
+  let parsed   = QcUnparsed "\\x -> simplify x" ""
+      stderr_  = "test/Spec.hs:7:1: Variable not in scope: simplify"
+      result   = RegTool.classifyLoadFailure parsed stderr_
+  in pure $ case result of
+       Just msg -> "Variable not in scope" `T.isInfixOf` msg
+       Nothing  -> False
+
+-- | Issue #51: GHC's @Could not find module@ error is the other
+-- common load-failure shape (e.g. when @cabal v2-repl@ rebuilt
+-- after a @ghc_remove_modules@). It must also map to
+-- 'load_failed', not to a regression.
+testRegressionClassifyMissing :: IO Bool
+testRegressionClassifyMissing =
+  let parsed  = QcUnparsed "\\x -> True" ""
+      stderr_ = "test/Spec.hs:7:1: error [GHC-87110] Could not find module 'Spec'"
+      result  = RegTool.classifyLoadFailure parsed stderr_
+  in pure (isJust result)
+
+-- | Issue #51 — false-positive guard: a property that genuinely
+-- failed at runtime (parser produced a non-Unparsed result) must
+-- not be re-classified as load_failed even if some incidental
+-- stderr was captured.
+testRegressionClassifyPassedPassthrough :: IO Bool
+testRegressionClassifyPassedPassthrough =
+  let parsed   = QcPassed "\\x -> True" 200
+      stderr_  = "Variable not in scope: foo"  -- noise, not load failure
+      result   = RegTool.classifyLoadFailure parsed stderr_
+  in pure (result == Nothing)
+
+-- | Issue #51: an unparsed result with NO load-failure marker in
+-- stderr (e.g. a property that printed unrecognised text) must
+-- stay unparsed — promotion to load_failed requires evidence.
+testRegressionClassifyQuiet :: IO Bool
+testRegressionClassifyQuiet =
+  let parsed   = QcUnparsed "\\x -> True" ""
+      stderr_  = "" -- nothing actionable
+      result   = RegTool.classifyLoadFailure parsed stderr_
+  in pure (result == Nothing)
+
+-- | Issue #51: cabal-repl can dump several KB of build-plan
+-- noise on a load failure; the response payload caps it at
+-- 600 chars + a truncation marker so the JSON-RPC line stays
+-- manageable.
+testRegressionSummariseCap :: IO Bool
+testRegressionSummariseCap =
+  let huge = T.replicate 2000 "x"
+      out  = RegTool.summariseLoadError huge
+  in pure (T.length out <= 700  -- 600 + truncation marker
+       && "(truncated)" `T.isInfixOf` out)
 
 -- | Phase-7 foundation: can we compile + run an 'IO String' action
 -- in-process and read its result back? This is the primitive QC /

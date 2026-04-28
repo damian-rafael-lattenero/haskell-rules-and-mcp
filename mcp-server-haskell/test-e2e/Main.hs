@@ -58,6 +58,7 @@ import qualified Scenarios.FlowMutation          as FlowMut
 import qualified Scenarios.FlowPropertyLifecycle as FlowPL
 import qualified Scenarios.FlowPropertyStoreRace as FlowPSR
 import qualified Scenarios.FlowQuickCheckExportImports as FlowQcExp
+import qualified Scenarios.FlowRegressionLoadFailure as FlowRegLF
 import qualified Scenarios.FlowQualityGates     as FlowQG
 import qualified Scenarios.FlowRefactor         as FlowR
 import qualified Scenarios.FlowRefactorAdversarial as FlowRAdv
@@ -143,6 +144,8 @@ scenarios =
     , False, FlowDC.runFlow )
   , ( "Flow: QuickCheck export imports (#40 · self-import + lib widen)"
     , False, FlowQcExp.runFlow )
+  , ( "Flow: Regression load_failed (#51 · scope failure ≠ regression)"
+    , False, FlowRegLF.runFlow )
   , ( "Flow: Sandbox escape / RCE contract (documents ghc_eval capabilities)"
     , False, FlowSE.runFlow )
   , ( "Flow: Concurrent clients (two MCP clients, same project dir)"

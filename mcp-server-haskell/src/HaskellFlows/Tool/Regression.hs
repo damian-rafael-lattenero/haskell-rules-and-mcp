@@ -15,11 +15,15 @@ module HaskellFlows.Tool.Regression
   , Replay (..)
   , runOne
   , parseShowModulesPaths
+    -- * Load-failure detection (#51)
+  , classifyLoadFailure
+  , summariseLoadError
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
@@ -102,9 +106,20 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
 -- running
 --------------------------------------------------------------------------------
 
+-- | One replayed property's outcome.
+--
+-- 'rpLoadFailure' (issue #51) is 'Just msg' when the cabal-repl
+-- vehicle could not even compile the property's load scope —
+-- typically because the recorded 'spModule' no longer imports
+-- the symbols the lambda body references. In that case
+-- 'rpResult' is the (best-effort) parsed result — usually
+-- 'QcUnparsed' — but the caller MUST treat the replay as
+-- skipped, not regressed: a property whose module failed to
+-- load was never actually evaluated.
 data Replay = Replay
-  { rpStored :: !StoredProperty
-  , rpResult :: !QuickCheckResult
+  { rpStored      :: !StoredProperty
+  , rpResult      :: !QuickCheckResult
+  , rpLoadFailure :: !(Maybe Text)
   }
 
 runOne :: GhcSession -> StoredProperty -> IO Replay
@@ -115,24 +130,72 @@ runOne ghcSess sp = do
   -- depended on the GHC-API stanza-flag replay, which misresolved
   -- @-package-id QckChck-…@. cabal repl does that resolution
   -- natively and works every time.
-  qr <- case sanitizeExpression expr of
-    Left _ -> pure (QcUnparsed expr
-                    "boundary-sanitiser rejected the stored expression")
+  (qr, mLoadFail) <- case sanitizeExpression expr of
+    Left _ ->
+      pure ( QcUnparsed expr
+                "boundary-sanitiser rejected the stored expression"
+           , Nothing )
     Right safe -> do
       mRes <- timeout replayTimeoutMicros $
         try $ QcTool.runQuickCheckViaCabalRepl
                 (gsProject ghcSess) (spModule sp) safe
       case mRes of
-        Nothing                      -> pure (QcException expr "timeout")
+        Nothing -> pure (QcException expr "timeout", Nothing)
         Just (Left (ex :: SomeException)) ->
-          pure (QcException expr (T.pack (show ex)))
-        Just (Right (out, _err))     ->
-          -- Regression replay ignores stderr: if a stored property
-          -- fails to compile the right escalation is "surface it
-          -- as QcUnparsed and let the caller re-run via
-          -- ghc_quickcheck to see the hint".
-          pure (parseQuickCheckOutput expr out)
-  pure Replay { rpStored = sp, rpResult = qr }
+          pure (QcException expr (T.pack (show ex)), Nothing)
+        Just (Right (out, err)) ->
+          let parsed = parseQuickCheckOutput expr out
+          in pure (parsed, classifyLoadFailure parsed err)
+  pure Replay { rpStored = sp, rpResult = qr, rpLoadFailure = mLoadFail }
+
+-- | Issue #51: when @parseQuickCheckOutput@ returns 'QcUnparsed'
+-- (raw output empty / unrecognised) AND cabal-repl's stderr
+-- carries telltale GHC load-failure messages, classify the
+-- replay as a load failure rather than a regression. The
+-- difference matters: a real regression means the property's
+-- semantics changed; a load failure means the property never
+-- actually ran. Conflating the two erodes trust in the
+-- regression gate.
+--
+-- The detection is intentionally permissive: any of the GHC
+-- error markers below are sufficient. False positives here
+-- (a property that mentions \"not in scope\" in a string lit
+-- and happens to also fail) are tolerable because the response
+-- still surfaces the captured stderr verbatim — the agent can
+-- read it and decide.
+classifyLoadFailure :: QuickCheckResult -> Text -> Maybe Text
+classifyLoadFailure (QcUnparsed _ raw) errStr
+  | T.null (T.strip raw) && hasLoadMarker errStr =
+      Just (summariseLoadError errStr)
+classifyLoadFailure _ _ = Nothing
+
+-- | The stable subset of GHC error fragments that signal a
+-- module/load failure rather than a property-runtime failure.
+hasLoadMarker :: Text -> Bool
+hasLoadMarker err =
+  let lo = T.toLower err
+  in any (`T.isInfixOf` lo)
+       [ "could not find module"
+       , "could not load module"
+       , "cannot find module"
+       , "variable not in scope"
+       , "not in scope:"
+       , "module" `T.append` " is not loaded"
+       , "module ‘"  -- unicode opening quote precedes module names
+       ]
+
+-- | Trim cabal-repl stderr to a JSON-friendly summary. Keeps the
+-- first 600 characters and strips surrounding whitespace; that
+-- is enough for the agent to identify the failing identifier
+-- without bloating the response.
+summariseLoadError :: Text -> Text
+summariseLoadError err =
+  let body   = T.strip err
+      cap    = 600
+      capped = if T.length body > cap
+                 then T.take cap body <> "…(truncated)"
+                 else body
+  in capped
 
 --------------------------------------------------------------------------------
 -- :show modules parser (kept for unit-test coverage even though the
@@ -178,35 +241,60 @@ listResult props =
 
 runResult :: [Replay] -> ToolResult
 runResult replays =
-  let total        = length replays
-      regressions  = filter (not . isPass . rpResult) replays
-      regressed    = length regressions
+  let total          = length replays
+      -- Issue #51: properties whose recorded module failed to
+      -- compile/load are NOT regressions — they were never actually
+      -- evaluated. Partition first.
+      (loadFailed, evaluated) =
+        foldr (\r (lf, ev) ->
+                  if isJust (rpLoadFailure r)
+                    then (r : lf, ev)
+                    else (lf, r : ev))
+              ([], []) replays
+      regressions    = filter (not . isPass . rpResult) evaluated
+      regressed      = length regressions
+      loadFailures   = length loadFailed
+      passed         = total - regressed - loadFailures
+      success        = regressed == 0 && loadFailures == 0
       payload =
         object
-          [ "success"     .= (regressed == 0)
-          , "action"      .= ("run" :: Text)
-          , "total"       .= total
-          , "passed"      .= (total - regressed)
-          , "regressions" .= map renderRegression regressions
-          , "summary"     .= summarise total regressed
+          [ "success"        .= success
+          , "action"         .= ("run" :: Text)
+          , "total"          .= total
+          , "passed"         .= passed
+          , "regressions"    .= map renderRegression regressions
+          , "load_failed"    .= map renderLoadFailed  loadFailed
+          , "summary"        .= summarise total regressed loadFailures
           ]
   in ToolResult
        { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = regressed > 0
+       , trIsError = not success
        }
 
 isPass :: QuickCheckResult -> Bool
 isPass (QcPassed _ _) = True
 isPass _              = False
 
-summarise :: Int -> Int -> Text
-summarise 0 _ =
+-- | Issue #51: humans + agents need to distinguish three states
+-- in the run summary, not two. \"M of N regressed\" used to fire
+-- even when M of N actually never replayed because their load
+-- scope was stale. The new wording calls that out.
+summarise :: Int -> Int -> Int -> Text
+summarise 0 _ _ =
   "No stored properties. Run ghc_quickcheck and it'll auto-persist on pass."
-summarise total 0 =
+summarise total 0 0 =
   T.pack (show total) <> " / " <> T.pack (show total) <> " stored properties pass."
-summarise total regressed =
+summarise total regressed 0 =
   T.pack (show regressed) <> " of " <> T.pack (show total) <> " stored \
   \properties regressed. Details in 'regressions'."
+summarise total 0 lf =
+  T.pack (show lf) <> " of " <> T.pack (show total) <> " stored properties \
+  \could not replay (module failed to load). Details in 'load_failed'."
+summarise total regressed lf =
+  T.pack (show regressed) <> " regressed, " <> T.pack (show lf) <>
+  " could not replay (module failed to load) of " <>
+  T.pack (show total) <> " stored properties. Details in 'regressions' + \
+  \'load_failed'."
 
 renderStored :: StoredProperty -> Value
 renderStored sp =
@@ -223,6 +311,22 @@ renderRegression r =
     [ "expression" .= spExpression (rpStored r)
     , "module"     .= spModule (rpStored r)
     , "outcome"    .= renderOutcome (rpResult r)
+    ]
+
+-- | Issue #51: distinct shape for replays that were skipped due
+-- to a module load failure. The 'state' is "load_failed" (not
+-- "unparsed") so callers can branch on it; 'error' carries the
+-- summarised cabal-repl stderr.
+renderLoadFailed :: Replay -> Value
+renderLoadFailed r =
+  object
+    [ "expression" .= spExpression (rpStored r)
+    , "module"     .= spModule (rpStored r)
+    , "outcome"    .= object
+        [ "state" .= ("load_failed" :: Text)
+        , "error" .= maybe ("(no captured stderr)" :: Text) id
+                       (rpLoadFailure r)
+        ]
     ]
 
 renderOutcome :: QuickCheckResult -> Value
