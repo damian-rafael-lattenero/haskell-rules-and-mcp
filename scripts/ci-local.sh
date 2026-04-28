@@ -65,6 +65,14 @@ step "[4/9] cabal build"
 cabal build all
 
 step "[5/9] cabal test"
+# Parallelise the e2e suite by default — post-#43 the session
+# layer is safe under concurrent withGhcSession calls so the
+# scenarios run cleanly with N=4. Override by setting
+# HASKELL_FLOWS_E2E_PARALLEL=<N> before invoking this script
+# (set 1 to fall back to the historical sequential mode).
+: "${HASKELL_FLOWS_E2E_PARALLEL:=4}"
+export HASKELL_FLOWS_E2E_PARALLEL
+printf '   (HASKELL_FLOWS_E2E_PARALLEL=%s)\n' "$HASKELL_FLOWS_E2E_PARALLEL"
 cabal test all --test-show-details=direct
 
 if [ "$FAST" = false ]; then

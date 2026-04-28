@@ -12,6 +12,9 @@ module HaskellFlows.Tool.Info
   ( descriptor
   , handle
   , InfoArgs (..)
+    -- * Issue #54 — constructor extraction helpers
+  , successResult
+  , renderConstructorsBlock
   ) where
 
 import Control.Exception (SomeException, try)
@@ -30,12 +33,21 @@ import GHC
   , getInfo
   , parseName
   )
+import GHC.Core.DataCon
+  ( DataCon
+  , dataConName
+  , dataConOrigArgTys
+  )
 import GHC.Core.TyCon
   ( isClassTyCon
   , isDataTyCon
   , isNewTyCon
   , isTypeSynonymTyCon
+  , tyConDataCons
   )
+import GHC.Core.TyCo.Rep (scaledThing)
+import GHC.Types.Name (nameOccName)
+import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Utils.Outputable (showPprUnsafe)
 
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
@@ -98,12 +110,21 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
           bestEffortResult safe
         Right Nothing ->
           bestEffortResult safe
-        Right (Just pinfo) ->
-          successResult pinfo
+        Right (Just (pinfo, ctorPairs)) ->
+          successResult pinfo ctorPairs
 
 -- | Resolve the name in scope, query 'getInfo' including instances,
 -- and build the pre-migration 'ParsedInfo' shape from its return.
-queryInfo :: Text -> Ghc (Maybe ParsedInfo)
+--
+-- Issue #54: when the resolved 'TyThing' is an algebraic 'TyCon'
+-- (data or newtype), enumerate its 'DataCon' list and embed the
+-- canonical @data X = A | B a | C a b@ shape into the rendered
+-- 'piDefinition'. The constructor list is what GHCi's @:info@
+-- shows on the first line; the original code dropped it entirely.
+-- Result is also pre-computed as a structured list returned via
+-- 'piConstructors' so JSON consumers don't have to scrape the
+-- text.
+queryInfo :: Text -> Ghc (Maybe (ParsedInfo, [(Text, [Text])]))
 queryInfo nm = do
   -- parseName finds both value-level and type-level names (TyCons
   -- don't live in getNamesInScope, so the old scan missed 'data'
@@ -114,14 +135,70 @@ queryInfo nm = do
   pure $ case info of
     Nothing -> Nothing
     Just (thing, _fixity, clsInsts, famInsts, _doc) ->
-      let kind = kindFromTyThing thing
-      in Just ParsedInfo
-        { piName       = nm
-        , piKind       = kind
-        , piDefinition = renderDefinition kind nm (T.pack (showPprUnsafe thing))
-        , piInstances  = map (T.pack . showPprUnsafe) clsInsts
-                      <> map (T.pack . showPprUnsafe) famInsts
-        }
+      let kind         = kindFromTyThing thing
+          renderedThing = T.pack (showPprUnsafe thing)
+          (definition, ctorPairs) = case thing of
+            ATyCon tc | not (isClassTyCon tc) ->
+              let dcs       = tyConDataCons tc
+                  ctorList  = map dataConPair dcs
+                  dataLine
+                    | null dcs  = renderedThing
+                    | otherwise = renderDataLine kind nm dcs
+              in (dataLine, ctorList)
+            _ ->
+              (renderDefinition kind nm renderedThing, [])
+          parsed = ParsedInfo
+            { piName       = nm
+            , piKind       = kind
+            , piDefinition = definition
+            , piInstances  = map (T.pack . showPprUnsafe) clsInsts
+                          <> map (T.pack . showPprUnsafe) famInsts
+            }
+      in Just (parsed, ctorPairs)
+
+-- | Issue #54: render the canonical \"@data X = A | B a@\" /
+-- \"@newtype X = X a@\" header from the constructor list. Mirrors
+-- the rendering in 'Tool.Arbitrary' but stays self-contained to
+-- avoid a Tool→Tool dependency.
+renderDataLine :: InfoKind -> Text -> [DataCon] -> Text
+renderDataLine kind nm dcs =
+  let keyword = case kind of
+        IkNewtype -> "newtype "
+        _         -> "data "
+      rhs = T.intercalate " | " (map renderDataConText dcs)
+  in keyword <> nm <> " = " <> rhs
+
+-- | Single-constructor rendering: @Just a@ / @Pair Int Int@.
+renderDataConText :: DataCon -> Text
+renderDataConText dc =
+  let cn   = dataConTextName dc
+      args = map (parenArg . T.pack . showPprUnsafe . scaledThing)
+                 (dataConOrigArgTys dc)
+  in if null args then cn else cn <> " " <> T.intercalate " " args
+  where
+    parenArg t
+      | T.any (== ' ') (T.strip t) = "(" <> t <> ")"
+      | otherwise                  = t
+
+-- | Structured constructor pair: @(name, [arg-type])@. Returned
+-- alongside 'ParsedInfo' so 'successResult' can attach a
+-- 'constructors' array to the JSON response.
+dataConPair :: DataCon -> (Text, [Text])
+dataConPair dc =
+  ( dataConTextName dc
+  , map (T.pack . showPprUnsafe . scaledThing) (dataConOrigArgTys dc)
+  )
+
+dataConTextName :: DataCon -> Text
+dataConTextName = T.pack . occNameString . nameOccName . dataConName
+
+-- | Issue #54: the structured 'constructors' array shape, factored
+-- out of 'successResult' so unit tests can drive it without
+-- constructing a full 'DataCon' chain. Each (name, args) pair
+-- becomes one @{"name": ..., "args": [...]}@ object.
+renderConstructorsBlock :: [(Text, [Text])] -> [Value]
+renderConstructorsBlock ctors =
+  [ object [ "name" .= n, "args" .= as ] | (n, as) <- ctors ]
 
 -- | Rebuild the declaration header (@data Tree@ / @class Functor@ /
 -- …) that @:info@ would have emitted as the first line. Uses the
@@ -198,16 +275,23 @@ bestEffortResult nm =
        , trIsError = False
        }
 
-successResult :: ParsedInfo -> ToolResult
-successResult parsed =
-  let payload =
-        object
-          [ "success"    .= True
-          , "name"       .= piName parsed
-          , "kind"       .= kindToText (piKind parsed)
-          , "definition" .= piDefinition parsed
-          , "instances"  .= piInstances parsed
-          ]
+successResult :: ParsedInfo -> [(Text, [Text])] -> ToolResult
+successResult parsed ctors =
+  let renderedCtors = renderConstructorsBlock ctors
+      basePayload =
+        [ "success"    .= True
+        , "name"       .= piName parsed
+        , "kind"       .= kindToText (piKind parsed)
+        , "definition" .= piDefinition parsed
+        , "instances"  .= piInstances parsed
+        ]
+      -- Issue #54: only emit 'constructors' for algebraic types.
+      -- Classes / type-synonyms / functions / unknowns get the
+      -- legacy shape — preserving wire-format compatibility for
+      -- consumers that didn't ask for the field.
+      payload
+        | null ctors = object basePayload
+        | otherwise  = object (basePayload <> [ "constructors" .= renderedCtors ])
   in ToolResult
        { trContent = [ TextContent (encodeUtf8Text payload) ]
        , trIsError = False

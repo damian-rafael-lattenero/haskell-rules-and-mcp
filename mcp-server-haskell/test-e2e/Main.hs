@@ -71,6 +71,7 @@ import qualified Scenarios.FlowCabalRecovery     as FlowCR
 import qualified Scenarios.FlowRefactorPreExistingError as FlowRPE
 import qualified Scenarios.FlowSuggestAssocOuter  as FlowSAO
 import qualified Scenarios.FlowAddImportNoHoogle  as FlowAINH
+import qualified Scenarios.FlowInfoConstructors   as FlowIC
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
@@ -181,6 +182,8 @@ scenarios =
     , False, FlowSAO.runFlow )
   , ( "Flow: AddImport no-hoogle (#53 · honest error vs lying success)"
     , False, FlowAINH.runFlow )
+  , ( "Flow: Info constructors (#54 · data + newtype expose ctors)"
+    , False, FlowIC.runFlow )
   , ( "Flow: Dogfood replay (7 MCP fixes round-tripped through one session)"
     , True, FlowDFR.runFlow )
   , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"

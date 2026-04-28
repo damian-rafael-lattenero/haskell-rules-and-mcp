@@ -134,7 +134,9 @@ import HaskellFlows.Parser.QuickCheck
   , parseQuickCheckOutput
   )
 import HaskellFlows.Parser.Type
-  ( ParsedType (..)
+  ( InfoKind (..)
+  , ParsedInfo (..)
+  , ParsedType (..)
   , isOutOfScope
   , parseTypeOutput
   )
@@ -182,6 +184,7 @@ import HaskellFlows.Refactor.Rename
   , validateIdentifier
   )
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
+import qualified HaskellFlows.Tool.Info as InfoTool
 import HaskellFlows.Tool.Goto
   ( Location (..)
   , parseDefinedAt
@@ -423,6 +426,10 @@ main = do
       , test "code tools: all 5 registered"        testCodeToolsRegistered
       , test "add_import: qualified renderImportLine" testAddImportQualified
       , test "add_import: missing hoogle returns success=false (#53)" testAddImportMissingHoogle
+      , test "info: renderConstructorsBlock empty (#54)"  testInfoCtorBlockEmpty
+      , test "info: renderConstructorsBlock Maybe (#54)"  testInfoCtorBlockMaybe
+      , test "info: successResult includes constructors (#54)" testInfoSuccessIncludesCtors
+      , test "info: successResult drops field when none (#54)" testInfoSuccessDropsCtorField
       , test "nextStep: add_import count=0 suppresses load (#53)"     testNextStepAddImportZero
       , test "nextStep: add_import count>0 nudges load (#53)"         testNextStepAddImportNonZero
       , test "add_modules: moduleToPath mapping"   testAddModulesPath
@@ -3431,6 +3438,73 @@ testAddImportQualified = pure $
        == "import Data.Map"
   && AddImport.renderImportLine True  "Data.Map"
        == "import qualified Data.Map as M"
+
+-- | Issue #54: empty constructor list → empty array, not a
+-- one-element block of @null@s.
+testInfoCtorBlockEmpty :: IO Bool
+testInfoCtorBlockEmpty =
+  pure (null (InfoTool.renderConstructorsBlock []))
+
+-- | Issue #54: each constructor pair becomes one
+-- @{name, args}@ object. Verify shape with the canonical
+-- 'Maybe' example: @Nothing | Just a@.
+testInfoCtorBlockMaybe :: IO Bool
+testInfoCtorBlockMaybe =
+  let block = InfoTool.renderConstructorsBlock
+                [ ("Nothing", [])
+                , ("Just",    ["a"])
+                ]
+  in pure $ length block == 2
+        && hasName "Nothing" block
+        && hasName "Just"    block
+  where
+    hasName n vs = any (\v -> case v of
+                           A.Object o -> AKM.lookup (AKey.fromText "name") o
+                                           == Just (A.String n)
+                           _          -> False) vs
+
+-- | Issue #54: 'successResult' must embed the @constructors@
+-- field when the type is algebraic, so JSON consumers see the
+-- structured constructor list alongside the legacy 'definition'.
+testInfoSuccessIncludesCtors :: IO Bool
+testInfoSuccessIncludesCtors =
+  let parsed = ParsedInfo
+        { piName       = "Maybe"
+        , piKind       = IkData
+        , piDefinition = "data Maybe a = Nothing | Just a"
+        , piInstances  = []
+        }
+      ctors  = [("Nothing", []), ("Just", ["a"])]
+      result = InfoTool.successResult parsed ctors
+  in pure $ case trContent result of
+       [TextContent t] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
+           Just (A.Object o) -> case AKM.lookup (AKey.fromText "constructors") o of
+             Just (A.Array xs) -> length xs == 2
+             _                 -> False
+           _                  -> False
+       _ -> False
+
+-- | Issue #54: when no constructors apply (class / function /
+-- type-synonym), the 'constructors' field must be absent — not
+-- present-with-empty-array. Preserves wire-format compatibility
+-- for consumers that didn't ask for the field.
+testInfoSuccessDropsCtorField :: IO Bool
+testInfoSuccessDropsCtorField =
+  let parsed = ParsedInfo
+        { piName       = "Functor"
+        , piKind       = IkClass
+        , piDefinition = "class Functor f"
+        , piInstances  = []
+        }
+      result = InfoTool.successResult parsed []
+  in pure $ case trContent result of
+       [TextContent t] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
+           Just (A.Object o) ->
+             AKM.lookup (AKey.fromText "constructors") o == Nothing
+           _                  -> False
+       _ -> False
 
 -- | Issue #53: when @hoogle@ is not on PATH, ghc_add_import must
 -- mirror @hoogle_search@ and return success=false with a
