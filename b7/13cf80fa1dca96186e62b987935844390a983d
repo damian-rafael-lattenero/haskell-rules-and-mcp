@@ -1,0 +1,25 @@
+mcp-server-haskell/test-e2e/E2E/Envelope.hs
+  033795528ddcaec0 1-146
+mcp-server-haskell/haskell-flows-mcp.cabal
+  033795528ddcaec0 199
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "b713cf80fa1dca96186e62b987935844390a983d",
+  "prompts": {
+    "033795528ddcaec0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c2325b8-3973-461e-9af9-e12d8c594bf0",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 154,
+      "total_deletions": 438,
+      "accepted_lines": 17078,
+      "overriden_lines": 0
+    }
+  }
+}
