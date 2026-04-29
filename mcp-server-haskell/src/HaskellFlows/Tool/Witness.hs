@@ -42,6 +42,8 @@ module HaskellFlows.Tool.Witness
   , bucketSize
   , buildInstrumentedProperty
   , parseLabelDistribution
+  , parseLabelCounts
+  , countsToDistribution
   , biasWarnings
   ) where
 
@@ -120,17 +122,34 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Right args -> do
     t0 <- realToFrac <$> getPOSIXTime :: IO Double
     let instrumented = buildInstrumentedProperty (waProperty args) (waRuns args)
+    -- Issue #78: use the labels-aware harness so the structured
+    -- 'Result.labels' map reaches us regardless of QuickCheck's
+    -- 'chatty' setting. The pre-#78 path read 'output r', which
+    -- 'chatty=False' (set by the harness) suppresses — leaving the
+    -- distribution silently empty.
     res <- try @SomeException $
-      Qc.runQuickCheckViaCabalRepl (gsProject ghcSess)
+      Qc.runQuickCheckWithLabelsViaCabalRepl (gsProject ghcSess)
         (waModulePath args) instrumented
     t1 <- realToFrac <$> getPOSIXTime :: IO Double
     case res of
       Left e -> pure (errorResult (T.pack ("subprocess error: " <> show e)))
-      Right (out, _err) ->
+      Right (out, labelsBlock, _err) ->
         let qcResult = parseQuickCheckOutput (waProperty args) out
-            dist     = parseLabelDistribution out
+            -- Issue #78: prefer the structured labels block over
+            -- the formatted-output histogram. The latter only
+            -- exists when chatty=True; the former is canonical.
+            counts   = parseLabelCounts labelsBlock
+            dist     = if null counts
+                         then parseLabelDistribution out  -- legacy fallback
+                         else countsToDistribution counts
             warnings = biasWarnings dist
-        in pure (renderReport args qcResult dist warnings
+            -- Use the labels block as 'qc_raw_output' so the agent
+            -- (and any failing e2e) can see what cabal-repl actually
+            -- emitted between the LABELS sentinels — this is what
+            -- the structured parser ate (or didn't).
+            rawForResponse =
+              if T.null labelsBlock then out else labelsBlock
+        in pure (renderReport args qcResult dist warnings rawForResponse
                               (truncate ((t1 - t0) * 1000)))
 
 --------------------------------------------------------------------------------
@@ -225,6 +244,37 @@ parseLabelDistribution raw =
       Just y  -> y : mapMaybe f xs
       Nothing -> mapMaybe f xs
 
+-- | Issue #78: parse the structured labels block emitted by
+-- 'runQuickCheckWithLabelsViaCabalRepl'. Each line is
+-- @"<label>\\t<count>"@. Returns @[(label, count)]@.
+--
+-- Robust to leading/trailing whitespace and silently skips
+-- malformed lines. We don't fail the witness over a single
+-- corrupt row — every other label still informs the agent.
+parseLabelCounts :: Text -> [(Text, Int)]
+parseLabelCounts raw =
+  let parseLine ln = case T.splitOn "\t" (T.strip ln) of
+        [lbl, cnt] | not (T.null lbl)
+                   , Just n <- readMaybe (T.unpack (T.strip cnt))
+                   -> Just (lbl, n)
+        _          -> Nothing
+  in foldr (\ln acc -> maybe acc (:acc) (parseLine ln))
+           []
+           (T.lines raw)
+
+-- | Issue #78: convert structured @[(label, count)]@ pairs into
+-- the legacy @[(label, percent)]@ shape the renderer + bias
+-- detector consume. Total is the sum of counts; if zero (no
+-- labels recorded), returns an empty distribution.
+countsToDistribution :: [(Text, Int)] -> [(Text, Double)]
+countsToDistribution counts =
+  let total = fromIntegral (sum (map snd counts)) :: Double
+  in if total <= 0
+       then []
+       else [ (label, fromIntegral n / total * 100)
+            | (label, n) <- counts
+            ]
+
 -- | Issue #65: emit a 'biased-distribution' warning for any
 -- bucket whose share is < 1 %% of the total runs. Phase 1 only
 -- inspects the size dimension (the only one Phase 1 instruments).
@@ -246,9 +296,10 @@ biasWarnings dist =
 
 renderReport
   :: WitnessArgs -> QuickCheckResult
-  -> [(Text, Double)] -> [Text] -> Int -> ToolResult
-renderReport args qc dist warnings wallMs =
-  let (passed, failed, raw) = qcCounts qc
+  -> [(Text, Double)] -> [Text] -> Text -> Int -> ToolResult
+renderReport args qc dist warnings rawForResponse wallMs =
+  let (passed, failed, _qcRaw) = qcCounts qc
+      raw = rawForResponse
       sizeDist = filter (("size:" `T.isPrefixOf`) . fst) dist
       payload = object
         [ "success"      .= True

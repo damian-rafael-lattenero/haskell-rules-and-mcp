@@ -75,11 +75,50 @@ runFlow c _projectDir = do
     ("Got: " <> truncRender rBad)
   stepFooter 2 t1
 
-  pure [cOk, cBad]
+  -- Step 4 — Issue #78: the distribution must NOT be empty. The
+  -- pre-#78 witness path read 'output r' from QC with chatty=False,
+  -- which suppressed the label histogram → the agent always saw
+  -- empty buckets. Post-#78 the labels-aware harness emits the
+  -- structured 'Result.labels' map directly, so the distribution
+  -- is populated regardless of QC's chatty setting.
+  --
+  -- Use a list-shaped property whose 'show' length actually varies
+  -- with input so QuickCheck genuinely produces multiple buckets.
+  t2 <- stepHeader 3 "ghc_witness produces non-empty distribution (#78)"
+  rDist <- Client.callTool c GhcWitness
+            (object
+               [ "property" .= ("\\xs -> length (xs :: [Int]) >= 0" :: Text)
+               , "runs"     .= (300 :: Int)
+               ])
+  let buckets = bucketsArray rDist
+      okDist  = fieldBool "success" rDist == Just True
+             && not (null buckets)
+  cDist <- liveCheck $ checkPure
+    "distribution.by_size.buckets is non-empty post-#78"
+    okDist
+    ("Got: " <> truncRender rDist)
+  stepFooter 3 t2
+
+  pure [cOk, cBad, cDist]
 
 --------------------------------------------------------------------------------
 -- helpers
 --------------------------------------------------------------------------------
+
+-- | Issue #78: drill into 'distribution.by_size.buckets' and
+-- return its array contents. Empty list either means the path
+-- didn't resolve OR the buckets array is genuinely empty —
+-- both are red signals for the witness Phase 1 + #78 contract.
+bucketsArray :: Value -> [Value]
+bucketsArray v = case lookupField "distribution" v of
+  Just (Object dist) ->
+    case KeyMap.lookup (Key.fromText "by_size") dist of
+      Just (Object bySize) ->
+        case KeyMap.lookup (Key.fromText "buckets") bySize of
+          Just (Array arr) -> foldr (:) [] arr
+          _                -> []
+      _ -> []
+  _ -> []
 
 fieldBool :: Text -> Value -> Maybe Bool
 fieldBool k v = case lookupField k v of

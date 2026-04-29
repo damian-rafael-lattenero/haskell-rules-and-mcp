@@ -16,6 +16,8 @@ module HaskellFlows.Tool.QuickCheck
   , QuickCheckArgs (..)
     -- * Shared runtime-execution helper (Regression, Determinism)
   , runQuickCheckViaCabalRepl
+  , runQuickCheckWithLabelsViaCabalRepl
+  , extractLabelsBlock
     -- * Pure helpers exposed for unit tests
   , chooseStoreModule
   , isSimpleIdent
@@ -310,6 +312,107 @@ extractQcOutput full =
   let (_, afterStart) = T.breakOn "__QC_OUTPUT_START__" full
       body            = T.drop (T.length "__QC_OUTPUT_START__") afterStart
       (captured, _)   = T.breakOn "__QC_OUTPUT_END__" body
+  in T.strip captured
+
+--------------------------------------------------------------------------------
+-- Issue #78 — labels-aware repl harness
+--------------------------------------------------------------------------------
+
+-- | Like 'runQuickCheckViaCabalRepl' but additionally emits the
+-- structured @Result.labels@ map between sentinel markers so the
+-- caller can recover QuickCheck's label histogram even when the
+-- formatted output suppresses it (@chatty = False@ does that).
+--
+-- Returns @(qcOutput, labelsBlock, stderr)@ where:
+--
+--   * @qcOutput@ is the same slice 'extractQcOutput' would produce.
+--   * @labelsBlock@ contains zero or more lines, each
+--     @"<label-tab><count>"@.
+--   * @stderr@ is cabal's combined stderr (loader noise + diags).
+--
+-- Used by 'ghc_witness' (#65) so its size-bucket distribution
+-- doesn't depend on the chatty stream that 'chatty=False' kills.
+runQuickCheckWithLabelsViaCabalRepl
+  :: ProjectDir -> Maybe Text -> Text -> IO (Text, Text, Text)
+runQuickCheckWithLabelsViaCabalRepl pd mModule safeProp = do
+  libMods <- libraryExposedModules pd
+  let loadDirective = case mModule of
+        Just modPath | not (T.null modPath) ->
+          [":load " <> T.unpack modPath]
+        _ -> []
+      moduleImport
+        | null libMods = []
+        | otherwise    = [":m + " <> unwords (map T.unpack libMods)]
+      input = unlines $
+        loadDirective <>
+        moduleImport <>
+        [ "import Test.QuickCheck"
+        -- Use 'Data.Map' (from 'containers'). The cabal v2-repl
+        -- invocation below pins '--build-depends=containers' so
+        -- this import resolves regardless of what the project's
+        -- own build-depends list looks like.
+        , "import qualified Data.Map as M"
+        , "import Data.List (intercalate)"
+        , "let qcArgs = stdArgs { chatty = False }"
+        , "r <- quickCheckWithResult qcArgs (" <> T.unpack safeProp <> ")"
+        , "putStrLn \"__QC_OUTPUT_START__\""
+        , "putStr (output r)"
+        , "putStrLn \"__QC_OUTPUT_END__\""
+        , "putStrLn \"__QC_LABELS_START__\""
+        -- Emit one line per label: "<label-set-joined-by-+><tab><count>".
+        -- Most properties carry single-label sets so the join is a
+        -- no-op; for 'classify'-heavy properties we keep grouping
+        -- intact so the agent can still recover joint frequencies.
+        --
+        -- Strip QC's quote-wrapping: 'collect x' calls 'label (show x)',
+        -- so a String value 'x = "size:1-5"' becomes the label
+        -- '"size:1-5"' (with the literal quote characters). We
+        -- unquote here so the structured labels block carries the
+        -- raw bucket name the agent sent in.
+        , "let unquote s = if length s >= 2 && head s == '\"' && last s == '\"' then init (tail s) else s"
+        , "mapM_ (\\(ks, n) -> putStrLn (intercalate \"+\" (map unquote ks) ++ \"\\t\" ++ show n)) (M.toList (labels r))"
+        , "putStrLn \"__QC_LABELS_END__\""
+        , ":q"
+        ]
+      cp = (Proc.proc "cabal"
+             [ "v2-repl", "all"
+             , "--build-depends=QuickCheck"
+             , "--build-depends=containers"
+             , "-v0"
+             ])
+             { Proc.cwd     = Just (unProjectDir pd)
+             , Proc.std_in  = Proc.CreatePipe
+             , Proc.std_out = Proc.CreatePipe
+             , Proc.std_err = Proc.CreatePipe
+             }
+  (ec, outStr, errStr) <- Proc.readCreateProcessWithExitCode cp input
+  let errText     = T.pack errStr
+      stdoutT     = T.pack outStr
+      qcSlice     = extractQcOutput     stdoutT
+      labelsSlice = extractLabelsBlock  stdoutT
+  case ec of
+    ExitSuccess    -> pure (qcSlice, labelsSlice, errText)
+    ExitFailure _c ->
+      -- Same defensive fallback as the regular runner: if the
+      -- repl failed late but the sentinels were already emitted,
+      -- prefer the captured slice over the full noisy stdout.
+      pure
+        ( if T.null qcSlice then stdoutT else qcSlice
+        , labelsSlice
+        , errText
+        )
+
+-- | Issue #78: slice the labels block emitted between
+-- @__QC_LABELS_START__@ and @__QC_LABELS_END__@. Returns the
+-- block's body (zero or more @"label\\tcount"@ lines, one per
+-- distinct label set the property's collect/classify calls
+-- emitted). 'parseLabelCounts' in the witness tool turns this
+-- into a structured @[(label, count)]@.
+extractLabelsBlock :: Text -> Text
+extractLabelsBlock full =
+  let (_, afterStart) = T.breakOn "__QC_LABELS_START__" full
+      body            = T.drop (T.length "__QC_LABELS_START__") afterStart
+      (captured, _)   = T.breakOn "__QC_LABELS_END__" body
   in T.strip captured
 
 

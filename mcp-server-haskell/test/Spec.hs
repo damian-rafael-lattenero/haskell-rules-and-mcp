@@ -569,6 +569,13 @@ main = do
       , test "witness: buildInstrumentedProperty wraps with collect (#65)" testWitBuildInstrumented
       , test "witness: parseLabelDistribution recovers buckets (#65)" testWitParseDistribution
       , test "witness: biasWarnings flags <1% bucket (#65)" testWitBiasWarning
+      , test "witness: parseLabelCounts reads tab-separated rows (#78)"
+                                                                 testWitParseLabelCounts
+      , test "witness: parseLabelCounts skips malformed rows (#78)"
+                                                                 testWitParseLabelCountsRobust
+      , test "witness: countsToDistribution sums to 100 (#78)"   testWitCountsToDistribution
+      , test "witness: countsToDistribution empty input → []  (#78)"
+                                                                 testWitCountsEmpty
       , test "workflow-state: initial empty"       testWorkflowStateInitial
       , test "workflow-state: tracks load + edits" testWorkflowStateTracks
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
@@ -4843,6 +4850,56 @@ testWitBiasWarning =
   in pure $ length ws == 1
          && T.isInfixOf "size:0" (head ws)
          && T.isInfixOf "0.5"    (head ws)
+
+-- | Issue #78: 'parseLabelCounts' reads the tab-separated
+-- block emitted by the labels-aware harness. Each line is
+-- '"<label>\\t<count>"'.
+testWitParseLabelCounts :: IO Bool
+testWitParseLabelCounts =
+  let raw = T.unlines
+        [ "size:0\t40"
+        , "size:1-5\t312"
+        , "size:6-20\t148"
+        ]
+      counts = WitnessTool.parseLabelCounts raw
+  in pure $  length counts == 3
+          && lookup "size:0"    counts == Just 40
+          && lookup "size:1-5"  counts == Just 312
+          && lookup "size:6-20" counts == Just 148
+
+-- | Issue #78: malformed rows (missing tab, non-numeric count,
+-- empty label) are silently skipped — never crash the witness.
+testWitParseLabelCountsRobust :: IO Bool
+testWitParseLabelCountsRobust =
+  let raw = T.unlines
+        [ "size:1-5\t312"
+        , "garbage row without a tab"
+        , "\tlone-tab"
+        , "label-no-count\tnotanint"
+        , "size:6-20\t100"
+        ]
+      counts = WitnessTool.parseLabelCounts raw
+  in pure $  length counts == 2
+          && lookup "size:1-5"  counts == Just 312
+          && lookup "size:6-20" counts == Just 100
+
+-- | Issue #78: 'countsToDistribution' converts raw counts into
+-- percentages summing (within float drift) to 100.
+testWitCountsToDistribution :: IO Bool
+testWitCountsToDistribution =
+  let counts = [("size:0", 25), ("size:1-5", 75)]
+      dist   = WitnessTool.countsToDistribution counts
+      total  = sum (map snd dist)
+  in pure $ length dist == 2
+         && abs (total - 100.0) < 0.001
+         && lookup "size:0"   dist == Just 25.0
+         && lookup "size:1-5" dist == Just 75.0
+
+-- | Issue #78: empty input ⇒ empty distribution. Avoids a
+-- divide-by-zero and keeps the bias-warning machinery happy.
+testWitCountsEmpty :: IO Bool
+testWitCountsEmpty =
+  pure $ WitnessTool.countsToDistribution [] == []
 
 testLabConfidence :: IO Bool
 testLabConfidence = pure $
