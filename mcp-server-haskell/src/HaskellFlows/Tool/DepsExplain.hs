@@ -251,7 +251,7 @@ parseBackjumps txt =
   case T.breakOn "backjump limit reached (currently " txt of
     (_, after) | not (T.null after) ->
       let payload = T.drop (T.length "backjump limit reached (currently ") after
-          numTxt  = T.takeWhile (\c -> isDigit c) payload
+          numTxt  = T.takeWhile isDigit payload
       in if T.null numTxt then Nothing
          else case reads (T.unpack numTxt) of
                 ((n, _) : _) -> Just n
