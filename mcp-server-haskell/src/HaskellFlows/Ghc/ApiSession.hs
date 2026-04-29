@@ -63,6 +63,8 @@ module HaskellFlows.Ghc.ApiSession
   , absolutizeStanzaFlags
     -- * Issue #57 — diagnostic artifact filter
   , filterArtifacts
+    -- * Issue #84 — empty-project pre-flight detection
+  , enumerateHaskellSources
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)

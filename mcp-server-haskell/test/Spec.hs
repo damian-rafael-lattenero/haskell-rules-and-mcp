@@ -141,6 +141,7 @@ import HaskellFlows.Tool.CheckProject (parseExposedModules)
 import HaskellFlows.Tool.Lint (parseHlintJson)
 import qualified HaskellFlows.Tool.Lint as LintTool
 import HaskellFlows.Tool.Load (checkPathExists)
+import qualified HaskellFlows.Tool.Load as LoadTool
 import qualified HaskellFlows.Tool.ValidateCabal as VC
 import HaskellFlows.Parser.QuickCheck
   ( QuickCheckResult (..)
@@ -279,6 +280,7 @@ main = do
       , test "mkModulePath rejects traversal"    testRejectsTraversal
       , test "ghc_load #79: checkPathExists Right" testCheckPathExistsAccepts
       , test "ghc_load #79: checkPathExists Left"  testCheckPathExistsRejects
+      , test "ghc_load #84: empty project → no_match" testGhcLoadEmptyProjectNoMatch
       , test "parseGhcErrors extracts header"    testParseHeader
       , test "sanitizeExpression accepts normal" testSanitizeAccepts
       , test "sanitizeExpression rejects newline" testSanitizeRejectsNewline
@@ -993,6 +995,46 @@ testCheckPathExistsRejects = do
         Left msg -> T.isInfixOf (T.pack "does not exist") msg
                  && T.isInfixOf (T.pack "DoesNotExist.hs") msg
         Right () -> False
+
+-- | Issue #84: ghc_load on a project with no @src/@ or @app/@
+-- Haskell sources used to silently report @success=true@ +
+-- @summary="Compiled OK. No issues."@. The post-#90-Phase-C
+-- envelope surfaces it as @status='no_match'@ +
+-- @kind='module_not_in_graph'@ so consumer agents can route to
+-- ghc_create_project / ghc_add_modules instead of charging into
+-- ghc_suggest on an empty graph. We don't need a real GhcSession
+-- here: the empty-project guard runs before 'firstTestSuiteOrLibrary',
+-- so we exercise the new short-circuit path with a stub session.
+--
+-- The stub is built by 'startGhcSession' on a tmpdir that has no
+-- src/ + no app/ + no .cabal file — the same shape the issue's
+-- repro describes.
+testGhcLoadEmptyProjectNoMatch :: IO Bool
+testGhcLoadEmptyProjectNoMatch = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-issue-84-empty"
+  removePathForcibly dir
+  createDirectoryIfMissing True dir
+  result <- case mkProjectDir dir of
+    Left _   -> pure (Left "could not build ProjectDir")
+    Right pd -> do
+      sess <- startGhcSession pd
+      tr   <- LoadTool.handle sess pd (A.object [])
+      killGhcSession sess
+      case trContent tr of
+        [TextContent body] ->
+          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+        _ -> pure (Left "expected exactly one TextContent")
+  removePathForcibly dir
+  pure $ case result of
+    Right env
+      | Env.reStatus env == Env.StatusNoMatch
+      , Just envErr <- Env.reError env
+      , Env.eeKind envErr == Env.ModuleNotInGraph
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "loaded") payload == Just (A.Number 0)
+            && AKM.member (AKey.fromText "remediation") payload
+    _ -> False
 
 testParseHeader :: IO Bool
 testParseHeader =
