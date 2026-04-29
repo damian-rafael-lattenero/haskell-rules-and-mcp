@@ -51,6 +51,7 @@ library
                       HaskellFlows.Mcp.ResourceUri
                       HaskellFlows.Mcp.Resources
                       HaskellFlows.Mcp.RpcMethod
+                      HaskellFlows.Mcp.Schema
                       HaskellFlows.Mcp.Staleness
                       HaskellFlows.Mcp.WorkflowState
                       HaskellFlows.Mcp.Transport

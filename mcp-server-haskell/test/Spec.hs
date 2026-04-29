@@ -109,6 +109,7 @@ import HaskellFlows.Mcp.ParseError
   ( InterpretedParseError (..)
   , interpretParseError
   )
+import qualified HaskellFlows.Mcp.Schema as Schema
 import qualified PathTraversal
 import HaskellFlows.Mcp.PermissiveJSON
   ( BoolField (..)
@@ -392,6 +393,21 @@ main = do
                                                    PathTraversal.prop_pathGuard_lint_resolveTarget_consistent
       , quickTest "path guard · any '..' segment always rejected (#100)"
                                                    PathTraversal.prop_pathGuard_dotdot_always_rejected
+      -- Issue #92 Phase A · discriminated schema helpers
+      , test "Schema · top-level oneOf shape (#92)"
+                                                   testSchemaTopLevelOneOf
+      , test "Schema · discriminant in every branch's properties + required (#92)"
+                                                   testSchemaDiscriminantInEveryBranch
+      , test "Schema · discriminant const matches branch value (#92)"
+                                                   testSchemaDiscriminantConstMatchesValue
+      , test "Schema · per-branch required sets correct (#92)"
+                                                   testSchemaRequiredSetsAreCorrect
+      , test "Schema · additionalProperties:false on every branch (#92)"
+                                                   testSchemaAdditionalPropertiesFalse
+      , test "Schema · flatObjectSchema for non-discriminated tools (#92)"
+                                                   testSchemaFlatObject
+      , test "Schema · field builders surface correct type+description (#92)"
+                                                   testSchemaFieldBuilders
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
       , test "validatePackageName accepts normal"  testPkgAccepts
@@ -1879,6 +1895,169 @@ testParseErrorRawAlwaysPreserved =
               ]
       results = map interpretParseError cases
   in pure (and (zipWith (\raw r -> ipRaw r == T.pack raw) cases results))
+
+--------------------------------------------------------------------------------
+-- Issue #92 Phase A: discriminated schema helpers
+--------------------------------------------------------------------------------
+
+-- | Sample two-branch schema modelled on ghc_refactor's eventual shape.
+sampleRefactorSchema :: Value
+sampleRefactorSchema = Schema.discriminatedSchema "action"
+  [ Schema.SchemaBranch
+      { Schema.sbDiscriminantValue = "rename_local"
+      , Schema.sbDescription       = "Scoped identifier rename."
+      , Schema.sbProperties        =
+          [ ("module_path",      Schema.stringField  "Module path.")
+          , ("new_name",         Schema.stringField  "New identifier.")
+          , ("old_name",         Schema.stringField  "Existing identifier.")
+          , ("scope_line_start", Schema.integerField "Inclusive start line.")
+          , ("scope_line_end",   Schema.integerField "Inclusive end line.")
+          , ("dry_run",          Schema.booleanField "Compute without writing.")
+          ]
+      , Schema.sbRequired
+          = ["module_path", "new_name", "old_name"
+            , "scope_line_start", "scope_line_end"]
+      }
+  , Schema.SchemaBranch
+      { Schema.sbDiscriminantValue = "extract_binding"
+      , Schema.sbDescription       = "Extract expression."
+      , Schema.sbProperties        =
+          [ ("module_path",      Schema.stringField  "Module path.")
+          , ("new_name",         Schema.stringField  "New binding name.")
+          , ("scope_line_start", Schema.integerField "Inclusive start line.")
+          , ("scope_line_end",   Schema.integerField "Inclusive end line.")
+          ]
+      , Schema.sbRequired
+          = ["module_path", "new_name"
+            , "scope_line_start", "scope_line_end"]
+      }
+  ]
+
+-- | The top-level shape: an object with a `oneOf` array. Pinning
+-- the structure lets a future migration check by-eye that
+-- branch-aware hosts will see what they expect.
+testSchemaTopLevelOneOf :: IO Bool
+testSchemaTopLevelOneOf = pure $ case sampleRefactorSchema of
+  Object km ->
+       AKM.lookup "type" km == Just (String "object")
+    && case AKM.lookup "oneOf" km of
+         Just (Array xs) -> length xs == 2
+         _               -> False
+  _ -> False
+
+-- | Each branch must list the discriminant in BOTH `properties`
+-- AND `required`. This was the bug from #92 — flat schemas
+-- lied because the discriminant slot wasn't pinned.
+testSchemaDiscriminantInEveryBranch :: IO Bool
+testSchemaDiscriminantInEveryBranch = pure $
+  case sampleRefactorSchema of
+    Object km -> case AKM.lookup "oneOf" km of
+      Just (Array xs) -> all branchHasDiscriminant (V.toList xs)
+      _               -> False
+    _ -> False
+  where
+    branchHasDiscriminant (Object km) =
+      let inProps = case AKM.lookup "properties" km of
+            Just (Object p) -> AKey.fromText "action" `AKM.member` p
+            _               -> False
+          inRequired = case AKM.lookup "required" km of
+            Just (Array reqs) -> String "action" `V.elem` reqs
+            _                 -> False
+      in inProps && inRequired
+    branchHasDiscriminant _ = False
+
+-- | The discriminant property in each branch must be a `const`
+-- string equal to that branch's `sbDiscriminantValue`. Pinning
+-- this makes the JSON Schema branch-discriminate cleanly: a
+-- well-behaved client picking @action: rename_local@ knows
+-- exactly which branch's required-set to enforce.
+testSchemaDiscriminantConstMatchesValue :: IO Bool
+testSchemaDiscriminantConstMatchesValue = pure $
+  case sampleRefactorSchema of
+    Object km -> case AKM.lookup "oneOf" km of
+      Just (Array xs) ->
+        let consts = mapMaybe extractActionConst (V.toList xs)
+        in consts == ["rename_local", "extract_binding"]
+      _ -> False
+    _ -> False
+  where
+    extractActionConst (Object km) = do
+      Object props <- AKM.lookup "properties" km
+      Object actObj <- AKM.lookup "action" props
+      String c <- AKM.lookup "const" actObj
+      pure c
+    extractActionConst _ = Nothing
+
+-- | The required set of each branch must include the discriminant
+-- AND every field listed in `sbRequired`. Pre-helper, callers
+-- forgetting to repeat the discriminant in `required` was the
+-- bug; the helper splices it in automatically and this test
+-- pins that.
+testSchemaRequiredSetsAreCorrect :: IO Bool
+testSchemaRequiredSetsAreCorrect = pure $
+  case sampleRefactorSchema of
+    Object km -> case AKM.lookup "oneOf" km of
+      Just (Array xs) ->
+        let reqs = mapMaybe extractRequired (V.toList xs)
+            renameSet  = ["action", "module_path", "new_name", "old_name"
+                         , "scope_line_start", "scope_line_end"]
+            extractSet = ["action", "module_path", "new_name"
+                         , "scope_line_start", "scope_line_end"]
+        in reqs == [renameSet, extractSet]
+      _ -> False
+    _ -> False
+  where
+    extractRequired (Object km) = do
+      Array reqs <- AKM.lookup "required" km
+      pure [ s | String s <- V.toList reqs ]
+    extractRequired _ = Nothing
+
+-- | additionalProperties: false is essential so a host doesn't
+-- silently accept fields meant for the other branch.
+testSchemaAdditionalPropertiesFalse :: IO Bool
+testSchemaAdditionalPropertiesFalse = pure $
+  case sampleRefactorSchema of
+    Object km -> case AKM.lookup "oneOf" km of
+      Just (Array xs) -> all checkBranch (V.toList xs)
+      _               -> False
+    _ -> False
+  where
+    checkBranch (Object km) =
+      AKM.lookup "additionalProperties" km == Just (Bool False)
+    checkBranch _ = False
+
+-- | Anchor: 'flatObjectSchema' for non-discriminated tools matches
+-- the inline shape every Tool/*.hs already uses today (pre-migration).
+-- Tests the helper produces a valid flat schema with the same
+-- property + required set that the inline form does.
+testSchemaFlatObject :: IO Bool
+testSchemaFlatObject =
+  let s = Schema.flatObjectSchema
+            [ ("expression", Schema.stringField "Haskell expression to eval.") ]
+            [ "expression" ]
+  in pure $ case s of
+       Object km ->
+            AKM.lookup "type" km == Just (String "object")
+         && AKM.lookup "additionalProperties" km == Just (Bool False)
+         && case AKM.lookup "required" km of
+              Just (Array reqs) -> reqs == V.fromList [String "expression"]
+              _                 -> False
+       _ -> False
+
+-- | Field-builder anchors: each helper's output has the right
+-- `type` + a `description`. Cheap pin against accidental drift.
+testSchemaFieldBuilders :: IO Bool
+testSchemaFieldBuilders =
+  let cases = [ ("string",  Schema.stringField  "x")
+              , ("integer", Schema.integerField "x")
+              , ("boolean", Schema.booleanField "x")
+              , ("array",   Schema.arrayField   "x")
+              ]
+      ok (expected, v) = case v of
+        Object km -> AKM.lookup "type" km == Just (String expected)
+                  && AKM.lookup "description" km == Just (String "x")
+        _         -> False
+  in pure (all ok cases)
 
 -- | Round-trip a property through the on-disk store. Uses a unique
 -- temp project dir to keep repeated test runs independent.
