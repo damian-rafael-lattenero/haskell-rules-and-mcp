@@ -1,7 +1,8 @@
 -- | Tool dispatch + shared server state.
 --
--- Mirrors the role of @mcp-server/src/index.ts@: owns the @projectDir@,
--- owns the GHCi session singleton, and routes JSON-RPC methods to handlers.
+-- Mirrors the role of @mcp-server/src/index.ts@: owns the
+-- @projectDir@, owns the GHCi session singleton, and routes
+-- JSON-RPC methods to handlers.
 --
 -- Important invariant ported from the TS audit (finding A1): @projectDir@
 -- is held in a 'TVar', not a top-level @let@ binding, so concurrent
