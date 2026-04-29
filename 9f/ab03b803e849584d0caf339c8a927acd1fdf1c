@@ -1,0 +1,31 @@
+mcp-server-haskell/test-e2e/Main.hs
+  033795528ddcaec0 101,264-265
+mcp-server-haskell/test/Spec.hs
+  033795528ddcaec0 326-335,1525-1586
+mcp-server-haskell/test-e2e/Scenarios/FlowEvalContextDedup.hs
+  033795528ddcaec0 1-180
+mcp-server-haskell/src/HaskellFlows/Tool/Eval.hs
+  033795528ddcaec0 16-18,30,37,39,42,269-309,313-317
+mcp-server-haskell/haskell-flows-mcp.cabal
+  033795528ddcaec0 267
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "9fab03b803e849584d0caf339c8a927acd1fdf1c",
+  "prompts": {
+    "033795528ddcaec0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c2325b8-3973-461e-9af9-e12d8c594bf0",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 401,
+      "total_deletions": 26,
+      "accepted_lines": 27518,
+      "overriden_lines": 0
+    }
+  }
+}
