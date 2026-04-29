@@ -1,5 +1,5 @@
 -- | @WorkflowState@ — light session-level tracker the Server
--- updates after every successful tool call. @ghc_workflow@'s
+-- updates after every successful tool call.  @ghc_workflow@'s
 -- @help@ action reads this state to render context-aware advice
 -- ("you edited 4 times since last load, recompile"; "regression
 -- has N saved properties, consider running it") instead of a
