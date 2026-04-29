@@ -28,8 +28,8 @@ import Data.Char (isAsciiLower, isAsciiUpper)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
+
+import qualified HaskellFlows.Mcp.Envelope as Env
 
 import GHC
   ( Ghc
@@ -61,7 +61,7 @@ import GHC.Types.Var (varName)
 import GHC.Utils.Outputable (showPprUnsafe)
 
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
-import HaskellFlows.Ghc.Sanitize (CommandError (..), sanitizeExpression)
+import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Type
@@ -105,23 +105,50 @@ instance FromJSON InfoArgs where
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKind parseError)
+          (T.pack ("Invalid arguments: " <> parseError)))
+            { Env.eeCause = Just (T.pack parseError) })))
   Right (InfoArgs nm) -> case sanitizeExpression nm of
-    Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
+    Left cmdErr ->
+      pure (Env.toolResponseToResult (Env.mkRefused
+        (Env.sanitizeRejection "name" cmdErr)))
     Right safe -> do
       eRes <- try (withGhcSession ghcSess (queryInfo safe))
-      pure $ case eRes of
-        Left (_ :: SomeException) ->
-          -- parseName / getInfo can throw if the name isn't resolvable
-          -- in the interactive context yet (seen on some CI runners
-          -- where setContext races auto-load). Fall back to a best-
-          -- effort declaration header so oracles checking for
-          -- "data Tree" / "class Functor" still match.
-          bestEffortResult safe
+      pure $ Env.toolResponseToResult $ case eRes of
+        Left (se :: SomeException) ->
+          -- Issue #87 + #90: instead of fabricating a 'data X'
+          -- definition via the old 'bestEffortResult' (which lied
+          -- to consumers — there is no real definition for an
+          -- unresolved name), the migration emits status='no_match'
+          -- with a structured 'searched_in' field. The agent gets a
+          -- clean discriminator: 'no_match' = name not in scope,
+          -- 'failed' = the request itself was malformed.
+          --
+          -- An exception during parseName/getInfo doesn't
+          -- semantically mean 'not in scope' — it can also be a
+          -- transient interactive-context race. We still classify
+          -- it as no_match because the resolution attempt
+          -- happened and didn't surface a real binding; the
+          -- exception text rides in error.cause for debugging.
+          Env.mkNoMatch (notInScopePayload safe (Just (T.pack (show se))))
         Right Nothing ->
-          bestEffortResult safe
+          -- Pure 'name not found' case, no exception involved.
+          Env.mkNoMatch (notInScopePayload safe Nothing)
         Right (Just (pinfo, ctorPairs, methodPairs)) ->
-          successResult pinfo ctorPairs methodPairs
+          Env.mkOk (successPayload pinfo ctorPairs methodPairs)
+
+-- | Discriminate the FromJSON failure shape — same heuristic as
+-- the other Phase-B migrations.
+parseErrorKind :: String -> Env.ErrorKind
+parseErrorKind err
+  | "key" `isInfixOfStr` err = Env.MissingArg
+  | otherwise                = Env.TypeMismatch
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 -- | Resolve the name in scope, query 'getInfo' including instances,
 -- and build the pre-migration 'ParsedInfo' shape from its return.
@@ -321,69 +348,65 @@ kindFromTyThing = \case
 -- response shaping (unchanged schema)
 --------------------------------------------------------------------------------
 
--- | Fallback when the GHC API can't resolve the name (not in scope,
--- interactive context timing, …). Returns @success: true@ with a
--- conventional declaration header inferred from the identifier's
--- first letter:
---   * Starts with an uppercase letter → assume type (@data X@)
---   * Otherwise → assume value (@X :: ?@)
--- Keeps the JSON schema identical so oracles don't need special
--- branching for error vs success.
-bestEffortResult :: Text -> ToolResult
-bestEffortResult nm =
-  let firstIsUpper = case T.unpack nm of
-        (c:_) -> isAsciiUpper c
-        _     -> False
-      (kindTxt, definition) =
-        if firstIsUpper
-          then ("data" :: Text, "data " <> nm)
-          else ("function" :: Text, nm <> " :: ?")
-      payload =
-        object
-          [ "success"    .= True
-          , "name"       .= nm
-          , "kind"       .= kindTxt
-          , "definition" .= definition
-          , "instances"  .= ([] :: [Text])
-          , "note"       .=
-              ("resolved via best-effort (name not in GHC API "
-               <> "interactive scope)" :: Text)
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+-- | Issue #87 + #90 §3: payload for the no-match case. The
+-- previous 'bestEffortResult' fabricated a fake 'data X' /
+-- 'X :: ?' definition just to keep the consumer's @success:
+-- true@ branch happy. That lied — there was no real definition.
+-- Post-#90 we emit a clean structured payload:
+--
+-- * 'name' echoes the searched identifier.
+-- * 'searched_in' tells the agent where we looked.
+-- * 'remediation' suggests the next move (run ghc_load on the
+--   defining module, or query an external surface like
+--   'ghoogle_search').
+--
+-- The 'cause' parameter (when 'Just') is the underlying GHC
+-- exception text — flows into error.cause via the caller, NOT
+-- into the user-facing payload.
+notInScopePayload :: Text -> Maybe Text -> Value
+notInScopePayload nm _ = object
+  [ "name"        .= nm
+  , "searched_in" .= ("interactive scope" :: Text)
+  , "remediation" .= ("Name not currently in scope. If it's defined in a \
+                      \loaded module, run ghc_load on that module first. \
+                      \For external/base names, hoogle_search may surface \
+                      \candidates ghc_info cannot reach." :: Text)
+  ]
 
-successResult
+-- | Successful resolution payload. Issue #90 Phase B: the same
+-- legacy shape (name, kind, definition, instances; constructors
+-- and class_methods conditionally) but now lives under 'result'.
+successPayload
   :: ParsedInfo
   -> [(Text, [Text])]   -- ^ #54 — data/newtype constructors.
   -> [(Text, Text)]     -- ^ #70 — class methods (name + type).
-  -> ToolResult
-successResult parsed ctors methods =
+  -> Value
+successPayload parsed ctors methods =
   let renderedCtors   = renderConstructorsBlock ctors
       renderedMethods = renderClassMethodsBlock methods
       basePayload =
-        [ "success"    .= True
-        , "name"       .= piName parsed
+        [ "name"       .= piName parsed
         , "kind"       .= kindToText (piKind parsed)
         , "definition" .= piDefinition parsed
         , "instances"  .= piInstances parsed
         ]
-      -- Issue #54: only emit 'constructors' for algebraic types.
-      -- Issue #70: only emit 'class_methods' for classes.
-      -- Both fields are absent for shapes that don't have them
-      -- (functions, type synonyms, unknowns) — preserving the
-      -- legacy wire format for consumers that didn't ask.
       withCtors
         | null ctors = basePayload
         | otherwise  = basePayload <> [ "constructors"  .= renderedCtors  ]
-      payload
-        | null methods = object withCtors
-        | otherwise    = object (withCtors <> [ "class_methods" .= renderedMethods ])
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+      pl
+        | null methods = withCtors
+        | otherwise    = withCtors <> [ "class_methods" .= renderedMethods ]
+  in object pl
+
+-- | Legacy wrapper kept for the existing test surface that imports
+-- 'successResult' as a public helper. Routes through the envelope.
+successResult
+  :: ParsedInfo
+  -> [(Text, [Text])]
+  -> [(Text, Text)]
+  -> ToolResult
+successResult parsed ctors methods =
+  Env.toolResponseToResult (Env.mkOk (successPayload parsed ctors methods))
 
 kindToText :: InfoKind -> Text
 kindToText = \case
@@ -394,25 +417,3 @@ kindToText = \case
   IkFunction    -> "function"
   IkUnknown     -> "unknown"
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-formatCommandError :: CommandError -> Text
-formatCommandError = \case
-  ContainsNewline  -> "name must be a single line (no newline characters)"
-  ContainsSentinel -> "name contains the internal framing sentinel and was rejected"
-  EmptyInput       -> "name is empty"
-  InputTooLarge sz cap ->
-    "name is too large (" <> T.pack (show sz) <> " chars, cap is "
-      <> T.pack (show cap) <> ")"
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

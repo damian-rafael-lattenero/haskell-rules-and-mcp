@@ -485,6 +485,12 @@ main = do
                                                    testHoleNoHoleMatch
       , test "Envelope #90 Phase B: ghc_hole rejects path traversal"
                                                    testHoleRejectsTraversal
+      , test "Envelope #90 Phase B: ghc_info on real symbol → status=ok (#87)"
+                                                   testInfoRealSymbolOk
+      , test "Envelope #90 Phase B: ghc_info on unknown name → status=no_match (closes #87)"
+                                                   testInfoUnknownNameNoMatch
+      , test "Envelope #90 Phase B: ghc_info refuses newline in name"
+                                                   testInfoRefusesNewline
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -3447,6 +3453,81 @@ testHoleRejectsTraversal = do
             && Env.eeField err == Just "module_path"
     _ -> False
 
+-- | Phase B helper: drive 'InfoTool.handle' against a fresh
+-- session with a tiny project loaded.
+runInfo :: A.Value -> IO (Either String Env.ToolResponse)
+runInfo args = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-info-test"
+  removePathForcibly dir
+  createDirectoryIfMissing True (dir </> "src")
+  TIO.writeFile (dir </> "src" </> "Foo.hs")
+    (T.pack "module Foo where\nfoo :: Int\nfoo = 1\n")
+  result <- case mkProjectDir dir of
+    Left _   -> pure (Left "could not build ProjectDir")
+    Right pd -> do
+      sess <- startGhcSession pd
+      tr   <- InfoTool.handle sess args
+      killGhcSession sess
+      case trContent tr of
+        [TextContent body] ->
+          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+        _ -> pure (Left "expected exactly one TextContent")
+  removePathForcibly dir
+  pure result
+
+-- | 'ghc_info' on a real symbol resolves to a structured definition.
+-- Status='ok' with result.{name, kind, definition, instances}.
+testInfoRealSymbolOk :: IO Bool
+testInfoRealSymbolOk = do
+  decoded <- runInfo (A.object [ "name" A..= ("foo" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "name") payload == Just (A.String "foo")
+            && AKM.member (AKey.fromText "kind") payload
+            && AKM.member (AKey.fromText "definition") payload
+    _ -> False
+
+-- | Issue #87 closure: 'ghc_info' on a name not in scope MUST emit
+-- status='no_match' (the question was well-formed; the answer is
+-- the empty set), NOT a fabricated 'data X' definition. This is
+-- the load-bearing test for #87 — the previous behaviour was
+-- success=true with a synthesised definition that didn't exist
+-- in the project, in base, or anywhere reachable. Post-#90 the
+-- definition field is gone (no fabrication), result.searched_in
+-- documents where we looked, result.remediation suggests the
+-- next move.
+testInfoUnknownNameNoMatch :: IO Bool
+testInfoUnknownNameNoMatch = do
+  decoded <- runInfo
+    (A.object [ "name" A..= ("DoesNotExistName123" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusNoMatch
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "name") payload
+            == Just (A.String "DoesNotExistName123")
+            && AKM.member (AKey.fromText "searched_in") payload
+            && AKM.member (AKey.fromText "remediation") payload
+            -- The fabricated 'data DoesNotExistName123' definition
+            -- is GONE — that was the #87 bug.
+            && not (AKM.member (AKey.fromText "definition") payload)
+    _ -> False
+
+-- | Newline in name → status='refused' with kind='newline_injection'.
+testInfoRefusesNewline :: IO Bool
+testInfoRefusesNewline = do
+  decoded <- runInfo (A.object [ "name" A..= ("foo\n:quit" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusRefused
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.NewlineInjection
+            && Env.eeField err == Just "name"
+    _ -> False
+
 --------------------------------------------------------------------------------
 -- Phase 9: Lint parser + Cabal validator + check_project + hole fits
 --------------------------------------------------------------------------------
@@ -5197,11 +5278,15 @@ testInfoSuccessIncludesCtors =
       result = InfoTool.successResult parsed ctors []
   in pure $ case trContent result of
        [TextContent t] ->
+         -- Issue #90 Phase B: 'constructors' moved under 'result'.
+         -- Drill through the envelope to keep the existing oracle.
          case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-           Just (A.Object o) -> case AKM.lookup (AKey.fromText "constructors") o of
-             Just (A.Array xs) -> length xs == 2
-             _                 -> False
-           _                  -> False
+           Just (A.Object env) -> case AKM.lookup (AKey.fromText "result") env of
+             Just (A.Object o) -> case AKM.lookup (AKey.fromText "constructors") o of
+               Just (A.Array xs) -> length xs == 2
+               _                 -> False
+             _ -> False
+           _ -> False
        _ -> False
 
 -- | Issue #54: when no constructors apply (class / function /
@@ -5220,9 +5305,11 @@ testInfoSuccessDropsCtorField =
   in pure $ case trContent result of
        [TextContent t] ->
          case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-           Just (A.Object o) ->
-             isNothing (AKM.lookup (AKey.fromText "constructors") o)
-           _                  -> False
+           Just (A.Object env) -> case AKM.lookup (AKey.fromText "result") env of
+             Just (A.Object o) ->
+               isNothing (AKM.lookup (AKey.fromText "constructors") o)
+             _ -> False
+           _ -> False
        _ -> False
 
 -- | Issue #70: 'renderClassMethodsBlock' produces one
@@ -5256,10 +5343,12 @@ testInfoSuccessClassMethods =
   in pure $ case trContent result of
        [TextContent t] ->
          case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-           Just (A.Object o) ->
-             case AKM.lookup (AKey.fromText "class_methods") o of
-               Just (A.Array xs) -> length xs == 1
-               _                 -> False
+           Just (A.Object env) -> case AKM.lookup (AKey.fromText "result") env of
+             Just (A.Object o) ->
+               case AKM.lookup (AKey.fromText "class_methods") o of
+                 Just (A.Array xs) -> length xs == 1
+                 _                 -> False
+             _ -> False
            _ -> False
        _ -> False
 
@@ -5279,8 +5368,10 @@ testInfoSuccessDropsClassMethods =
   in pure $ case trContent result of
        [TextContent t] ->
          case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-           Just (A.Object o) ->
-             isNothing (AKM.lookup (AKey.fromText "class_methods") o)
+           Just (A.Object env) -> case AKM.lookup (AKey.fromText "result") env of
+             Just (A.Object o) ->
+               isNothing (AKM.lookup (AKey.fromText "class_methods") o)
+             _ -> False
            _ -> False
        _ -> False
 
