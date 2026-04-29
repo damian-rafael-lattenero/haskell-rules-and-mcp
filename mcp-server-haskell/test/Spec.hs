@@ -231,6 +231,7 @@ import HaskellFlows.Ghc.ApiSession
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
+import qualified HaskellFlows.Tool.Imports as ImportsTool
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
 import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmupTool
 import qualified HaskellFlows.Tool.ValidateCabal as ValidateCabalTool
@@ -434,6 +435,8 @@ main = do
                                                    testBootstrapRejectsUnknownHost
       , test "Envelope #90 Phase B: ghc_bootstrap rejects missing host"
                                                    testBootstrapRejectsMissingHost
+      , test "Envelope #90 Phase B: ghc_imports emits envelope with count + imports"
+                                                   testImportsEnvelopeShape
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -2885,6 +2888,39 @@ testBootstrapRejectsMissingHost = do
       | Env.reStatus env == Env.StatusFailed
       , Just err <- Env.reError env ->
           Env.eeKind err == Env.MissingArg
+    _ -> False
+
+-- | 'ghc_imports' returns the interactive context's import list.
+-- Phase B: status='ok' with result carrying the legacy 'count' +
+-- 'imports' fields (preserved during the dual-shape window). The
+-- absolute *contents* of the imports list depend on whatever
+-- autoLoadProject + augmentEvalContext settled on (Prelude + a few
+-- stdlib modules); we don't pin specific names — only the contract.
+testImportsEnvelopeShape :: IO Bool
+testImportsEnvelopeShape = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-imports-test"
+  removePathForcibly dir
+  createDirectoryIfMissing True (dir </> "src")
+  TIO.writeFile (dir </> "src" </> "Foo.hs")
+    (T.pack "module Foo where\nfoo :: Int\nfoo = 1\n")
+  result <- case mkProjectDir dir of
+    Left _   -> pure (Left "could not build ProjectDir")
+    Right pd -> do
+      sess <- startGhcSession pd
+      tr   <- ImportsTool.handle sess (A.object [])
+      killGhcSession sess
+      case trContent tr of
+        [TextContent body] ->
+          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+        _ -> pure (Left "expected exactly one TextContent")
+  removePathForcibly dir
+  pure $ case result of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.member (AKey.fromText "count")   payload
+            && AKM.member (AKey.fromText "imports") payload
     _ -> False
 
 --------------------------------------------------------------------------------

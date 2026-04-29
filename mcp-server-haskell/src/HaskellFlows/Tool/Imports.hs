@@ -13,8 +13,6 @@ import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
 import GHC
   ( Ghc
@@ -23,6 +21,7 @@ import GHC
   )
 import GHC.Utils.Outputable (showPprUnsafe)
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -46,9 +45,13 @@ descriptor =
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess _rawArgs = do
   eRes <- try (withGhcSession ghcSess queryImports)
-  pure $ case eRes of
-    Left (se :: SomeException) -> errorResult (T.pack ("GHC API error: " <> show se))
-    Right imports              -> successResult imports
+  pure $ Env.toolResponseToResult $ case eRes of
+    Left (se :: SomeException) ->
+      Env.mkFailed
+        ((Env.mkErrorEnvelope Env.InternalError
+            (T.pack ("GHC API error: " <> show se)))
+              { Env.eeCause = Just (T.pack (show se)) })
+    Right imports -> Env.mkOk (importsPayload imports)
 
 queryImports :: Ghc [Text]
 queryImports = map renderImport <$> getContext
@@ -58,24 +61,15 @@ renderImport = \case
   IIDecl decl  -> T.pack (showPprUnsafe decl)
   IIModule mn  -> "module " <> T.pack (showPprUnsafe mn)
 
-successResult :: [Text] -> ToolResult
-successResult imports =
-  let payload = object
-        [ "success" .= True
-        , "count"   .= length imports
-        , "imports" .= imports
-        ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
-
-errorResult :: Text -> ToolResult
-errorResult msg = ToolResult
-  { trContent = [ TextContent (encodeUtf8Text (object
-      [ "success" .= False, "error" .= msg ])) ]
-  , trIsError = True
-  }
+-- | Result payload (pre-envelope shape preserved). Issue #90 Phase B
+-- moves it under 'result' but keeps the field names so consumers
+-- that read @count@ + @imports@ directly stay compatible during
+-- the migration window.
+importsPayload :: [Text] -> Value
+importsPayload imports = object
+  [ "count"   .= length imports
+  , "imports" .= imports
+  ]
 
 -- | Pre-migration parser kept for the unit-test scaffolding. Retained
 -- as a pure parser fixture so the tests can pin the text-shape
@@ -86,6 +80,3 @@ parseImportsOutput = filter keep . map T.strip . T.lines
     keep ln =
       not (T.null ln)
       && not (T.isInfixOf "via the command line" ln)
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
