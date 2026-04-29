@@ -77,6 +77,7 @@ import qualified Scenarios.FlowInfoConstructors   as FlowIC
 import qualified Scenarios.FlowLoadHoleDiagnostics as FlowLHD
 import qualified Scenarios.FlowGatesProperties    as FlowGP
 import qualified Scenarios.FlowCreateProjectNameValidation as FlowCPV
+import qualified Scenarios.FlowBootstrapDocs      as FlowBD
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
@@ -195,6 +196,8 @@ scenarios =
     , False, FlowGP.runFlow )
   , ( "Flow: CreateProject name validation (#58 · Hackage rules)"
     , False, FlowCPV.runFlow )
+  , ( "Flow: Bootstrap docs (#56 · in-process model, no retired vocab)"
+    , False, FlowBD.runFlow )
   , ( "Flow: Dogfood replay (7 MCP fixes round-tripped through one session)"
     , True, FlowDFR.runFlow )
   , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"

@@ -518,6 +518,10 @@ main = do
       , test "guidance: markdown lists every tool"  testGuidanceMarkdownListsEveryTool
       , test "guidance: situation table non-empty"  testGuidanceSituationNonEmpty
       , test "guidance: no phantom ghc_session"    testGuidanceNoPhantomSession
+      , test "guidance: text drops retired-subprocess vocab (#56)" testGuidanceNoRetiredVocab
+      , test "guidance: markdown drops retired-subprocess vocab (#56)" testGuidanceMdNoRetiredVocab
+      , test "guidance: text mentions in-process GHC API (#56)" testGuidanceMentionsApi
+      , test "guidance: markdown mentions in-process GHC API (#56)" testGuidanceMdMentionsApi
       , test "deps: description has no phantom"     testDepsDescriptorNoPhantom
       , test "deps: hint text has no phantom"       testDepsHintNoPhantom
       , test "qcexport: modulePathToModule src"     testExportPathSrc
@@ -2445,6 +2449,64 @@ testGuidanceListsEveryTool :: IO Bool
 testGuidanceListsEveryTool = do
   let instructions = Guidance.sessionInstructionsText allToolDescriptors
   pure (all (`T.isInfixOf` instructions) allToolNameTexts)
+
+-- | Issue #56: the rules text emitted by 'ghc_bootstrap' is
+-- baked into the binary via 'workflowRulesMarkdown' /
+-- 'sessionInstructionsText'. It used to document the retired
+-- subprocess GHCi model ('SessionStatus = Alive | Overflowed |
+-- Dead', 'executeNoLock', 'registerDelay', 'GHCi death')  —
+-- vocabulary that has nothing to do with the in-process GHC API
+-- session that's actually running. Agents debugging timeouts
+-- looked for invariants that didn't exist.
+--
+-- Pin both halves of the contract:
+--   * The retired-model words must NOT appear in the rendered text.
+--   * The new model words MUST appear so the bake-source isn't
+--     accidentally cleared.
+
+testGuidanceNoRetiredVocab :: IO Bool
+testGuidanceNoRetiredVocab = do
+  let txt = Guidance.sessionInstructionsText allToolDescriptors
+      retiredTerms =
+        [ "SessionStatus"
+        , "executeNoLock"
+        , "registerDelay"
+        , "GHCi death"
+        ]
+  pure (not (any (`T.isInfixOf` txt) retiredTerms))
+
+testGuidanceMdNoRetiredVocab :: IO Bool
+testGuidanceMdNoRetiredVocab = do
+  let md = Guidance.workflowRulesMarkdown allToolDescriptors
+      retiredTerms =
+        [ "SessionStatus"
+        , "executeNoLock"
+        , "registerDelay"
+        , "GHCi death"
+        ]
+  pure (not (any (`T.isInfixOf` md) retiredTerms))
+
+testGuidanceMentionsApi :: IO Bool
+testGuidanceMentionsApi = do
+  let txt = T.toLower (Guidance.sessionInstructionsText allToolDescriptors)
+      newTerms = map T.toLower
+        [ "in-process"
+        , "HscEnv"
+        , "MVar"
+        , "resetHscEnvInPlace"
+        ]
+  pure (all (`T.isInfixOf` txt) newTerms)
+
+testGuidanceMdMentionsApi :: IO Bool
+testGuidanceMdMentionsApi = do
+  let md = T.toLower (Guidance.workflowRulesMarkdown allToolDescriptors)
+      newTerms = map T.toLower
+        [ "in-process"
+        , "HscEnv"
+        , "MVar"
+        , "resetHscEnvInPlace"
+        ]
+  pure (all (`T.isInfixOf` md) newTerms)
 
 -- | BUG-09: the markdown resource must match the plain-text
 -- instructions in tool coverage — both are derived from the same
@@ -4643,11 +4705,17 @@ testInstructionsMentionCore = do
   -- rendered text contains (a) every registered tool name and
   -- (b) the core workflow / invariant markers. Any drift between
   -- the registry and the text fails here.
+  --
+  -- Issue #56: the post-Wave-5 model uses HscEnv + MVar, NOT the
+  -- retired SessionStatus / executeNoLock / registerDelay
+  -- subprocess GHCi vocabulary. Drop the latter from the
+  -- expected-markers set; rely on 'testGuidanceNoRetiredVocab'
+  -- + 'testGuidanceMentionsApi' to pin both halves.
   let instructions = Guidance.sessionInstructionsText allToolDescriptors
       staticMarkers =
         [ "ci-local.sh"
-        , "SessionStatus"   , "Dead"
-        , "registerDelay"   , "10-min"
+        , "HscEnv"          , "MVar"
+        , "10-min"
         , "dogfood"
         , "handshake"
         , "situation"       , "invariant"
