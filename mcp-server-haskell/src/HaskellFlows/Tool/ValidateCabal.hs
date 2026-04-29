@@ -47,6 +47,7 @@ import System.Process
   )
 import System.Timeout (timeout)
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
@@ -99,17 +100,27 @@ cabalCheckTimeoutMicros = 30 * 1_000_000  -- 30 s
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs :: Either String Value of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope Env.Validation
+          (T.pack ("Invalid arguments: " <> parseError)))
+            { Env.eeCause = Just (T.pack parseError) })))
   Right _ -> do
     mCabalFile <- findCabalFile pd
     case mCabalFile of
       Nothing ->
-        pure (errorResult "No .cabal file found in project root")
+        pure (Env.toolResponseToResult (Env.mkFailed
+          ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
+              "No .cabal file found in project root")
+                { Env.eeRemediation =
+                    Just "Run ghc_create_project to scaffold one, or check that the project root is correct." })))
       Just file -> do
         readRes <- try (TIO.readFile file) :: IO (Either SomeException Text)
         case readRes of
           Left e ->
-            pure (errorResult (T.pack ("Could not read cabal file: " <> show e)))
+            pure (Env.toolResponseToResult (Env.mkFailed
+              ((Env.mkErrorEnvelope Env.SubprocessError
+                  (T.pack ("Could not read cabal file: " <> show e)))
+                    { Env.eeCause = Just (T.pack (show e)) })))
           Right body -> do
             heuristicIssues <- (scanCabalText body ++) <$> scanExposedModules pd body
             cabalCheckIssues <- runCabalCheck pd
@@ -392,39 +403,63 @@ runCabalCheck pd = do
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Build the response. Three structurally-distinct outcomes after
+-- issue #90 Phase B:
+--
+-- * No issues at all → 'Env.StatusOk'.
+-- * Warnings only → 'Env.StatusPartial' with one envelope-warning
+--   per issue. The cabal file is still shippable; the agent can
+--   decide whether to fix.
+-- * One or more cabal errors → 'Env.StatusFailed' with
+--   'Env.Validation' kind. The 'cause' field carries a short tally
+--   of the issue counts; the structured 'issues' array stays inside
+--   'result' so consumers that branch per-issue keep the same
+--   shape.
+--
+-- The 'errors', 'warnings', 'issues', 'cabal_file', and 'summary'
+-- fields are preserved inside 'result' so any consumer keying on
+-- the legacy shape continues to function during the dual-shape
+-- window. The 'cause' field on the error envelope mirrors the
+-- summary text without poisoning the user-facing 'message' with
+-- counts.
 renderResult :: FilePath -> [Issue] -> ToolResult
 renderResult file issues =
   let errs  = length (filter ((== CabalSevError) . iSeverity) issues)
       warns = length (filter ((== CabalSevWarn)  . iSeverity) issues)
+      summary = summarise errs warns
       payload =
         object
-          [ "success"    .= (errs == 0)
-          , "cabal_file" .= T.pack file
+          [ "cabal_file" .= T.pack file
           , "errors"     .= errs
           , "warnings"   .= warns
           , "issues"     .= issues
-          , "summary"    .= summarise errs warns
+          , "summary"    .= summary
           ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = errs > 0
-       }
+      response = case (errs, warns) of
+        (0, 0)     -> Env.mkOk payload
+        (0, _)     -> Env.withWarnings (map issueToWarning warningIssues)
+                        (Env.mkPartial payload)
+        (_, _)     -> Env.mkFailed
+          ((Env.mkErrorEnvelope Env.Validation
+              ("cabal validation found " <> T.pack (show errs) <> " error(s)"))
+                { Env.eeCause = Just summary })
+      warningIssues = filter ((== CabalSevWarn) . iSeverity) issues
+  in Env.toolResponseToResult response
 
 summarise :: Int -> Int -> Text
 summarise 0 0 = "cabal file is clean."
 summarise 0 w = T.pack (show w) <> " warning(s); cabal file is shippable."
 summarise e w = T.pack (show e) <> " error(s), " <> T.pack (show w) <> " warning(s)."
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+-- | Translate a Phase-A 'Issue' into an envelope 'Warning'. Carries
+-- the issue's 'kind' inside 'wExtra' so an agent can branch on
+-- specific cabal-check categories without re-parsing the message.
+issueToWarning :: Issue -> Env.Warning
+issueToWarning i = Env.Warning
+  { Env.wKind    = Env.OtherWarning
+  , Env.wMessage = iMessage i
+  , Env.wExtra   = Just (object
+      [ "kind"     .= iKind i
+      , "severity" .= iSeverity i
+      ])
+  }
