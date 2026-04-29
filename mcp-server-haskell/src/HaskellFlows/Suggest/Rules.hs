@@ -303,12 +303,42 @@ ruleListLengthPreserving = Rule
 -- Same same-inner-type guard as 'ruleListLengthPreserving': the
 -- self-composition only type-checks when arg and return carry the
 -- same element type.
+--
+-- Issue #73: 'Self-inverse on lists' is the structural twin of
+-- 'Involutive' (@f . f == id@) — both fail for normaliser-named
+-- functions for the same reason ('normalize . normalize == normalize',
+-- not == id). The pre-#73 rule was only Medium-confidence regardless
+-- of the function name, so an agent following confidence rankings
+-- would burn a counterexample-search round-trip on a normaliser
+-- before reaching the (Low) Involutive twin. Apply the same
+-- dampening to keep the two rules in sync — when a name like
+-- 'simplify', 'normalize', 'canon', 'reduce', 'rewrite' shows up,
+-- self-inverse-on-lists drops to Low with a name-aware rationale.
 ruleListRoundtrip :: Rule
 ruleListRoundtrip = Rule
   { rId = "list-roundtrip"
   , rMatches = legacy $ \nm sig -> case (psArgs sig, psReturn sig) of
       ([TyList argInner], TyList retInner)
-        | argInner == retInner -> Just Suggestion
+        | argInner == retInner -> Just (mkSelfInverse nm)
+      _ -> Nothing
+  }
+  where
+    mkSelfInverse nm
+      | nameHintsOptimization nm = Suggestion
+          { sLaw        = "Self-inverse on lists"
+          , sProperty   =
+              "\\(xs :: [Int]) -> " <> nm <> " (" <> nm <> " xs) == xs"
+          , sRationale  = "Type is `[a] -> [a]` but the name hints at a \
+                          \normaliser (simplify / normalize / canon / fold / \
+                          \reduce / rewrite). Normalisers are idempotent on \
+                          \lists, not self-inverse — running this almost \
+                          \certainly fails on the first unsorted / non-canonical \
+                          \input. Consider the idempotent or length-preserving \
+                          \law instead."
+          , sConfidence = Low
+          , sCategory   = "list"
+          }
+      | otherwise = Suggestion
           { sLaw        = "Self-inverse on lists"
           , sProperty   =
               "\\(xs :: [Int]) -> " <> nm <> " (" <> nm <> " xs) == xs"
@@ -317,8 +347,6 @@ ruleListRoundtrip = Rule
           , sConfidence = Medium
           , sCategory   = "list"
           }
-      _ -> Nothing
-  }
 
 -- | @f :: a -> Bool@ (any arity) ⇒ dual-polarity sanity check:
 -- at least one input produces @True@ AND at least one produces

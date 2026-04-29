@@ -94,6 +94,7 @@ import qualified Scenarios.FlowHoleFitsBoundary   as FlowHFB
 import qualified Scenarios.FlowInfoClass          as FlowICls
 import qualified Scenarios.FlowCreateProjectGreen as FlowCPG
 import qualified Scenarios.FlowBrowseInteractive  as FlowBI
+import qualified Scenarios.FlowSuggestSelfInverseDampening as FlowSSID
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
@@ -246,6 +247,8 @@ scenarios =
     , False, FlowCPG.runFlow )
   , ( "Flow: Browse module-not-in-graph nextStep (#72)"
     , False, FlowBI.runFlow )
+  , ( "Flow: Suggest self-inverse dampening for normalisers (#73)"
+    , False, FlowSSID.runFlow )
   , ( "Flow: Dogfood replay (7 MCP fixes round-tripped through one session)"
     , True, FlowDFR.runFlow )
   , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"

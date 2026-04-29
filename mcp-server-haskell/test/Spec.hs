@@ -640,6 +640,10 @@ main = do
       , test "regression: summariseLoadError caps at 600 chars (#51)" testRegressionSummariseCap
       , test "suggest: involutive Low for normalizer" testInvolutiveLowForNormalizer
       , test "suggest: involutive Medium for reverse" testInvolutiveMediumForReverse
+      , test "suggest: self-inverse-on-lists Low for normalizer (#73)"
+                                                                 testSelfInverseLowForNormalizer
+      , test "suggest: self-inverse-on-lists Medium for reverse (#73)"
+                                                                 testSelfInverseMediumForReverse
       , test "suggest: scope error -> structured hint" testSuggestScopeStructuredHint
       , test "suggest: parseShowModules simple"     testParseShowModulesSimple
       , test "suggest: parseShowModules with star"  testParseShowModulesStar
@@ -2938,6 +2942,46 @@ testInvolutiveMediumForReverse =
       in case row of
            [s] -> sConfidence s == Medium
                   && "involutive" `T.isInfixOf` T.toLower (sRationale s)
+                  && not ("normaliser" `T.isInfixOf` sRationale s)
+           _   -> False
+
+-- | Issue #73: 'Self-inverse on lists' is the structural twin
+-- of 'Involutive' (same f.f==id law, list-shaped surface).
+-- The pre-#73 rule ranked it Medium for ANY list signature,
+-- including normalisers — making the agent burn a round-trip
+-- on the losing law before reaching the (Low) Involutive
+-- twin. Same dampening applies: when the function name hints
+-- at canonicalisation, the rule must drop to Low with a
+-- name-aware rationale.
+testSelfInverseLowForNormalizer :: IO Bool
+testSelfInverseLowForNormalizer =
+  case parseSignature "[a] -> [a]" of
+    Nothing  -> pure False
+    Just sig -> pure $
+      let names = ["simplify", "normalize", "canonicalize"
+                  , "fold", "optimize", "reduce", "rewrite"]
+          row nm =
+            [ s | s <- applyRules nm sig, sLaw s == "Self-inverse on lists" ]
+      in all (\nm ->
+                case row nm of
+                  [s] -> sConfidence s == Low
+                         && "normaliser" `T.isInfixOf` sRationale s
+                  _   -> False)
+              names
+
+-- | Issue #73 — symmetric: 'reverse :: [a] -> [a]' is a real
+-- self-inverse, so the rule stays Medium with the original
+-- "reverse, rot-k, swap-adjacent-pairs" rationale.
+testSelfInverseMediumForReverse :: IO Bool
+testSelfInverseMediumForReverse =
+  case parseSignature "[a] -> [a]" of
+    Nothing  -> pure False
+    Just sig -> pure $
+      let row =
+            [ s | s <- applyRules "reverse" sig, sLaw s == "Self-inverse on lists" ]
+      in case row of
+           [s] -> sConfidence s == Medium
+                  && "reverse" `T.isInfixOf` sRationale s
                   && not ("normaliser" `T.isInfixOf` sRationale s)
            _   -> False
 
