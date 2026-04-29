@@ -335,6 +335,16 @@ dispatch name payload = case name of
   -- example before deleting.
   GhcDeterminism -> Just (determinismNext payload)
 
+  -- Issue #63: the explainer just told you which packages
+  -- conflict. The natural follow-up is editing the .cabal
+  -- bound that prevents resolution.
+  GhcDepsExplain -> Just (simple GhcDeps
+    "The conflict's root_cause names the package whose pin is forcing \
+    \the solver into the dead end. Either bump that constraint via \
+    \ghc_deps or add an 'allow-newer' entry to cabal.project. Phase 2 \
+    \will generate verified candidates automatically."
+    Nothing)
+
   -- Issue #62: a successful move was already verified via the
   -- internal loadForTarget; the agent's next reasonable check is
   -- the project-level gate so any consumer the heuristic missed

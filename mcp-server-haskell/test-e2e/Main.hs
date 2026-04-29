@@ -81,6 +81,7 @@ import qualified Scenarios.FlowBootstrapDocs      as FlowBD
 import qualified Scenarios.FlowFixWarningUnusedBinding as FlowFWUB
 import qualified Scenarios.FlowRemoveModulesDownstream as FlowRMD
 import qualified Scenarios.FlowMoveSymbol         as FlowMS
+import qualified Scenarios.FlowDepsExplain        as FlowDE
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
@@ -207,6 +208,8 @@ scenarios =
     , False, FlowRMD.runFlow )
   , ( "Flow: Move symbol cross-module (#62 · slice + rewrite + verify)"
     , True, FlowMS.runFlow )
+  , ( "Flow: DepsExplain solver translator (#63 · root cause)"
+    , False, FlowDE.runFlow )
   , ( "Flow: Dogfood replay (7 MCP fixes round-tripped through one session)"
     , True, FlowDFR.runFlow )
   , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"

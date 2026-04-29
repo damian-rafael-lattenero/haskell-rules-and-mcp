@@ -106,6 +106,7 @@ import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import qualified HaskellFlows.Tool.CreateProject as CreateProject
 import qualified HaskellFlows.Tool.Move as MoveTool
+import qualified HaskellFlows.Tool.DepsExplain as DepsExplain
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import qualified HaskellFlows.Tool.Regression as RegTool
@@ -528,6 +529,10 @@ main = do
       , test "move: moduleNameToPath canonical (#62)" testMoveModulePath
       , test "move: removeFromSourceExportList drops symbol (#62)" testMoveRemoveExport
       , test "move: removeFromSourceExportList no-op on open export (#62)" testMoveRemoveExportOpen
+      , test "deps_explain: parseSolverOutput on real dump (#63)" testDepsExplainParse
+      , test "deps_explain: identifyRootCause picks deepest (#63)" testDepsExplainRoot
+      , test "deps_explain: extractPackages strips versions (#63)" testDepsExplainPackages
+      , test "deps_explain: parseSolverOutput Nothing on clean (#63)" testDepsExplainClean
       , test "workflow-state: initial empty"       testWorkflowStateInitial
       , test "workflow-state: tracks load + edits" testWorkflowStateTracks
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
@@ -4416,6 +4421,63 @@ testMoveRemoveExportOpen =
         ]
       stripped = MoveTool.removeFromSourceExportList "double" body
   in pure (stripped == body)
+
+-- | Issue #63 Phase 1: a representative cabal solver dump must
+-- parse into a non-empty Conflict.
+testDepsExplainParse :: IO Bool
+testDepsExplainParse =
+  let dump = T.unlines
+        [ "Resolving dependencies..."
+        , "cabal: Could not resolve dependencies:"
+        , "[__0] trying: my-project-0.1.0.0 (user goal)"
+        , "[__1] next goal: aeson (dependency of my-project)"
+        , "[__1] rejecting: aeson-2.2.3.0 (conflict: my-project => aeson < 2.0)"
+        , "[__2] rejecting: aeson-2.1.2.1 (conflict: text >= 2.0 needed; text-1.2.5.0 installed)"
+        , "[__41] backjump limit reached (currently 4000, change with --max-backjumps)."
+        ]
+  in pure $ case DepsExplain.parseSolverOutput dump of
+       Just c  -> length (DepsExplain.cAll c) == 2
+                && DepsExplain.cBackjumps c == Just 4000
+       Nothing -> False
+
+-- | Issue #63: 'identifyRootCause' must pick the rejection at the
+-- greatest depth.
+testDepsExplainRoot :: IO Bool
+testDepsExplainRoot =
+  let rs =
+        [ DepsExplain.Rejection 1  "aeson-2.2.3.0" "my-project => aeson < 2.0"
+        , DepsExplain.Rejection 41 "aeson-2.1.2.1" "text needed"
+        , DepsExplain.Rejection 12 "lens-5.2.0"    "transitive"
+        ]
+      root = DepsExplain.identifyRootCause rs
+  in pure (DepsExplain.rDepth root == 41
+        && DepsExplain.rPackage root == "aeson-2.1.2.1")
+
+-- | Issue #63: 'extractPackages' strips version suffixes and
+-- dedupes by name.
+testDepsExplainPackages :: IO Bool
+testDepsExplainPackages =
+  let rs =
+        [ DepsExplain.Rejection 1  "aeson-2.2.3.0" "text >= 2.0"
+        , DepsExplain.Rejection 2  "aeson-2.1.2.1" "text needed"
+        , DepsExplain.Rejection 3  "lens-5.2.0"    "lens upper bound"
+        ]
+      pkgs = DepsExplain.extractPackages rs
+  in pure $ "aeson" `elem` pkgs
+        && "lens"  `elem` pkgs
+        -- Dedup: aeson appears twice in input.
+        && length (filter (== "aeson") pkgs) == 1
+
+-- | Issue #63: clean output (no rejections) → Nothing.
+testDepsExplainClean :: IO Bool
+testDepsExplainClean =
+  let dump = T.unlines
+        [ "Resolving dependencies..."
+        , "Build profile: -w ghc-9.12.2 -O1"
+        , "In order, the following will be built:"
+        , " - my-project-0.1.0.0 (lib)"
+        ]
+  in pure (isNothing (DepsExplain.parseSolverOutput dump))
 
 -- | Symmetric regression: 'ghc_remove_modules' still removes when
 -- given a valid name.

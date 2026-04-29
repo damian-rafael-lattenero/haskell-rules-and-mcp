@@ -107,6 +107,7 @@ import qualified HaskellFlows.Tool.QuickCheck      as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExportTool
 import qualified HaskellFlows.Tool.Refactor        as RefactorTool
 import qualified HaskellFlows.Tool.Move             as MoveTool
+import qualified HaskellFlows.Tool.DepsExplain      as DepsExplainTool
 import qualified HaskellFlows.Tool.Regression      as RegressionTool
 import qualified HaskellFlows.Tool.RemoveModules   as RemoveModulesTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
@@ -443,6 +444,12 @@ dispatchByName srv args = \case
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
     MoveTool.handle ghcSess pd args
+  GhcDepsExplain -> do
+    -- Issue #63 Phase 1: cabal solver-output translator. Spawns
+    -- 'cabal v2-build --dry-run' under Proc.cwd = projectDir;
+    -- otherwise pure parsing. No GhcSession needed.
+    pd <- readIORef (srvProjectDir srv)
+    DepsExplainTool.handle pd args
   GhcLint -> do
     pd <- readIORef (srvProjectDir srv)
     LintTool.handle pd args
@@ -573,6 +580,7 @@ allToolDescriptors =
   , GotoTool.descriptor
   , RefactorTool.descriptor
   , MoveTool.descriptor
+  , DepsExplainTool.descriptor
   , BatchTool.descriptor
   , LintTool.descriptor
   , ToolchainStatusTool.descriptor
