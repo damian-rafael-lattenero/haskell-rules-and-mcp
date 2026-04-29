@@ -1,4 +1,4 @@
--- | MCP protocol envelope types — JSON-RPC 2.0 plus MCP-specific payloads.
+-- | MCP protocol types — JSON-RPC 2.0 plus MCP-specific payloads.
 --
 -- We intentionally do not pull in a third-party MCP SDK: the protocol
 -- surface we need for Phase 1 is small (initialize, tools/list, tools/call,
