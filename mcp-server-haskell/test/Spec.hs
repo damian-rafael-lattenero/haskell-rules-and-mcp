@@ -507,6 +507,12 @@ main = do
       , test "apply_exports: accepts lowercase function"
           testHandleApplyExportsAcceptsLowercase
       , test "fix_warning: plan for unused imports" testFixWarningUnusedImports
+      , test "fix_warning: planForCode marks fixable=True for 66111 (#55)" testFixPlanFixable66111
+      , test "fix_warning: planForCode marks fixable=False for 40910 (#55)" testFixPlanNotFixable40910
+      , test "fix_warning: planForCodeWithName promotes 40910 (#55)" testFixPlanWithNamePromotes
+      , test "fix_warning: underscorePrefix replaces token (#55)" testUnderscorePrefixToken
+      , test "fix_warning: underscorePrefix respects word boundary (#55)" testUnderscorePrefixWordBoundary
+      , test "fix_warning: underscorePrefix idempotent on _name (#55)" testUnderscorePrefixIdempotent
       , test "workflow-state: initial empty"       testWorkflowStateInitial
       , test "workflow-state: tracks load + edits" testWorkflowStateTracks
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
@@ -4298,6 +4304,60 @@ testFixWarningUnusedImports =
   let plan = FixWarning.planForCode "GHC-66111"
   in pure $ FixWarning.fpDrop plan
          && T.isInfixOf "unused import" (T.toLower (FixWarning.fpHint plan))
+
+-- | Issue #55: 'fixable' is the machine-readable signal that
+-- replaces \"read the prose hint\". GHC-66111 has a deterministic
+-- drop-the-line patch → fixable=True.
+testFixPlanFixable66111 :: IO Bool
+testFixPlanFixable66111 =
+  let plan = FixWarning.planForCode "GHC-66111"
+  in pure $ FixWarning.fpFixable plan
+         && FixWarning.fpDrop plan
+
+-- | Issue #55: GHC-40910 with NO name → no concrete patch
+-- (the tool can't guess which binding the warning meant).
+-- fixable=False so the agent knows to fix by hand.
+testFixPlanNotFixable40910 :: IO Bool
+testFixPlanNotFixable40910 =
+  let plan = FixWarning.planForCode "GHC-40910"
+  in pure $ not (FixWarning.fpFixable plan)
+         && not (FixWarning.fpDrop plan)
+         && FixWarning.fpPatch plan == Nothing
+
+-- | Issue #55: GHC-40910 WITH a binding name → 'planForCodeWithName'
+-- promotes the plan to fixable=True with a concrete patch line that
+-- prefixes the name with an underscore.
+testFixPlanWithNamePromotes :: IO Bool
+testFixPlanWithNamePromotes =
+  let srcLine = "combineSorted xs ys = sort (xs ++ _holeArg)"
+      plan    = FixWarning.planForCodeWithName "GHC-40910" (Just "ys") srcLine
+  in pure $ FixWarning.fpFixable plan
+         && case FixWarning.fpPatch plan of
+              Just patched ->
+                patched == "combineSorted xs _ys = sort (xs ++ _holeArg)"
+              Nothing -> False
+
+-- | Issue #55 — 'underscorePrefix' core: replace a free word-
+-- boundary occurrence of the binding name with @_<name>@.
+testUnderscorePrefixToken :: IO Bool
+testUnderscorePrefixToken =
+  let line = "f x ys = x + 1"
+  in pure $
+    FixWarning.underscorePrefix "ys" line == Just "f x _ys = x + 1"
+
+-- | Issue #55: must NOT match substrings — 'ysx' or 'tys' don't
+-- count as the binding 'ys'.
+testUnderscorePrefixWordBoundary :: IO Bool
+testUnderscorePrefixWordBoundary =
+  let line = "process xys = xys + 1  -- 'ys' is not a token here"
+  in pure (FixWarning.underscorePrefix "ys" line == Nothing)
+
+-- | Issue #55: a name already underscore-prefixed → no patch.
+-- Prevents double-underscoring on retries.
+testUnderscorePrefixIdempotent :: IO Bool
+testUnderscorePrefixIdempotent =
+  let line = "f x _ys = x"
+  in pure (FixWarning.underscorePrefix "ys" line == Nothing)
 
 -- | Phase 11i: warning categorizer buckets common messages into
 -- the 5 coarse classes the agent can prioritise on.
