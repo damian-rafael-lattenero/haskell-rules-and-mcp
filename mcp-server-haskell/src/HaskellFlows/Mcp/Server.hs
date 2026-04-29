@@ -50,6 +50,7 @@ import HaskellFlows.Ghc.ApiSession
   , killGhcSession
   , startGhcSession
   )
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ErrorKind (ErrorKind (..), renderErrorKind)
 import HaskellFlows.Mcp.Guidance (sessionInstructionsText, workflowRulesMarkdown)
 import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
@@ -806,15 +807,23 @@ err_ rid e = Response { respId = rid, respPayload = Left e }
 --                  @"timeout"@, or @"tool_exception"@.
 --
 -- Found by 'Scenarios.FlowTimeoutEnforcement' in the e2e suite.
+-- | Issue #90: route exception responses through the same
+-- envelope every other tool emits. The legacy ErrorKind (this
+-- file's import) has 3 values; map each to the closed-enum
+-- 'Env.ErrorKind':
+--   * 'Timeout'          → Env.OuterTimeout (status='timeout')
+--   * 'SessionExhausted' → Env.SessionExhausted (status='failed')
+--   * 'ToolException'    → Env.InternalError (status='failed')
 toolException :: ErrorKind -> Text -> ToolResult
 toolException kind msg =
-  let payload = object
-        [ "success"    .= False
-        , "error"      .= ("Tool threw an exception: " <> msg)
-        , "error_kind" .= renderErrorKind kind
-        ]
-      encoded = TE.decodeUtf8 (BL.toStrict (encode payload))
-  in ToolResult
-       { trContent = [ TextContent encoded ]
-       , trIsError = True
-       }
+  let envKind = case kind of
+        Timeout          -> Env.OuterTimeout
+        SessionExhausted -> Env.SessionExhausted
+        ToolException    -> Env.InternalError
+      envErr = (Env.mkErrorEnvelope envKind
+                  ("Tool threw an exception: " <> msg))
+                    { Env.eeCause = Just msg }
+      response = case kind of
+        Timeout -> Env.mkTimeout envErr
+        _       -> Env.mkFailed  envErr
+  in Env.toolResponseToResult response
