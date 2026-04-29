@@ -53,7 +53,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
-import E2E.Envelope (statusOk, fieldInt)
+import E2E.Envelope (statusOk, fieldInt, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 import Scenarios.ExprSources
   ( evalSrc
@@ -83,12 +83,14 @@ fieldString _ _          = Nothing
 
 -- | Read a top-level boolean field.
 
--- | Count entries in a top-level array.
+-- | Count entries in an array field. Uses E2E.Envelope's
+-- auto-drilling lookupField so the field resolves whether it's
+-- at the top level (pre-#90 wire) or nested under @result@
+-- (post-#90 envelope).
 fieldArrayLen :: Text -> Value -> Maybe Int
-fieldArrayLen k (Object o) = case KeyMap.lookup (Key.fromText k) o of
+fieldArrayLen k v = case lookupField k v of
   Just (Array a) -> Just (V.length a)
   _              -> Nothing
-fieldArrayLen _ _          = Nothing
 
 -- | Read a numeric top-level field as 'Int'.
 
@@ -198,12 +200,15 @@ csToolField v = case lookupPath v ["tool"] of
   Just (String t) -> t
   _               -> ""
 
+-- | Walk a key path through a nested envelope. The first hop
+-- uses 'lookupField' from 'E2E.Envelope' so it auto-drills
+-- through @result@. Subsequent hops are direct (the deeper
+-- objects don't carry an envelope).
 lookupPath :: Value -> [Text] -> Maybe Value
 lookupPath v = foldl step (Just v)
   where
     step Nothing  _          = Nothing
-    step (Just (Object o)) k = KeyMap.lookup (Key.fromText k) o
-    step _ _                 = Nothing
+    step (Just outer) k      = lookupField k outer
 
 --------------------------------------------------------------------------------
 -- step 3 — add QuickCheck to test-suite

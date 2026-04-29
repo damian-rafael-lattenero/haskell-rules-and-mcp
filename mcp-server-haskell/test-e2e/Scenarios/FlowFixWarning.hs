@@ -26,6 +26,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 unusedImportSrc :: Text
@@ -86,9 +87,13 @@ runFlow c projectDir = do
 --------------------------------------------------------------------------------
 
 -- | A marker predicate: payload is any object that has at least
--- one of the user-facing output fields.
+-- one of the user-facing output fields. Routes through
+-- 'lookupField' from 'E2E.Envelope' so the auto-drill kicks in
+-- for envelope-wrapped responses (post-#90 these fields live
+-- under 'result').
 hasPatchSignals :: Value -> Bool
-hasPatchSignals (Object o) =
-  any (\k -> KeyMap.member (Key.fromText k) o)
+hasPatchSignals v =
+  any (\k -> case lookupField k v of
+              Just _  -> True
+              Nothing -> False)
       ["patch", "plan", "hint", "diff", "new_content"]
-hasPatchSignals _ = False
