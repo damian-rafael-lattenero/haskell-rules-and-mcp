@@ -1,0 +1,23 @@
+README.md
+  033795528ddcaec0 3,5-7,12-18,24,26,29-36,39,43,45-47,49-50,52,54-55,57-58,60,62-63,65-66,68,70-72,74,76,78,80-83,86-88,92,94-112,115-118,121,126-127,130,134,138-145,147,149-151,154-156,160,164,166-175,177,179,181,183,185-192,194,196,198,200-203,207,211-217,221,223-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "cd3629c93ef032ffa8075b565c9840bb8f04ac42",
+  "prompts": {
+    "033795528ddcaec0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c2325b8-3973-461e-9af9-e12d8c594bf0",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 141,
+      "total_deletions": 158,
+      "accepted_lines": 27088,
+      "overriden_lines": 0
+    }
+  }
+}
