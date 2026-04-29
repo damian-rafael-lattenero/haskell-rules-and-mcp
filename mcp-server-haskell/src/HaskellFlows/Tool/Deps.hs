@@ -45,8 +45,6 @@ import Data.List (sortOn)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import GHC.IO.Handle.Lock (hLock, hUnlock, LockMode (..))
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.Exit (ExitCode (..))
@@ -55,6 +53,7 @@ import System.IO (IOMode (..), openFile, hClose)
 import System.IO.Unsafe (unsafePerformIO)
 import qualified System.Process as Proc
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
@@ -181,12 +180,19 @@ instance FromJSON DepsArgs where
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKindD parseError)
+          (T.pack ("Invalid arguments: " <> parseError)))
+            { Env.eeCause = Just (T.pack parseError) })))
   Right args -> do
     mCabal <- findCabalFile pd
     case mCabal of
       Nothing ->
-        pure (errorResult "No .cabal file found in project root")
+        pure (Env.toolResponseToResult (Env.mkFailed
+          ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
+              "No .cabal file found in project root")
+                { Env.eeRemediation =
+                    Just "Run ghc_create_project to scaffold a cabal package first." })))
       Just file -> handleAction file args
 
 handleAction :: FilePath -> DepsArgs -> IO ToolResult
@@ -748,98 +754,78 @@ splitAtBuildDependsEnd ls =
 
 listResult :: FilePath -> [Text] -> ToolResult
 listResult file deps =
-  let payload =
-        object
-          [ "success"      .= True
-          , "action"       .= ("list" :: Text)
-          , "cabal_file"   .= T.pack file
-          , "count"        .= length deps
-          , "build_depends".= deps
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  let payload = object
+        [ "action"       .= ("list" :: Text)
+        , "cabal_file"   .= T.pack file
+        , "count"        .= length deps
+        , "build_depends".= deps
+        ]
+  in Env.toolResponseToResult (Env.mkOk payload)
 
 editResult :: FilePath -> Text -> Text -> ToolResult
 editResult file pkg verb =
-  let payload =
-        object
-          [ "success"    .= True
-          , "action"     .= verb
-          , "cabal_file" .= T.pack file
-          , "package"    .= pkg
-          , "hint"       .= ( "Dependency set changed. The next \
-                             \ghc_load reloads GHCi with the new \
-                             \package graph — no explicit session \
-                             \restart tool is needed."
-                            :: Text )
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  let payload = object
+        [ "action"     .= verb
+        , "cabal_file" .= T.pack file
+        , "package"    .= pkg
+        , "hint"       .= ( "Dependency set changed. The next \
+                            \ghc_load reloads GHCi with the new \
+                            \package graph — no explicit session \
+                            \restart tool is needed."
+                          :: Text )
+        ]
+  in Env.toolResponseToResult (Env.mkOk payload)
 
--- | Structured failure when post-edit cabal verification rejects
--- the new dep set (#48). The .cabal has already been restored to
--- its pre-edit body; the response carries 'error_kind:
--- \"unresolvable_dep\"' so agents can match on the kind without
--- parsing the message.
+-- | #48 + #90: cabal-rejected dep maps to status='failed' with
+-- kind='unresolvable_dep'. The legacy 'rolled_back' flag stays
+-- inside 'result' for back-compat.
 verifyFailedResult :: FilePath -> Text -> Text -> ToolResult
 verifyFailedResult file pkg err =
-  let payload =
-        object
-          [ "success"     .= False
-          , "action"      .= ("rejected" :: Text)
-          , "cabal_file"  .= T.pack file
-          , "package"     .= pkg
-          , "error"       .=
-              ( "cabal could not solve the dep set after adding '"
-                <> pkg <> "': " <> err )
-          , "error_kind"  .= ("unresolvable_dep" :: Text)
-          , "rolled_back" .= True
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = True
-       }
+  let envErr = (Env.mkErrorEnvelope Env.UnresolvableDep
+                 ("cabal could not solve the dep set after adding '"
+                  <> pkg <> "'"))
+                 { Env.eeCause = Just err
+                 , Env.eeField = Just "package"
+                 }
+      payload = object
+        [ "action"      .= ("rejected" :: Text)
+        , "cabal_file"  .= T.pack file
+        , "package"     .= pkg
+        , "rolled_back" .= True
+        ]
+      response = (Env.mkFailed envErr) { Env.reResult = Just payload }
+  in Env.toolResponseToResult response
 
--- | Idempotent no-op payload. Shape parallels 'editResult' but marks
--- the action as \"unchanged\" with a verb-aware @note@ field so the
--- agent gets a clear signal that the post-condition is already met
--- (on @add@: package is present; on @remove@: package is absent)
--- instead of the earlier remove-shaped \"not found or already at
--- desired state\" error that fired on every idempotent add too.
 unchangedResult :: FilePath -> Text -> Text -> ToolResult
 unchangedResult file pkg verb =
   let note = case verb of
         "added"   -> "'" <> pkg <> "' already present in target stanza — no change written."
         "removed" -> "'" <> pkg <> "' not listed in target stanza — no change written."
         _         -> "no change written"
-      payload =
-        object
-          [ "success"    .= True
-          , "action"     .= ("unchanged" :: Text)
-          , "verb"       .= verb
-          , "cabal_file" .= T.pack file
-          , "package"    .= pkg
-          , "note"       .= (note :: Text)
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+      payload = object
+        [ "action"     .= ("unchanged" :: Text)
+        , "verb"       .= verb
+        , "cabal_file" .= T.pack file
+        , "package"    .= pkg
+        , "note"       .= (note :: Text)
+        ]
+  in Env.toolResponseToResult (Env.mkOk payload)
 
+-- | Issue #90 Phase C: route the legacy 'errorResult' through the
+-- envelope. Most call sites pass a free-form 'Text' that maps to
+-- kind='validation' (the input was structurally fine but failed a
+-- domain check).
 errorResult :: Text -> ToolResult
 errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
+  Env.toolResponseToResult (Env.mkFailed
+    (Env.mkErrorEnvelope Env.Validation msg))
 
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+parseErrorKindD :: String -> Env.ErrorKind
+parseErrorKindD err
+  | "key" `isInfixOfStrD` err = Env.MissingArg
+  | otherwise                 = Env.TypeMismatch
+  where
+    isInfixOfStrD needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]

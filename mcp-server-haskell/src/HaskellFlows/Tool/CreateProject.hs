@@ -38,14 +38,13 @@ import Data.Char (isAlphaNum, isAsciiLower, isAsciiUpper, isDigit, toUpper)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory
   ( createDirectoryIfMissing
   , doesFileExist
   )
 import System.FilePath ((</>), takeDirectory)
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
@@ -105,16 +104,35 @@ instance FromJSON CreateArgs where
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKind parseError)
+          (T.pack ("Invalid arguments: " <> parseError)))
+            { Env.eeCause = Just (T.pack parseError) })))
   Right args -> case validateName (caName args) of
-    Left err -> pure (errorResult err)
+    Left err ->
+      pure (Env.toolResponseToResult (Env.mkFailed
+        ((Env.mkErrorEnvelope Env.Validation err)
+            { Env.eeField = Just "name" })))
     Right pkg -> do
       let modName = case caModule args of
             Just m  -> m
             Nothing -> packageToModule pkg
       case validateModule modName of
-        Left err -> pure (errorResult err)
+        Left err ->
+          pure (Env.toolResponseToResult (Env.mkFailed
+            ((Env.mkErrorEnvelope Env.Validation err)
+                { Env.eeField = Just "module" })))
         Right m  -> scaffold pd pkg m (caOverwrite args)
+
+parseErrorKind :: String -> Env.ErrorKind
+parseErrorKind err
+  | "key" `isInfixOfStr` err = Env.MissingArg
+  | otherwise                = Env.TypeMismatch
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 --------------------------------------------------------------------------------
 -- boundary validation
@@ -216,10 +234,13 @@ scaffold pd pkg modName overwrite = do
       clashes <- filterExistingM root plans
       case clashes of
         [] -> writeAll root plans pkg modName
-        xs -> pure (errorResult
-                ( "Target files already exist: "
-               <> T.intercalate ", " (map (T.pack . fpRelPath) xs)
-               <> ". Pass overwrite=true to replace." ))
+        xs -> pure (Env.toolResponseToResult (Env.mkFailed
+                ((Env.mkErrorEnvelope Env.Validation
+                    ( "Target files already exist: "
+                   <> T.intercalate ", " (map (T.pack . fpRelPath) xs)
+                   <> ". Pass overwrite=true to replace."))
+                      { Env.eeRemediation =
+                          Just "Pass overwrite=true to replace existing files, or remove them first." })))
     else writeAll root plans pkg modName
 
 filterExistingM :: FilePath -> [FilePlan] -> IO [FilePlan]
@@ -236,7 +257,11 @@ writeAll :: FilePath -> [FilePlan] -> Text -> Text -> IO ToolResult
 writeAll root plans pkg modName = do
   res <- try (mapM_ (writeOne root) plans) :: IO (Either SomeException ())
   case res of
-    Left e  -> pure (errorResult (T.pack ("write failed: " <> show e)))
+    Left e  ->
+      pure (Env.toolResponseToResult (Env.mkFailed
+        ((Env.mkErrorEnvelope Env.SubprocessError
+            (T.pack ("write failed: " <> show e)))
+              { Env.eeCause = Just (T.pack (show e)) })))
     Right _ -> pure (createdResult pkg modName plans)
 
 writeOne :: FilePath -> FilePlan -> IO ()
@@ -335,32 +360,13 @@ testFile modName = T.unlines
 
 createdResult :: Text -> Text -> [FilePlan] -> ToolResult
 createdResult pkg modName plans =
-  let payload =
-        object
-          [ "success"       .= True
-          , "package"       .= pkg
-          , "module"        .= modName
-          , "files_written" .= map (T.pack . fpRelPath) plans
-          , "hint"          .= ( "Run ghc_load(module_path=\"src/"
-                              <> T.replace "." "/" modName
-                              <> ".hs\") to verify the scaffold compiles."
-                              :: Text )
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
-
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+  let payload = object
+        [ "package"       .= pkg
+        , "module"        .= modName
+        , "files_written" .= map (T.pack . fpRelPath) plans
+        , "hint"          .= ( "Run ghc_load(module_path=\"src/"
+                            <> T.replace "." "/" modName
+                            <> ".hs\") to verify the scaffold compiles."
+                            :: Text )
+        ]
+  in Env.toolResponseToResult (Env.mkOk payload)

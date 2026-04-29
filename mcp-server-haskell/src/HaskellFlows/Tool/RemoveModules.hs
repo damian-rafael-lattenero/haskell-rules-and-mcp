@@ -32,11 +32,10 @@ import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (doesFileExist, listDirectory, removeFile)
 import System.FilePath (takeExtension, (</>))
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.ModuleName
@@ -120,7 +119,11 @@ instance FromJSON RemoveModulesArgs where
 
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+  Left err ->
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKindRM err)
+          (T.pack ("Invalid arguments: " <> err)))
+            { Env.eeCause = Just (T.pack err) })))
   Right (RemoveModulesArgs mods deleteFiles forceFlag) ->
     -- ISSUE-47: refuse names that violate the module-name grammar
     -- symmetrically with 'ghc_add_modules'. Two motivations:
@@ -146,16 +149,34 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
           else do
             mCabal <- findCabalFile pd
             case mCabal of
-              Nothing -> pure (errorResult "No .cabal file found in project root")
+              Nothing ->
+                pure (Env.toolResponseToResult (Env.mkFailed
+                  ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
+                      "No .cabal file found in project root")
+                        { Env.eeRemediation =
+                            Just "Run ghc_create_project to scaffold a cabal package first." })))
               Just file -> do
                 eCabal <- tryRewriteCabal file validated
                 case eCabal of
-                  Left err -> pure (errorResult err)
+                  Left err ->
+                    pure (Env.toolResponseToResult (Env.mkFailed
+                      ((Env.mkErrorEnvelope Env.SubprocessError err)
+                          { Env.eeCause = Just err })))
                   Right removedFromCabal -> do
                     deleted <- if deleteFiles
                                  then deleteSourceFiles pd removedFromCabal
                                  else pure []
                     pure (successResult removedFromCabal deleted importers)
+
+parseErrorKindRM :: String -> Env.ErrorKind
+parseErrorKindRM err
+  | "key" `isInfixOfStr` err = Env.MissingArg
+  | otherwise                = Env.TypeMismatch
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 --------------------------------------------------------------------------------
 -- cabal rewriting
@@ -423,21 +444,17 @@ findCabalFile pd = do
 
 successResult :: [Text] -> [FilePath] -> [Importer] -> ToolResult
 successResult removedFromCabal deletedFiles importers =
-  let warnings =
-        [ "warnings" .= object
-            [ "downstream_imports" .= map renderImporter importers ]
-        | not (null importers)
-        ]
-      payload = object $
-        [ "success"            .= True
-        , "cabal_removed"      .= removedFromCabal
-        , "deleted_files"      .= map T.pack deletedFiles
-        , "hint"               .= mkHint importers
-        ] <> warnings
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  let payload = object $
+        [ "cabal_removed" .= removedFromCabal
+        , "deleted_files" .= map T.pack deletedFiles
+        , "hint"          .= mkHint importers
+        ] <> warnsField
+      warnsField
+        | null importers = []
+        | otherwise =
+            [ "warnings" .= object
+                [ "downstream_imports" .= map renderImporter importers ] ]
+  in Env.toolResponseToResult (Env.mkOk payload)
   where
     mkHint :: [Importer] -> Text
     mkHint [] =
@@ -449,29 +466,25 @@ successResult removedFromCabal deletedFiles importers =
       \(file, line, module) tuples — fix each before the next \
       \ghc_load."
 
--- | Issue #41: pre-removal refusal. Importers exist and the
--- caller didn't pass force=true. The .cabal stays untouched and
--- no source files are deleted.
+-- | Issue #41 + #90: refusal when downstream importers exist
+-- and force=false. status='failed' (this is a hard refusal, not
+-- a sanitize-layer policy) with kind='validation' and the
+-- structured importer list inside 'result' for back-compat.
 downstreamRefusalResult :: [Text] -> [Importer] -> ToolResult
 downstreamRefusalResult requested importers =
-  let payload = object
-        [ "success"            .= False
-        , "error_kind"         .= ("downstream_imports_present" :: Text)
-        , "error"              .=
-            ( "Refusing to remove module(s) — at least one remaining \
-              \.hs file still imports them. Pass force=true to override \
-              \(the response will list every importer so the agent can \
-              \rewrite them next)." :: Text )
-        , "requested"          .= requested
+  let err = (Env.mkErrorEnvelope Env.Validation
+               "Refusing to remove module(s) — at least one remaining .hs file still imports them. Pass force=true to override.")
+              { Env.eeRemediation =
+                  Just "Either remove the import lines first OR pass force=true to proceed with downstream warnings."
+              , Env.eeCause = Just "downstream_imports_present"
+              }
+      payload = object
+        [ "requested"          .= requested
         , "downstream_imports" .= map renderImporter importers
-        , "remediation"        .=
-            ( "Either remove the import lines first OR pass force=true \
-              \to proceed with downstream warnings." :: Text )
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = True
-       }
+      response = (Env.mkFailed err)
+                   { Env.reResult = Just payload }
+  in Env.toolResponseToResult response
 
 renderImporter :: Importer -> Value
 renderImporter i = object
@@ -480,18 +493,7 @@ renderImporter i = object
   , "module" .= iModule i
   ]
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False, "error" .= msg ])) ]
-    , trIsError = True
-    }
-
--- | Mirror of 'HaskellFlows.Tool.AddModules.rejectionResult' (kept
--- in this module to avoid a one-helper export from AddModules and
--- to let the two tools diverge if we ever need different hint
--- copy). See ISSUE-47.
+-- | Mirror of 'HaskellFlows.Tool.AddModules.rejectionResult'.
 rejectionResult :: [(Text, ModuleNameError)] -> ToolResult
 rejectionResult entries =
   let n        = length entries
@@ -504,23 +506,14 @@ rejectionResult entries =
                      ]
                  | (name, err) <- entries
                  ]
-      payload = object
-        [ "success"  .= False
-        , "error"    .= summary
-        , "rejected" .= rendered
-        , "hint"     .= ("Haskell module names follow conid('.'conid)*, \
-                         \where each conid starts with an uppercase \
-                         \ASCII letter and may contain A-Z, a-z, 0-9, \
-                         \underscore, and apostrophe. Reserved keywords \
-                         \(module, where, class, ...) are rejected." :: Text)
-        ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = True
-       }
+      err = (Env.mkErrorEnvelope Env.Validation summary)
+              { Env.eeField = Just "modules"
+              , Env.eeHint  =
+                  Just "Haskell module names follow conid('.'conid)*, where each conid starts with an uppercase ASCII letter and may contain A-Z, a-z, 0-9, underscore, and apostrophe. Reserved keywords (module, where, class, ...) are rejected."
+              }
+      response = (Env.mkFailed err)
+                   { Env.reResult = Just (object [ "rejected" .= rendered ]) }
+  in Env.toolResponseToResult response
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

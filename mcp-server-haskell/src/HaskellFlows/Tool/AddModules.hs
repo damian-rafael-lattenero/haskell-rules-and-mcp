@@ -21,11 +21,10 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (createDirectoryIfMissing, doesFileExist, listDirectory)
 import System.FilePath (takeDirectory, takeExtension, (</>))
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.ModuleName
@@ -173,28 +172,49 @@ parseModuleList other =
 
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+  Left err ->
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKindAM err)
+          (T.pack ("Invalid arguments: " <> err)))
+            { Env.eeCause = Just (T.pack err) })))
   Right (AddModulesArgs mods mStanzaRaw) ->
-    -- ISSUE-47: validate module names BEFORE any IO. Refuse the
-    -- entire batch on the first invalid name — partial registration
-    -- would leave the .cabal mid-corruption and the agent has no
-    -- way to know which entries succeeded vs which were rejected.
     case validateModuleNames mods of
       (rejected@(_:_), _) -> pure (rejectionResult rejected)
       ([], validated) ->
         case resolveStanzaTarget mStanzaRaw of
-          Left err -> pure (errorResult err)
+          Left err ->
+            pure (Env.toolResponseToResult (Env.mkFailed
+              ((Env.mkErrorEnvelope Env.Validation err)
+                  { Env.eeField = Just "stanza" })))
           Right tgt -> do
             mCabal <- findCabalFile pd
             case mCabal of
-              Nothing -> pure (errorResult "No .cabal file found in project root")
+              Nothing ->
+                pure (Env.toolResponseToResult (Env.mkFailed
+                  ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
+                      "No .cabal file found in project root")
+                        { Env.eeRemediation =
+                            Just "Run ghc_create_project to scaffold a cabal package first." })))
               Just file -> do
                 (createdFiles, existingFiles) <- scaffoldFiles pd tgt validated
                 eCabal <- tryRewriteCabal file tgt validated
                 case eCabal of
-                  Left err -> pure (errorResult err)
+                  Left err ->
+                    pure (Env.toolResponseToResult (Env.mkFailed
+                      ((Env.mkErrorEnvelope Env.SubprocessError err)
+                          { Env.eeCause = Just err })))
                   Right addedToCabal ->
                     pure (successResult tgt createdFiles existingFiles addedToCabal)
+
+parseErrorKindAM :: String -> Env.ErrorKind
+parseErrorKindAM err
+  | "key" `isInfixOfStr` err = Env.MissingArg
+  | otherwise                = Env.TypeMismatch
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 --------------------------------------------------------------------------------
 -- stanza target
@@ -426,33 +446,18 @@ findCabalFile pd = do
 successResult :: StanzaTarget -> [FilePath] -> [FilePath] -> [Text] -> ToolResult
 successResult tgt created existed addedToCabal =
   let payload = object
-        [ "success"         .= True
-        , "stanza"          .= stLabel tgt
+        [ "stanza"          .= stLabel tgt
         , "field"           .= stFieldName tgt
         , "source_dir"      .= T.pack (stSourceDir tgt)
         , "created_files"   .= map T.pack created
         , "existing_files"  .= map T.pack existed
         , "cabal_added"     .= addedToCabal
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  in Env.toolResponseToResult (Env.mkOk payload)
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False, "error" .= msg ])) ]
-    , trIsError = True
-    }
-
--- | Structured rejection payload (ISSUE-47). Each entry pairs the
--- offending input with the rendered diagnostic so the agent can
--- (a) see exactly which name was rejected and (b) self-correct in
--- one round-trip. The top-level @error@ field summarises the count
--- so a curious LLM can decide between \"fix one typo\" and
--- \"reconsider the whole list\".
+-- | Structured rejection payload (ISSUE-47 + #90). Issue #90 §4
+-- maps invalid-module-name to 'Validation' kind; the structured
+-- 'rejected' array is preserved inside 'result' for backward-compat.
 rejectionResult :: [(Text, ModuleNameError)] -> ToolResult
 rejectionResult entries =
   let n        = length entries
@@ -465,23 +470,15 @@ rejectionResult entries =
                      ]
                  | (name, err) <- entries
                  ]
-      payload = object
-        [ "success"  .= False
-        , "error"    .= summary
-        , "rejected" .= rendered
-        , "hint"     .= ("Haskell module names follow conid('.'conid)*, \
-                         \where each conid starts with an uppercase \
-                         \ASCII letter and may contain A-Z, a-z, 0-9, \
-                         \underscore, and apostrophe. Reserved keywords \
-                         \(module, where, class, ...) are rejected." :: Text)
-        ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = True
-       }
+      err = (Env.mkErrorEnvelope Env.Validation summary)
+              { Env.eeField = Just "modules"
+              , Env.eeHint  =
+                  Just "Haskell module names follow conid('.'conid)*, where each conid starts with an uppercase ASCII letter and may contain A-Z, a-z, 0-9, underscore, and apostrophe. Reserved keywords (module, where, class, ...) are rejected."
+              , Env.eeCause = Just (T.pack (show n) <> " names rejected")
+              }
+      response = (Env.mkFailed err)
+                   { Env.reResult = Just (object [ "rejected" .= rendered ]) }
+  in Env.toolResponseToResult response
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

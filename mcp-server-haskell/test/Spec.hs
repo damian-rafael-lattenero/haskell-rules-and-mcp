@@ -6041,13 +6041,16 @@ testHandleAddModulesRefusesLowercaseModule = withFixture $ \pd cabalFile -> do
   before <- TIO.readFile cabalFile
   result <- AddModules.handle pd args
   after  <- TIO.readFile cabalFile
-  let isErr   = trIsError result
-      payload = extractPayload result
+  let isErr        = trIsError result
+      envelope     = extractPayload result
+      innerResult  = resultPayload result
   pure
     (  isErr
     && before == after
-    && hasField "rejected" payload
-    && fieldEquals "success" (A.Bool False) payload
+    -- Issue #90: 'rejected' moved under 'result'; 'success'
+    -- stays at top level during the dual-shape window.
+    && hasField "rejected" innerResult
+    && fieldEquals "success" (A.Bool False) envelope
     )
 
 -- | Atomic refusal: ANY bad name in the batch MUST refuse the
@@ -6074,7 +6077,7 @@ testHandleAddModulesAllOffendersListed = withFixture $ \pd _ -> do
   let args = A.object
         [ "modules" A..= (["1Foo", "lowercase", "Foo.module"] :: [Text]) ]
   result <- AddModules.handle pd args
-  let payload   = extractPayload result
+  let payload   = resultPayload result
       rejected  = lookupField "rejected" payload
       names     = case rejected of
         Just (A.Array xs) -> map (lookupField "name") (Vector.toList xs)
@@ -6113,7 +6116,7 @@ testHandleRemoveModulesRefuses = withFixture $ \pd cabalFile -> do
   pure
     (  trIsError result
     && before == after
-    && hasField "rejected" (extractPayload result)
+    && hasField "rejected" (resultPayload result)
     )
 
 -- | Issue #41: 'parseImportLine' / 'scanImportersInBody' must
@@ -6884,6 +6887,18 @@ extractPayload tr = case trContent tr of
   _ -> A.Null
   where
     encodeUtf8Strict = BL.toStrict . TLE.encodeUtf8 . TL.fromStrict
+
+-- | Issue #90: drill through the envelope to the inner @result@
+-- payload. Most pre-envelope tests inspected fields at the top
+-- level — those fields now live under @result@. Returns the
+-- top-level Value when there's no @result@ field (graceful
+-- back-compat for tools still emitting the pre-envelope shape).
+resultPayload :: ToolResult -> A.Value
+resultPayload tr = case extractPayload tr of
+  A.Object o -> case AKM.lookup (AKey.fromText "result") o of
+    Just inner -> inner
+    Nothing    -> A.Object o
+  v          -> v
 
 hasField :: Text -> A.Value -> Bool
 hasField k (A.Object o) = AKM.member (AKey.fromText k) o

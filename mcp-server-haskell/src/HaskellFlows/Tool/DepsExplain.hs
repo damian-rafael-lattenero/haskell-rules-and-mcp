@@ -34,11 +34,10 @@ import Data.Char (isAsciiLower, isDigit)
 import Data.List (nub)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Exit (ExitCode)
 import qualified System.Process as Proc
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
@@ -82,7 +81,11 @@ instance FromJSON DepsExplainArgs where
 
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+  Left err ->
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope Env.MissingArg
+          (T.pack ("Invalid arguments: " <> err)))
+            { Env.eeCause = Just (T.pack err) })))
   Right args -> do
     output <- case daCabalOutput args of
       Just t  -> pure t
@@ -270,11 +273,13 @@ mapMaybe' f (x : xs) = case f x of
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90: zero-conflict case maps to status='no_match' (the
+-- explainer asked \"is there a conflict?\" and the answer is no);
+-- conflict found maps to status='ok' with the structured report.
 renderReport :: Text -> Maybe Conflict -> ToolResult
 renderReport _ Nothing =
   let payload = object
-        [ "success"  .= True
-        , "conflict" .= Null
+        [ "conflict" .= Null
         , "hint"     .= ( "No solver conflict detected in the supplied \
                           \cabal output. Either the build resolves \
                           \cleanly or the output came from a different \
@@ -282,15 +287,11 @@ renderReport _ Nothing =
                           \to capture solver-shaped stderr and retry."
                           :: Text )
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  in Env.toolResponseToResult (Env.mkNoMatch payload)
 renderReport _ (Just c) =
   let root = cRoot c
       payload = object
-        [ "success"   .= True
-        , "conflict"  .= object
+        [ "conflict"  .= object
             [ "root_cause" .= object
                 [ "package" .= rPackage root
                 , "depth"   .= rDepth   root
@@ -307,18 +308,4 @@ renderReport _ (Just c) =
               \or add an 'allow-newer' line to cabal.project. Phase 2 will \
               \generate verified fix candidates automatically." :: Text )
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
-
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False, "error" .= msg ])) ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+  in Env.toolResponseToResult (Env.mkOk payload)
