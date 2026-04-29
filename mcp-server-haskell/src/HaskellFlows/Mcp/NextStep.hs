@@ -652,13 +652,29 @@ qcState = stringField "state"
 cabalErrors :: Value -> Maybe Int
 cabalErrors = intField "errors"
 
--- | 'ghc_gate' payload has a top-level @success@ bool.
+-- | Issue #90 Phase D: 'success' was dropped from the wire.
+-- These helpers now read the envelope's @status@ discriminator
+-- and return True iff status='ok' (or 'partial', matching the
+-- legacy projection).
 gatePassed :: Value -> Bool
-gatePassed = boolField "success"
+gatePassed = statusOk_
 
--- | 'ghc_determinism' payload has a top-level @success@ bool.
+-- | Same for 'ghc_determinism'.
 determinismPassed :: Value -> Bool
-determinismPassed = boolField "success"
+determinismPassed = statusOk_
+
+-- | Internal: success-equivalent boolean. Reads the envelope's
+-- @status@ discriminator first; falls back to the pre-#90
+-- @success :: Bool@ shape for callers (and unit tests) that
+-- pass the legacy payload directly.
+statusOk_ :: Value -> Bool
+statusOk_ v = case envField "status" v of
+  Just (String "ok")      -> True
+  Just (String "partial") -> True
+  Just _                  -> False
+  Nothing                 -> case envField "success" v of
+    Just (Bool b) -> b
+    _             -> False
 
 -- | Extract a boolean field; auto-drills through @result@.
 boolField :: Text -> Value -> Bool
