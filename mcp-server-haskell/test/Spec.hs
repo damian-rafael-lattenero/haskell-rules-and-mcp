@@ -1740,8 +1740,8 @@ testRefactorPermissiveLineRange = do
   -- Both must decode (no parse error). The pre-fix behaviour was:
   -- nativeJson decoded, stringJson rejected with an Aeson error
   -- string. Post-fix both succeed.
-  let na = A.decode nativeJson :: Maybe Value
-      st = A.decode stringJson :: Maybe Value
+  let na = A.decode nativeJson :: Maybe A.Value
+      st = A.decode stringJson :: Maybe A.Value
   case (na, st) of
     (Just nv, Just sv) -> do
       let nDecoded = A.fromJSON nv :: A.Result RefactorTool.RefactorArgs
@@ -1760,7 +1760,7 @@ testRemoveModulesPermissiveBool = do
         "{\"modules\":[\"Foo\"],\"delete_files\":true,\"force\":false}"
       stringJson =
         "{\"modules\":[\"Foo\"],\"delete_files\":\"true\",\"force\":\"false\"}"
-      decode raw = A.fromJSON <$> (A.decode raw :: Maybe Value)
+      decode raw = A.fromJSON <$> (A.decode raw :: Maybe A.Value)
   case (decode nativeJson, decode stringJson) of
     (Just (A.Success (a :: RM.RemoveModulesArgs)),
      Just (A.Success (b :: RM.RemoveModulesArgs))) ->
@@ -1779,7 +1779,7 @@ testFixWarningPermissiveLine = do
       stringJson =
         "{\"module_path\":\"src/X.hs\",\"line\":\"3\",\"code\":\"GHC-66111\",\
         \\"apply\":\"true\"}"
-      decode raw = A.fromJSON <$> (A.decode raw :: Maybe Value)
+      decode raw = A.fromJSON <$> (A.decode raw :: Maybe A.Value)
   case (decode nativeJson, decode stringJson) of
     (Just (A.Success (a :: FixWarning.FixWarningArgs)),
      Just (A.Success (b :: FixWarning.FixWarningArgs))) ->
@@ -1793,7 +1793,7 @@ testCompletePermissiveLimit = do
   let nativeJson = "{\"prefix\":\"sho\",\"limit\":10}"
       stringJson = "{\"prefix\":\"sho\",\"limit\":\"10\"}"
       missingJson = "{\"prefix\":\"sho\"}"
-      decode raw = A.fromJSON <$> (A.decode raw :: Maybe Value)
+      decode raw = A.fromJSON <$> (A.decode raw :: Maybe A.Value)
   case (decode nativeJson, decode stringJson, decode missingJson) of
     (Just (A.Success (a :: CompleteTool.CompleteArgs)),
      Just (A.Success (b :: CompleteTool.CompleteArgs)),
