@@ -18,8 +18,7 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
+import qualified HaskellFlows.Mcp.Envelope as Env
 import System.Directory (findExecutable)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
@@ -74,7 +73,7 @@ coverageTimeoutMicros = 5 * 60 * 1_000_000
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (parseErrorResult parseError)
   Right CoverageArgs -> do
     mCabal <- findExecutable "cabal"
     case mCabal of
@@ -82,6 +81,21 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
       Just _    -> do
         outcome <- runCoverage pd
         pure (renderResult outcome)
+
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 --------------------------------------------------------------------------------
 -- subprocess
@@ -225,26 +239,34 @@ runHpcReport mixDirs tix = do
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C:
+--
+-- * 'CovSuccess' → status='ok' with parsed metrics under 'result'.
+-- * 'CovTimeout' → status='timeout' kind='inner_timeout', cause='5m'.
+-- * 'CovFailure' → status='failed' kind='subprocess_error',
+--                  cause=<exit code>.
 renderResult :: CovOutcome -> ToolResult
 renderResult (CovSuccess out) =
   let report  = parseCoverage out
       metrics = crMetrics report
       payload =
         object
-          [ "success" .= True
-          , "metrics" .= map renderMetric metrics
+          [ "metrics" .= map renderMetric metrics
           , "summary" .= summarise metrics
           , "raw"     .= out
           ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  in Env.toolResponseToResult (Env.mkOk payload)
 renderResult CovTimeout =
-  errorResult "cabal test --enable-coverage timed out after 5 minutes"
+  let envErr = (Env.mkErrorEnvelope Env.InnerTimeout
+                  ("cabal test --enable-coverage timed out after 5 minutes" :: Text))
+                 { Env.eeCause = Just "5m" }
+  in Env.toolResponseToResult (Env.mkTimeout envErr)
 renderResult (CovFailure code err) =
-  errorResult ( "cabal test --enable-coverage exited with code "
-             <> T.pack (show code) <> ": " <> T.strip err )
+  let msg    = "cabal test --enable-coverage exited with code "
+                 <> T.pack (show code) <> ": " <> T.strip err
+      envErr = (Env.mkErrorEnvelope Env.SubprocessError msg)
+                 { Env.eeCause = Just (T.pack (show code)) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
 
 renderMetric :: Metric -> Value
 renderMetric m =
@@ -263,29 +285,14 @@ summarise ms =
      <> T.pack (show (length ms)) <> " metrics: "
      <> T.pack (show avg) <> "%."
 
+-- | Issue #90 Phase C: cabal binary not on PATH → status='unavailable'
+-- kind='binary_unavailable'.
 unavailableResult :: Text -> ToolResult
 unavailableResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success"     .= False
-        , "error"       .= msg
-        , "remediation" .= ( "Install cabal (`ghcup install cabal`) and \
+  let payload  = object
+        [ "remediation" .= ( "Install cabal (`ghcup install cabal`) and \
                             \retry." :: Text )
-        ]))
-      ]
-    , trIsError = True
-    }
-
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+        ]
+      envErr   = Env.mkErrorEnvelope Env.BinaryUnavailable msg
+      response = (Env.mkUnavailable envErr) { Env.reResult = Just payload }
+  in Env.toolResponseToResult response

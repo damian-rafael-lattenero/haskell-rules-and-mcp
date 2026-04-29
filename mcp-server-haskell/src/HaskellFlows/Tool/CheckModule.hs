@@ -22,8 +22,6 @@ import Data.Char (isAlphaNum)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.FilePath ((</>))
 
 import HaskellFlows.Data.PropertyStore
@@ -38,6 +36,7 @@ import HaskellFlows.Ghc.ApiSession
   , loadForTarget
   , targetForPath
   )
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error
@@ -106,16 +105,17 @@ instance FromJSON CheckArgs where
 handle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (parseErrorResult parseError)
   Right (CheckArgs raw warnBlock) -> case mkModulePath pd (T.unpack raw) of
-    Left e -> pure (errorResult (formatPathError e))
+    Left e -> pure (pathTraversalResult (formatPathError e))
     Right _ -> do
       invalidateLoadCache ghcSess
       tgt <- targetForPath ghcSess (T.unpack raw)
       eStrict <- try (loadForTarget ghcSess tgt Strict)
       case eStrict :: Either SomeException (Bool, [GhcError]) of
         Left ex ->
-          pure (errorResult ("loadForTarget failed: " <> T.pack (show ex)))
+          pure (subprocessResult
+                  ("loadForTarget failed: " <> T.pack (show ex)))
         Right (strictOk, strictDiags) -> do
           -- 'loadForTarget' loads the whole target (library or
           -- test-suite), so 'strictDiags' is the UNION of warnings
@@ -227,8 +227,7 @@ renderResult mp compileOk errs warns holes regressions totalProps loadFailed war
              && loadFailed == 0
       payload =
         object
-          [ "success"    .= overall
-          , "module"     .= mp
+          [ "module"     .= mp
           , "overall"    .= overall
           , "gates"      .= object
               [ "compile"    .= gateCompile
@@ -242,10 +241,20 @@ renderResult mp compileOk errs warns holes regressions totalProps loadFailed war
               ]
           , "summary" .= summarise overall errs warns holes regressions
           ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = not overall
-       }
+  -- Issue #90 Phase C: 'overall=true' → status='ok'. Any red gate
+  -- → status='failed' with kind matching the dominant signal:
+  -- compile error → 'compile_error', otherwise 'validation' (the
+  -- compile passed but a higher-level invariant — warnings,
+  -- holes, property regression — failed).
+  in if overall
+       then Env.toolResponseToResult (Env.mkOk payload)
+       else
+         let kind | not compileOk = Env.CompileError
+                  | otherwise     = Env.Validation
+             envErr   = Env.mkErrorEnvelope kind
+                          (summarise overall errs warns holes regressions)
+             response = (Env.mkFailed envErr) { Env.reResult = Just payload }
+         in Env.toolResponseToResult response
 
 -- | Issue #42: structured properties-gate value with a status
 -- discriminator and per-bucket counts. Four states:
@@ -317,24 +326,38 @@ summarise False errs warns holes regs =
     , if null regs  then "" else T.pack (show (length regs))  <> " property regression(s)"
     ]
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
+
+-- | Issue #90 Phase C: 'mkModulePath' rejection.
+pathTraversalResult :: Text -> ToolResult
+pathTraversalResult msg =
+  Env.toolResponseToResult
+    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+
+-- | Issue #90 Phase C: GHC API exception.
+subprocessResult :: Text -> ToolResult
+subprocessResult msg =
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
 
 formatPathError :: PathError -> Text
 formatPathError = \case
   PathNotAbsolute p        -> "Project directory is not absolute: " <> p
   PathEscapesProject a p _ -> "module_path '" <> a <> "' escapes project directory " <> p
 
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
 
 --------------------------------------------------------------------------------
 -- Issue #74 — path → module-name resolver

@@ -35,6 +35,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import qualified HaskellFlows.Mcp.Envelope as Env
 import System.Directory (doesDirectoryExist, doesFileExist, findExecutable)
 import System.FilePath
   ( equalFilePath
@@ -118,9 +119,9 @@ hlintTimeoutMicros = 60 * 1_000_000  -- 60 s
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (parseErrorResult parseError)
   Right args -> case resolveTarget pd args of
-    Left err     -> pure (errorResult err)
+    Left err     -> pure (pathTraversalResult err)
     Right target -> do
       mHlint <- findExecutable "hlint"
       case mHlint of
@@ -129,6 +130,28 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
         Just _ -> do
           res <- runHlint pd target
           pure (renderResult target (laFailOn args) res)
+
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
+
+-- | Issue #90 Phase C: 'resolveTarget' rejected the input as
+-- escaping the project root → status='refused', kind='path_traversal'.
+pathTraversalResult :: Text -> ToolResult
+pathTraversalResult msg =
+  Env.toolResponseToResult
+    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
 
 -- | Resolve which path hlint should lint. Prefer `module_path`
 -- (single file, fastest inner loop), fall back to `path` (directory
@@ -258,30 +281,47 @@ parseHlintJson raw =
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: each hlint subprocess outcome maps to a
+-- typed envelope. The success path carries the suggestions list
+-- under 'result' so callers can iterate per-hint; offending hints
+-- (>= fail_on) flip the status to 'failed' but the same payload
+-- is preserved so the caller can still render and decide.
 renderResult :: FilePath -> Text -> HlintOutcome -> ToolResult
 renderResult target failOn (HlOk raw) =
   let suggestions = parseHlintJson raw
       offending   = filter (atOrAbove failOn . sSeverity) suggestions
       payload =
         object
-          [ "success"      .= null offending
-          , "target"       .= T.pack target
+          [ "target"       .= T.pack target
           , "fail_on"      .= failOn
           , "count"        .= length suggestions
           , "blocking"     .= length offending
           , "suggestions"  .= suggestions
           ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = not (null offending)
-       }
+  in if null offending
+       then Env.toolResponseToResult (Env.mkOk payload)
+       else
+         let envErr   = Env.mkErrorEnvelope Env.Validation
+                          ( T.pack (show (length offending))
+                              <> " hint(s) at or above '"
+                              <> failOn <> "' threshold" )
+             response = (Env.mkFailed envErr) { Env.reResult = Just payload }
+         in Env.toolResponseToResult response
 renderResult _ _ HlTimeout =
-  errorResult "hlint timed out after 60 seconds"
+  let envErr = (Env.mkErrorEnvelope Env.InnerTimeout
+                  ("hlint timed out after 60 seconds" :: Text))
+                 { Env.eeCause = Just "60s" }
+  in Env.toolResponseToResult (Env.mkTimeout envErr)
 renderResult _ _ (HlFailure code err) =
-  errorResult ( "hlint failed with exit code " <> T.pack (show code)
-             <> ": " <> T.strip err )
+  let msg    = "hlint failed with exit code " <> T.pack (show code)
+                 <> ": " <> T.strip err
+      envErr = (Env.mkErrorEnvelope Env.SubprocessError msg)
+                 { Env.eeCause = Just (T.pack (show code)) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
 renderResult target _ HlMissingTarget =
-  errorResult ("target path does not exist: " <> T.pack target)
+  Env.toolResponseToResult (Env.mkFailed
+    (Env.mkErrorEnvelope Env.ModulePathDoesNotExist
+       ("target path does not exist: " <> T.pack target)))
 
 -- | severity ordering: ignore < suggestion < warning < error.
 severityRank :: Text -> Int
@@ -301,29 +341,16 @@ atOrAbove threshold severity =
     canonSeverity "error"      = "Error"
     canonSeverity x            = x
 
+-- | Issue #90 Phase C: hlint binary missing → status='unavailable'
+-- kind='binary_unavailable'. The 'remediation' string lives under
+-- 'result' so it stays readable when the consumer is showing an
+-- error banner.
 unavailableResult :: Text -> ToolResult
 unavailableResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success"     .= False
-        , "error"       .= msg
-        , "remediation" .= ( "Install hlint: `cabal install hlint` or \
+  let payload  = object
+        [ "remediation" .= ( "Install hlint: `cabal install hlint` or \
                             \`ghcup install hls` (bundles hlint)." :: Text )
-        ]))
-      ]
-    , trIsError = True
-    }
-
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+        ]
+      envErr   = Env.mkErrorEnvelope Env.BinaryUnavailable msg
+      response = (Env.mkUnavailable envErr) { Env.reResult = Just payload }
+  in Env.toolResponseToResult response

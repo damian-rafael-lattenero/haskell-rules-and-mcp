@@ -27,13 +27,12 @@ import Data.Char (isAsciiUpper, isSpace)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
 
 import HaskellFlows.Data.PropertyStore (Store)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
@@ -86,17 +85,18 @@ instance FromJSON CheckProjectArgs where
 handle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (parseErrorResult parseError)
   Right args -> do
     mCabalFile <- findCabalFile pd
     case mCabalFile of
-      Nothing -> pure (errorResult "No .cabal file found in project root")
+      Nothing -> pure cabalNotFoundResult
       Just cabalPath -> do
         readRes <- try (TIO.readFile cabalPath)
                    :: IO (Either SomeException Text)
         case readRes of
           Left e ->
-            pure (errorResult (T.pack ("Could not read .cabal: " <> show e)))
+            pure (subprocessResult
+                    (T.pack ("Could not read .cabal: " <> show e)))
           Right body -> do
             let moduleNames = parseExposedModules body
             modulePaths   <- resolveModulePaths pd moduleNames
@@ -104,6 +104,41 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
                                (cpFailFast args) (cpWarningsBlock args)
                                modulePaths
             pure (renderResult results)
+
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
+
+-- | Issue #90 Phase C: no .cabal in project root → status='no_match'
+-- with kind='module_not_in_graph' (the project layout doesn't
+-- expose any modules to check).
+cabalNotFoundResult :: ToolResult
+cabalNotFoundResult =
+  let payload  = object
+        [ "remediation" .= ( "Run ghc_create_project to scaffold a \
+                            \cabal layout, then retry." :: Text )
+        ]
+      envErr   = Env.mkErrorEnvelope Env.ModuleNotInGraph
+                   ("No .cabal file found in project root" :: Text)
+      response = (Env.mkNoMatch payload) { Env.reError = Just envErr }
+  in Env.toolResponseToResult response
+
+-- | Issue #90 Phase C: filesystem read of .cabal failed.
+subprocessResult :: Text -> ToolResult
+subprocessResult msg =
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
 
 --------------------------------------------------------------------------------
 -- cabal parsing
@@ -251,6 +286,11 @@ runChecks ghcSess store pd ff wb ((nm, mp) : rest) = case mp of
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: every-module-passed → status='ok'. Any
+-- module fails or 'not_found' → status='failed', kind='validation'
+-- (compile errors are already aggregated through ghc_check_module's
+-- envelope under 'per_module[i].result'; the project-level
+-- envelope just summarises).
 renderResult :: [ModuleOutcome] -> ToolResult
 renderResult outcomes =
   let checked   = [ (nm, tr) | MoChecked nm tr <- outcomes ]
@@ -258,22 +298,25 @@ renderResult outcomes =
       notFound  = [ nm       | MoNotFound nm <- outcomes ]
       skipped   = [ nm       | MoSkipped nm <- outcomes ]
       overall   = null failing && null notFound
+      total     = length outcomes
       payload =
         object
-          [ "success"       .= overall
-          , "overall"       .= overall
-          , "total"         .= length outcomes
+          [ "overall"       .= overall
+          , "total"         .= total
           , "passed"        .= length (filter (not . trIsError . snd) checked)
           , "failed"        .= length failing
           , "not_found"     .= length notFound
           , "skipped"       .= length skipped
           , "per_module"    .= map renderOutcome outcomes
-          , "summary"       .= summarise (length outcomes) (length failing) (length notFound)
+          , "summary"       .= summarise total (length failing) (length notFound)
           ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = not overall
-       }
+  in if overall
+       then Env.toolResponseToResult (Env.mkOk payload)
+       else
+         let envErr   = Env.mkErrorEnvelope Env.Validation
+                          (summarise total (length failing) (length notFound))
+             response = (Env.mkFailed envErr) { Env.reResult = Just payload }
+         in Env.toolResponseToResult response
 
 renderOutcome :: ModuleOutcome -> Value
 renderOutcome (MoChecked nm tr) =
@@ -305,16 +348,3 @@ summarise total failed notFound =
   <> (if notFound > 0 then "; "    <> T.pack (show notFound) <> " not found" else "")
   <> "."
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

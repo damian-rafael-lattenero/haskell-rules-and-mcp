@@ -42,8 +42,6 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (ExitCode (..))
 import System.Process
@@ -56,6 +54,7 @@ import System.Timeout (timeout)
 
 import HaskellFlows.Data.PropertyStore (Store, loadAll)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Parser.QuickCheck as QC
@@ -115,7 +114,7 @@ cabalBuildTimeoutMicros  = 3 * 60 * 1_000_000     -- 3 min
 
 handle :: Store -> GhcSession -> ProjectDir -> Value -> IO ToolResult
 handle store sess pd rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+  Left err -> pure (parseErrorResult err)
   Right args -> do
     t0  <- now
     reg <- if gaSkipRegression args
@@ -306,11 +305,14 @@ outputCap = 256 * 1024
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: every-gate-green → status='ok' with the
+-- per-step report under 'result'. Any red step → status='failed'
+-- (kind='validation' if the step ran and reported failures,
+-- 'inner_timeout' if a step timed out).
 renderReport :: Bool -> Double -> Step -> Step -> Step -> ToolResult
 renderReport allPassed total reg tst bld =
   let payload = object
-        [ "success"          .= allPassed
-        , "totalDurationSec" .= total
+        [ "totalDurationSec" .= total
         , "steps" .= object
             [ "regression" .= renderStep reg
             , "cabal_test" .= renderStep tst
@@ -318,10 +320,20 @@ renderReport allPassed total reg tst bld =
             ]
         , "summary" .= summary allPassed reg tst bld
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = not allPassed
-       }
+  in if allPassed
+       then Env.toolResponseToResult (Env.mkOk payload)
+       else
+         let anyTimedOut = anyTimeout reg || anyTimeout tst || anyTimeout bld
+             kind | anyTimedOut = Env.InnerTimeout
+                  | otherwise   = Env.Validation
+             envErr   = Env.mkErrorEnvelope kind
+                          (summary allPassed reg tst bld)
+             response = (Env.mkFailed envErr) { Env.reResult = Just payload }
+         in Env.toolResponseToResult response
+
+anyTimeout :: Step -> Bool
+anyTimeout TimedOut{} = True
+anyTimeout _          = False
 
 renderStep :: Step -> Value
 renderStep s = case s of
@@ -355,13 +367,20 @@ passedVerbs reg tst bld =
     notSkipped Skipped = False
     notSkipped _       = True
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False, "error" .= msg ])) ]
-    , trIsError = True
-    }
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 --------------------------------------------------------------------------------
 -- misc
@@ -369,6 +388,3 @@ errorResult msg =
 
 now :: IO Double
 now = realToFrac <$> getPOSIXTime
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
