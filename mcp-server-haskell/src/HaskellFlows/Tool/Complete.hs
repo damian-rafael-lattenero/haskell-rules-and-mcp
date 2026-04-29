@@ -25,7 +25,7 @@ import GHC.Types.Name.Occurrence (occNameString)
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
-import HaskellFlows.Ghc.Sanitize (CommandError (..), sanitizeExpression)
+import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
@@ -87,7 +87,7 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Right (CompleteArgs prefix limit) ->
     case sanitizeExpression prefix of
       Left e ->
-        pure (Env.toolResponseToResult (Env.mkRefused (sanitizeError "prefix" e)))
+        pure (Env.toolResponseToResult (Env.mkRefused (Env.sanitizeRejection "prefix" e)))
       Right safe -> do
         eRes <- try (withGhcSession ghcSess (queryCompletions safe))
         pure $ Env.toolResponseToResult $ case eRes of
@@ -111,30 +111,6 @@ parseErrorKind err
       in any (\i -> take n (drop i haystack) == needle)
              [0 .. length haystack - n]
 
--- | Translate a sanitize-layer rejection into the envelope's
--- 'StatusRefused' error shape. Newline / sentinel / oversize
--- inputs are policy refusals — the agent could have predicted
--- them by checking the input itself.
-sanitizeError :: Text -> CommandError -> Env.ErrorEnvelope
-sanitizeError fieldName = \case
-  ContainsNewline ->
-    (Env.mkErrorEnvelope Env.NewlineInjection
-       (fieldName <> " must be a single line (no newline characters)"))
-         { Env.eeField = Just fieldName }
-  ContainsSentinel ->
-    (Env.mkErrorEnvelope Env.SentinelPoisoning
-       (fieldName <> " contains the internal framing sentinel and was rejected"))
-         { Env.eeField = Just fieldName }
-  EmptyInput ->
-    (Env.mkErrorEnvelope Env.EmptyInput (fieldName <> " is empty"))
-      { Env.eeField = Just fieldName }
-  InputTooLarge sz cap ->
-    (Env.mkErrorEnvelope Env.OversizedInput
-       (fieldName <> " is too large (" <> T.pack (show sz) <> " chars, cap is "
-        <> T.pack (show cap) <> ")"))
-      { Env.eeField = Just fieldName
-      , Env.eeCause = Just (T.pack (show sz) <> "/" <> T.pack (show cap))
-      }
 
 -- | Scan every name currently in the interactive context, keep the
 -- ones whose occurrence name starts with the prefix. Sort + dedupe

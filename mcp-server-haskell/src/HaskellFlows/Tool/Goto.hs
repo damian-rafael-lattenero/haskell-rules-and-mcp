@@ -20,8 +20,6 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Text.Read (readMaybe)
 
 import GHC
@@ -42,8 +40,9 @@ import GHC.Types.SrcLoc
   )
 import GHC.Utils.Outputable (showPprUnsafe)
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
-import HaskellFlows.Ghc.Sanitize (CommandError (..), sanitizeExpression)
+import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
@@ -91,18 +90,40 @@ data Location
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKind parseError)
+          (T.pack ("Invalid arguments: " <> parseError)))
+            { Env.eeCause = Just (T.pack parseError) })))
   Right (GotoArgs nm) -> case sanitizeExpression nm of
-    Left e -> pure (errorResult (formatCommandError e))
+    Left e ->
+      pure (Env.toolResponseToResult (Env.mkRefused (Env.sanitizeRejection "name" e)))
     Right safe -> do
       eRes <- try (withGhcSession ghcSess (queryLocation safe))
-      pure $ case eRes of
+      pure $ Env.toolResponseToResult $ case eRes of
         Left (se :: SomeException) ->
-          errorResult (T.pack ("GHC API error: " <> show se))
+          Env.mkFailed
+            ((Env.mkErrorEnvelope Env.InternalError
+                (T.pack ("GHC API error: " <> show se)))
+                  { Env.eeCause = Just (T.pack (show se)) })
         Right Nothing ->
-          errorResult ("Could not locate '" <> safe <> "'. Not in scope.")
-        Right (Just loc) ->
-          locationResult safe loc
+          -- Issue #90 §3 + §4: name not in scope is a 'no_match'
+          -- (the question was well-formed, the answer is the
+          -- empty set), NOT a 'failed'. The result echoes the
+          -- name + the search context so the agent can pivot.
+          Env.mkNoMatch (notInScopePayload safe)
+        Right (Just loc) -> Env.mkOk (locationPayload safe loc)
+
+-- | Discriminate the FromJSON failure shape — same heuristic as
+-- the other Phase-B migrations.
+parseErrorKind :: String -> Env.ErrorKind
+parseErrorKind err
+  | "key" `isInfixOfStr` err = Env.MissingArg
+  | otherwise                = Env.TypeMismatch
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 -- | Match names in the interactive scope by exact occurrence name,
 -- then promote the 'SrcSpan' to a structured 'Location'.
@@ -178,49 +199,37 @@ firstJust f (x:xs) = case f x of
 -- response shaping (unchanged schema)
 --------------------------------------------------------------------------------
 
-locationResult :: Text -> Location -> ToolResult
-locationResult nm loc =
-  let payload = case loc of
-        InFile f l c ->
-          object
-            [ "success" .= True
-            , "name"    .= nm
-            , "kind"    .= ("file" :: Text)
-            , "file"    .= f
-            , "line"    .= l
-            , "column"  .= c
-            ]
-        InModule m ->
-          object
-            [ "success" .= True
-            , "name"    .= nm
-            , "kind"    .= ("module" :: Text)
-            , "module"  .= m
-            ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
-
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
+-- | Render the resolved location into the same shape the legacy
+-- callers consumed (kind=file with file/line/column, OR kind=module
+-- with module). Phase B keeps these field names; only the wrapping
+-- 'success: bool' moves out of the payload (auto-derived from
+-- 'status').
+locationPayload :: Text -> Location -> Value
+locationPayload nm = \case
+  InFile f l c ->
+    object
+      [ "name"   .= nm
+      , "kind"   .= ("file" :: Text)
+      , "file"   .= f
+      , "line"   .= l
+      , "column" .= c
       ]
-    , trIsError = True
-    }
+  InModule m ->
+    object
+      [ "name"   .= nm
+      , "kind"   .= ("module" :: Text)
+      , "module" .= m
+      ]
 
-formatCommandError :: CommandError -> Text
-formatCommandError = \case
-  ContainsNewline  -> "name must be a single line (no newline characters)"
-  ContainsSentinel -> "name contains the internal framing sentinel and was rejected"
-  EmptyInput       -> "name is empty"
-  InputTooLarge sz cap ->
-    "name is too large (" <> T.pack (show sz) <> " chars, cap is "
-      <> T.pack (show cap) <> ")"
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+-- | Result payload for the no-match (name-not-in-scope) path.
+-- Carries the searched name + a remediation pointer so the agent
+-- can choose to retry via a richer surface.
+notInScopePayload :: Text -> Value
+notInScopePayload nm = object
+  [ "name"        .= nm
+  , "searched_in" .= ("interactive scope" :: Text)
+  , "remediation" .= ("Name not currently in scope. If it's defined in a \
+                      \loaded module, run ghc_load on that module first. \
+                      \For external/base names, ghc_info often resolves \
+                      \what ghc_goto cannot." :: Text)
+  ]

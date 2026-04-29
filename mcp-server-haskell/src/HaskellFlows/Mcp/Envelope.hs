@@ -72,6 +72,8 @@ module HaskellFlows.Mcp.Envelope
   , withMeta
     -- * Wire-wrapper bridge
   , toolResponseToResult
+    -- * Cross-tool helpers
+  , sanitizeRejection
   ) where
 
 import Data.Aeson
@@ -95,6 +97,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 
+import qualified HaskellFlows.Ghc.Sanitize as San
 import HaskellFlows.Mcp.Protocol
   ( ToolContent (..)
   , ToolResult (..)
@@ -624,3 +627,40 @@ toolResponseToResult r =
        { trContent = [ TextContent body ]
        , trIsError = not (isLegacySuccess (reStatus r))
        }
+
+--------------------------------------------------------------------------------
+-- Cross-tool helpers
+--------------------------------------------------------------------------------
+
+-- | Translate a sanitize-layer 'CommandError' into the envelope's
+-- 'StatusRefused' error shape. Newline / sentinel / oversize /
+-- empty inputs are *policy* refusals — the agent could have
+-- predicted them by inspecting the input itself, so they're
+-- distinct from runtime failures (compile errors, exceptions).
+--
+-- Every tool that routes a user input through 'sanitizeExpression'
+-- (ghc_eval, ghc_quickcheck, ghc_complete, ghc_goto, ghc_info,
+-- ghc_doc, ghc_type, …) shares this mapping. The 'fieldName'
+-- argument is the JSON-RPC field that carried the offending input
+-- — so the consumer can pinpoint *which* argument tripped the
+-- policy without parsing the message string.
+sanitizeRejection :: Text -> San.CommandError -> ErrorEnvelope
+sanitizeRejection fieldName = \case
+  San.ContainsNewline ->
+    (mkErrorEnvelope NewlineInjection
+       (fieldName <> " must be a single line (no newline characters)"))
+         { eeField = Just fieldName }
+  San.ContainsSentinel ->
+    (mkErrorEnvelope SentinelPoisoning
+       (fieldName <> " contains the internal framing sentinel and was rejected"))
+         { eeField = Just fieldName }
+  San.EmptyInput ->
+    (mkErrorEnvelope EmptyInput (fieldName <> " is empty"))
+      { eeField = Just fieldName }
+  San.InputTooLarge sz cap ->
+    (mkErrorEnvelope OversizedInput
+       (fieldName <> " is too large (" <> T.pack (show sz) <> " chars, cap is "
+        <> T.pack (show cap) <> ")"))
+      { eeField = Just fieldName
+      , eeCause = Just (T.pack (show sz) <> "/" <> T.pack (show cap))
+      }

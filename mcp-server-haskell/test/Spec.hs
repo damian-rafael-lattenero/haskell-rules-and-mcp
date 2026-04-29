@@ -233,6 +233,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
 import qualified HaskellFlows.Tool.Browse as BrowseTool
 import qualified HaskellFlows.Tool.Complete as CompleteTool
+import qualified HaskellFlows.Tool.Goto as GotoTool
 import qualified HaskellFlows.Tool.Imports as ImportsTool
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
 import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmupTool
@@ -451,6 +452,12 @@ main = do
                                                    testCompleteNoMatch
       , test "Envelope #90 Phase B: ghc_complete refuses newline in prefix"
                                                    testCompleteRefusesNewline
+      , test "Envelope #90 Phase B: ghc_goto on local name → status=ok"
+                                                   testGotoLocalNameOk
+      , test "Envelope #90 Phase B: ghc_goto on unknown name → status=no_match"
+                                                   testGotoUnknownNameNoMatch
+      , test "Envelope #90 Phase B: ghc_goto refuses newline in name"
+                                                   testGotoRefusesNewline
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -3076,6 +3083,72 @@ testCompleteRefusesNewline = do
       , Just err <- Env.reError env ->
           Env.eeKind err == Env.NewlineInjection
             && Env.eeField err == Just "prefix"
+    _ -> False
+
+-- | Phase B helper: stage a tmpdir project with a 'Foo' module
+-- exporting 'foo' + drive 'GotoTool.handle'.
+runGoto :: A.Value -> IO (Either String Env.ToolResponse)
+runGoto args = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-goto-test"
+  removePathForcibly dir
+  createDirectoryIfMissing True (dir </> "src")
+  TIO.writeFile (dir </> "src" </> "Foo.hs")
+    (T.pack "module Foo where\nfoo :: Int\nfoo = 1\n")
+  result <- case mkProjectDir dir of
+    Left _   -> pure (Left "could not build ProjectDir")
+    Right pd -> do
+      sess <- startGhcSession pd
+      tr   <- GotoTool.handle sess args
+      killGhcSession sess
+      case trContent tr of
+        [TextContent body] ->
+          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+        _ -> pure (Left "expected exactly one TextContent")
+  removePathForcibly dir
+  pure result
+
+-- | 'ghc_goto' on a project-defined name resolves to a file
+-- location → status='ok' with result.kind='file' + result.file +
+-- result.line + result.column.
+testGotoLocalNameOk :: IO Bool
+testGotoLocalNameOk = do
+  decoded <- runGoto (A.object [ "name" A..= ("foo" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "name") payload == Just (A.String "foo")
+            && (AKM.lookup (AKey.fromText "kind") payload == Just (A.String "file")
+                  || AKM.lookup (AKey.fromText "kind") payload == Just (A.String "module"))
+    _ -> False
+
+-- | 'ghc_goto' on a name that's not in scope → status='no_match'
+-- with the searched name echoed inside result. Closes one of the
+-- ghc_info-class \"name not in scope\" cases that #87 generalises.
+testGotoUnknownNameNoMatch :: IO Bool
+testGotoUnknownNameNoMatch = do
+  decoded <- runGoto
+    (A.object [ "name" A..= ("definitelyNotARealName123" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusNoMatch
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "name") payload
+            == Just (A.String "definitelyNotARealName123")
+            && AKM.member (AKey.fromText "remediation") payload
+    _ -> False
+
+-- | A newline-laden name → status='refused' with kind='newline_injection'.
+testGotoRefusesNewline :: IO Bool
+testGotoRefusesNewline = do
+  decoded <- runGoto (A.object [ "name" A..= ("foo\n:quit" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusRefused
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.NewlineInjection
+            && Env.eeField err == Just "name"
     _ -> False
 
 --------------------------------------------------------------------------------
