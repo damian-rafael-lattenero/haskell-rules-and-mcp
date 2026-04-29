@@ -37,6 +37,7 @@ import HaskellFlows.Ghc.ApiSession
   , targetForPath
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error
@@ -105,7 +106,7 @@ instance FromJSON CheckArgs where
 handle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (parseErrorResult parseError)
+    pure (formatParseError parseError)
   Right (CheckArgs raw warnBlock) -> case mkModulePath pd (T.unpack raw) of
     Left e -> pure (pathTraversalResult (formatPathError e))
     Right _ -> do
@@ -326,20 +327,6 @@ summarise False errs warns holes regs =
     , if null regs  then "" else T.pack (show (length regs))  <> " property regression(s)"
     ]
 
--- | Issue #90 Phase C: caller-side parse failure.
-parseErrorResult :: String -> ToolResult
-parseErrorResult err =
-  let kind | "key" `isInfixOfStr` err = Env.MissingArg
-           | otherwise                = Env.TypeMismatch
-      envErr = (Env.mkErrorEnvelope kind
-                  (T.pack ("Invalid arguments: " <> err)))
-                    { Env.eeCause = Just (T.pack err) }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
-  where
-    isInfixOfStr needle haystack =
-      let n = length needle
-      in any (\i -> take n (drop i haystack) == needle)
-             [0 .. length haystack - n]
 
 -- | Issue #90 Phase C: 'mkModulePath' rejection.
 pathTraversalResult :: Text -> ToolResult

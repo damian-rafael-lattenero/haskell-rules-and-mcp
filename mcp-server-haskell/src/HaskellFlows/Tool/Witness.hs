@@ -60,6 +60,7 @@ import Text.Read (readMaybe)
 
 import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.QuickCheck
@@ -117,7 +118,7 @@ instance FromJSON WitnessArgs where
 
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (parseErrorResult err)
+  Left err -> pure (formatParseError err)
   Right args -> do
     t0 <- realToFrac <$> getPOSIXTime :: IO Double
     let instrumented = buildInstrumentedProperty (waProperty args) (waRuns args)
@@ -357,20 +358,6 @@ qcCounts = \case
   QcGaveUp _ n d        -> (n, 0, T.pack ("gave up after " <> show d <> " discards"))
   QcUnparsed _ raw      -> (0, 0, raw)
 
--- | Issue #90 Phase C: caller-side parse failure.
-parseErrorResult :: String -> ToolResult
-parseErrorResult err =
-  let kind | "key" `isInfixOfStr` err = Env.MissingArg
-           | otherwise                = Env.TypeMismatch
-      envErr = (Env.mkErrorEnvelope kind
-                  (T.pack ("Invalid arguments: " <> err)))
-                    { Env.eeCause = Just (T.pack err) }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
-  where
-    isInfixOfStr needle haystack =
-      let n = length needle
-      in any (\i -> take n (drop i haystack) == needle)
-             [0 .. length haystack - n]
 
 -- | Issue #90 Phase C: cabal-repl subprocess threw.
 subprocessResult :: Text -> ToolResult

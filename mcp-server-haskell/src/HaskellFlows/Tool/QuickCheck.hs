@@ -70,6 +70,7 @@ import HaskellFlows.Ghc.Sanitize
   ( sanitizeExpression
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.QuickCheck
@@ -131,7 +132,7 @@ quickCheckTimeoutMicros = 30_000_000
 handle :: Store -> GhcSession -> Value -> IO ToolResult
 handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (parseErrorResult parseError)
+    pure (formatParseError parseError)
   Right (QuickCheckArgs prop md) -> case sanitizeExpression prop of
     Left cmdErr ->
       pure (Env.toolResponseToResult
@@ -627,18 +628,4 @@ summariseStderr raw =
          && not ("resolving dependencies" `T.isPrefixOf` l)
          && not ("build profile" `T.isPrefixOf` l)
 
--- | Issue #90 Phase C: caller-side parse failure.
-parseErrorResult :: String -> ToolResult
-parseErrorResult err =
-  let kind | "key" `isInfixOfStr` err = Env.MissingArg
-           | otherwise                = Env.TypeMismatch
-      envErr = (Env.mkErrorEnvelope kind
-                  (T.pack ("Invalid arguments: " <> err)))
-                    { Env.eeCause = Just (T.pack err) }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
-  where
-    isInfixOfStr needle haystack =
-      let n = length needle
-      in any (\i -> take n (drop i haystack) == needle)
-             [0 .. length haystack - n]
 

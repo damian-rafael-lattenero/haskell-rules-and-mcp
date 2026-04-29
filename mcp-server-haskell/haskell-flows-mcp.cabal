@@ -44,6 +44,7 @@ library
                       HaskellFlows.Mcp.Guidance
                       HaskellFlows.Mcp.NextStep
                       HaskellFlows.Mcp.ToolName
+                      HaskellFlows.Mcp.ParseError
                       HaskellFlows.Mcp.PathBootstrap
                       HaskellFlows.Mcp.PermissiveJSON
                       HaskellFlows.Mcp.Protocol

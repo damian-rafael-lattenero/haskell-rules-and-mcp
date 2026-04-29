@@ -22,6 +22,7 @@ import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.ParseError (formatParseError)
 import System.Directory (findExecutable)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
@@ -76,7 +77,7 @@ coverageTimeoutMicros = 5 * 60 * 1_000_000
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (parseErrorResult parseError)
+    pure (formatParseError parseError)
   Right CoverageArgs -> do
     mCabal <- findExecutable "cabal"
     case mCabal of
@@ -85,20 +86,6 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
         outcome <- runCoverage pd
         pure (renderResult outcome)
 
--- | Issue #90 Phase C: caller-side parse failure.
-parseErrorResult :: String -> ToolResult
-parseErrorResult err =
-  let kind | "key" `isInfixOfStr` err = Env.MissingArg
-           | otherwise                = Env.TypeMismatch
-      envErr = (Env.mkErrorEnvelope kind
-                  (T.pack ("Invalid arguments: " <> err)))
-                    { Env.eeCause = Just (T.pack err) }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
-  where
-    isInfixOfStr needle haystack =
-      let n = length needle
-      in any (\i -> take n (drop i haystack) == needle)
-             [0 .. length haystack - n]
 
 --------------------------------------------------------------------------------
 -- subprocess

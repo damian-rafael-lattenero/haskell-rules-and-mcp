@@ -35,6 +35,7 @@ import System.Process
 import System.Timeout (timeout)
 
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types
@@ -94,7 +95,7 @@ formatTimeoutMicros = 30 * 1_000_000  -- 30 s
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (parseErrorResult parseError)
+    pure (formatParseError parseError)
   Right args -> case mkModulePath pd (T.unpack (faModulePath args)) of
     Left e -> pure (pathTraversalResult (formatPathError e))
     Right mp -> do
@@ -108,19 +109,6 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
 
 -- | Issue #90 Phase C: caller-side parse failure → status='failed'
 -- with kind='missing_arg' (missing key) or 'type_mismatch'.
-parseErrorResult :: String -> ToolResult
-parseErrorResult err =
-  let kind | "key" `isInfixOfStr` err = Env.MissingArg
-           | otherwise                = Env.TypeMismatch
-      envErr = (Env.mkErrorEnvelope kind
-                  (T.pack ("Invalid arguments: " <> err)))
-                    { Env.eeCause = Just (T.pack err) }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
-  where
-    isInfixOfStr needle haystack =
-      let n = length needle
-      in any (\i -> take n (drop i haystack) == needle)
-             [0 .. length haystack - n]
 
 -- | Issue #90 Phase C: 'mkModulePath' rejected the input → that's
 -- a path-traversal refusal. Status='refused', kind='path_traversal'.

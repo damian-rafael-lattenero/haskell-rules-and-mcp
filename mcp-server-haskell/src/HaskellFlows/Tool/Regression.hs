@@ -27,6 +27,7 @@ import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.ParseError (formatParseError)
 import System.Timeout (timeout)
 
 import HaskellFlows.Data.PropertyStore
@@ -92,7 +93,7 @@ replayTimeoutMicros = 30_000_000
 handle :: Store -> GhcSession -> Value -> IO ToolResult
 handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (parseErrorResult parseError)
+    pure (formatParseError parseError)
   Right (RegressionArgs a) -> do
     props <- loadAll store
     case a of
@@ -101,20 +102,6 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
         results <- mapM (runOne ghcSess) props
         pure (runResult results)
 
--- | Issue #90 Phase C: caller-side parse failure.
-parseErrorResult :: String -> ToolResult
-parseErrorResult err =
-  let kind | "key" `isInfixOfStr` err = Env.MissingArg
-           | otherwise                = Env.TypeMismatch
-      envErr = (Env.mkErrorEnvelope kind
-                  (T.pack ("Invalid arguments: " <> err)))
-                    { Env.eeCause = Just (T.pack err) }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
-  where
-    isInfixOfStr needle haystack =
-      let n = length needle
-      in any (\i -> take n (drop i haystack) == needle)
-             [0 .. length haystack - n]
 
 --------------------------------------------------------------------------------
 -- running

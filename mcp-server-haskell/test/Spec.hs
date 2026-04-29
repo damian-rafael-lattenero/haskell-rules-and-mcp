@@ -105,6 +105,10 @@ import HaskellFlows.Mcp.RpcMethod
   , parseRpcMethod
   , rpcMethodText
   )
+import HaskellFlows.Mcp.ParseError
+  ( InterpretedParseError (..)
+  , interpretParseError
+  )
 import HaskellFlows.Mcp.PermissiveJSON
   ( BoolField (..)
   , IntField (..)
@@ -367,6 +371,19 @@ main = do
                                                    testFixWarningPermissiveLine
       , test "Complete · limit accepts string + default (#88)"
                                                    testCompletePermissiveLimit
+      -- Issue #85: friendly parse-error formatting
+      , test "ParseError · missing key extracted + flagged (#85)"
+                                                   testParseErrorMissingKey
+      , test "ParseError · dotted-path type mismatch (#85)"
+                                                   testParseErrorTypeMismatchDotted
+      , test "ParseError · bracket-quoted field (#85)"
+                                                   testParseErrorTypeMismatchBracketed
+      , test "ParseError · type mismatch w/o field (#85)"
+                                                   testParseErrorTypeMismatchNoField
+      , test "ParseError · unrecognised falls through to Validation (#85)"
+                                                   testParseErrorUnrecognisedFalls
+      , test "ParseError · raw text always preserved on ipRaw (#85)"
+                                                   testParseErrorRawAlwaysPreserved
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
       , test "validatePackageName accepts normal"  testPkgAccepts
@@ -1777,6 +1794,83 @@ testCompletePermissiveLimit = do
        -- existence of c proves the default still applies.
        pure ( show a == show b && not (null (show c)) )
     _ -> pure False
+
+--------------------------------------------------------------------------------
+-- Issue #85: friendly Aeson parse-error rewriting at the tool boundary
+--
+-- The interpreter operates on the Aeson 'parseEither' string and
+-- categorises it into 'missing_arg' / 'type_mismatch' / 'validation'
+-- with an extracted 'field' and a friendly natural-language message.
+-- Each test pins one shape — including the unrecognised fall-through.
+--------------------------------------------------------------------------------
+
+-- | The canonical \"missing required key\" shape from Aeson.
+testParseErrorMissingKey :: IO Bool
+testParseErrorMissingKey =
+  let raw = "Error in $: key \"expression\" not found"
+      ip  = interpretParseError raw
+  in pure ( ipKind    ip == Env.MissingArg
+         && ipField   ip == Just "expression"
+         && T.isInfixOf "expression" (ipMessage ip)
+         && T.isInfixOf "missing"    (ipMessage ip)
+         && ipRaw     ip == T.pack raw )
+
+-- | The dotted-path shape: @Error in $.field: <reason>@.
+-- Field extracted, kind flagged as type mismatch, raw preserved.
+testParseErrorTypeMismatchDotted :: IO Bool
+testParseErrorTypeMismatchDotted =
+  let raw = "Error in $.line: parsing Int failed, expected Number, but encountered String"
+      ip  = interpretParseError raw
+  in pure ( ipKind    ip == Env.TypeMismatch
+         && ipField   ip == Just "line"
+         && T.isInfixOf "line"  (ipMessage ip)
+         && T.isInfixOf "wrong" (ipMessage ip) )
+
+-- | Bracket-quoted field name: @Error in $['delete_files']: ...@.
+-- Aeson uses this form when the key name contains characters that
+-- would be ambiguous in dotted-path syntax.
+testParseErrorTypeMismatchBracketed :: IO Bool
+testParseErrorTypeMismatchBracketed =
+  let raw = "Error in $['delete_files']: expected Bool, but encountered String"
+      ip  = interpretParseError raw
+  in pure ( ipKind  ip == Env.TypeMismatch
+         && ipField ip == Just "delete_files" )
+
+-- | Type-mismatch signal but no field path — the heuristic fall
+-- through to a Validation result that surfaces the raw text.
+testParseErrorTypeMismatchNoField :: IO Bool
+testParseErrorTypeMismatchNoField =
+  let raw = "Error in something else: expected Bool, but encountered String"
+      ip  = interpretParseError raw
+  in pure ( ipKind  ip == Env.TypeMismatch
+         && isNothing (ipField ip)
+         && T.isInfixOf "wrong" (ipMessage ip) )
+
+-- | A parse-error string we don't recognise must NOT be silently
+-- mis-categorised. Falls through to Validation with the original
+-- text preserved verbatim — that's the one shape that doesn't get
+-- friendly-rewritten because we don't know what it means.
+testParseErrorUnrecognisedFalls :: IO Bool
+testParseErrorUnrecognisedFalls =
+  let raw = "some Aeson shape we never saw before"
+      ip  = interpretParseError raw
+  in pure ( ipKind  ip == Env.Validation
+         && isNothing (ipField ip)
+         && T.isInfixOf (T.pack raw) (ipMessage ip)
+         && ipRaw   ip == T.pack raw )
+
+-- | The bug-pinning anchor: the original raw text must always be
+-- preserved on 'ipRaw' regardless of which branch fires. A
+-- debugging consumer that wants the literal Aeson output can
+-- always retrieve it from there.
+testParseErrorRawAlwaysPreserved :: IO Bool
+testParseErrorRawAlwaysPreserved =
+  let cases = [ "Error in $: key \"foo\" not found"
+              , "Error in $.bar: parsing Int failed"
+              , "weird unrecognised shape"
+              ]
+      results = map interpretParseError cases
+  in pure (and (zipWith (\raw r -> ipRaw r == T.pack raw) cases results))
 
 -- | Round-trip a property through the on-disk store. Uses a unique
 -- temp project dir to keep repeated test runs independent.

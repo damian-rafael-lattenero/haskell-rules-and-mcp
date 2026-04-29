@@ -68,6 +68,7 @@ import HaskellFlows.Ghc.Sanitize
   ( sanitizeExpression
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error (GhcError)
@@ -128,7 +129,7 @@ instance FromJSON SuggestArgs where
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (parseErrorResult parseError)
+    pure (formatParseError parseError)
   Right args -> case sanitizeExpression (saFunctionName args) of
     Left e -> pure (Env.toolResponseToResult
                       (Env.mkRefused (Env.sanitizeRejection "function_name" e)))
@@ -165,20 +166,6 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
                             Just c  -> filter ((c ==) . sCategory) matches
                       pure (successResult safe typeText filtered)
 
--- | Issue #90 Phase C: caller-side parse failure.
-parseErrorResult :: String -> ToolResult
-parseErrorResult err =
-  let kind | "key" `isInfixOfStr` err = Env.MissingArg
-           | otherwise                = Env.TypeMismatch
-      envErr = (Env.mkErrorEnvelope kind
-                  (T.pack ("Invalid arguments: " <> err)))
-                    { Env.eeCause = Just (T.pack err) }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
-  where
-    isInfixOfStr needle haystack =
-      let n = length needle
-      in any (\i -> take n (drop i haystack) == needle)
-             [0 .. length haystack - n]
 
 -- | Issue #90 Phase C: GHC API exception (load threw).
 subprocessResult :: Text -> ToolResult

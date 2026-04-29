@@ -36,6 +36,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.ParseError (formatParseError)
 import System.Directory (doesDirectoryExist, doesFileExist, findExecutable)
 import System.FilePath
   ( equalFilePath
@@ -119,7 +120,7 @@ hlintTimeoutMicros = 60 * 1_000_000  -- 60 s
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (parseErrorResult parseError)
+    pure (formatParseError parseError)
   Right args -> case resolveTarget pd args of
     Left err     -> pure (pathTraversalResult err)
     Right target -> do
@@ -131,20 +132,6 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
           res <- runHlint pd target
           pure (renderResult target (laFailOn args) res)
 
--- | Issue #90 Phase C: caller-side parse failure.
-parseErrorResult :: String -> ToolResult
-parseErrorResult err =
-  let kind | "key" `isInfixOfStr` err = Env.MissingArg
-           | otherwise                = Env.TypeMismatch
-      envErr = (Env.mkErrorEnvelope kind
-                  (T.pack ("Invalid arguments: " <> err)))
-                    { Env.eeCause = Just (T.pack err) }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
-  where
-    isInfixOfStr needle haystack =
-      let n = length needle
-      in any (\i -> take n (drop i haystack) == needle)
-             [0 .. length haystack - n]
 
 -- | Issue #90 Phase C: 'resolveTarget' rejected the input as
 -- escaping the project root → status='refused', kind='path_traversal'.

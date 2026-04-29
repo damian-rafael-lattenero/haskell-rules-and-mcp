@@ -51,6 +51,7 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import HaskellFlows.Data.PropertyStore (Store)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.TypeSignature (parseSignature)
@@ -127,7 +128,7 @@ confidenceAtLeast threshold candidate =
 
 handle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (parseErrorResult err)
+  Left err -> pure (formatParseError err)
   Right args -> case mkModulePath pd (T.unpack (laModulePath args)) of
     Left e   -> pure (pathTraversalResult (T.pack (show e)))
     Right mp -> do
@@ -139,20 +140,6 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
           (T.pack ("Could not read module: " <> show e)))
         Right body -> runLab ghcSess store pd args (laModulePath args) body
 
--- | Issue #90 Phase C: caller-side parse failure.
-parseErrorResult :: String -> ToolResult
-parseErrorResult err =
-  let kind | "key" `isInfixOfStr` err = Env.MissingArg
-           | otherwise                = Env.TypeMismatch
-      envErr = (Env.mkErrorEnvelope kind
-                  (T.pack ("Invalid arguments: " <> err)))
-                    { Env.eeCause = Just (T.pack err) }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
-  where
-    isInfixOfStr needle haystack =
-      let n = length needle
-      in any (\i -> take n (drop i haystack) == needle)
-             [0 .. length haystack - n]
 
 -- | Issue #90 Phase C: 'mkModulePath' rejection.
 pathTraversalResult :: Text -> ToolResult

@@ -63,6 +63,7 @@ import System.FilePath (takeExtension)
 import HaskellFlows.Data.PropertyStore (Store, openStore)
 import HaskellFlows.Ghc.ApiSession (GhcSession, killGhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types
@@ -187,7 +188,7 @@ handle
   -> Value
   -> IO ToolResult
 handle pdRef sessRef storeRef rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (parseErrorResult err)
+  Left err -> pure (formatParseError err)
   Right (SwitchProjectArgs raw) -> do
     res <- validateSwitchTarget raw
     case res of
@@ -235,20 +236,6 @@ successResult oldPd newPd scaffolded =
                        \call boots a fresh GhcSession." :: Text)
     ]))
 
--- | Issue #90 Phase C: caller-side parse failure.
-parseErrorResult :: String -> ToolResult
-parseErrorResult err =
-  let kind | "key" `isInfixOfStr` err = Env.MissingArg
-           | otherwise                = Env.TypeMismatch
-      envErr = (Env.mkErrorEnvelope kind
-                  (T.pack ("Invalid arguments: " <> err)))
-                    { Env.eeCause = Just (T.pack err) }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
-  where
-    isInfixOfStr needle haystack =
-      let n = length needle
-      in any (\i -> take n (drop i haystack) == needle)
-             [0 .. length haystack - n]
 
 -- | Issue #90 Phase C: closed-enum dispatch over the validation
 -- failure modes. Each maps to a typed kind:

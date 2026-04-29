@@ -47,6 +47,7 @@ import System.FilePath (takeDirectory)
 
 import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.QuickCheck as Qc
@@ -100,7 +101,7 @@ instance FromJSON ExportArgs where
 
 handle :: Store -> ProjectDir -> Value -> IO ToolResult
 handle store pd rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (parseErrorResult err)
+  Left err -> pure (formatParseError err)
   Right args -> do
     props <- loadAll store
     let filtered = case eaModule args of
@@ -310,20 +311,6 @@ successResult path written total =
              \every property as a regression gate." :: Text )
     ]))
 
--- | Issue #90 Phase C: caller-side parse failure.
-parseErrorResult :: String -> ToolResult
-parseErrorResult err =
-  let kind | "key" `isInfixOfStr` err = Env.MissingArg
-           | otherwise                = Env.TypeMismatch
-      envErr = (Env.mkErrorEnvelope kind
-                  (T.pack ("Invalid arguments: " <> err)))
-                    { Env.eeCause = Just (T.pack err) }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
-  where
-    isInfixOfStr needle haystack =
-      let n = length needle
-      in any (\i -> take n (drop i haystack) == needle)
-             [0 .. length haystack - n]
 
 -- | Issue #90 Phase C: 'mkModulePath' rejected the output path.
 pathTraversalResult :: Text -> ToolResult
