@@ -111,6 +111,7 @@ import qualified HaskellFlows.Tool.DepsExplain      as DepsExplainTool
 import qualified HaskellFlows.Tool.Lab              as LabTool
 import qualified HaskellFlows.Tool.ExplainError     as ExplainErrorTool
 import qualified HaskellFlows.Tool.Perf             as PerfTool
+import qualified HaskellFlows.Tool.PropertyAudit    as PropertyAuditTool
 import qualified HaskellFlows.Tool.Regression      as RegressionTool
 import qualified HaskellFlows.Tool.RemoveModules   as RemoveModulesTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
@@ -472,6 +473,13 @@ dispatchByName srv args = \case
     -- evalIOString path.
     ghcSess <- getOrStartGhcSession srv
     PerfTool.handle ghcSess args
+  GhcPropertyAudit -> do
+    -- Issue #64 Phase 1: pairwise contradiction detector over the
+    -- persisted property store. Re-uses the QuickCheck cabal-repl
+    -- vehicle for each pair-probe.
+    ghcSess <- getOrStartGhcSession srv
+    store   <- readIORef (srvStore srv)
+    PropertyAuditTool.handle store ghcSess args
   GhcLint -> do
     pd <- readIORef (srvProjectDir srv)
     LintTool.handle pd args
@@ -606,6 +614,7 @@ allToolDescriptors =
   , LabTool.descriptor
   , ExplainErrorTool.descriptor
   , PerfTool.descriptor
+  , PropertyAuditTool.descriptor
   , BatchTool.descriptor
   , LintTool.descriptor
   , ToolchainStatusTool.descriptor

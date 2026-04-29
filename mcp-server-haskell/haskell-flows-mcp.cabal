@@ -98,6 +98,7 @@ library
                       HaskellFlows.Tool.Lab
                       HaskellFlows.Tool.ExplainError
                       HaskellFlows.Tool.Perf
+                      HaskellFlows.Tool.PropertyAudit
                       HaskellFlows.Tool.QuickCheck
                       HaskellFlows.Tool.QuickCheckExport
                       HaskellFlows.Tool.Refactor
@@ -247,6 +248,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowLabAudit
                       Scenarios.FlowExplainError
                       Scenarios.FlowPerfBasic
+                      Scenarios.FlowPropertyAudit
                       Scenarios.FlowDogfoodReplay
                       Scenarios.FlowTypeBreakage
                       Scenarios.FlowScopeMgmt

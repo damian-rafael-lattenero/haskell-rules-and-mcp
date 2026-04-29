@@ -110,6 +110,7 @@ import qualified HaskellFlows.Tool.DepsExplain as DepsExplain
 import qualified HaskellFlows.Tool.Lab as LabTool
 import qualified HaskellFlows.Tool.ExplainError as ExplainError
 import qualified HaskellFlows.Tool.Perf as PerfTool
+import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import qualified HaskellFlows.Tool.Regression as RegTool
@@ -549,6 +550,10 @@ main = do
       , test "perf: aggregate single sample (#61)" testPerfAggregateSingle
       , test "perf: aggregate odd count median (#61)" testPerfAggregateOdd
       , test "perf: aggregate even count median average (#61)" testPerfAggregateEven
+      , test "property_audit: pairCombinations 0 elements (#64)" testPACombinationsEmpty
+      , test "property_audit: pairCombinations 5 elements (#64)" testPACombinations5
+      , test "property_audit: pairCombinations distinct pairs (#64)" testPACombinationsDistinct
+      , test "property_audit: buildContradictionProbe shape (#64)" testPABuildProbe
       , test "workflow-state: initial empty"       testWorkflowStateInitial
       , test "workflow-state: tracks load + edits" testWorkflowStateTracks
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
@@ -4645,6 +4650,41 @@ testPerfAggregateEven =
   in pure (PerfTool.sCount s == 4
         && PerfTool.sMedian s == 25
         && PerfTool.sMean s == 25)
+
+-- | Issue #64: 'pairCombinations' on an empty list returns no
+-- pairs. Edge case the auditor relies on so a property store
+-- with 0 entries doesn't try to run a probe.
+testPACombinationsEmpty :: IO Bool
+testPACombinationsEmpty =
+  pure (null (PropertyAuditTool.pairCombinations ([] :: [Int])))
+
+-- | Issue #64: n*(n-1)/2 = 5*4/2 = 10 for a 5-element list.
+testPACombinations5 :: IO Bool
+testPACombinations5 =
+  let pairs = PropertyAuditTool.pairCombinations [1 .. 5 :: Int]
+  in pure (length pairs == 10)
+
+-- | Issue #64: every pair is between distinct elements (no
+-- (x, x) pairs).
+testPACombinationsDistinct :: IO Bool
+testPACombinationsDistinct =
+  let pairs = PropertyAuditTool.pairCombinations [1 .. 4 :: Int]
+  in pure (all (uncurry (/=)) pairs)
+
+-- | Issue #64: 'buildContradictionProbe' wraps the two property
+-- expressions into a conjunction lambda. The shape must contain
+-- 'args' (the lambda parameter), '&&' (the conjunction), and
+-- 'not' (the negation of the second property).
+testPABuildProbe :: IO Bool
+testPABuildProbe =
+  let p1 = "\\x -> simplify (simplify x) == simplify x"
+      p2 = "\\x -> simplify (simplify x) == x"
+      probe = PropertyAuditTool.buildContradictionProbe p1 p2
+  in pure $ T.isInfixOf "args" probe
+        && T.isInfixOf "&&"   probe
+        && T.isInfixOf "not"  probe
+        && T.isInfixOf p1     probe
+        && T.isInfixOf p2     probe
 
 testLabConfidence :: IO Bool
 testLabConfidence = pure $

@@ -1,0 +1,99 @@
+-- | Flow: 'ghc_property_audit' Phase 1 — pair-combination
+-- skeleton (#64).
+--
+-- Phase 1 verifies the structural surface of the audit:
+--
+--   * Empty store → properties_checked=0, pairs_checked=0,
+--     wall_time_ms ≥ 0.
+--   * Single stored property → pairs_checked=0 (no
+--     contradiction possible with itself).
+--
+-- A scenario that drives the actual contradiction-detection
+-- probe through a runnable cabal-repl is deferred to Phase 2,
+-- where 'arity-aware-pairing' makes the probe robust enough
+-- to evaluate without manual library setup.
+module Scenarios.FlowPropertyAudit
+  ( runFlow
+  ) where
+
+import Data.Aeson (Value (..), object, (.=))
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
+import System.Directory (createDirectoryIfMissing)
+import System.FilePath ((</>))
+
+import E2E.Assert
+  ( Check (..)
+  , checkPure
+  , liveCheck
+  , stepFooter
+  , stepHeader
+  )
+import qualified E2E.Client as Client
+import HaskellFlows.Mcp.ToolName (ToolName (..))
+
+runFlow :: Client.McpClient -> FilePath -> IO [Check]
+runFlow c projectDir = do
+  -- Step 1 — scaffold so the property store has a home.
+  _ <- Client.callTool c GhcCreateProject
+         (object [ "name" .= ("audit-demo" :: Text) ])
+
+  -- Step 2 — empty-store call. The auditor reports zero pairs
+  -- without trying to run any probe.
+  t0 <- stepHeader 1 "ghc_property_audit on empty store (#64)"
+  rEmpty <- Client.callTool c GhcPropertyAudit (object [])
+  let okEmpty = fieldBool "success" rEmpty == Just True
+              && fieldInt "properties_checked" rEmpty == 0
+              && fieldInt "pairs_checked" rEmpty == 0
+  cEmpty <- liveCheck $ checkPure
+    "empty store → properties_checked=0, pairs_checked=0"
+    okEmpty
+    ("Got: " <> truncRender rEmpty)
+  stepFooter 1 t0
+
+  -- Step 3 — plant a single property and audit again. Still no
+  -- pairs (n=1 → n*(n-1)/2 = 0).
+  t1 <- stepHeader 2 "ghc_property_audit on 1-element store (#64)"
+  let storeDir = projectDir </> ".haskell-flows"
+  createDirectoryIfMissing True storeDir
+  TIO.writeFile (storeDir </> "properties.json")
+    "[{\"expression\":\"\\\\x -> x == (x :: Int)\",\
+    \\"module\":\"src/Foo.hs\",\"passed\":1,\"updated\":0}]"
+  rOne <- Client.callTool c GhcPropertyAudit (object [])
+  let okOne = fieldBool "success" rOne == Just True
+            && fieldInt "properties_checked" rOne == 1
+            && fieldInt "pairs_checked" rOne == 0
+  cOne <- liveCheck $ checkPure
+    "1-property store → properties_checked=1, pairs_checked=0"
+    okOne
+    ("Got: " <> truncRender rOne)
+  stepFooter 2 t1
+
+  pure [cEmpty, cOne]
+
+--------------------------------------------------------------------------------
+-- helpers
+--------------------------------------------------------------------------------
+
+fieldBool :: Text -> Value -> Maybe Bool
+fieldBool k v = case lookupField k v of
+  Just (Bool b) -> Just b
+  _             -> Nothing
+
+fieldInt :: Text -> Value -> Int
+fieldInt k v = case lookupField k v of
+  Just (Number n) -> truncate (toRational n)
+  _               -> -1
+
+lookupField :: Text -> Value -> Maybe Value
+lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
+lookupField _ _          = Nothing
+
+truncRender :: Value -> Text
+truncRender v =
+  let raw = T.pack (show v)
+      cap = 600
+  in if T.length raw > cap then T.take cap raw <> "…(truncated)" else raw

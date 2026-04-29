@@ -335,6 +335,17 @@ dispatch name payload = case name of
   -- example before deleting.
   GhcDeterminism -> Just (determinismNext payload)
 
+  -- Issue #64: the auditor flagged contradictory pairs (or
+  -- nothing). When findings exist, the canonical follow-up is
+  -- ghc_property_lifecycle drop on the wrong property; when
+  -- empty, the next step is the regular gate.
+  GhcPropertyAudit -> Just (simple GhcPropertyLifecycle
+    "Audit completed. If 'findings' is non-empty, decide which \
+    \property reflects real intent and drop the other via \
+    \ghc_property_lifecycle. If empty, the store is consistent — \
+    \run ghc_check_project."
+    Nothing)
+
   -- Issue #61 Phase 1: the perf harness just returned wall-clock
   -- statistics. Without baseline persistence (Phase 2) the agent's
   -- next move is to compare against an earlier capture by hand
