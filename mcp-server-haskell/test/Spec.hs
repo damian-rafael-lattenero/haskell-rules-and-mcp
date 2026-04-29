@@ -206,6 +206,7 @@ import HaskellFlows.Tool.Hoogle
   , parseHoogleLine
   )
 import Control.Concurrent (forkIO, threadDelay)
+import Control.Exception (SomeException, try)
 import qualified HaskellFlows.Mcp.PathBootstrap
 import qualified HaskellFlows.Parser.TypeSignature
 import qualified System.Directory
@@ -228,6 +229,7 @@ import HaskellFlows.Ghc.ApiSession
   , startGhcSession
   , withGhcSession
   )
+import qualified HaskellFlows.Tool.Type as TypeTool
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
 import HaskellFlows.Tool.SwitchProject
   ( ValidationError (..)
@@ -706,6 +708,8 @@ main = do
       , test "ghc-api: GhcSession boots + exprType roundtrip" testGhcSessionBoots
       , test "ghc-api: HscEnv persists across withGhcSession calls" testGhcSessionPersists
       , test "ghc-api: evalIOString runs IO String actions in-process" testEvalIOString
+      , test "ghc-api #80: queryExprType resolves 'id' after autoLoadProject"
+                                                                 testQueryExprTypeIdAfterAutoLoad
       , test "ghc-api: bootstrapProject captures cabal flags for library" testCabalBootstrapLibrary
       , test "ghc-api: loadForTarget compiles library module via stanza flags" testLoadForTargetLibrary
       , test "ghc-api: deferred hole warnings are captured by logger hook" testHoleDiagnosticCapture
@@ -6421,6 +6425,42 @@ testEvalIOString = case mkProjectDir "/tmp" of
       evalIOString "(return \"hello-from-ghc-api\") :: IO String"
     killGhcSession sess
     pure (result == "hello-from-ghc-api")
+
+-- | Issue #80 regression anchor: the most fundamental query the
+-- MCP exposes — ghc_type "id" — must always succeed regardless of
+-- whether autoLoadProject ran. We stage a tiny project (no
+-- .cabal — autoLoadProject path, no stanza flags) with one
+-- module that imports Prelude only, start a GhcSession, run
+-- 'queryExprType "id"' inside 'withGhcSession' (which auto-loads
+-- the project on first use), and assert the renderer returns a
+-- polymorphic identity signature.
+--
+-- Pre-fix this could (in some sessions) return a hidden-package
+-- cascade because the interactive context's auto-imported set
+-- referenced symbols not exposed under base-only DynFlags.
+-- Codifies the working state so any future regression that
+-- swaps the IC handling re-surfaces in the unit suite, before
+-- the e2e harness catches it.
+testQueryExprTypeIdAfterAutoLoad :: IO Bool
+testQueryExprTypeIdAfterAutoLoad = do
+  tmp <- getTemporaryDirectory
+  let dir  = tmp </> "haskell-flows-issue-80"
+      file = dir </> "src" </> "Foo.hs"
+  removePathForcibly dir
+  createDirectoryIfMissing True (dir </> "src")
+  TIO.writeFile file
+    (T.pack "module Foo where\nimport Prelude\nfoo :: Int\nfoo = 1\n")
+  case mkProjectDir dir of
+    Left _   -> pure False
+    Right pd -> do
+      sess <- startGhcSession pd
+      eRes <- try @SomeException $
+        withGhcSession sess (TypeTool.queryExprType "id")
+      killGhcSession sess
+      removePathForcibly dir
+      pure $ case eRes of
+        Right t -> "a -> a" `T.isInfixOf` t
+        Left _  -> False
 
 -- | Wave-2 gate: 'loadForTarget' against /tmp/bench-project library
 -- must compile Foo.hs cleanly (success=True, no errors). If the

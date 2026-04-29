@@ -97,6 +97,7 @@ import qualified Scenarios.FlowCreateProjectGreen as FlowCPG
 import qualified Scenarios.FlowBrowseInteractive  as FlowBI
 import qualified Scenarios.FlowSuggestSelfInverseDampening as FlowSSID
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
+import qualified Scenarios.FlowTypeAfterLoadDeps as FlowTAL
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
 import qualified Scenarios.FlowToolchain        as FlowTC
@@ -256,6 +257,8 @@ scenarios =
     , True, FlowDFR.runFlow )
   , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"
     , False, FlowDUX.runFlow )
+  , ( "Flow: type_after_load · ghc_type after ghc_load with non-base deps (#80)"
+    , False, FlowTAL.runFlow )
   ]
 
 main :: IO ()

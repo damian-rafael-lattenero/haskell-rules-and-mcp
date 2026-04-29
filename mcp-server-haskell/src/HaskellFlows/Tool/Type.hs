@@ -16,6 +16,7 @@
 module HaskellFlows.Tool.Type
   ( descriptor
   , handle
+  , queryExprType
   , TypeArgs (..)
   ) where
 
