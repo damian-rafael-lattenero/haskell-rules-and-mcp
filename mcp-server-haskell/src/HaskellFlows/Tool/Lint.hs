@@ -23,6 +23,7 @@ module HaskellFlows.Tool.Lint
   , LintArgs (..)
   , Suggestion (..)
   , parseHlintJson
+  , resolveTarget
   ) where
 
 import Control.Concurrent (forkIO)
@@ -35,7 +36,14 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (doesDirectoryExist, doesFileExist, findExecutable)
-import System.FilePath (isAbsolute, (</>))
+import System.FilePath
+  ( equalFilePath
+  , isAbsolute
+  , normalise
+  , pathSeparator
+  , splitDirectories
+  , (</>)
+  )
 import System.IO (hClose, hGetContents)
 import System.Process
   ( CreateProcess (..)
@@ -125,28 +133,35 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
 -- | Resolve which path hlint should lint. Prefer `module_path`
 -- (single file, fastest inner loop), fall back to `path` (directory
 -- — matches CI). If neither, default to the project root itself.
+--
+-- Path-traversal guard mirrors 'HaskellFlows.Types.mkModulePath':
+-- after joining and normalising, refuse any path whose directory
+-- segments contain @..@, or whose normalised form does not live
+-- under the project root. The previous string-prefix check
+-- (issue #81 / CWE-22) accepted @"<root>/../.."@ because the
+-- literal prefix matched, leaving hlint to run wherever the path
+-- actually pointed (e.g. the parent directory of the project).
 resolveTarget :: ProjectDir -> LintArgs -> Either Text FilePath
 resolveTarget pd args =
   let raw = case (laPath args, laModulePath args) of
         (_, Just mp)        -> T.unpack mp
         (Just p,  Nothing)  -> T.unpack p
         (Nothing, Nothing)  -> ""
-      root = unProjectDir pd
-      full
-        | null raw       = root
-        | isAbsolute raw = raw
-        | otherwise      = root </> raw
-  in if isInside root full
-       then Right full
-       else Left ("target path escapes project directory: " <> T.pack raw)
-
--- | Cheap prefix check. Good enough here because we construct @full@
--- ourselves via @root </> raw@ — we're defending against the agent
--- passing an absolute path that points outside.
-isInside :: FilePath -> FilePath -> Bool
-isInside root target =
-  let r = if last root == '/' then root else root <> "/"
-  in target == root || take (length r) target == r
+      root      = unProjectDir pd
+      rootN     = normalise root
+      joined
+        | null raw       = rootN
+        | isAbsolute raw = normalise raw
+        | otherwise      = normalise (root </> raw)
+      prefix    = rootN <> [pathSeparator]
+      segments  = splitDirectories joined
+      hasDotDot = ".." `elem` segments
+      insidePrefix =
+        joined `equalFilePath` rootN
+          || take (length prefix) joined == prefix
+  in if hasDotDot || not insidePrefix
+       then Left ("target path escapes project directory: " <> T.pack raw)
+       else Right joined
 
 --------------------------------------------------------------------------------
 -- subprocess
@@ -279,12 +294,12 @@ severityRank = \case
 
 atOrAbove :: Text -> Text -> Bool
 atOrAbove threshold severity =
-  severityRank severity >= severityRank (normalise threshold)
+  severityRank severity >= severityRank (canonSeverity threshold)
   where
-    normalise "suggestion" = "Suggestion"
-    normalise "warning"    = "Warning"
-    normalise "error"      = "Error"
-    normalise x            = x
+    canonSeverity "suggestion" = "Suggestion"
+    canonSeverity "warning"    = "Warning"
+    canonSeverity "error"      = "Error"
+    canonSeverity x            = x
 
 unavailableResult :: Text -> ToolResult
 unavailableResult msg =

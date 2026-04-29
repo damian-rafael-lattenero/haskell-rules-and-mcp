@@ -19,6 +19,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.Vector as Vector
 import Data.Char (isAsciiLower, isDigit)
+import qualified Data.List as List
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -365,6 +366,12 @@ main = do
       , test "ResourceUri: parse rejects unknown"   testResourceUriParseUnknown
       , test "ResourceUri: wire forms canonical"    testResourceUriWireCanonical
       , test "parseHlintJson parses list"          testHlintJson
+      , test "ghc_lint #81: resolveTarget rejects relative traversal"
+                                                   testLintResolveRejectsTraversal
+      , test "ghc_lint #81: resolveTarget rejects abs path outside root"
+                                                   testLintResolveRejectsAbsoluteOutside
+      , test "ghc_lint #81: resolveTarget accepts in-tree path/module_path"
+                                                   testLintResolveAcceptsInTree
       , test "validateCabal flags duplicate deps"  testDuplicateDeps
       , test "validateCabal flags missing synopsis" testMissingSynopsis
       , test "parseExposedModules reads modules"   testParseModules
@@ -2135,6 +2142,67 @@ testHlintJson =
            && LintTool.sHint s     == "Use isNothing"
            && LintTool.sStartLine s == 10
        _ -> False
+
+-- | Issue #81 (CWE-22): the previous 'resolveTarget' compared the
+-- joined path against the project root with a literal string-prefix
+-- check, which the agent could trick by passing a relative path
+-- that contained '..' segments. The fix mirrors 'mkModulePath' and
+-- rejects anything whose normalised segments contain '..' before
+-- it can reach hlint. Each entry below is a path the old gate
+-- accepted but the new one must refuse.
+testLintResolveRejectsTraversal :: IO Bool
+testLintResolveRejectsTraversal =
+  case mkProjectDir "/tmp/project" of
+    Left _   -> pure False
+    Right pd ->
+      let escapes = [ "../.."
+                    , "../../something"
+                    , "./../foo"
+                    , "a/../../escape"
+                    ]
+          rejectedAsPath p = case LintTool.resolveTarget pd
+                                  (LintTool.LintArgs (Just (T.pack p)) Nothing "warning") of
+            Left err -> "escapes project directory" `T.isInfixOf` err
+            Right _  -> False
+          rejectedAsModulePath p = case LintTool.resolveTarget pd
+                                  (LintTool.LintArgs Nothing (Just (T.pack p)) "warning") of
+            Left err -> "escapes project directory" `T.isInfixOf` err
+            Right _  -> False
+      in pure $ all rejectedAsPath escapes && all rejectedAsModulePath escapes
+
+-- | Companion: absolute paths outside the project root must also be
+-- rejected. (The old gate already caught these — this anchors the
+-- regression so a future refactor doesn't trade one bypass for
+-- another.)
+testLintResolveRejectsAbsoluteOutside :: IO Bool
+testLintResolveRejectsAbsoluteOutside =
+  case mkProjectDir "/tmp/project" of
+    Left _   -> pure False
+    Right pd ->
+      let outside = LintTool.resolveTarget pd
+                       (LintTool.LintArgs (Just "/tmp") Nothing "warning")
+      in pure $ case outside of
+           Left err -> "escapes project directory" `T.isInfixOf` err
+           Right _  -> False
+
+-- | Companion: legitimate relative paths inside the project must
+-- still resolve. Both 'path' (directory) and 'module_path' (file)
+-- forms are exercised; the empty-args default (root itself) is the
+-- third anchor.
+testLintResolveAcceptsInTree :: IO Bool
+testLintResolveAcceptsInTree =
+  case mkProjectDir "/tmp/project" of
+    Left _   -> pure False
+    Right pd ->
+      let asPath       = LintTool.resolveTarget pd
+                           (LintTool.LintArgs (Just "src/") Nothing "warning")
+          asModulePath = LintTool.resolveTarget pd
+                           (LintTool.LintArgs Nothing (Just "src/Foo.hs") "warning")
+          asEmpty      = LintTool.resolveTarget pd
+                           (LintTool.LintArgs Nothing Nothing "warning")
+          isInTree (Right p) = "/tmp/project" `List.isPrefixOf` p
+          isInTree _         = False
+      in pure $ isInTree asPath && isInTree asModulePath && isInTree asEmpty
 
 testDuplicateDeps :: IO Bool
 testDuplicateDeps =

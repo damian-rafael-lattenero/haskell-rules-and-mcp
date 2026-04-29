@@ -110,7 +110,34 @@ runFlow c _projectDir = do
      <> truncRender r3)
   stepFooter 3 t2
 
-  pure [c1, c2, c3]
+  ----------------------------------------------------------------
+  -- (4) Path traversal via ghc_lint (issue #81 / CWE-22).
+  --
+  -- Same invariant as (3) but targeting ghc_lint, which has its
+  -- own 'resolveTarget' guard. The earlier release used a literal
+  -- string-prefix check that accepted '../..' (the literal
+  -- "<root>/../.." starts with "<root>/") and silently launched
+  -- hlint on the project's parent directory — only the eventual
+  -- 60 s timeout stopped it. The fixed gate must refuse the input
+  -- before any subprocess spawns. Substring 'lint_relative_traversal'
+  -- in this scenario name is the e2e-only filter handle.
+  ----------------------------------------------------------------
+  t3 <- stepHeader 4
+          "lint_relative_traversal · ghc_lint must refuse '../..'"
+  r4 <- Client.callTool c GhcLint
+          (object [ "path" .= ("../.." :: Text) ])
+  let r4Ok = errorShaped r4
+  c4 <- liveCheck $ checkPure
+    "ghc_lint refused traversal · escape error before subprocess spawns"
+    r4Ok
+    ("ghc_lint must reject any 'path' or 'module_path' whose normalised \
+     \form contains '..' segments or escapes the project root. The \
+     \previous gate did a literal string-prefix check that accepted \
+     \'../..' and ran hlint over the parent directory (#81, CWE-22). \
+     \Raw: " <> truncRender r4)
+  stepFooter 4 t3
+
+  pure [c1, c2, c3, c4]
 
 --------------------------------------------------------------------------------
 -- helpers
