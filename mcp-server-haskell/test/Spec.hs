@@ -230,6 +230,7 @@ import HaskellFlows.Ghc.ApiSession
   , withGhcSession
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
+import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
 import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmupTool
 import qualified HaskellFlows.Tool.ValidateCabal as ValidateCabalTool
@@ -425,6 +426,14 @@ main = do
                                                    testWorkflowNextEnvelope
       , test "Envelope #90 Phase B: ghc_workflow rejects unknown action"
                                                    testWorkflowRejectsUnknownAction
+      , test "Envelope #90 Phase B: ghc_bootstrap host=claude-code preview emits envelope"
+                                                   testBootstrapClaudeCodePreviewEnvelope
+      , test "Envelope #90 Phase B: ghc_bootstrap host=generic preview emits envelope"
+                                                   testBootstrapGenericPreviewEnvelope
+      , test "Envelope #90 Phase B: ghc_bootstrap rejects unknown host"
+                                                   testBootstrapRejectsUnknownHost
+      , test "Envelope #90 Phase B: ghc_bootstrap rejects missing host"
+                                                   testBootstrapRejectsMissingHost
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -2798,6 +2807,84 @@ testWorkflowRejectsUnknownAction = do
       | Env.reStatus env == Env.StatusFailed
       , Just err <- Env.reError env ->
           Env.eeKind err == Env.Validation
+    _ -> False
+
+-- | Phase B helper: build a fresh tmpdir-based ProjectDir + drive
+-- 'BootstrapTool.handle' with the given args. Returns the parsed
+-- envelope and cleans up the tmpdir on exit.
+runBootstrap :: A.Value -> IO (Either String Env.ToolResponse)
+runBootstrap args = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-bootstrap-test"
+  removePathForcibly dir
+  createDirectoryIfMissing True dir
+  result <- case mkProjectDir dir of
+    Left _   -> pure (Left "could not build ProjectDir")
+    Right pd -> do
+      tr <- BootstrapTool.handle pd [] args
+      case trContent tr of
+        [TextContent body] ->
+          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+        _ -> pure (Left "expected exactly one TextContent")
+  removePathForcibly dir
+  pure result
+
+-- | 'ghc_bootstrap host=claude-code' (default mode=preview) emits
+-- status='ok' with the rules content + the canonical claude-code
+-- target path inside 'result'.
+testBootstrapClaudeCodePreviewEnvelope :: IO Bool
+testBootstrapClaudeCodePreviewEnvelope = do
+  decoded <- runBootstrap (A.object [ "host" A..= ("claude-code" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "host")    payload == Just (A.String "claude-code")
+            && AKM.lookup (AKey.fromText "mode")    payload == Just (A.String "preview")
+            && AKM.member (AKey.fromText "content") payload
+            && AKM.member (AKey.fromText "target")  payload  -- non-generic ⇒ target path is set
+    _ -> False
+
+-- | 'ghc_bootstrap host=generic' emits status='ok' with content but
+-- no 'target' field (per the existing contract: generic mode has no
+-- canonical target path).
+testBootstrapGenericPreviewEnvelope :: IO Bool
+testBootstrapGenericPreviewEnvelope = do
+  decoded <- runBootstrap (A.object [ "host" A..= ("generic" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "host") payload == Just (A.String "generic")
+            && AKM.lookup (AKey.fromText "mode") payload == Just (A.String "preview")
+            && AKM.member (AKey.fromText "content") payload
+            && not (AKM.member (AKey.fromText "target") payload)
+    _ -> False
+
+-- | An unknown host lands as status='failed' with
+-- error.kind='validation' (the value was structurally a string,
+-- just outside the closed Host enum).
+testBootstrapRejectsUnknownHost :: IO Bool
+testBootstrapRejectsUnknownHost = do
+  decoded <- runBootstrap (A.object [ "host" A..= ("orbital-station" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusFailed
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.Validation
+    _ -> False
+
+-- | A request with no 'host' lands as status='failed' with
+-- error.kind='missing_arg'. Catches the case where the FromJSON
+-- 'fail' string format changes and the discriminator regresses.
+testBootstrapRejectsMissingHost :: IO Bool
+testBootstrapRejectsMissingHost = do
+  decoded <- runBootstrap (A.object [])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusFailed
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.MissingArg
     _ -> False
 
 --------------------------------------------------------------------------------

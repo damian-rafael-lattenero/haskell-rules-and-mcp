@@ -34,11 +34,10 @@ import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory)
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Guidance (workflowRulesMarkdown)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -109,7 +108,11 @@ instance FromJSON BootstrapArgs where
 
 handle :: ProjectDir -> [ToolDescriptor] -> Value -> IO ToolResult
 handle pd descriptors rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+  Left err ->
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKind err)
+          (T.pack ("Invalid arguments: " <> err)))
+            { Env.eeCause = Just (T.pack err) })))
   Right (BootstrapArgs host write) -> do
     let body = workflowRulesMarkdown descriptors
     case host of
@@ -117,8 +120,11 @@ handle pd descriptors rawArgs = case parseEither parseJSON rawArgs of
       _ ->
         let relPath = pathForHost host
         in case mkModulePath pd relPath of
-             Left e -> pure (errorResult
-               (T.pack ("Invalid output path: " <> show e)))
+             Left e ->
+               pure (Env.toolResponseToResult (Env.mkFailed
+                 ((Env.mkErrorEnvelope Env.PathTraversal
+                     (T.pack ("Invalid output path: " <> show e)))
+                       { Env.eeCause = Just (T.pack (show e)) })))
              Right mp -> do
                let full = unModulePath mp
                if not write
@@ -128,9 +134,28 @@ handle pd descriptors rawArgs = case parseEither parseJSON rawArgs of
                      createDirectoryIfMissing True (takeDirectory full)
                      TIO.writeFile full body) :: IO (Either SomeException ())
                    case w of
-                     Left e  -> pure (errorResult
-                       (T.pack ("Could not write: " <> show e)))
+                     Left e ->
+                       pure (Env.toolResponseToResult (Env.mkFailed
+                         ((Env.mkErrorEnvelope Env.SubprocessError
+                             (T.pack ("Could not write: " <> show e)))
+                               { Env.eeCause = Just (T.pack (show e)) })))
                      Right _ -> pure (writeResult host full)
+
+-- | Discriminate the FromJSON failure shape — same heuristic as
+-- 'HaskellFlows.Tool.Workflow.parseErrorKind'. \"unknown host\"
+-- maps to 'Validation' (the value was a string, just outside the
+-- closed enum); a missing required key maps to 'MissingArg';
+-- everything else falls back to 'TypeMismatch'.
+parseErrorKind :: String -> Env.ErrorKind
+parseErrorKind err
+  | "unknown host" `isInfixOfStr` err = Env.Validation
+  | "key" `isInfixOfStr` err          = Env.MissingArg
+  | otherwise                         = Env.TypeMismatch
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 -- | Canonical on-disk location per host. Closed mapping; no
 -- agent input flows into this.
@@ -144,11 +169,15 @@ pathForHost = \case
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Preview path response. Issue #90 Phase B: status='ok' with the
+-- preview body inside 'result'. Same field names as before
+-- ('mode', 'host', 'content', 'hint', and optionally 'target')
+-- so any consumer that read those fields directly continues to
+-- work during the dual-shape window.
 previewResult :: Host -> Text -> Maybe Text -> ToolResult
 previewResult host body mTarget =
   let payload = object $
-        [ "success"  .= True
-        , "mode"     .= ("preview" :: Text)
+        [ "mode"     .= ("preview" :: Text)
         , "host"     .= hostLabel host
         , "content"  .= body
         , "hint"     .=
@@ -160,19 +189,17 @@ previewResult host body mTarget =
                 :: Text )
         ]
         <> maybe [] (\t -> ["target" .= t]) mTarget
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  in Env.toolResponseToResult (Env.mkOk payload)
 
+-- | Write-completed response. Issue #90 Phase B: status='ok' with
+-- the write metadata inside 'result'.
 writeResult :: Host -> FilePath -> ToolResult
 writeResult host path =
   let payload = object
-        [ "success"  .= True
-        , "mode"     .= ("written" :: Text)
-        , "host"     .= hostLabel host
-        , "path"     .= T.pack path
-        , "hint"     .=
+        [ "mode" .= ("written" :: Text)
+        , "host" .= hostLabel host
+        , "path" .= T.pack path
+        , "hint" .=
             ( "Rules written. Your host should pick them up on the \
               \next session start — for Claude Code, that means the \
               \next /claude launch; for Cursor, the next reload. \
@@ -180,24 +207,10 @@ writeResult host path =
               \tool surface."
               :: Text )
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  in Env.toolResponseToResult (Env.mkOk payload)
 
 hostLabel :: Host -> Text
 hostLabel = \case
   HostClaudeCode -> "claude-code"
   HostCursor     -> "cursor"
   HostGeneric    -> "generic"
-
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False, "error" .= msg ])) ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
