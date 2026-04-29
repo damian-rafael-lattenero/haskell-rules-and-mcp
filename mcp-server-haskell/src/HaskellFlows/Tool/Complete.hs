@@ -19,12 +19,11 @@ import Data.Aeson.Types (parseEither)
 import Data.List (isPrefixOf, nub, sort)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import GHC (Ghc, getNamesInScope)
 import GHC.Types.Name (nameOccName)
 import GHC.Types.Name.Occurrence (occNameString)
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Ghc.Sanitize (CommandError (..), sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
@@ -81,17 +80,61 @@ clampLimit n
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKind parseError)
+          (T.pack ("Invalid arguments: " <> parseError)))
+            { Env.eeCause = Just (T.pack parseError) })))
   Right (CompleteArgs prefix limit) ->
     case sanitizeExpression prefix of
-      Left e -> pure (errorResult (formatCommandError e))
+      Left e ->
+        pure (Env.toolResponseToResult (Env.mkRefused (sanitizeError "prefix" e)))
       Right safe -> do
         eRes <- try (withGhcSession ghcSess (queryCompletions safe))
-        case eRes of
+        pure $ Env.toolResponseToResult $ case eRes of
           Left (se :: SomeException) ->
-            pure (errorResult (T.pack ("GHC API error: " <> show se)))
-          Right cands ->
-            pure (successResult prefix limit cands)
+            Env.mkFailed
+              ((Env.mkErrorEnvelope Env.InternalError
+                  (T.pack ("GHC API error: " <> show se)))
+                    { Env.eeCause = Just (T.pack (show se)) })
+          Right cands -> renderCompletions prefix limit cands
+
+-- | Discriminate the FromJSON failure shape — a missing required
+-- field maps to 'MissingArg'; everything else falls back to
+-- 'TypeMismatch'.
+parseErrorKind :: String -> Env.ErrorKind
+parseErrorKind err
+  | "key" `isInfixOfStr` err = Env.MissingArg
+  | otherwise                = Env.TypeMismatch
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
+
+-- | Translate a sanitize-layer rejection into the envelope's
+-- 'StatusRefused' error shape. Newline / sentinel / oversize
+-- inputs are policy refusals — the agent could have predicted
+-- them by checking the input itself.
+sanitizeError :: Text -> CommandError -> Env.ErrorEnvelope
+sanitizeError fieldName = \case
+  ContainsNewline ->
+    (Env.mkErrorEnvelope Env.NewlineInjection
+       (fieldName <> " must be a single line (no newline characters)"))
+         { Env.eeField = Just fieldName }
+  ContainsSentinel ->
+    (Env.mkErrorEnvelope Env.SentinelPoisoning
+       (fieldName <> " contains the internal framing sentinel and was rejected"))
+         { Env.eeField = Just fieldName }
+  EmptyInput ->
+    (Env.mkErrorEnvelope Env.EmptyInput (fieldName <> " is empty"))
+      { Env.eeField = Just fieldName }
+  InputTooLarge sz cap ->
+    (Env.mkErrorEnvelope Env.OversizedInput
+       (fieldName <> " is too large (" <> T.pack (show sz) <> " chars, cap is "
+        <> T.pack (show cap) <> ")"))
+      { Env.eeField = Just fieldName
+      , Env.eeCause = Just (T.pack (show sz) <> "/" <> T.pack (show cap))
+      }
 
 -- | Scan every name currently in the interactive context, keep the
 -- ones whose occurrence name starts with the prefix. Sort + dedupe
@@ -112,41 +155,20 @@ queryCompletions prefix = do
 -- response shaping (unchanged schema)
 --------------------------------------------------------------------------------
 
-successResult :: Text -> Int -> [Text] -> ToolResult
-successResult prefix limit candidates =
+-- | Map the candidate list into the right envelope: 'no_match'
+-- when the list is empty (the question was well-formed; the
+-- answer is the empty set), 'ok' otherwise. The legacy field
+-- shape ('prefix', 'count', 'candidates', 'truncated') is
+-- preserved inside 'result' for the dual-shape window.
+renderCompletions :: Text -> Int -> [Text] -> Env.ToolResponse
+renderCompletions prefix limit candidates =
   let capped = take limit candidates
-      payload =
-        object
-          [ "success"    .= True
-          , "prefix"     .= prefix
-          , "count"      .= length capped
-          , "candidates" .= capped
-          , "truncated"  .= (length candidates > limit)
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
-
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-formatCommandError :: CommandError -> Text
-formatCommandError = \case
-  ContainsNewline  -> "prefix must be a single line (no newline characters)"
-  ContainsSentinel -> "prefix contains the internal framing sentinel and was rejected"
-  EmptyInput       -> "prefix is empty"
-  InputTooLarge sz cap ->
-    "prefix is too large (" <> T.pack (show sz) <> " chars, cap is "
-      <> T.pack (show cap) <> ")"
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+      payload = object
+        [ "prefix"     .= prefix
+        , "count"      .= length capped
+        , "candidates" .= capped
+        , "truncated"  .= (length candidates > limit)
+        ]
+  in case candidates of
+       [] -> Env.mkNoMatch payload
+       _  -> Env.mkOk payload

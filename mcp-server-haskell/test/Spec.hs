@@ -232,6 +232,7 @@ import HaskellFlows.Ghc.ApiSession
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
 import qualified HaskellFlows.Tool.Browse as BrowseTool
+import qualified HaskellFlows.Tool.Complete as CompleteTool
 import qualified HaskellFlows.Tool.Imports as ImportsTool
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
 import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmupTool
@@ -444,6 +445,12 @@ main = do
                                                    testBrowseExternalModuleNoMatch
       , test "Envelope #90 Phase B: ghc_browse rejects missing module arg"
                                                    testBrowseRejectsMissingArg
+      , test "Envelope #90 Phase B: ghc_complete with hits → status=ok"
+                                                   testCompleteHitsOk
+      , test "Envelope #90 Phase B: ghc_complete with zero hits → status=no_match"
+                                                   testCompleteNoMatch
+      , test "Envelope #90 Phase B: ghc_complete refuses newline in prefix"
+                                                   testCompleteRefusesNewline
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -2998,6 +3005,77 @@ testBrowseRejectsMissingArg = do
       | Env.reStatus env == Env.StatusFailed
       , Just err <- Env.reError env ->
           Env.eeKind err == Env.MissingArg
+    _ -> False
+
+-- | Phase B helper: stage a tmpdir project, drive
+-- 'CompleteTool.handle' with the given args.
+runComplete :: A.Value -> IO (Either String Env.ToolResponse)
+runComplete args = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-complete-test"
+  removePathForcibly dir
+  createDirectoryIfMissing True (dir </> "src")
+  TIO.writeFile (dir </> "src" </> "Foo.hs")
+    (T.pack "module Foo where\nfoo :: Int\nfoo = 1\n")
+  result <- case mkProjectDir dir of
+    Left _   -> pure (Left "could not build ProjectDir")
+    Right pd -> do
+      sess <- startGhcSession pd
+      tr   <- CompleteTool.handle sess args
+      killGhcSession sess
+      case trContent tr of
+        [TextContent body] ->
+          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+        _ -> pure (Left "expected exactly one TextContent")
+  removePathForcibly dir
+  pure result
+
+-- | Completing 'fold' returns at least one in-scope candidate (foldr,
+-- foldl, foldMap, …) → status='ok' with the legacy candidates
+-- array preserved inside 'result'.
+testCompleteHitsOk :: IO Bool
+testCompleteHitsOk = do
+  decoded <- runComplete
+    (A.object [ "prefix" A..= ("fold" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "prefix") payload == Just (A.String "fold")
+            && AKM.member (AKey.fromText "count")      payload
+            && AKM.member (AKey.fromText "candidates") payload
+            && AKM.member (AKey.fromText "truncated")  payload
+    _ -> False
+
+-- | A prefix that matches no in-scope identifier → status='no_match'.
+-- Legacy callers that read result.{count, candidates} keep working
+-- (count = 0, candidates = []); the discriminator is the
+-- top-level 'status'.
+testCompleteNoMatch :: IO Bool
+testCompleteNoMatch = do
+  decoded <- runComplete
+    (A.object [ "prefix" A..= ("zZqXunlikelyPrefix" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusNoMatch
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "count") payload == Just (A.Number 0)
+    _ -> False
+
+-- | A newline-laden prefix → status='refused' with
+-- error.kind='newline_injection'. Issue #90 Phase B: every
+-- sanitize-layer rejection rides StatusRefused with a structured
+-- error.kind, distinct from a tool-level failure ('Failed').
+testCompleteRefusesNewline :: IO Bool
+testCompleteRefusesNewline = do
+  decoded <- runComplete
+    (A.object [ "prefix" A..= ("fold\n:quit" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusRefused
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.NewlineInjection
+            && Env.eeField err == Just "prefix"
     _ -> False
 
 --------------------------------------------------------------------------------
