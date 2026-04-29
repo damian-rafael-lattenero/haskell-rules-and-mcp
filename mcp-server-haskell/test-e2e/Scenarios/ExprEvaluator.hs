@@ -75,11 +75,12 @@ mkCheck name ok detail = Check
   }
 
 -- | Read a top-level string field from a JSON object.
+-- | Read a string field. Routes through 'lookupField' from
+-- 'E2E.Envelope' so the auto-drill kicks in.
 fieldString :: Text -> Value -> Maybe Text
-fieldString k (Object o) = case KeyMap.lookup (Key.fromText k) o of
+fieldString k v = case lookupField k v of
   Just (String t) -> Just t
   _               -> Nothing
-fieldString _ _          = Nothing
 
 -- | Read a top-level boolean field.
 
@@ -148,7 +149,7 @@ step1_initialStatus c = do
         (isJust (fieldString "phase" r))
         "workflow(status) must include a 'phase' field (BUG-24)"
     , mkCheck "step 1 · staleness report attached"
-        (KeyMap.member "staleness" (objMap r))
+        (isJust (lookupField "staleness" r))
         "workflow(status) must include a 'staleness' field (BUG-07)"
     , checkJsonFieldMatches
         "step 1 · toolsActive is non-empty"

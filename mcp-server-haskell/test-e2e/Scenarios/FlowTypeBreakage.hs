@@ -44,7 +44,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
-import E2E.Envelope (fieldBool)
+import E2E.Envelope (fieldBool, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 clean :: Text
@@ -130,11 +130,13 @@ runFlow c projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
+-- | Walk a key path; auto-drills the first hop through @result@
+-- so post-#90 envelope responses resolve.
 lookupPath :: Value -> [Text] -> Maybe Value
 lookupPath = foldl step . Just
   where
-    step (Just (Object o)) k = KeyMap.lookup (Key.fromText k) o
-    step _                 _ = Nothing
+    step (Just o) k = lookupField k o
+    step Nothing  _ = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

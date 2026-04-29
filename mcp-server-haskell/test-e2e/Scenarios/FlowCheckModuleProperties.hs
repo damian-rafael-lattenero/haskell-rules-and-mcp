@@ -36,6 +36,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -99,12 +100,13 @@ fieldTextPath ks v = case lookupPath ks v of
   Just (String s) -> Just s
   _               -> Nothing
 
+-- | Walk a key path, auto-drilling through @result@ at the top
+-- level (post-#90 envelope). Subsequent hops are direct.
 lookupPath :: [Text] -> Value -> Maybe Value
 lookupPath ks v = foldl step (Just v) ks
   where
-    step Nothing _            = Nothing
-    step (Just (Object o)) k  = KeyMap.lookup (Key.fromText k) o
-    step _ _                  = Nothing
+    step Nothing _    = Nothing
+    step (Just o) k   = lookupField k o
 
 truncRender :: Value -> Text
 truncRender v =
