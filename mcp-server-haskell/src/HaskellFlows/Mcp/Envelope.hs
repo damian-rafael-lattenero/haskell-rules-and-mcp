@@ -43,7 +43,6 @@ module HaskellFlows.Mcp.Envelope
     ToolStatus (..)
   , statusToText
   , textToStatus
-  , isLegacySuccess
     -- * Error envelope
   , ErrorKind (..)
   , errorKindToText
@@ -158,14 +157,6 @@ textToStatus = flip Map.lookup statusReverseMap
 statusReverseMap :: Map.Map Text ToolStatus
 statusReverseMap =
   Map.fromList [ (statusToText s, s) | s <- [minBound .. maxBound] ]
-
--- | Derived legacy @success@ field. Present in the wire output
--- during the migration window so old clients keep working.
--- See issue #90 §5 (Phase D) for removal.
-isLegacySuccess :: ToolStatus -> Bool
-isLegacySuccess StatusOk      = True
-isLegacySuccess StatusPartial = True
-isLegacySuccess _             = False
 
 instance ToJSON ToolStatus where
   toJSON = String . statusToText
@@ -469,8 +460,7 @@ data ToolResponse = ToolResponse
   }
   deriving stock (Eq, Show)
 
--- | Issue #90 wire format. The current envelope is dual-shape:
--- the canonical top-level keys are
+-- | Issue #90 wire format — final shape (Phase D step 2):
 --
 -- @
 --   { "status"   : "ok"|"partial"|"no_match"|"refused"|"failed"|
@@ -483,26 +473,13 @@ data ToolResponse = ToolResponse
 --   }
 -- @
 --
--- Two legacy keys are still emitted alongside the canonical
--- shape for backwards-compat with pre-#90 consumers (the e2e
--- oracle suite, primarily): a top-level @\"success\" : Bool@ and
--- a top-level @\"error_kind\" : Text@. These are scheduled for
--- removal in the second commit of Phase D after every consumer
--- has migrated. New code MUST branch on @status@ and on
--- @error.kind@ (not the top-level @error_kind@).
+-- Phase D step 2 (this commit) drops the dual-shape window: the
+-- pre-#90 @\"success\" : Bool@ and @\"error_kind\" : Text@
+-- top-level legacy duplicates are removed. Every consumer now
+-- branches on @status@ and on @error.kind@.
 instance ToJSON ToolResponse where
   toJSON r = object $ catMaybes
     [ Just ("status"     .= reStatus r)
-      -- Issue #90 Phase D (DEPRECATED — slated for removal):
-      -- 'success' duplicates the boolean projection of 'status'.
-      -- Kept for the dual-shape window so pre-#90 consumers that
-      -- branch on 'fieldBool "success"' still work. Migrate to
-      -- 'fieldText "status"' and drop this on the next major.
-    , Just ("success"    .= isLegacySuccess (reStatus r))
-      -- Issue #90 Phase D (DEPRECATED — slated for removal):
-      -- 'error_kind' duplicates 'error.kind'. Kept for the
-      -- dual-shape window. New code MUST read 'error.kind'.
-    , optField "error_kind" (errorKindToText . eeKind <$> reError r)
     , optField "result"   (reResult r)
     , optField "error"    (reError r)
     , optWarnings (reWarnings r)
@@ -655,8 +632,24 @@ toolResponseToResult r =
   let body = TL.toStrict (TLE.decodeUtf8 (encode r))
   in ToolResult
        { trContent = [ TextContent body ]
-       , trIsError = not (isLegacySuccess (reStatus r))
+       , trIsError = isFailingStatus (reStatus r)
        }
+
+-- | A status that should set the 'trIsError' flag at the MCP
+-- transport layer. 'StatusOk' and 'StatusPartial' are
+-- non-failing (the call produced usable output); everything else
+-- — refused / failed / no_match / timeout / unavailable — flips
+-- the MCP @isError@ flag so JSON-RPC clients see the call as an
+-- error response.
+--
+-- This was previously called 'isLegacySuccess' and lived behind
+-- the dual-shape window; it's now a private helper for the
+-- transport flag only — no consumer reads its inverse from the
+-- wire (they branch on the structured 'status' field instead).
+isFailingStatus :: ToolStatus -> Bool
+isFailingStatus StatusOk      = False
+isFailingStatus StatusPartial = False
+isFailingStatus _             = True
 
 --------------------------------------------------------------------------------
 -- Cross-tool helpers

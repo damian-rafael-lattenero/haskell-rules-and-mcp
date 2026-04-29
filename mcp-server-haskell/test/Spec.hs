@@ -392,8 +392,6 @@ main = do
                                                    testEnvelopeErrorKindRoundTrip
       , test "Envelope #90: WarningKind round-trips JSON wire form"
                                                    testEnvelopeWarningKindRoundTrip
-      , test "Envelope #90: legacy `success` derives correctly per status"
-                                                   testEnvelopeLegacySuccess
       , test "Envelope #90: mkOk produces status=ok with result"
                                                    testEnvelopeMkOk
       , test "Envelope #90: mkRefused produces status=refused with error"
@@ -411,11 +409,8 @@ main = do
       , quickTest "prop_envelope_status_total"     prop_envelopeStatusTotal
       , quickTest "prop_envelope_errorkind_total"  prop_envelopeErrorKindTotal
       , quickTest "prop_envelope_warningkind_total" prop_envelopeWarningKindTotal
-      , quickTest "prop_envelope_legacy_success"   prop_envelopeLegacySuccess
       , test "Envelope #90 Phase B: ghc_toolchain_status emits envelope shape"
                                                    testToolchainStatusEnvelopeShape
-      , test "Envelope #90 Phase B: ghc_toolchain_status legacy success matches status"
-                                                   testToolchainStatusLegacyConsistent
       , test "Envelope #90 Phase B: ghc_toolchain_status preserves tools/blocking_gates"
                                                    testToolchainStatusBackcompatFields
       , test "Envelope #90 Phase B: ghc_toolchain_warmup emits envelope shape"
@@ -448,10 +443,10 @@ main = do
                                                    testBootstrapRejectsMissingHost
       , test "Envelope #90 Phase B: ghc_imports emits envelope with count + imports"
                                                    testImportsEnvelopeShape
-      , test "Envelope #90 Phase D: dual-shape window — legacy success co-emitted"
-                                                   testEnvelopeDualShapeSuccessLegacy
-      , test "Envelope #90 Phase D: dual-shape window — legacy error_kind co-emitted"
-                                                   testEnvelopeDualShapeErrorKindLegacy
+      , test "Envelope #90 Phase D: legacy 'success' field dropped"
+                                                   testEnvelopeLegacySuccessDropped
+      , test "Envelope #90 Phase D: legacy 'error_kind' field dropped"
+                                                   testEnvelopeLegacyErrorKindDropped
       , test "Envelope #90 Phase B: ghc_browse on project module → status=ok"
                                                    testBrowseProjectModuleOk
       , test "Envelope #90 Phase B: ghc_browse on external module → status=no_match"
@@ -2395,27 +2390,6 @@ testEnvelopeWarningKindRoundTrip =
                          allKinds
   in pure (pinnedOk && reverseTotal)
 
--- | The deprecated @success@ field must be derived as
--- @ok | partial → True@, every other status → False. This is the
--- contract that lets old clients keep working during the migration
--- window (Phases B–D); a regression here breaks every legacy
--- consumer silently.
-testEnvelopeLegacySuccess :: IO Bool
-testEnvelopeLegacySuccess =
-  let truthy =
-        [ Env.StatusOk
-        , Env.StatusPartial
-        ]
-      falsy =
-        [ Env.StatusNoMatch
-        , Env.StatusRefused
-        , Env.StatusFailed
-        , Env.StatusTimeout
-        , Env.StatusUnavailable
-        ]
-  in pure (all Env.isLegacySuccess truthy
-        && not (any Env.isLegacySuccess falsy))
-
 -- | 'mkOk' produces the canonical happy-path shape: status=ok,
 -- result present, error absent. Encodes through Aeson and asserts
 -- the wire-form fields.
@@ -2432,14 +2406,13 @@ testEnvelopeMkOk =
       && Env.reResult response == Just payload
       && isNothing (Env.reError response)
       && lookupKey "status"  (A.String "ok")
-      && lookupKey "success" (A.Bool True)
       && lookupKey "result"  payload
        )
 
 -- | 'mkRefused' produces the canonical refusal shape: status=refused,
--- error present, result absent. The encoded @success@ field must be
--- @False@; this is the *legacy* signal that distinguishes a refusal
--- from an OK response.
+-- error present, result absent. Status='refused' is the only
+-- discriminator post-#90; the dropped legacy 'success: false'
+-- duplicate used to live alongside it during the migration window.
 testEnvelopeMkRefused :: IO Bool
 testEnvelopeMkRefused =
   let err      = Env.mkErrorEnvelope Env.PathTraversal "target path escapes project root"
@@ -2459,7 +2432,6 @@ testEnvelopeMkRefused =
        ( Env.reStatus response == Env.StatusRefused
       && isNothing (Env.reResult response)
       && lookupKey "status"  (A.String "refused")
-      && lookupKey "success" (A.Bool False)
       && hasErrorObj
        )
 
@@ -2564,16 +2536,6 @@ prop_envelopeWarningKindTotal = QC.forAll (QC.elements [minBound..maxBound]) $ \
     A.Success w' -> w' === w
     A.Error e    -> QC.counterexample e (QC.property False)
 
--- | QC: legacy @success@ derives correctly for every status.
--- Equivalent to the unit test 'testEnvelopeLegacySuccess' but
--- reasoned exhaustively: the contract is *exactly* @ok | partial
--- → True@, no exceptions.
-prop_envelopeLegacySuccess :: QC.Property
-prop_envelopeLegacySuccess = QC.forAll (QC.elements [minBound..maxBound]) $ \s ->
-  let derived  = Env.isLegacySuccess s
-      expected = s == Env.StatusOk || s == Env.StatusPartial
-  in derived === expected
-
 -- | Helper for Phase B tool-migration tests: drive the tool's
 -- handler, decode the JSON body inside the wire-level 'ToolResult',
 -- return the parsed 'Env.ToolResponse' (or a string-shaped failure
@@ -2605,27 +2567,6 @@ testToolchainStatusEnvelopeShape = do
       Env.reStatus env
         `elem` [Env.StatusOk, Env.StatusPartial, Env.StatusFailed]
     Left _ -> False
-
--- | Phase B legacy-window invariant: the deprecated @success@ field
--- on the wire equals @isLegacySuccess(status)@. Catches the case
--- where a future refactor splits the two paths and the legacy field
--- drifts from the structured one.
-testToolchainStatusLegacyConsistent :: IO Bool
-testToolchainStatusLegacyConsistent = do
-  result <- ToolchainStatusTool.handle (A.object [])
-  case trContent result of
-    [TextContent body] ->
-      let bytes = TLE.encodeUtf8 (TL.fromStrict body)
-      in pure $ case A.decode bytes :: Maybe A.Value of
-           Just (A.Object o) ->
-             let mStatus  = AKM.lookup (AKey.fromText "status")  o
-                 mSuccess = AKM.lookup (AKey.fromText "success") o
-             in case (mStatus, mSuccess) of
-                  (Just (A.String s), Just (A.Bool b)) ->
-                    maybe False Env.isLegacySuccess (Env.textToStatus s) == b
-                  _ -> False
-           _ -> False
-    _ -> pure False
 
 -- | The migrated tool keeps the @tools@ + @blocking_gates@ + @summary@
 -- fields inside @result@ so any consumer keying on them via the
@@ -3034,46 +2975,39 @@ testImportsEnvelopeShape = do
             && AKM.member (AKey.fromText "imports") payload
     _ -> False
 
--- | Issue #90 Phase D: lock the dual-shape contract. The
--- envelope's ToJSON instance MUST keep emitting a top-level
--- @\"success\" : Bool@ alongside @\"status\"@ during the
--- migration window. This test pins the wire shape so an
--- accidental removal trips a red.
+-- | Issue #90 Phase D step 2: the legacy top-level @\"success\"@
+-- field is gone. Every consumer reads @\"status\"@ now. This
+-- test inverts the Phase D step 1 lock: instead of asserting the
+-- field's PRESENCE in the dual-shape window, it pins its
+-- ABSENCE. An accidental re-introduction (e.g. someone restoring
+-- the @optField \"success\" ...@ line) reds this test.
 --
--- The contract is the projection isLegacySuccess: status='ok'
--- → success=True; everything else → success=False. We exercise
--- both ends of the projection by encoding a 'mkOk' and a
--- 'mkFailed' response and decoding the raw JSON.
-testEnvelopeDualShapeSuccessLegacy :: IO Bool
-testEnvelopeDualShapeSuccessLegacy = do
+-- We still verify @\"status\"@ is present and consistent with
+-- the ADT — that's the canonical replacement.
+testEnvelopeLegacySuccessDropped :: IO Bool
+testEnvelopeLegacySuccessDropped = do
   let okJson     = A.toJSON (Env.mkOk     (A.object [ "k" A..= ("v" :: Text) ]))
       failedJson = A.toJSON (Env.mkFailed
                               (Env.mkErrorEnvelope Env.Validation "boom"))
-      okSuccess  = lookupField "success" okJson
-      okStatus   = lookupField "status"  okJson
-      failSuccess = lookupField "success" failedJson
-      failStatus  = lookupField "status"  failedJson
-  pure $ okSuccess  == Just (A.Bool True)
-      && okStatus   == Just (A.String "ok")
-      && failSuccess == Just (A.Bool False)
-      && failStatus  == Just (A.String "failed")
+  pure $ isNothing (lookupField "success" okJson)
+      && isNothing (lookupField "success" failedJson)
+      && lookupField "status"  okJson      == Just (A.String "ok")
+      && lookupField "status"  failedJson  == Just (A.String "failed")
 
--- | Issue #90 Phase D: lock the second half of the dual-shape
--- contract — the top-level @\"error_kind\"@ duplicate. When the
--- envelope carries an 'error', ToJSON MUST emit error_kind at
--- the top level mirroring 'error.kind'. Several pre-#90 oracles
--- (FlowTimeoutEnforcement, FlowRemoveModulesDownstream) branch
--- on 'error_kind' specifically; pinning the duplicate here keeps
--- a future cleanup honest.
-testEnvelopeDualShapeErrorKindLegacy :: IO Bool
-testEnvelopeDualShapeErrorKindLegacy = do
+-- | Issue #90 Phase D step 2: the legacy top-level
+-- @\"error_kind\"@ duplicate is gone. Every consumer reads
+-- @\"error.kind\"@ (nested) now. Inverts the Phase D step 1
+-- lock: pins absence of the duplicate while keeping the nested
+-- structured kind intact.
+testEnvelopeLegacyErrorKindDropped :: IO Bool
+testEnvelopeLegacyErrorKindDropped = do
   let json = A.toJSON (Env.mkFailed
                         (Env.mkErrorEnvelope Env.PathTraversal "tried to escape"))
       topLevelKind = lookupField "error_kind" json
       nestedKind   = lookupField "error" json
                        >>= lookupField "kind"
-  pure $ topLevelKind == Just (A.String "path_traversal")
-      && nestedKind   == Just (A.String "path_traversal")
+  pure $ isNothing topLevelKind
+      && nestedKind == Just (A.String "path_traversal")
 
 -- | Phase B helper: stage a tmpdir project with a single 'Foo'
 -- module, start a fresh GhcSession, drive 'BrowseTool.handle'
@@ -5729,13 +5663,11 @@ testAddImportMissingHoogle = do
     Nothing -> System.Environment.unsetEnv "PATH"
   case trContent result of
     [TextContent t] ->
-      -- Issue #90 Phase B: the response is now an envelope.
-      -- Drill into 'error.message' / 'error.remediation' for the
-      -- structured fields. Legacy 'success: false' is still
-      -- emitted at top level during the migration window.
+      -- Issue #90 Phase D step 2: legacy 'success: false' is gone.
+      -- Branch on @status@ and the structured @error.kind@ instead.
       let parsed = A.decode (TLE.encodeUtf8 (TL.fromStrict t)) :: Maybe A.Value
       in pure $ case parsed of
-           Just v -> fieldBool "success" v == Just False
+           Just v -> fieldText "status" v == Just "unavailable"
                   && trIsError result
                   && case lookupField "error" v of
                        Just (A.Object errObj) ->
@@ -5752,10 +5684,10 @@ testAddImportMissingHoogle = do
            Nothing -> False
     _ -> pure False
   where
-    fieldBool k (A.Object o) = case AKM.lookup (AKey.fromText k) o of
-      Just (A.Bool b) -> Just b
-      _               -> Nothing
-    fieldBool _ _ = Nothing
+    fieldText k (A.Object o) = case AKM.lookup (AKey.fromText k) o of
+      Just (A.String s) -> Just s
+      _                 -> Nothing
+    fieldText _ _ = Nothing
     lookupField k (A.Object o) = AKM.lookup (AKey.fromText k) o
     lookupField _ _            = Nothing
 
@@ -6134,10 +6066,12 @@ testHandleAddModulesRefusesLowercaseModule = withFixture $ \pd cabalFile -> do
   pure
     (  isErr
     && before == after
-    -- Issue #90: 'rejected' moved under 'result'; 'success'
-    -- stays at top level during the dual-shape window.
+    -- Issue #90 Phase D step 2: 'rejected' moved under 'result';
+    -- the legacy 'success' top-level field is dropped, callers
+    -- branch on 'status' (here, 'failed' since the rejection is
+    -- a domain validation failure, not a sanitize-layer refusal).
     && hasField "rejected" innerResult
-    && fieldEquals "success" (A.Bool False) envelope
+    && fieldEquals "status" (A.String "failed") envelope
     )
 
 -- | Atomic refusal: ANY bad name in the batch MUST refuse the
