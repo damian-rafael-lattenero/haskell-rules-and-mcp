@@ -47,7 +47,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
-import E2E.Envelope (statusOk, fieldInt, lookupField)
+import E2E.Envelope (statusOk, statusIs, fieldInt, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | Simple module with no holes — used by the no-holes miss test.
@@ -135,10 +135,16 @@ runFlow c projectDir = do
   t2 <- stepHeader 3 "ghc_hole on Whole.hs (no holes present)"
   r2 <- Client.callTool c GhcHole
           (object [ "module_path" .= ("src/Whole.hs" :: Text) ])
+  -- Issue #90: ghc_hole on a hole-free module emits status='no_match'
+-- post-envelope (semantically "no holes matched"). The end-state
+-- semantic is the same — there are 0 holes to fix. Accept either
+-- 'ok' (legacy semantic) or 'no_match' (post-#90 semantic) as
+-- "the tool reported clean".
   let succ2   = statusOk r2 == Just True
+              || statusIs "no_match" r2
       countOk = fieldInt   "hole_count" r2 == Just 0
   cMiss2 <- liveCheck $ checkPure
-    "hole on a hole-free module · success=true + hole_count=0"
+    "hole on a hole-free module · ok|no_match + hole_count=0"
     (succ2 && countOk)
     ("A hole-free module is the desired end state. The tool must \
      \report 0 holes cleanly; an error on this input would make \
