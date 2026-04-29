@@ -2170,7 +2170,7 @@ testValidFitsOperatorBoundary =
       fits = extractValidFits block
       names = map hfName fits
       addPairFit = head fits
-      addPairSrc = maybe "" id (hfSource addPairFit)
+      addPairSrc = fromMaybe "" (hfSource addPairFit)
   in pure $ length fits == 4
          && names == ["addPair", "(-)", "asTypeOf", "const"]
          && "(bound at" `T.isInfixOf` addPairSrc
@@ -5172,7 +5172,7 @@ testWitCountsToDistribution =
 -- divide-by-zero and keeps the bias-warning machinery happy.
 testWitCountsEmpty :: IO Bool
 testWitCountsEmpty =
-  pure $ WitnessTool.countsToDistribution [] == []
+  pure $ null (WitnessTool.countsToDistribution [])
 
 testLabConfidence :: IO Bool
 testLabConfidence = pure $
@@ -7188,7 +7188,7 @@ testParseHeaderNoHeader =
         [ "-- just a comment"
         , "x = 1"
         ]
-  in pure $ CheckModule.parseModuleHeader src == Nothing
+  in pure $ isNothing (CheckModule.parseModuleHeader src)
 
 -- | Issue #74: defensive parsing — Haskell module names must
 -- start uppercase. A misspelled or invalid header should not
@@ -7197,8 +7197,8 @@ testParseHeaderInvalidName :: IO Bool
 testParseHeaderInvalidName = do
   let lower    = "module foo where"
       digit    = "module 1Foo where"
-  pure $ CheckModule.parseModuleHeader lower == Nothing
-      && CheckModule.parseModuleHeader digit == Nothing
+  pure $ isNothing (CheckModule.parseModuleHeader lower)
+      && isNothing (CheckModule.parseModuleHeader digit)
 
 --------------------------------------------------------------------------------
 -- BUG-PLUS-mediocre-2: summariseStderr cleans cabal noise, caps length
