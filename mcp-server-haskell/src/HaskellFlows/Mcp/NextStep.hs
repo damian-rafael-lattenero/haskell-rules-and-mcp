@@ -1,5 +1,5 @@
--- | @nextStep@ — structured "what to do next" hint injected into
--- every successful tool response.
+-- | @nextStep@ — structured "what to do next" hint injected
+-- into every successful tool response.
 --
 -- The MCP protocol already carries tool descriptors (static,
 -- 'tools/list') and a session-level 'instructions' field (one-shot,
