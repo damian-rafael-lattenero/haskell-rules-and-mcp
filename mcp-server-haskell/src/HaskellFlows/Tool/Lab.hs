@@ -39,6 +39,7 @@ import Data.Aeson
 import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import Data.Aeson.Types (parseEither)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -211,14 +212,14 @@ listTopLevelBindings body = walk (T.lines body) Nothing []
            then Nothing
            else case T.uncons stripped of
                   Just (c, _)
-                    | c >= 'a' && c <= 'z'
+                    | isAsciiLower c
                     , T.all isIdent stripped
                     -> Just stripped
                   _ -> Nothing
       where
-        isIdent c = (c >= 'a' && c <= 'z')
-                 || (c >= 'A' && c <= 'Z')
-                 || (c >= '0' && c <= '9')
+        isIdent c = isAsciiLower c
+                 || isAsciiUpper c
+                 || isDigit c
                  || c == '_' || c == '\''
 
     -- Does the next line look like an indented '::' continuation?
@@ -240,21 +241,20 @@ listTopLevelBindings body = walk (T.lines body) Nothing []
 parseSignatureLine :: Text -> Maybe Binding
 parseSignatureLine ln =
   let stripped = T.strip ln
-  in if T.null stripped then Nothing
-     else if T.takeWhile (== ' ') ln /= ""
-            then Nothing
-            else case T.breakOn " :: " stripped of
-                   (lhs, rhs)
-                     | not (T.null rhs)
-                     , isIdent lhs
-                     -> Just Binding
-                          { bName      = lhs
-                          , bSignature = T.drop 4 rhs
-                          }
-                   _ -> Nothing
+  in if T.null stripped || T.takeWhile (== ' ') ln /= ""
+       then Nothing
+       else case T.breakOn " :: " stripped of
+              (lhs, rhs)
+                | not (T.null rhs)
+                , isIdent lhs
+                -> Just Binding
+                     { bName      = lhs
+                     , bSignature = T.drop 4 rhs
+                     }
+              _ -> Nothing
   where
     isIdent t = case T.uncons t of
-      Just (c, _) -> c >= 'a' && c <= 'z'
+      Just (c, _) -> isAsciiLower c
       Nothing     -> False
 
 --------------------------------------------------------------------------------
@@ -337,9 +337,7 @@ runProperty ghcSess store pd modulePath sug = do
   where
     _ = pd  -- pd kept in signature for cohesion; unused in Phase 1
     decodeFirst (TextContent t : _) =
-      case decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-        Just v  -> v
-        Nothing -> Null
+      fromMaybe Null (decode (TLE.encodeUtf8 (TL.fromStrict t)))
     decodeFirst _ = Null
 
 decideStatus :: Value -> Text
