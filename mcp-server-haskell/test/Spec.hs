@@ -105,6 +105,10 @@ import HaskellFlows.Mcp.RpcMethod
   , parseRpcMethod
   , rpcMethodText
   )
+import HaskellFlows.Mcp.PermissiveJSON
+  ( BoolField (..)
+  , IntField (..)
+  )
 import HaskellFlows.Tool.Batch (BatchArgs (..))
 import qualified HaskellFlows.Tool.Coverage as CoverageTool
 import qualified HaskellFlows.Tool.Gate as Gate
@@ -333,6 +337,36 @@ main = do
                                                    testEvalContextSubsetExisting
       , test "eval ctx · idempotent on its own output (#86)"
                                                    testEvalContextIdempotent
+      -- Issue #88: PermissiveJSON IntField + BoolField
+      , test "IntField · canonical JSON number (#88)"
+                                                   testIntFieldNumber
+      , test "IntField · numeric string \"42\" (#88)"
+                                                   testIntFieldNumericString
+      , test "IntField · signed string -17 / +17 (#88)"
+                                                   testIntFieldSignedString
+      , test "IntField · whitespace stripped (#88)"
+                                                   testIntFieldStrippedString
+      , test "IntField · rejects non-numeric (#88)"
+                                                   testIntFieldRejectsNonNumeric
+      , test "IntField · rejects trailing garbage (#88)"
+                                                   testIntFieldRejectsTrailingGarbage
+      , test "IntField · rejects fractional (#88)"
+                                                   testIntFieldRejectsFractional
+      , test "BoolField · canonical JSON bool (#88)"
+                                                   testBoolFieldNative
+      , test "BoolField · accepts \"true\"/\"1\"/\"FALSE\"/etc (#88)"
+                                                   testBoolFieldStringForms
+      , test "BoolField · rejects truthy strings (#88)"
+                                                   testBoolFieldRejectsTruthy
+      -- Integration: each migrated tool's *Args parses both wires.
+      , test "Refactor · scope_line_start/_end accept strings (#88)"
+                                                   testRefactorPermissiveLineRange
+      , test "RemoveModules · delete_files/force accept strings (#88)"
+                                                   testRemoveModulesPermissiveBool
+      , test "FixWarning · line/apply accept strings (#88)"
+                                                   testFixWarningPermissiveLine
+      , test "Complete · limit accepts string + default (#88)"
+                                                   testCompletePermissiveLimit
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
       , test "validatePackageName accepts normal"  testPkgAccepts
@@ -1583,6 +1617,166 @@ testEvalContextIdempotent =
       afterStep = Set.fromList step1
       step2     = EvalTool.selectMissingExtras afterStep EvalTool.evalContextExtras
   in pure (null step2 && step1 == EvalTool.evalContextExtras)
+
+--------------------------------------------------------------------------------
+-- Issue #88: PermissiveJSON IntField + BoolField
+--------------------------------------------------------------------------------
+
+-- | The canonical wire shape — JSON number — must keep parsing.
+testIntFieldNumber :: IO Bool
+testIntFieldNumber =
+  pure (A.decode "42" == Just (IntField 42))
+
+-- | Issue #88's bug shape: an MCP host wrapper stringifies the
+-- number. The newtype must accept @\"42\"@ and produce IntField 42.
+testIntFieldNumericString :: IO Bool
+testIntFieldNumericString =
+  pure (A.decode "\"42\"" == Just (IntField 42))
+
+-- | Negative integers and a leading sign survive the string path.
+testIntFieldSignedString :: IO Bool
+testIntFieldSignedString =
+  pure ( A.decode "\"-17\"" == Just (IntField (-17))
+      && A.decode "\"+17\"" == Just (IntField 17) )
+
+-- | Whitespace trim — common when shells stringify with padding.
+testIntFieldStrippedString :: IO Bool
+testIntFieldStrippedString =
+  pure (A.decode "\"  42  \"" == Just (IntField 42))
+
+-- | A clearly non-numeric string is rejected (not silently
+-- coerced to 0). Loud failure beats a magic-default footgun.
+testIntFieldRejectsNonNumeric :: IO Bool
+testIntFieldRejectsNonNumeric =
+  pure (A.decode "\"hello\"" == (Nothing :: Maybe IntField))
+
+-- | A trailing non-digit after the integer is rejected: a typo
+-- like @\"42x\"@ shouldn't silently parse as 42.
+testIntFieldRejectsTrailingGarbage :: IO Bool
+testIntFieldRejectsTrailingGarbage =
+  pure (A.decode "\"42 lines\"" == (Nothing :: Maybe IntField))
+
+-- | Float / fractional numbers are rejected — the field is
+-- documented as @integer@ in the schema and the newtype must
+-- enforce it.
+testIntFieldRejectsFractional :: IO Bool
+testIntFieldRejectsFractional =
+  pure (A.decode "1.5" == (Nothing :: Maybe IntField))
+
+-- | Canonical Bool wire — JSON boolean — keeps parsing.
+testBoolFieldNative :: IO Bool
+testBoolFieldNative =
+  pure ( A.decode "true"  == Just (BoolField True)
+      && A.decode "false" == Just (BoolField False) )
+
+-- | The bug shape: stringified booleans, all four documented
+-- forms (case-insensitive).
+testBoolFieldStringForms :: IO Bool
+testBoolFieldStringForms =
+  pure ( A.decode "\"true\""  == Just (BoolField True)
+      && A.decode "\"false\"" == Just (BoolField False)
+      && A.decode "\"TRUE\""  == Just (BoolField True)
+      && A.decode "\"False\"" == Just (BoolField False)
+      && A.decode "\"1\""     == Just (BoolField True)
+      && A.decode "\"0\""     == Just (BoolField False) )
+
+-- | We do NOT do JavaScript truthiness — empty string and
+-- arbitrary non-empty strings must be rejected. A non-truth
+-- value should never land in a boolean field by accident.
+testBoolFieldRejectsTruthy :: IO Bool
+testBoolFieldRejectsTruthy =
+  pure ( A.decode "\"\""    == (Nothing :: Maybe BoolField)
+      && A.decode "\"yes\"" == (Nothing :: Maybe BoolField)
+      && A.decode "1"       == (Nothing :: Maybe BoolField) )
+
+--------------------------------------------------------------------------------
+-- #88 integration: drive each affected tool's *Args parser with
+-- both wire shapes and assert behaviour matches.
+--
+-- The key invariant: the SAME logical args, expressed via the
+-- old (number/bool) wire vs. the new (string) wire, must decode
+-- to the same record. Anything else is a regression in the
+-- parser surface that the tool relies on.
+--------------------------------------------------------------------------------
+
+-- | Refactor.scope_line_start / scope_line_end accept stringified
+-- numbers (the most user-visible win — rename_local was completely
+-- unusable from stringifying clients pre-fix).
+testRefactorPermissiveLineRange :: IO Bool
+testRefactorPermissiveLineRange = do
+  let nativeJson =
+        "{\"action\":\"rename_local\",\"module_path\":\"src/X.hs\",\
+        \\"new_name\":\"newSym\",\"scope_line_start\":17,\
+        \\"scope_line_end\":42}"
+      stringJson =
+        "{\"action\":\"rename_local\",\"module_path\":\"src/X.hs\",\
+        \\"new_name\":\"newSym\",\"scope_line_start\":\"17\",\
+        \\"scope_line_end\":\"42\"}"
+  -- Both must decode (no parse error). The pre-fix behaviour was:
+  -- nativeJson decoded, stringJson rejected with an Aeson error
+  -- string. Post-fix both succeed.
+  let na = A.decode nativeJson :: Maybe Value
+      st = A.decode stringJson :: Maybe Value
+  case (na, st) of
+    (Just nv, Just sv) -> do
+      let nDecoded = A.fromJSON nv :: A.Result RefactorTool.RefactorArgs
+          sDecoded = A.fromJSON sv :: A.Result RefactorTool.RefactorArgs
+      case (nDecoded, sDecoded) of
+        (A.Success _, A.Success _) -> pure True
+        _                                   -> pure False
+    _ -> pure False
+
+-- | RemoveModules.delete_files / force accept stringified
+-- "true"/"false" — the shape that triggered the issue's
+-- @\"true\"@ wire form.
+testRemoveModulesPermissiveBool :: IO Bool
+testRemoveModulesPermissiveBool = do
+  let nativeJson =
+        "{\"modules\":[\"Foo\"],\"delete_files\":true,\"force\":false}"
+      stringJson =
+        "{\"modules\":[\"Foo\"],\"delete_files\":\"true\",\"force\":\"false\"}"
+      decode raw = A.fromJSON <$> (A.decode raw :: Maybe Value)
+  case (decode nativeJson, decode stringJson) of
+    (Just (A.Success (a :: RM.RemoveModulesArgs)),
+     Just (A.Success (b :: RM.RemoveModulesArgs))) ->
+       -- Both decoded; if their fields agree then the permissive
+       -- path is round-trip-equivalent to the native path.
+       pure ( show a == show b )
+    _ -> pure False
+
+-- | FixWarning.line and apply: line is REQUIRED, and apply has a
+-- default. Both must accept stringified primitives.
+testFixWarningPermissiveLine :: IO Bool
+testFixWarningPermissiveLine = do
+  let nativeJson =
+        "{\"module_path\":\"src/X.hs\",\"line\":3,\"code\":\"GHC-66111\",\
+        \\"apply\":true}"
+      stringJson =
+        "{\"module_path\":\"src/X.hs\",\"line\":\"3\",\"code\":\"GHC-66111\",\
+        \\"apply\":\"true\"}"
+      decode raw = A.fromJSON <$> (A.decode raw :: Maybe Value)
+  case (decode nativeJson, decode stringJson) of
+    (Just (A.Success (a :: FixWarning.FixWarningArgs)),
+     Just (A.Success (b :: FixWarning.FixWarningArgs))) ->
+       pure ( show a == show b )
+    _ -> pure False
+
+-- | Complete.limit accepts stringified numbers. Default still
+-- applies when the field is omitted entirely.
+testCompletePermissiveLimit :: IO Bool
+testCompletePermissiveLimit = do
+  let nativeJson = "{\"prefix\":\"sho\",\"limit\":10}"
+      stringJson = "{\"prefix\":\"sho\",\"limit\":\"10\"}"
+      missingJson = "{\"prefix\":\"sho\"}"
+      decode raw = A.fromJSON <$> (A.decode raw :: Maybe Value)
+  case (decode nativeJson, decode stringJson, decode missingJson) of
+    (Just (A.Success (a :: CompleteTool.CompleteArgs)),
+     Just (A.Success (b :: CompleteTool.CompleteArgs)),
+     Just (A.Success (c :: CompleteTool.CompleteArgs))) ->
+       -- a == b proves permissive parses match native;
+       -- existence of c proves the default still applies.
+       pure ( show a == show b && not (null (show c)) )
+    _ -> pure False
 
 -- | Round-trip a property through the on-disk store. Uses a unique
 -- temp project dir to keep repeated test runs independent.

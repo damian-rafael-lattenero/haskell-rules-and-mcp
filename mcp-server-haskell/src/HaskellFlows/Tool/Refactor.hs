@@ -42,8 +42,6 @@ import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
@@ -53,6 +51,10 @@ import HaskellFlows.Ghc.ApiSession
   , targetForPath
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.PermissiveJSON
+  ( IntField (unIntField)
+  , BoolField (unBoolField)
+  )
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error
@@ -153,9 +155,11 @@ instance FromJSON RefactorArgs where
     mp  <- o .:  "module_path"
     old <- o .:? "old_name"
     new <- o .:  "new_name"
-    ls  <- o .:? "scope_line_start"
-    le  <- o .:? "scope_line_end"
-    dr  <- o .:? "dry_run" .!= False
+    -- Issue #88: accept stringified numerics / booleans from MCP
+    -- host wrappers that serialise primitives as strings.
+    ls  <- fmap unIntField  <$> o .:? "scope_line_start"
+    le  <- fmap unIntField  <$> o .:? "scope_line_end"
+    dr  <- maybe False unBoolField <$> o .:? "dry_run"
     act <- case (a :: Text) of
       "rename_local"    -> pure ActRename
       "extract_binding" -> pure ActExtract
@@ -465,6 +469,3 @@ formatPathError = \case
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

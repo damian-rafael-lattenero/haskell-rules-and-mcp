@@ -24,6 +24,7 @@ import GHC.Types.Name (nameOccName)
 import GHC.Types.Name.Occurrence (occNameString)
 
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.PermissiveJSON (IntField (unIntField))
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
@@ -65,10 +66,13 @@ data CompleteArgs = CompleteArgs
   }
   deriving stock (Show)
 
+-- | Issue #88: 'limit' accepts a stringified number ("10") in
+-- addition to a JSON number, mirroring the array-param widening
+-- already in place for other tools.
 instance FromJSON CompleteArgs where
   parseJSON = withObject "CompleteArgs" $ \o -> do
     p <- o .:  "prefix"
-    l <- o .:? "limit" .!= 25
+    l <- maybe 25 unIntField <$> o .:? "limit"
     pure CompleteArgs { caPrefix = p, caLimit = clampLimit l }
 
 clampLimit :: Int -> Int

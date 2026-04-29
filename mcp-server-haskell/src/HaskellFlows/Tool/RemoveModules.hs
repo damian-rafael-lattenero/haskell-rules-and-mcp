@@ -36,6 +36,7 @@ import System.Directory (doesFileExist, listDirectory, removeFile)
 import System.FilePath (takeExtension, (</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.PermissiveJSON (BoolField (unBoolField))
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.ModuleName
@@ -109,12 +110,14 @@ data RemoveModulesArgs = RemoveModulesArgs
   }
   deriving stock (Show)
 
+-- | Issue #88: 'delete_files' / 'force' accept stringified
+-- "true"/"false" in addition to JSON booleans.
 instance FromJSON RemoveModulesArgs where
   parseJSON = withObject "RemoveModulesArgs" $ \o -> do
     raw <- o .: "modules"
     mods <- parseModuleList raw
-    delF <- o .:? "delete_files" .!= False
-    frc  <- o .:? "force" .!= False
+    delF <- maybe False unBoolField <$> o .:? "delete_files"
+    frc  <- maybe False unBoolField <$> o .:? "force"
     pure (RemoveModulesArgs mods delF frc)
 
 handle :: ProjectDir -> Value -> IO ToolResult
@@ -502,9 +505,9 @@ rejectionResult entries =
                               <> "; see 'rejected' for details"
       rendered = [ object
                      [ "name"   .= name
-                     , "reason" .= renderModuleNameError err
+                     , "reason" .= renderModuleNameError mnErr
                      ]
-                 | (name, err) <- entries
+                 | (name, mnErr) <- entries
                  ]
       err = (Env.mkErrorEnvelope Env.Validation summary)
               { Env.eeField = Just "modules"

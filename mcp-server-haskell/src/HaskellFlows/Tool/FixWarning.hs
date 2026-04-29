@@ -28,6 +28,10 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.PermissiveJSON
+  ( IntField (unIntField)
+  , BoolField (unBoolField)
+  )
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
@@ -79,13 +83,18 @@ data FixWarningArgs = FixWarningArgs
   }
   deriving stock (Show)
 
+-- | Issue #88: 'line' and 'apply' accept stringified forms
+-- ("3" / "true") so MCP host clients that serialise primitives
+-- as strings can still drive 'ghc_fix_warning'. The JSON Schema
+-- still advertises @integer@ / @boolean@ — the parser is just
+-- more lenient about what it accepts.
 instance FromJSON FixWarningArgs where
   parseJSON = withObject "FixWarningArgs" $ \o ->
     FixWarningArgs
       <$> o .:  "module_path"
-      <*> o .:  "line"
+      <*> (unIntField <$> o .:  "line")
       <*> o .:  "code"
-      <*> o .:? "apply" .!= False
+      <*> (maybe False unBoolField <$> o .:? "apply")
       <*> o .:? "name"
 
 data FixPlan = FixPlan
