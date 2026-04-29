@@ -111,9 +111,16 @@ runFlow c projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
+-- | Resolve a top-level key to its String value. For the
+-- post-#90 envelope, the 'error' field is an object — drill
+-- into 'error.message' transparently so existing assertions
+-- still resolve their text.
 lookupString :: Text -> Value -> Maybe Text
 lookupString k v = case lookupField k v of
   Just (String s) -> Just s
+  Just (Object o) -> case KeyMap.lookup (Key.fromText "message") o of
+    Just (String m) -> Just m
+    _               -> Nothing
   _               -> Nothing
 
 truncRender :: Value -> Text

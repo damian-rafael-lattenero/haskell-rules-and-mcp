@@ -43,7 +43,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
-import E2E.Envelope (statusOk, lookupField)
+import E2E.Envelope (statusOk, errorMessage, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -66,9 +66,12 @@ runFlow c _projectDir = do
       r <- Client.callTool c GhcAddImport
              (object [ "name" .= ("fromMaybe" :: Text) ])
       let success     = statusOk r
-          errFieldOk  = case lookupField "error" r of
-                          Just (String e) -> "hoogle" `T.isInfixOf` T.toLower e
-                          _               -> False
+          -- Issue #90: 'error' is now an object; the message
+          -- is at error.message. 'errorMessage' tolerates both
+          -- shapes during the migration window.
+          errFieldOk  = case errorMessage r of
+                          Just e  -> "hoogle" `T.isInfixOf` T.toLower e
+                          Nothing -> False
           remPresent  = case lookupField "remediation" r of
                           Just (String _) -> True
                           _               -> False

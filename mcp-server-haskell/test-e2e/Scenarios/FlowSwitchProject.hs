@@ -32,6 +32,8 @@ module Scenarios.FlowSwitchProject
   ) where
 
 import Data.Aeson (Value (..), object, (.=))
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -220,9 +222,17 @@ runFlow c projectDir = do
 
 -- | Case-insensitive substring match — keeps error-message
 -- assertions tolerant of exact wording.
+--
+-- Issue #90 Phase D: post-envelope, the 'error' field passed
+-- to this predicate is an Object @{kind, message, …}@ rather
+-- than a top-level String. Drill into 'message' when we see
+-- an Object so the same assertion sites continue to work.
 containsCI :: Text -> Value -> Bool
 containsCI needle (String s) =
   T.toLower needle `T.isInfixOf` T.toLower s
+containsCI needle (Object o) = case KeyMap.lookup (Key.fromText "message") o of
+  Just (String s) -> T.toLower needle `T.isInfixOf` T.toLower s
+  _               -> False
 containsCI _ _ = False
 
 -- | Path equality that tolerates macOS's @/var@ ↔ @/private/var@

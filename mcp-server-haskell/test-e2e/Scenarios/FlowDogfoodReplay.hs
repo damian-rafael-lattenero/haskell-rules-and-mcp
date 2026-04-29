@@ -505,12 +505,14 @@ pathEq expected (String actual) = normalize (T.pack expected) == normalize actua
 pathEq _ _ = False
 
 -- | Count issues of a particular kind in a 'ghc_validate_cabal'
--- response. The response is @{issues: [{kind, message, severity}]}@.
+-- response. The response is @{issues: [{kind, message, severity}]}@
+-- post-#90 nested under @result.issues@. 'lookupField' from
+-- 'E2E.Envelope' auto-drills through the @result@ envelope.
 countIssuesOfKind :: Text -> Value -> Int
-countIssuesOfKind kind (Object o) =
-  case KeyMap.lookup (Key.fromText "issues") o of
+countIssuesOfKind kind v =
+  case lookupField "issues" v of
     Just (Array arr) ->
-      length [ () | v <- toList arr, issueHasKind kind v ]
+      length [ () | item <- toList arr, issueHasKind kind item ]
     _ -> 0
   where
     toList = foldr (:) []
@@ -518,12 +520,11 @@ countIssuesOfKind kind (Object o) =
       Just (String s) -> s == k
       _               -> False
     issueHasKind _ _ = False
-countIssuesOfKind _ _ = 0
 
 -- | Any issue's message text contains 'fragment'.
 issueMessagesMention :: Text -> Value -> Bool
-issueMessagesMention fragment (Object o) =
-  case KeyMap.lookup (Key.fromText "issues") o of
+issueMessagesMention fragment v =
+  case lookupField "issues" v of
     Just (Array arr) -> any mentions (foldr (:) [] arr)
     _                -> False
   where
@@ -531,13 +532,14 @@ issueMessagesMention fragment (Object o) =
       Just (String s) -> fragment `T.isInfixOf` s
       _               -> False
     mentions _ = False
-issueMessagesMention _ _ = False
 
 -- | Does a @ghc_suggest@ response contain a suggestion with
 -- 'sLaw == lawName'? Looks into @suggestions[].law@.
+-- 'suggestions' is under 'result.suggestions' post-#90;
+-- 'lookupField' auto-drills.
 hasSuggestionLaw :: Text -> Value -> Bool
-hasSuggestionLaw lawName (Object o) =
-  case KeyMap.lookup (Key.fromText "suggestions") o of
+hasSuggestionLaw lawName v =
+  case lookupField "suggestions" v of
     Just (Array arr) -> any isLaw (foldr (:) [] arr)
     _                -> False
   where
@@ -559,8 +561,10 @@ truncRender v =
 -- @{content: [{type: "text", text: "<JSON>"}]}@, so we decode
 -- the inner JSON once before looking at @gates@.
 allModulesCompileOk :: Value -> Bool
-allModulesCompileOk (Object o) =
-  case KeyMap.lookup (Key.fromText "per_module") o of
+allModulesCompileOk v =
+  -- 'per_module' lives under 'result.per_module' post-#90;
+  -- 'lookupField' auto-drills.
+  case lookupField "per_module" v of
     Just (Array arr) -> all moduleCompiles (foldr (:) [] arr)
     _                -> False
   where

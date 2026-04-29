@@ -38,6 +38,7 @@ module E2E.Envelope
     statusOk
   , statusIs
   , errorKind
+  , errorMessage
     -- * Generic field accessors
   , fieldBool
   , fieldText
@@ -86,6 +87,19 @@ errorKind v = case lookupField "error" v of
     Just (String k) -> Just k
     _               -> Nothing
   _ -> Nothing
+
+-- | The free-form error message from the envelope's
+-- @error.message@ nested field — the post-#90 replacement for
+-- the pre-envelope top-level @error@ string. Tolerates the
+-- legacy shape (@error :: Text@) too so an oracle that hits a
+-- mid-migration response still resolves.
+errorMessage :: Value -> Maybe Text
+errorMessage v = case lookupField "error" v of
+  Just (Object o) -> case KeyMap.lookup (Key.fromText "message") o of
+    Just (String m) -> Just m
+    _               -> Nothing
+  Just (String s) -> Just s   -- legacy shape, still tolerated
+  _               -> Nothing
 
 -- | Internal: pull the @status@ field as a plain 'Text'. Every
 -- post-#90 envelope must carry one of the seven canonical status

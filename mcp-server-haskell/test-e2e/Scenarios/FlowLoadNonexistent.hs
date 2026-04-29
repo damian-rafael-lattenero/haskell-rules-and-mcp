@@ -30,7 +30,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
-import E2E.Envelope (statusOk, fieldText)
+import E2E.Envelope (statusOk, errorMessage)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -55,10 +55,12 @@ runFlow c _projectDir = do
   t1 <- stepHeader 2 "ghc_load nonexistent module_path"
   r1 <- Client.callTool c GhcLoad
           (object [ "module_path" .= ("src/DoesNotExist.hs" :: Text) ])
+  -- Issue #90: post-envelope, 'error' is an object; the message
+-- text is at error.message. Use 'errorMessage' from E2E.Envelope.
   let succ1   = statusOk r1
-      errText = fieldText "error"   r1
+      errMsg  = errorMessage r1
       refused = succ1 == Just False
-      mentions s = case errText of
+      mentions s = case errMsg of
         Just t  -> T.isInfixOf s t
         Nothing -> False
       pathInErr  = mentions (T.pack "DoesNotExist.hs")

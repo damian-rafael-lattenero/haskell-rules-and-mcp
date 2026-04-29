@@ -73,7 +73,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
-import E2E.Envelope (statusOk, fieldText, lookupField)
+import E2E.Envelope (statusOk, errorMessage, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | 256 KiB of 'A' wrapped in a Haskell String literal. 4× the
@@ -113,7 +113,10 @@ runFlow c _pd = do
                            * 1000) :: Int
       wasRejected = statusOk big == Just False
       returnedFast = bigMs < 2_000
-      errText      = case fieldText "error" big of
+      -- Issue #90: post-envelope, 'error' is an Object; the
+-- message lives at error.message. 'errorMessage' tolerates both
+-- shapes during the migration window.
+      errText      = case errorMessage big of
                         Just t  -> T.map toLower t
                         Nothing -> T.empty
       mentionsSize =
@@ -132,7 +135,7 @@ runFlow c _pd = do
     "error message mentions size / length / oversize"
     mentionsSize
     ("The rejection message should name the failure mode so callers \
-     \can act on it. Got error=" <> T.pack (show (fieldText "error" big))
+     \can act on it. Got error=" <> T.pack (show (errorMessage big))
      <> ". If this fails but cReject passes, the refusal is happening \
         \for some OTHER reason — the cap is still missing. Raw: "
       <> truncRender big)
