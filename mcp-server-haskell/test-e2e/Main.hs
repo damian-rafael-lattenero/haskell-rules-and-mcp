@@ -50,6 +50,7 @@ import qualified Scenarios.FlowExprEvaluatorDogfood as FlowEED
 import qualified Scenarios.FlowDogfoodUxFixes   as FlowDUX
 import qualified Scenarios.FlowFixWarning       as FlowFW
 import qualified Scenarios.FlowGracefulMiss      as FlowGM
+import qualified Scenarios.FlowLoadNonexistent    as FlowLN
 import qualified Scenarios.FlowInjectionGuard   as FlowIG
 import qualified Scenarios.FlowNonUTF8           as FlowNU
 import qualified Scenarios.FlowOversizedInput   as FlowOI
@@ -161,6 +162,8 @@ scenarios =
     , False, FlowMNG.runFlow )
   , ( "Flow: Graceful miss (deps remove / hole-free / non-predicate QC)"
     , False, FlowGM.runFlow )
+  , ( "Flow: LoadNonexistent (#79 · ghc_load short-circuits on missing path)"
+    , False, FlowLN.runFlow )
   , ( "Flow: Session robustness (user throws don't kill GHCi)"
     , False, FlowSR.runFlow )
   , ( "Flow: Timeout enforcement (inner 30 s budget must trip)"

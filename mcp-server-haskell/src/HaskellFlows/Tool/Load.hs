@@ -14,6 +14,7 @@ module HaskellFlows.Tool.Load
   ( descriptor
   , handle
   , LoadArgs (..)
+  , checkPathExists
   ) where
 
 import Control.Exception (SomeException, try)
@@ -23,6 +24,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import qualified System.Directory as Dir
+import System.FilePath ((</>))
 
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
@@ -89,13 +92,23 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
   Right (LoadArgs mModPath dx) -> do
-    mTgt <- case mModPath of
+    eTgt <- case mModPath of
       Nothing -> Right <$> firstTestSuiteOrLibrary ghcSess
       Just p  -> case mkModulePath pd (T.unpack p) of
-        Left err -> pure (Left err)
-        Right _  -> Right <$> targetForPath ghcSess (T.unpack p)
-    case mTgt of
-      Left pathErr -> pure (errorResult (formatPathError pathErr))
+        Left pathErr -> pure (Left (formatPathError pathErr))
+        Right _      -> do
+          -- Issue #79: targetForPath silently falls back to
+          -- TargetLibrary for any path that doesn't match the
+          -- test/, app/, or bench/ prefix — including paths that
+          -- don't exist on disk. Verify existence here so callers
+          -- get a clear "file not found" instead of a misleading
+          -- whole-library load with unrelated warnings.
+          existsCheck <- checkPathExists pd p
+          case existsCheck of
+            Left missingMsg -> pure (Left missingMsg)
+            Right ()        -> Right <$> targetForPath ghcSess (T.unpack p)
+    case eTgt of
+      Left errMsg -> pure (errorResult errMsg)
       Right tgt -> do
         -- Strict first gives agents the canonical error set.
         -- diagnostics=true merges a Deferred pass so typed holes
@@ -171,3 +184,16 @@ formatPathError = \case
     "Project directory is not absolute: " <> p
   PathEscapesProject a p _ ->
     "module_path '" <> a <> "' escapes project directory " <> p
+
+-- | Verify that a syntactically-valid module_path actually points to
+-- an existing file under the project root. Exported so the test suite
+-- can lock the issue-#79 contract without having to spin up a full
+-- GhcSession. Note: callers must run 'mkModulePath' first; this helper
+-- only checks existence, not escape.
+checkPathExists :: ProjectDir -> Text -> IO (Either Text ())
+checkPathExists pd rel = do
+  let resolved = unProjectDir pd </> T.unpack rel
+  exists <- Dir.doesFileExist resolved
+  pure $ if exists
+    then Right ()
+    else Left ("module_path does not exist: " <> rel)

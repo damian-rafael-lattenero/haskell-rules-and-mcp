@@ -138,6 +138,7 @@ import qualified HaskellFlows.Mcp.Resources as Resources
 import HaskellFlows.Tool.CheckProject (parseExposedModules)
 import HaskellFlows.Tool.Lint (parseHlintJson)
 import qualified HaskellFlows.Tool.Lint as LintTool
+import HaskellFlows.Tool.Load (checkPathExists)
 import qualified HaskellFlows.Tool.ValidateCabal as VC
 import HaskellFlows.Parser.QuickCheck
   ( QuickCheckResult (..)
@@ -256,6 +257,8 @@ main = do
       [ test "mkProjectDir rejects relative"    testRejectsRelativeProject
       , test "mkModulePath accepts in-tree"      testAcceptsInTree
       , test "mkModulePath rejects traversal"    testRejectsTraversal
+      , test "ghc_load #79: checkPathExists Right" testCheckPathExistsAccepts
+      , test "ghc_load #79: checkPathExists Left"  testCheckPathExistsRejects
       , test "parseGhcErrors extracts header"    testParseHeader
       , test "sanitizeExpression accepts normal" testSanitizeAccepts
       , test "sanitizeExpression rejects newline" testSanitizeRejectsNewline
@@ -809,6 +812,41 @@ testRejectsTraversal = do
     Right pd -> pure $ case mkModulePath pd "../../etc/passwd" of
       Left (PathEscapesProject {}) -> True
       _                            -> False
+
+-- Issue #79: 'checkPathExists' is the gate that turned the silent
+-- "load anything, get the whole library back" foot-gun into an
+-- explicit error. The Right () branch fires when the file is on
+-- disk; the Left branch is the original bug repro shape.
+testCheckPathExistsAccepts :: IO Bool
+testCheckPathExistsAccepts = do
+  tmp <- getTemporaryDirectory
+  let dir  = tmp </> "haskell-flows-issue-79-accept"
+      file = dir </> "Foo.hs"
+  removePathForcibly dir
+  createDirectoryIfMissing True dir
+  TIO.writeFile file (T.pack "module Foo where\nfoo :: Int\nfoo = 1\n")
+  case mkProjectDir dir of
+    Left _   -> pure False
+    Right pd -> do
+      r <- checkPathExists pd (T.pack "Foo.hs")
+      removePathForcibly dir
+      pure (r == Right ())
+
+testCheckPathExistsRejects :: IO Bool
+testCheckPathExistsRejects = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-issue-79-reject"
+  removePathForcibly dir
+  createDirectoryIfMissing True dir
+  case mkProjectDir dir of
+    Left _   -> pure False
+    Right pd -> do
+      r <- checkPathExists pd (T.pack "DoesNotExist.hs")
+      removePathForcibly dir
+      pure $ case r of
+        Left msg -> T.isInfixOf (T.pack "does not exist") msg
+                 && T.isInfixOf (T.pack "DoesNotExist.hs") msg
+        Right () -> False
 
 testParseHeader :: IO Bool
 testParseHeader =

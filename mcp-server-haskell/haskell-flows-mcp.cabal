@@ -215,6 +215,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowFixWarning
                       Scenarios.FlowGracefulMiss
                       Scenarios.FlowInjectionGuard
+                      Scenarios.FlowLoadNonexistent
                       Scenarios.FlowNonUTF8
                       Scenarios.FlowOversizedInput
                       Scenarios.FlowSandboxEscape
