@@ -256,9 +256,19 @@ step4_addModules c = do
 
 step5_removeStub :: Client.McpClient -> IO [Check]
 step5_removeStub c = do
+  -- Issue #41 added a downstream-importer safety net that refuses
+  -- by default if any other source still imports the module being
+  -- removed. The scaffolded test/Spec.hs (written by step 2) does
+  -- import 'ExprEvaluator (greet)', so the unforced call would now
+  -- fail-safe by design. The scenario's intent is "deliberately
+  -- drop the default stub before wiring real sources" — exactly
+  -- the use-case 'force=true' is for. The follow-up step 7 then
+  -- rewrites Spec.hs to import the real test modules, so the
+  -- post-step state is consistent.
   r <- Client.callTool c GhcRemoveModules (object
     [ "modules"      .= (["ExprEvaluator"] :: [Text])
     , "delete_files" .= True
+    , "force"        .= True
     ])
   pure
     [ checkJsonField "step 5 · remove_modules success (BUG-16)"
