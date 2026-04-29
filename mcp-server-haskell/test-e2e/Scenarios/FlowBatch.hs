@@ -161,9 +161,14 @@ runFlow c _projectDir = do
     [ "actions"   .= ffActions
     , "fail_fast" .= True
     ])
+  -- Issue #90: post-envelope, ghc_batch with a mixed outcome
+-- (ok + failed) emits status='partial' rather than success=false.
+-- Pre-#90 the legacy projection mapped partial → success: true,
+-- so the original test was already inaccurate; assert the
+-- post-#90 status discriminator directly.
   c6 <- liveCheck $ checkJsonField
-          "fail_fast · overall success is false"
-          ffR "success" (Bool False)
+          "fail_fast · status = 'partial' (mixed outcome)"
+          ffR "status" (String "partial")
   c7 <- liveCheck $ checkJsonFieldMatches
           "fail_fast · ok == 1 (first action only)"
           ffR "ok" (\v -> v == Number 1)
