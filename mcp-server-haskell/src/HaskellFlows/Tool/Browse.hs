@@ -71,7 +71,16 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
       Left (se :: SomeException) ->
         errorResult (T.pack ("GHC API error: " <> show se))
       Right Nothing ->
-        errorResult ("Module '" <> m <> "' is not in the loaded module graph.")
+        -- Issue #72: 'browse' can only enumerate modules from the
+        -- project's compile graph, but 'ghc_imports' often lists
+        -- 'Prelude' and other base modules that are in the
+        -- *interactive scope* without being in the graph. The
+        -- pre-#72 message ("Module … is not in the loaded module
+        -- graph") was technically correct but actionable-blind.
+        -- Surface a structured nextStep that points the agent at
+        -- 'ghc_info' (per-name) or 'hoogle_search' so the
+        -- discrepancy doesn't waste a round-trip.
+        moduleNotInGraphResult m
       Right (Just entries) ->
         successResult m entries
 
@@ -144,6 +153,34 @@ errorResult msg = ToolResult
       [ "success" .= False, "error" .= msg ])) ]
   , trIsError = True
   }
+
+-- | Issue #72: structured failure when 'browse' can't find the
+-- requested module in the project module graph. The agent gets
+-- a pointer at the canonical fallback path (per-name via
+-- 'ghc_info' or 'hoogle_search') instead of a dead-end string.
+moduleNotInGraphResult :: Text -> ToolResult
+moduleNotInGraphResult m =
+  ToolResult
+    { trContent = [ TextContent (encodeUtf8Text (object
+        [ "success"     .= False
+        , "error"       .= ("Module '" <> m <> "' is not in the project's module graph.")
+        , "error_kind"  .= ("module_not_in_graph" :: Text)
+        , "remediation" .= ("Browse only enumerates modules compiled by this project. \
+                            \For modules in interactive scope (Prelude, base, external \
+                            \deps), look up individual names with ghc_info or query \
+                            \with hoogle_search." :: Text)
+        , "nextStep"    .= object
+            [ "tool"    .= ("ghc_info" :: Text)
+            , "why"     .= ("'ghc_browse' only sees modules compiled into this project. \
+                            \Use ghc_info(name=\"<symbol>\") for per-name inspection of \
+                            \external/base modules, or hoogle_search to discover names." :: Text)
+            , "example" .= object
+                [ "name" .= ("<symbol from " <> m <> ">" :: Text) ]
+            ]
+        ]))
+      ]
+    , trIsError = True
+    }
 
 encodeUtf8Text :: Value -> Text
 encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
