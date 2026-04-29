@@ -97,6 +97,7 @@ import qualified Scenarios.FlowInfoClass          as FlowICls
 import qualified Scenarios.FlowCreateProjectGreen as FlowCPG
 import qualified Scenarios.FlowBrowseInteractive  as FlowBI
 import qualified Scenarios.FlowSuggestSelfInverseDampening as FlowSSID
+import qualified Scenarios.FlowCrossClientStringification as FlowXCS
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
 import qualified Scenarios.FlowEvalContextDedup  as FlowECD
 import qualified Scenarios.FlowTypeAfterLoadDeps as FlowTAL
@@ -263,6 +264,8 @@ scenarios =
     , False, FlowTAL.runFlow )
   , ( "Flow: eval_context_dedup · ghc_eval doesn't grow imports across calls (#86)"
     , False, FlowECD.runFlow )
+  , ( "Flow: cross_client_stringification · permissive Int/Bool wires (#91 PhA / #88)"
+    , False, FlowXCS.runFlow )
   ]
 
 main :: IO ()
