@@ -36,6 +36,7 @@ module HaskellFlows.Tool.Move
   , rewriteImports
   , rewriteSelectiveImport
   , removeFromSourceExportList
+  , addToDestinationExportList
   , moduleNameToPath
   ) where
 
@@ -176,7 +177,15 @@ proceedMove sess pd args fromAbs toAbs fromBody toBody sliced = do
   -- An open export ('module Foo where') is left untouched.
   let fromExportStripped = removeFromSourceExportList (maSymbol args) fromBody
       fromBody'          = removeSliceFromBody sliced fromExportStripped
-      toBody'            = insertSliceAtEnd sliced toBody
+      -- Issue #76: when the destination module declares an
+      -- explicit export list ("module Foo (a, b) where"), the
+      -- moved symbol must be added to it — otherwise the slice
+      -- lands in the file but stays private to the module,
+      -- silently breaking every consumer that imported it.
+      -- An open export ("module Foo where") is left untouched
+      -- (the symbol is already exported by default).
+      toBodyWithExport   = addToDestinationExportList (maSymbol args) toBody
+      toBody'            = insertSliceAtEnd sliced toBodyWithExport
   consumerFiles <- enumerateConsumers (unProjectDir pd)
                      [fromAbs, toAbs]
   consumerSnapshots <- mapM (\p -> do
@@ -321,15 +330,30 @@ findEndOfBinding symbol start indexed =
          ((i, _) : _) -> i
          []           -> start
   where
+    -- Issue #76: a column-0 "-- |" or "-- ^" line documents the
+    -- NEXT decl by Haddock convention — it's a boundary marker
+    -- for the slice, not part of the current binding's body.
+    -- The pre-#76 version excluded it (the comment guards
+    -- treated all '-- ' prefixes as non-boundary), so the
+    -- slicer leaked the next binding's docstring into the cut
+    -- range. Treat Haddock-for-decl explicitly as a boundary;
+    -- plain '-- foo' comments still belong to the current
+    -- binding's continuation.
     isOtherTopLevel sym ln =
       let stripped = T.stripStart ln
+          col0     = T.takeWhile (== ' ') ln == ""
+          haddockForNext =
+               "-- |"  `T.isPrefixOf` ln
+            || "-- ^"  `T.isPrefixOf` ln
+            || "-- |"  == T.stripEnd ln
       in not (T.null stripped)
-         && T.takeWhile (== ' ') ln == ""
-         && not ("-- " `T.isPrefixOf` ln)
-         && not ("--|" `T.isPrefixOf` ln)
-         && not ("--^" `T.isPrefixOf` ln)
-         && not (sym `T.isPrefixOf` stripped
-                   && hasIdentBoundaryAt (T.length sym) stripped)
+         && col0
+         && (haddockForNext
+             ||  not ("-- " `T.isPrefixOf` ln)
+                  && not ("--|" `T.isPrefixOf` ln)
+                  && not ("--^" `T.isPrefixOf` ln)
+                  && not (sym `T.isPrefixOf` stripped
+                            && hasIdentBoundaryAt (T.length sym) stripped))
     -- Same-symbol shape — header `sym :: …`, equation `sym x = …`,
     -- pattern `sym (Just x) = …`. After the symbol there's a
     -- non-identifier char (space, paren, equals, ::, etc).
@@ -402,6 +426,58 @@ removeFromSourceExportList symbol body =
                               <> "module " <> T.stripEnd modPart
                               <> " (" <> T.intercalate ", " kept <> ")"
                               <> afterClose
+
+-- | Issue #76: symmetric companion to 'removeFromSourceExportList'.
+--
+-- Walks the destination module's header and inserts @symbol@
+-- into its explicit export list. The supported header shapes
+-- (single-line) are:
+--
+-- @
+-- module Foo (a, b) where        -- inserts symbol before ')'
+-- module Foo where               -- left untouched (open export)
+-- @
+--
+-- Returns the body unchanged when:
+--
+--   * the header has no explicit list (open export — every
+--     binding is exported by default);
+--   * the symbol is already in the list (idempotent);
+--   * we cannot recognise the header shape (defensive: leave
+--     the file alone rather than risk corrupting it).
+addToDestinationExportList :: Text -> Text -> Text
+addToDestinationExportList symbol body =
+  case T.lines body of
+    []       -> body
+    (h : tl) -> case rewriteHeader symbol h of
+      Nothing       -> body
+      Just newHeader -> T.unlines (newHeader : tl)
+  where
+    rewriteHeader :: Text -> Text -> Maybe Text
+    rewriteHeader sym ln =
+      let leading  = T.takeWhile (== ' ') ln
+          stripped = T.drop (T.length leading) ln
+      in case T.stripPrefix "module " stripped of
+        Nothing -> Nothing
+        Just rest -> case T.breakOn "(" rest of
+          (_, parenAndAfter) | T.null parenAndAfter -> Nothing  -- open export
+          (modPart, parenAndAfter) ->
+            let afterOpen = T.drop 1 parenAndAfter
+                (inside, closeAndAfter) = T.breakOn ")" afterOpen
+            in if T.null closeAndAfter
+                  then Nothing
+                  else
+                    let items = map T.strip (T.splitOn "," inside)
+                        trimmed = filter (not . T.null) items
+                    in if sym `elem` trimmed
+                          then Nothing  -- already exported, no change
+                          else
+                            let newItems  = trimmed ++ [sym]
+                                afterClose = T.drop 1 closeAndAfter
+                            in Just $ leading
+                                 <> "module " <> T.stripEnd modPart
+                                 <> " (" <> T.intercalate ", " newItems <> ")"
+                                 <> afterClose
 
 collapseBlanks :: [Text] -> [Text]
 collapseBlanks = go False

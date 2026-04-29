@@ -534,6 +534,12 @@ main = do
       , test "move: moduleNameToPath canonical (#62)" testMoveModulePath
       , test "move: removeFromSourceExportList drops symbol (#62)" testMoveRemoveExport
       , test "move: removeFromSourceExportList no-op on open export (#62)" testMoveRemoveExportOpen
+      , test "move: addToDestinationExportList appends symbol (#76)" testMoveAddDestExport
+      , test "move: addToDestinationExportList no-op when already present (#76)"
+                                                                 testMoveAddDestExportIdempotent
+      , test "move: addToDestinationExportList no-op on open export (#76)"
+                                                                 testMoveAddDestExportOpen
+      , test "move: slicer stops at next binding's Haddock (#76)" testMoveSliceStopsAtHaddock
       , test "deps_explain: parseSolverOutput on real dump (#63)" testDepsExplainParse
       , test "deps_explain: identifyRootCause picks deepest (#63)" testDepsExplainRoot
       , test "deps_explain: extractPackages strips versions (#63)" testDepsExplainPackages
@@ -4486,6 +4492,72 @@ testMoveRemoveExportOpen =
         ]
       stripped = MoveTool.removeFromSourceExportList "double" body
   in pure (stripped == body)
+
+-- | Issue #76: 'addToDestinationExportList' must insert the
+-- moved symbol into a destination header that declares an
+-- explicit export list. Without this step, 'ghc_move' lands
+-- the symbol in the file but it stays private.
+testMoveAddDestExport :: IO Bool
+testMoveAddDestExport =
+  let body = T.unlines
+        [ "module Dest (a, b) where"
+        , ""
+        , "a = 1"
+        , "b = 2"
+        ]
+      out = MoveTool.addToDestinationExportList "moved" body
+  in pure $ T.isInfixOf "module Dest (a, b, moved) where" out
+         && T.isInfixOf "a = 1"  out  -- body untouched
+         && T.isInfixOf "b = 2"  out
+
+-- | Issue #76: idempotence — if the destination already exports
+-- the symbol (e.g. a re-run of the move), the helper must not
+-- duplicate the entry.
+testMoveAddDestExportIdempotent :: IO Bool
+testMoveAddDestExportIdempotent =
+  let body = T.unlines
+        [ "module Dest (a, moved, b) where"
+        , "a = 1"
+        ]
+      out = MoveTool.addToDestinationExportList "moved" body
+  in pure (out == body)
+
+-- | Issue #76: open exports ('module Foo where') already export
+-- every binding by default. The helper must leave them alone —
+-- introducing a list would change the API surface.
+testMoveAddDestExportOpen :: IO Bool
+testMoveAddDestExportOpen =
+  let body = T.unlines
+        [ "module Dest where"
+        , "a = 1"
+        ]
+      out = MoveTool.addToDestinationExportList "moved" body
+  in pure (out == body)
+
+-- | Issue #76: the slicer's biggest leak is mistaking the next
+-- binding's '-- |' Haddock for a continuation of the current
+-- binding. The fix treats column-0 '-- |' / '-- ^' as a slice
+-- boundary; the slice for 'first' must end at line 5, before
+-- 'second's Haddock starts.
+testMoveSliceStopsAtHaddock :: IO Bool
+testMoveSliceStopsAtHaddock =
+  let body = T.unlines
+        [ "-- | First."          -- 1
+        , "first :: Int"         -- 2
+        , "first = 1"            -- 3
+        , ""                     -- 4
+        , "-- | Second."         -- 5  ← boundary
+        , "second :: Int"        -- 6
+        , "second = 2"           -- 7
+        ]
+  in case MoveTool.sliceTopLevelBinding "first" body of
+       Nothing -> pure False
+       Just s  ->
+         let sliced = MoveTool.srSliced s
+         in pure $ T.isInfixOf "first :: Int" sliced
+                && T.isInfixOf "first = 1"   sliced
+                && not (T.isInfixOf "Second" sliced)
+                && not (T.isInfixOf "second" sliced)
 
 -- | Issue #63 Phase 1: a representative cabal solver dump must
 -- parse into a non-empty Conflict.
