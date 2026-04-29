@@ -88,6 +88,7 @@ import qualified Scenarios.FlowPerfBasic          as FlowPerf
 import qualified Scenarios.FlowPropertyAudit      as FlowPA
 import qualified Scenarios.FlowWitness            as FlowWit
 import qualified Scenarios.FlowCheckModuleProperties as FlowCMP
+import qualified Scenarios.FlowGateNoCrash        as FlowGNC
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
@@ -228,6 +229,8 @@ scenarios =
     , True, FlowWit.runFlow )
   , ( "Flow: CheckModule properties gate finds module-name entries (#74)"
     , False, FlowCMP.runFlow )
+  , ( "Flow: ghc_gate survives noisy cabal_test failure (#75)"
+    , True, FlowGNC.runFlow )
   , ( "Flow: Dogfood replay (7 MCP fixes round-tripped through one session)"
     , True, FlowDFR.runFlow )
   , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"

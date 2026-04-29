@@ -3353,17 +3353,28 @@ testGateRunStepCatchesExceptions = do
       && T.isInfixOf "Left (e :: SomeException)" src
       && T.isInfixOf "\"exception\" .= T.pack (show e)" src
 
--- | BUG-01 — 'cabalStep' must use 'bracket' to guarantee
--- process cleanup (terminateProcess + hClose) on any exit path,
--- and must not partial-pattern on 'createProcess'. The old
--- irrefutable @(_, Just hOut, Just hErr, ph)@ match would
--- throw on any unexpected CreateProcess return shape; the new
--- code pattern-matches totally and returns a structured error.
+-- | BUG-01 + Issue #75 — 'cabalStep' must drain stdout AND
+-- stderr without deadlocking on a full pipe buffer.
+--
+-- The pre-#75 implementation forked two threads doing
+-- @hGetContents h >>= putMVar v@. Because @hGetContents@ is
+-- lazy, the forks deposited thunks into the MVars without
+-- actually draining the OS pipes. When cabal wrote more than
+-- ~64 KiB (a noisy build error, a -Wall storm), the writer
+-- blocked, @waitForProcess@ blocked, and the whole gate hung
+-- past its 5-minute timeout in a way that corrupted the MCP
+-- transport — the agent saw \"Connection closed\" instead of a
+-- structured TimedOut step.
+--
+-- The fix delegates to @readCreateProcessWithExitCode@, which
+-- uses strict bytestring drains for both pipes internally. This
+-- test pins the new invariant: the manual fork-and-MVar pattern
+-- is gone, replaced by the canonical helper.
 testGateCabalStepBracket :: IO Bool
 testGateCabalStepBracket = do
   src <- TIO.readFile "src/HaskellFlows/Tool/Gate.hs"
-  pure $ T.isInfixOf "bracket acquire release body"  src
-      && T.isInfixOf "(Just hOut, Just hErr)"        src
+  pure $ T.isInfixOf "readCreateProcessWithExitCode" src
+      && not (T.isInfixOf "forkIO (hGetContents" src)
       && not (T.isInfixOf "(_, Just hOut, Just hErr, ph) <- createProcess" src)
 
 -- | BUG-06 nextStep coverage for the new tool: 'ghc_remove_modules'

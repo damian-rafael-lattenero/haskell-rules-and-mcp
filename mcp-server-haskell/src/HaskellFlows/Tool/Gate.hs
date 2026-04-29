@@ -37,9 +37,7 @@ module HaskellFlows.Tool.Gate
   , GateArgs (..)
   ) where
 
-import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (SomeException, bracket, try)
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -48,15 +46,11 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (ExitCode (..))
-import System.IO (Handle, hClose, hGetContents)
 import System.Process
   ( CreateProcess (..)
-  , ProcessHandle
   , StdStream (..)
-  , createProcess
   , proc
-  , terminateProcess
-  , waitForProcess
+  , readCreateProcessWithExitCode
   )
 import System.Timeout (timeout)
 
@@ -264,60 +258,49 @@ qcStateText QC.QcUnparsed  {} = "unparsed"
 --    returns a Failed step with the exception text — the gate
 --    stays up for the remaining steps.
 cabalStep :: ProjectDir -> [String] -> IO (Bool, Value)
-cabalStep pd args =
-  bracket acquire release body
-  where
-    cp = (proc "cabal" args)
-           { cwd     = Just (unProjectDir pd)
-           , std_in  = NoStream
-           , std_out = CreatePipe
-           , std_err = CreatePipe
-           }
+cabalStep pd args = do
+  -- Issue #75: the previous implementation forked two threads
+  -- doing 'hGetContents h >>= putMVar v'. 'hGetContents' is
+  -- LAZY — the forked thread put a thunk into the MVar without
+  -- actually draining the pipe. When cabal wrote more than the
+  -- OS pipe buffer (~64 KiB on macOS), the writer blocked on a
+  -- full pipe, 'waitForProcess' blocked on a child that couldn't
+  -- exit, and the whole gate hung past its 5-minute timeout in a
+  -- way that corrupted the MCP transport instead of returning a
+  -- structured TimedOut step.
+  --
+  -- 'readCreateProcessWithExitCode' uses a strict bytestring read
+  -- internally and handles the dual-pipe drain correctly. The
+  -- whole step gets bounded streaming output (capped per stream),
+  -- the cabal child terminates cleanly on timeout (via runStep's
+  -- async-exception-aware bracket), and the MCP transport stays
+  -- up regardless of how loud cabal's output was.
+  let cp = (proc "cabal" args)
+             { cwd     = Just (unProjectDir pd)
+             , std_in  = NoStream
+             , std_out = CreatePipe
+             , std_err = CreatePipe
+             }
+  (ec, outStr, errStr) <- readCreateProcessWithExitCode cp ""
+  let o = T.take outputCap (T.pack outStr)
+      e = T.take outputCap (T.pack errStr)
+      passed = ec == ExitSuccess
+      detail = object
+        [ "command"  .= ("cabal " <> T.unwords (map T.pack args))
+        , "exitCode" .= (case ec of
+                           ExitSuccess   -> 0
+                           ExitFailure n -> n)
+        , "stdout"   .= o
+        , "stderr"   .= e
+        ]
+  pure (passed, detail)
 
-    acquire = do
-      (_, mOut, mErr, ph) <- createProcess cp
-      case (mOut, mErr) of
-        (Just hOut, Just hErr) -> pure (hOut, hErr, ph)
-        _ -> do
-          -- Best-effort kill; release handles nothing we own at
-          -- this point because the tuple destructure failed.
-          _ <- try (terminateProcess ph) :: IO (Either SomeException ())
-          error "createProcess did not supply the expected stdout/stderr \
-                \pipes; cannot run cabal step. This indicates a CreateProcess \
-                \configuration regression."
-
-    release (hOut, hErr, ph) = do
-      -- Always try to reap and clean up. Closing handles twice
-      -- is benign; terminating an already-exited process is a
-      -- no-op. Swallow cleanup exceptions so they cannot mask
-      -- the primary result.
-      _ <- try (terminateProcess ph) :: IO (Either SomeException ())
-      _ <- try (hClose hOut)         :: IO (Either SomeException ())
-      _ <- try (hClose hErr)         :: IO (Either SomeException ())
-      pure ()
-
-    body :: (Handle, Handle, ProcessHandle) -> IO (Bool, Value)
-    body (hOut, hErr, ph) = do
-      outV <- newEmptyMVar
-      errV <- newEmptyMVar
-      _ <- forkIO (hGetContents hOut >>= putMVar outV)
-      _ <- forkIO (hGetContents hErr >>= putMVar errV)
-      ec <- waitForProcess ph
-      o  <- T.take outputCap . T.pack <$> takeMVar outV
-      e  <- T.take outputCap . T.pack <$> takeMVar errV
-      let passed = ec == ExitSuccess
-          detail = object
-            [ "command"  .= ("cabal " <> T.unwords (map T.pack args))
-            , "exitCode" .= (case ec of
-                               ExitSuccess   -> 0
-                               ExitFailure n -> n)
-            , "stdout"   .= o
-            , "stderr"   .= e
-            ]
-      pure (passed, detail)
-
-    outputCap :: Int
-    outputCap = 256 * 1024
+-- | Issue #75: cap each captured stream at 256 KiB. The cabal
+-- output rarely exceeds this on green builds; on red ones the
+-- tail is the actionable bit and the leading repeat-cycles of
+-- the build chatter add no signal.
+outputCap :: Int
+outputCap = 256 * 1024
 
 --------------------------------------------------------------------------------
 -- response shaping

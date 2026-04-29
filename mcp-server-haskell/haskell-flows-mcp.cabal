@@ -252,6 +252,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowPropertyAudit
                       Scenarios.FlowWitness
                       Scenarios.FlowCheckModuleProperties
+                      Scenarios.FlowGateNoCrash
                       Scenarios.FlowDogfoodReplay
                       Scenarios.FlowTypeBreakage
                       Scenarios.FlowScopeMgmt
