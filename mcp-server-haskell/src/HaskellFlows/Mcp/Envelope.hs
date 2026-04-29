@@ -1,8 +1,9 @@
 -- | Unified response envelope for every haskell-flows-mcp tool.
 --
--- This module is the contract layer described in issue #90. It
--- replaces the per-tool ad-hoc @{success: bool, …}@ shape with a
--- single normative envelope:
+-- This module is the contract layer described in issue #90 (now
+-- closed end-to-end after Phase D step 2). It replaces the
+-- per-tool ad-hoc @{success: bool, …}@ shape with a single
+-- normative envelope:
 --
 -- > { status:   ok | partial | no_match | refused | failed | timeout | unavailable
 -- > , result:   <tool-specific payload, present iff status ∈ {ok, partial, no_match}>
