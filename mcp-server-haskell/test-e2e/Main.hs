@@ -91,6 +91,7 @@ import qualified Scenarios.FlowCheckModuleProperties as FlowCMP
 import qualified Scenarios.FlowGateNoCrash        as FlowGNC
 import qualified Scenarios.FlowMoveExportLists    as FlowMEL
 import qualified Scenarios.FlowHoleFitsBoundary   as FlowHFB
+import qualified Scenarios.FlowInfoClass          as FlowICls
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
@@ -237,6 +238,8 @@ scenarios =
     , True, FlowMEL.runFlow )
   , ( "Flow: Hole validFits operator-name boundary (#71)"
     , False, FlowHFB.runFlow )
+  , ( "Flow: Info class header + methods (#70)"
+    , False, FlowICls.runFlow )
   , ( "Flow: Dogfood replay (7 MCP fixes round-tripped through one session)"
     , True, FlowDFR.runFlow )
   , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"

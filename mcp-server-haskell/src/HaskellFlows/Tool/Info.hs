@@ -15,12 +15,16 @@ module HaskellFlows.Tool.Info
     -- * Issue #54 — constructor extraction helpers
   , successResult
   , renderConstructorsBlock
+    -- * Issue #70 — class method extraction helpers
+  , renderClassDefinition
+  , classMethodPairs
+  , renderClassMethodsBlock
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import Data.Char (isAsciiUpper)
+import Data.Char (isAsciiLower, isAsciiUpper)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -33,21 +37,27 @@ import GHC
   , getInfo
   , parseName
   )
+import GHC.Core.Class (Class, classMethods)
 import GHC.Core.DataCon
   ( DataCon
   , dataConName
   , dataConOrigArgTys
   )
 import GHC.Core.TyCon
-  ( isClassTyCon
+  ( TyCon
+  , isClassTyCon
   , isDataTyCon
   , isNewTyCon
   , isTypeSynonymTyCon
+  , tyConClass_maybe
   , tyConDataCons
+  , tyConTyVars
   )
 import GHC.Core.TyCo.Rep (scaledThing)
+import GHC.Types.Id (idType)
 import GHC.Types.Name (nameOccName)
 import GHC.Types.Name.Occurrence (occNameString)
+import GHC.Types.Var (varName)
 import GHC.Utils.Outputable (showPprUnsafe)
 
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
@@ -110,8 +120,8 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
           bestEffortResult safe
         Right Nothing ->
           bestEffortResult safe
-        Right (Just (pinfo, ctorPairs)) ->
-          successResult pinfo ctorPairs
+        Right (Just (pinfo, ctorPairs, methodPairs)) ->
+          successResult pinfo ctorPairs methodPairs
 
 -- | Resolve the name in scope, query 'getInfo' including instances,
 -- and build the pre-migration 'ParsedInfo' shape from its return.
@@ -124,7 +134,7 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
 -- Result is also pre-computed as a structured list returned via
 -- 'piConstructors' so JSON consumers don't have to scrape the
 -- text.
-queryInfo :: Text -> Ghc (Maybe (ParsedInfo, [(Text, [Text])]))
+queryInfo :: Text -> Ghc (Maybe (ParsedInfo, [(Text, [Text])], [(Text, Text)]))
 queryInfo nm = do
   -- parseName finds both value-level and type-level names (TyCons
   -- don't live in getNamesInScope, so the old scan missed 'data'
@@ -137,16 +147,23 @@ queryInfo nm = do
     Just (thing, _fixity, clsInsts, famInsts, _doc) ->
       let kind         = kindFromTyThing thing
           renderedThing = T.pack (showPprUnsafe thing)
-          (definition, ctorPairs) = case thing of
+          (definition, ctorPairs, methodPairs) = case thing of
+            -- Issue #54: algebraic types — enumerate constructors.
             ATyCon tc | not (isClassTyCon tc) ->
               let dcs       = tyConDataCons tc
                   ctorList  = map dataConPair dcs
                   dataLine
                     | null dcs  = renderedThing
                     | otherwise = renderDataLine kind nm dcs
-              in (dataLine, ctorList)
+              in (dataLine, ctorList, [])
+            -- Issue #70: classes — enumerate methods.
+            ATyCon tc | isClassTyCon tc, Just cls <- tyConClass_maybe tc ->
+              let methods   = classMethodPairs cls
+                  classLine = renderClassDefinition nm tc methods
+              in (classLine, [], methods)
+            -- Functions / type-synonyms / unknowns: legacy shape.
             _ ->
-              (renderDefinition kind nm renderedThing, [])
+              (renderDefinition kind nm renderedThing, [], [])
           parsed = ParsedInfo
             { piName       = nm
             , piKind       = kind
@@ -154,7 +171,7 @@ queryInfo nm = do
             , piInstances  = map (T.pack . showPprUnsafe) clsInsts
                           <> map (T.pack . showPprUnsafe) famInsts
             }
-      in Just (parsed, ctorPairs)
+      in Just (parsed, ctorPairs, methodPairs)
 
 -- | Issue #54: render the canonical \"@data X = A | B a@\" /
 -- \"@newtype X = X a@\" header from the constructor list. Mirrors
@@ -199,6 +216,68 @@ dataConTextName = T.pack . occNameString . nameOccName . dataConName
 renderConstructorsBlock :: [(Text, [Text])] -> [Value]
 renderConstructorsBlock ctors =
   [ object [ "name" .= n, "args" .= as ] | (n, as) <- ctors ]
+
+--------------------------------------------------------------------------------
+-- Issue #70 — class extraction
+--------------------------------------------------------------------------------
+
+-- | Issue #70: enumerate a class's method signatures. Each pair
+-- is @(method-name, method-type)@; the type is GHC's pretty-printed
+-- form (matching the textual shape ':info' would have used).
+--
+-- Operator method names are wrapped in parens so the rendered
+-- output matches how Haskell sources write them — e.g. the
+-- 'Eq' methods come back as @"(==)"@ / @"(/=)"@, not @"=="@ /
+-- @"/="@. 'occNameString' strips the parens, so the wrap is on
+-- us. Returned in declaration order — same as 'classMethods',
+-- so the JSON response stays stable across runs.
+classMethodPairs :: Class -> [(Text, Text)]
+classMethodPairs cls =
+  [ ( parenthesiseIfOperator (T.pack (occNameString (nameOccName (varName m))))
+    , T.pack (showPprUnsafe (idType m))
+    )
+  | m <- classMethods cls
+  ]
+
+-- | Wrap @(@/@)@ around an operator-shaped name. A name is
+-- "operator-shaped" when its first character is not a letter,
+-- digit or underscore — i.e. @==@, @/=@, @<>@, @<$@, etc.
+parenthesiseIfOperator :: Text -> Text
+parenthesiseIfOperator name = case T.uncons name of
+  Just (c, _)
+    | isAsciiUpper c || isAsciiLower c || c == '_' -> name
+    | otherwise                                    -> "(" <> name <> ")"
+  Nothing -> name
+
+-- | Issue #70: render the class's @class Foo a where@ header
+-- followed by the method signatures, matching the canonical
+-- ':info' first-block output.
+--
+-- Drops the trailing 'where' when the class has zero methods
+-- (rare — @class Show1 f@ in older GHCs, or marker classes).
+renderClassDefinition
+  :: Text                 -- ^ Class name, as the agent typed it.
+  -> TyCon                -- ^ For type-variable parameters.
+  -> [(Text, Text)]       -- ^ Methods from 'classMethodPairs'.
+  -> Text
+renderClassDefinition nm tc methods =
+  let tvNames = T.unwords [ T.pack (occNameString (nameOccName (varName v)))
+                          | v <- tyConTyVars tc ]
+      header  = "class " <> nm <> (if T.null tvNames then "" else " " <> tvNames)
+      body
+        | null methods = ""
+        | otherwise    =
+            " where\n"
+              <> T.intercalate "\n"
+                   [ "  " <> n <> " :: " <> t | (n, t) <- methods ]
+  in header <> body
+
+-- | Issue #70: structured @class_methods@ array shape, mirroring
+-- 'renderConstructorsBlock'. Each (name, type) pair becomes
+-- @{"name": ..., "type": ...}@.
+renderClassMethodsBlock :: [(Text, Text)] -> [Value]
+renderClassMethodsBlock methods =
+  [ object [ "name" .= n, "type" .= t ] | (n, t) <- methods ]
 
 -- | Rebuild the declaration header (@data Tree@ / @class Functor@ /
 -- …) that @:info@ would have emitted as the first line. Uses the
@@ -275,9 +354,14 @@ bestEffortResult nm =
        , trIsError = False
        }
 
-successResult :: ParsedInfo -> [(Text, [Text])] -> ToolResult
-successResult parsed ctors =
-  let renderedCtors = renderConstructorsBlock ctors
+successResult
+  :: ParsedInfo
+  -> [(Text, [Text])]   -- ^ #54 — data/newtype constructors.
+  -> [(Text, Text)]     -- ^ #70 — class methods (name + type).
+  -> ToolResult
+successResult parsed ctors methods =
+  let renderedCtors   = renderConstructorsBlock ctors
+      renderedMethods = renderClassMethodsBlock methods
       basePayload =
         [ "success"    .= True
         , "name"       .= piName parsed
@@ -286,12 +370,16 @@ successResult parsed ctors =
         , "instances"  .= piInstances parsed
         ]
       -- Issue #54: only emit 'constructors' for algebraic types.
-      -- Classes / type-synonyms / functions / unknowns get the
-      -- legacy shape — preserving wire-format compatibility for
-      -- consumers that didn't ask for the field.
+      -- Issue #70: only emit 'class_methods' for classes.
+      -- Both fields are absent for shapes that don't have them
+      -- (functions, type synonyms, unknowns) — preserving the
+      -- legacy wire format for consumers that didn't ask.
+      withCtors
+        | null ctors = basePayload
+        | otherwise  = basePayload <> [ "constructors"  .= renderedCtors  ]
       payload
-        | null ctors = object basePayload
-        | otherwise  = object (basePayload <> [ "constructors" .= renderedCtors ])
+        | null methods = object withCtors
+        | otherwise    = object (withCtors <> [ "class_methods" .= renderedMethods ])
   in ToolResult
        { trContent = [ TextContent (encodeUtf8Text payload) ]
        , trIsError = False

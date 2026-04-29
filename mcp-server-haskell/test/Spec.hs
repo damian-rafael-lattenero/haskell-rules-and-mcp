@@ -444,6 +444,11 @@ main = do
       , test "info: renderConstructorsBlock Maybe (#54)"  testInfoCtorBlockMaybe
       , test "info: successResult includes constructors (#54)" testInfoSuccessIncludesCtors
       , test "info: successResult drops field when none (#54)" testInfoSuccessDropsCtorField
+      , test "info: renderClassMethodsBlock shape (#70)"        testInfoClassMethodsBlock
+      , test "info: successResult emits class_methods on a class (#70)"
+                                                                 testInfoSuccessClassMethods
+      , test "info: successResult drops class_methods on a data type (#70)"
+                                                                 testInfoSuccessDropsClassMethods
       , test "check: propertiesGate empty -> ok=true (#42)"   testCheckGateEmpty
       , test "check: propertiesGate all pass -> ok=true (#42)" testCheckGatePass
       , test "check: propertiesGate regressed -> ok=false (#42)" testCheckGateRegressed
@@ -3717,7 +3722,7 @@ testInfoSuccessIncludesCtors =
         , piInstances  = []
         }
       ctors  = [("Nothing", []), ("Just", ["a"])]
-      result = InfoTool.successResult parsed ctors
+      result = InfoTool.successResult parsed ctors []
   in pure $ case trContent result of
        [TextContent t] ->
          case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
@@ -3739,13 +3744,72 @@ testInfoSuccessDropsCtorField =
         , piDefinition = "class Functor f"
         , piInstances  = []
         }
-      result = InfoTool.successResult parsed []
+      result = InfoTool.successResult parsed [] []
   in pure $ case trContent result of
        [TextContent t] ->
          case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
            Just (A.Object o) ->
              isNothing (AKM.lookup (AKey.fromText "constructors") o)
            _                  -> False
+       _ -> False
+
+-- | Issue #70: 'renderClassMethodsBlock' produces one
+-- @{name, type}@ object per method, in declaration order.
+testInfoClassMethodsBlock :: IO Bool
+testInfoClassMethodsBlock =
+  let methods = [ ("fmap", "(a -> b) -> f a -> f b")
+                , ("(<$)", "a -> f b -> f a")
+                ]
+      block = InfoTool.renderClassMethodsBlock methods
+  in pure $ length block == 2
+         && case block of
+              [A.Object o1, A.Object o2] ->
+                AKM.lookup (AKey.fromText "name") o1 == Just (A.String "fmap")
+                && AKM.lookup (AKey.fromText "name") o2 == Just (A.String "(<$)")
+              _ -> False
+
+-- | Issue #70: when methods are present, the response carries
+-- a top-level @class_methods@ array — the symmetric companion
+-- to @constructors@ for data types.
+testInfoSuccessClassMethods :: IO Bool
+testInfoSuccessClassMethods =
+  let parsed = ParsedInfo
+        { piName       = "Functor"
+        , piKind       = IkClass
+        , piDefinition = "class Functor f where\n  fmap :: (a -> b) -> f a -> f b"
+        , piInstances  = []
+        }
+      methods = [ ("fmap", "(a -> b) -> f a -> f b") ]
+      result = InfoTool.successResult parsed [] methods
+  in pure $ case trContent result of
+       [TextContent t] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
+           Just (A.Object o) ->
+             case AKM.lookup (AKey.fromText "class_methods") o of
+               Just (A.Array xs) -> length xs == 1
+               _                 -> False
+           _ -> False
+       _ -> False
+
+-- | Issue #70: a data type's response must NOT carry an empty
+-- @class_methods@ array — the field should be absent. Wire-format
+-- compatibility with consumers that didn't ask.
+testInfoSuccessDropsClassMethods :: IO Bool
+testInfoSuccessDropsClassMethods =
+  let parsed = ParsedInfo
+        { piName       = "Maybe"
+        , piKind       = IkData
+        , piDefinition = "data Maybe a = Nothing | Just a"
+        , piInstances  = []
+        }
+      ctors = [("Nothing", []), ("Just", ["a"])]
+      result = InfoTool.successResult parsed ctors []
+  in pure $ case trContent result of
+       [TextContent t] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
+           Just (A.Object o) ->
+             isNothing (AKM.lookup (AKey.fromText "class_methods") o)
+           _ -> False
        _ -> False
 
 -- | Issue #42: empty store → status="empty", ok=true.
