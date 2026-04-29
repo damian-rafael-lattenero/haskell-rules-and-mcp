@@ -26,26 +26,28 @@ on:
       - ".github/workflows/haskell-ci.yml"
   workflow_dispatch: {}
 
-# Concurrency policy: PR runs are cancelled when a new push lands on
-# the same PR head, master runs are NOT cancelled so every commit on
-# the protected branch gets its own green/red signal.
+# Concurrency policy: PR runs are cancelled when a new push lands
+# on the same PR head, master runs are NEVER cancelled so every
+# commit on the protected branch gets its own green/red signal.
 #
-# Why distinct groups instead of one group with a conditional
-# cancel-in-progress: GitHub Actions evaluates the
-# ${{ github.event_name == 'pull_request' }} expression but ALSO
-# treats the resulting string "false" as truthy when feeding it back
-# into the concurrency machinery — the empirical effect was that a
-# new master push DID cancel the in-flight master run from the
-# previous commit (~50% of the last 50 master runs ended in
-# 'cancelled' for this reason).
+# Why this exact shape — past attempts at
+# `cancel-in-progress: ${{ <conditional> }}` got cancelled
+# anyway (~50% of master runs over the last 50). GitHub Actions
+# stringifies the expression result, and "false" as a string is
+# truthy in some evaluation paths, so the conditional silently
+# became `cancel-in-progress: true` for master.
 #
-# Two distinct groups split the lock so the cancel policy is
-# unambiguous: the master group never has cancel-in-progress, the
-# PR group always does. Same observable behaviour the conditional
-# was trying to express, without the implicit-conversion footgun.
+# The bulletproof pattern: make each master commit's group key
+# unique (per-SHA), so it never SHARES a lock with another
+# in-flight run. With nothing to cancel, the cancel-in-progress
+# value doesn't matter — no expression-stringification footgun.
+#
+# PR runs still share a per-ref group so a new push on the same
+# PR head DOES cancel the previous build (the desired behaviour
+# for iterative PR feedback).
 concurrency:
-  group: haskell-ci-${{ github.ref_name == 'master' && 'master' || format('pr-{0}', github.ref) }}
-  cancel-in-progress: ${{ github.ref_name != 'master' }}
+  group: haskell-ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: true
 
 # Least-privilege by default. Individual jobs ask for extras explicitly.
 permissions:
