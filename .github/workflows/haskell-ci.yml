@@ -146,7 +146,28 @@ jobs:
           brew install hlint
           hlint --version
 
+      # Tier-1 e2e parallelization (Tier 1 of the perf plan).
+      #
+      # The e2e suite has a built-in QSem-bounded pool gated by
+      # 'HASKELL_FLOWS_E2E_PARALLEL'. Setting it to 4 maps to the
+      # 4 vCPUs of GitHub's ubuntu-latest free-tier runner and
+      # gives a ~3 min cut on the e2e wall-time:
+      #
+      #   sequential e2e  : 467 s
+      #   parallel-4 e2e  : ~250 s  (slow scenarios still serial,
+      #                              fast ones fan out 4-wide)
+      #
+      # Slow scenarios (cabal-build / coverage / disk-full /
+      # concurrent-clients / inner-timeout) stay sequential
+      # internally — they share ~/.cabal/store and would contend.
+      # The pool implementation handles that split automatically.
+      #
+      # Local dev still controls parallelism per-run via the
+      # same env var. Unit tests don't honour the var (they're
+      # already fast: 514 tests in ~17 s).
       - name: Run tests
+        env:
+          HASKELL_FLOWS_E2E_PARALLEL: "4"
         run: cabal test all --test-show-details=direct --test-options="--color"
 
       # Haddock with `--haddock-all` spots broken @<https://...>@ links,
