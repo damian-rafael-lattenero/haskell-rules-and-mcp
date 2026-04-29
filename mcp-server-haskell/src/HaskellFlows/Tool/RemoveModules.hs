@@ -26,6 +26,7 @@ module HaskellFlows.Tool.RemoveModules
 
 import Control.Exception (SomeException, try)
 import Control.Monad (filterM)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -345,9 +346,9 @@ parseImportLine raw =
              modTok = T.takeWhile isModChar afterQ
          in if T.null modTok then Nothing else Just modTok
   where
-    isModChar c = (c >= 'A' && c <= 'Z')
-               || (c >= 'a' && c <= 'z')
-               || (c >= '0' && c <= '9')
+    isModChar c = isAsciiUpper c
+               || isAsciiLower c
+               || isDigit c
                || c == '.' || c == '_' || c == '\''
 
 -- | Recursively enumerate @.hs@ files under the given directories.
@@ -422,11 +423,11 @@ findCabalFile pd = do
 
 successResult :: [Text] -> [FilePath] -> [Importer] -> ToolResult
 successResult removedFromCabal deletedFiles importers =
-  let warnings = if null importers
-        then []
-        else [ "warnings" .= object
-                 [ "downstream_imports" .= map renderImporter importers ]
-             ]
+  let warnings =
+        [ "warnings" .= object
+            [ "downstream_imports" .= map renderImporter importers ]
+        | not (null importers)
+        ]
       payload = object $
         [ "success"            .= True
         , "cabal_removed"      .= removedFromCabal
@@ -438,14 +439,15 @@ successResult removedFromCabal deletedFiles importers =
        , trIsError = False
        }
   where
+    mkHint :: [Importer] -> Text
     mkHint [] =
-      ( "Modules were de-registered from exposed-modules. The next \
-        \ghc_load picks up the new surface." :: Text )
+      "Modules were de-registered from exposed-modules. The next \
+      \ghc_load picks up the new surface."
     mkHint _ =
-      ( "Forced removal completed but downstream files still import \
-        \the removed module(s). See warnings.downstream_imports for \
-        \(file, line, module) tuples — fix each before the next \
-        \ghc_load." :: Text )
+      "Forced removal completed but downstream files still import \
+      \the removed module(s). See warnings.downstream_imports for \
+      \(file, line, module) tuples — fix each before the next \
+      \ghc_load."
 
 -- | Issue #41: pre-removal refusal. Importers exist and the
 -- caller didn't pass force=true. The .cabal stays untouched and
