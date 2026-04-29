@@ -1,0 +1,27 @@
+mcp-server-haskell/src/HaskellFlows/Tool/AddImport.hs
+  033795528ddcaec0 21,66-70,72-75,86-87,99,104-108,110-125,128-133
+mcp-server-haskell/src/HaskellFlows/Tool/Hoogle.hs
+  033795528ddcaec0 47,113-117,119-121,126-131,136-148,150-151,153-156,255-259,261-276,278-283,285-289
+mcp-server-haskell/test/Spec.hs
+  033795528ddcaec0 30,210,239,241,497-504,3542-3626,5645-5648,5654-5664
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "2074aeb6b36adf636b03e0f47d13db9cd0d84d3a",
+  "prompts": {
+    "033795528ddcaec0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c2325b8-3973-461e-9af9-e12d8c594bf0",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 660,
+      "total_deletions": 9677,
+      "accepted_lines": 12319,
+      "overriden_lines": 0
+    }
+  }
+}
