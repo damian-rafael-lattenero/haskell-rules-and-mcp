@@ -323,6 +323,16 @@ main = do
                                                    testCoverageAllMetricsApplicable
       , test "summarise handles all-non-applicable (#89)"
                                                    testCoverageAllNotApplicable
+      , test "eval ctx · empty adds all 5 extras (#86)"
+                                                   testEvalContextEmptyAddsAll
+      , test "eval ctx · existing Prelude suppresses dup (#86)"
+                                                   testEvalContextSkipsExistingPrelude
+      , test "eval ctx · second call is no-op (#86)"
+                                                   testEvalContextSecondCallNoop
+      , test "eval ctx · subset existing only fills gaps (#86)"
+                                                   testEvalContextSubsetExisting
+      , test "eval ctx · idempotent on its own output (#86)"
+                                                   testEvalContextIdempotent
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
       , test "validatePackageName accepts normal"  testPkgAccepts
@@ -1511,6 +1521,68 @@ testCoverageAllNotApplicable =
   in pure $
        T.isInfixOf "No applicable HPC metrics" summary
          && T.isInfixOf "3 metrics seen" summary
+
+--------------------------------------------------------------------------------
+-- Issue #86: augmentEvalContext dedup
+--
+-- The pure helper 'selectMissingExtras' is the load-bearing dedup
+-- step. Direct GHC-session integration (calling 'augmentEvalContext'
+-- twice and inspecting 'getContext') would require spinning up a
+-- real GHC session inside the test runner, which is what the e2e
+-- 'eval_context_dedup' scenario covers; here we just nail down the
+-- pure arithmetic so a regression in the set logic surfaces in
+-- ~1 ms instead of waiting on a 200 s e2e cycle.
+--------------------------------------------------------------------------------
+
+-- | Anchor: with no existing imports, every baseline extra is
+-- missing and must be appended.
+testEvalContextEmptyAddsAll :: IO Bool
+testEvalContextEmptyAddsAll =
+  let missing = EvalTool.selectMissingExtras Set.empty EvalTool.evalContextExtras
+  in pure (missing == EvalTool.evalContextExtras
+              && length missing == 5)
+
+-- | Issue #86 — the bug shape: 'Prelude' already in the existing
+-- context (because 'autoLoadProject' put it there) MUST suppress
+-- the baseline 'Prelude' from being re-added. Pre-fix the result
+-- contained 'Prelude' twice on the second eval call.
+testEvalContextSkipsExistingPrelude :: IO Bool
+testEvalContextSkipsExistingPrelude =
+  let existing = Set.fromList ["Prelude"]
+      missing  = EvalTool.selectMissingExtras existing EvalTool.evalContextExtras
+  in pure (missing == ["System.IO", "Data.List", "Control.Monad", "Control.Concurrent"]
+              && notElem "Prelude" missing)
+
+-- | After the FIRST 'augmentEvalContext' call has run, every
+-- baseline module is in the existing set. The SECOND call must
+-- therefore append nothing — this is exactly the scenario that
+-- produced the unbounded growth pre-fix.
+testEvalContextSecondCallNoop :: IO Bool
+testEvalContextSecondCallNoop =
+  let existing = Set.fromList EvalTool.evalContextExtras
+      missing  = EvalTool.selectMissingExtras existing EvalTool.evalContextExtras
+  in pure (null missing)
+
+-- | The dedup is purely on module name string. An existing context
+-- with a SUBSET of the baseline (e.g. only 'Prelude' and
+-- 'Data.List' from a project that imports them) leaves only the
+-- complement to append.
+testEvalContextSubsetExisting :: IO Bool
+testEvalContextSubsetExisting =
+  let existing = Set.fromList ["Prelude", "Data.List", "Foo.Bar"]
+      missing  = EvalTool.selectMissingExtras existing EvalTool.evalContextExtras
+  in pure (missing == ["System.IO", "Control.Monad", "Control.Concurrent"])
+
+-- | Idempotence law: running the dedup against the result of a
+-- previous run is a no-op. This is the clean property-style
+-- statement of the bug — pre-fix, the operation was *not*
+-- idempotent under the same input set.
+testEvalContextIdempotent :: IO Bool
+testEvalContextIdempotent =
+  let step1     = EvalTool.selectMissingExtras Set.empty EvalTool.evalContextExtras
+      afterStep = Set.fromList step1
+      step2     = EvalTool.selectMissingExtras afterStep EvalTool.evalContextExtras
+  in pure (null step2 && step1 == EvalTool.evalContextExtras)
 
 -- | Round-trip a property through the on-disk store. Uses a unique
 -- temp project dir to keep repeated test runs independent.

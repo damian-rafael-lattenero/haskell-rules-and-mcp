@@ -264,6 +264,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowBrowseInteractive
                       Scenarios.FlowSuggestSelfInverseDampening
                       Scenarios.FlowDogfoodReplay
+                      Scenarios.FlowEvalContextDedup
                       Scenarios.FlowTypeAfterLoadDeps
                       Scenarios.FlowTypeBreakage
                       Scenarios.FlowScopeMgmt

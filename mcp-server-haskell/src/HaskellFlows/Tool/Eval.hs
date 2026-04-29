@@ -13,6 +13,9 @@ module HaskellFlows.Tool.Eval
   ( descriptor
   , handle
   , EvalArgs (..)
+    -- * Internals — exposed for unit tests (Spec.hs)
+  , evalContextExtras
+  , selectMissingExtras
   ) where
 
 import Control.Exception
@@ -24,15 +27,19 @@ import Control.Exception
   )
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC
   ( Ghc
   , InteractiveImport (IIDecl)
   , getContext
+  , ideclName
   , mkModuleName
+  , moduleNameString
   , setContext
   , simpleImportDecl
+  , unLoc
   )
 import GHC.Runtime.Eval (compileExpr)
 import System.Timeout (timeout)
@@ -259,18 +266,55 @@ evalShowPure expr = do
 -- With auto-import in place, this list is expected to *shrink* over
 -- time: every scenario that motivates an addition here is a sign the
 -- auto-import path missed a case, not a sign the list should grow.
+-- | Issue #86: dedupe by module name before appending. Without this
+-- guard, every 'ghc_eval' call grew the @InteractiveContext@'s
+-- import list by 5 entries — the second call left two @import
+-- Prelude@s, the third left three, and so on. Cosmetic on
+-- 'ghc_imports' (duplicate rows in the response), but the real
+-- harm is the unbounded growth of the scope chain that every
+-- @exprType@ / @compileExpr@ walks: a long-running session paid
+-- @O(n)@ per eval where @n@ tracks total prior eval calls.
+--
+-- Strategy: project the existing 'InteractiveImport' set down to
+-- the set of module-name 'String's it already covers, then add
+-- only the extras that are missing. Deduplication on module-name
+-- (rather than on full 'ImportDecl' equality) is the right
+-- granularity: a project source already importing @Prelude@ via
+-- 'autoLoadProject' should suppress the @Prelude@ baseline here
+-- whether or not the two declarations are field-by-field equal.
+-- | The fixed baseline of stdlib modules we inject into the
+-- interactive context for projects that haven't auto-imported them
+-- via 'autoLoadProject'. Exposed so unit tests can pin the exact
+-- set without hard-coding it twice.
+evalContextExtras :: [String]
+evalContextExtras =
+  [ "Prelude"
+  , "System.IO"
+  , "Data.List"
+  , "Control.Monad"
+  , "Control.Concurrent"
+  ]
+
+-- | Issue #86: pure helper for the dedup arithmetic. Given the
+-- module names already present in the interactive context and the
+-- baseline 'evalContextExtras', returns the subset that's missing
+-- and must therefore be appended.
+--
+-- Testable in isolation (no @Ghc@ monad, no GHC session needed).
+selectMissingExtras
+  :: Set.Set String   -- ^ existing context module names
+  -> [String]         -- ^ candidate extras (typically 'evalContextExtras')
+  -> [String]
+selectMissingExtras existing = filter (`Set.notMember` existing)
+
 augmentEvalContext :: Ghc ()
 augmentEvalContext = do
   existing <- getContext
-  let extras =
-        [ "Prelude"
-        , "System.IO"
-        , "Data.List"
-        , "Control.Monad"
-        , "Control.Concurrent"
-        ]
-      newImports =
-        [ IIDecl (simpleImportDecl (mkModuleName m)) | m <- extras ]
+  let existingNames = Set.fromList
+        [ moduleNameString (unLoc (ideclName d)) | IIDecl d <- existing ]
+      missing       = selectMissingExtras existingNames evalContextExtras
+      newImports    =
+        [ IIDecl (simpleImportDecl (mkModuleName m)) | m <- missing ]
   setContext (existing <> newImports)
 
 --------------------------------------------------------------------------------
