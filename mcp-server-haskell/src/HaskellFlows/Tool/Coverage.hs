@@ -9,6 +9,9 @@ module HaskellFlows.Tool.Coverage
   ( descriptor
   , handle
   , CoverageArgs (..)
+    -- * Pure helpers (re-exported for unit tests; see Spec.hs)
+  , summarise
+  , renderMetric
   ) where
 
 import Control.Concurrent (forkIO)
@@ -268,6 +271,11 @@ renderResult (CovFailure code err) =
                  { Env.eeCause = Just (T.pack (show code)) }
   in Env.toolResponseToResult (Env.mkFailed envErr)
 
+-- | Issue #89: 'percent' is null when the metric has no applicable
+-- program points (@total == 0@). 'status' is the categorical
+-- discriminator @\"covered\" | \"uncovered\" | \"not_applicable\"@
+-- — agents should branch on it instead of treating @percent: 100,
+-- total: 0@ as a positive contribution.
 renderMetric :: Metric -> Value
 renderMetric m =
   object
@@ -275,15 +283,31 @@ renderMetric m =
     , "percent" .= mPercent m
     , "covered" .= mCovered m
     , "total"   .= mTotal m
+    , "status"  .= mStatus m
     ]
 
+-- | Issue #89: average across only the *applicable* metrics
+-- (@total > 0@). The @0/0@ rows that HPC reports as @100%@ aren't
+-- evidence of coverage — folding them into the average mis-anchors
+-- the headline number for any project that doesn't exercise every
+-- branch flavour.
+--
+-- The summary string names the count of applicable metrics so an
+-- agent can tell at a glance how many categories actually applied
+-- (vs. the old fixed-8 wording that made the absent ones invisible).
 summarise :: [Metric] -> Text
 summarise [] = "No coverage metrics parsed from the cabal output."
 summarise ms =
-  let avg = sum (map mPercent ms) `div` length ms
-  in "Average coverage across "
-     <> T.pack (show (length ms)) <> " metrics: "
-     <> T.pack (show avg) <> "%."
+  let applicable = [p | Metric { mPercent = Just p } <- ms]
+      n          = length applicable
+  in case n of
+       0 -> "No applicable HPC metrics for this project ("
+              <> T.pack (show (length ms))
+              <> " metrics seen, all with total=0)."
+       _ -> let avg = sum applicable `div` n
+            in "Average coverage across " <> T.pack (show n)
+                 <> " applicable metrics: "
+                 <> T.pack (show avg) <> "%."
 
 -- | Issue #90 Phase C: cabal binary not on PATH → status='unavailable'
 -- kind='binary_unavailable'.

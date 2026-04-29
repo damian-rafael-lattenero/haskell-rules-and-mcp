@@ -130,6 +130,44 @@ runFlow c projectDir = do
            \shape that would have silently slipped past the old \
            \structural oracle. metrics.length=" <>
            T.pack (show (V.length metricsArr)))
+  -- Issue #89: guards / qualifiers / boolean coverage have zero
+  -- applicable program points in this minimal `double x = x * 2`
+  -- module — the parser must surface them as `status:
+  -- "not_applicable"` with `percent: null`, not the old buggy
+  -- `percent: 100`. Skip the assertion when HPC didn't come
+  -- together at all (metricsArr empty + happySuccess=false is the
+  -- documented graceful-failure path).
+  let nonApplicableMetrics =
+        [ m
+        | Object m <- V.toList metricsArr
+        , Just (String lbl) <- [KeyMap.lookup (Key.fromText "label") m]
+        , any (`T.isInfixOf` lbl) ["guards", "qualifiers"]
+        ]
+      allFlaggedNotApplicable = all isNotApplicable nonApplicableMetrics
+      isNotApplicable m =
+        KeyMap.lookup (Key.fromText "status") m == Just (String "not_applicable")
+          && KeyMap.lookup (Key.fromText "percent") m == Just Null
+  c3a <- liveCheck $ checkPure
+          "happy · 0/0 metrics report status=not_applicable, percent=null (#89)"
+          (V.null metricsArr || allFlaggedNotApplicable)
+          ("guards/qualifiers rows reported status=" <>
+           T.pack (show (map (KeyMap.lookup (Key.fromText "status"))
+                              nonApplicableMetrics)) <>
+           " — they should be 'not_applicable' for a project with \
+           \no pattern guards or list-comprehension qualifiers")
+  -- Summary string should drop the buggy fixed-8 wording in favour
+  -- of the per-applicable count. Skip when no metrics parsed.
+  let summaryStr = case lookupField "summary" r of
+                     Just (String s) -> s
+                     _               -> ""
+  c3b <- liveCheck $ checkPure
+          "happy · summary names 'applicable metrics' count (#89)"
+          ( V.null metricsArr
+              || T.isInfixOf "applicable metrics" summaryStr
+              || T.isInfixOf "No applicable HPC metrics" summaryStr
+          )
+          ("summary should drop the fixed 'across 8 metrics' wording. \
+           \Got: " <> summaryStr)
   stepFooter 2 t1
 
   ----------------------------------------------------------------
@@ -194,7 +232,7 @@ runFlow c projectDir = do
            \is papering over a real failure. Raw: " <> renderShort r3)
   stepFooter 4 t3
 
-  pure [c1, c2, c3, c4, c5, c6, c7]
+  pure [c1, c2, c3, c3a, c3b, c4, c5, c6, c7]
 
 --------------------------------------------------------------------------------
 -- helpers

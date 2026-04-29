@@ -106,6 +106,7 @@ import HaskellFlows.Mcp.RpcMethod
   , rpcMethodText
   )
 import HaskellFlows.Tool.Batch (BatchArgs (..))
+import qualified HaskellFlows.Tool.Coverage as CoverageTool
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import qualified HaskellFlows.Tool.CreateProject as CreateProject
@@ -314,6 +315,14 @@ main = do
       , test "parseHoogleLine no-results line"    testHoogleEmpty
       , test "parseCoverage full report"           testCoverageFull
       , test "parseCoverage ignores banner"        testCoverageBanner
+      , test "parseCoverage flags 0/0 not_applicable (#89)"
+                                                   testCoverageMetricNotApplicable
+      , test "summarise skips not_applicable (#89)"
+                                                   testCoverageAverageSkipsNotApplicable
+      , test "summarise covers all-applicable case (#89)"
+                                                   testCoverageAllMetricsApplicable
+      , test "summarise handles all-non-applicable (#89)"
+                                                   testCoverageAllNotApplicable
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
       , test "validatePackageName accepts normal"  testPkgAccepts
@@ -1401,10 +1410,13 @@ testCoverageFull =
         ]
   in pure $ case crMetrics (parseCoverage raw) of
        [a, b, c, d] ->
-            mPercent a == 100 && mTotal a == 12
-         && mPercent b == 66  && mCovered b == 2 && mTotal b == 3
-         && mPercent c == 75
-         && mPercent d == 100 && mLabel d == "top-level declarations used"
+            mPercent a == Just 100 && mTotal a == 12
+         && mStatus  a == "covered"
+         && mPercent b == Just 66  && mCovered b == 2 && mTotal b == 3
+         && mStatus  b == "uncovered"
+         && mPercent c == Just 75 && mStatus c == "uncovered"
+         && mPercent d == Just 100 && mLabel d == "top-level declarations used"
+         && mStatus  d == "covered"
        _ -> False
 
 testCoverageBanner :: IO Bool
@@ -1415,6 +1427,90 @@ testCoverageBanner =
         , ""
         ]
   in pure (length (crMetrics (parseCoverage raw)) == 1)
+
+-- | Issue #89: HPC reports @100%@ for categories with zero applicable
+-- program points. The parser must collapse those rows to
+-- @mPercent = Nothing, mStatus = "not_applicable"@ regardless of the
+-- leading-column percent value HPC emitted.
+testCoverageMetricNotApplicable :: IO Bool
+testCoverageMetricNotApplicable =
+  let raw = T.unlines
+        [ "100% expressions used (19/19)"
+        , "100% guards (0/0)"
+        , "100% qualifiers (0/0)"
+        , " 50% alternatives used (2/4)"
+        ]
+  in pure $ case crMetrics (parseCoverage raw) of
+       [expr, guards_, quals, alts] ->
+            -- Real-coverage rows untouched.
+            mPercent expr   == Just 100 && mStatus expr   == "covered"
+         && mPercent alts   == Just 50  && mStatus alts   == "uncovered"
+            -- 0/0 rows normalised: percent dropped, status flagged.
+         && isNothing (mPercent guards_) && mStatus guards_ == "not_applicable"
+         && mTotal   guards_ == 0        && mCovered guards_ == 0
+         && isNothing (mPercent quals)   && mStatus quals  == "not_applicable"
+         && mTotal   quals  == 0         && mCovered quals  == 0
+       _ -> False
+
+-- | Issue #89: 'summarise' must skip 'not_applicable' rows when
+-- computing the headline average. Anchor: mixed input where 2 of
+-- 8 metrics have @total = 0@; the average must be @(89+0+0+50+
+-- 100+100) / 6 = 56%@, not @67%@ (the buggy 8-metric average that
+-- counted the @100%@ from each @0/0@ row).
+testCoverageAverageSkipsNotApplicable :: IO Bool
+testCoverageAverageSkipsNotApplicable =
+  let raw = T.unlines
+        [ " 89% expressions used (17/19)"
+        , "  0% boolean coverage (0/2)"
+        , "100% guards (0/0)"
+        , "  0% 'if' conditions (0/2)"
+        , "100% qualifiers (0/0)"
+        , " 50% alternatives used (2/4)"
+        , "100% local declarations used (1/1)"
+        , "100% top-level declarations used (2/2)"
+        ]
+      summary = CoverageTool.summarise (crMetrics (parseCoverage raw))
+  in pure $
+       T.isInfixOf "6 applicable metrics" summary
+         && T.isInfixOf "56%" summary
+         -- Make sure the buggy answer never reappears.
+         && not (T.isInfixOf "67%" summary)
+         && not (T.isInfixOf "8 metrics" summary)
+
+-- | Issue #89 anchor: when EVERY metric is applicable (all rows
+-- have @total > 0@), the summary should still mention all of them.
+-- Catches a regression where the new logic over-corrects and counts
+-- only a subset.
+testCoverageAllMetricsApplicable :: IO Bool
+testCoverageAllMetricsApplicable =
+  let raw = T.unlines
+        [ "100% expressions used (12/12)"
+        , " 50% boolean coverage (1/2)"
+        , " 33% guards (1/3)"
+        , "100% 'if' conditions (1/1)"
+        , " 50% qualifiers (1/2)"
+        , " 66% alternatives used (2/3)"
+        , " 75% local declarations used (3/4)"
+        , "100% top-level declarations used (5/5)"
+        ]
+      summary = CoverageTool.summarise (crMetrics (parseCoverage raw))
+  in pure $
+       T.isInfixOf "8 applicable metrics" summary
+         && T.isInfixOf "%" summary
+
+-- | Issue #89 edge case: every metric is non-applicable. Don't
+-- divide-by-zero; emit a coherent summary that names the count.
+testCoverageAllNotApplicable :: IO Bool
+testCoverageAllNotApplicable =
+  let raw = T.unlines
+        [ "100% guards (0/0)"
+        , "100% qualifiers (0/0)"
+        , "100% boolean coverage (0/0)"
+        ]
+      summary = CoverageTool.summarise (crMetrics (parseCoverage raw))
+  in pure $
+       T.isInfixOf "No applicable HPC metrics" summary
+         && T.isInfixOf "3 metrics seen" summary
 
 -- | Round-trip a property through the on-disk store. Uses a unique
 -- temp project dir to keep repeated test runs independent.

@@ -12,8 +12,19 @@
 -- >  75% local declarations used (3/4)
 -- > 100% top-level declarations used (5/5)
 --
--- We parse it into 'CoverageReport' with one 'Metric' per line. The
--- result is ReDoS-safe — no regex, just a small line-based state
+-- Note that @hpc@ reports @100%@ for categories with zero applicable
+-- program points (e.g. a project with no guards reports
+-- @100% guards (0/0)@). Issue #89 — that quirk is mathematically
+-- meaningless and inflates any naive average across categories. We
+-- normalise it at the parse boundary: @total == 0@ rows surface with
+-- @mPercent = Nothing@ and @mStatus = \"not_applicable\"@, mirroring
+-- the @status: empty@ discriminator pattern that @ghc_check_project@
+-- already uses for its zero-property gate. Consumers that want a
+-- pure HPC dump still have @mCovered@ and @mTotal@; the
+-- @\"not_applicable\"@ tag tells them to skip the row when computing
+-- summary numbers like averages.
+--
+-- The result is ReDoS-safe — no regex, just a small line-based state
 -- machine.
 module HaskellFlows.Parser.Coverage
   ( CoverageReport (..)
@@ -33,14 +44,27 @@ newtype CoverageReport = CoverageReport
   }
   deriving stock (Eq, Show)
 
--- | One coverage dimension. 'mPercent' is the integer percentage from
--- the leading column; 'mCovered' / 'mTotal' come from the @(a/b)@
--- suffix on the same line.
+-- | One coverage dimension.
+--
+-- 'mCovered' / 'mTotal' come from the @(a/b)@ suffix on the same
+-- line. 'mPercent' is 'Nothing' when @mTotal == 0@ (\"no applicable
+-- program points\") and @'Just' p@ otherwise — never trust HPC's
+-- leading-column percentage on a @0/0@ row, it always lies as
+-- @100%@. 'mStatus' is the categorical discriminator:
+--
+--   * @\"covered\"@        when @covered == total > 0@
+--   * @\"uncovered\"@      when @covered <  total > 0@
+--   * @\"not_applicable\"@ when @total == 0@
+--
+-- See Issue #89 for the bug this shape fixes (the old @!Int@ percent
+-- claimed @100%@ for @0/0@ rows and dragged the across-metrics
+-- average upward).
 data Metric = Metric
   { mLabel   :: !Text
-  , mPercent :: !Int
+  , mPercent :: !(Maybe Int)
   , mCovered :: !Int
   , mTotal   :: !Int
+  , mStatus  :: !Text
   }
   deriving stock (Eq, Show)
 
@@ -58,12 +82,27 @@ parseLine ln = do
   let stripped = T.strip ln
   (pct, rest1) <- takePercent stripped
   (covered, total, label) <- takeFractionAndLabel rest1
-  pure Metric
-    { mLabel   = T.strip label
-    , mPercent = pct
-    , mCovered = covered
-    , mTotal   = total
-    }
+  pure (mkMetric (T.strip label) pct covered total)
+
+-- | Smart constructor — collapses the @total == 0@ row to the
+-- @\"not_applicable\"@ shape regardless of what HPC's leading-column
+-- percent claimed.
+mkMetric :: Text -> Int -> Int -> Int -> Metric
+mkMetric label pct covered total
+  | total <= 0 = Metric
+      { mLabel   = label
+      , mPercent = Nothing
+      , mCovered = covered
+      , mTotal   = total
+      , mStatus  = "not_applicable"
+      }
+  | otherwise  = Metric
+      { mLabel   = label
+      , mPercent = Just pct
+      , mCovered = covered
+      , mTotal   = total
+      , mStatus  = if covered >= total then "covered" else "uncovered"
+      }
 
 -- | Consume a leading @NN%@ (with optional leading whitespace) and
 -- return the number plus the remainder after the @%@ sign.
