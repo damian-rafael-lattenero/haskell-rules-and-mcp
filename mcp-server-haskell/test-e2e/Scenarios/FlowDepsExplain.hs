@@ -27,7 +27,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
-import E2E.Envelope (statusOk, lookupField)
+import E2E.Envelope (statusOk, statusIs, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 solverDump :: Text
@@ -76,10 +76,15 @@ runFlow c _projectDir = do
   t1 <- stepHeader 2 "ghc_deps_explain returns null on clean dump (#63)"
   rClean <- Client.callTool c GhcDepsExplain
               (object [ "cabal_output" .= cleanDump ])
-  let cleanOk = statusOk rClean == Just True
+  -- Issue #90: 'no conflict found' is semantically status='no_match'
+-- post-envelope (the tool was asked "is there a conflict?" and
+-- the answer was no). Accept either 'ok' or 'no_match' — both
+-- represent "explainer ran successfully, no conflict in input".
+  let cleanOk = (statusOk rClean == Just True
+                  || statusIs "no_match" rClean)
               && drill ["conflict"] rClean == Just Null
   cClean <- liveCheck $ checkPure
-    "clean dump → success=true, conflict=null"
+    "clean dump → ok|no_match, conflict=null"
     cleanOk
     ("Expected conflict=null. Got: " <> truncRender rClean)
   stepFooter 2 t1
