@@ -86,6 +86,7 @@ import qualified Scenarios.FlowLabAudit           as FlowLab
 import qualified Scenarios.FlowExplainError       as FlowEE
 import qualified Scenarios.FlowPerfBasic          as FlowPerf
 import qualified Scenarios.FlowPropertyAudit      as FlowPA
+import qualified Scenarios.FlowWitness            as FlowWit
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
@@ -222,6 +223,8 @@ scenarios =
     , True, FlowPerf.runFlow )
   , ( "Flow: PropertyAudit pair skeleton (#64 · empty + 1-element)"
     , False, FlowPA.runFlow )
+  , ( "Flow: Witness distribution surface (#65 · cabal-repl harness)"
+    , True, FlowWit.runFlow )
   , ( "Flow: Dogfood replay (7 MCP fixes round-tripped through one session)"
     , True, FlowDFR.runFlow )
   , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"

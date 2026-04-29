@@ -112,6 +112,7 @@ import qualified HaskellFlows.Tool.Lab              as LabTool
 import qualified HaskellFlows.Tool.ExplainError     as ExplainErrorTool
 import qualified HaskellFlows.Tool.Perf             as PerfTool
 import qualified HaskellFlows.Tool.PropertyAudit    as PropertyAuditTool
+import qualified HaskellFlows.Tool.Witness          as WitnessTool
 import qualified HaskellFlows.Tool.Regression      as RegressionTool
 import qualified HaskellFlows.Tool.RemoveModules   as RemoveModulesTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
@@ -480,6 +481,13 @@ dispatchByName srv args = \case
     ghcSess <- getOrStartGhcSession srv
     store   <- readIORef (srvStore srv)
     PropertyAuditTool.handle store ghcSess args
+  GhcWitness -> do
+    -- Issue #65 Phase 1: property-witness explorer. Wraps the
+    -- property with size-bucket instrumentation and runs it via
+    -- the cabal-repl harness so we get QuickCheck's label histogram
+    -- in the formatted output.
+    ghcSess <- getOrStartGhcSession srv
+    WitnessTool.handle ghcSess args
   GhcLint -> do
     pd <- readIORef (srvProjectDir srv)
     LintTool.handle pd args
@@ -615,6 +623,7 @@ allToolDescriptors =
   , ExplainErrorTool.descriptor
   , PerfTool.descriptor
   , PropertyAuditTool.descriptor
+  , WitnessTool.descriptor
   , BatchTool.descriptor
   , LintTool.descriptor
   , ToolchainStatusTool.descriptor

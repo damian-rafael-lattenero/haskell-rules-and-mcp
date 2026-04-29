@@ -387,6 +387,18 @@ dispatch name payload = case name of
     \will generate verified candidates automatically."
     Nothing)
 
+  -- Issue #65 Phase 1: witness already emitted its own nextStep
+  -- pointing back at ghc_quickcheck (re-run without instrumentation
+  -- to confirm the pass/fail signal). The dispatcher hint here is
+  -- a backstop — when the runtime payload carries no nextStep we
+  -- still want to nudge the agent towards the canonical follow-up.
+  GhcWitness -> Just (simple GhcQuickCheck
+    "Witness reported a distribution and any biased buckets. Re-run \
+    \the property with ghc_quickcheck (or tighten the Arbitrary \
+    \instance) so the next pass/fail signal reflects an unbiased \
+    \input space."
+    Nothing)
+
   -- Issue #62: a successful move was already verified via the
   -- internal loadForTarget; the agent's next reasonable check is
   -- the project-level gate so any consumer the heuristic missed

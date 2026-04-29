@@ -110,6 +110,7 @@ library
                       HaskellFlows.Tool.ToolchainWarmup
                       HaskellFlows.Tool.Type
                       HaskellFlows.Tool.ValidateCabal
+                      HaskellFlows.Tool.Witness
                       HaskellFlows.Tool.Workflow
     build-depends:    base              >= 4.20 && < 5
                     , aeson             >= 2.2  && < 2.3
@@ -249,6 +250,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowExplainError
                       Scenarios.FlowPerfBasic
                       Scenarios.FlowPropertyAudit
+                      Scenarios.FlowWitness
                       Scenarios.FlowDogfoodReplay
                       Scenarios.FlowTypeBreakage
                       Scenarios.FlowScopeMgmt

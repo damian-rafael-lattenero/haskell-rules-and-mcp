@@ -1,0 +1,316 @@
+-- | @ghc_witness@ — property witness explorer (#65).
+--
+-- When QuickCheck reports @100/100 passed@, it doesn't tell you
+-- WHAT it tested. Were all 100 inputs empty lists? Was the
+-- recursive case exercised at all? @ghc_witness@ inverts the
+-- usual signal — instead of \"did it pass?\" it answers \"what
+-- was tested, and what wasn't?\".
+--
+-- Phase 1 (MVP, total ~1 week):
+--
+--   * @bucketSize@ — pure helper that maps an input size to one
+--     of four canonical buckets ("0", "1-5", "6-20", ">20").
+--   * @buildInstrumentedProperty@ — pure helper that wraps the
+--     user-supplied property body with @Test.QuickCheck.collect
+--     (sizeBucket (length (show args))) (... original body ...)@.
+--     Works for any @Show@-able input (the common case) and
+--     Phase 1 deliberately uses the @show@-length proxy so we
+--     don't need to know the input's structural shape.
+--   * @parseLabelDistribution@ — pure helper that walks
+--     QuickCheck's formatted output (@\"35.5% size:0-1\"@) and
+--     produces @[(label, percent)]@.
+--   * @ghc_witness@ tool — runs the instrumented property via
+--     the existing @runQuickCheckViaCabalRepl@ harness, parses
+--     the distribution, and surfaces \"biased\" warnings when
+--     any bucket holds < 1 % of the runs.
+--
+-- Phase 1 deferrals (documented in the descriptor):
+--
+--   * Constructor-level distribution — needs to know the type
+--     declaration of the input via 'tyConDataCons' (same path
+--     'ghc_arbitrary' uses).
+--   * Uncovered-branch detection — same dependency.
+--   * Smallest-witness extraction — QuickCheck shrinks naturally
+--     on failure; for passing properties we'd need an inverted
+--     probe and re-execution.
+--   * Custom 'classify_by' fields beyond size — Phase 2.
+module HaskellFlows.Tool.Witness
+  ( descriptor
+  , handle
+  , WitnessArgs (..)
+    -- * Pure helpers (exported for unit tests)
+  , bucketSize
+  , buildInstrumentedProperty
+  , parseLabelDistribution
+  , biasWarnings
+  ) where
+
+import Control.Exception (SomeException, try)
+import Data.Aeson
+import Data.Aeson.Types (parseEither)
+import Data.Char (isDigit)
+import Data.List (sortOn)
+import qualified Data.Ord
+import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
+import Data.Time.Clock.POSIX (getPOSIXTime)
+import Text.Read (readMaybe)
+
+import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
+import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Parser.QuickCheck
+  ( QuickCheckResult (..)
+  , parseQuickCheckOutput
+  )
+import qualified HaskellFlows.Tool.QuickCheck as Qc
+
+descriptor :: ToolDescriptor
+descriptor =
+  ToolDescriptor
+    { tdName        = toolNameText GhcWitness
+    , tdDescription =
+        "Phase 1 property-witness explorer. Runs the property "
+          <> "through QuickCheck with size-bucket instrumentation, "
+          <> "then surfaces the input distribution and flags biased "
+          <> "buckets (< 1 %% of total runs). Useful when a "
+          <> "'+++ OK, passed N tests' looks suspicious — e.g. all "
+          <> "passes were on size-1 inputs. Phase 2 will add "
+          <> "constructor-level distribution and uncovered-branch "
+          <> "detection via the GHC API."
+    , tdInputSchema =
+        object
+          [ "type"       .= ("object" :: Text)
+          , "required"   .= (["property"] :: [Text])
+          , "properties" .= object
+              [ "property"    .= obj "string"
+              , "module_path" .= obj "string"
+              , "runs"        .= obj "integer"
+              ]
+          , "additionalProperties" .= False
+          ]
+    }
+  where
+    obj :: Text -> Value
+    obj t = object [ "type" .= t ]
+
+data WitnessArgs = WitnessArgs
+  { waProperty   :: !Text
+  , waModulePath :: !(Maybe Text)
+  , waRuns       :: !Int
+  }
+  deriving stock (Show)
+
+instance FromJSON WitnessArgs where
+  parseJSON = withObject "WitnessArgs" $ \o -> do
+    prop <- o .:  "property"
+    mp   <- o .:? "module_path"
+    rs   <- o .:? "runs" .!= 1000
+    pure WitnessArgs
+      { waProperty   = prop
+      , waModulePath = mp
+      , waRuns       = max 100 (min 10000 rs)
+      }
+
+handle :: GhcSession -> Value -> IO ToolResult
+handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
+  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+  Right args -> do
+    t0 <- realToFrac <$> getPOSIXTime :: IO Double
+    let instrumented = buildInstrumentedProperty (waProperty args) (waRuns args)
+    res <- try @SomeException $
+      Qc.runQuickCheckViaCabalRepl (gsProject ghcSess)
+        (waModulePath args) instrumented
+    t1 <- realToFrac <$> getPOSIXTime :: IO Double
+    case res of
+      Left e -> pure (errorResult (T.pack ("subprocess error: " <> show e)))
+      Right (out, _err) ->
+        let qcResult = parseQuickCheckOutput (waProperty args) out
+            dist     = parseLabelDistribution out
+            warnings = biasWarnings dist
+        in pure (renderReport args qcResult dist warnings
+                              (truncate ((t1 - t0) * 1000)))
+
+--------------------------------------------------------------------------------
+-- pure helpers
+--------------------------------------------------------------------------------
+
+-- | Issue #65: bucket an input size into one of four canonical
+-- ranges. Phase 1 uses these four buckets (matching the issue's
+-- response shape) so the histogram stays human-readable for any
+-- input type.
+bucketSize :: Int -> Text
+bucketSize n
+  | n <= 0    = "0"
+  | n <= 5    = "1-5"
+  | n <= 20   = "6-20"
+  | otherwise = ">20"
+
+-- | Issue #65: synthesise the instrumented property. Wraps the
+-- user-supplied lambda with a 'Test.QuickCheck.collect' call
+-- whose label is the size-bucket of the show-rendered input.
+--
+-- @
+--   \\args -> Test.QuickCheck.collect ("size:" ++ bucketSize ...)
+--                                    ((originalProp) args)
+-- @
+--
+-- We thread the @runs@ count through 'Test.QuickCheck.withMaxSuccess'
+-- so the harness honours the user's request without us having to
+-- modify the cabal-repl driver.
+--
+-- Phase 1 caveats (intentional, documented in the descriptor):
+--
+--   * @show@-length is a proxy for structural size; it works well
+--     for lists/strings/tuples, less so for numeric inputs (every
+--     'Int' shows as 1–11 chars). Phase 2 will use the type's data
+--     constructors.
+--   * The wrapper assumes the original property is a single-arg
+--     lambda — exactly the shape 'ghc_quickcheck' already accepts.
+buildInstrumentedProperty :: Text -> Int -> Text
+buildInstrumentedProperty prop runs =
+  T.concat
+    [ "Test.QuickCheck.withMaxSuccess "
+    , T.pack (show runs)
+    , " (\\args -> Test.QuickCheck.collect "
+    , "(\"size:\" ++ "
+    , bucketSizeFn
+    , " (length (show args))) "
+    , "((", T.strip prop, ") args))"
+    ]
+  where
+    -- Inline let — keeps the wrapper a single expression so it
+    -- slots into the existing repl harness without needing a
+    -- multi-line :{ … :} block.
+    bucketSizeFn =
+      "(\\n -> if n <= 0 then \"0\" \
+      \else if n <= 5 then \"1-5\" \
+      \else if n <= 20 then \"6-20\" \
+      \else \">20\")"
+
+-- | Issue #65: parse QuickCheck's label histogram. Lines look like
+-- @"35.5% size:0-1"@ or @"100.0% size:>20"@. We tolerate both
+-- integer (@35%@) and decimal (@35.5%@) percentages and any
+-- amount of leading whitespace.
+parseLabelDistribution :: Text -> [(Text, Double)]
+parseLabelDistribution raw =
+  let candidates = mapMaybe parseLine (T.lines raw)
+  in sortOn (Data.Ord.Down . snd) candidates
+  where
+    parseLine ln =
+      let stripped = T.strip ln
+          (numTxt, rest) = T.break (== '%') stripped
+          numTxtClean    = T.strip numTxt
+      in case T.uncons rest of
+        Just ('%', after) ->
+          let labelTxt = T.strip after
+          in case readDouble (T.unpack numTxtClean) of
+               Just pct | not (T.null labelTxt) ->
+                 Just (labelTxt, pct)
+               _ -> Nothing
+        _ -> Nothing
+
+    -- Tolerate both integer (\"35\") and decimal (\"35.5\") forms.
+    readDouble :: String -> Maybe Double
+    readDouble s =
+      let trimmed = dropWhile (== ' ') s
+          digits  = takeWhile (\c -> isDigit c || c == '.') trimmed
+      in readMaybe digits
+
+    mapMaybe :: (a -> Maybe b) -> [a] -> [b]
+    mapMaybe _ []     = []
+    mapMaybe f (x:xs) = case f x of
+      Just y  -> y : mapMaybe f xs
+      Nothing -> mapMaybe f xs
+
+-- | Issue #65: emit a 'biased-distribution' warning for any
+-- bucket whose share is < 1 %% of the total runs. Phase 1 only
+-- inspects the size dimension (the only one Phase 1 instruments).
+biasWarnings :: [(Text, Double)] -> [Text]
+biasWarnings dist =
+  [ "biased-bucket: '"
+      <> label
+      <> "' holds only "
+      <> T.pack (show pct)
+      <> "% of runs (< 1% threshold)"
+  | (label, pct) <- dist
+  , pct < 1.0
+  , "size:" `T.isPrefixOf` label
+  ]
+
+--------------------------------------------------------------------------------
+-- response shaping
+--------------------------------------------------------------------------------
+
+renderReport
+  :: WitnessArgs -> QuickCheckResult
+  -> [(Text, Double)] -> [Text] -> Int -> ToolResult
+renderReport args qc dist warnings wallMs =
+  let (passed, failed, raw) = qcCounts qc
+      sizeDist = filter (("size:" `T.isPrefixOf`) . fst) dist
+      payload = object
+        [ "success"      .= True
+        , "property"     .= waProperty args
+        , "module"       .= waModulePath args
+        , "runs"         .= waRuns args
+        , "passed"       .= passed
+        , "failed"       .= failed
+        , "distribution" .= object
+            [ "by_size" .= object
+                [ "buckets" .= map renderBucket sizeDist
+                , "total_labels" .= length sizeDist
+                ]
+            ]
+        , "warnings"     .= map (\w -> object [ "kind" .= ("biased-distribution" :: Text)
+                                              , "message" .= w
+                                              ]) warnings
+        , "wall_time_ms" .= wallMs
+        , "phase"        .= ("1-mvp" :: Text)
+        , "deferred"     .= ([ "by-constructor"
+                             , "uncovered-branches"
+                             , "smallest-witness"
+                             , "custom-classify-by"
+                             ] :: [Text])
+        , "qc_raw_output" .= T.take 1000 raw
+        , "nextStep"      .= object
+            [ "tool"    .= ("ghc_quickcheck" :: Text)
+            , "why"     .= ("Re-run the same property with ghc_quickcheck "
+                            <> "to verify the pass/fail signal "
+                            <> "without the extra instrumentation overhead." :: Text)
+            , "example" .= object
+                [ "property"    .= waProperty args
+                , "module_path" .= waModulePath args
+                ]
+            ]
+        ]
+  in ToolResult
+       { trContent = [ TextContent (encodeUtf8Text payload) ]
+       , trIsError = False
+       }
+
+renderBucket :: (Text, Double) -> Value
+renderBucket (label, pct) = object
+  [ "label"   .= label
+  , "percent" .= pct
+  ]
+
+qcCounts :: QuickCheckResult -> (Int, Int, Text)
+qcCounts = \case
+  QcPassed _ n          -> (n, 0, "")
+  QcFailed _ n _ cex    -> (n, 1, cex)
+  QcException _ msg     -> (0, 1, msg)
+  QcGaveUp _ n d        -> (n, 0, T.pack ("gave up after " <> show d <> " discards"))
+  QcUnparsed _ raw      -> (0, 0, raw)
+
+errorResult :: Text -> ToolResult
+errorResult msg =
+  ToolResult
+    { trContent = [ TextContent (encodeUtf8Text (object
+        [ "success" .= False, "error" .= msg ])) ]
+    , trIsError = True
+    }
+
+encodeUtf8Text :: Value -> Text
+encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

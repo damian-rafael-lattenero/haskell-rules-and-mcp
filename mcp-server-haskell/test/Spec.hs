@@ -111,6 +111,7 @@ import qualified HaskellFlows.Tool.Lab as LabTool
 import qualified HaskellFlows.Tool.ExplainError as ExplainError
 import qualified HaskellFlows.Tool.Perf as PerfTool
 import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
+import qualified HaskellFlows.Tool.Witness as WitnessTool
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import qualified HaskellFlows.Tool.Regression as RegTool
@@ -554,6 +555,10 @@ main = do
       , test "property_audit: pairCombinations 5 elements (#64)" testPACombinations5
       , test "property_audit: pairCombinations distinct pairs (#64)" testPACombinationsDistinct
       , test "property_audit: buildContradictionProbe shape (#64)" testPABuildProbe
+      , test "witness: bucketSize boundary cases (#65)" testWitBucketBoundaries
+      , test "witness: buildInstrumentedProperty wraps with collect (#65)" testWitBuildInstrumented
+      , test "witness: parseLabelDistribution recovers buckets (#65)" testWitParseDistribution
+      , test "witness: biasWarnings flags <1% bucket (#65)" testWitBiasWarning
       , test "workflow-state: initial empty"       testWorkflowStateInitial
       , test "workflow-state: tracks load + edits" testWorkflowStateTracks
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
@@ -4685,6 +4690,70 @@ testPABuildProbe =
         && T.isInfixOf "not"  probe
         && T.isInfixOf p1     probe
         && T.isInfixOf p2     probe
+
+-- | Issue #65: each canonical bucket boundary maps to its
+-- expected label (0 / 1-5 / 6-20 / >20). The four cases below
+-- pin every transition point so a future regression doesn't
+-- silently shift the histogram.
+testWitBucketBoundaries :: IO Bool
+testWitBucketBoundaries =
+  pure $  WitnessTool.bucketSize 0   == "0"
+       && WitnessTool.bucketSize 1   == "1-5"
+       && WitnessTool.bucketSize 5   == "1-5"
+       && WitnessTool.bucketSize 6   == "6-20"
+       && WitnessTool.bucketSize 20  == "6-20"
+       && WitnessTool.bucketSize 21  == ">20"
+       && WitnessTool.bucketSize 999 == ">20"
+
+-- | Issue #65: 'buildInstrumentedProperty' wraps the user
+-- property with a 'Test.QuickCheck.collect' call carrying a
+-- size-prefixed label, and threads withMaxSuccess so the
+-- harness honours the requested run count.
+testWitBuildInstrumented :: IO Bool
+testWitBuildInstrumented =
+  let prop = "\\xs -> length (reverse xs) == length (xs :: [Int])"
+      out  = WitnessTool.buildInstrumentedProperty prop 750
+  in pure $  T.isInfixOf "Test.QuickCheck.withMaxSuccess" out
+          && T.isInfixOf "750"                            out
+          && T.isInfixOf "Test.QuickCheck.collect"        out
+          && T.isInfixOf "size:"                          out
+          && T.isInfixOf prop                             out
+
+-- | Issue #65: 'parseLabelDistribution' recovers (label, %) pairs
+-- from QuickCheck's formatted histogram. Tolerates integer and
+-- decimal forms, and ignores non-percent lines.
+testWitParseDistribution :: IO Bool
+testWitParseDistribution =
+  let raw = T.unlines
+        [ "+++ OK, passed 1000 tests:"
+        , "35.5% size:1-5"
+        , " 40% size:0"
+        , "20.0% size:6-20"
+        , "4.5% size:>20"
+        , "noise line without percent"
+        ]
+      dist = WitnessTool.parseLabelDistribution raw
+  in pure $  any (\(l, p) -> l == "size:1-5"  && p == 35.5) dist
+          && any (\(l, p) -> l == "size:0"    && p == 40.0) dist
+          && any (\(l, p) -> l == "size:6-20" && p == 20.0) dist
+          && any (\(l, p) -> l == "size:>20"  && p == 4.5)  dist
+          && length dist == 4
+
+-- | Issue #65: any size-bucket holding < 1 % of the runs is a
+-- bias signal. The function only emits warnings for size labels
+-- (Phase 1's only instrumented dimension) so unrelated labels
+-- are silently ignored.
+testWitBiasWarning :: IO Bool
+testWitBiasWarning =
+  let dist = [ ("size:0",    0.5)   -- below 1% → warned
+             , ("size:1-5", 80.0)   -- healthy
+             , ("size:6-20", 19.5)  -- healthy
+             , ("noise",     0.1)   -- not size:* → ignored
+             ]
+      ws = WitnessTool.biasWarnings dist
+  in pure $ length ws == 1
+         && T.isInfixOf "size:0" (head ws)
+         && T.isInfixOf "0.5"    (head ws)
 
 testLabConfidence :: IO Bool
 testLabConfidence = pure $
