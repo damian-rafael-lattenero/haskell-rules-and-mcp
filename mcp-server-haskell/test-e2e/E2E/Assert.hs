@@ -83,9 +83,28 @@ checkJsonFieldMatches name payload key pred_ detail = Check
       Nothing     -> "field " <> key <> " not present"
   }
 
+-- | Look up a field, auto-drilling through the @result@ envelope
+-- when the field isn't at the top level (issue #90 Phase D step 2).
+--
+-- The pre-#90 wire format put tool-specific fields at the top
+-- level (@type@, @output@, @file@, @raw@, @holes@, etc.); the
+-- post-#90 envelope nests them under @result@. To keep oracles
+-- ergonomic across the migration window, this helper checks
+-- BOTH: top-level first (so envelope discriminators @status@ /
+-- @error@ / @nextStep@ resolve directly), then under @result@
+-- (so tool-specific payload fields resolve transparently).
+--
+-- Mirrors the auto-drilling 'lookupField' in 'E2E.Envelope';
+-- having both makes the migration survive whether a scenario
+-- imports its helpers from Assert ('checkJsonField',
+-- 'checkJsonFieldMatches') or from Envelope.
 lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
+lookupField k (Object o) = case KeyMap.lookup (Key.fromText k) o of
+  Just inner -> Just inner
+  Nothing    -> case KeyMap.lookup (Key.fromText "result") o of
+    Just (Object r) -> KeyMap.lookup (Key.fromText k) r
+    _               -> Nothing
+lookupField _ _ = Nothing
 
 -- | Short, single-line JSON rendering for failure messages.
 -- Truncates at ~200 chars so a multi-KB payload doesn't drown

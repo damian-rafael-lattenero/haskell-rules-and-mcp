@@ -26,12 +26,26 @@ on:
       - ".github/workflows/haskell-ci.yml"
   workflow_dispatch: {}
 
-# Newer pushes cancel in-flight PR runs on the same ref. Master runs are
-# not cancellable so we always get a green/red signal per commit on the
-# protected branch.
+# Concurrency policy: PR runs are cancelled when a new push lands on
+# the same PR head, master runs are NOT cancelled so every commit on
+# the protected branch gets its own green/red signal.
+#
+# Why distinct groups instead of one group with a conditional
+# cancel-in-progress: GitHub Actions evaluates the
+# ${{ github.event_name == 'pull_request' }} expression but ALSO
+# treats the resulting string "false" as truthy when feeding it back
+# into the concurrency machinery — the empirical effect was that a
+# new master push DID cancel the in-flight master run from the
+# previous commit (~50% of the last 50 master runs ended in
+# 'cancelled' for this reason).
+#
+# Two distinct groups split the lock so the cancel policy is
+# unambiguous: the master group never has cancel-in-progress, the
+# PR group always does. Same observable behaviour the conditional
+# was trying to express, without the implicit-conversion footgun.
 concurrency:
-  group: haskell-ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: haskell-ci-${{ github.ref_name == 'master' && 'master' || format('pr-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.ref_name != 'master' }}
 
 # Least-privilege by default. Individual jobs ask for extras explicitly.
 permissions:
