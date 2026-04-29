@@ -59,29 +59,40 @@ defaults:
 
 jobs:
   # -------------------------------------------------------------------------
-  #  Full build + test + haddock + cabal-check + sdist across a small GHC
-  #  matrix. Two compiler versions on two OSes is the sweet spot for a
-  #  library this size: catches portability bugs without burning an hour
-  #  per PR. Extend the matrix once Phase 4 stabilises.
+  #  Tier-2 sharded ubuntu matrix: 'ghc × shard' = 6 cells, all blocking.
+  #
+  #  Each cell runs unit tests + 1/3 of e2e scenarios via the
+  #  'HASKELL_FLOWS_E2E_SHARD' env var (round-robin split, see
+  #  E2E.Sharding). With three shards running in parallel on
+  #  separate runners, each shard owns its own ~/.cabal/store and
+  #  doesn't contend with the other two — so the slow scenarios
+  #  that dominated the sequential floor (cabal_test, ghc_coverage,
+  #  ghc_check_project, ghc_witness, …) only contend WITHIN a
+  #  shard rather than across the full set.
+  #
+  #  Measured: full e2e sequentially = 467 s (CI baseline). Local
+  #  shard 1/3 with N=8 = 166 s for 24 scenarios. Projected CI
+  #  wall-clock per shard cell ≈ 250-300 s (4-vCPU runner is
+  #  roughly half as fast as the local 8-core), giving an
+  #  aggregator-to-green path of ~5-6 min vs the current ~13 min.
+  #
+  #  Why ubuntu-only here (macOS is a separate advisory job below):
+  #  the aggregator 'needs: [build-and-test, hlint]' waits for
+  #  EVERY cell of the matrix to complete before running. Keeping
+  #  macOS in this matrix would make the aggregator wait for the
+  #  ~13 min macOS cell even though it's continue-on-error and
+  #  doesn't gate. Splitting macOS into its own job removes that
+  #  wait without changing what blocks vs. what's advisory.
   # -------------------------------------------------------------------------
   build-and-test:
-    name: Build & test — GHC ${{ matrix.ghc }} / ${{ matrix.os }}
+    name: Build & test — ubuntu / GHC ${{ matrix.ghc }} / shard ${{ matrix.shard }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
         ghc: ["9.10.1", "9.12.2"]
         cabal: ["3.12.1.0"]
-    runs-on: ${{ matrix.os }}
-    # macOS-latest is gh-free-tier-saturated: GitHub queues then
-    # cancels macos jobs when the org-wide concurrent macOS-runner
-    # quota is hit, surfacing as 'cancelled' on every commit
-    # regardless of code correctness. Promote macos to an advisory
-    # cell — failures and cancellations are visible in the matrix
-    # report but don't block the aggregator. The two ubuntu cells
-    # (different GHC versions on the same OS) are still mandatory
-    # and remain the authoritative correctness gate.
-    continue-on-error: ${{ matrix.os == 'macos-latest' }}
+        shard: ["1/3", "2/3", "3/3"]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
@@ -125,66 +136,48 @@ jobs:
       # toolchain. `haskell-actions/setup@v2` installs cabal + ghc but
       # not hlint, so we stage hlint separately here. Keep this step
       # right BEFORE `Run tests` so cache hits above don't skip it.
-      # `haskell-actions/hlint-setup@v2` ships only x86_64 prebuilt
-      # binaries — it fails on macos-latest (now arm64) with
-      # "Unsupported architecture hlint: arm64". Linux keeps the
-      # action; macOS falls back to Homebrew, which has a native
-      # aarch64 bottle. The standalone `hlint` job on ubuntu is the
-      # authoritative version gate, so brew's hlint version on the
-      # matrix is only used for the e2e `findExecutable "hlint"`
-      # probe and minor drift is tolerable.
-      - name: Install HLint (Linux, via action)
-        if: runner.os == 'Linux'
+      - name: Install HLint
         uses: haskell-actions/hlint-setup@v2
         with:
           version: "latest"
 
-      - name: Install HLint (macOS, via Homebrew)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          brew install hlint
-          hlint --version
-
-      # Tier-1 e2e parallelization.
+      # Two stacked perf knobs:
       #
-      # The e2e suite has a built-in QSem-bounded pool gated by
-      # 'HASKELL_FLOWS_E2E_PARALLEL'. The pool auto-caps to the
-      # RTS capability count via `min k numCaps` in Main.hs:285,
-      # so setting '8' on the current 4-vCPU GitHub free-tier
-      # runner clamps to 4 — but 'communicates intent' so a
-      # future bigger-runner migration (paid tier or self-hosted)
-      # automatically picks up the larger fan-out without a
-      # workflow edit.
+      # 1. HASKELL_FLOWS_E2E_PARALLEL=8 — opts the e2e harness
+      #    into its built-in QSem-bounded pool. Auto-clamps to
+      #    the RTS capability count (`min k numCaps`), so on a
+      #    4-vCPU runner the effective fan-out is 4. '8' is the
+      #    forward-compat hint for a future bigger-runner.
       #
-      # Measured baseline (commit 56ded4d, ubuntu/9.12.2):
-      #   GHC install     : 142 s
-      #   Build project   : 103 s
-      #   Run tests       : 469 s    ← 59% of cell time
-      #     - unit (514)  :  17 s   (already fast)
-      #     - e2e (70)    : 467 s   (sequential floor)
-      #   Haddock + check :  65 s
-      #   TOTAL cell      : 796 s   (= 13.3 min)
+      # 2. HASKELL_FLOWS_E2E_SHARD=${{ matrix.shard }} — picks
+      #    1/3 of the 70 scenarios via round-robin (E2E.Sharding).
+      #    Three matrix cells per GHC version run truly in
+      #    parallel on separate runners, each with its own clean
+      #    ~/.cabal/store — eliminating the cross-scenario lock
+      #    contention that capped the in-process pool at ~10%
+      #    speedup.
       #
-      # Expected at parallelism 4 (current runner cap):
-      #   55 fast scenarios × 5 s avg ÷ 4 ≈ 69 s
-      #   15 slow scenarios × 12 s seq    ≈ 180 s   (cabal-store
-      #                                              contention floor)
-      #   e2e wall-time                   ≈ 250 s
-      #   TOTAL cell                      ≈ 580 s   (= 9.7 min,
-      #                                              ~30% cut)
+      # Local measurement (8-core macOS, parallelism=8):
+      #   full e2e (sequential, baseline) : 467 s
+      #   full e2e (N=8, no shard)        : 419 s   (-10%)
+      #   shard 1/3 (24 scenarios, N=8)   : 166 s   (35% of full)
       #
-      # Slow scenarios stay sequential internally — they create
-      # real cabal projects that share ~/.cabal/store and contend
-      # heavily under parallel spawn. The 180 s slow-floor is the
-      # reason the next perf tier (cabal-store prewarm) matters
-      # more than further bumping this number.
+      # Projected CI per-cell (4-vCPU ubuntu, shard cell):
+      #   GHC install (cached)            :  ~10 s
+      #   Build project (cached)          :  ~30 s
+      #   Run tests                       : ~250 s
+      #     - unit (514)                  :  ~17 s
+      #     - e2e (~23 of 70)             : ~230 s
+      #   Haddock + cabal check + sdist   :  ~65 s
+      #   Cell total (warm cache)         : ~360 s  (= 6.0 min)
       #
-      # Local dev still controls parallelism per-run via the same
-      # env var. Unit tests don't honour the var (already fast).
+      # Aggregator wall-clock to green = max(6 ubuntu shards) ≈
+      # 6 min (vs current 13 min). macOS runs in a separate job
+      # below as advisory.
       - name: Run tests
         env:
           HASKELL_FLOWS_E2E_PARALLEL: "8"
+          HASKELL_FLOWS_E2E_SHARD: ${{ matrix.shard }}
         run: cabal test all --test-show-details=direct --test-options="--color"
 
       # Haddock with `--haddock-all` spots broken @<https://...>@ links,
@@ -197,6 +190,96 @@ jobs:
 
       # Proves the package can be published to Hackage. Round-tripping the
       # tarball catches missing extra-source-files and bad file globs.
+      - name: SDist round-trip
+        run: |
+          cabal sdist all --output-dir /tmp/haskell-flows-mcp-sdist
+          ls -la /tmp/haskell-flows-mcp-sdist
+
+  # -------------------------------------------------------------------------
+  #  macOS portability canary — advisory.
+  #
+  #  Runs the FULL test suite on macOS (no sharding) as a portability
+  #  signal. Deliberately NOT in 'required.needs', so:
+  #
+  #    * Failure / cancellation here does not block the merge.
+  #    * The aggregator does not WAIT for this job to finish, so the
+  #      green-check signal arrives at ~6 min (ubuntu shards) instead
+  #      of ~13 min (slowest macOS cell).
+  #
+  #  Why keep it at all: surfaces real macOS-specific regressions
+  #  (recall the 'haskell-actions/hlint-setup' arm64 surprise that
+  #  needed the Homebrew fallback) before they hit a contributor on
+  #  a Mac. The job-level 'continue-on-error' ensures the matrix
+  #  badge stays green / yellow rather than red on free-tier
+  #  saturation, so it remains useful signal rather than alarm-fatigue.
+  # -------------------------------------------------------------------------
+  build-and-test-macos:
+    name: Build & test — macOS / GHC ${{ matrix.ghc }} (advisory)
+    strategy:
+      fail-fast: false
+      matrix:
+        ghc: ["9.10.1", "9.12.2"]
+        cabal: ["3.12.1.0"]
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: setup
+        name: Set up GHC ${{ matrix.ghc }} / cabal ${{ matrix.cabal }}
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: ${{ matrix.ghc }}
+          cabal-version: ${{ matrix.cabal }}
+          cabal-update: true
+
+      - name: Configure + freeze
+        run: |
+          cabal configure --enable-tests --enable-benchmarks --disable-documentation
+          cabal freeze
+
+      - name: Restore cabal store cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ steps.setup.outputs.cabal-store }}
+            dist-newstyle
+          key: ${{ runner.os }}-ghc-${{ matrix.ghc }}-cabal-${{ matrix.cabal }}-${{ hashFiles('mcp-server-haskell/cabal.project.freeze') }}
+          restore-keys: |
+            ${{ runner.os }}-ghc-${{ matrix.ghc }}-cabal-${{ matrix.cabal }}-
+
+      - name: Build dependencies
+        run: cabal build all --only-dependencies
+
+      - name: Build project
+        run: cabal build all
+
+      # 'haskell-actions/hlint-setup@v2' ships only x86_64 prebuilt
+      # binaries — it fails on macos-latest (now arm64) with
+      # "Unsupported architecture hlint: arm64". Homebrew has a
+      # native aarch64 bottle; the standalone 'hlint' job on
+      # ubuntu remains the authoritative version gate, so brew's
+      # version on macOS is only consumed by the e2e
+      # 'findExecutable "hlint"' probe and minor drift is fine.
+      - name: Install HLint (Homebrew)
+        shell: bash
+        run: |
+          brew install hlint
+          hlint --version
+
+      # No HASKELL_FLOWS_E2E_SHARD — runs the full 70-scenario
+      # suite as portability coverage.
+      - name: Run tests
+        env:
+          HASKELL_FLOWS_E2E_PARALLEL: "8"
+        run: cabal test all --test-show-details=direct --test-options="--color"
+
+      - name: Build haddocks
+        run: cabal haddock all --haddock-all
+
+      - name: Cabal check (package metadata sanity)
+        run: cabal check
+
       - name: SDist round-trip
         run: |
           cabal sdist all --output-dir /tmp/haskell-flows-mcp-sdist

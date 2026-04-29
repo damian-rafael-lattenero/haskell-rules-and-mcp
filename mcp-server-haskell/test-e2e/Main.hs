@@ -31,9 +31,10 @@ import System.FilePath ((</>))
 import System.IO (BufferMode (..), hSetBuffering, stderr, stdout)
 import Text.Read (readMaybe)
 
-import qualified E2E.Assert as Assert
-import qualified E2E.Client as Client
-import qualified E2E.Smoke  as Smoke
+import qualified E2E.Assert   as Assert
+import qualified E2E.Client   as Client
+import qualified E2E.Sharding as Sharding
+import qualified E2E.Smoke    as Smoke
 import qualified Scenarios.ExprEvaluator        as Expr
 import qualified Scenarios.FlowANSIEscape        as FlowANSI
 import qualified Scenarios.FlowArbitrary        as FlowA
@@ -265,14 +266,23 @@ main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
   hSetBuffering stderr LineBuffering
+  -- Self-test the sharding partition logic before any scenario
+  -- fires. Cheap (microseconds) and turns a pure-logic regression
+  -- into a fail-fast at startup with a single attributable error
+  -- rather than a quietly-skipped scenario that the matrix never
+  -- noticed. Runs on every e2e invocation, including when sharding
+  -- is disabled — the goal is regression coverage, not gating.
+  Sharding.selfTest
+
   binary <- Client.findMcpBinaryPath
 
   -- Read the opt-in slow-skip flag before we start banner-printing
   -- so the operator knows which mode they're about to watch.
-  mSkipRaw <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_SKIP_SLOW"
-  mParRaw  <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_PARALLEL"
-  mOnlyRaw <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_ONLY"
-  numCaps  <- getNumCapabilities
+  mSkipRaw  <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_SKIP_SLOW"
+  mParRaw   <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_PARALLEL"
+  mOnlyRaw  <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_ONLY"
+  mShardRaw <- System.Environment.lookupEnv "HASKELL_FLOWS_E2E_SHARD"
+  numCaps   <- getNumCapabilities
   let skipSlow = mSkipRaw == Just "1"
       -- Parallel e2e is OPT-IN via HASKELL_FLOWS_E2E_PARALLEL=<N>.
       -- Default stays sequential: the Linux CI scheduler dispatches
@@ -294,9 +304,20 @@ main = do
       matchOnly label = case mOnly of
         Nothing     -> True
         Just needle -> needle `T.isInfixOf` T.toLower label
+      -- Round-robin shard split. Empty / malformed value =
+      -- no sharding (full suite, identity). Filter ordering
+      -- matters: shard FIRST so each shard observes a stable
+      -- subset, THEN substring-filter, THEN slow-skip — gives
+      -- a developer running 'HASKELL_FLOWS_E2E_SHARD=2/3
+      -- HASKELL_FLOWS_E2E_ONLY=Refactor' a deterministic and
+      -- reproducible scenario set tied to the shard value.
+      mShard     = mShardRaw >>= Sharding.parseShard
+      afterShard = case mShard of
+        Just sh -> Sharding.applyShard sh scenarios
+        Nothing -> scenarios
       afterOnly
-        | Just _ <- mOnly = filter (\(lbl, _, _) -> matchOnly lbl) scenarios
-        | otherwise       = scenarios
+        | Just _ <- mOnly = filter (\(lbl, _, _) -> matchOnly lbl) afterShard
+        | otherwise       = afterShard
       selected
         | skipSlow  = filter (\(_, slow, _) -> not slow) afterOnly
         | otherwise = afterOnly
@@ -306,6 +327,14 @@ main = do
 
   putStrLn "==> haskell-flows-mcp e2e"
   putStrLn ("==> binary: " <> binary)
+  case mShard of
+    Nothing -> pure ()
+    Just sh -> putStrLn ("==> HASKELL_FLOWS_E2E_SHARD="
+                          <> show (Sharding.shardIndex sh) <> "/"
+                          <> show (Sharding.shardTotal sh)
+                          <> " — running " <> show (length afterShard)
+                          <> " of " <> show totalCount
+                          <> " scenarios (round-robin)")
   case mOnly of
     Nothing -> pure ()
     Just n  -> putStrLn ("==> HASKELL_FLOWS_E2E_ONLY=" <> T.unpack n
