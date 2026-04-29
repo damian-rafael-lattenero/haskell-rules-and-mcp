@@ -109,6 +109,7 @@ import HaskellFlows.Mcp.ParseError
   ( InterpretedParseError (..)
   , interpretParseError
   )
+import qualified PathTraversal
 import HaskellFlows.Mcp.PermissiveJSON
   ( BoolField (..)
   , IntField (..)
@@ -384,6 +385,13 @@ main = do
                                                    testParseErrorUnrecognisedFalls
       , test "ParseError · raw text always preserved on ipRaw (#85)"
                                                    testParseErrorRawAlwaysPreserved
+      -- Issue #100 · property-based path-traversal fuzz (Phase A)
+      , quickTest "path guard · canonical invariant (#100)"
+                                                   PathTraversal.prop_pathGuard_canonical_invariant
+      , quickTest "path guard · mkModulePath ↔ resolveTarget agree (#100)"
+                                                   PathTraversal.prop_pathGuard_lint_resolveTarget_consistent
+      , quickTest "path guard · any '..' segment always rejected (#100)"
+                                                   PathTraversal.prop_pathGuard_dotdot_always_rejected
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
       , test "validatePackageName accepts normal"  testPkgAccepts
