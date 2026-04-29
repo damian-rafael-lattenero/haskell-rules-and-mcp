@@ -1,0 +1,31 @@
+mcp-server-haskell/test-e2e/Scenarios/FlowSuggestSelfInverseDampening.hs
+  e759bc5a1ffc634e 1-113
+mcp-server-haskell/haskell-flows-mcp.cabal
+  e759bc5a1ffc634e 261
+mcp-server-haskell/test-e2e/Main.hs
+  e759bc5a1ffc634e 97,250-251
+mcp-server-haskell/src/HaskellFlows/Suggest/Rules.hs
+  e759bc5a1ffc634e 306-316,322-341
+mcp-server-haskell/test/Spec.hs
+  e759bc5a1ffc634e 643-646,2948-2987
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "8bcdd7afab503416d3373e3720cc6af79b558794",
+  "prompts": {
+    "e759bc5a1ffc634e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9dcb7642-cab8-48eb-8095-963a2ce3ddd7",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 7662,
+      "total_deletions": 8938,
+      "accepted_lines": 21373,
+      "overriden_lines": 0
+    }
+  }
+}
