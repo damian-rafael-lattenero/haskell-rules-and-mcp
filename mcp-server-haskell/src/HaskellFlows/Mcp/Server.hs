@@ -110,6 +110,7 @@ import qualified HaskellFlows.Tool.Move             as MoveTool
 import qualified HaskellFlows.Tool.DepsExplain      as DepsExplainTool
 import qualified HaskellFlows.Tool.Lab              as LabTool
 import qualified HaskellFlows.Tool.ExplainError     as ExplainErrorTool
+import qualified HaskellFlows.Tool.Perf             as PerfTool
 import qualified HaskellFlows.Tool.Regression      as RegressionTool
 import qualified HaskellFlows.Tool.RemoveModules   as RemoveModulesTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
@@ -466,6 +467,11 @@ dispatchByName srv args = \case
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
     ExplainErrorTool.handle ghcSess pd args
+  GhcPerf -> do
+    -- Issue #61 Phase 1: wall-clock perf harness via the in-process
+    -- evalIOString path.
+    ghcSess <- getOrStartGhcSession srv
+    PerfTool.handle ghcSess args
   GhcLint -> do
     pd <- readIORef (srvProjectDir srv)
     LintTool.handle pd args
@@ -599,6 +605,7 @@ allToolDescriptors =
   , DepsExplainTool.descriptor
   , LabTool.descriptor
   , ExplainErrorTool.descriptor
+  , PerfTool.descriptor
   , BatchTool.descriptor
   , LintTool.descriptor
   , ToolchainStatusTool.descriptor

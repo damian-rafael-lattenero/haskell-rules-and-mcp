@@ -335,6 +335,16 @@ dispatch name payload = case name of
   -- example before deleting.
   GhcDeterminism -> Just (determinismNext payload)
 
+  -- Issue #61 Phase 1: the perf harness just returned wall-clock
+  -- statistics. Without baseline persistence (Phase 2) the agent's
+  -- next move is to compare against an earlier capture by hand
+  -- or call ghc_perf again on a different optimisation level.
+  GhcPerf -> Just (simple GhcPerf
+    "Phase 1 returned wall-clock statistics. Re-run with a different \
+    \implementation to compare; Phase 2 will persist baselines so the \
+    \tool can compute the delta automatically."
+    Nothing)
+
   -- Issue #59: the explainer returned context but no patch.
   -- The agent's LLM step belongs OUT-OF-MCP — once it has a
   -- candidate, the natural follow-up is ghc_refactor /
