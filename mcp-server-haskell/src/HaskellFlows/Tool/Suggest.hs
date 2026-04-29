@@ -36,8 +36,6 @@ import Data.Char (isAsciiLower)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
 import Control.Exception (SomeException, try)
 
@@ -67,9 +65,9 @@ import HaskellFlows.Ghc.ApiSession
   , withGhcSession
   )
 import HaskellFlows.Ghc.Sanitize
-  ( CommandError (..)
-  , sanitizeExpression
+  ( sanitizeExpression
   )
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error (GhcError)
@@ -130,15 +128,17 @@ instance FromJSON SuggestArgs where
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (parseErrorResult parseError)
   Right args -> case sanitizeExpression (saFunctionName args) of
-    Left e -> pure (errorResult (formatCommandError e))
+    Left e -> pure (Env.toolResponseToResult
+                      (Env.mkRefused (Env.sanitizeRejection "function_name" e)))
     Right safe -> do
       tgt <- firstLibraryOrTestSuite ghcSess
       eLoad <- try (loadForTarget ghcSess tgt Strict)
       case eLoad :: Either SomeException (Bool, [GhcError]) of
         Left ex ->
-          pure (errorResult ("loadForTarget failed: " <> T.pack (show ex)))
+          pure (subprocessResult
+                  ("loadForTarget failed: " <> T.pack (show ex)))
         Right _ -> do
           eType <- try (withGhcSession ghcSess (queryType safe))
           case eType :: Either SomeException Text of
@@ -150,7 +150,7 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
               | otherwise ->
                   case parseSignature typeText of
                     Nothing ->
-                      pure (errorResult
+                      pure (validationErr
                         ("Could not parse signature: " <> typeText))
                     Just sig -> do
                       siblings <- gatherSiblings ghcSess safe
@@ -165,6 +165,34 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
                             Just c  -> filter ((c ==) . sCategory) matches
                       pure (successResult safe typeText filtered)
 
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
+
+-- | Issue #90 Phase C: GHC API exception (load threw).
+subprocessResult :: Text -> ToolResult
+subprocessResult msg =
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
+
+-- | Issue #90 Phase C: type signature parsed by GHC but our
+-- in-house parser couldn't read it.
+validationErr :: Text -> ToolResult
+validationErr msg =
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg))
+
 -- | Ask GHC for the type of @safe@. Exceptions (unresolved name,
 -- ambiguous type, …) are caught at the IO layer by the caller.
 queryType :: Text -> Ghc Text
@@ -176,21 +204,18 @@ queryType safe = do
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: matched suggestions → status='ok'. The
+-- payload shape ('function', 'signature', 'count', 'suggestions',
+-- 'hint') is preserved verbatim under 'result'.
 successResult :: Text -> Text -> [Suggestion] -> ToolResult
 successResult fn sig suggestions =
-  let payload =
-        object
-          [ "success"     .= True
-          , "function"    .= fn
-          , "signature"   .= sig
-          , "count"       .= length suggestions
-          , "suggestions" .= map renderSuggestion suggestions
-          , "hint"        .= hintFor suggestions
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "function"    .= fn
+    , "signature"   .= sig
+    , "count"       .= length suggestions
+    , "suggestions" .= map renderSuggestion suggestions
+    , "hint"        .= hintFor suggestions
+    ]))
 
 renderSuggestion :: Suggestion -> Value
 renderSuggestion s =
@@ -220,32 +245,23 @@ hintFor xs =
   <> T.pack (show (length (filter ((High ==) . sConfidence) xs)))
   <> "."
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
 -- | BUG-15: a structured response for the "function not in scope"
 -- case. The raw GHC error (@<interactive>:1:1: error: [GHC-88464]
 -- Variable not in scope: foo@) is passed back as @ghcError@ for
 -- drill-in, but the top-level keys speak the agent's language:
--- @reason@ names the class of failure and @hint@ tells the agent
--- exactly which tool to call next. 'success: false' is preserved
--- so the MCP treats this as an error for metrics, but the
--- @nextStep@ push in @Server.runTool@ still runs — steering the
--- agent straight at @ghc_load@ instead of letting it guess.
+-- 'reason' names the class of failure and 'hint' tells the agent
+-- exactly which tool to call next. The Server.runTool nextStep
+-- push still runs — steering the agent straight at @ghc_load@
+-- instead of letting it guess.
+--
+-- Issue #90 Phase C: status='no_match' kind='not_in_scope'. The
+-- pre-envelope pre-existing fields ('reason', 'function', 'hint',
+-- 'ghcError') stay under 'result' — consumers branch on those
+-- exactly as before.
 outOfScopeResult :: Text -> Text -> ToolResult
 outOfScopeResult fn ghcOutput =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success"  .= False
-        , "reason"   .= ("function_not_in_scope" :: Text)
+  let payload  = object
+        [ "reason"   .= ("function_not_in_scope" :: Text)
         , "function" .= fn
         , "hint"     .=
             ( "`" <> fn <> "` is not in scope in the current GHCi \
@@ -256,22 +272,11 @@ outOfScopeResult fn ghcOutput =
               \a qualified import."
               :: Text )
         , "ghcError" .= ghcOutput
-        ]))
-      ]
-    , trIsError = True
-    }
-
-formatCommandError :: CommandError -> Text
-formatCommandError = \case
-  ContainsNewline  -> "function_name must be a single line (no newline characters)"
-  ContainsSentinel -> "function_name contains the internal framing sentinel and was rejected"
-  EmptyInput       -> "function_name is empty"
-  InputTooLarge sz cap ->
-    "function_name is too large (" <> T.pack (show sz) <> " chars, cap is "
-      <> T.pack (show cap) <> ")"
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+        ]
+      envErr   = Env.mkErrorEnvelope Env.NotInScope
+                   ("'" <> fn <> "' is not in scope")
+      response = (Env.mkNoMatch payload) { Env.reError = Just envErr }
+  in Env.toolResponseToResult response
 
 --------------------------------------------------------------------------------
 -- BUG-03: sibling discovery

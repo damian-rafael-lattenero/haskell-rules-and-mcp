@@ -9,10 +9,9 @@ module HaskellFlows.Tool.PropertyLifecycle
 
 import Data.Aeson
 import Data.Text (Text)
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
 import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
@@ -33,18 +32,18 @@ descriptor =
           ]
     }
 
+-- | Issue #90 Phase C: pure introspection of the property store.
+-- Always status='ok' (the operation has no failure modes — an
+-- empty store still returns count=0 with an empty list under
+-- 'result.properties').
 handle :: Store -> Value -> IO ToolResult
 handle store _rawArgs = do
   props <- loadAll store
   let payload = object
-        [ "success"    .= True
-        , "count"      .= length props
+        [ "count"      .= length props
         , "properties" .= map render props
         ]
-  pure ToolResult
-         { trContent = [ TextContent (encodeUtf8Text payload) ]
-         , trIsError = False
-         }
+  pure (Env.toolResponseToResult (Env.mkOk payload))
   where
     render p = object
       [ "expression" .= spExpression p
@@ -52,6 +51,3 @@ handle store _rawArgs = do
       , "passed"     .= spPassed p
       , "updated"    .= spUpdated p
       ]
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

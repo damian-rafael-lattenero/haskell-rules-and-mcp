@@ -16,12 +16,11 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Timeout (timeout)
 
 import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..), parseQuickCheckOutput)
@@ -72,27 +71,37 @@ runTimeoutMicros = 30_000_000
 
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+  Left err -> pure (parseErrorResult err)
   Right args -> case sanitizeExpression (daProperty args) of
-    Left _ -> pure (errorResult "property is empty or contains forbidden characters")
+    Left e ->
+      pure (Env.toolResponseToResult
+              (Env.mkRefused (Env.sanitizeRejection "property" e)))
     Right safe -> do
       results <- replicateM (daRuns args)
                    (runOnce ghcSess (daProperty args) safe (daModule args))
       let allPassed = all isPassed results
+          summaryTxt
+            | allPassed =
+                "All " <> T.pack (show (daRuns args))
+                  <> " runs passed — no flakiness observed."
+            | otherwise =
+                "At least one run did not pass — property is flaky \
+                \or broken."
           payload = object
-            [ "success" .= allPassed
-            , "runs"    .= daRuns args
+            [ "runs"    .= daRuns args
             , "states"  .= map stateText results
-            , "summary" .=
-                ( if allPassed
-                    then "All " <> T.pack (show (daRuns args)) <> " runs passed — no flakiness observed."
-                    else "At least one run did not pass — property is flaky or broken."
-                )
+            , "summary" .= summaryTxt
             ]
-      pure ToolResult
-             { trContent = [ TextContent (encodeUtf8Text payload) ]
-             , trIsError = not allPassed
-             }
+      -- Issue #90 Phase C: every run passed → status='ok'. Any
+      -- non-pass → status='failed' kind='validation' (the property
+      -- is flaky). Per-run states stay under 'result.states' so
+      -- consumers can pinpoint which run flipped.
+      pure $ if allPassed
+        then Env.toolResponseToResult (Env.mkOk payload)
+        else
+          let envErr   = Env.mkErrorEnvelope Env.Validation summaryTxt
+              response = (Env.mkFailed envErr) { Env.reResult = Just payload }
+          in Env.toolResponseToResult response
   where
     runOnce sess origExpr safe mModule = do
       -- Route through the same subprocess-cabal-repl vehicle as
@@ -126,12 +135,17 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
     stateText QcException {} = "exception"
     stateText QcUnparsed  {} = "unparsed"
 
-errorResult :: Text -> ToolResult
-errorResult msg = ToolResult
-  { trContent = [ TextContent (encodeUtf8Text (object
-      [ "success" .= False, "error" .= msg ])) ]
-  , trIsError = True
-  }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]

@@ -42,12 +42,11 @@ import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory)
 
 import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.QuickCheck as Qc
@@ -101,7 +100,7 @@ instance FromJSON ExportArgs where
 
 handle :: Store -> ProjectDir -> Value -> IO ToolResult
 handle store pd rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+  Left err -> pure (parseErrorResult err)
   Right args -> do
     props <- loadAll store
     let filtered = case eaModule args of
@@ -109,7 +108,8 @@ handle store pd rawArgs = case parseEither parseJSON rawArgs of
           Just m  -> [ p | p <- props, spModule p == Just m ]
         outRel = maybe "test/Spec.hs" T.unpack (eaOutputPath args)
     case mkModulePath pd outRel of
-      Left err -> pure (errorResult (T.pack ("Invalid output path: " <> show err)))
+      Left err -> pure (pathTraversalResult
+                          (T.pack ("Invalid output path: " <> show err)))
       Right mp -> do
         -- Resolve the project's library exposed-modules so a property
         -- whose 'spModule' was a test scope (e.g. 'test/Spec.hs') can
@@ -127,7 +127,8 @@ handle store pd rawArgs = case parseEither parseJSON rawArgs of
           createDirectoryIfMissing True (takeDirectory full)
           TIO.writeFile full body) :: IO (Either SomeException ())
         case eRes of
-          Left ex -> pure (errorResult (T.pack ("Could not write: " <> show ex)))
+          Left ex -> pure (subprocessResult
+                              (T.pack ("Could not write: " <> show ex)))
           Right _ -> pure (successResult full (length filtered) (length props))
   where
     _ = unProjectDir pd  -- silence unused when path validation is the only use
@@ -295,30 +296,43 @@ f >=> g = \x -> f x >>= g
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: rendered Spec.hs file → status='ok' with
+-- the on-disk path + counts under 'result'.
 successResult :: FilePath -> Int -> Int -> ToolResult
 successResult path written total =
-  let payload = object
-        [ "success"        .= True
-        , "output_path"    .= T.pack path
-        , "properties_written" .= written
-        , "total_persisted"    .= total
-        , "hint"
-            .= ( "Commit the generated file and add QuickCheck to the \
-                 \test-suite via ghc_deps. `cabal test` will replay \
-                 \every property as a regression gate." :: Text )
-        ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "output_path"        .= T.pack path
+    , "properties_written" .= written
+    , "total_persisted"    .= total
+    , "hint"
+        .= ( "Commit the generated file and add QuickCheck to the \
+             \test-suite via ghc_deps. `cabal test` will replay \
+             \every property as a regression gate." :: Text )
+    ]))
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False, "error" .= msg ])) ]
-    , trIsError = True
-    }
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+-- | Issue #90 Phase C: 'mkModulePath' rejected the output path.
+pathTraversalResult :: Text -> ToolResult
+pathTraversalResult msg =
+  Env.toolResponseToResult
+    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+
+-- | Issue #90 Phase C: filesystem write failure.
+subprocessResult :: Text -> ToolResult
+subprocessResult msg =
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))

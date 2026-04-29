@@ -34,8 +34,6 @@ import Data.Aeson.Types (parseEither)
 import Data.Char (isAlpha, isAlphaNum)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Timeout (timeout)
 
 import qualified System.Process as Proc
@@ -69,9 +67,9 @@ import GHC.Types.Name (nameOccName, nameSrcSpan)
 import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.SrcLoc (RealSrcSpan, SrcSpan (..), srcSpanFile)
 import HaskellFlows.Ghc.Sanitize
-  ( CommandError (..)
-  , sanitizeExpression
+  ( sanitizeExpression
   )
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.QuickCheck
@@ -133,9 +131,11 @@ quickCheckTimeoutMicros = 30_000_000
 handle :: Store -> GhcSession -> Value -> IO ToolResult
 handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (parseErrorResult parseError)
   Right (QuickCheckArgs prop md) -> case sanitizeExpression prop of
-    Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
+    Left cmdErr ->
+      pure (Env.toolResponseToResult
+              (Env.mkRefused (Env.sanitizeRejection "property" cmdErr)))
     Right safe -> do
       -- Resolve the property's defining module via the GHC API.
       -- If the property is a bare identifier we can look up
@@ -450,57 +450,86 @@ isSimpleIdent t = case T.uncons t of
 -- upstream of QC). It carries the condensed stderr from cabal
 -- v2-repl so the agent can read the error message directly
 -- instead of staring at an empty @raw@ field.
+-- | Issue #90 Phase C: each QuickCheck outcome maps to a typed
+-- envelope. The pre-envelope payload (state, property, passed,
+-- shrinks, counterexample, raw) is preserved verbatim under
+-- 'result' so consumers branch on the structured 'state' field
+-- exactly as before.
+--
+--   * 'QcPassed'    → status='ok'.
+--   * 'QcFailed'    → status='failed'        kind='validation'.
+--   * 'QcException' → status='failed'        kind='subprocess_error'
+--                     (the property bombed mid-shrink). Special
+--                     case: the timeout path passes a fixed string
+--                     prefix; we surface it as 'inner_timeout'.
+--   * 'QcGaveUp'    → status='no_match'      kind='not_in_scope'
+--                     (semantically, no input satisfied the
+--                     precondition; consumers branch on this
+--                     same as on a missing fixture).
+--   * 'QcUnparsed'  → status='failed'        kind='subprocess_error'
+--                     (cabal repl printed something we can't
+--                     parse — usually a load error; the optional
+--                     hint surfaces the cleaned stderr).
 renderResult :: QuickCheckResult -> Maybe Text -> ToolResult
-renderResult qr mHint =
-  let payload = case qr of
-        QcPassed p n ->
-          object
-            [ "success"  .= True
-            , "state"    .= ("passed" :: Text)
-            , "property" .= p
-            , "passed"   .= n
-            ]
-        QcFailed p n shr cex ->
-          object
-            [ "success"        .= False
-            , "state"          .= ("failed" :: Text)
-            , "property"       .= p
-            , "passed"         .= n
-            , "shrinks"        .= shr
-            , "counterexample" .= cex
-            ]
-        QcException p err ->
-          object
-            [ "success"  .= False
-            , "state"    .= ("exception" :: Text)
-            , "property" .= p
-            , "error"    .= err
-            ]
-        QcGaveUp p n disc ->
-          object
-            [ "success"   .= False
-            , "state"     .= ("gave_up" :: Text)
-            , "property"  .= p
-            , "passed"    .= n
-            , "discarded" .= disc
-            , "hint"      .= ( "Too many inputs rejected by precondition (==>). \
-                              \Consider relaxing the precondition or writing a \
-                              \custom generator." :: Text)
-            ]
-        QcUnparsed p raw ->
-          object $
-            [ "success"  .= False
-            , "state"    .= ("unparsed" :: Text)
-            , "property" .= p
-            , "raw"      .= raw
-            ] <> maybeHintPair mHint
-      isErr = case qr of
-        QcPassed _ _ -> False
-        _            -> True
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = isErr
-       }
+renderResult qr mHint = case qr of
+  QcPassed p n ->
+    Env.toolResponseToResult (Env.mkOk (object
+      [ "state"    .= ("passed" :: Text)
+      , "property" .= p
+      , "passed"   .= n
+      ]))
+  QcFailed p n shr cex ->
+    let payload = object
+          [ "state"          .= ("failed" :: Text)
+          , "property"       .= p
+          , "passed"         .= n
+          , "shrinks"        .= shr
+          , "counterexample" .= cex
+          ]
+        envErr   = Env.mkErrorEnvelope Env.Validation
+                     ("Property failed at counterexample (after "
+                       <> T.pack (show n) <> " passes, "
+                       <> T.pack (show shr) <> " shrinks)")
+        response = (Env.mkFailed envErr) { Env.reResult = Just payload }
+    in Env.toolResponseToResult response
+  QcException p err ->
+    let payload = object
+          [ "state"    .= ("exception" :: Text)
+          , "property" .= p
+          , "error"    .= err
+          ]
+        kind | "timeout:" `T.isPrefixOf` err = Env.InnerTimeout
+             | otherwise                     = Env.SubprocessError
+        envErr   = Env.mkErrorEnvelope kind err
+        response = (Env.mkFailed envErr) { Env.reResult = Just payload }
+    in Env.toolResponseToResult response
+  QcGaveUp p n disc ->
+    let payload = object
+          [ "state"     .= ("gave_up" :: Text)
+          , "property"  .= p
+          , "passed"    .= n
+          , "discarded" .= disc
+          , "hint"      .= ( "Too many inputs rejected by precondition (==>). \
+                             \Consider relaxing the precondition or writing a \
+                             \custom generator." :: Text)
+          ]
+        envErr   = Env.mkErrorEnvelope Env.NotInScope
+                     ("QuickCheck gave up after "
+                       <> T.pack (show disc) <> " discards / "
+                       <> T.pack (show n) <> " passes")
+        response = (Env.mkNoMatch payload) { Env.reError = Just envErr }
+    in Env.toolResponseToResult response
+  QcUnparsed p raw ->
+    let payload = object $
+          [ "state"    .= ("unparsed" :: Text)
+          , "property" .= p
+          , "raw"      .= raw
+          ] <> maybeHintPair mHint
+        envErr   = Env.mkErrorEnvelope Env.SubprocessError
+                     ( "Could not parse cabal repl output for property '"
+                       <> p <> "'." )
+        response = (Env.mkFailed envErr) { Env.reResult = Just payload }
+    in Env.toolResponseToResult response
   where
     -- Attach the 'hint' key ONLY when the stderr actually carried
     -- a diagnostic; empty or whitespace-only stderr is worse than
@@ -598,25 +627,18 @@ summariseStderr raw =
          && not ("resolving dependencies" `T.isPrefixOf` l)
          && not ("build profile" `T.isPrefixOf` l)
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
-formatCommandError :: CommandError -> Text
-formatCommandError = \case
-  ContainsNewline  -> "property must be a single line (no newline characters)"
-  ContainsSentinel -> "property contains the internal framing sentinel and was rejected"
-  EmptyInput       -> "property is empty"
-  InputTooLarge sz cap ->
-    "property is too large (" <> T.pack (show sz) <> " chars, cap is "
-      <> T.pack (show cap) <> ")"
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

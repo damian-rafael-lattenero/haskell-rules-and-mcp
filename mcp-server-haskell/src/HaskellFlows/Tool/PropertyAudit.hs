@@ -34,8 +34,6 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Time.Clock.POSIX (getPOSIXTime)
 
 import HaskellFlows.Data.PropertyStore
@@ -44,6 +42,7 @@ import HaskellFlows.Data.PropertyStore
   , loadAll
   )
 import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.QuickCheck
@@ -96,7 +95,7 @@ instance FromJSON PropertyAuditArgs where
 
 handle :: Store -> GhcSession -> Value -> IO ToolResult
 handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+  Left err -> pure (parseErrorResult err)
   Right args -> do
     t0 <- realToFrac <$> getPOSIXTime :: IO Double
     allProps <- loadAll store
@@ -187,6 +186,11 @@ runPairProbe ghcSess _args (p1, p2) = do
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: the audit report is informational — even
+-- when contradictions exist, this is data the agent uses to act
+-- on, not a hard failure of the tool. status='ok' always; the
+-- structured 'pairs_inconsistent' / 'findings' fields under
+-- 'result' carry the verdict.
 renderReport
   :: PropertyAuditArgs -> Int -> Int
   -> [PairFinding] -> Int
@@ -196,8 +200,7 @@ renderReport args nProps nPairs findings wallMs =
       skipped       = filter ((== "skipped") . pfStatus)       findings
       compatible    = length findings - length contradictory - length skipped
       payload = object
-        [ "success"             .= True
-        , "module_filter"       .= paModulePath args
+        [ "module_filter"       .= paModulePath args
         , "properties_checked"  .= nProps
         , "pairs_checked"       .= nPairs
         , "pairs_inconsistent"  .= length contradictory
@@ -212,10 +215,7 @@ renderReport args nProps nPairs findings wallMs =
                                     , "llm-conclusion-text"
                                     ] :: [Text])
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  in Env.toolResponseToResult (Env.mkOk payload)
 
 renderFinding :: PairFinding -> Value
 renderFinding f = object
@@ -228,16 +228,20 @@ renderFinding f = object
   , "counterexample" .= pfDetail f
   ]
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False, "error" .= msg ])) ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 --------------------------------------------------------------------------------
 -- Issue #77 — pure interpretation of the contradiction probe

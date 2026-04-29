@@ -26,8 +26,7 @@ import Data.Aeson.Types (parseEither)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
+import qualified HaskellFlows.Mcp.Envelope as Env
 import System.Timeout (timeout)
 
 import HaskellFlows.Data.PropertyStore
@@ -93,7 +92,7 @@ replayTimeoutMicros = 30_000_000
 handle :: Store -> GhcSession -> Value -> IO ToolResult
 handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (parseErrorResult parseError)
   Right (RegressionArgs a) -> do
     props <- loadAll store
     case a of
@@ -101,6 +100,21 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
       ActRun  -> do
         results <- mapM (runOne ghcSess) props
         pure (runResult results)
+
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 --------------------------------------------------------------------------------
 -- running
@@ -225,20 +239,21 @@ parseShowModulesPaths raw =
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: list view → status='ok'. Pure introspection
+-- of the on-disk property store.
 listResult :: [StoredProperty] -> ToolResult
 listResult props =
-  let payload =
-        object
-          [ "success"    .= True
-          , "action"     .= ("list" :: Text)
-          , "count"      .= length props
-          , "properties" .= map renderStored props
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "action"     .= ("list" :: Text)
+    , "count"      .= length props
+    , "properties" .= map renderStored props
+    ]))
 
+-- | Issue #90 Phase C: replay run → status='ok' iff every stored
+-- property re-played green. Any regression OR any property whose
+-- module failed to load → status='failed' kind='validation'.
+-- Both buckets ('regressions', 'load_failed') stay under 'result'
+-- so consumers branch on the structured outcome.
 runResult :: [Replay] -> ToolResult
 runResult replays =
   let total          = length replays
@@ -258,18 +273,20 @@ runResult replays =
       success        = regressed == 0 && loadFailures == 0
       payload =
         object
-          [ "success"        .= success
-          , "action"         .= ("run" :: Text)
+          [ "action"         .= ("run" :: Text)
           , "total"          .= total
           , "passed"         .= passed
           , "regressions"    .= map renderRegression regressions
           , "load_failed"    .= map renderLoadFailed  loadFailed
           , "summary"        .= summarise total regressed loadFailures
           ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = not success
-       }
+  in if success
+       then Env.toolResponseToResult (Env.mkOk payload)
+       else
+         let envErr   = Env.mkErrorEnvelope Env.Validation
+                          (summarise total regressed loadFailures)
+             response = (Env.mkFailed envErr) { Env.reResult = Just payload }
+         in Env.toolResponseToResult response
 
 isPass :: QuickCheckResult -> Bool
 isPass (QcPassed _ _) = True
@@ -346,16 +363,3 @@ renderOutcome = \case
                              ]
   QcUnparsed _ raw      -> object [ "state" .= ("unparsed" :: Text), "raw" .= raw ]
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
