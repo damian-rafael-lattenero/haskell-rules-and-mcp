@@ -67,6 +67,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import qualified E2E.Envelope as Env
 import E2E.Envelope (statusOk)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
@@ -512,11 +513,14 @@ runFlow c projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
+-- Issue #90 Phase D step 2: route through E2E.Envelope's
+-- envelope-aware lookupField so 'success' resolves to the
+-- synthesized projection of 'status' even though the legacy
+-- top-level field has been dropped.
 fieldIsTrue :: Text -> Value -> Bool
-fieldIsTrue k (Object o) = case KeyMap.lookup (Key.fromText k) o of
+fieldIsTrue k v = case Env.lookupField k v of
   Just (Bool True) -> True
   _                -> False
-fieldIsTrue _ _ = False
 
 renderShort :: Value -> Text
 renderShort v =
