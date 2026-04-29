@@ -52,6 +52,7 @@ import HaskellFlows.Ghc.ApiSession
   , loadForTarget
   , targetForPath
   )
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error
@@ -371,30 +372,25 @@ commitResultWithDiff base preDiags postDiags =
         | null postErrs && null preErrs = "ok"
         | null postErrs                 = "ok"  -- rewrite fixed every pre-existing error
         | otherwise                     = "ok-with-pre-existing-errors"
+  -- Issue #90 Phase C: success → status='ok' with merged payload
+  -- under 'result'.
   in case base of
        Object o ->
-         let extended = foldr (uncurry insertKV) o
-               [ ("success"             :: Text, toJSON True)
-               , ("dry_run",                     toJSON False)
+         let payload = Object (foldr (uncurry insertKV) o
+               [ ("dry_run"             :: Text, toJSON False)
                , ("compile",                     toJSON compileTag)
                , ("pre_existing_errors",         toJSON preErrs)
                , ("new_errors",                  toJSON ([] :: [GhcError]))
-               ]
-         in ToolResult
-              { trContent = [ TextContent (encodeUtf8Text (Object extended)) ]
-              , trIsError = False
-              }
+               ])
+         in Env.toolResponseToResult (Env.mkOk payload)
        _ ->
-         ToolResult
-           { trContent = [ TextContent (encodeUtf8Text
-               (object [ "success"             .= True
-                       , "summary"             .= base
-                       , "compile"             .= compileTag
-                       , "pre_existing_errors" .= preErrs
-                       , "new_errors"          .= ([] :: [GhcError])
-                       ])) ]
-           , trIsError = False
-           }
+         let payload = object
+               [ "summary"             .= base
+               , "compile"             .= compileTag
+               , "pre_existing_errors" .= preErrs
+               , "new_errors"          .= ([] :: [GhcError])
+               ]
+         in Env.toolResponseToResult (Env.mkOk payload)
 
 -- | Render a list of diagnostics into a single text blob matching
 -- the legacy @grOutput@ shape (file:line:col: message, blank line
@@ -410,30 +406,23 @@ renderDiags = T.intercalate "\n\n" . map one
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: dry-run success → status='ok' with the
+-- merged base+dry-run-extras payload under 'result'.
 dryRunResult :: Value -> Text -> ToolResult
 dryRunResult base preview =
-  case base of
-    Object o ->
-      let extended = foldr (uncurry insertKV) o dryRunKVs
-          dryRunKVs =
-            [ ("success" :: Text, toJSON True)
-            , ("dry_run",         toJSON True)
+  let payload = case base of
+        Object o ->
+          Object (foldr (uncurry insertKV) o
+            [ ("dry_run" :: Text, toJSON True)
             , ("preview",         toJSON preview)
+            ])
+        _ ->
+          object
+            [ "dry_run" .= True
+            , "preview" .= preview
+            , "summary" .= base
             ]
-      in ToolResult
-           { trContent = [ TextContent (encodeUtf8Text (Object extended)) ]
-           , trIsError = False
-           }
-    _ ->
-      ToolResult
-        { trContent = [ TextContent (encodeUtf8Text
-            (object [ "success" .= True
-                    , "dry_run" .= True
-                    , "preview" .= preview
-                    , "summary" .= base
-                    ])) ]
-        , trIsError = False
-        }
+  in Env.toolResponseToResult (Env.mkOk payload)
 
 -- | Aeson 2.x 'Object' is a 'KeyMap.KeyMap' — we go through 'Key.fromText'
 -- so callers stay in 'Text' land and never touch the @Key@ newtype
@@ -441,32 +430,33 @@ dryRunResult base preview =
 insertKV :: Text -> Value -> Object -> Object
 insertKV k = KeyMap.insert (Key.fromText k)
 
+-- | Issue #90 §4: post-rewrite type-check failure maps to
+-- status='failed' with kind='verify_failed'. The diagnostic detail
+-- ('errors', 'raw', 'note') stays under 'result' so consumers can
+-- branch per-error.
 compileFailResult :: [GhcError] -> Text -> Text -> ToolResult
 compileFailResult errs raw restoreMsg =
-  let payload =
-        object
-          [ "success"      .= False
-          , "dry_run"      .= False
-          , "compile"      .= ("failed" :: Text)
-          , "errors"       .= errs
-          , "raw"          .= raw
-          , "note"         .= ("Rewrite did not type-check" <> restoreMsg)
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = True
-       }
+  let envErr = (Env.mkErrorEnvelope Env.VerifyFailed
+                 ("Rewrite did not type-check" <> restoreMsg))
+                 { Env.eeCause = Just (T.take 400 raw) }
+      payload = object
+        [ "dry_run" .= False
+        , "compile" .= ("failed" :: Text)
+        , "errors"  .= errs
+        , "raw"     .= raw
+        ]
+      response = (Env.mkFailed envErr) { Env.reResult = Just payload }
+  in Env.toolResponseToResult response
 
+-- | Issue #90 Phase C: routed through the envelope. Most refactor
+-- failures map to kind='validation' (the input was structurally
+-- fine but failed a domain check — missing 'old_name', wrong
+-- scope, etc.). Path-traversal cases still emit kind='path_traversal'
+-- via the matching path in 'handle'.
 errorResult :: Text -> ToolResult
 errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
+  Env.toolResponseToResult (Env.mkFailed
+    (Env.mkErrorEnvelope Env.Validation msg))
 
 formatPathError :: PathError -> Text
 formatPathError = \case

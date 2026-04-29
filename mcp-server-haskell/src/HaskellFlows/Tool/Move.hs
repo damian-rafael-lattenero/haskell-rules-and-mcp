@@ -63,6 +63,7 @@ import HaskellFlows.Ghc.ApiSession
   , invalidateLoadCache
   , loadForTarget
   )
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
@@ -614,11 +615,14 @@ moduleNameToPath m =
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: dry-run preview → status='ok' with the
+-- (unwritten) plan under 'result'. Field names preserved verbatim
+-- so callers depending on @applied@/@dry_run@/@files_modified@
+-- still work.
 dryRunResult :: MoveArgs -> [(FilePath, Text, Text)] -> ToolResult
 dryRunResult args allWrites =
   let payload = object
-        [ "success"           .= True
-        , "applied"           .= False
+        [ "applied"           .= False
         , "dry_run"           .= True
         , "symbol"            .= maSymbol args
         , "from"              .= maFrom   args
@@ -627,16 +631,15 @@ dryRunResult args allWrites =
             map (\(p,_,_) -> T.pack p) allWrites
         , "consumers_updated" .= max 0 (length allWrites - 2)
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  in Env.toolResponseToResult (Env.mkOk payload)
 
+-- | Issue #90 Phase C: applied + verified move → status='ok'.
+-- 'verification.compile_status' stays under 'result' so the
+-- unchanged shape ('compile_status', 'new_errors') is intact.
 successResult :: MoveArgs -> [(FilePath, Text, Text)] -> ToolResult
 successResult args allWrites =
   let payload = object
-        [ "success"           .= True
-        , "applied"           .= True
+        [ "applied"           .= True
         , "dry_run"           .= False
         , "symbol"            .= maSymbol args
         , "from"              .= maFrom   args
@@ -649,29 +652,26 @@ successResult args allWrites =
             , "new_errors"     .= (0 :: Int)
             ]
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  in Env.toolResponseToResult (Env.mkOk payload)
 
+-- | Issue #90 §4: post-move type-check failure → status='failed'
+-- with kind='verify_failed'. Diagnostic detail ('errors',
+-- 'symbol', 'from', 'to', 'applied=false') stays under 'result'
+-- so consumers can branch by error.
 verifyFailedResult :: MoveArgs -> [GhcError] -> ToolResult
 verifyFailedResult args errs =
-  let payload = object
-        [ "success"     .= False
-        , "applied"     .= False
-        , "error_kind"  .= ("verify_failed" :: Text)
-        , "error"       .=
-            ( "Move rolled back — post-move project did not load. \
-              \See 'errors' for the GHC diagnostics." :: Text )
-        , "symbol"      .= maSymbol args
-        , "from"        .= maFrom   args
-        , "to"          .= maTo     args
-        , "errors"      .= map renderErr errs
+  let envErr = Env.mkErrorEnvelope Env.VerifyFailed
+        ( "Move rolled back — post-move project did not load. \
+          \See 'errors' for the GHC diagnostics." :: Text )
+      payload = object
+        [ "applied" .= False
+        , "symbol"  .= maSymbol args
+        , "from"    .= maFrom   args
+        , "to"      .= maTo     args
+        , "errors"  .= map renderErr errs
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = True
-       }
+      response = (Env.mkFailed envErr) { Env.reResult = Just payload }
+  in Env.toolResponseToResult response
   where
     renderErr e = object
       [ "file"    .= geFile e
@@ -680,24 +680,30 @@ verifyFailedResult args errs =
       , "message" .= geMessage e
       ]
 
+-- | Issue #90 Phase C: generic move failures route through
+-- kind='validation' (input was syntactically OK but failed a
+-- domain check). Path-traversal cases get their own kind via
+-- the 'kindError' family below.
 errorResult :: Text -> ToolResult
 errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False, "error" .= msg ])) ]
-    , trIsError = True
-    }
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg))
 
+-- | Issue #90 Phase C: typed-error helper. Maps the legacy kind
+-- string to a closed 'ErrorKind' constructor. The legacy string
+-- itself is preserved on the wire because 'ToolResponse'\'s
+-- ToJSON instance still emits the top-level @error_kind@ field
+-- during the migration window (see 'Env.errorKindToText').
 kindError :: Text -> Text -> ToolResult
 kindError kind msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success"    .= False
-        , "error_kind" .= kind
-        , "error"      .= msg
-        ])) ]
-    , trIsError = True
-    }
+  let resolved = case kind of
+        "source_module_missing"      -> Env.ModulePathDoesNotExist
+        "destination_module_missing" -> Env.ModulePathDoesNotExist
+        "symbol_not_found"           -> Env.NotInScope
+        "write_failed"               -> Env.SubprocessError
+        _                            -> Env.Validation
+  in Env.toolResponseToResult
+       (Env.mkFailed (Env.mkErrorEnvelope resolved msg))
 
 encodeUtf8Text :: Value -> Text
 encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

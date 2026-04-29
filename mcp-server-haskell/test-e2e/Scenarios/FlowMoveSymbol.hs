@@ -11,7 +11,9 @@
 --   3. Real move — assert success, files updated, the consumer's
 --      selective import was split, the project still loads.
 --   4. Negative test: a missing destination module is rejected
---      with @error_kind=destination_module_missing@ before any
+--      with @error_kind=module_path_does_not_exist@ (post-#90
+--      Phase C; the legacy @destination_module_missing@ string is
+--      still accepted during the dual-shape window) before any
 --      filesystem touch.
 module Scenarios.FlowMoveSymbol
   ( runFlow
@@ -147,14 +149,20 @@ runFlow c projectDir = do
     , "from"   .= ("Source"            :: Text)
     , "to"     .= ("Definitely.Missing" :: Text)
     ])
-  let missingOk =
+  -- Issue #90 Phase C: 'destination_module_missing' was a tool-local
+  -- string in the pre-envelope wire. Post-migration the closed enum
+  -- collapses both source/destination missing-on-disk failures to
+  -- 'module_path_does_not_exist'. Accept either while the dual-shape
+  -- window is open; Phase D drops the legacy form.
+  let kindMatches t = t == "module_path_does_not_exist"
+                   || t == "destination_module_missing"
+      missingOk =
         fieldBool "success" rMissing == Just False
-          && fieldText "error_kind" rMissing
-                == Just "destination_module_missing"
+          && maybe False kindMatches (fieldText "error_kind" rMissing)
   cMissing <- liveCheck $ checkPure
-    "missing destination → success=false, error_kind=destination_module_missing"
+    "missing destination → success=false, error_kind=module_path_does_not_exist"
     missingOk
-    ("Expected destination_module_missing. Got: " <> truncRender rMissing)
+    ("Expected module_path_does_not_exist. Got: " <> truncRender rMissing)
   stepFooter 4 t3
 
   pure [cDry, cApply, cInvariants, cMissing]
