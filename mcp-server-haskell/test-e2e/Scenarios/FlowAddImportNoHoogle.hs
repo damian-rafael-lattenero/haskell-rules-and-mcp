@@ -67,14 +67,18 @@ runFlow c _projectDir = do
              (object [ "name" .= ("fromMaybe" :: Text) ])
       let success     = statusOk r
           -- Issue #90: 'error' is now an object; the message
-          -- is at error.message. 'errorMessage' tolerates both
-          -- shapes during the migration window.
+          -- is at error.message and remediation lives on the
+          -- error envelope at error.remediation. 'errorMessage'
+          -- tolerates both shapes during the migration window.
           errFieldOk  = case errorMessage r of
                           Just e  -> "hoogle" `T.isInfixOf` T.toLower e
                           Nothing -> False
-          remPresent  = case lookupField "remediation" r of
-                          Just (String _) -> True
-                          _               -> False
+          remPresent  = case lookupField "error" r of
+                          Just (Object e) -> case KeyMap.lookup
+                                                 (Key.fromText "remediation") e of
+                            Just (String _) -> True
+                            _               -> False
+                          _ -> False
       liveCheck $ checkPure
         "success=false with 'hoogle' in error and remediation present"
         (success == Just False && errFieldOk && remPresent)
