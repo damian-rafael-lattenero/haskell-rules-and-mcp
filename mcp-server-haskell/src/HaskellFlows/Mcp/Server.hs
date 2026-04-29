@@ -109,6 +109,7 @@ import qualified HaskellFlows.Tool.Refactor        as RefactorTool
 import qualified HaskellFlows.Tool.Move             as MoveTool
 import qualified HaskellFlows.Tool.DepsExplain      as DepsExplainTool
 import qualified HaskellFlows.Tool.Lab              as LabTool
+import qualified HaskellFlows.Tool.ExplainError     as ExplainErrorTool
 import qualified HaskellFlows.Tool.Regression      as RegressionTool
 import qualified HaskellFlows.Tool.RemoveModules   as RemoveModulesTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
@@ -458,6 +459,13 @@ dispatchByName srv args = \case
     pd      <- readIORef (srvProjectDir srv)
     store   <- readIORef (srvStore srv)
     LabTool.handle ghcSess store pd args
+  GhcExplainError -> do
+    -- Issue #59 Phase 1: structured explanation-context builder.
+    -- The agent's own LLM consumes the response and proposes
+    -- candidates; Phase 2 will add a verify endpoint.
+    ghcSess <- getOrStartGhcSession srv
+    pd      <- readIORef (srvProjectDir srv)
+    ExplainErrorTool.handle ghcSess pd args
   GhcLint -> do
     pd <- readIORef (srvProjectDir srv)
     LintTool.handle pd args
@@ -590,6 +598,7 @@ allToolDescriptors =
   , MoveTool.descriptor
   , DepsExplainTool.descriptor
   , LabTool.descriptor
+  , ExplainErrorTool.descriptor
   , BatchTool.descriptor
   , LintTool.descriptor
   , ToolchainStatusTool.descriptor

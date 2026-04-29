@@ -80,6 +80,7 @@ data ToolName
   | GhcMove
   | GhcDepsExplain
   | GhcLab
+  | GhcExplainError
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 -- | Render a 'ToolName' as the wire-format string the MCP clients
@@ -129,6 +130,7 @@ toolNameText = \case
   GhcMove              -> "ghc_move"
   GhcDepsExplain       -> "ghc_deps_explain"
   GhcLab               -> "ghc_lab"
+  GhcExplainError      -> "ghc_explain_error"
 
 -- | Parse a wire-format tool name back to its constructor. Returns
 -- 'Nothing' for any unknown string — used by the dispatcher to emit

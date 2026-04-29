@@ -335,6 +335,17 @@ dispatch name payload = case name of
   -- example before deleting.
   GhcDeterminism -> Just (determinismNext payload)
 
+  -- Issue #59: the explainer returned context but no patch.
+  -- The agent's LLM step belongs OUT-OF-MCP — once it has a
+  -- candidate, the natural follow-up is ghc_refactor /
+  -- hand-edit, then ghc_load to confirm.
+  GhcExplainError -> Just (simple GhcLoad
+    "Phase 1 returns the explanation context. Use your LLM to \
+    \propose fix candidates from the {diagnostic, context} payload, \
+    \apply the chosen patch via ghc_refactor (or hand-edit), then \
+    \ghc_load to confirm the original error is gone."
+    Nothing)
+
   -- Issue #60: the audit just persisted a batch of properties;
   -- the natural follow-up is the project-level gate that
   -- replays the new + existing set under the post-audit

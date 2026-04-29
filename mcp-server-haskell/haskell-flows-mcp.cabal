@@ -96,6 +96,7 @@ library
                       HaskellFlows.Tool.Move
                       HaskellFlows.Tool.DepsExplain
                       HaskellFlows.Tool.Lab
+                      HaskellFlows.Tool.ExplainError
                       HaskellFlows.Tool.QuickCheck
                       HaskellFlows.Tool.QuickCheckExport
                       HaskellFlows.Tool.Refactor
@@ -243,6 +244,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowMoveSymbol
                       Scenarios.FlowDepsExplain
                       Scenarios.FlowLabAudit
+                      Scenarios.FlowExplainError
                       Scenarios.FlowDogfoodReplay
                       Scenarios.FlowTypeBreakage
                       Scenarios.FlowScopeMgmt

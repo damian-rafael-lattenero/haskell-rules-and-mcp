@@ -83,6 +83,7 @@ import qualified Scenarios.FlowRemoveModulesDownstream as FlowRMD
 import qualified Scenarios.FlowMoveSymbol         as FlowMS
 import qualified Scenarios.FlowDepsExplain        as FlowDE
 import qualified Scenarios.FlowLabAudit           as FlowLab
+import qualified Scenarios.FlowExplainError       as FlowEE
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
@@ -213,6 +214,8 @@ scenarios =
     , False, FlowDE.runFlow )
   , ( "Flow: Lab audit (#60 · module-wide property audit)"
     , True, FlowLab.runFlow )
+  , ( "Flow: ExplainError context (#59 · type-error therapist)"
+    , False, FlowEE.runFlow )
   , ( "Flow: Dogfood replay (7 MCP fixes round-tripped through one session)"
     , True, FlowDFR.runFlow )
   , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"
