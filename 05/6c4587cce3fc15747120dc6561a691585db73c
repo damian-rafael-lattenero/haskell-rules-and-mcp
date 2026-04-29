@@ -1,0 +1,35 @@
+mcp-server-haskell/src/HaskellFlows/Mcp/PermissiveJSON.hs
+  033795528ddcaec0 1-78
+mcp-server-haskell/src/HaskellFlows/Tool/Refactor.hs
+  033795528ddcaec0 54-57,158-162
+mcp-server-haskell/src/HaskellFlows/Tool/RemoveModules.hs
+  033795528ddcaec0 39,113-114,119-120,508,510
+mcp-server-haskell/src/HaskellFlows/Tool/Complete.hs
+  033795528ddcaec0 27,69-71,75
+mcp-server-haskell/test/Spec.hs
+  033795528ddcaec0 108-111,340-369,1621-1780
+mcp-server-haskell/haskell-flows-mcp.cabal
+  033795528ddcaec0 48,129
+mcp-server-haskell/src/HaskellFlows/Tool/FixWarning.hs
+  033795528ddcaec0 31-34,86-90,95,97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "056c4587cce3fc15747120dc6561a691585db73c",
+  "prompts": {
+    "033795528ddcaec0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c2325b8-3973-461e-9af9-e12d8c594bf0",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 578,
+      "total_deletions": 76,
+      "accepted_lines": 27740,
+      "overriden_lines": 0
+    }
+  }
+}
