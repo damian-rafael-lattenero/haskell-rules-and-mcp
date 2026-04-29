@@ -72,7 +72,27 @@ runFlow c projectDir = do
     ("Got: " <> truncRender rOne)
   stepFooter 2 t1
 
-  pure [cEmpty, cOne]
+  -- Step 4 — Issue #77: two duplicate-expression rows under
+  -- different module shapes (the cascade-of-#74 corruption shape).
+  -- After dedupe the audit must see ONE property and emit zero
+  -- pairs — not two distinct ones whose conjunction is vacuous.
+  t2 <- stepHeader 3 "ghc_property_audit dedupes by expression (#77)"
+  TIO.writeFile (storeDir </> "properties.json")
+    "[{\"expression\":\"\\\\x -> x == (x :: Int)\",\
+    \\"module\":\"Foo\",\"passed\":1,\"updated\":0},\
+    \{\"expression\":\"\\\\x -> x == (x :: Int)\",\
+    \\"module\":\"src/Foo.hs\",\"passed\":1,\"updated\":0}]"
+  rDup <- Client.callTool c GhcPropertyAudit (object [])
+  let okDup = fieldBool "success" rDup == Just True
+            && fieldInt "properties_checked" rDup == 1
+            && fieldInt "pairs_checked" rDup == 0
+  cDup <- liveCheck $ checkPure
+    "duplicate expression collapses to 1 property"
+    okDup
+    ("Got: " <> truncRender rDup)
+  stepFooter 3 t2
+
+  pure [cEmpty, cOne, cDup]
 
 --------------------------------------------------------------------------------
 -- helpers

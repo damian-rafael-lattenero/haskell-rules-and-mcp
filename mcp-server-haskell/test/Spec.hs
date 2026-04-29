@@ -555,6 +555,16 @@ main = do
       , test "property_audit: pairCombinations 5 elements (#64)" testPACombinations5
       , test "property_audit: pairCombinations distinct pairs (#64)" testPACombinationsDistinct
       , test "property_audit: buildContradictionProbe shape (#64)" testPABuildProbe
+      , test "property_audit: interpretProbeResult QcPassed → contradictory (#77)"
+                                                                 testPAInterpretPassed
+      , test "property_audit: interpretProbeResult QcFailed → compatible (#77)"
+                                                                 testPAInterpretFailed
+      , test "property_audit: interpretProbeResult QcGaveUp/Unparsed/Exception → skipped (#77)"
+                                                                 testPAInterpretSkipped
+      , test "property_audit: dedupByExpression keeps first occurrence (#77)"
+                                                                 testPADedupByExpression
+      , test "property_audit: dedupByExpression preserves singletons (#77)"
+                                                                 testPADedupSingletons
       , test "witness: bucketSize boundary cases (#65)" testWitBucketBoundaries
       , test "witness: buildInstrumentedProperty wraps with collect (#65)" testWitBuildInstrumented
       , test "witness: parseLabelDistribution recovers buckets (#65)" testWitParseDistribution
@@ -4701,6 +4711,74 @@ testPABuildProbe =
         && T.isInfixOf "not"  probe
         && T.isInfixOf p1     probe
         && T.isInfixOf p2     probe
+
+-- | Issue #77: 'QcPassed' means the probe @P1 ∧ ¬P2@ was true
+-- on every random input — that IS the contradiction. The
+-- pre-#77 implementation had this inverted.
+testPAInterpretPassed :: IO Bool
+testPAInterpretPassed =
+  let (status, _detail) = PropertyAuditTool.interpretProbeResult
+                            (QcPassed "probe" 100)
+  in pure (status == "contradictory")
+
+-- | Issue #77: 'QcFailed' means at least one input made the
+-- probe false — the conjunction P1 ∧ ¬P2 does not hold there,
+-- so the properties are compatible at that input.
+testPAInterpretFailed :: IO Bool
+testPAInterpretFailed =
+  let (status, detail) = PropertyAuditTool.interpretProbeResult
+                           (QcFailed "probe" 50 2 "[0,-1]")
+  in pure (status == "compatible" && T.isInfixOf "[0,-1]" detail)
+
+-- | Issue #77: every QC outcome that is neither passed nor
+-- failed (parse failure, exception, give-up) maps to skipped.
+-- The audit must not pretend to know the answer.
+testPAInterpretSkipped :: IO Bool
+testPAInterpretSkipped =
+  let (s1, _) = PropertyAuditTool.interpretProbeResult
+                  (QcUnparsed  "p" "garbage")
+      (s2, _) = PropertyAuditTool.interpretProbeResult
+                  (QcException "p" "oops")
+      (s3, _) = PropertyAuditTool.interpretProbeResult
+                  (QcGaveUp    "p" 10 50)
+  in pure (s1 == "skipped" && s2 == "skipped" && s3 == "skipped")
+
+-- | Issue #77 (cascade of #74): when the store has duplicate
+-- rows for the same expression under different module shapes,
+-- 'dedupByExpression' collapses them into one entry, keeping
+-- the first occurrence.
+testPADedupByExpression :: IO Bool
+testPADedupByExpression =
+  let mk e m = StoredProperty
+                 { spExpression = e
+                 , spModule     = Just m
+                 , spPassed     = 1
+                 , spUpdated    = 0
+                 }
+      input = [ mk "expr-A" "Foo.Bar"
+              , mk "expr-A" "src/Foo/Bar.hs"   -- duplicate, dropped
+              , mk "expr-B" "Foo.Bar"
+              , mk "expr-B" "src/Foo/Bar.hs"   -- duplicate, dropped
+              ]
+      out = PropertyAuditTool.dedupByExpression input
+      modules = map spModule out
+  in pure $ length out == 2
+         && map spExpression out == ["expr-A", "expr-B"]
+         && modules == [Just "Foo.Bar", Just "Foo.Bar"]   -- first kept
+
+-- | Issue #77: dedupe is a no-op when every expression is
+-- distinct. We must never drop a real entry.
+testPADedupSingletons :: IO Bool
+testPADedupSingletons =
+  let mk e = StoredProperty
+               { spExpression = e
+               , spModule     = Just "Foo"
+               , spPassed     = 1
+               , spUpdated    = 0
+               }
+      input = [mk "p1", mk "p2", mk "p3"]
+      out   = PropertyAuditTool.dedupByExpression input
+  in pure (length out == 3)
 
 -- | Issue #65: each canonical bucket boundary maps to its
 -- expected label (0 / 1-5 / 6-20 / >20). The four cases below

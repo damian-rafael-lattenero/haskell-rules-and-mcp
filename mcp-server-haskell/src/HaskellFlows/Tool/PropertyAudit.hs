@@ -25,6 +25,8 @@ module HaskellFlows.Tool.PropertyAudit
     -- * Pure helpers (exported for unit tests)
   , pairCombinations
   , buildContradictionProbe
+  , interpretProbeResult
+  , dedupByExpression
   ) where
 
 import Control.Exception (SomeException, try)
@@ -98,13 +100,21 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Right args -> do
     t0 <- realToFrac <$> getPOSIXTime :: IO Double
     allProps <- loadAll store
-    let filtered = case paModulePath args of
-          Nothing -> allProps
-          Just m  -> [ p | p <- allProps, spModule p == Just m ]
-        pairs = pairCombinations filtered
-    findings <- mapM (runPairProbe ghcSess args) pairs
+    -- Issue #77 / cascade of #74: the property store may carry
+    -- duplicate rows for the same expression under different
+    -- 'module' shapes (path vs Haskell module name). Without
+    -- deduplication the audit pairs a property with itself
+    -- under the second shape, producing a counterexample that
+    -- looks like a contradiction with no real disagreement.
+    -- Dedupe by expression text — the canonical identity.
+    let deduped = dedupByExpression allProps
+        filtered = case paModulePath args of
+          Nothing -> deduped
+          Just m  -> [ p | p <- deduped, spModule p == Just m ]
+        propPairs = pairCombinations filtered
+    findings <- mapM (runPairProbe ghcSess args) propPairs
     t1 <- realToFrac <$> getPOSIXTime :: IO Double
-    pure (renderReport args (length filtered) (length pairs)
+    pure (renderReport args (length filtered) (length propPairs)
                        findings (truncate ((t1 - t0) * 1000)))
 
 --------------------------------------------------------------------------------
@@ -165,48 +175,13 @@ runPairProbe ghcSess _args (p1, p2) = do
         , pfDetail = T.pack ("subprocess error: " <> show e)
         }
     Right (out, _err) ->
-      case parseQuickCheckOutput probe out of
-        QcFailed _ _ _ counterex ->
-          -- QuickCheck failed our probe → the conjunction holds for
-          -- some input → P1 says yes, P2 says no on that input →
-          -- properties disagree.
-          PairFinding
-            { pfP1     = p1
-            , pfP2     = p2
-            , pfStatus = "contradictory"
-            , pfDetail = counterex
-            }
-        QcPassed _ _ ->
-          -- The probe never succeeded (no input where P1 ∧ ¬P2
-          -- held) — within the searched input space, the
-          -- properties are consistent.
-          PairFinding
-            { pfP1     = p1
-            , pfP2     = p2
-            , pfStatus = "compatible"
-            , pfDetail = ""
-            }
-        QcUnparsed _ raw ->
-          PairFinding
-            { pfP1     = p1
-            , pfP2     = p2
-            , pfStatus = "skipped"
-            , pfDetail = "probe load/parse failure: " <> T.take 200 raw
-            }
-        QcException _ msg ->
-          PairFinding
-            { pfP1     = p1
-            , pfP2     = p2
-            , pfStatus = "skipped"
-            , pfDetail = "probe exception: " <> T.take 200 msg
-            }
-        QcGaveUp {} ->
-          PairFinding
-            { pfP1     = p1
-            , pfP2     = p2
-            , pfStatus = "skipped"
-            , pfDetail = "QuickCheck gave up (too many discards)"
-            }
+      let (status, detail) = interpretProbeResult (parseQuickCheckOutput probe out)
+      in PairFinding
+           { pfP1     = p1
+           , pfP2     = p2
+           , pfStatus = status
+           , pfDetail = detail
+           }
 
 --------------------------------------------------------------------------------
 -- response shaping
@@ -263,3 +238,79 @@ errorResult msg =
 
 encodeUtf8Text :: Value -> Text
 encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+
+--------------------------------------------------------------------------------
+-- Issue #77 — pure interpretation of the contradiction probe
+--------------------------------------------------------------------------------
+
+-- | Issue #77: classify a QuickCheck verdict on the
+-- contradiction probe @\\args -> P1 args && not (P2 args)@
+-- into one of the audit's three statuses.
+--
+-- The pre-#77 implementation had this inverted: \"QC failed
+-- → contradictory\" / \"QC passed → compatible\". Re-derive
+-- from QuickCheck's semantics:
+--
+--   * 'QcPassed' — every random input made the probe TRUE.
+--     The probe is @P1 ∧ ¬P2@; if it's true on every input QC
+--     tried, then P1 holds whenever ¬P2 holds, i.e. P1 says
+--     yes whenever P2 says no. That IS the contradiction.
+--
+--   * 'QcFailed' with a counterexample — at least one input
+--     made the probe FALSE. For that input, either P1 was
+--     false or P2 was true; in both cases, the conjunction
+--     @P1 ∧ ¬P2@ does not hold, so the input does NOT
+--     demonstrate disagreement. The properties are compatible
+--     at least there.
+--
+-- We treat 'QcUnparsed', 'QcException' and 'QcGaveUp' as
+-- 'skipped' — the probe could not be evaluated, so we don't
+-- pretend to know the answer.
+interpretProbeResult :: QuickCheckResult -> (Text, Text)
+interpretProbeResult = \case
+  QcPassed _ n ->
+    ( "contradictory"
+    , "QuickCheck found "
+        <> T.pack (show n)
+        <> " random inputs satisfying P1 ∧ ¬P2 — properties disagree."
+    )
+  QcFailed _ _ _ counterex ->
+    ( "compatible"
+    , "Probe falsified at: " <> counterex
+    )
+  QcUnparsed _ raw ->
+    ( "skipped"
+    , "probe load/parse failure: " <> T.take 200 raw
+    )
+  QcException _ msg ->
+    ( "skipped"
+    , "probe exception: " <> T.take 200 msg
+    )
+  QcGaveUp {} ->
+    ( "skipped"
+    , "QuickCheck gave up (too many discards)"
+    )
+
+--------------------------------------------------------------------------------
+-- Issue #77 / cascade of #74 — defensive deduplication
+--------------------------------------------------------------------------------
+
+-- | Issue #77: dedupe stored properties by expression text.
+--
+-- The property store can carry the same property twice when
+-- a historical bug (#74) caused 'check_module' / regression
+-- replays to re-persist under a path-shape 'module' field.
+-- The expression string is the canonical identity; if two
+-- rows have the same expression, they're the same property
+-- regardless of how their 'module' field is shaped.
+--
+-- We keep the FIRST occurrence so the store's natural order
+-- (oldest-first) is preserved — useful for reasoning about
+-- when each property was added.
+dedupByExpression :: [StoredProperty] -> [StoredProperty]
+dedupByExpression = go []
+  where
+    go _    []     = []
+    go seen (p:ps)
+      | spExpression p `elem` seen = go seen ps
+      | otherwise                  = p : go (spExpression p : seen) ps
