@@ -39,6 +39,7 @@ library
     hs-source-dirs:   src
     exposed-modules:  HaskellFlows
                       HaskellFlows.Types
+                      HaskellFlows.Mcp.Envelope
                       HaskellFlows.Mcp.ErrorKind
                       HaskellFlows.Mcp.Guidance
                       HaskellFlows.Mcp.NextStep

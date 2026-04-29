@@ -229,6 +229,7 @@ import HaskellFlows.Ghc.ApiSession
   , startGhcSession
   , withGhcSession
   )
+import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.Type as TypeTool
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
 import HaskellFlows.Tool.SwitchProject
@@ -367,6 +368,32 @@ main = do
       , test "ResourceUri: render-parse round-trip" testResourceUriRoundTrip
       , test "ResourceUri: parse rejects unknown"   testResourceUriParseUnknown
       , test "ResourceUri: wire forms canonical"    testResourceUriWireCanonical
+      , test "Envelope #90: ToolStatus round-trips JSON wire form"
+                                                   testEnvelopeStatusRoundTrip
+      , test "Envelope #90: ErrorKind round-trips JSON wire form"
+                                                   testEnvelopeErrorKindRoundTrip
+      , test "Envelope #90: WarningKind round-trips JSON wire form"
+                                                   testEnvelopeWarningKindRoundTrip
+      , test "Envelope #90: legacy `success` derives correctly per status"
+                                                   testEnvelopeLegacySuccess
+      , test "Envelope #90: mkOk produces status=ok with result"
+                                                   testEnvelopeMkOk
+      , test "Envelope #90: mkRefused produces status=refused with error"
+                                                   testEnvelopeMkRefused
+      , test "Envelope #90: FromJSON rejects status=ok without result"
+                                                   testEnvelopeFromJSONRequiresResult
+      , test "Envelope #90: FromJSON rejects status=failed without error"
+                                                   testEnvelopeFromJSONRequiresError
+      , test "Envelope #90: ToolResponse JSON encode/decode round-trip"
+                                                   testEnvelopeRoundTrip
+      , test "Envelope #90: ErrorEnvelope optional fields default to Nothing"
+                                                   testEnvelopeErrorOptionalFields
+      , test "Envelope #90: warnings field omitted when empty"
+                                                   testEnvelopeWarningsOmittedEmpty
+      , quickTest "prop_envelope_status_total"     prop_envelopeStatusTotal
+      , quickTest "prop_envelope_errorkind_total"  prop_envelopeErrorKindTotal
+      , quickTest "prop_envelope_warningkind_total" prop_envelopeWarningKindTotal
+      , quickTest "prop_envelope_legacy_success"   prop_envelopeLegacySuccess
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -2130,6 +2157,268 @@ testResourceUriWireCanonical = pure $
      resourceUriText WorkflowRules == "haskell-flows://rules/workflow"
   && length allResourceUris       == 1
   && length allResourceUriTexts   == 1
+
+--------------------------------------------------------------------------------
+-- Issue #90 (Phase A): Mcp.Envelope contract
+--
+-- Tests the unified response envelope at the JSON-wire boundary plus
+-- the smart-constructor invariants. Phase A is pure-additive — these
+-- tests exercise the new module without touching any existing tool.
+-- The wire-format strings are also a security-relevant contract: the
+-- @StatusRefused@ + @{path_traversal, newline_injection,
+-- sentinel_poisoning, oversized_input, empty_input}@ pairing is what
+-- the future sanitize-layer migration will emit, so the round-trip
+-- assertions double as wire-stability anchors for those error kinds.
+--------------------------------------------------------------------------------
+
+-- | Every 'ToolStatus' encodes to its documented lowercase wire form
+-- and decodes back. Anchors the wire string against accidental
+-- rename in 'statusToText'. Iterates @[minBound..maxBound]@ so a
+-- future eighth status fails compilation, not at runtime.
+testEnvelopeStatusRoundTrip :: IO Bool
+testEnvelopeStatusRoundTrip =
+  let allStatuses = [minBound .. maxBound] :: [Env.ToolStatus]
+      expected =
+        [ (Env.StatusOk,          "ok")
+        , (Env.StatusPartial,     "partial")
+        , (Env.StatusNoMatch,     "no_match")
+        , (Env.StatusRefused,     "refused")
+        , (Env.StatusFailed,      "failed")
+        , (Env.StatusTimeout,     "timeout")
+        , (Env.StatusUnavailable, "unavailable")
+        ]
+      wireFormCorrect = all (\(s, t) -> Env.statusToText s == t) expected
+      reverseTotal    = all (\s -> Env.textToStatus (Env.statusToText s) == Just s) allStatuses
+      jsonRound s     = case A.fromJSON (A.toJSON s) of
+                          A.Success s' -> s' == s
+                          _            -> False
+      jsonAllOk       = all jsonRound allStatuses
+  in pure (wireFormCorrect && reverseTotal && jsonAllOk)
+
+-- | 'ErrorKind' has 23 documented wire-form strings (issue #90 §4).
+-- Spot-check a representative subset against the documented strings,
+-- plus assert the round-trip works for the full enum.
+testEnvelopeErrorKindRoundTrip :: IO Bool
+testEnvelopeErrorKindRoundTrip =
+  let allKinds = [minBound .. maxBound] :: [Env.ErrorKind]
+      pinned =
+        [ (Env.MissingArg,             "missing_arg")
+        , (Env.TypeMismatch,           "type_mismatch")
+        , (Env.PathTraversal,          "path_traversal")
+        , (Env.NewlineInjection,       "newline_injection")
+        , (Env.SentinelPoisoning,      "sentinel_poisoning")
+        , (Env.OversizedInput,         "oversized_input")
+        , (Env.NotInScope,             "not_in_scope")
+        , (Env.ModuleNotInGraph,       "module_not_in_graph")
+        , (Env.ModulePathDoesNotExist, "module_path_does_not_exist")
+        , (Env.UnresolvableDep,        "unresolvable_dep")
+        , (Env.VerifyFailed,           "verify_failed")
+        , (Env.InnerTimeout,           "inner_timeout")
+        , (Env.OuterTimeout,           "outer_timeout")
+        , (Env.SessionExhausted,       "session_exhausted")
+        , (Env.BinaryUnavailable,      "binary_unavailable")
+        ]
+      pinnedOk = all (\(k, t) -> Env.errorKindToText k == t) pinned
+      reverseTotal = all (\k -> Env.textToErrorKind (Env.errorKindToText k) == Just k)
+                         allKinds
+      countOk = length allKinds == 23  -- §4 promises 23 kinds
+  in pure (pinnedOk && reverseTotal && countOk)
+
+-- | Companion round-trip for 'WarningKind'.
+testEnvelopeWarningKindRoundTrip :: IO Bool
+testEnvelopeWarningKindRoundTrip =
+  let allKinds = [minBound .. maxBound] :: [Env.WarningKind]
+      pinned =
+        [ (Env.DeprecatedField,     "deprecated_field")
+        , (Env.DeprecatedTool,      "deprecated_tool")
+        , (Env.LowConfidence,       "low_confidence")
+        , (Env.SlowPath,            "slow_path")
+        , (Env.RecoveredAfterRetry, "recovered_after_retry")
+        , (Env.OtherWarning,        "other")
+        ]
+      pinnedOk     = all (\(k, t) -> Env.warningKindToText k == t) pinned
+      reverseTotal = all (\k -> Env.textToWarningKind (Env.warningKindToText k) == Just k)
+                         allKinds
+  in pure (pinnedOk && reverseTotal)
+
+-- | The deprecated @success@ field must be derived as
+-- @ok | partial → True@, every other status → False. This is the
+-- contract that lets old clients keep working during the migration
+-- window (Phases B–D); a regression here breaks every legacy
+-- consumer silently.
+testEnvelopeLegacySuccess :: IO Bool
+testEnvelopeLegacySuccess =
+  let truthy =
+        [ Env.StatusOk
+        , Env.StatusPartial
+        ]
+      falsy =
+        [ Env.StatusNoMatch
+        , Env.StatusRefused
+        , Env.StatusFailed
+        , Env.StatusTimeout
+        , Env.StatusUnavailable
+        ]
+  in pure (all Env.isLegacySuccess truthy
+        && not (any Env.isLegacySuccess falsy))
+
+-- | 'mkOk' produces the canonical happy-path shape: status=ok,
+-- result present, error absent. Encodes through Aeson and asserts
+-- the wire-form fields.
+testEnvelopeMkOk :: IO Bool
+testEnvelopeMkOk =
+  let payload = A.object [ "answer" A..= (42 :: Int) ]
+      response = Env.mkOk payload
+      encoded = A.toJSON response
+      lookupKey k v = case encoded of
+        A.Object o -> AKM.lookup (AKey.fromText k) o == Just v
+        _          -> False
+  in pure
+       ( Env.reStatus response == Env.StatusOk
+      && Env.reResult response == Just payload
+      && isNothing (Env.reError response)
+      && lookupKey "status"  (A.String "ok")
+      && lookupKey "success" (A.Bool True)
+      && lookupKey "result"  payload
+       )
+
+-- | 'mkRefused' produces the canonical refusal shape: status=refused,
+-- error present, result absent. The encoded @success@ field must be
+-- @False@; this is the *legacy* signal that distinguishes a refusal
+-- from an OK response.
+testEnvelopeMkRefused :: IO Bool
+testEnvelopeMkRefused =
+  let err      = Env.mkErrorEnvelope Env.PathTraversal "target path escapes project root"
+      response = Env.mkRefused err
+      encoded  = A.toJSON response
+      lookupKey k v = case encoded of
+        A.Object o -> AKM.lookup (AKey.fromText k) o == Just v
+        _          -> False
+      hasErrorObj = case encoded of
+        A.Object o -> case AKM.lookup (AKey.fromText "error") o of
+          Just (A.Object eo) ->
+            AKM.lookup (AKey.fromText "kind")    eo == Just (A.String "path_traversal")
+              && AKM.lookup (AKey.fromText "message") eo == Just (A.String "target path escapes project root")
+          _ -> False
+        _ -> False
+  in pure
+       ( Env.reStatus response == Env.StatusRefused
+      && isNothing (Env.reResult response)
+      && lookupKey "status"  (A.String "refused")
+      && lookupKey "success" (A.Bool False)
+      && hasErrorObj
+       )
+
+-- | 'FromJSON' enforces the §2 invariant: a payload that announces
+-- @status: ok@ but omits @result@ is malformed and must fail the
+-- parser. Catches the case where a future emitter forgets the
+-- @result@ field — without this gate, the consumer would see
+-- @reResult = Nothing@ and silently degrade.
+testEnvelopeFromJSONRequiresResult :: IO Bool
+testEnvelopeFromJSONRequiresResult =
+  let bytes = "{\"status\":\"ok\"}"
+  in pure $ case A.eitherDecode bytes :: Either String Env.ToolResponse of
+       Left err -> "requires" `List.isInfixOf` err
+       Right _  -> False
+
+-- | Inverse: @status: failed@ without @error@ must fail.
+testEnvelopeFromJSONRequiresError :: IO Bool
+testEnvelopeFromJSONRequiresError =
+  let bytes = "{\"status\":\"failed\"}"
+  in pure $ case A.eitherDecode bytes :: Either String Env.ToolResponse of
+       Left err -> "requires" `List.isInfixOf` err
+       Right _  -> False
+
+-- | Encode → decode round-trip. Builds a representative response
+-- with every optional field populated; assertion is structural
+-- equality after the round-trip.
+testEnvelopeRoundTrip :: IO Bool
+testEnvelopeRoundTrip =
+  let payload = A.object [ "type" A..= ("Int -> Int" :: Text) ]
+      warning = Env.Warning
+                  { Env.wKind    = Env.LowConfidence
+                  , Env.wMessage = "result inferred via best-effort"
+                  , Env.wExtra   = Just (A.object [ "confidence" A..= ("medium" :: Text) ])
+                  }
+      meta = Env.Meta
+               { Env.metaTool       = "ghc_type"
+               , Env.metaVersion    = "0.1.0.0"
+               , Env.metaDurationMs = 42
+               , Env.metaTraceId    = Just "7f3a2b"
+               }
+      response =
+        Env.withMeta meta
+        . Env.withNextStep (A.object [ "tool" A..= ("ghc_quickcheck" :: Text) ])
+        . Env.withWarnings [warning]
+        $ Env.mkOk payload
+      encoded = A.encode response
+  in pure $ case A.eitherDecode encoded :: Either String Env.ToolResponse of
+       Right decoded
+         | decoded == response -> True
+       _                       -> False
+
+-- | The optional fields on 'ErrorEnvelope' default to 'Nothing' on
+-- decode when omitted — confirms that minimal-shape errors
+-- (kind + message only) parse cleanly without the consumer needing
+-- to special-case missing keys.
+testEnvelopeErrorOptionalFields :: IO Bool
+testEnvelopeErrorOptionalFields =
+  let bytes = "{\"kind\":\"missing_arg\",\"message\":\"required field 'expression' is missing\"}"
+  in pure $ case A.eitherDecode bytes :: Either String Env.ErrorEnvelope of
+       Right ee ->
+         Env.eeKind ee == Env.MissingArg
+           && Env.eeMessage ee == "required field 'expression' is missing"
+           && isNothing (Env.eeField ee)
+           && isNothing (Env.eeHint ee)
+       Left _ -> False
+
+-- | When a response has no warnings, the @warnings@ field is omitted
+-- from the wire output (rather than being serialised as an empty
+-- array). Keeps the wire payload small and deterministic so a future
+-- consumer's string-equality oracle on the JSON doesn't break when
+-- a tool that previously emitted warnings stops.
+testEnvelopeWarningsOmittedEmpty :: IO Bool
+testEnvelopeWarningsOmittedEmpty =
+  let response = Env.mkOk (A.object [])
+      encoded  = A.toJSON response
+      hasWarningsKey = case encoded of
+        A.Object o -> AKM.member (AKey.fromText "warnings") o
+        _          -> False
+  in pure (not hasWarningsKey)
+
+-- | QC: round-trip totality for 'ToolStatus'. Hand-rolled 'Arbitrary'
+-- via @[minBound..maxBound]@ + 'QC.elements' so we don't pull in
+-- @quickcheck-instances@ for the enum. Every status, when serialised
+-- and re-parsed, returns the same value.
+prop_envelopeStatusTotal :: QC.Property
+prop_envelopeStatusTotal = QC.forAll (QC.elements [minBound..maxBound]) $ \s ->
+  case A.fromJSON (A.toJSON (s :: Env.ToolStatus)) of
+    A.Success s' -> s' === s
+    A.Error e    -> QC.counterexample e (QC.property False)
+
+-- | QC: same totality for 'ErrorKind'. 23 values per #90 §4.
+prop_envelopeErrorKindTotal :: QC.Property
+prop_envelopeErrorKindTotal = QC.forAll (QC.elements [minBound..maxBound]) $ \k ->
+  case A.fromJSON (A.toJSON (k :: Env.ErrorKind)) of
+    A.Success k' -> k' === k
+    A.Error e    -> QC.counterexample e (QC.property False)
+
+-- | QC: same totality for 'WarningKind'.
+prop_envelopeWarningKindTotal :: QC.Property
+prop_envelopeWarningKindTotal = QC.forAll (QC.elements [minBound..maxBound]) $ \w ->
+  case A.fromJSON (A.toJSON (w :: Env.WarningKind)) of
+    A.Success w' -> w' === w
+    A.Error e    -> QC.counterexample e (QC.property False)
+
+-- | QC: legacy @success@ derives correctly for every status.
+-- Equivalent to the unit test 'testEnvelopeLegacySuccess' but
+-- reasoned exhaustively: the contract is *exactly* @ok | partial
+-- → True@, no exceptions.
+prop_envelopeLegacySuccess :: QC.Property
+prop_envelopeLegacySuccess = QC.forAll (QC.elements [minBound..maxBound]) $ \s ->
+  let derived  = Env.isLegacySuccess s
+      expected = s == Env.StatusOk || s == Env.StatusPartial
+  in derived === expected
 
 --------------------------------------------------------------------------------
 -- Phase 9: Lint parser + Cabal validator + check_project + hole fits
