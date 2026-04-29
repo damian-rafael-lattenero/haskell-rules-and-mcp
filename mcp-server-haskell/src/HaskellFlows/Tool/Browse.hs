@@ -15,8 +15,6 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
 import GHC
   ( Ghc
@@ -36,6 +34,7 @@ import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.Var (varType)
 import GHC.Utils.Outputable (showPprUnsafe)
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -64,25 +63,45 @@ instance FromJSON BrowseArgs where
 
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+  Left err ->
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKind err)
+          (T.pack ("Invalid arguments: " <> err)))
+            { Env.eeCause = Just (T.pack err) })))
   Right (BrowseArgs m) -> do
     eRes <- try (withGhcSession ghcSess (queryBrowse m))
-    pure $ case eRes of
+    pure $ Env.toolResponseToResult $ case eRes of
       Left (se :: SomeException) ->
-        errorResult (T.pack ("GHC API error: " <> show se))
+        Env.mkFailed
+          ((Env.mkErrorEnvelope Env.InternalError
+              (T.pack ("GHC API error: " <> show se)))
+                { Env.eeCause = Just (T.pack (show se)) })
       Right Nothing ->
-        -- Issue #72: 'browse' can only enumerate modules from the
-        -- project's compile graph, but 'ghc_imports' often lists
-        -- 'Prelude' and other base modules that are in the
-        -- *interactive scope* without being in the graph. The
-        -- pre-#72 message ("Module … is not in the loaded module
-        -- graph") was technically correct but actionable-blind.
-        -- Surface a structured nextStep that points the agent at
-        -- 'ghc_info' (per-name) or 'hoogle_search' so the
-        -- discrepancy doesn't waste a round-trip.
-        moduleNotInGraphResult m
+        -- Issue #72 + #90: 'browse' can only enumerate modules
+        -- from the project's compile graph. Phase B re-shapes the
+        -- response: the not-found case is now status='no_match'
+        -- (the question was well-formed, the answer is "this
+        -- module isn't in this graph") with the diagnostic
+        -- context inside 'result' and a 'nextStep' pointer at
+        -- 'ghc_info' / 'hoogle_search' for the agent's next move.
+        Env.withNextStep moduleNotInGraphNextStep
+          (Env.mkNoMatch (moduleNotInGraphPayload m))
       Right (Just entries) ->
-        successResult m entries
+        Env.mkOk (browsePayload m entries)
+
+-- | Discriminate the FromJSON failure shape — same heuristic as
+-- 'HaskellFlows.Tool.Workflow.parseErrorKind'. A missing required
+-- field maps to 'MissingArg'; everything else falls back to
+-- 'TypeMismatch'.
+parseErrorKind :: String -> Env.ErrorKind
+parseErrorKind err
+  | "key" `isInfixOfStr` err = Env.MissingArg
+  | otherwise                = Env.TypeMismatch
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 -- | Look up the module in the current module graph, pull its exports,
 -- render each as "name :: type" (or just the name for non-Id things).
@@ -134,53 +153,37 @@ parseBrowseOutput = filter (not . T.null) . map T.strip . T.lines
 -- response shaping (unchanged schema)
 --------------------------------------------------------------------------------
 
-successResult :: Text -> [Text] -> ToolResult
-successResult m entries =
-  let payload = object
-        [ "success" .= True
-        , "module"  .= m
-        , "count"   .= length entries
-        , "entries" .= entries
-        ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+-- | Browse-success payload. Issue #90 Phase B: status='ok' with
+-- the same field names as before ('module', 'count', 'entries')
+-- so consumers continue to function during the dual-shape window.
+browsePayload :: Text -> [Text] -> Value
+browsePayload m entries = object
+  [ "module"  .= m
+  , "count"   .= length entries
+  , "entries" .= entries
+  ]
 
-errorResult :: Text -> ToolResult
-errorResult msg = ToolResult
-  { trContent = [ TextContent (encodeUtf8Text (object
-      [ "success" .= False, "error" .= msg ])) ]
-  , trIsError = True
-  }
+-- | Issue #72 + #90: payload for the no-match path. Carries
+-- 'module' echo + a 'remediation' string. The previous shape's
+-- 'error' string is replaced by the structured envelope at the
+-- top level.
+moduleNotInGraphPayload :: Text -> Value
+moduleNotInGraphPayload m = object
+  [ "module"      .= m
+  , "remediation" .= ("Browse only enumerates modules compiled by this project. \
+                      \For modules in interactive scope (Prelude, base, external \
+                      \deps), look up individual names with ghc_info or query \
+                      \with hoogle_search." :: Text)
+  ]
 
--- | Issue #72: structured failure when 'browse' can't find the
--- requested module in the project module graph. The agent gets
--- a pointer at the canonical fallback path (per-name via
--- 'ghc_info' or 'hoogle_search') instead of a dead-end string.
-moduleNotInGraphResult :: Text -> ToolResult
-moduleNotInGraphResult m =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success"     .= False
-        , "error"       .= ("Module '" <> m <> "' is not in the project's module graph.")
-        , "error_kind"  .= ("module_not_in_graph" :: Text)
-        , "remediation" .= ("Browse only enumerates modules compiled by this project. \
-                            \For modules in interactive scope (Prelude, base, external \
-                            \deps), look up individual names with ghc_info or query \
-                            \with hoogle_search." :: Text)
-        , "nextStep"    .= object
-            [ "tool"    .= ("ghc_info" :: Text)
-            , "why"     .= ("'ghc_browse' only sees modules compiled into this project. \
-                            \Use ghc_info(name=\"<symbol>\") for per-name inspection of \
-                            \external/base modules, or hoogle_search to discover names." :: Text)
-            , "example" .= object
-                [ "name" .= ("<symbol from " <> m <> ">" :: Text) ]
-            ]
-        ]))
-      ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+-- | NextStep pointer attached to the no-match path: per-name
+-- inspection via 'ghc_info', or discovery via 'hoogle_search'.
+moduleNotInGraphNextStep :: Value
+moduleNotInGraphNextStep = object
+  [ "tool"    .= ("ghc_info" :: Text)
+  , "why"     .= ("'ghc_browse' only sees modules compiled into this project. \
+                  \Use ghc_info(name=\"<symbol>\") for per-name inspection of \
+                  \external/base modules, or hoogle_search to discover names." :: Text)
+  , "example" .= object
+      [ "name" .= ("<symbol you're trying to inspect>" :: Text) ]
+  ]

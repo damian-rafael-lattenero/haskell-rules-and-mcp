@@ -231,6 +231,7 @@ import HaskellFlows.Ghc.ApiSession
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
+import qualified HaskellFlows.Tool.Browse as BrowseTool
 import qualified HaskellFlows.Tool.Imports as ImportsTool
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
 import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmupTool
@@ -437,6 +438,12 @@ main = do
                                                    testBootstrapRejectsMissingHost
       , test "Envelope #90 Phase B: ghc_imports emits envelope with count + imports"
                                                    testImportsEnvelopeShape
+      , test "Envelope #90 Phase B: ghc_browse on project module → status=ok"
+                                                   testBrowseProjectModuleOk
+      , test "Envelope #90 Phase B: ghc_browse on external module → status=no_match"
+                                                   testBrowseExternalModuleNoMatch
+      , test "Envelope #90 Phase B: ghc_browse rejects missing module arg"
+                                                   testBrowseRejectsMissingArg
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -2921,6 +2928,76 @@ testImportsEnvelopeShape = do
       , Just (A.Object payload) <- Env.reResult env ->
           AKM.member (AKey.fromText "count")   payload
             && AKM.member (AKey.fromText "imports") payload
+    _ -> False
+
+-- | Phase B helper: stage a tmpdir project with a single 'Foo'
+-- module, start a fresh GhcSession, drive 'BrowseTool.handle'
+-- with the given args. Returns the parsed envelope.
+runBrowse :: A.Value -> IO (Either String Env.ToolResponse)
+runBrowse args = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-browse-test"
+  removePathForcibly dir
+  createDirectoryIfMissing True (dir </> "src")
+  TIO.writeFile (dir </> "src" </> "Foo.hs")
+    (T.pack "module Foo (foo, bar) where\nfoo :: Int\nfoo = 1\n\
+            \bar :: String -> String\nbar s = s ++ \"!\"\n")
+  result <- case mkProjectDir dir of
+    Left _   -> pure (Left "could not build ProjectDir")
+    Right pd -> do
+      sess <- startGhcSession pd
+      tr   <- BrowseTool.handle sess args
+      killGhcSession sess
+      case trContent tr of
+        [TextContent body] ->
+          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+        _ -> pure (Left "expected exactly one TextContent")
+  removePathForcibly dir
+  pure result
+
+-- | Browsing a module that's in the project's compile graph
+-- produces status='ok' with result.{module, count, entries}.
+testBrowseProjectModuleOk :: IO Bool
+testBrowseProjectModuleOk = do
+  decoded <- runBrowse (A.object [ "module" A..= ("Foo" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "module") payload == Just (A.String "Foo")
+            && AKM.member (AKey.fromText "count")   payload
+            && AKM.member (AKey.fromText "entries") payload
+    _ -> False
+
+-- | Browsing an external module (e.g. 'Data.Maybe') is not in the
+-- project's compile graph. Pre-#90 this returned status=success-false
+-- with error_kind='module_not_in_graph'; post-#90 the same surface
+-- semantically becomes status='no_match' with the diagnostic
+-- context inside 'result' and a 'nextStep' pointer at ghc_info.
+testBrowseExternalModuleNoMatch :: IO Bool
+testBrowseExternalModuleNoMatch = do
+  decoded <- runBrowse (A.object [ "module" A..= ("Data.Maybe" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusNoMatch
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "module") payload == Just (A.String "Data.Maybe")
+            && AKM.member (AKey.fromText "remediation") payload
+            && case Env.reNextStep env of
+                 Just _  -> True   -- next-step pointer included
+                 Nothing -> False
+    _ -> False
+
+-- | Empty args (missing 'module') → status='failed' with
+-- error.kind='missing_arg'.
+testBrowseRejectsMissingArg :: IO Bool
+testBrowseRejectsMissingArg = do
+  decoded <- runBrowse (A.object [])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusFailed
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.MissingArg
     _ -> False
 
 --------------------------------------------------------------------------------
