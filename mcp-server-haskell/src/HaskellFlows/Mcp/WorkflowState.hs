@@ -119,17 +119,26 @@ applyToolUpdate s toolName ok payload = case toolName of
 -- payload probes
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase D: tool payload fields moved under 'result'.
+-- 'envField' auto-drills so the trackTool counters keep updating
+-- correctly across the wire migration.
+envField :: Text -> Value -> Maybe Value
+envField k (Object o) = case KeyMap.lookup (Key.fromText k) o of
+  Just inner -> Just inner
+  Nothing    -> case KeyMap.lookup (Key.fromText "result") o of
+    Just (Object r) -> KeyMap.lookup (Key.fromText k) r
+    _               -> Nothing
+envField _ _ = Nothing
+
 warningCount :: Value -> Int
-warningCount (Object o) = case KeyMap.lookup (Key.fromText "warnings") o of
+warningCount v = case envField "warnings" v of
   Just (Array a) -> length a
   _              -> 0
-warningCount _ = 0
 
 isPassed :: Value -> Bool
-isPassed (Object o) = case KeyMap.lookup (Key.fromText "state") o of
+isPassed v = case envField "state" v of
   Just (String s) -> s == "passed"
   _               -> False
-isPassed _ = False
 
 --------------------------------------------------------------------------------
 -- state-aware help
