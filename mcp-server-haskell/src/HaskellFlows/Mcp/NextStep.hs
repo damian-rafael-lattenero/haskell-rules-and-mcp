@@ -518,20 +518,20 @@ dispatch name payload = case name of
   --   * Empty dir → 'ghc_create_project' is the canonical next
   --     action; pointing at status would surface a PhasePreScaffold
   --     with no actionable hint.
-  GhcSwitchProject ->
-    case payload of
-      Object o | Just (Bool False) <- KeyMap.lookup "scaffolded" o ->
+  GhcSwitchProject
+    | envField "scaffolded" payload == Just (Bool False) ->
         Just (simple GhcCreateProject
           "Switched to an empty directory. Scaffold a fresh cabal \
           \package here with 'ghc_create_project' (library + \
           \test-suite stub) before any other tool has something \
           \to load."
           (Just (object [ "name" .= ("<pkg-name>" :: Text) ])))
-      _ -> Just (simple GhcWorkflow
-        "Project root swapped. Ask 'ghc_workflow(status)' to \
-        \orient yourself in the new project: phase classifier, \
-        \tools active, and staleness check against the new .cabal."
-        (Just (object [ "action" .= ("status" :: Text) ])))
+    | otherwise ->
+        Just (simple GhcWorkflow
+          "Project root swapped. Ask 'ghc_workflow(status)' to \
+          \orient yourself in the new project: phase classifier, \
+          \tools active, and staleness check against the new .cabal."
+          (Just (object [ "action" .= ("status" :: Text) ])))
 
 -- | 'ghc_gate' payload carries per-step status. On green, push is
 -- unblocked; on red, the agent should narrow down per module.
@@ -567,21 +567,34 @@ determinismNext payload
 -- payload probes (small, hand-written, no lens-aeson dep)
 --------------------------------------------------------------------------------
 
--- | Extract a string field from a JSON object payload. Returns
--- 'Nothing' if the payload is not an object, the field is missing,
--- or its value is not a string.
+-- | Look up a field, auto-drilling through the @result@ envelope
+-- when the field isn't at the top level (issue #90 Phase D).
+--
+-- Tool payloads moved under @result@ post-#90; this helper makes
+-- the router see them transparently. Top-level keys
+-- (@status@, @error@, @nextStep@) resolve directly because the
+-- top-level lookup hits first.
+envField :: Text -> Value -> Maybe Value
+envField k (Object o) = case KeyMap.lookup (Key.fromText k) o of
+  Just inner -> Just inner
+  Nothing    -> case KeyMap.lookup (Key.fromText "result") o of
+    Just (Object r) -> KeyMap.lookup (Key.fromText k) r
+    _               -> Nothing
+envField _ _ = Nothing
+
+-- | Extract a string field from a JSON object payload. Auto-drills
+-- through the post-#90 envelope. Returns 'Nothing' if the field is
+-- missing or its value is not a string.
 stringField :: Text -> Value -> Maybe Text
-stringField k (Object o) = case KeyMap.lookup (Key.fromText k) o of
+stringField k v = case envField k v of
   Just (String s) -> Just s
   _               -> Nothing
-stringField _ _ = Nothing
 
--- | Extract an integer field.
+-- | Extract an integer field. Auto-drills through @result@.
 intField :: Text -> Value -> Maybe Int
-intField k (Object o) = case KeyMap.lookup (Key.fromText k) o of
+intField k v = case envField k v of
   Just (Number n) -> Just (round n)
   _               -> Nothing
-intField _ _ = Nothing
 
 -- | Issue #53: count of candidate imports in a 'ghc_add_import'
 -- response. Drives the suppress-nextStep-on-zero-hits gate.
@@ -598,13 +611,12 @@ data LoadWarningKind
   deriving (Eq, Show)
 
 loadWarningKind :: Value -> LoadWarningKind
-loadWarningKind (Object o) = case KeyMap.lookup "warnings" o of
+loadWarningKind v = case envField "warnings" v of
   Just (Array xs)
     | null xs                      -> LWNone
     | all isTypedHoleWarning xs    -> LWTypedHoles
     | otherwise                    -> LWFixable
   _                                -> LWNone
-loadWarningKind _ = LWNone
 
 -- | A warning entry counts as a typed-hole iff its 'message' text
 -- mentions "typed hole". GHC's diagnostic wording is stable on
@@ -624,10 +636,9 @@ loadHasWarnings :: Value -> Bool
 loadHasWarnings v = loadWarningKind v /= LWNone
 
 loadHasErrors :: Value -> Bool
-loadHasErrors (Object o) = case KeyMap.lookup "errors" o of
+loadHasErrors v = case envField "errors" v of
   Just (Array a) -> not (null a)
   _              -> False
-loadHasErrors _ = False
 
 depsAction :: Value -> Maybe Text
 depsAction = stringField "action"
@@ -649,12 +660,11 @@ gatePassed = boolField "success"
 determinismPassed :: Value -> Bool
 determinismPassed = boolField "success"
 
--- | Extract a boolean field; missing / malformed → False.
+-- | Extract a boolean field; auto-drills through @result@.
 boolField :: Text -> Value -> Bool
-boolField k (Object o) = case KeyMap.lookup (Key.fromText k) o of
+boolField k v = case envField k v of
   Just (Bool b) -> b
   _             -> False
-boolField _ _ = False
 
 --------------------------------------------------------------------------------
 -- injection
