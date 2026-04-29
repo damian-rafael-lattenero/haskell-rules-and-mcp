@@ -231,6 +231,7 @@ import HaskellFlows.Ghc.ApiSession
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
+import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmupTool
 import qualified HaskellFlows.Tool.Type as TypeTool
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
 import HaskellFlows.Tool.SwitchProject
@@ -401,6 +402,10 @@ main = do
                                                    testToolchainStatusLegacyConsistent
       , test "Envelope #90 Phase B: ghc_toolchain_status preserves tools/blocking_gates"
                                                    testToolchainStatusBackcompatFields
+      , test "Envelope #90 Phase B: ghc_toolchain_warmup emits envelope shape"
+                                                   testToolchainWarmupEnvelopeShape
+      , test "Envelope #90 Phase B: ghc_toolchain_warmup partial → warnings populated"
+                                                   testToolchainWarmupPartialWarnings
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -2493,6 +2498,40 @@ testToolchainStatusBackcompatFields = do
           && AKM.member (AKey.fromText "blocking_gates") payload
           && AKM.member (AKey.fromText "summary")        payload
       _ -> False
+    Left _ -> False
+
+-- | 'ghc_toolchain_warmup' is the simpler analogue of toolchain_status —
+-- it only probes optional binaries. After Phase B the response is
+-- 'ok' when every probed binary is present, 'partial' when one or
+-- more are missing. The host-independent assertion: the response
+-- decodes as an envelope with status ∈ {ok, partial}.
+testToolchainWarmupEnvelopeShape :: IO Bool
+testToolchainWarmupEnvelopeShape = do
+  decoded <- runToolEnvelope ToolchainWarmupTool.handle (A.object [])
+  pure $ case decoded of
+    Right env -> Env.reStatus env `elem` [Env.StatusOk, Env.StatusPartial]
+              && case Env.reResult env of
+                   Just (A.Object payload) ->
+                     AKM.member (AKey.fromText "tools") payload
+                   _ -> False
+    Left _ -> False
+
+-- | When the warmup status is 'partial' (i.e. ≥1 optional binary is
+-- missing), the response MUST carry a non-empty 'warnings' array
+-- with one entry per missing binary. This is the contract that
+-- lets an agent know *which* downstream tool surfaces are about to
+-- start returning status='unavailable'.
+testToolchainWarmupPartialWarnings :: IO Bool
+testToolchainWarmupPartialWarnings = do
+  decoded <- runToolEnvelope ToolchainWarmupTool.handle (A.object [])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusPartial ->
+          not (null (Env.reWarnings env))
+            && all (\w -> Env.wKind w == Env.SlowPath) (Env.reWarnings env)
+      | Env.reStatus env == Env.StatusOk ->
+          null (Env.reWarnings env)  -- ok ⇒ no missing binaries ⇒ no warnings
+      | otherwise -> False  -- only ok or partial expected
     Left _ -> False
 
 --------------------------------------------------------------------------------
