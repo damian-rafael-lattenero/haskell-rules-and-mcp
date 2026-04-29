@@ -27,6 +27,7 @@ import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (exitFailure, exitSuccess)
 import qualified System.Environment
+import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Timeout (timeout)
 import qualified Test.QuickCheck as QC
 import Test.QuickCheck
@@ -206,7 +207,7 @@ import HaskellFlows.Tool.Hoogle
   , parseHoogleLine
   )
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Exception (SomeException, try)
+import Control.Exception (SomeException, bracket_, try)
 import qualified HaskellFlows.Mcp.PathBootstrap
 import qualified HaskellFlows.Parser.TypeSignature
 import qualified System.Directory
@@ -235,7 +236,9 @@ import qualified HaskellFlows.Tool.Browse as BrowseTool
 import qualified HaskellFlows.Tool.Complete as CompleteTool
 import qualified HaskellFlows.Tool.Doc as DocTool
 import qualified HaskellFlows.Tool.Eval as EvalTool
+import qualified HaskellFlows.Tool.AddImport as AddImportTool
 import qualified HaskellFlows.Tool.Hole as HoleTool
+import qualified HaskellFlows.Tool.Hoogle as HoogleTool
 import qualified HaskellFlows.Tool.Goto as GotoTool
 import qualified HaskellFlows.Tool.Imports as ImportsTool
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
@@ -491,6 +494,14 @@ main = do
                                                    testInfoUnknownNameNoMatch
       , test "Envelope #90 Phase B: ghc_info refuses newline in name"
                                                    testInfoRefusesNewline
+      , test "Envelope #90 Phase B: hoogle_search rejects empty query"
+                                                   testHoogleRejectsEmpty
+      , test "Envelope #90 Phase B: hoogle_search reports unavailable when binary missing"
+                                                   testHoogleUnavailable
+      , test "Envelope #90 Phase B: ghc_add_import reports unavailable when hoogle missing"
+                                                   testAddImportUnavailable
+      , test "Envelope #90 Phase B: ghc_add_import rejects missing name arg"
+                                                   testAddImportRejectsMissingArg
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -3528,6 +3539,91 @@ testInfoRefusesNewline = do
             && Env.eeField err == Just "name"
     _ -> False
 
+-- | Phase B helper: drive 'HoogleTool.handle' / 'AddImportTool.handle'.
+-- These tools don't need a GhcSession.
+runHoogle :: A.Value -> IO (Either String Env.ToolResponse)
+runHoogle args = do
+  tr <- HoogleTool.handle args
+  case trContent tr of
+    [TextContent body] ->
+      pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+    _ -> pure (Left "expected exactly one TextContent")
+
+runAddImport :: A.Value -> IO (Either String Env.ToolResponse)
+runAddImport args = do
+  tr <- AddImportTool.handle args
+  case trContent tr of
+    [TextContent body] ->
+      pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+    _ -> pure (Left "expected exactly one TextContent")
+
+-- | An empty hoogle query → status='refused' with
+-- kind='empty_input' + field='query'.
+testHoogleRejectsEmpty :: IO Bool
+testHoogleRejectsEmpty = do
+  decoded <- runHoogle (A.object [ "query" A..= ("" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusRefused
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.EmptyInput
+            && Env.eeField err == Just "query"
+    _ -> False
+
+-- | When the hoogle binary isn't on PATH, the status is
+-- 'unavailable' (NOT 'failed'). Distinct discriminator: an
+-- environment-binary issue is structurally different from a
+-- runtime failure. The test scrubs PATH around the call to
+-- guarantee the missing-binary code path fires regardless of
+-- the host's actual hoogle install.
+testHoogleUnavailable :: IO Bool
+testHoogleUnavailable = do
+  origPath <- lookupEnv "PATH"
+  let scrubbed = "/var/empty-haskell-flows-no-hoogle"
+  decoded <- bracket_
+    (setEnv "PATH" scrubbed)
+    (case origPath of
+       Just p  -> setEnv "PATH" p
+       Nothing -> unsetEnv "PATH")
+    (runHoogle (A.object [ "query" A..= ("filter" :: Text) ]))
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusUnavailable
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.BinaryUnavailable
+            && isJust (Env.eeRemediation err)
+    _ -> False
+
+-- | ghc_add_import shares the unavailable contract with hoogle_search.
+testAddImportUnavailable :: IO Bool
+testAddImportUnavailable = do
+  origPath <- lookupEnv "PATH"
+  let scrubbed = "/var/empty-haskell-flows-no-hoogle"
+  decoded <- bracket_
+    (setEnv "PATH" scrubbed)
+    (case origPath of
+       Just p  -> setEnv "PATH" p
+       Nothing -> unsetEnv "PATH")
+    (runAddImport (A.object [ "name" A..= ("fromMaybe" :: Text) ]))
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusUnavailable
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.BinaryUnavailable
+    _ -> False
+
+-- | Empty args (missing 'name') → status='failed' with
+-- error.kind='missing_arg'.
+testAddImportRejectsMissingArg :: IO Bool
+testAddImportRejectsMissingArg = do
+  decoded <- runAddImport (A.object [])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusFailed
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.MissingArg
+    _ -> False
+
 --------------------------------------------------------------------------------
 -- Phase 9: Lint parser + Cabal validator + check_project + hole fits
 --------------------------------------------------------------------------------
@@ -5546,16 +5642,26 @@ testAddImportMissingHoogle = do
     Nothing -> System.Environment.unsetEnv "PATH"
   case trContent result of
     [TextContent t] ->
+      -- Issue #90 Phase B: the response is now an envelope.
+      -- Drill into 'error.message' / 'error.remediation' for the
+      -- structured fields. Legacy 'success: false' is still
+      -- emitted at top level during the migration window.
       let parsed = A.decode (TLE.encodeUtf8 (TL.fromStrict t)) :: Maybe A.Value
       in pure $ case parsed of
            Just v -> fieldBool "success" v == Just False
                   && trIsError result
                   && case lookupField "error" v of
-                       Just (A.String e) -> "hoogle" `T.isInfixOf` T.toLower e
-                       _                 -> False
-                  && case lookupField "remediation" v of
-                       Just (A.String _) -> True
-                       _                 -> False
+                       Just (A.Object errObj) ->
+                         let msg = AKM.lookup (AKey.fromText "message") errObj
+                             rem_ = AKM.lookup (AKey.fromText "remediation") errObj
+                             msgOk = case msg of
+                               Just (A.String m) -> "hoogle" `T.isInfixOf` T.toLower m
+                               _ -> False
+                             remOk = case rem_ of
+                               Just (A.String _) -> True
+                               _ -> False
+                         in msgOk && remOk
+                       _ -> False
            Nothing -> False
     _ -> pure False
   where

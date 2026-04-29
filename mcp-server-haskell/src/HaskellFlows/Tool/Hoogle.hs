@@ -31,8 +31,6 @@ import Data.Aeson.Types (parseEither)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (findExecutable)
 import System.Exit (ExitCode (..))
 import System.IO (hClose, hGetContents)
@@ -46,6 +44,7 @@ import System.Process
   )
 import System.Timeout (timeout)
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
@@ -111,25 +110,50 @@ hoogleTimeoutMicros = 10_000000  -- 10 s
 handle :: Value -> IO ToolResult
 handle rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
-  Right args -> do
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKind parseError)
+          (T.pack ("Invalid arguments: " <> parseError)))
+            { Env.eeCause = Just (T.pack parseError) })))
+  Right args ->
     case validateQuery (haQuery args) of
-      Left msg -> pure (errorResult msg)
+      Left (kind, msg) ->
+        pure (Env.toolResponseToResult (Env.mkRefused
+          ((Env.mkErrorEnvelope kind msg) { Env.eeField = Just "query" })))
       Right q  -> do
         mPath <- findExecutable "hoogle"
         case mPath of
           Nothing ->
-            pure (unavailableResult "hoogle binary not found on PATH")
+            pure (Env.toolResponseToResult (Env.mkUnavailable
+              ((Env.mkErrorEnvelope Env.BinaryUnavailable
+                  "hoogle binary not found on PATH")
+                    { Env.eeRemediation =
+                        Just "Install hoogle (cabal install hoogle) and generate the index (hoogle generate), then retry."
+                    })))
           Just _ -> do
             res <- runHoogle q (haLimit args)
             pure (renderResult q res)
 
-validateQuery :: Text -> Either Text Text
+-- | Discriminate the FromJSON failure shape — same heuristic as
+-- the other Phase-B migrations.
+parseErrorKind :: String -> Env.ErrorKind
+parseErrorKind err
+  | "key" `isInfixOfStr` err = Env.MissingArg
+  | otherwise                = Env.TypeMismatch
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
+
+validateQuery :: Text -> Either (Env.ErrorKind, Text) Text
 validateQuery q
-  | T.null stripped            = Left "query is empty"
+  | T.null stripped =
+      Left (Env.EmptyInput, "query is empty")
   | T.length stripped > maxQueryChars =
-      Left ("query exceeds " <> T.pack (show maxQueryChars) <> " characters")
-  | otherwise                  = Right stripped
+      Left ( Env.OversizedInput
+           , "query exceeds " <> T.pack (show maxQueryChars) <> " characters"
+           )
+  | otherwise = Right stripped
   where
     stripped = T.strip q
 
@@ -228,56 +252,38 @@ splitModule lhs =
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Map subprocess outcomes to the unified envelope. Issue #90 §6:
+-- zero hits → 'no_match' (well-formed query, empty answer);
+-- non-empty hits → 'ok'; subprocess timeout → 'timeout' with
+-- 'inner_timeout'; non-zero exit code → 'failed' with
+-- 'subprocess_error'.
 renderResult :: Text -> HoogleOutcome -> ToolResult
-renderResult q (HoSuccess hits) =
-  let payload =
-        object
-          [ "success" .= True
-          , "query"   .= q
-          , "count"   .= length hits
-          , "hits"    .= map renderHit hits
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
-renderResult q HoTimeout =
-  errorResult ("hoogle timed out after 10s for query: " <> q)
-renderResult q (HoFailure code err) =
-  errorResult ( "hoogle exited with code " <> T.pack (show code)
-             <> " for query '" <> q <> "': " <> T.strip err )
+renderResult q outcome = Env.toolResponseToResult $ case outcome of
+  HoSuccess [] ->
+    Env.mkNoMatch (hitsPayload q [])
+  HoSuccess hits ->
+    Env.mkOk (hitsPayload q hits)
+  HoTimeout ->
+    Env.mkTimeout
+      ((Env.mkErrorEnvelope Env.InnerTimeout
+          ("hoogle timed out after 10s for query: " <> q))
+            { Env.eeCause = Just "10s subprocess budget" })
+  HoFailure code err ->
+    Env.mkFailed
+      ((Env.mkErrorEnvelope Env.SubprocessError
+          ("hoogle exited with code " <> T.pack (show code)
+           <> " for query '" <> q <> "'"))
+            { Env.eeCause = Just (T.strip err) })
+
+hitsPayload :: Text -> [HoogleHit] -> Value
+hitsPayload q hits = object
+  [ "query" .= q
+  , "count" .= length hits
+  , "hits"  .= map renderHit hits
+  ]
 
 renderHit :: HoogleHit -> Value
-renderHit h =
-  object
-    [ "module"    .= hhModule h
-    , "signature" .= hhSignature h
-    ]
-
-unavailableResult :: Text -> ToolResult
-unavailableResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success"     .= False
-        , "error"       .= msg
-        , "remediation" .= ( "Install hoogle (`cabal install hoogle`) and \
-                            \generate the index (`hoogle generate`), then retry."
-                           :: Text )
-        ]))
-      ]
-    , trIsError = True
-    }
-
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+renderHit h = object
+  [ "module"    .= hhModule h
+  , "signature" .= hhSignature h
+  ]
