@@ -27,6 +27,8 @@ module HaskellFlows.Tool.CreateProject
   , CreateArgs (..)
     -- * Issue #58 — Hackage-conformant package-name validation
   , validateName
+    -- * Issue #69 — exported for unit tests
+  , cabalFile
   ) where
 
 import Control.Exception (SomeException, try)
@@ -256,6 +258,17 @@ cabalFile pkg modName = T.unlines
   , "name:               " <> pkg
   , "version:            0.1.0.0"
   , "synopsis:           (describe here)"
+  -- Issue #69: scaffold green-by-default. Without these three
+  -- fields, 'cabal check' (and our 'ghc_validate_cabal') yells
+  -- about missing 'category', 'maintainer', 'description' on
+  -- every fresh project — three warnings the agent's first
+  -- gate-call always trips, even though nothing is wrong.
+  -- Sensible stubs keep the scaffold clean; the 'TODO:'
+  -- markers make it obvious to the agent what's still
+  -- placeholder text.
+  , "category:           Development"
+  , "maintainer:         you@example.com"
+  , "description:        TODO: describe " <> pkg <> " in one line."
   , "license:            BSD-3-Clause"
   , "build-type:         Simple"
   , ""

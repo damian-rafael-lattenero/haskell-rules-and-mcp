@@ -375,7 +375,18 @@ runCabalCheck pd = do
           e <- takeMVar errVar
           let sev = case code of { ExitSuccess -> CabalSevWarn; _ -> CabalSevError }
               combined = T.strip (T.pack (o <> e))
-          pure [ Issue sev "cabal-check" combined | not (T.null combined) ]
+              -- Issue #69: 'cabal check' emits a positive
+              -- confirmation line on success — "No errors or
+              -- warnings could be found in the package." Wrapping
+              -- that as a Warning Issue is a UX bug: a green
+              -- check is reported as yellow. Treat the
+              -- confirmation line (and any blank-trailing
+              -- siblings) as the empty case — no Issue emitted.
+              actionable =
+                  not (T.null combined)
+                && not ("No errors or warnings could be found"
+                          `T.isInfixOf` combined)
+          pure [ Issue sev "cabal-check" combined | actionable ]
 
 --------------------------------------------------------------------------------
 -- response shaping

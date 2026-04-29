@@ -461,6 +461,8 @@ main = do
       , test "create_project: validateName rejects trailing hyphen (#58)" testCreateValidateTrailing
       , test "create_project: validateName rejects leading digit (#58)"  testCreateValidateLeadingDigit
       , test "create_project: validateName rejects symbols (#58)"    testCreateValidateSymbols
+      , test "create_project: scaffold cabal file is shippable green-by-default (#69)"
+                                                                 testCreateProjectScaffoldGreenCabal
       , test "create_project: validateName error names violation (#58)" testCreateValidateErrorMsg
       , test "nextStep: add_import count=0 suppresses load (#53)"     testNextStepAddImportZero
       , test "nextStep: add_import count>0 nudges load (#53)"         testNextStepAddImportNonZero
@@ -3914,6 +3916,22 @@ testCreateValidateSymbols = pure $
   where
     isLeft (Left _) = True
     isLeft _        = False
+
+-- | Issue #69: a freshly-scaffolded cabal file must declare
+-- 'category', 'maintainer', and 'description'. Without these,
+-- 'cabal check' (and our 'ghc_validate_cabal') tags the project
+-- with 3 warnings on the agent's very first gate-call. The
+-- placeholders are stubs the agent should fill before
+-- publishing — but they keep the gate green by default.
+testCreateProjectScaffoldGreenCabal :: IO Bool
+testCreateProjectScaffoldGreenCabal =
+  let cabal = CreateProject.cabalFile "demo" "Demo"
+  in pure $  T.isInfixOf "category:" cabal
+          && T.isInfixOf "maintainer:" cabal
+          && T.isInfixOf "description:" cabal
+          -- The TODO sentinel keeps it obvious to the agent
+          -- that the description is placeholder text.
+          && T.isInfixOf "TODO:" cabal
 
 -- | Issue #58: error messages must NAME the violation so the agent
 -- can rename appropriately instead of guessing what \"invalid name\"

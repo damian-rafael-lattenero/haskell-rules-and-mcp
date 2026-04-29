@@ -92,6 +92,7 @@ import qualified Scenarios.FlowGateNoCrash        as FlowGNC
 import qualified Scenarios.FlowMoveExportLists    as FlowMEL
 import qualified Scenarios.FlowHoleFitsBoundary   as FlowHFB
 import qualified Scenarios.FlowInfoClass          as FlowICls
+import qualified Scenarios.FlowCreateProjectGreen as FlowCPG
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
@@ -240,6 +241,8 @@ scenarios =
     , False, FlowHFB.runFlow )
   , ( "Flow: Info class header + methods (#70)"
     , False, FlowICls.runFlow )
+  , ( "Flow: CreateProject scaffold green-by-default (#69)"
+    , False, FlowCPG.runFlow )
   , ( "Flow: Dogfood replay (7 MCP fixes round-tripped through one session)"
     , True, FlowDFR.runFlow )
   , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"
