@@ -469,17 +469,39 @@ data ToolResponse = ToolResponse
   }
   deriving stock (Eq, Show)
 
+-- | Issue #90 wire format. The current envelope is dual-shape:
+-- the canonical top-level keys are
+--
+-- @
+--   { "status"   : "ok"|"partial"|"no_match"|"refused"|"failed"|
+--                  "timeout"|"unavailable"
+--   , "result"?  : <tool-specific payload>
+--   , "error"?   : { "kind", "message", "field"?, "cause"? }
+--   , "warnings"?: [...]
+--   , "nextStep"?: { "tool", "why", ... }
+--   , "meta"?    : { "took_ms"?, ... }
+--   }
+-- @
+--
+-- Two legacy keys are still emitted alongside the canonical
+-- shape for backwards-compat with pre-#90 consumers (the e2e
+-- oracle suite, primarily): a top-level @\"success\" : Bool@ and
+-- a top-level @\"error_kind\" : Text@. These are scheduled for
+-- removal in the second commit of Phase D after every consumer
+-- has migrated. New code MUST branch on @status@ and on
+-- @error.kind@ (not the top-level @error_kind@).
 instance ToJSON ToolResponse where
   toJSON r = object $ catMaybes
     [ Just ("status"     .= reStatus r)
-    , Just ("success"    .= isLegacySuccess (reStatus r))   -- deprecated, kept during migration
-      -- Migration-window companion: surface a top-level
-      -- 'error_kind' when an error is present, mirroring the
-      -- pre-envelope shape several e2e oracles (especially
-      -- 'FlowTimeoutEnforcement') key on. The structured value
-      -- still lives under 'error.kind' — this is the
-      -- backwards-compat duplicate. Dropped in Phase D along
-      -- with 'success'.
+      -- Issue #90 Phase D (DEPRECATED — slated for removal):
+      -- 'success' duplicates the boolean projection of 'status'.
+      -- Kept for the dual-shape window so pre-#90 consumers that
+      -- branch on 'fieldBool "success"' still work. Migrate to
+      -- 'fieldText "status"' and drop this on the next major.
+    , Just ("success"    .= isLegacySuccess (reStatus r))
+      -- Issue #90 Phase D (DEPRECATED — slated for removal):
+      -- 'error_kind' duplicates 'error.kind'. Kept for the
+      -- dual-shape window. New code MUST read 'error.kind'.
     , optField "error_kind" (errorKindToText . eeKind <$> reError r)
     , optField "result"   (reResult r)
     , optField "error"    (reError r)

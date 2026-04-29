@@ -448,6 +448,10 @@ main = do
                                                    testBootstrapRejectsMissingHost
       , test "Envelope #90 Phase B: ghc_imports emits envelope with count + imports"
                                                    testImportsEnvelopeShape
+      , test "Envelope #90 Phase D: dual-shape window — legacy success co-emitted"
+                                                   testEnvelopeDualShapeSuccessLegacy
+      , test "Envelope #90 Phase D: dual-shape window — legacy error_kind co-emitted"
+                                                   testEnvelopeDualShapeErrorKindLegacy
       , test "Envelope #90 Phase B: ghc_browse on project module → status=ok"
                                                    testBrowseProjectModuleOk
       , test "Envelope #90 Phase B: ghc_browse on external module → status=no_match"
@@ -3029,6 +3033,47 @@ testImportsEnvelopeShape = do
           AKM.member (AKey.fromText "count")   payload
             && AKM.member (AKey.fromText "imports") payload
     _ -> False
+
+-- | Issue #90 Phase D: lock the dual-shape contract. The
+-- envelope's ToJSON instance MUST keep emitting a top-level
+-- @\"success\" : Bool@ alongside @\"status\"@ during the
+-- migration window. This test pins the wire shape so an
+-- accidental removal trips a red.
+--
+-- The contract is the projection isLegacySuccess: status='ok'
+-- → success=True; everything else → success=False. We exercise
+-- both ends of the projection by encoding a 'mkOk' and a
+-- 'mkFailed' response and decoding the raw JSON.
+testEnvelopeDualShapeSuccessLegacy :: IO Bool
+testEnvelopeDualShapeSuccessLegacy = do
+  let okJson     = A.toJSON (Env.mkOk     (A.object [ "k" A..= ("v" :: Text) ]))
+      failedJson = A.toJSON (Env.mkFailed
+                              (Env.mkErrorEnvelope Env.Validation "boom"))
+      okSuccess  = lookupField "success" okJson
+      okStatus   = lookupField "status"  okJson
+      failSuccess = lookupField "success" failedJson
+      failStatus  = lookupField "status"  failedJson
+  pure $ okSuccess  == Just (A.Bool True)
+      && okStatus   == Just (A.String "ok")
+      && failSuccess == Just (A.Bool False)
+      && failStatus  == Just (A.String "failed")
+
+-- | Issue #90 Phase D: lock the second half of the dual-shape
+-- contract — the top-level @\"error_kind\"@ duplicate. When the
+-- envelope carries an 'error', ToJSON MUST emit error_kind at
+-- the top level mirroring 'error.kind'. Several pre-#90 oracles
+-- (FlowTimeoutEnforcement, FlowRemoveModulesDownstream) branch
+-- on 'error_kind' specifically; pinning the duplicate here keeps
+-- a future cleanup honest.
+testEnvelopeDualShapeErrorKindLegacy :: IO Bool
+testEnvelopeDualShapeErrorKindLegacy = do
+  let json = A.toJSON (Env.mkFailed
+                        (Env.mkErrorEnvelope Env.PathTraversal "tried to escape"))
+      topLevelKind = lookupField "error_kind" json
+      nestedKind   = lookupField "error" json
+                       >>= lookupField "kind"
+  pure $ topLevelKind == Just (A.String "path_traversal")
+      && nestedKind   == Just (A.String "path_traversal")
 
 -- | Phase B helper: stage a tmpdir project with a single 'Foo'
 -- module, start a fresh GhcSession, drive 'BrowseTool.handle'
