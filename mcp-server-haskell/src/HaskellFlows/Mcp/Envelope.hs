@@ -471,8 +471,16 @@ data ToolResponse = ToolResponse
 
 instance ToJSON ToolResponse where
   toJSON r = object $ catMaybes
-    [ Just ("status"   .= reStatus r)
-    , Just ("success"  .= isLegacySuccess (reStatus r))   -- deprecated, kept during migration
+    [ Just ("status"     .= reStatus r)
+    , Just ("success"    .= isLegacySuccess (reStatus r))   -- deprecated, kept during migration
+      -- Migration-window companion: surface a top-level
+      -- 'error_kind' when an error is present, mirroring the
+      -- pre-envelope shape several e2e oracles (especially
+      -- 'FlowTimeoutEnforcement') key on. The structured value
+      -- still lives under 'error.kind' — this is the
+      -- backwards-compat duplicate. Dropped in Phase D along
+      -- with 'success'.
+    , optField "error_kind" (errorKindToText . eeKind <$> reError r)
     , optField "result"   (reResult r)
     , optField "error"    (reError r)
     , optWarnings (reWarnings r)

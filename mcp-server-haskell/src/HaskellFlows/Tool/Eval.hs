@@ -26,8 +26,6 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import GHC
   ( Ghc
   , InteractiveImport (IIDecl)
@@ -40,6 +38,7 @@ import GHC.Runtime.Eval (compileExpr)
 import System.Timeout (timeout)
 import Unsafe.Coerce (unsafeCoerce)
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
   , LoadFlavour (..)
@@ -51,11 +50,9 @@ import HaskellFlows.Ghc.ApiSession
   , withStanzaFlags
   )
 import HaskellFlows.Ghc.Sanitize
-  ( CommandError (..)
-  , maxEvalBytes
+  ( maxEvalBytes
   , sanitizeExpression
   )
-import HaskellFlows.Mcp.ErrorKind (ErrorKind (..), renderErrorKind)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
@@ -98,10 +95,15 @@ instance FromJSON EvalArgs where
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKind parseError)
+          (T.pack ("Invalid arguments: " <> parseError)))
+            { Env.eeCause = Just (T.pack parseError) })))
   Right (EvalArgs expr) ->
     case sanitizeExpression expr of
-      Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
+      Left cmdErr ->
+        pure (Env.toolResponseToResult (Env.mkRefused
+          (Env.sanitizeRejection "expression" cmdErr)))
       Right safe -> do
         -- Inner per-eval budget. 'ghc_eval' is the only tool that
         -- interprets user-supplied expressions; without a tighter
@@ -196,27 +198,37 @@ runEvalBody ghcSess safe = do
         Right out ->
           pure (renderOk (truncateOutput (T.pack out)))
         Left ex ->
-          pure (errorResult (T.pack (show ex)))
+          -- Issue #90 §4: a compileExpr / evalIOString failure
+          -- maps to status='failed' with kind='internal_error'.
+          -- The user-facing 'message' stays terse; the full
+          -- exception text lives in error.cause.
+          pure (Env.toolResponseToResult (Env.mkFailed
+            ((Env.mkErrorEnvelope Env.InternalError
+                ("ghc_eval failed: " <> T.take 200 (T.pack (show ex))))
+                  { Env.eeCause = Just (T.pack (show ex)) })))
 
--- | Structured payload emitted when the inner per-eval timeout
--- fires. Shape matches 'Server.toolException'\'s 'error_kind'
--- contract — clients use the tag to distinguish budget trips
--- from user-level compile/runtime errors.
+-- | Issue #90 Phase B: timeout maps to status='timeout' with
+-- error.kind='inner_timeout'. The envelope's ToJSON also surfaces
+-- a top-level 'error_kind' (= "inner_timeout") for the migration
+-- window, so consumers that key on the legacy field still see a
+-- structured discriminator (@FlowTimeoutEnforcement@'s oracle was
+-- updated in this commit to accept it). Clients that key on the
+-- new 'status' field get the cleaner discriminator immediately.
 timeoutResult :: ToolResult
 timeoutResult =
-  let payload = object
-        [ "success"    .= False
-        , "error"      .=
-            ("ghc_eval exceeded inner budget ("
-             <> T.pack (show evalTimeoutSeconds)
-             <> " s). GHC session evicted; next call boots fresh."
-             :: Text)
-        , "error_kind" .= renderErrorKind Timeout
-        ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = True
-       }
+  let timeoutMsg =
+        "ghc_eval exceeded inner budget ("
+          <> T.pack (show evalTimeoutSeconds)
+          <> " s). GHC session evicted; next call boots fresh."
+      cause = "inner-eval timeout @ " <> T.pack (show evalTimeoutSeconds) <> "s"
+      remediation =
+        "The session was evicted. Retry with a smaller or less divergent "
+          <> "expression; the next call boots a fresh GhcSession."
+      err = (Env.mkErrorEnvelope Env.InnerTimeout timeoutMsg)
+              { Env.eeCause       = Just cause
+              , Env.eeRemediation = Just remediation
+              }
+  in Env.toolResponseToResult (Env.mkTimeout err)
 
 -- | Fast path: wrap user expr in 'show', compile, coerce. Returns
 -- 'Nothing' if the wrap fails to compile (typically an IO
@@ -280,39 +292,20 @@ truncateOutput output =
 
 renderOk :: TruncatedOutput -> ToolResult
 renderOk t =
-  let payload =
-        object
-          [ "success"   .= True
-          , "output"    .= toOutput t
-          , "truncated" .= toTruncated t
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  let payload = object
+        [ "output"    .= toOutput t
+        , "truncated" .= toTruncated t
+        ]
+  in Env.toolResponseToResult (Env.mkOk payload)
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-formatCommandError :: CommandError -> Text
-formatCommandError = \case
-  ContainsNewline ->
-    "expression must be a single line (no newline characters allowed)"
-  ContainsSentinel ->
-    "expression contains the internal framing sentinel and was rejected"
-  EmptyInput ->
-    "expression is empty"
-  InputTooLarge sz cap ->
-    "expression is too large (" <> T.pack (show sz) <> " chars, cap is "
-      <> T.pack (show cap) <> ")"
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+-- | Discriminate the FromJSON failure shape — same heuristic as
+-- the other Phase-B migrations.
+parseErrorKind :: String -> Env.ErrorKind
+parseErrorKind err
+  | "key" `isInfixOfStr` err = Env.MissingArg
+  | otherwise                = Env.TypeMismatch
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]

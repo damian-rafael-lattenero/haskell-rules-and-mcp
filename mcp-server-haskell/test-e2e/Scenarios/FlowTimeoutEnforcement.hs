@@ -102,15 +102,30 @@ runFlow c _pd = do
   -- the contract: if someone ever refactors runTool back to plain
   -- text, this scenario fails loudly.
   t1b <- stepHeader 3 "error-shape · runTool emits structured JSON on timeout"
+  -- Issue #90 Phase B (eval migration): the legacy top-level
+  -- 'error_kind' field stays during the dual-shape window. The
+  -- new envelope additionally exposes 'status' = "timeout" |
+  -- "failed" and a structured 'error.kind' which can be
+  -- "inner_timeout" / "outer_timeout" / "session_exhausted" /
+  -- "timeout" (legacy). Accept any of those — the contract is
+  -- still "structured JSON with a discriminator", not a specific
+  -- wire string.
   let errKind  = fieldText "error_kind" slow
-      shapeOk  = errKind == Just "session_exhausted"
+      legacyOk = errKind == Just "session_exhausted"
               || errKind == Just "timeout"
+              || errKind == Just "inner_timeout"
+              || errKind == Just "outer_timeout"
+      statusV  = fieldText "status" slow
+      newShapeOk = statusV == Just "timeout" || statusV == Just "failed"
+      shapeOk    = legacyOk || newShapeOk
   cShape <- liveCheck $ checkPure
-    "error_kind tagged session_exhausted | timeout"
+    "error_kind / status discriminator present on timeout"
     shapeOk
-    ("Expected error_kind ∈ {session_exhausted, timeout}. Got: "
-     <> T.pack (show errKind)
-     <> ". If this is Nothing, runTool regressed to emitting plain \
+    ("Expected one of (legacy) error_kind ∈ {session_exhausted, \
+     \timeout, inner_timeout, outer_timeout} OR (envelope) status \
+     \∈ {timeout, failed}. Got error_kind=" <> T.pack (show errKind)
+     <> " status=" <> T.pack (show statusV)
+     <> ". If both are Nothing, runTool regressed to emitting plain \
         \text instead of JSON for caught exceptions. Raw: "
      <> truncRender slow)
   stepFooter 3 t1b

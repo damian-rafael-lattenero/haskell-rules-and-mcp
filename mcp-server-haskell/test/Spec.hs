@@ -234,6 +234,7 @@ import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
 import qualified HaskellFlows.Tool.Browse as BrowseTool
 import qualified HaskellFlows.Tool.Complete as CompleteTool
 import qualified HaskellFlows.Tool.Doc as DocTool
+import qualified HaskellFlows.Tool.Eval as EvalTool
 import qualified HaskellFlows.Tool.Goto as GotoTool
 import qualified HaskellFlows.Tool.Imports as ImportsTool
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
@@ -471,6 +472,12 @@ main = do
                                                    testTypeIllTypedFailed
       , test "Envelope #90 Phase B: ghc_type refuses newline in expression"
                                                    testTypeRefusesNewline
+      , test "Envelope #90 Phase B: ghc_eval pure expr → status=ok"
+                                                   testEvalPureExprOk
+      , test "Envelope #90 Phase B: ghc_eval refuses newline in expression"
+                                                   testEvalRefusesNewline
+      , test "Envelope #90 Phase B: ghc_eval refuses sentinel string"
+                                                   testEvalRefusesSentinel
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -3296,6 +3303,70 @@ testTypeRefusesNewline = do
       | Env.reStatus env == Env.StatusRefused
       , Just err <- Env.reError env ->
           Env.eeKind err == Env.NewlineInjection
+            && Env.eeField err == Just "expression"
+    _ -> False
+
+-- | Phase B helper: stage a tmpdir + drive 'EvalTool.handle'.
+runEval :: A.Value -> IO (Either String Env.ToolResponse)
+runEval args = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-eval-test"
+  removePathForcibly dir
+  createDirectoryIfMissing True (dir </> "src")
+  TIO.writeFile (dir </> "src" </> "Foo.hs")
+    (T.pack "module Foo where\nfoo :: Int\nfoo = 1\n")
+  result <- case mkProjectDir dir of
+    Left _   -> pure (Left "could not build ProjectDir")
+    Right pd -> do
+      sess <- startGhcSession pd
+      tr   <- EvalTool.handle sess args
+      killGhcSession sess
+      case trContent tr of
+        [TextContent body] ->
+          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+        _ -> pure (Left "expected exactly one TextContent")
+  removePathForcibly dir
+  pure result
+
+-- | 'ghc_eval' on a pure expression returns its show-rendered
+-- output → status='ok' with result.{output, truncated}.
+testEvalPureExprOk :: IO Bool
+testEvalPureExprOk = do
+  decoded <- runEval (A.object [ "expression" A..= ("1 + 1" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "output") payload == Just (A.String "2")
+            && AKM.lookup (AKey.fromText "truncated") payload == Just (A.Bool False)
+    _ -> False
+
+-- | Newline in expression → status='refused' with
+-- kind='newline_injection'.
+testEvalRefusesNewline :: IO Bool
+testEvalRefusesNewline = do
+  decoded <- runEval (A.object [ "expression" A..= ("1 + 1\n:quit" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusRefused
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.NewlineInjection
+            && Env.eeField err == Just "expression"
+    _ -> False
+
+-- | Sentinel string in expression → status='refused' with
+-- kind='sentinel_poisoning'. Anchors the security gate that
+-- prevents an attacker-controlled prompt from desyncing the
+-- framing protocol.
+testEvalRefusesSentinel :: IO Bool
+testEvalRefusesSentinel = do
+  decoded <- runEval
+    (A.object [ "expression" A..= ("\"<<<GHCi-DONE-7f3a2b>>>\"" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusRefused
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.SentinelPoisoning
             && Env.eeField err == Just "expression"
     _ -> False
 
@@ -7087,10 +7158,15 @@ testEvalInnerTimeoutBudget = do
       && T.isInfixOf "evalTimeoutMicros" code
       && T.isInfixOf "timeout evalTimeoutMicros" code
       && T.isInfixOf "resetHscEnvInPlace" code
-      -- post-issue-#45: payload routes through the ErrorKind ADT
-      -- ('Timeout' constructor + 'renderErrorKind') instead of a
-      -- bare string literal. The wire string is still "timeout".
-      && T.isInfixOf "\"error_kind\" .= renderErrorKind Timeout" code
+      -- Issue #90 Phase B: payload routes through the unified
+      -- envelope ('mkTimeout' + 'InnerTimeout' kind) instead of
+      -- the legacy 'renderErrorKind Timeout' top-level string.
+      -- Wire string moves from "timeout" to "inner_timeout"; the
+      -- envelope additionally surfaces a top-level 'error_kind'
+      -- field for the dual-shape window so legacy oracles still
+      -- see a discriminator.
+      && T.isInfixOf "Env.mkTimeout" code
+      && T.isInfixOf "Env.InnerTimeout" code
       && T.isInfixOf "SomeAsyncException" code
   where
     isDocLine ln =
