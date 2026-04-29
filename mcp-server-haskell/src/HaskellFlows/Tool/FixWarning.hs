@@ -20,6 +20,7 @@ module HaskellFlows.Tool.FixWarning
   ) where
 
 import Control.Exception (SomeException, try)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -198,9 +199,9 @@ underscorePrefix name srcLine =
       = Just (drop nameLen s)
       | otherwise = Nothing
 
-    isIdentChar c = (c >= 'a' && c <= 'z')
-                 || (c >= 'A' && c <= 'Z')
-                 || (c >= '0' && c <= '9')
+    isIdentChar c = isAsciiLower c
+                 || isAsciiUpper c
+                 || isDigit c
                  || c == '_' || c == '\''
 
 handle :: ProjectDir -> Value -> IO ToolResult

@@ -4322,7 +4322,7 @@ testFixPlanNotFixable40910 =
   let plan = FixWarning.planForCode "GHC-40910"
   in pure $ not (FixWarning.fpFixable plan)
          && not (FixWarning.fpDrop plan)
-         && FixWarning.fpPatch plan == Nothing
+         && isNothing (FixWarning.fpPatch plan)
 
 -- | Issue #55: GHC-40910 WITH a binding name → 'planForCodeWithName'
 -- promotes the plan to fixable=True with a concrete patch line that
@@ -4350,14 +4350,14 @@ testUnderscorePrefixToken =
 testUnderscorePrefixWordBoundary :: IO Bool
 testUnderscorePrefixWordBoundary =
   let line = "process xys = xys + 1  -- 'ys' is not a token here"
-  in pure (FixWarning.underscorePrefix "ys" line == Nothing)
+  in pure (isNothing (FixWarning.underscorePrefix "ys" line))
 
 -- | Issue #55: a name already underscore-prefixed → no patch.
 -- Prevents double-underscoring on retries.
 testUnderscorePrefixIdempotent :: IO Bool
 testUnderscorePrefixIdempotent =
   let line = "f x _ys = x"
-  in pure (FixWarning.underscorePrefix "ys" line == Nothing)
+  in pure (isNothing (FixWarning.underscorePrefix "ys" line))
 
 -- | Phase 11i: warning categorizer buckets common messages into
 -- the 5 coarse classes the agent can prioritise on.
