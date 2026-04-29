@@ -335,6 +335,17 @@ dispatch name payload = case name of
   -- example before deleting.
   GhcDeterminism -> Just (determinismNext payload)
 
+  -- Issue #62: a successful move was already verified via the
+  -- internal loadForTarget; the agent's next reasonable check is
+  -- the project-level gate so any consumer the heuristic missed
+  -- surfaces immediately.
+  GhcMove -> Just (simple GhcCheckProject
+    "Move was applied AND the source target loaded clean. Run \
+    \ghc_check_project for the whole-project gate so any unrewritten \
+    \consumer (qualified import, hiding clause, Haddock ref) surfaces \
+    \with file + line."
+    Nothing)
+
   -- Issue #53: only nudge towards 'ghc_load' when ghc_add_import
   -- actually returned candidate imports. The legacy nextStep ran
   -- unconditionally, so a hoogle-missing or zero-hits response

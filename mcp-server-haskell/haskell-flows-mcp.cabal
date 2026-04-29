@@ -93,6 +93,7 @@ library
                       HaskellFlows.Tool.Lint
                       HaskellFlows.Tool.PropertyLifecycle
                       HaskellFlows.Tool.Load
+                      HaskellFlows.Tool.Move
                       HaskellFlows.Tool.QuickCheck
                       HaskellFlows.Tool.QuickCheckExport
                       HaskellFlows.Tool.Refactor
@@ -237,6 +238,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowBootstrapDocs
                       Scenarios.FlowFixWarningUnusedBinding
                       Scenarios.FlowRemoveModulesDownstream
+                      Scenarios.FlowMoveSymbol
                       Scenarios.FlowDogfoodReplay
                       Scenarios.FlowTypeBreakage
                       Scenarios.FlowScopeMgmt

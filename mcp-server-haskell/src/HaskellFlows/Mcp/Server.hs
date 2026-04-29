@@ -106,6 +106,7 @@ import qualified HaskellFlows.Tool.Load            as Load
 import qualified HaskellFlows.Tool.QuickCheck      as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExportTool
 import qualified HaskellFlows.Tool.Refactor        as RefactorTool
+import qualified HaskellFlows.Tool.Move             as MoveTool
 import qualified HaskellFlows.Tool.Regression      as RegressionTool
 import qualified HaskellFlows.Tool.RemoveModules   as RemoveModulesTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
@@ -436,6 +437,12 @@ dispatchByName srv args = \case
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
     RefactorTool.handle ghcSess pd args
+  GhcMove -> do
+    -- Issue #62 Phase 1: cross-module top-level symbol move with
+    -- multi-file snapshot + verify-via-loadForTarget rollback.
+    ghcSess <- getOrStartGhcSession srv
+    pd      <- readIORef (srvProjectDir srv)
+    MoveTool.handle ghcSess pd args
   GhcLint -> do
     pd <- readIORef (srvProjectDir srv)
     LintTool.handle pd args
@@ -565,6 +572,7 @@ allToolDescriptors =
   , DocTool.descriptor
   , GotoTool.descriptor
   , RefactorTool.descriptor
+  , MoveTool.descriptor
   , BatchTool.descriptor
   , LintTool.descriptor
   , ToolchainStatusTool.descriptor

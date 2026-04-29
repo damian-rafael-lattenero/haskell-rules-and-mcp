@@ -105,6 +105,7 @@ import HaskellFlows.Tool.Batch (BatchArgs (..))
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import qualified HaskellFlows.Tool.CreateProject as CreateProject
+import qualified HaskellFlows.Tool.Move as MoveTool
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import qualified HaskellFlows.Tool.Regression as RegTool
@@ -516,6 +517,17 @@ main = do
       , test "remove_modules: scanImportersInBody plain (#41)" testRMScanImportPlain
       , test "remove_modules: scanImportersInBody respects hierarchy (#41)" testRMScanRespectsHierarchy
       , test "remove_modules: scanImportersInBody quiet on no match (#41)" testRMScanQuietOnNoMatch
+      , test "move: sliceTopLevelBinding finds signature+body (#62)" testMoveSliceFindsBinding
+      , test "move: sliceTopLevelBinding absorbs Haddock (#62)" testMoveSliceAbsorbsHaddock
+      , test "move: sliceTopLevelBinding misses unknown (#62)" testMoveSliceMisses
+      , test "move: removeSliceFromBody removes range (#62)" testMoveRemoveSlice
+      , test "move: insertSliceAtEnd appends + separates (#62)" testMoveInsertSlice
+      , test "move: rewriteImports splits selective import (#62)" testMoveRewriteSelective
+      , test "move: rewriteImports leaves bare import alone (#62)" testMoveRewriteBare
+      , test "move: rewriteImports leaves qualified alone (#62)" testMoveRewriteQualified
+      , test "move: moduleNameToPath canonical (#62)" testMoveModulePath
+      , test "move: removeFromSourceExportList drops symbol (#62)" testMoveRemoveExport
+      , test "move: removeFromSourceExportList no-op on open export (#62)" testMoveRemoveExportOpen
       , test "workflow-state: initial empty"       testWorkflowStateInitial
       , test "workflow-state: tracks load + edits" testWorkflowStateTracks
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
@@ -4249,6 +4261,161 @@ testRMScanQuietOnNoMatch = pure $
      null (RM.scanImportersInBody "f.hs" ["Foo"] "")
   && null (RM.scanImportersInBody "f.hs" []      "import Foo\n")
   && null (RM.scanImportersInBody "f.hs" ["Foo"] "module Other where\n")
+
+-- | Issue #62: 'sliceTopLevelBinding' must find a column-0
+-- signature and grow the slice down to the next top-level
+-- binding's start.
+
+testMoveSliceFindsBinding :: IO Bool
+testMoveSliceFindsBinding =
+  let body = T.unlines
+        [ "module M where"
+        , ""
+        , "double :: Int -> Int"
+        , "double x = x + x"
+        , ""
+        , "next :: Int -> Int"
+        , "next y = y + 1"
+        ]
+  in case MoveTool.sliceTopLevelBinding "double" body of
+       Just s ->
+         pure $ "double :: Int -> Int" `T.isInfixOf` MoveTool.srSliced s
+             && "double x = x + x"     `T.isInfixOf` MoveTool.srSliced s
+             && not ("next" `T.isInfixOf` MoveTool.srSliced s)
+       Nothing -> pure False
+
+testMoveSliceAbsorbsHaddock :: IO Bool
+testMoveSliceAbsorbsHaddock =
+  let body = T.unlines
+        [ "module M where"
+        , ""
+        , "-- | Doubles its input."
+        , "-- Continues across lines."
+        , "double :: Int -> Int"
+        , "double x = x + x"
+        ]
+  in case MoveTool.sliceTopLevelBinding "double" body of
+       Just s -> pure $
+         "Doubles its input"   `T.isInfixOf` MoveTool.srSliced s
+            && "double x = x + x" `T.isInfixOf` MoveTool.srSliced s
+       Nothing -> pure False
+
+testMoveSliceMisses :: IO Bool
+testMoveSliceMisses =
+  let body = T.unlines
+        [ "module M where"
+        , "double :: Int -> Int"
+        , "double x = x + x"
+        ]
+  in pure (isNothing (MoveTool.sliceTopLevelBinding "missing" body))
+
+testMoveRemoveSlice :: IO Bool
+testMoveRemoveSlice =
+  let body = T.unlines
+        [ "module M where"
+        , ""
+        , "double :: Int -> Int"
+        , "double x = x + x"
+        , ""
+        , "next :: Int"
+        , "next = 0"
+        ]
+  in case MoveTool.sliceTopLevelBinding "double" body of
+       Just s ->
+         let after = MoveTool.removeSliceFromBody s body
+         in pure $ not ("double" `T.isInfixOf` after)
+                && "next" `T.isInfixOf` after
+       Nothing -> pure False
+
+testMoveInsertSlice :: IO Bool
+testMoveInsertSlice =
+  let body = T.unlines
+        [ "module M where"
+        , ""
+        , "double :: Int -> Int"
+        , "double x = x + x"
+        ]
+      destBody = T.unlines
+        [ "module Dest where"
+        , ""
+        , "existing :: Int"
+        , "existing = 0"
+        ]
+  in case MoveTool.sliceTopLevelBinding "double" body of
+       Just s ->
+         let merged = MoveTool.insertSliceAtEnd s destBody
+         in pure $ "existing"            `T.isInfixOf` merged
+                && "double :: Int -> Int" `T.isInfixOf` merged
+                -- blank-line separator between existing + slice
+                && T.isInfixOf "existing = 0\n\ndouble" merged
+       Nothing -> pure False
+
+-- | Issue #62: a consumer body with @import Foo (bar, double)@ and
+-- a move of 'double' must split into
+-- @import Foo (bar)@ + @import Bar (double)@ — preserving leading
+-- whitespace.
+testMoveRewriteSelective :: IO Bool
+testMoveRewriteSelective =
+  let body = T.unlines
+        [ "module Other where"
+        , ""
+        , "import Foo (bar, double)"
+        ]
+      rewritten = MoveTool.rewriteImports "double" "Foo" "Bar" body
+  in pure $ "import Foo (bar)"     `T.isInfixOf` rewritten
+        && "import Bar (double)"   `T.isInfixOf` rewritten
+        && not ("Foo (bar, double)" `T.isInfixOf` rewritten)
+
+-- | Phase 1 deferral: bare 'import Foo' is left alone — verify
+-- catches anything that breaks.
+testMoveRewriteBare :: IO Bool
+testMoveRewriteBare =
+  let body = T.unlines [ "module Other where", "import Foo" ]
+      rewritten = MoveTool.rewriteImports "double" "Foo" "Bar" body
+  in pure $ "import Foo" `T.isInfixOf` rewritten
+        && not ("import Bar" `T.isInfixOf` rewritten)
+
+-- | Phase 1 deferral: 'import qualified Foo as F' is left alone.
+testMoveRewriteQualified :: IO Bool
+testMoveRewriteQualified =
+  let body = T.unlines [ "module O where", "import qualified Foo as F" ]
+      rewritten = MoveTool.rewriteImports "double" "Foo" "Bar" body
+  in pure $ "import qualified Foo as F" `T.isInfixOf` rewritten
+        && not ("import Bar" `T.isInfixOf` rewritten)
+
+testMoveModulePath :: IO Bool
+testMoveModulePath = pure $
+     MoveTool.moduleNameToPath "Foo"          == "src/Foo.hs"
+  && MoveTool.moduleNameToPath "Foo.Bar"      == "src/Foo/Bar.hs"
+  && MoveTool.moduleNameToPath "Expr.Simplify" == "src/Expr/Simplify.hs"
+
+-- | Issue #62: when the source module's header carries an
+-- explicit export list with the moved symbol, the rewriter
+-- drops the symbol from it. Without this, post-move load
+-- fails with \"Not in scope\" on the export list.
+testMoveRemoveExport :: IO Bool
+testMoveRemoveExport =
+  let body = T.unlines
+        [ "module Source (greet, double) where"
+        , ""
+        , "double :: Int -> Int"
+        , "double x = x + x"
+        ]
+      stripped = MoveTool.removeFromSourceExportList "double" body
+  in pure $ T.isInfixOf "module Source (greet) where" stripped
+        && not ("greet, double" `T.isInfixOf` stripped)
+
+-- | Issue #62: open export ('module Foo where' with no parens)
+-- is left unchanged.
+testMoveRemoveExportOpen :: IO Bool
+testMoveRemoveExportOpen =
+  let body = T.unlines
+        [ "module M where"
+        , ""
+        , "double = 42"
+        ]
+      stripped = MoveTool.removeFromSourceExportList "double" body
+  in pure (stripped == body)
 
 -- | Symmetric regression: 'ghc_remove_modules' still removes when
 -- given a valid name.
