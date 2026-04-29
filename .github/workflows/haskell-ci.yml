@@ -198,51 +198,49 @@ jobs:
   # -------------------------------------------------------------------------
   #  macOS portability canary — advisory, sharded.
   #
-  #  Cell-count is asymmetric across GHC versions to fit GitHub's
-  #  free-tier macOS concurrent-runner cap (5 simultaneous macOS
-  #  runners per org). With 6 cells, one was always queued — the
-  #  queue compounded across in-flight commits and surfaced as
-  #  pseudo-cancellations in the matrix UI. Five cells hits the
-  #  ceiling exactly without spilling.
+  #  Cell-count tuned to share-not-saturate the free-tier macOS
+  #  concurrent-runner cap (5 simultaneous macOS runners per org).
+  #
+  #  Why not 5 cells: with 5 cells per run, ONE run fits the cap
+  #  exactly — but multiple in-flight master pushes (every commit
+  #  gets its own SHA-keyed concurrency group, so no cancellation
+  #  cascade) saturate immediately: 4 in-flight runs × 5 cells =
+  #  20 macOS jobs requesting a quota of 5. Most cells sit in
+  #  "All GitHub-hosted runners with label [macos-latest] are busy"
+  #  for an hour, then get cancelled. That's exactly the failure
+  #  shape this comment is being written to address.
+  #
+  #  Why 3 cells: leaves room for 1-2 concurrent in-flight runs
+  #  to all start their macOS jobs without queuing. Captures the
+  #  portability-canary signal we want without saturating the
+  #  org-wide quota.
   #
   #  Layout:
-  #    * GHC 9.10.1 → 2 shards (1/2, 2/2)        = 2 cells
-  #    * GHC 9.12.2 → 3 shards (1/3, 2/3, 3/3)   = 3 cells
-  #    * Total                                    = 5 cells
+  #    * GHC 9.12.2 only          (latest stable, the gating GHC)
+  #    * 3 shards: 1/3, 2/3, 3/3  (full e2e coverage via union)
+  #    * Total                     = 3 cells
   #
-  #  Coverage rationale: every scenario runs on macOS twice
-  #  (once via the 9.10.1 2-way split, once via the 9.12.2 3-way
-  #  split) — strictly more redundancy per scenario than the
-  #  prior 6-cell design where each scenario ran exactly once
-  #  per GHC version. Trade is per-cell wall-clock: 9.10.1 cells
-  #  see ~35 scenarios each (vs ~23 in the 3-way), 9.12.2 cells
-  #  unchanged at ~23.
+  #  Coverage trade vs the prior 5-cell shape: dropped GHC 9.10.1
+  #  on macOS. Ubuntu still covers both GHC versions in its 6-cell
+  #  shard matrix — the macOS-specific portability axis was about
+  #  arm64-vs-x86_64 system regressions, not GHC-version drift, so
+  #  one GHC version on macOS is sufficient signal. If the quota
+  #  becomes more relaxed (paid tier, self-hosted) we can put
+  #  9.10.1 back; the matrix is one 'include' line away.
   #
   #    * 'continue-on-error: true' — failure / cancellation never blocks.
   #    * Deliberately NOT in 'required.needs' — the aggregator does not
   #      WAIT for this job, so the green-check signal arrives via the
   #      ubuntu shards alone.
-  #
-  #  Both GHC versions still run for portability coverage. Drop one
-  #  if the macOS quota tightens further; the ubuntu matrix is
-  #  the authoritative correctness gate either way.
   # -------------------------------------------------------------------------
   build-and-test-macos:
     name: Build & test — macOS / GHC ${{ matrix.ghc }} / shard ${{ matrix.shard }} (advisory)
     strategy:
       fail-fast: false
       matrix:
+        ghc: ["9.12.2"]
         cabal: ["3.12.1.0"]
-        # Asymmetric matrix: 9.10.1 splits 2-way, 9.12.2 splits
-        # 3-way. Use 'include' instead of a cross-product because
-        # the shard list differs per GHC version. Total = 5 cells,
-        # which fits the free-tier macOS concurrent-runner cap.
-        include:
-          - { ghc: "9.10.1", shard: "1/2" }
-          - { ghc: "9.10.1", shard: "2/2" }
-          - { ghc: "9.12.2", shard: "1/3" }
-          - { ghc: "9.12.2", shard: "2/3" }
-          - { ghc: "9.12.2", shard: "3/3" }
+        shard: ["1/3", "2/3", "3/3"]
     runs-on: macos-latest
     continue-on-error: true
     steps:
