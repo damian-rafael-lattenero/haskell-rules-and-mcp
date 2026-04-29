@@ -7892,7 +7892,7 @@ testParseHpcReportText =
         ]
       rpt = parseCoverage sample
   in pure (length (crMetrics rpt) >= 5
-         && any (\m -> mPercent m == 92) (crMetrics rpt))
+         && any (\m -> mPercent m == Just 92) (crMetrics rpt))
 
 -- | Phase 11b F-08 (critical): the old @loadModuleWith Deferred@ used
 -- @:unset -fdefer-type-errors -fdefer-typed-holes@, but GHCi's
