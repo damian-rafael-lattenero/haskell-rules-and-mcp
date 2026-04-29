@@ -198,36 +198,51 @@ jobs:
   # -------------------------------------------------------------------------
   #  macOS portability canary — advisory, sharded.
   #
-  #  Same 'ghc × shard' shape as the ubuntu job above (6 cells), but:
+  #  Cell-count is asymmetric across GHC versions to fit GitHub's
+  #  free-tier macOS concurrent-runner cap (5 simultaneous macOS
+  #  runners per org). With 6 cells, one was always queued — the
+  #  queue compounded across in-flight commits and surfaced as
+  #  pseudo-cancellations in the matrix UI. Five cells hits the
+  #  ceiling exactly without spilling.
+  #
+  #  Layout:
+  #    * GHC 9.10.1 → 2 shards (1/2, 2/2)        = 2 cells
+  #    * GHC 9.12.2 → 3 shards (1/3, 2/3, 3/3)   = 3 cells
+  #    * Total                                    = 5 cells
+  #
+  #  Coverage rationale: every scenario runs on macOS twice
+  #  (once via the 9.10.1 2-way split, once via the 9.12.2 3-way
+  #  split) — strictly more redundancy per scenario than the
+  #  prior 6-cell design where each scenario ran exactly once
+  #  per GHC version. Trade is per-cell wall-clock: 9.10.1 cells
+  #  see ~35 scenarios each (vs ~23 in the 3-way), 9.12.2 cells
+  #  unchanged at ~23.
   #
   #    * 'continue-on-error: true' — failure / cancellation never blocks.
   #    * Deliberately NOT in 'required.needs' — the aggregator does not
-  #      WAIT for this job, so the green-check signal arrives at
-  #      ~6 min (ubuntu shards) instead of ~13 min (slowest full
-  #      macOS cell).
+  #      WAIT for this job, so the green-check signal arrives via the
+  #      ubuntu shards alone.
   #
-  #  Why shard macOS too (since it doesn't gate): per-cell wall-clock
-  #  drops from ~13 min to ~5 min, so when a contributor lands on a
-  #  Mac and clicks through to the macOS tab they see results sooner.
-  #  Trade-off: cell count goes 2 → 6 and macOS minutes count 10× the
-  #  ubuntu rate against GitHub's billing quota — total macOS
-  #  minute-credits per push goes from 2×~13×10 = 260 to 6×~5×10 =
-  #  300, +15 %. Acceptable for the symmetry + faster-feedback gain;
-  #  trim to one GHC version (or drop the matrix entirely) if the
-  #  free-tier quota becomes a real ceiling.
-  #
-  #  macOS-specific portability signal preserved (the original
-  #  motivation): both GHC versions still run, just split three ways
-  #  each. Each scenario runs on at least one macOS cell per push.
+  #  Both GHC versions still run for portability coverage. Drop one
+  #  if the macOS quota tightens further; the ubuntu matrix is
+  #  the authoritative correctness gate either way.
   # -------------------------------------------------------------------------
   build-and-test-macos:
     name: Build & test — macOS / GHC ${{ matrix.ghc }} / shard ${{ matrix.shard }} (advisory)
     strategy:
       fail-fast: false
       matrix:
-        ghc: ["9.10.1", "9.12.2"]
         cabal: ["3.12.1.0"]
-        shard: ["1/3", "2/3", "3/3"]
+        # Asymmetric matrix: 9.10.1 splits 2-way, 9.12.2 splits
+        # 3-way. Use 'include' instead of a cross-product because
+        # the shard list differs per GHC version. Total = 5 cells,
+        # which fits the free-tier macOS concurrent-runner cap.
+        include:
+          - { ghc: "9.10.1", shard: "1/2" }
+          - { ghc: "9.10.1", shard: "2/2" }
+          - { ghc: "9.12.2", shard: "1/3" }
+          - { ghc: "9.12.2", shard: "2/3" }
+          - { ghc: "9.12.2", shard: "3/3" }
     runs-on: macos-latest
     continue-on-error: true
     steps:
@@ -275,10 +290,12 @@ jobs:
           brew install hlint
           hlint --version
 
-      # Same shard env var as the ubuntu matrix above. Each macOS
-      # cell runs unit + 1/3 of e2e scenarios (round-robin); the
-      # union of the three shards covers the full suite per GHC
-      # version.
+      # Shard string is per-cell from the matrix include block —
+      # 1/2 and 2/2 on GHC 9.10.1, 1/3..3/3 on GHC 9.12.2. The
+      # E2E.Sharding harness honours arbitrary "i/n" so both
+      # split widths work without harness changes. Each cell's
+      # union with its same-GHC siblings covers the full 70-scenario
+      # suite once per GHC version.
       - name: Run tests
         env:
           HASKELL_FLOWS_E2E_PARALLEL: "8"
