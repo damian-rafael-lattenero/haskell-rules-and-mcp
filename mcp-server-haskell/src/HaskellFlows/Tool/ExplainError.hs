@@ -30,6 +30,7 @@ module HaskellFlows.Tool.ExplainError
   ) where
 
 import Control.Exception (SomeException, try)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -163,9 +164,9 @@ extractImports body =
           ( T.takeWhile isModChar (T.stripStart rest)
           , False
           )
-    isModChar c = (c >= 'A' && c <= 'Z')
-               || (c >= 'a' && c <= 'z')
-               || (c >= '0' && c <= '9')
+    isModChar c = isAsciiUpper c
+               || isAsciiLower c
+               || isDigit c
                || c == '.' || c == '_' || c == '\''
 
 -- | Issue #59: return the line range surrounding a given line
