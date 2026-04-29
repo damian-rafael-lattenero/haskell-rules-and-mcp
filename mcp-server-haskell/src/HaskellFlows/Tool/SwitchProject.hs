@@ -57,13 +57,12 @@ import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, atomicWriteIORef, readIORef)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath (takeExtension)
 
 import HaskellFlows.Data.PropertyStore (Store, openStore)
 import HaskellFlows.Ghc.ApiSession (GhcSession, killGhcSession)
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types
@@ -188,11 +187,11 @@ handle
   -> Value
   -> IO ToolResult
 handle pdRef sessRef storeRef rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+  Left err -> pure (parseErrorResult err)
   Right (SwitchProjectArgs raw) -> do
     res <- validateSwitchTarget raw
     case res of
-      Left ve -> pure (errorResult (renderValidationError ve))
+      Left ve -> pure (validationErrorResult ve)
       Right newPd -> do
         oldPd <- readIORef pdRef
         -- Re-check scaffold state AFTER validation accepted the path
@@ -221,32 +220,58 @@ handle pdRef sessRef storeRef rawArgs = case parseEither parseJSON rawArgs of
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: switch landed → status='ok' with the
+-- ('previous', 'current', 'scaffolded') fields under 'result'.
+-- The boolean 'scaffolded' lets the NextStep router branch
+-- between 'run status' (project ready) and 'run create_project'
+-- (empty dir).
 successResult :: ProjectDir -> ProjectDir -> Bool -> ToolResult
 successResult oldPd newPd scaffolded =
-  let payload = object
-        [ "success"    .= True
-        , "previous"   .= T.pack (unProjectDir oldPd)
-        , "current"    .= T.pack (unProjectDir newPd)
-        , "scaffolded" .= scaffolded
-        , "message"    .= ("Project directory switched. Next tool \
-                           \call boots a fresh GhcSession." :: Text)
-        ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "previous"   .= T.pack (unProjectDir oldPd)
+    , "current"    .= T.pack (unProjectDir newPd)
+    , "scaffolded" .= scaffolded
+    , "message"    .= ("Project directory switched. Next tool \
+                       \call boots a fresh GhcSession." :: Text)
+    ]))
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent =
-        [ TextContent (encodeUtf8Text (object
-            [ "success" .= False
-            , "error"   .= msg
-            ]))
-        ]
-    , trIsError = True
-    }
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+-- | Issue #90 Phase C: closed-enum dispatch over the validation
+-- failure modes. Each maps to a typed kind:
+--   * 'VEPathError'     → kind='path_traversal' (refused).
+--   * 'VENotADirectory' → kind='module_path_does_not_exist'.
+--   * 'VENoCabalFile'   → kind='module_not_in_graph' (no cabal
+--                         project in the target — caller likely
+--                         wants ghc_create_project).
+validationErrorResult :: ValidationError -> ToolResult
+validationErrorResult ve =
+  let msg = renderValidationError ve
+  in case ve of
+       VEPathError _ ->
+         Env.toolResponseToResult
+           (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+       VENotADirectory _ ->
+         Env.toolResponseToResult
+           (Env.mkFailed (Env.mkErrorEnvelope Env.ModulePathDoesNotExist msg))
+       VENoCabalFile _ ->
+         let payload  = object
+               [ "remediation" .= ( "Run ghc_create_project to scaffold \
+                                   \a cabal layout, then retry." :: Text )
+               ]
+             envErr   = Env.mkErrorEnvelope Env.ModuleNotInGraph msg
+             response = (Env.mkNoMatch payload) { Env.reError = Just envErr }
+         in Env.toolResponseToResult response

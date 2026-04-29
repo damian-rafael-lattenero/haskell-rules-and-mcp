@@ -36,14 +36,13 @@ import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
   , LoadFlavour (..)
   , loadAndCaptureDiagnostics
   )
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
@@ -90,15 +89,15 @@ instance FromJSON ExplainErrorArgs where
 
 handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+  Left err -> pure (parseErrorResult err)
   Right args -> case mkModulePath pd (T.unpack (eaModulePath args)) of
-    Left e   -> pure (errorResult (T.pack (show e)))
+    Left e   -> pure (pathTraversalResult (T.pack (show e)))
     Right mp -> do
       let full = unModulePath mp
       eBody <- try (TIO.readFile full)
                  :: IO (Either SomeException Text)
       case eBody of
-        Left e -> pure (errorResult
+        Left e -> pure (subprocessResult
           (T.pack ("Could not read module: " <> show e)))
         Right body -> do
           (_, diags) <- loadAndCaptureDiagnostics ghcSess Strict
@@ -183,6 +182,10 @@ enclosingLineRange totalLines padding lineNum =
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: a found-error context is informational —
+-- the tool's job is to package evidence for the agent's LLM, not
+-- to fail. status='ok' always; the agent reads
+-- 'result.diagnostic' and decides what to do next.
 renderContext :: Text -> Text -> GhcError -> [GhcError] -> ToolResult
 renderContext modulePath body diag ownDiags =
   let lns      = T.lines body
@@ -191,8 +194,7 @@ renderContext modulePath body diag ownDiags =
       sliced   = T.unlines
         [ ln | (i, ln) <- zip [1 :: Int ..] lns, i >= lo, i <= hi ]
       payload = object
-        [ "success"     .= True
-        , "module_path" .= modulePath
+        [ "module_path" .= modulePath
         , "diagnostic"  .= renderDiag diag
         , "context"     .= object
             [ "module_source"   .= body
@@ -213,16 +215,14 @@ renderContext modulePath body diag ownDiags =
               \verify endpoint that snapshots, applies, recompiles, and \
               \ranks." :: Text )
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  in Env.toolResponseToResult (Env.mkOk payload)
 
+-- | Issue #90 Phase C: no error to explain → status='ok' with
+-- 'diagnostic=null' and the agent-side hint under 'result'.
 renderNoErrors :: Text -> [GhcError] -> ToolResult
 renderNoErrors modulePath diags =
   let payload = object
-        [ "success"     .= True
-        , "module_path" .= modulePath
+        [ "module_path" .= modulePath
         , "diagnostic"  .= Null
         , "warnings"    .= map renderDiag
                               (filter ((== SevWarning) . geSeverity) diags)
@@ -231,10 +231,7 @@ renderNoErrors modulePath diags =
               \whole still fails to build, run ghc_check_project to \
               \enumerate the failing modules." :: Text )
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  in Env.toolResponseToResult (Env.mkOk payload)
 
 renderDiag :: GhcError -> Value
 renderDiag d = object
@@ -249,13 +246,29 @@ renderDiag d = object
     sevText SevError   = "error"
     sevText SevWarning = "warning"
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False, "error" .= msg ])) ]
-    , trIsError = True
-    }
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+-- | Issue #90 Phase C: 'mkModulePath' rejection.
+pathTraversalResult :: Text -> ToolResult
+pathTraversalResult msg =
+  Env.toolResponseToResult
+    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+
+-- | Issue #90 Phase C: filesystem read failure.
+subprocessResult :: Text -> ToolResult
+subprocessResult msg =
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))

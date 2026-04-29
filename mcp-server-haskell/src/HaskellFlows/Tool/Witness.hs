@@ -55,12 +55,11 @@ import Data.List (sortOn)
 import qualified Data.Ord
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Text.Read (readMaybe)
 
 import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.QuickCheck
@@ -118,7 +117,7 @@ instance FromJSON WitnessArgs where
 
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+  Left err -> pure (parseErrorResult err)
   Right args -> do
     t0 <- realToFrac <$> getPOSIXTime :: IO Double
     let instrumented = buildInstrumentedProperty (waProperty args) (waRuns args)
@@ -132,7 +131,8 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
         (waModulePath args) instrumented
     t1 <- realToFrac <$> getPOSIXTime :: IO Double
     case res of
-      Left e -> pure (errorResult (T.pack ("subprocess error: " <> show e)))
+      Left e -> pure (subprocessResult
+                        (T.pack ("subprocess error: " <> show e)))
       Right (out, labelsBlock, _err) ->
         let qcResult = parseQuickCheckOutput (waProperty args) out
             -- Issue #78: prefer the structured labels block over
@@ -294,6 +294,12 @@ biasWarnings dist =
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: the witness report is informational —
+-- distribution warnings are flagged as 'warnings' under 'result'
+-- but the run itself is always 'ok' (tool successfully measured).
+-- Consumers branch on the structured 'distribution' / 'warnings'
+-- fields. The legacy in-payload 'nextStep' object is preserved
+-- because the existing nextStep injection plumbing keys on it.
 renderReport
   :: WitnessArgs -> QuickCheckResult
   -> [(Text, Double)] -> [Text] -> Text -> Int -> ToolResult
@@ -302,8 +308,7 @@ renderReport args qc dist warnings rawForResponse wallMs =
       raw = rawForResponse
       sizeDist = filter (("size:" `T.isPrefixOf`) . fst) dist
       payload = object
-        [ "success"      .= True
-        , "property"     .= waProperty args
+        [ "property"     .= waProperty args
         , "module"       .= waModulePath args
         , "runs"         .= waRuns args
         , "passed"       .= passed
@@ -336,10 +341,7 @@ renderReport args qc dist warnings rawForResponse wallMs =
                 ]
             ]
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  in Env.toolResponseToResult (Env.mkOk payload)
 
 renderBucket :: (Text, Double) -> Value
 renderBucket (label, pct) = object
@@ -355,13 +357,23 @@ qcCounts = \case
   QcGaveUp _ n d        -> (n, 0, T.pack ("gave up after " <> show d <> " discards"))
   QcUnparsed _ raw      -> (0, 0, raw)
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False, "error" .= msg ])) ]
-    , trIsError = True
-    }
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+-- | Issue #90 Phase C: cabal-repl subprocess threw.
+subprocessResult :: Text -> ToolResult
+subprocessResult msg =
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))

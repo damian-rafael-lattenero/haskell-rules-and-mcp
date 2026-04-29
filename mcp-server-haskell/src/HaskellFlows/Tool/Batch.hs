@@ -41,9 +41,8 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
@@ -126,10 +125,25 @@ instance FromJSON BatchArgs where
 handle :: (ToolCall -> IO ToolResult) -> Value -> IO ToolResult
 handle dispatch rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (parseErrorResult parseError)
   Right args -> do
     results <- runActions dispatch (baFailFast args) (baActions args)
     pure (renderResult (baFailFast args) results)
+
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 --------------------------------------------------------------------------------
 -- execution
@@ -178,6 +192,11 @@ outcomeIsError = \case
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: every-action-passed → status='ok'. Mixed
+-- outcomes (some actions ran cleanly, others errored) →
+-- status='partial' so the consumer sees the partial-progress
+-- discriminator. Pure-failure (no oks) → status='failed'.
+-- Per-action results stay under 'result.results'.
 renderResult :: Bool -> [ActionOutcome] -> ToolResult
 renderResult ff outcomes =
   let errCount  = length (filter outcomeIsError outcomes)
@@ -185,18 +204,26 @@ renderResult ff outcomes =
       okCount   = length outcomes - errCount - skipCount
       payload =
         object
-          [ "success"   .= (errCount == 0)
-          , "fail_fast" .= ff
+          [ "fail_fast" .= ff
           , "total"     .= length outcomes
           , "ok"        .= okCount
           , "failed"    .= errCount
           , "skipped"   .= skipCount
           , "results"   .= map renderOutcome outcomes
           ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = errCount > 0
-       }
+      envMsg = T.pack (show errCount) <> " of "
+                 <> T.pack (show (length outcomes))
+                 <> " action(s) failed"
+      envErr = Env.mkErrorEnvelope Env.Validation envMsg
+  in case (errCount, okCount) of
+       (0, _) ->
+         Env.toolResponseToResult (Env.mkOk payload)
+       (_, 0) ->
+         Env.toolResponseToResult
+           ((Env.mkFailed envErr) { Env.reResult = Just payload })
+       (_, _) ->
+         Env.toolResponseToResult
+           ((Env.mkPartial payload) { Env.reError = Just envErr })
 
 renderOutcome :: ActionOutcome -> Value
 renderOutcome (AoOk nm tr) =
@@ -224,16 +251,3 @@ renderOutcome (AoThrew nm msg) =
     , "error"  .= msg
     ]
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

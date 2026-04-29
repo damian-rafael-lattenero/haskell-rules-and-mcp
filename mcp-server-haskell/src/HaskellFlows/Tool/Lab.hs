@@ -50,6 +50,7 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 
 import HaskellFlows.Data.PropertyStore (Store)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.TypeSignature (parseSignature)
@@ -126,17 +127,44 @@ confidenceAtLeast threshold candidate =
 
 handle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+  Left err -> pure (parseErrorResult err)
   Right args -> case mkModulePath pd (T.unpack (laModulePath args)) of
-    Left e   -> pure (errorResult (T.pack (show e)))
+    Left e   -> pure (pathTraversalResult (T.pack (show e)))
     Right mp -> do
       let full = unModulePath mp
       eBody <- try (TIO.readFile full)
                  :: IO (Either SomeException Text)
       case eBody of
-        Left e -> pure (errorResult
+        Left e -> pure (subprocessResult
           (T.pack ("Could not read module: " <> show e)))
         Right body -> runLab ghcSess store pd args (laModulePath args) body
+
+-- | Issue #90 Phase C: caller-side parse failure.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
+
+-- | Issue #90 Phase C: 'mkModulePath' rejection.
+pathTraversalResult :: Text -> ToolResult
+pathTraversalResult msg =
+  Env.toolResponseToResult
+    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+
+-- | Issue #90 Phase C: filesystem read failure.
+subprocessResult :: Text -> ToolResult
+subprocessResult msg =
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
 
 runLab
   :: GhcSession -> Store -> ProjectDir
@@ -352,6 +380,10 @@ decideStatus payload = case lookupString "state" payload of
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: the lab report is informational — it
+-- doesn't fail when uncovered functions exist; it surfaces them.
+-- status='ok' always; consumers branch on the structured
+-- 'covered'/'uncovered' fields under 'result'.
 renderReport :: Text -> [FunctionReport] -> Int -> ToolResult
 renderReport modulePath fns wallMs =
   let totalProps = sum (map (length . frProperties) fns)
@@ -361,8 +393,7 @@ renderReport modulePath fns wallMs =
         [ () | f <- fns, any ((== "passed") . poStatus) (frProperties f) ]
       uncovered  = length fns - coveredFns
       payload = object
-        [ "success"            .= True
-        , "module_path"        .= modulePath
+        [ "module_path"        .= modulePath
         , "audited_bindings"   .= length fns
         , "covered"            .= coveredFns
         , "uncovered"          .= uncovered
@@ -374,10 +405,7 @@ renderReport modulePath fns wallMs =
         , "summary"            .= summarise totalProps passedProps
                                             (length fns) coveredFns
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  in Env.toolResponseToResult (Env.mkOk payload)
 
 renderFn :: FunctionReport -> Value
 renderFn f = object $
@@ -410,16 +438,6 @@ summarise total passed nFns covered =
     <> " properties passed across " <> T.pack (show covered) <> "/"
     <> T.pack (show nFns) <> " functions."
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False, "error" .= msg ])) ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
 
 --------------------------------------------------------------------------------
 -- JSON walk helpers
