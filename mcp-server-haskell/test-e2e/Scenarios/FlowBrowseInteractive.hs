@@ -33,7 +33,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
-import E2E.Envelope (statusOk, errorKind, fieldText, lookupField)
+import E2E.Envelope (statusOk, fieldText, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -49,16 +49,20 @@ runFlow c _projectDir = do
   t0 <- stepHeader 1 "ghc_browse(Prelude) returns structured nextStep (#72)"
   rBr <- Client.callTool c GhcBrowse
            (object [ "module" .= ("Prelude" :: Text) ])
+  -- Issue #90: Browse no-match emits status='no_match' (not
+-- failed/refused) without an error envelope — the diagnostic
+-- context lives in 'result' and the agent steers via
+-- 'nextStep'. Check status + the remediation/nextStep payload.
   let okShape =
            statusOk rBr == Just False
-        && errorKind rBr == Just "module_not_in_graph"
-        -- Remediation must mention ghc_info OR hoogle_search.
+        -- 'success=false' covers both 'no_match' and 'failed'
+        -- via the synthesised projection in lookupField.
         && (maybe False (T.isInfixOf "ghc_info") (fieldText "remediation" rBr)
               || maybe False (T.isInfixOf "hoogle_search") (fieldText "remediation" rBr))
         -- nextStep must point at ghc_info specifically.
         && nextStepTool rBr == Just "ghc_info"
   cShape <- liveCheck $ checkPure
-    "browse Prelude → success=false + error_kind + nextStep=ghc_info"
+    "browse Prelude → status=no_match with remediation + nextStep=ghc_info"
     okShape
     ("Got: " <> truncRender rBr)
   stepFooter 1 t0

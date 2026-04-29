@@ -78,17 +78,28 @@ runFlow c projectDir = do
                 (object [ "modules" .= (["Expr"] :: [Text]) ])
   cabalAfter <- TIO.readFile =<< findCabal projectDir
   let success    = statusOk rRefused
-      kindIsDown = errorKind rRefused == Just "downstream_imports_present"
+      -- Issue #90: post-envelope, error.kind is the closed enum
+      -- (Validation here). The legacy 'downstream_imports_present'
+      -- string is preserved on the wire as error.cause for
+      -- consumers that need the specific reason. Check both.
+      kindIsValidation = errorKind rRefused == Just "validation"
+      causeIsDown      = case lookupField "error" rRefused of
+        Just (Object o) -> case KeyMap.lookup (Key.fromText "cause") o of
+          Just (String s) -> s == "downstream_imports_present"
+          _               -> False
+        _ -> False
       hasDownArr = arrayLen "downstream_imports" rRefused >= 1
       cabalUntouched = cabalBefore == cabalAfter
   cRefuse <- liveCheck $ checkPure
     "default remove refused, .cabal untouched, downstream_imports present"
     (success == Just False
-       && kindIsDown
+       && kindIsValidation
+       && causeIsDown
        && hasDownArr
        && cabalUntouched)
-    ( "Expected: success=false, error_kind=downstream_imports_present, \
-      \array≥1, .cabal unchanged. Got: success=" <> T.pack (show success)
+    ( "Expected: success=false, error.kind=validation, \
+      \error.cause=downstream_imports_present, array≥1, .cabal unchanged. \
+      \Got: success=" <> T.pack (show success)
       <> ", kind=" <> T.pack (show (errorKind rRefused))
       <> ", n=" <> T.pack (show (arrayLen "downstream_imports" rRefused))
       <> ", cabalUntouched=" <> T.pack (show cabalUntouched) )
