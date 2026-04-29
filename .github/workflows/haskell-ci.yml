@@ -73,6 +73,15 @@ jobs:
         ghc: ["9.10.1", "9.12.2"]
         cabal: ["3.12.1.0"]
     runs-on: ${{ matrix.os }}
+    # macOS-latest is gh-free-tier-saturated: GitHub queues then
+    # cancels macos jobs when the org-wide concurrent macOS-runner
+    # quota is hit, surfacing as 'cancelled' on every commit
+    # regardless of code correctness. Promote macos to an advisory
+    # cell — failures and cancellations are visible in the matrix
+    # report but don't block the aggregator. The two ubuntu cells
+    # (different GHC versions on the same OS) are still mandatory
+    # and remain the authoritative correctness gate.
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     steps:
       - uses: actions/checkout@v6
 
