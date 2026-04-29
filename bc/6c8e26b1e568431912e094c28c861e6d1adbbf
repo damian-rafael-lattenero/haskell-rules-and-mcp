@@ -1,0 +1,67 @@
+mcp-server-haskell/src/HaskellFlows/Tool/Batch.hs
+  033795528ddcaec0 46,129
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheckExport.hs
+  033795528ddcaec0 50,104
+mcp-server-haskell/src/HaskellFlows/Tool/Lab.hs
+  033795528ddcaec0 54,131
+mcp-server-haskell/src/HaskellFlows/Tool/Perf.hs
+  033795528ddcaec0 46,96
+mcp-server-haskell/src/HaskellFlows/Tool/CheckModule.hs
+  033795528ddcaec0 40,109
+mcp-server-haskell/src/HaskellFlows/Tool/Lint.hs
+  033795528ddcaec0 39,123
+mcp-server-haskell/src/HaskellFlows/Tool/PropertyAudit.hs
+  033795528ddcaec0 46,99
+mcp-server-haskell/src/HaskellFlows/Tool/Regression.hs
+  033795528ddcaec0 30,96
+mcp-server-haskell/src/HaskellFlows/Tool/Arbitrary.hs
+  033795528ddcaec0 71,116
+mcp-server-haskell/src/HaskellFlows/Tool/Load.hs
+  033795528ddcaec0 37,94
+mcp-server-haskell/src/HaskellFlows/Tool/SwitchProject.hs
+  033795528ddcaec0 66,191
+mcp-server-haskell/src/HaskellFlows/Mcp/ParseError.hs
+  033795528ddcaec0 1-171
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheck.hs
+  033795528ddcaec0 73,135
+mcp-server-haskell/src/HaskellFlows/Tool/CheckProject.hs
+  033795528ddcaec0 36,89
+mcp-server-haskell/src/HaskellFlows/Tool/Suggest.hs
+  033795528ddcaec0 71,132
+mcp-server-haskell/haskell-flows-mcp.cabal
+  033795528ddcaec0 47
+mcp-server-haskell/src/HaskellFlows/Tool/Format.hs
+  033795528ddcaec0 38,98
+mcp-server-haskell/src/HaskellFlows/Tool/Coverage.hs
+  033795528ddcaec0 25,80
+mcp-server-haskell/src/HaskellFlows/Tool/ExplainError.hs
+  033795528ddcaec0 46,93
+mcp-server-haskell/src/HaskellFlows/Tool/Determinism.hs
+  033795528ddcaec0 24,75
+mcp-server-haskell/src/HaskellFlows/Tool/Gate.hs
+  033795528ddcaec0 58,118
+mcp-server-haskell/test/Spec.hs
+  033795528ddcaec0 108-111,374-386,1798-1874
+mcp-server-haskell/src/HaskellFlows/Tool/Witness.hs
+  033795528ddcaec0 63,121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "bc6c8e26b1e568431912e094c28c861e6d1adbbf",
+  "prompts": {
+    "033795528ddcaec0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c2325b8-3973-461e-9af9-e12d8c594bf0",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 886,
+      "total_deletions": 582,
+      "accepted_lines": 28026,
+      "overriden_lines": 0
+    }
+  }
+}
