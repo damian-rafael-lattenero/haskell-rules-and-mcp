@@ -108,6 +108,7 @@ import qualified HaskellFlows.Tool.QuickCheckExport as QcExportTool
 import qualified HaskellFlows.Tool.Refactor        as RefactorTool
 import qualified HaskellFlows.Tool.Move             as MoveTool
 import qualified HaskellFlows.Tool.DepsExplain      as DepsExplainTool
+import qualified HaskellFlows.Tool.Lab              as LabTool
 import qualified HaskellFlows.Tool.Regression      as RegressionTool
 import qualified HaskellFlows.Tool.RemoveModules   as RemoveModulesTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
@@ -450,6 +451,13 @@ dispatchByName srv args = \case
     -- otherwise pure parsing. No GhcSession needed.
     pd <- readIORef (srvProjectDir srv)
     DepsExplainTool.handle pd args
+  GhcLab -> do
+    -- Issue #60 Phase 1: module-wide property audit. Composes
+    -- Suggest.applyRules + Tool.QuickCheck per top-level binding.
+    ghcSess <- getOrStartGhcSession srv
+    pd      <- readIORef (srvProjectDir srv)
+    store   <- readIORef (srvStore srv)
+    LabTool.handle ghcSess store pd args
   GhcLint -> do
     pd <- readIORef (srvProjectDir srv)
     LintTool.handle pd args
@@ -581,6 +589,7 @@ allToolDescriptors =
   , RefactorTool.descriptor
   , MoveTool.descriptor
   , DepsExplainTool.descriptor
+  , LabTool.descriptor
   , BatchTool.descriptor
   , LintTool.descriptor
   , ToolchainStatusTool.descriptor

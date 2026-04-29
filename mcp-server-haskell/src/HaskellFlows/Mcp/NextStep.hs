@@ -335,6 +335,16 @@ dispatch name payload = case name of
   -- example before deleting.
   GhcDeterminism -> Just (determinismNext payload)
 
+  -- Issue #60: the audit just persisted a batch of properties;
+  -- the natural follow-up is the project-level gate that
+  -- replays the new + existing set under the post-audit
+  -- regression store.
+  GhcLab -> Just (simple GhcCheckProject
+    "Module audit completed. Run ghc_check_project to confirm \
+    \the regression-store delta replays cleanly under the whole \
+    \project, then ghc_gate before push."
+    Nothing)
+
   -- Issue #63: the explainer just told you which packages
   -- conflict. The natural follow-up is editing the .cabal
   -- bound that prevents resolution.

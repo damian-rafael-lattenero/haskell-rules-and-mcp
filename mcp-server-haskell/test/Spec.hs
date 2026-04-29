@@ -107,6 +107,7 @@ import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import qualified HaskellFlows.Tool.CreateProject as CreateProject
 import qualified HaskellFlows.Tool.Move as MoveTool
 import qualified HaskellFlows.Tool.DepsExplain as DepsExplain
+import qualified HaskellFlows.Tool.Lab as LabTool
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import qualified HaskellFlows.Tool.Regression as RegTool
@@ -533,6 +534,10 @@ main = do
       , test "deps_explain: identifyRootCause picks deepest (#63)" testDepsExplainRoot
       , test "deps_explain: extractPackages strips versions (#63)" testDepsExplainPackages
       , test "deps_explain: parseSolverOutput Nothing on clean (#63)" testDepsExplainClean
+      , test "lab: listTopLevelBindings finds simple sigs (#60)" testLabListSimple
+      , test "lab: listTopLevelBindings handles multi-line sig (#60)" testLabListMultiline
+      , test "lab: listTopLevelBindings skips empty + non-sigs (#60)" testLabListSkips
+      , test "lab: confidenceAtLeast threshold (#60)" testLabConfidence
       , test "workflow-state: initial empty"       testWorkflowStateInitial
       , test "workflow-state: tracks load + edits" testWorkflowStateTracks
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
@@ -4478,6 +4483,70 @@ testDepsExplainClean =
         , " - my-project-0.1.0.0 (lib)"
         ]
   in pure (isNothing (DepsExplain.parseSolverOutput dump))
+
+-- | Issue #60: 'listTopLevelBindings' must pick up every
+-- column-0 type signature.
+testLabListSimple :: IO Bool
+testLabListSimple =
+  let body = T.unlines
+        [ "module M where"
+        , ""
+        , "import Data.List (sort)"
+        , ""
+        , "double :: Int -> Int"
+        , "double x = x + x"
+        , ""
+        , "greet :: String -> String"
+        , "greet n = \"hi \" <> n"
+        ]
+      bs = LabTool.listTopLevelBindings body
+  in pure $ length bs == 2
+        && map LabTool.bName bs == ["double", "greet"]
+
+-- | Issue #60: signatures wrapped across lines (the second line
+-- starts with whitespace) must be joined into one binding entry.
+testLabListMultiline :: IO Bool
+testLabListMultiline =
+  let body = T.unlines
+        [ "module M where"
+        , ""
+        , "concatPairs"
+        , "  :: (Eq a, Show b)"
+        , "  => [(a, b)] -> [b]"
+        , "concatPairs = undefined"
+        ]
+      bs = LabTool.listTopLevelBindings body
+  in pure $ length bs == 1
+        && LabTool.bName (head bs) == "concatPairs"
+        && T.isInfixOf "[(a, b)] -> [b]" (LabTool.bSignature (head bs))
+
+-- | Issue #60: comments / module headers / equations are NOT
+-- mistaken for signatures.
+testLabListSkips :: IO Bool
+testLabListSkips =
+  let body = T.unlines
+        [ "module M where"
+        , ""
+        , "-- top-level comment"
+        , "import Data.List (sort)"
+        , ""
+        , "double = 42  -- no signature"
+        ]
+  in pure (null (LabTool.listTopLevelBindings body))
+
+-- | Issue #60: 'confidenceAtLeast' compares the candidate against
+-- the threshold (Low ≤ Medium ≤ High).
+testLabConfidence :: IO Bool
+testLabConfidence = pure $
+     LabTool.confidenceAtLeast Low    Low    -- threshold Low,    candidate Low    → True
+  && LabTool.confidenceAtLeast Low    Medium
+  && LabTool.confidenceAtLeast Low    High
+  && LabTool.confidenceAtLeast Medium Medium
+  && LabTool.confidenceAtLeast Medium High
+  && LabTool.confidenceAtLeast High   High
+  && not (LabTool.confidenceAtLeast Medium Low)
+  && not (LabTool.confidenceAtLeast High   Medium)
+  && not (LabTool.confidenceAtLeast High   Low)
 
 -- | Symmetric regression: 'ghc_remove_modules' still removes when
 -- given a valid name.
