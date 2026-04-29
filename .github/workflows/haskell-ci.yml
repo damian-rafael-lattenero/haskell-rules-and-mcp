@@ -196,30 +196,38 @@ jobs:
           ls -la /tmp/haskell-flows-mcp-sdist
 
   # -------------------------------------------------------------------------
-  #  macOS portability canary — advisory.
+  #  macOS portability canary — advisory, sharded.
   #
-  #  Runs the FULL test suite on macOS (no sharding) as a portability
-  #  signal. Deliberately NOT in 'required.needs', so:
+  #  Same 'ghc × shard' shape as the ubuntu job above (6 cells), but:
   #
-  #    * Failure / cancellation here does not block the merge.
-  #    * The aggregator does not WAIT for this job to finish, so the
-  #      green-check signal arrives at ~6 min (ubuntu shards) instead
-  #      of ~13 min (slowest macOS cell).
+  #    * 'continue-on-error: true' — failure / cancellation never blocks.
+  #    * Deliberately NOT in 'required.needs' — the aggregator does not
+  #      WAIT for this job, so the green-check signal arrives at
+  #      ~6 min (ubuntu shards) instead of ~13 min (slowest full
+  #      macOS cell).
   #
-  #  Why keep it at all: surfaces real macOS-specific regressions
-  #  (recall the 'haskell-actions/hlint-setup' arm64 surprise that
-  #  needed the Homebrew fallback) before they hit a contributor on
-  #  a Mac. The job-level 'continue-on-error' ensures the matrix
-  #  badge stays green / yellow rather than red on free-tier
-  #  saturation, so it remains useful signal rather than alarm-fatigue.
+  #  Why shard macOS too (since it doesn't gate): per-cell wall-clock
+  #  drops from ~13 min to ~5 min, so when a contributor lands on a
+  #  Mac and clicks through to the macOS tab they see results sooner.
+  #  Trade-off: cell count goes 2 → 6 and macOS minutes count 10× the
+  #  ubuntu rate against GitHub's billing quota — total macOS
+  #  minute-credits per push goes from 2×~13×10 = 260 to 6×~5×10 =
+  #  300, +15 %. Acceptable for the symmetry + faster-feedback gain;
+  #  trim to one GHC version (or drop the matrix entirely) if the
+  #  free-tier quota becomes a real ceiling.
+  #
+  #  macOS-specific portability signal preserved (the original
+  #  motivation): both GHC versions still run, just split three ways
+  #  each. Each scenario runs on at least one macOS cell per push.
   # -------------------------------------------------------------------------
   build-and-test-macos:
-    name: Build & test — macOS / GHC ${{ matrix.ghc }} (advisory)
+    name: Build & test — macOS / GHC ${{ matrix.ghc }} / shard ${{ matrix.shard }} (advisory)
     strategy:
       fail-fast: false
       matrix:
         ghc: ["9.10.1", "9.12.2"]
         cabal: ["3.12.1.0"]
+        shard: ["1/3", "2/3", "3/3"]
     runs-on: macos-latest
     continue-on-error: true
     steps:
@@ -267,11 +275,14 @@ jobs:
           brew install hlint
           hlint --version
 
-      # No HASKELL_FLOWS_E2E_SHARD — runs the full 70-scenario
-      # suite as portability coverage.
+      # Same shard env var as the ubuntu matrix above. Each macOS
+      # cell runs unit + 1/3 of e2e scenarios (round-robin); the
+      # union of the three shards covers the full suite per GHC
+      # version.
       - name: Run tests
         env:
           HASKELL_FLOWS_E2E_PARALLEL: "8"
+          HASKELL_FLOWS_E2E_SHARD: ${{ matrix.shard }}
         run: cabal test all --test-show-details=direct --test-options="--color"
 
       - name: Build haddocks
