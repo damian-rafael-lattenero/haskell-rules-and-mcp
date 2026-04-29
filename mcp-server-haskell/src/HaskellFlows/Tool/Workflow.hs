@@ -25,9 +25,8 @@ import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, readIORef)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -108,11 +107,34 @@ handle
   -> IO ToolResult
 handle pdRef sessMVar toolNames ws staleness rawArgs =
   case parseEither parseJSON rawArgs of
-    Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+    Left err ->
+      pure (Env.toolResponseToResult (Env.mkFailed
+        ((Env.mkErrorEnvelope (parseErrorKind err)
+            (T.pack ("Invalid arguments: " <> err)))
+              { Env.eeCause = Just (T.pack err) })))
     Right (WorkflowArgs a) -> do
       pd        <- readIORef pdRef
       sessAlive <- isAlive sessMVar
       pure (render a pd sessAlive toolNames ws staleness)
+
+-- | Discriminate the FromJSON failure shape so the envelope's
+-- error.kind reflects what actually went wrong: an unknown
+-- 'action' value lands as 'Validation' (the value is structurally
+-- valid JSON, just outside the enum); a missing required field
+-- lands as 'MissingArg'; everything else falls back to
+-- 'TypeMismatch'. Substring-detection is fragile but the
+-- alternative (custom Aeson runner) is heavier than this surface
+-- needs.
+parseErrorKind :: String -> Env.ErrorKind
+parseErrorKind err
+  | "unknown action" `isInfixOfStr` err = Env.Validation
+  | "key" `isInfixOfStr` err            = Env.MissingArg
+  | otherwise                           = Env.TypeMismatch
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 isAlive :: MVar (Maybe GhcSession) -> IO Bool
 isAlive sessMVar = do
@@ -125,6 +147,13 @@ isAlive sessMVar = do
 
 -- | Render the workflow view. The three branches share the same
 -- top-level shape so agents can treat the tool's output polymorphically.
+-- | Render the workflow view via the unified envelope. Issue #90
+-- Phase B: 'ghc_workflow' is read-only — every successful call is
+-- 'Env.StatusOk' carrying the requested view inside 'result'.
+-- The legacy 'success: true' is auto-derived; the per-action
+-- payloads stay shape-stable so consumers that read e.g.
+-- 'projectDir' / 'toolsActive' / 'phase' need no client-side
+-- changes.
 render
   :: Action
   -> ProjectDir
@@ -134,16 +163,13 @@ render
   -> StalenessReport
   -> ToolResult
 render a pd alive toolNames ws staleness =
-  let phase    = classifyPhase ws
+  let phase      = classifyPhase ws
       stateHints = renderHelp ws
-      payload  = case a of
+      payload    = case a of
         ActStatus -> statusPayload pd alive toolNames staleness phase
         ActHelp   -> helpPayload pd alive stateHints staleness phase
         ActNext   -> nextPayload pd alive
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  in Env.toolResponseToResult (Env.mkOk payload)
 
 statusPayload :: ProjectDir -> Bool -> [Text] -> StalenessReport -> SessionPhase -> Value
 statusPayload pd alive toolNames staleness phase =
@@ -217,16 +243,3 @@ nextPayload _pd alive =
              , "No active session. ghc_load boots GHCi and is the \
                \cheapest way to learn the project's current compile state." )
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

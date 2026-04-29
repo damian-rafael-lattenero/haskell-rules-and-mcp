@@ -233,6 +233,8 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
 import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmupTool
 import qualified HaskellFlows.Tool.ValidateCabal as ValidateCabalTool
+import qualified HaskellFlows.Tool.Workflow as WorkflowTool
+import HaskellFlows.Mcp.Staleness (StalenessReport (..))
 import qualified HaskellFlows.Tool.Type as TypeTool
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
 import HaskellFlows.Tool.SwitchProject
@@ -415,6 +417,14 @@ main = do
                                                    testValidateCabalErrors
       , test "Envelope #90 Phase B: ghc_validate_cabal preserves issues array"
                                                    testValidateCabalBackcompatIssues
+      , test "Envelope #90 Phase B: ghc_workflow status emits envelope"
+                                                   testWorkflowStatusEnvelope
+      , test "Envelope #90 Phase B: ghc_workflow help emits envelope"
+                                                   testWorkflowHelpEnvelope
+      , test "Envelope #90 Phase B: ghc_workflow next emits envelope"
+                                                   testWorkflowNextEnvelope
+      , test "Envelope #90 Phase B: ghc_workflow rejects unknown action"
+                                                   testWorkflowRejectsUnknownAction
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -2707,6 +2717,88 @@ testValidateCabalBackcompatIssues = do
         Env.reStatus env == Env.StatusFailed
       _ -> False
     Left _ -> False
+
+-- | Phase B helper: build the cluster of state values 'WorkflowTool.handle'
+-- needs and drive it for a given action. Returns the parsed envelope.
+runWorkflow :: A.Value -> IO (Either String Env.ToolResponse)
+runWorkflow args = do
+  let pd = case mkProjectDir "/tmp" of
+             Right p -> p
+             Left e  -> error ("test fixture: bad project dir: " <> show e)
+  pdRef    <- newIORef pd
+  sessRef  <- newMVar Nothing
+  wsRef    <- WS.newWorkflowStateRef
+  ws       <- WS.readState wsRef
+  let staleness = StalenessReport
+        { srStale            = False
+        , srBinaryOlderBySec = Nothing
+        , srMessage          = Nothing
+        }
+      toolNames = ["ghc_load", "ghc_type", "ghc_workflow"]
+  result <- WorkflowTool.handle pdRef sessRef toolNames ws staleness args
+  case trContent result of
+    [TextContent body] ->
+      pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+    _ -> pure (Left "expected exactly one TextContent")
+
+-- | 'ghc_workflow {action: status}' returns an envelope-shaped
+-- response with status='ok' and a result carrying the documented
+-- status fields ('view', 'projectDir', 'ghciAlive', 'toolsActive',
+-- 'phase', 'staleness').
+testWorkflowStatusEnvelope :: IO Bool
+testWorkflowStatusEnvelope = do
+  decoded <- runWorkflow (A.object [ "action" A..= ("status" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "view") payload == Just (A.String "status")
+            && AKM.member (AKey.fromText "projectDir") payload
+            && AKM.member (AKey.fromText "ghciAlive") payload
+            && AKM.member (AKey.fromText "toolsActive") payload
+            && AKM.member (AKey.fromText "phase") payload
+            && AKM.member (AKey.fromText "staleness") payload
+    _ -> False
+
+-- | 'ghc_workflow {action: help}' status='ok' carrying a help view.
+testWorkflowHelpEnvelope :: IO Bool
+testWorkflowHelpEnvelope = do
+  decoded <- runWorkflow (A.object [ "action" A..= ("help" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "view") payload == Just (A.String "help")
+            && AKM.member (AKey.fromText "phaseHint") payload
+            && AKM.member (AKey.fromText "steps") payload
+    _ -> False
+
+-- | 'ghc_workflow {action: next}' status='ok' carrying a single
+-- next-tool recommendation.
+testWorkflowNextEnvelope :: IO Bool
+testWorkflowNextEnvelope = do
+  decoded <- runWorkflow (A.object [ "action" A..= ("next" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "view") payload == Just (A.String "next")
+            && AKM.member (AKey.fromText "tool") payload
+            && AKM.member (AKey.fromText "why") payload
+    _ -> False
+
+-- | An unknown action lands as status='failed' with
+-- error.kind='validation' (the value was structurally a valid
+-- string but outside the action enum).
+testWorkflowRejectsUnknownAction :: IO Bool
+testWorkflowRejectsUnknownAction = do
+  decoded <- runWorkflow (A.object [ "action" A..= ("teleport" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusFailed
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.Validation
+    _ -> False
 
 --------------------------------------------------------------------------------
 -- Phase 9: Lint parser + Cabal validator + check_project + hole fits
