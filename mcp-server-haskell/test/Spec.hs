@@ -59,6 +59,8 @@ import HaskellFlows.Parser.Hole
   , TypedHole (..)
   , parseTypedHoles
   , extractValidFits
+  , isContinuationFitLine
+  , parseFitLine
   )
 import HaskellFlows.Parser.TypeSignature
   ( ParsedSig (..)
@@ -364,6 +366,10 @@ main = do
       , test "validateCabal flags missing synopsis" testMissingSynopsis
       , test "parseExposedModules reads modules"   testParseModules
       , test "extractValidFits parses fits"        testValidFits
+      , test "extractValidFits: operator-named fit not absorbed (#71)"
+                                                                 testValidFitsOperatorBoundary
+      , test "isContinuationFitLine: ' :: ' tagged line is a fresh fit (#71)"
+                                                                 testHoleContinuationDetector
       , test "parseSignature simple a -> a"         testSigSimple
       , test "parseSignature with constraint"       testSigConstraint
       , test "parseSignature list"                  testSigList
@@ -2124,6 +2130,64 @@ testValidFits =
               && hfName b == "negate"
               && "Num a" `T.isInfixOf` hfType b
        _      -> False
+
+-- | Issue #71: real GHC output for the @_addOp :: Int -> Int -> Int@
+-- hole produces fit-head lines like @(-) :: forall a. Num a => …@
+-- whose name starts with @(@. Pre-#71 the continuation classifier
+-- treated any indented line starting with @(@ as a continuation
+-- of the previous fit, so the operator-named fit was absorbed
+-- into the preceding entry's @source@ field, dropping the fit
+-- entirely from the array and inflating its predecessor's
+-- @source@ string.
+--
+-- Post-#71 we expect 4 distinct fits, each with its own clean
+-- @name@ / @type@ / @source@ — including @(-)@ as its own row.
+testValidFitsOperatorBoundary :: IO Bool
+testValidFitsOperatorBoundary =
+  let block = T.lines $ T.unlines
+        [ "    • Valid hole fits include"
+        , "        addPair :: Int -> Int -> Int"
+        , "          (bound at /tmp/Demo.hs:14:1)"
+        , "        (-) :: forall a. Num a => a -> a -> a"
+        , "          with (-) @Int"
+        , "          (imported from `Prelude' at /tmp/Demo.hs:2:8-19)"
+        , "        asTypeOf :: forall a. a -> a -> a"
+        , "          with asTypeOf @Int"
+        , "        const :: forall a b. a -> b -> a"
+        , "          with const @Int @Int"
+        ]
+      fits = extractValidFits block
+      names = map hfName fits
+      addPairFit = head fits
+      addPairSrc = maybe "" id (hfSource addPairFit)
+  in pure $ length fits == 4
+         && names == ["addPair", "(-)", "asTypeOf", "const"]
+         && "(bound at" `T.isInfixOf` addPairSrc
+         -- Critical: addPair's source must NOT have absorbed
+         -- the next fit's identifier or type signature.
+         && not ("(-)"            `T.isInfixOf` addPairSrc)
+         && not ("forall a. Num"  `T.isInfixOf` addPairSrc)
+
+-- | Issue #71: pin the new contract for the continuation
+-- classifier — the type-signature substring is the canonical
+-- disambiguator. Three boundary cases:
+--
+--   * Operator-named fit '(-) :: forall a. Num a => a -> a -> a'
+--     IS a fit-head (must NOT be classified as continuation).
+--   * Plain '(bound at /tmp/X.hs:1:1)' IS a continuation.
+--   * '(imported from ...)' IS a continuation.
+testHoleContinuationDetector :: IO Bool
+testHoleContinuationDetector =
+  pure $  not (isContinuationFitLine "        (-) :: forall a. Num a => a -> a -> a")
+       &&      isContinuationFitLine "          (bound at /tmp/X.hs:1:1)"
+       &&      isContinuationFitLine "          (imported from `Prelude' at /tmp/X.hs:2:8-19)"
+       &&      isContinuationFitLine "          with (-) @Int"
+       -- Sanity: parseFitLine on the operator head extracts the
+       -- name with parens and an empty source.
+       && case parseFitLine "        (-) :: forall a. Num a => a -> a -> a" of
+            Just hf -> hfName hf == "(-)"
+                    && "Num a" `T.isInfixOf` hfType hf
+            Nothing -> False
 
 --------------------------------------------------------------------------------
 -- Phase 10b: TypeSignature parser + rules catalog

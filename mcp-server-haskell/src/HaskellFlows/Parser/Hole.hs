@@ -22,6 +22,8 @@ module HaskellFlows.Parser.Hole
   , parseTypedHoles
   , splitDiagnosticBlocks
   , extractValidFits
+  , isContinuationFitLine    -- #71: exported for unit tests
+  , parseFitLine             -- #71: exported for unit tests
   ) where
 
 import Data.Char (isDigit)
@@ -209,20 +211,25 @@ collapseFits = go Nothing []
     maybeCons Nothing  acc = acc
     maybeCons (Just x) acc = x : acc
 
--- | A continuation line within a fit is indented more than a fresh
--- candidate would be. GHC uses 4 or 6 spaces for candidates, 6+ for
--- continuations. We use \">= 6 leading spaces + starts with \"with\",
--- \"(imported\", etc.\" as the heuristic — anything starting at 4
--- spaces is a new candidate.
+-- | Issue #71: a continuation line lives BELOW a fit-head and
+-- carries the @(bound at …)@ / @with … (imported from …)@
+-- annotations. The pre-#71 predicate matched on a leading @(@,
+-- which made it confuse an operator-named fit head like
+-- @(-) :: forall a. Num a => a -> a -> a@ for a continuation
+-- of the previous fit — its 'source' field then absorbed the
+-- whole next entry's name + type + provenance.
+--
+-- The robust disambiguator is the type-signature substring
+-- @\" :: \"@: GHC never emits @ :: @ inside a continuation
+-- block. A line containing it is a fresh candidate, regardless
+-- of how it starts. We keep the indent guard so blank-trailing
+-- garbage at column 0 still drops out of the section.
 isContinuationFitLine :: Text -> Bool
 isContinuationFitLine l =
-  let indent = T.length (T.takeWhile (== ' ') l)
-      stripped = T.stripStart l
-  in indent >= 6 &&
-     (  "with "     `T.isPrefixOf` stripped
-     || "("         `T.isPrefixOf` stripped
-     || "or "       `T.isPrefixOf` stripped
-     || "("         `T.isSuffixOf` T.stripEnd stripped )
+  let indent     = T.length (T.takeWhile (== ' ') l)
+      stripped   = T.stripStart l
+      hasTypeSig = " :: " `T.isInfixOf` stripped
+  in indent >= 6 && not hasTypeSig
 
 parseFitLine :: Text -> Maybe HoleFit
 parseFitLine l =
