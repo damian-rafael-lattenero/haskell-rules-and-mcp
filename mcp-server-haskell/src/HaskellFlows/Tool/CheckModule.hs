@@ -10,15 +10,21 @@ module HaskellFlows.Tool.CheckModule
   , CheckArgs (..)
     -- * Issue #42 — properties-gate computation
   , propertiesGate
+    -- * Issue #74 — path → module-name resolver helpers
+  , resolveModuleName
+  , parseModuleHeader
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Data.Char (isAlphaNum)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import System.FilePath ((</>))
 
 import HaskellFlows.Data.PropertyStore
   ( Store
@@ -46,6 +52,7 @@ import HaskellFlows.Types
   ( ProjectDir
   , PathError (..)
   , mkModulePath
+  , unProjectDir
   )
 
 descriptor :: ToolDescriptor
@@ -144,7 +151,17 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
                            parseTypedHoles (renderGhciStyle diags)
                      else pure []
           allProps <- loadAll store
-          let relevant = filter (\p -> spModule p == Just raw) allProps
+          -- Issue #74: 'ghc_quickcheck' persists 'module' as the
+          -- Haskell module name ("Foo.Bar"), but 'check_module' is
+          -- called with a relative path ("src/Foo/Bar.hs"). Resolve
+          -- the path to its module name and accept either shape so
+          -- the gate sees the properties it should be guarding.
+          mModName <- resolveModuleName pd raw
+          let propMatches sp = case spModule sp of
+                Just s  -> s == raw
+                       || (Just s == mModName)
+                Nothing -> False
+              relevant = filter propMatches allProps
           -- Reuse the Wave-3 Regression.runOne — it's already
           -- in-process via evalIOString.
           replays <- mapM (RegTool.runOne ghcSess) relevant
@@ -318,3 +335,89 @@ formatPathError = \case
 
 encodeUtf8Text :: Value -> Text
 encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+
+--------------------------------------------------------------------------------
+-- Issue #74 — path → module-name resolver
+--------------------------------------------------------------------------------
+
+-- | Issue #74: read the on-disk source file and recover its
+-- declared module name (e.g. @"DogfoodSuite.Math"@ from
+-- @src/DogfoodSuite/Math.hs@). Returns 'Nothing' when the file
+-- can't be read or has no parseable @module … where@ header.
+--
+-- The IO bit is the file read; the parsing is delegated to
+-- 'parseModuleHeader' which is pure and unit-tested independently.
+resolveModuleName :: ProjectDir -> Text -> IO (Maybe Text)
+resolveModuleName pd relPath = do
+  let absPath = unProjectDir pd </> T.unpack relPath
+  e <- try @SomeException (TIO.readFile absPath)
+  pure $ case e of
+    Left _    -> Nothing
+    Right src -> parseModuleHeader src
+
+-- | Issue #74: pure parser for the @module Foo.Bar where@ /
+-- @module Foo.Bar (…) where@ header.
+--
+-- We accept the line-by-line shape Haskell actually uses:
+--
+-- @
+-- -- | Optional Haddock blurb at the top.
+-- {-\# LANGUAGE Foo \#-}
+-- module Foo.Bar
+--   ( foo
+--   , bar
+--   ) where
+-- @
+--
+-- The parser:
+--
+--   * skips blank lines, single-line comments (@-- …@) and
+--     pragmas (@{-\# … \#-}@) at the top of the file;
+--   * looks for the first line that starts with @module @
+--     (after optional indent — Haskell allows it but the
+--     scaffold doesn't);
+--   * reads the next whitespace-delimited token as the module
+--     name and strips off any trailing @(@ that begins an
+--     explicit export list on the same line.
+--
+-- Returns 'Nothing' for a file with no recognisable header
+-- rather than guessing — the caller falls back to path-based
+-- comparison so the gate still behaves sensibly on, e.g.,
+-- @hs-boot@ files or partially-written sources.
+parseModuleHeader :: Text -> Maybe Text
+parseModuleHeader src = go (T.lines src)
+  where
+    go []         = Nothing
+    go (line:rest) =
+      let stripped = T.strip line
+      in case classify stripped of
+        SkipLine    -> go rest
+        ModuleStart name
+          | not (T.null name) && validModuleName name -> Just name
+          | otherwise                                 -> Nothing
+        UnknownLine -> Nothing  -- first non-skippable, non-module line
+                                -- means we're past the header.
+
+-- | Classification of a stripped source line for header-walking.
+data LineKind
+  = SkipLine          -- ^ blank, line comment, or pragma — keep walking.
+  | ModuleStart !Text -- ^ @module Foo.Bar (...)@ — the carried name.
+  | UnknownLine       -- ^ first \"real\" line — header search ends.
+
+classify :: Text -> LineKind
+classify s
+  | T.null s                  = SkipLine
+  | "--" `T.isPrefixOf` s     = SkipLine
+  | "{-#" `T.isPrefixOf` s    = SkipLine
+  | "{-" `T.isPrefixOf` s     = SkipLine     -- block-comment starts; bail to UnknownLine on next non-skip
+  | "module " `T.isPrefixOf` s =
+      let afterKw  = T.drop (T.length "module ") s
+          modName  = T.takeWhile (\c -> isAlphaNum c || c == '.') (T.stripStart afterKw)
+      in ModuleStart modName
+  | otherwise                 = UnknownLine
+
+validModuleName :: Text -> Bool
+validModuleName n = case T.uncons n of
+  Just (c, _) -> c >= 'A' && c <= 'Z'
+              && T.all (\ch -> isAlphaNum ch || ch == '.') n
+  Nothing     -> False

@@ -87,6 +87,7 @@ import qualified Scenarios.FlowExplainError       as FlowEE
 import qualified Scenarios.FlowPerfBasic          as FlowPerf
 import qualified Scenarios.FlowPropertyAudit      as FlowPA
 import qualified Scenarios.FlowWitness            as FlowWit
+import qualified Scenarios.FlowCheckModuleProperties as FlowCMP
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
 import qualified Scenarios.FlowScopeMgmt        as FlowS
@@ -225,6 +226,8 @@ scenarios =
     , False, FlowPA.runFlow )
   , ( "Flow: Witness distribution surface (#65 · cabal-repl harness)"
     , True, FlowWit.runFlow )
+  , ( "Flow: CheckModule properties gate finds module-name entries (#74)"
+    , False, FlowCMP.runFlow )
   , ( "Flow: Dogfood replay (7 MCP fixes round-tripped through one session)"
     , True, FlowDFR.runFlow )
   , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"

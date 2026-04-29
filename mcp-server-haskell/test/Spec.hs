@@ -707,6 +707,17 @@ main = do
       , test "check_module: warnings_block=false keeps warnings informational"
                                                                  testCheckModuleWarningsBlockFalse
       , test "check_module: warnings_block default is True"      testCheckModuleWarningsBlockDefault
+      , test "check_module: parseModuleHeader simple (#74)"      testParseHeaderSimple
+      , test "check_module: parseModuleHeader multi-segment (#74)"
+                                                                 testParseHeaderMultiSegment
+      , test "check_module: parseModuleHeader exports + multiline (#74)"
+                                                                 testParseHeaderExportsMultiline
+      , test "check_module: parseModuleHeader skips pragmas + comments + blanks (#74)"
+                                                                 testParseHeaderSkipsLeading
+      , test "check_module: parseModuleHeader returns Nothing on missing header (#74)"
+                                                                 testParseHeaderNoHeader
+      , test "check_module: parseModuleHeader rejects lowercase name (#74)"
+                                                                 testParseHeaderInvalidName
       , test "quickcheck: summariseStderr filters cabal noise"   testQcSummariseStderrFiltersNoise
       , test "quickcheck: summariseStderr caps at 1600 chars"    testQcSummariseStderrCaps
       , test "nextStep: ghc_load with typed-hole warning \8594 ghc_hole"
@@ -6708,6 +6719,78 @@ testCheckModuleWarningsBlockFalse =
   in case A.fromJSON payload of
        A.Success args -> pure (not (CheckModule.caWarningsBlock args))
        _              -> pure False
+
+--------------------------------------------------------------------------------
+-- Issue #74: path → module-name resolver — pure parser tests
+--
+-- 'parseModuleHeader' must accept the canonical Haskell module
+-- header shapes the scaffold and refactor tools produce, and must
+-- bail (Nothing) when the file has no recognisable header so the
+-- caller can fall back to path-based comparison without lying.
+--------------------------------------------------------------------------------
+
+-- | Issue #74: bare @module Foo where@ → "Foo".
+testParseHeaderSimple :: IO Bool
+testParseHeaderSimple =
+  pure $ CheckModule.parseModuleHeader "module Foo where" == Just "Foo"
+
+-- | Issue #74: dotted module names round-trip exactly.
+testParseHeaderMultiSegment :: IO Bool
+testParseHeaderMultiSegment =
+  pure $ CheckModule.parseModuleHeader "module Foo.Bar.Baz where"
+       == Just "Foo.Bar.Baz"
+
+-- | Issue #74: explicit export list — same line OR multi-line.
+-- 'apply_exports' produces the same-line shape; the scaffold and
+-- hand-edits often produce the multi-line variant. Both are valid.
+testParseHeaderExportsMultiline :: IO Bool
+testParseHeaderExportsMultiline = do
+  let oneLine   = "module Foo (a, b, c) where"
+      multiLine = T.unlines
+        [ "module Foo"
+        , "  ( a"
+        , "  , b"
+        , "  ) where"
+        ]
+  pure $ CheckModule.parseModuleHeader oneLine   == Just "Foo"
+      && CheckModule.parseModuleHeader multiLine == Just "Foo"
+
+-- | Issue #74: skip Haddock blurbs, pragmas, blank lines BEFORE
+-- the module header. 'ghc_create_project' emits exactly this
+-- shape: a Haddock comment, optional pragma, then `module … where`.
+testParseHeaderSkipsLeading :: IO Bool
+testParseHeaderSkipsLeading =
+  let src = T.unlines
+        [ "-- | Some Haddock blurb."
+        , "{-# LANGUAGE OverloadedStrings #-}"
+        , ""
+        , "-- another comment"
+        , "module DogfoodSuite.Math where"
+        , ""
+        , "square :: Int -> Int"
+        ]
+  in pure $ CheckModule.parseModuleHeader src == Just "DogfoodSuite.Math"
+
+-- | Issue #74: a file without a `module … where` line is not a
+-- regular Haskell source. Returning Nothing is the honest answer
+-- — the caller falls back to path-only comparison.
+testParseHeaderNoHeader :: IO Bool
+testParseHeaderNoHeader =
+  let src = T.unlines
+        [ "-- just a comment"
+        , "x = 1"
+        ]
+  in pure $ CheckModule.parseModuleHeader src == Nothing
+
+-- | Issue #74: defensive parsing — Haskell module names must
+-- start uppercase. A misspelled or invalid header should not
+-- be accepted as a valid name.
+testParseHeaderInvalidName :: IO Bool
+testParseHeaderInvalidName = do
+  let lower    = "module foo where"
+      digit    = "module 1Foo where"
+  pure $ CheckModule.parseModuleHeader lower == Nothing
+      && CheckModule.parseModuleHeader digit == Nothing
 
 --------------------------------------------------------------------------------
 -- BUG-PLUS-mediocre-2: summariseStderr cleans cabal noise, caps length
