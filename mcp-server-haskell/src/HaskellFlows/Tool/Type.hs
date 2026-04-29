@@ -25,13 +25,12 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import GHC (Ghc, TcRnExprMode (TM_Inst), exprType)
 import GHC.Utils.Outputable (showPprUnsafe)
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
-import HaskellFlows.Ghc.Sanitize (CommandError (..), sanitizeExpression)
+import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
@@ -73,18 +72,41 @@ instance FromJSON TypeArgs where
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKind parseError)
+          (T.pack ("Invalid arguments: " <> parseError)))
+            { Env.eeCause = Just (T.pack parseError) })))
   Right (TypeArgs expr) ->
     case sanitizeExpression expr of
       Left cmdErr ->
-        pure (errorResult (formatCommandError cmdErr))
+        pure (Env.toolResponseToResult (Env.mkRefused
+          (Env.sanitizeRejection "expression" cmdErr)))
       Right safe -> do
         eRes <- try (withGhcSession ghcSess (queryExprType safe))
-        case eRes of
+        pure $ Env.toolResponseToResult $ case eRes of
           Left (se :: SomeException) ->
-            pure (errorResult (renderGhcException se))
-          Right tyText ->
-            pure (successResult expr tyText)
+            -- Issue #90 §4: type-checker failure (expression does
+            -- not type-check) maps to status='failed' with
+            -- kind='type_error'. The user-facing message stays
+            -- short ("expression did not type-check"); the full
+            -- GHC SDoc lives in error.cause for debugging.
+            Env.mkFailed
+              ((Env.mkErrorEnvelope Env.TypeError
+                  ("expression '" <> expr <> "' did not type-check"))
+                    { Env.eeCause = Just (T.pack (show se)) })
+          Right tyText -> Env.mkOk (typePayload expr tyText)
+
+-- | Discriminate the FromJSON failure shape — same heuristic as
+-- the other Phase-B migrations.
+parseErrorKind :: String -> Env.ErrorKind
+parseErrorKind err
+  | "key" `isInfixOfStr` err = Env.MissingArg
+  | otherwise                = Env.TypeMismatch
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 -- | Single in-process query: ask GHC for the type, render it.
 -- Runs inside a 'withGhcSession' call so the auto-loaded interactive
@@ -98,52 +120,11 @@ queryExprType safe = do
 -- response shaping
 --------------------------------------------------------------------------------
 
--- | Success payload. Schema matches the pre-migration shape: the
--- subprocess-ghci version parsed @":t expr"@ output into @expression@
--- + @type@ via 'HaskellFlows.Parser.Type.parseTypeOutput'; the GHC-API
--- version already has the two halves split, so no parsing needed.
-successResult :: Text -> Text -> ToolResult
-successResult originalExpr tyRendered =
-  let payload = object
-        [ "success"    .= True
-        , "expression" .= originalExpr
-        , "type"       .= tyRendered
-        ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
-
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-formatCommandError :: CommandError -> Text
-formatCommandError = \case
-  ContainsNewline ->
-    "expression must be a single line (no newline characters allowed)"
-  ContainsSentinel ->
-    "expression contains the internal framing sentinel and was rejected"
-  EmptyInput ->
-    "expression is empty"
-  InputTooLarge sz cap ->
-    "expression is too large (" <> T.pack (show sz) <> " chars, cap is "
-      <> T.pack (show cap) <> ")"
-
--- | Render a GHC-API exception into a concise user-facing string.
--- The default 'Show' instance for 'SourceError' dumps Haddock-quoted
--- SDoc which is readable-enough for the MCP client; we prepend a
--- hint so the LLM can distinguish compile-time from schema errors.
-renderGhcException :: SomeException -> Text
-renderGhcException se = T.pack ("expression did not type-check: " <> show se)
-
--- | UTF-8-safe JSON → Text.
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+-- | Type-found payload. Issue #90 Phase B: status='ok' with the
+-- same field names as before ('expression', 'type') so consumers
+-- continue to function during the dual-shape window.
+typePayload :: Text -> Text -> Value
+typePayload originalExpr tyRendered = object
+  [ "expression" .= originalExpr
+  , "type"       .= tyRendered
+  ]

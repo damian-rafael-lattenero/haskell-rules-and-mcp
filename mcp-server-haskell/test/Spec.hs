@@ -465,6 +465,12 @@ main = do
                                                    testDocUnknownNameNoMatch
       , test "Envelope #90 Phase B: ghc_doc refuses newline in name"
                                                    testDocRefusesNewline
+      , test "Envelope #90 Phase B: ghc_type on valid expr → status=ok"
+                                                   testTypeValidExprOk
+      , test "Envelope #90 Phase B: ghc_type on ill-typed expr → status=failed (type_error)"
+                                                   testTypeIllTypedFailed
+      , test "Envelope #90 Phase B: ghc_type refuses newline in expression"
+                                                   testTypeRefusesNewline
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -3227,6 +3233,70 @@ testDocRefusesNewline = do
       , Just err <- Env.reError env ->
           Env.eeKind err == Env.NewlineInjection
             && Env.eeField err == Just "name"
+    _ -> False
+
+-- | Phase B helper: stage a tmpdir project + drive 'TypeTool.handle'.
+runType :: A.Value -> IO (Either String Env.ToolResponse)
+runType args = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-type-test"
+  removePathForcibly dir
+  createDirectoryIfMissing True (dir </> "src")
+  TIO.writeFile (dir </> "src" </> "Foo.hs")
+    (T.pack "module Foo where\nfoo :: Int\nfoo = 1\n")
+  result <- case mkProjectDir dir of
+    Left _   -> pure (Left "could not build ProjectDir")
+    Right pd -> do
+      sess <- startGhcSession pd
+      tr   <- TypeTool.handle sess args
+      killGhcSession sess
+      case trContent tr of
+        [TextContent body] ->
+          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+        _ -> pure (Left "expected exactly one TextContent")
+  removePathForcibly dir
+  pure result
+
+-- | 'ghc_type' on a valid Prelude expression resolves cleanly →
+-- status='ok' with result.{expression, type}. The exact rendering
+-- of the type varies by GHC minor (forall + brackets, etc.) so we
+-- only assert structure.
+testTypeValidExprOk :: IO Bool
+testTypeValidExprOk = do
+  decoded <- runType (A.object [ "expression" A..= ("id" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "expression") payload == Just (A.String "id")
+            && AKM.member (AKey.fromText "type") payload
+    _ -> False
+
+-- | An ill-typed expression → status='failed' with kind='type_error'.
+-- Pre-#90 this returned a free-form 'expression did not type-check
+-- — <SDoc>' string; post-#90 the SDoc lives in error.cause and
+-- the message stays short.
+testTypeIllTypedFailed :: IO Bool
+testTypeIllTypedFailed = do
+  decoded <- runType (A.object [ "expression" A..= ("True + 1" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusFailed
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.TypeError
+    _ -> False
+
+-- | Newline in expression → status='refused' with
+-- kind='newline_injection'.
+testTypeRefusesNewline :: IO Bool
+testTypeRefusesNewline = do
+  decoded <- runType (A.object [ "expression" A..= ("id\n:quit" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusRefused
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.NewlineInjection
+            && Env.eeField err == Just "expression"
     _ -> False
 
 --------------------------------------------------------------------------------
