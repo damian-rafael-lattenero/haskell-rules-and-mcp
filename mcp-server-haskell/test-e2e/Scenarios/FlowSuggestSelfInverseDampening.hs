@@ -41,6 +41,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 moduleSrc :: Text
@@ -101,10 +102,6 @@ fieldOf :: Text -> Value -> Maybe Text
 fieldOf k v = case lookupField k v of
   Just (String s) -> Just s
   _               -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

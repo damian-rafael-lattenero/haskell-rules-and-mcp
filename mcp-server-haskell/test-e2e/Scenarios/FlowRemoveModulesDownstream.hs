@@ -42,6 +42,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, errorKind, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -76,8 +77,8 @@ runFlow c projectDir = do
   rRefused <- Client.callTool c GhcRemoveModules
                 (object [ "modules" .= (["Expr"] :: [Text]) ])
   cabalAfter <- TIO.readFile =<< findCabal projectDir
-  let success    = fieldBool "success"    rRefused
-      kindIsDown = fieldText "error_kind" rRefused == Just "downstream_imports_present"
+  let success    = statusOk rRefused
+      kindIsDown = errorKind rRefused == Just "downstream_imports_present"
       hasDownArr = arrayLen "downstream_imports" rRefused >= 1
       cabalUntouched = cabalBefore == cabalAfter
   cRefuse <- liveCheck $ checkPure
@@ -88,7 +89,7 @@ runFlow c projectDir = do
        && cabalUntouched)
     ( "Expected: success=false, error_kind=downstream_imports_present, \
       \array≥1, .cabal unchanged. Got: success=" <> T.pack (show success)
-      <> ", kind=" <> T.pack (show (fieldText "error_kind" rRefused))
+      <> ", kind=" <> T.pack (show (errorKind rRefused))
       <> ", n=" <> T.pack (show (arrayLen "downstream_imports" rRefused))
       <> ", cabalUntouched=" <> T.pack (show cabalUntouched) )
   stepFooter 1 t0
@@ -100,7 +101,7 @@ runFlow c projectDir = do
                  [ "modules" .= (["Expr"] :: [Text])
                  , "force"   .= True
                  ])
-  let forcedOk    = fieldBool "success" rForced == Just True
+  let forcedOk    = statusOk rForced == Just True
       hasWarnings = arrayPathLen ["warnings", "downstream_imports"] rForced >= 1
   cForce <- liveCheck $ checkPure
     "force=true succeeds with warnings.downstream_imports populated"
@@ -119,16 +120,6 @@ runFlow c projectDir = do
 findCabal :: FilePath -> IO FilePath
 findCabal root = pure (root </> "rm-down-demo.cabal")
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldText :: Text -> Value -> Maybe Text
-fieldText k v = case lookupField k v of
-  Just (String s) -> Just s
-  _               -> Nothing
-
 arrayLen :: Text -> Value -> Int
 arrayLen k v = case lookupField k v of
   Just (Array xs) -> V.length xs
@@ -142,6 +133,3 @@ arrayPathLen ks v = case foldl step (Just v) ks of
     step Nothing  _  = Nothing
     step (Just o) k  = lookupField k o
 
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing

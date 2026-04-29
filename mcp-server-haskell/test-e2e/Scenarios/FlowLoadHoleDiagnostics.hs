@@ -38,6 +38,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | A module with a single typed hole — the canonical
@@ -100,10 +101,6 @@ errorsArray v = case lookupField "errors" v of
           , Just (String msg) <- [KeyMap.lookup (Key.fromText "message") o]
     ]
   _ -> []
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

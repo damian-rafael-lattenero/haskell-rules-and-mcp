@@ -39,6 +39,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 minimalCabal :: Text -> Text
@@ -93,7 +94,7 @@ runFlow c projectDir = do
                 (object [ "path" .= T.pack projB ])
   cSwitch <- liveCheck $ checkPure
     "switch A→B succeeds"
-    (fieldBool "success" switchAB == Just True)
+    (statusOk switchAB == Just True)
     ("switch must succeed; got: " <> truncRender switchAB)
 
   -- Step 4 — pre-#39 this returned count=1 (A's property
@@ -132,7 +133,7 @@ runFlow c projectDir = do
   -- Switch back to A — must see A's original property, NOT B's.
   switchBA <- Client.callTool c GhcSwitchProject
                 (object [ "path" .= T.pack projectDir ])
-  let backOk = fieldBool "success" switchBA == Just True
+  let backOk = statusOk switchBA == Just True
   cSwitchBack <- liveCheck $ checkPure
     "switch B→A succeeds"
     backOk
@@ -162,15 +163,6 @@ countN :: Text -> Value -> Int
 countN k v = case lookupField k v of
   Just (Number n) -> truncate (toRational n)
   _               -> -1
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

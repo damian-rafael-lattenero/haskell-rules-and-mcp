@@ -60,6 +60,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
@@ -550,10 +551,6 @@ truncRender :: Value -> Text
 truncRender v =
   let s = T.pack (show v)
   in if T.length s > 3500 then T.take 3500 s <> "…(truncated)" else s
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 -- | Walk a @ghc_check_project@ response and verify every
 -- per-module entry has @gates.compile.ok == true@. Warnings on

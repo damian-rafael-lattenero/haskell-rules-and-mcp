@@ -42,6 +42,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -72,7 +73,7 @@ runFlow c projectDir = do
   -- 'test/Spec.hs', mirroring the bug's exact reproduction.
   t0 <- stepHeader 1 "ghc_quickcheck_export defaults to test/Spec.hs (#40)"
   r <- Client.callTool c GhcQuickCheckExport (object [])
-  let exportSucceeded = fieldBool "success" r == Just True
+  let exportSucceeded = statusOk r == Just True
   cExport <- liveCheck $ checkPure
     "export tool returns success=true"
     exportSucceeded
@@ -114,15 +115,6 @@ runFlow c projectDir = do
 --------------------------------------------------------------------------------
 -- helpers
 --------------------------------------------------------------------------------
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

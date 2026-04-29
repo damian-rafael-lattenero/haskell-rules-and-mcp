@@ -40,6 +40,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | Expressions we expect GHCi to reject at RUNTIME (not at compile
@@ -64,7 +65,7 @@ runFlow c _pd = do
   t0 <- stepHeader 1 "pre-flight · ghc_eval(1+1) on a fresh session"
   preflight <- Client.callTool c GhcEval
                  (object [ "expression" .= ("1 + 1" :: Text) ])
-  let preOk = fieldBool "success" preflight == Just True
+  let preOk = statusOk preflight == Just True
   cPre <- liveCheck $ checkPure
     "pre-flight · session responds to a trivial eval"
     preOk
@@ -109,7 +110,7 @@ oneHostileCycle c (label, expr) = do
   -- The critical one: prove the session is still alive.
   rPilot <- Client.callTool c GhcEval
               (object [ "expression" .= ("2 + 3" :: Text) ])
-  let pilotOk = fieldBool "success" rPilot == Just True
+  let pilotOk = statusOk rPilot == Just True
              && case lookupField "output" rPilot of
                   Just (String s) -> "5" `T.isInfixOf` s
                   _ -> False
@@ -126,15 +127,6 @@ oneHostileCycle c (label, expr) = do
 --------------------------------------------------------------------------------
 -- helpers
 --------------------------------------------------------------------------------
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

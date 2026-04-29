@@ -33,6 +33,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, errorKind, fieldText, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -49,8 +50,8 @@ runFlow c _projectDir = do
   rBr <- Client.callTool c GhcBrowse
            (object [ "module" .= ("Prelude" :: Text) ])
   let okShape =
-           fieldBool "success" rBr == Just False
-        && fieldText "error_kind" rBr == Just "module_not_in_graph"
+           statusOk rBr == Just False
+        && errorKind rBr == Just "module_not_in_graph"
         -- Remediation must mention ghc_info OR hoogle_search.
         && (maybe False (T.isInfixOf "ghc_info") (fieldText "remediation" rBr)
               || maybe False (T.isInfixOf "hoogle_search") (fieldText "remediation" rBr))
@@ -83,26 +84,12 @@ runFlow c _projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldText :: Text -> Value -> Maybe Text
-fieldText k v = case lookupField k v of
-  Just (String s) -> Just s
-  _               -> Nothing
-
 nextStepTool :: Value -> Maybe Text
 nextStepTool v = case lookupField "nextStep" v of
   Just (Object o) -> case KeyMap.lookup (Key.fromText "tool") o of
     Just (String s) -> Just s
     _               -> Nothing
   _ -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

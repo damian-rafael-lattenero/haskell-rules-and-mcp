@@ -45,6 +45,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, fieldInt, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
@@ -197,7 +198,7 @@ runFlow c projectDir = do
   t5 <- stepHeader 6 "fix #2b · post-regression, 'answer' from Foo is still live"
   evalR <- Client.callTool c GhcEval
              (object [ "expression" .= ("answer" :: Text) ])
-  let answerOk = fieldBool "success" evalR == Just True
+  let answerOk = statusOk evalR == Just True
               && case fieldString "output" evalR of
                    Just s  -> "42" `T.isInfixOf` s
                    Nothing -> False
@@ -233,24 +234,10 @@ fieldString k v = case lookupField k v of
   Just (String s) -> Just s
   _               -> Nothing
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldInt :: Text -> Value -> Maybe Int
-fieldInt k v = case lookupField k v of
-  Just (Number n) -> Just (round n)
-  _               -> Nothing
-
 fieldArrayLen :: Text -> Value -> Maybe Int
 fieldArrayLen k v = case lookupField k v of
   Just (Array a) -> Just (V.length a)
   _              -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

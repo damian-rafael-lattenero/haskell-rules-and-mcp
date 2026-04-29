@@ -37,6 +37,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, errorKind, fieldBool, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 sourceSrc :: Text
@@ -93,7 +94,7 @@ runFlow c projectDir = do
     , "dry_run" .= True
     ])
   consumerAfterDry <- TIO.readFile (projectDir </> "src" </> "Consumer.hs")
-  let dryOk     = fieldBool "success"  rDry == Just True
+  let dryOk     = statusOk rDry == Just True
               && fieldBool "applied"  rDry == Just False
               && arrayLen "files_modified" rDry >= 3
       untouched = consumerBefore == consumerAfterDry
@@ -111,7 +112,7 @@ runFlow c projectDir = do
     , "from"   .= ("Source" :: Text)
     , "to"     .= ("Dest"   :: Text)
     ])
-  let appliedOk = fieldBool "success" rApply == Just True
+  let appliedOk = statusOk rApply == Just True
               && fieldBool "applied" rApply == Just True
   cApply <- liveCheck $ checkPure
     "move applied with verify ok"
@@ -157,8 +158,8 @@ runFlow c projectDir = do
   let kindMatches t = t == "module_path_does_not_exist"
                    || t == "destination_module_missing"
       missingOk =
-        fieldBool "success" rMissing == Just False
-          && maybe False kindMatches (fieldText "error_kind" rMissing)
+        statusOk rMissing == Just False
+          && maybe False kindMatches (errorKind rMissing)
   cMissing <- liveCheck $ checkPure
     "missing destination → success=false, error_kind=module_path_does_not_exist"
     missingOk
@@ -171,24 +172,10 @@ runFlow c projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldText :: Text -> Value -> Maybe Text
-fieldText k v = case lookupField k v of
-  Just (String s) -> Just s
-  _               -> Nothing
-
 arrayLen :: Text -> Value -> Int
 arrayLen k v = case lookupField k v of
   Just (Array xs) -> V.length xs
   _               -> -1
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

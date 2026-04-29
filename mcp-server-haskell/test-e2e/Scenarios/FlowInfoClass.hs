@@ -37,6 +37,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (fieldText, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -120,19 +121,10 @@ methodNames v = case lookupField "class_methods" v of
         , Just (String n) <- [KeyMap.lookup (Key.fromText "name") o] ]
   _ -> []
 
-fieldText :: Text -> Value -> Maybe Text
-fieldText k v = case lookupField k v of
-  Just (String s) -> Just s
-  _               -> Nothing
-
 hasArrayField :: Text -> Value -> Bool
 hasArrayField k v = case lookupField k v of
   Just (Array _) -> True
   _              -> False
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

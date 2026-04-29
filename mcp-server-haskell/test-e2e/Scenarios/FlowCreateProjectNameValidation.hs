@@ -33,6 +33,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -42,7 +43,7 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "ghc_create_project rejects uppercase name (#58)"
   rUpper <- Client.callTool c GhcCreateProject
               (object [ "name" .= ("Bad-Name" :: Text) ])
-  let okShape = fieldBool "success" rUpper == Just False
+  let okShape = statusOk rUpper == Just False
       errMsg  = lookupString "error" rUpper
       msgOK   = case errMsg of
         Just m -> T.isInfixOf "Bad-Name" m
@@ -65,7 +66,7 @@ runFlow c projectDir = do
   t1 <- stepHeader 2 "ghc_create_project rejects double hyphen (#58)"
   rDouble <- Client.callTool c GhcCreateProject
                (object [ "name" .= ("foo--bar" :: Text) ])
-  let dblOK = fieldBool "success" rDouble == Just False
+  let dblOK = statusOk rDouble == Just False
             && case lookupString "error" rDouble of
                  Just m -> T.isInfixOf "consecutive hyphens" m
                  Nothing -> False
@@ -79,7 +80,7 @@ runFlow c projectDir = do
   t2 <- stepHeader 3 "ghc_create_project rejects leading digit (#58)"
   rDigit <- Client.callTool c GhcCreateProject
               (object [ "name" .= ("9pkg" :: Text) ])
-  let digitOK = fieldBool "success" rDigit == Just False
+  let digitOK = statusOk rDigit == Just False
               && case lookupString "error" rDigit of
                    Just m -> T.isInfixOf "lowercase letter" m
                    Nothing -> False
@@ -93,7 +94,7 @@ runFlow c projectDir = do
   t3 <- stepHeader 4 "ghc_create_project accepts lowercase-hyphen name (#58)"
   rOk <- Client.callTool c GhcCreateProject
            (object [ "name" .= ("good-pkg" :: Text) ])
-  let okFlag = fieldBool "success" rOk == Just True
+  let okFlag = statusOk rOk == Just True
   cabalLanded <- doesFileExist (projectDir <> "/good-pkg.cabal")
   cOk <- liveCheck $ checkPure
     "good-pkg accepted; good-pkg.cabal landed on disk"
@@ -110,19 +111,10 @@ runFlow c projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
 lookupString :: Text -> Value -> Maybe Text
 lookupString k v = case lookupField k v of
   Just (String s) -> Just s
   _               -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

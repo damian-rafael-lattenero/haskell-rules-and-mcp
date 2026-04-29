@@ -63,6 +63,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, fieldBool)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -108,7 +109,7 @@ runFlow c projectDir = do
   --   * success=true with persisted=false AND an error/hint
   -- The WRONG shape is success=true with persisted=true, because
   -- that means the tool lied (nothing was written).
-  let success = fieldBool "success" r
+  let success = statusOk r
       persisted = fieldBool "persisted" r
       honestReport =
         -- Failure-shaped: success=false with some diagnostic
@@ -135,7 +136,7 @@ runFlow c projectDir = do
              (object [ "expression" .= ("1 + 1" :: Text) ])
   cAlive <- liveCheck $ checkPure
     "session alive · failed persist didn't wedge the GHCi"
-    (fieldBool "success" alive == Just True)
+    (statusOk alive == Just True)
     ("Raw: " <> truncRender alive)
   stepFooter 3 t2
 
@@ -148,7 +149,7 @@ runFlow c projectDir = do
   storeExists <- doesDirectoryExist storeDir
   cRecov <- liveCheck $ checkPure
     "post-restore quickcheck works · tool is not sticky-failed"
-    (fieldBool "success" r2 == Just True && storeExists)
+    (statusOk r2 == Just True && storeExists)
     ("After restoring permissions, a fresh quickcheck should persist \
      \normally. If it doesn't, the tool cached the earlier failure. \
      \Raw: " <> truncRender r2)
@@ -160,18 +161,9 @@ runFlow c projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
 hasField :: Text -> Value -> Bool
 hasField k (Object o) = KeyMap.member (Key.fromText k) o
 hasField _ _          = False
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

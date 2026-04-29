@@ -28,6 +28,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, fieldInt)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -41,9 +42,9 @@ runFlow c _projectDir = do
   rVal <- Client.callTool c GhcValidateCabal (object [])
   let warnings = fieldInt "warnings" rVal
       errors   = fieldInt "errors"   rVal
-      ok =  fieldBool "success" rVal == Just True
-         && warnings == 0
-         && errors   == 0
+      ok =  statusOk rVal == Just True
+         && warnings == Just 0
+         && errors   == Just 0
   cVal <- liveCheck $ checkPure
     "post-scaffold validate_cabal: warnings=0, errors=0"
     ok
@@ -57,20 +58,6 @@ runFlow c _projectDir = do
 --------------------------------------------------------------------------------
 -- helpers
 --------------------------------------------------------------------------------
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldInt :: Text -> Value -> Int
-fieldInt k v = case lookupField k v of
-  Just (Number n) -> truncate (toRational n)
-  _               -> -1
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

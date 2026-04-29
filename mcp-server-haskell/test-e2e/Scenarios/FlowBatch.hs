@@ -37,6 +37,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
@@ -218,10 +219,6 @@ runFlow c _projectDir = do
 numberAtLeast :: Int -> Value -> Bool
 numberAtLeast n (Number x) = n <= (round x :: Int)
 numberAtLeast _ _          = False
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 toListVec :: V.Vector a -> [a]
 toListVec = V.toList

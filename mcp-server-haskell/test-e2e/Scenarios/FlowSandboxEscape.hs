@@ -62,6 +62,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -84,7 +85,7 @@ runFlow c projectDir = do
   onDisk <- doesFileExist canary
   cWrite <- liveCheck $ checkPure
     "ghc_eval wrote a file · arbitrary IO is allowed by design"
-    (fieldBool "success" w == Just True && onDisk)
+    (statusOk w == Just True && onDisk)
     ("ghc_eval should execute arbitrary IO. If this fails, either \
      \writeFile threw (success=false) or the file wasn't on disk \
      \afterwards. Raw: " <> truncRender w)
@@ -97,7 +98,7 @@ runFlow c projectDir = do
   r <- Client.callTool c GhcEval
          (object [ "expression" .= readExpr ])
   let roundtripped =
-        fieldBool "success" r == Just True
+        statusOk r == Just True
         && case lookupField "output" r of
              Just (String s) -> "sandbox-escape-evidence" `T.isInfixOf` s
              _               -> False
@@ -132,15 +133,6 @@ runFlow c projectDir = do
 --------------------------------------------------------------------------------
 -- helpers
 --------------------------------------------------------------------------------
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

@@ -47,6 +47,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | Haskell source with raw 0xFF bytes planted OUTSIDE any comment
@@ -84,7 +85,7 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "load · ghc_load on a non-UTF-8 module"
   r  <- Client.callTool c GhcLoad
           (object [ "module_path" .= ("src/Evil.hs" :: Text) ])
-  let ok        = fieldBool "success" r
+  let ok        = statusOk r
       errsField = lookupField "errors" r
       hasErrors = case errsField of
         Just (Array xs) -> not (null xs)
@@ -119,7 +120,7 @@ runFlow c projectDir = do
              (object [ "expression" .= ("1 + 1" :: Text) ])
   cAlive <- liveCheck $ checkPure
     "session alive · ghc_eval(1+1) returns 2"
-    (fieldBool "success" alive == Just True
+    (statusOk alive == Just True
      && case lookupField "output" alive of
           Just (String s) -> "2" `T.isInfixOf` s
           _               -> False)
@@ -133,15 +134,6 @@ runFlow c projectDir = do
 --------------------------------------------------------------------------------
 -- helpers
 --------------------------------------------------------------------------------
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

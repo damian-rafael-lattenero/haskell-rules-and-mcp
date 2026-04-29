@@ -53,6 +53,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, fieldInt)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 import Scenarios.ExprSources
   ( evalSrc
@@ -81,11 +82,6 @@ fieldString k (Object o) = case KeyMap.lookup (Key.fromText k) o of
 fieldString _ _          = Nothing
 
 -- | Read a top-level boolean field.
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k (Object o) = case KeyMap.lookup (Key.fromText k) o of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-fieldBool _ _          = Nothing
 
 -- | Count entries in a top-level array.
 fieldArrayLen :: Text -> Value -> Maybe Int
@@ -95,11 +91,6 @@ fieldArrayLen k (Object o) = case KeyMap.lookup (Key.fromText k) o of
 fieldArrayLen _ _          = Nothing
 
 -- | Read a numeric top-level field as 'Int'.
-fieldInt :: Text -> Value -> Maybe Int
-fieldInt k (Object o) = case KeyMap.lookup (Key.fromText k) o of
-  Just (Number n) -> Just (round n)
-  _               -> Nothing
-fieldInt _ _          = Nothing
 
 --------------------------------------------------------------------------------
 -- scenario
@@ -176,7 +167,7 @@ step2_scaffold :: Client.McpClient -> IO [Check]
 step2_scaffold c = do
   r <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("expr-evaluator" :: Text) ])
-  let ok = fieldBool "success" r == Just True
+  let ok = statusOk r == Just True
       chain = fetchChain r
       chainTools = map csToolField chain
   pure
@@ -489,7 +480,7 @@ step13_regressionRun c = do
 step14_export :: Client.McpClient -> FilePath -> IO [Check]
 step14_export c projectDir = do
   r <- Client.callTool c GhcQuickCheckExport (object [])
-  let success = fieldBool "success" r == Just True
+  let success = statusOk r == Just True
       specPath = projectDir </> "test" </> "Spec.hs"
   specExists <- doesFileExist specPath
   specBody <- if specExists then TIO.readFile specPath else pure ""

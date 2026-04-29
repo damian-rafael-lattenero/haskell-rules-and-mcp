@@ -39,6 +39,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -55,7 +56,7 @@ runFlow c projectDir = do
             (object [ "expression" .= ("1 + 1" :: Text) ])
   cBase <- liveCheck $ checkPure
     "baseline ghc_eval(1+1) succeeds"
-    (fieldBool "success" base == Just True)
+    (statusOk base == Just True)
     ("Expected baseline eval to succeed; got: " <> truncRender base)
   stepFooter 1 t0
 
@@ -86,7 +87,7 @@ runFlow c projectDir = do
   t1 <- stepHeader 2 "recovery · ghc_eval after corrupt+restore (#49)"
   recovered <- Client.callTool c GhcEval
                  (object [ "expression" .= ("2 + 2" :: Text) ])
-  let okShape = fieldBool "success" recovered == Just True
+  let okShape = statusOk recovered == Just True
       hasFour = case lookupField "output" recovered of
                   Just (String s) -> "4" `T.isInfixOf` s
                   _               -> False
@@ -109,15 +110,6 @@ findCabalFile root = do
   case [ root </> e | e <- entries, takeExtension e == ".cabal" ] of
     (p : _) -> pure p
     []      -> error ("FlowCabalRecovery: no .cabal in " <> root)
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

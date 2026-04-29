@@ -40,6 +40,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | The repro module from issue #50: a clean binding 'greet' /
@@ -90,7 +91,7 @@ runFlow c projectDir = do
     , "scope_line_start" .= (6 :: Int)
     , "scope_line_end"   .= (8 :: Int)
     ])
-  let renameOk = fieldBool "success" r == Just True
+  let renameOk = statusOk r == Just True
   cAccept <- liveCheck $ checkPure
     "rename_local returns success=true (was: rolled back by hole)"
     renameOk
@@ -138,15 +139,6 @@ runFlow c projectDir = do
 --------------------------------------------------------------------------------
 -- helpers
 --------------------------------------------------------------------------------
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

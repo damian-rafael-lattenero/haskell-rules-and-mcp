@@ -33,6 +33,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, fieldInt)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -45,9 +46,9 @@ runFlow c projectDir = do
   -- without trying to run any probe.
   t0 <- stepHeader 1 "ghc_property_audit on empty store (#64)"
   rEmpty <- Client.callTool c GhcPropertyAudit (object [])
-  let okEmpty = fieldBool "success" rEmpty == Just True
-              && fieldInt "properties_checked" rEmpty == 0
-              && fieldInt "pairs_checked" rEmpty == 0
+  let okEmpty = statusOk rEmpty == Just True
+              && fieldInt "properties_checked" rEmpty == Just 0
+              && fieldInt "pairs_checked" rEmpty == Just 0
   cEmpty <- liveCheck $ checkPure
     "empty store → properties_checked=0, pairs_checked=0"
     okEmpty
@@ -63,9 +64,9 @@ runFlow c projectDir = do
     "[{\"expression\":\"\\\\x -> x == (x :: Int)\",\
     \\"module\":\"src/Foo.hs\",\"passed\":1,\"updated\":0}]"
   rOne <- Client.callTool c GhcPropertyAudit (object [])
-  let okOne = fieldBool "success" rOne == Just True
-            && fieldInt "properties_checked" rOne == 1
-            && fieldInt "pairs_checked" rOne == 0
+  let okOne = statusOk rOne == Just True
+            && fieldInt "properties_checked" rOne == Just 1
+            && fieldInt "pairs_checked" rOne == Just 0
   cOne <- liveCheck $ checkPure
     "1-property store → properties_checked=1, pairs_checked=0"
     okOne
@@ -83,9 +84,9 @@ runFlow c projectDir = do
     \{\"expression\":\"\\\\x -> x == (x :: Int)\",\
     \\"module\":\"src/Foo.hs\",\"passed\":1,\"updated\":0}]"
   rDup <- Client.callTool c GhcPropertyAudit (object [])
-  let okDup = fieldBool "success" rDup == Just True
-            && fieldInt "properties_checked" rDup == 1
-            && fieldInt "pairs_checked" rDup == 0
+  let okDup = statusOk rDup == Just True
+            && fieldInt "properties_checked" rDup == Just 1
+            && fieldInt "pairs_checked" rDup == Just 0
   cDup <- liveCheck $ checkPure
     "duplicate expression collapses to 1 property"
     okDup
@@ -97,20 +98,6 @@ runFlow c projectDir = do
 --------------------------------------------------------------------------------
 -- helpers
 --------------------------------------------------------------------------------
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldInt :: Text -> Value -> Int
-fieldInt k v = case lookupField k v of
-  Just (Number n) -> truncate (toRational n)
-  _               -> -1
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

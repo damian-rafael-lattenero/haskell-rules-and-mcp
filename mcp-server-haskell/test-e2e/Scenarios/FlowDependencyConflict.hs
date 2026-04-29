@@ -59,6 +59,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, errorKind, fieldBool, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | A package name that is syntactically valid (lowercase, hyphens,
@@ -88,16 +89,16 @@ runFlow c _projectDir = do
              [ "action"  .= ("add" :: Text)
              , "package" .= bogusPkg
              ])
-  let rejected      = fieldBool "success" add == Just False
-      kindIsUnres   = fieldText "error_kind" add == Just "unresolvable_dep"
+  let rejected      = statusOk add == Just False
+      kindIsUnres   = errorKind add == Just "unresolvable_dep"
       rolledBack    = fieldBool "rolled_back" add == Just True
   cReject <- liveCheck $ checkPure
     "bogus add returns success=false with error_kind=unresolvable_dep"
     (rejected && kindIsUnres && rolledBack)
     ( "Expected: success=false, error_kind=\"unresolvable_dep\", \
       \rolled_back=true. Got: success="
-      <> T.pack (show (fieldBool "success" add))
-      <> ", error_kind=" <> T.pack (show (fieldText "error_kind" add))
+      <> T.pack (show (statusOk add))
+      <> ", error_kind=" <> T.pack (show (errorKind add))
       <> ", rolled_back=" <> T.pack (show (fieldBool "rolled_back" add))
       <> ". Raw: " <> truncRender add )
   stepFooter 1 t0
@@ -127,7 +128,7 @@ runFlow c _projectDir = do
   t2 <- stepHeader 3 "session alive · ghc_eval(1+1) after rejected add"
   alive <- Client.callTool c GhcEval
              (object [ "expression" .= ("1 + 1" :: Text) ])
-  let aliveOk = fieldBool "success" alive == Just True
+  let aliveOk = statusOk alive == Just True
              && case lookupField "output" alive of
                   Just (String s) -> "2" `T.isInfixOf` s
                   _               -> False
@@ -151,7 +152,7 @@ runFlow c _projectDir = do
                ])
   cAccept <- liveCheck $ checkPure
     "valid boot-library add returns success=true · verify accepts"
-    (fieldBool "success" addOk == Just True)
+    (statusOk addOk == Just True)
     ( "Boot library 'mtl' should always resolve under modern cabal. \
       \If this fails, the verify step is over-rejecting (false \
       \positive in extractErrorSummary or the dry-run failed for an \
@@ -187,26 +188,12 @@ runFlow c _projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldText :: Text -> Value -> Maybe Text
-fieldText k v = case lookupField k v of
-  Just (String t) -> Just t
-  _               -> Nothing
-
 -- | Extract the build_depends array from a ghc_deps(list) response.
 -- The field name the MCP returns is @build_depends@ (not @packages@).
 buildDeps :: Value -> [Text]
 buildDeps v = case lookupField "build_depends" v of
   Just (Array xs) -> [ p | String p <- V.toList xs ]
   _               -> []
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

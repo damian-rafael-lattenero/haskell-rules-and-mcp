@@ -43,6 +43,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
@@ -154,7 +155,7 @@ runFlow c projectDir = do
   -- client would reload first, so do that here.
   rReload <- Client.callTool c GhcLoad
                (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
-  let reloadedCleanly = fieldBool "success" rReload == Just True
+  let reloadedCleanly = statusOk rReload == Just True
                      && fieldArrayLen "errors" rReload == Just 0
   cReload <- liveCheck $ checkPure
     "mutation · module reloads cleanly (mutated source still type-checks)"
@@ -218,15 +219,6 @@ regressionExprs v = case lookupField "regressions" v of
                         , Just (String e) <- [KeyMap.lookup (Key.fromText "expression") kv]
                     ]
   _ -> []
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
 
 fieldArrayLen :: Text -> Value -> Maybe Int
 fieldArrayLen k v = case lookupField k v of

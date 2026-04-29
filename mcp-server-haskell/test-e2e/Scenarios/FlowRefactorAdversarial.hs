@@ -67,6 +67,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
@@ -205,7 +206,7 @@ runFlow c projectDir = do
   -- a structured response.
   cExtractShape <- liveCheck $ checkPure
     "extract · response carries a 'success' boolean"
-    (case fieldBool "success" extractR of
+    (case statusOk extractR of
        Just _  -> True
        Nothing -> False)
     ("extract_binding must return a structured response. Raw: "
@@ -479,7 +480,7 @@ runFlow c projectDir = do
     "Earlier steps must not have mutated the indented expression line."
   cRegressionShape <- liveCheck $ checkPure
     "regression · response carries a 'success' boolean"
-    (case fieldBool "success" okR of
+    (case statusOk okR of
        Just _  -> True
        Nothing -> False)
     ("extract_binding on an indented expression must produce a \
@@ -516,12 +517,6 @@ fieldIsTrue k (Object o) = case KeyMap.lookup (Key.fromText k) o of
   Just (Bool True) -> True
   _                -> False
 fieldIsTrue _ _ = False
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k (Object o) = case KeyMap.lookup (Key.fromText k) o of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-fieldBool _ _ = Nothing
 
 renderShort :: Value -> Text
 renderShort v =

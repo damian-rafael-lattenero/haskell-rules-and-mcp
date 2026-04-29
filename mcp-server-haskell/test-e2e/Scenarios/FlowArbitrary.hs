@@ -39,6 +39,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
@@ -223,7 +224,7 @@ runFlow c projectDir = do
                (object [ "module_path" .= ("src/ShapesGen.hs" :: Text) ])
   c15 <- liveCheck $ Check
     { cName   = "3 generated Arbitrary instances compile together"
-    , cOk     = fieldBool "success" loadGen == Just True
+    , cOk     = statusOk loadGen == Just True
              && case lookupField "errors" loadGen of
                   Just (Array xs) -> null xs
                   _               -> True  -- missing errors field = ok
@@ -257,15 +258,6 @@ extractTemplate :: Value -> Text
 extractTemplate v = case lookupField "template" v of
   Just (String s) -> s
   _               -> T.empty
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 renderShort :: Value -> Text
 renderShort v =

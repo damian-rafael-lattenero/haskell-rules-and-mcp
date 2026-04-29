@@ -47,6 +47,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, fieldInt, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | Simple module with no holes — used by the no-holes miss test.
@@ -99,7 +100,7 @@ runFlow c projectDir = do
     , "package" .= ("not-a-real-dep" :: Text)
     , "stanza"  .= ("library" :: Text)
     ])
-  let succ1 = fieldBool "success" r1
+  let succ1 = statusOk r1
       refused = succ1 == Just False
       -- 'note' is the explainer emitted by 'Tool.Deps.unchangedResult'
       -- for idempotent add/remove no-ops (verb-specific: "already
@@ -134,7 +135,7 @@ runFlow c projectDir = do
   t2 <- stepHeader 3 "ghc_hole on Whole.hs (no holes present)"
   r2 <- Client.callTool c GhcHole
           (object [ "module_path" .= ("src/Whole.hs" :: Text) ])
-  let succ2   = fieldBool "success" r2 == Just True
+  let succ2   = statusOk r2 == Just True
       countOk = fieldInt   "hole_count" r2 == Just 0
   cMiss2 <- liveCheck $ checkPure
     "hole on a hole-free module · success=true + hole_count=0"
@@ -183,7 +184,7 @@ runFlow c projectDir = do
   -- the bad call. A follow-up ghc_eval should respond quickly.
   r4 <- Client.callTool c GhcEval
           (object [ "expression" .= ("1 + 1" :: Text) ])
-  let sessionAlive = fieldBool "success" r4 == Just True
+  let sessionAlive = statusOk r4 == Just True
   cLive <- liveCheck $ checkPure
     "session survives · ghc_eval(1+1) still works after the failed QC"
     sessionAlive
@@ -197,20 +198,6 @@ runFlow c projectDir = do
 --------------------------------------------------------------------------------
 -- helpers
 --------------------------------------------------------------------------------
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldInt :: Text -> Value -> Maybe Int
-fieldInt k v = case lookupField k v of
-  Just (Number n) -> Just (round n)
-  _               -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 hasField :: Text -> Value -> Bool
 hasField k (Object o) = KeyMap.member (Key.fromText k) o

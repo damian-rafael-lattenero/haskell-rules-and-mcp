@@ -100,22 +100,22 @@ statusField v = case lookupField "status" v of
 -- generic field accessors
 --------------------------------------------------------------------------------
 
--- | Read a top-level boolean field. Used for tool-specific flags
--- like @applied@, @dry_run@, @no_change@ — these aren't envelope
--- discriminators and don't change shape across #90.
+-- | Read a tool-payload boolean field. Used for tool-specific
+-- flags like @applied@, @dry_run@, @no_change@ — these aren't
+-- envelope discriminators and don't change shape across #90.
 fieldBool :: Text -> Value -> Maybe Bool
 fieldBool k v = case lookupField k v of
   Just (Bool b) -> Just b
   _             -> Nothing
 
--- | Read a top-level string field. Used for fields like
+-- | Read a tool-payload string field. Used for fields like
 -- @module@, @path@, @symbol@ — non-discriminator payload.
 fieldText :: Text -> Value -> Maybe Text
 fieldText k v = case lookupField k v of
   Just (String s) -> Just s
   _               -> Nothing
 
--- | Read a top-level integer field. Used for counts like
+-- | Read a tool-payload integer field. Used for counts like
 -- @passed@, @failed@, @count@. Truncates a non-integer
 -- 'Scientific' to its floor — fine for the integer fields the
 -- envelope and tool payloads emit (counts, durations in ms,
@@ -125,11 +125,28 @@ fieldInt k v = case lookupField k v of
   Just (Number n) -> Just (fromInteger (truncate (toRational n :: Rational)))
   _               -> Nothing
 
--- | Look up an arbitrary field. Returns the raw 'Value' so the
--- caller can branch on type or recurse into nested objects.
+-- | Look up a field, auto-drilling through the @result@ envelope
+-- when the field isn't at the top level.
+--
+-- The pre-#90 wire format put tool-specific fields at the top
+-- level (@diagnostic@, @applied@, @count@, etc.); the post-#90
+-- envelope nests them under @result@. To keep oracles ergonomic
+-- across the migration window, this helper checks BOTH:
+-- top-level first (so envelope discriminators @status@ /
+-- @error@ / @nextStep@ resolve directly), then under @result@
+-- (so tool-specific payload fields resolve transparently).
+--
+-- A scenario therefore just writes @lookupField \"diagnostic\" r@
+-- and gets the same answer pre- and post-envelope. Discriminators
+-- like @status@ that exist only at the top level are unaffected
+-- (the top-level lookup hits first).
 lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
+lookupField k (Object o) = case KeyMap.lookup (Key.fromText k) o of
+  Just inner -> Just inner
+  Nothing    -> case KeyMap.lookup (Key.fromText "result") o of
+    Just (Object r) -> KeyMap.lookup (Key.fromText k) r
+    _               -> Nothing
+lookupField _ _ = Nothing
 
 --------------------------------------------------------------------------------
 -- envelope drilling

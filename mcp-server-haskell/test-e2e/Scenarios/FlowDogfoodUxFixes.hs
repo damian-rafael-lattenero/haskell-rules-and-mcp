@@ -45,6 +45,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, fieldBool, fieldText, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -95,7 +96,7 @@ runFlow c projectDir = do
                   ])
   let c2a = checkPure
         "success=true on idempotent add"
-        (fieldBool "success" r2 == Just True)
+        (statusOk r2 == Just True)
         ("Idempotent add of 'base' should report success=true. Raw: "
           <> truncRender r2)
       c2b = checkPure
@@ -205,16 +206,6 @@ runFlow c projectDir = do
 -- helpers (shaped after the other scenarios — keep small + local)
 --------------------------------------------------------------------------------
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldText :: Text -> Value -> Maybe Text
-fieldText k v = case lookupField k v of
-  Just (String s) -> Just s
-  _               -> Nothing
-
 numberOf :: Text -> Value -> Maybe Int
 numberOf k v = case lookupField k v of
   Just (Number n) -> Just (round (realToFrac n :: Double))
@@ -224,10 +215,6 @@ fetchNextStepTool :: Value -> Maybe Text
 fetchNextStepTool v = case lookupField "nextStep" v of
   Just ns -> fieldText "tool" ns
   Nothing -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

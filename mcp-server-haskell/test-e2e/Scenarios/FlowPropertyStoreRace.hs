@@ -53,6 +53,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, errorKind, fieldText)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -75,10 +76,10 @@ runFlow c projectDir = do
     (Client.callTool d GhcQuickCheck
        (object [ "property" .= (propB :: Text) ]))
 
-  let aSucc    = fieldBool "success" rA == Just True
-      bSucc    = fieldBool "success" rB == Just True
-      aKind    = fieldText "error_kind" rA
-      bKind    = fieldText "error_kind" rB
+  let aSucc    = statusOk rA == Just True
+      bSucc    = statusOk rB == Just True
+      aKind    = errorKind rA
+      bKind    = errorKind rB
       aState   = fieldText "state" rA
       bState   = fieldText "state" rB
       anyWon   = aSucc || bSucc
@@ -154,20 +155,6 @@ runFlow c projectDir = do
 --------------------------------------------------------------------------------
 -- helpers
 --------------------------------------------------------------------------------
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldText :: Text -> Value -> Maybe Text
-fieldText k v = case lookupField k v of
-  Just (String s) -> Just s
-  _               -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

@@ -56,6 +56,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, fieldBool, fieldInt, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 import Scenarios.ExprEvaluatorDogfoodSources
   ( evalSrc
@@ -131,7 +132,7 @@ runFlow c projectDir = do
   t3 <- stepHeader 4 "load · test/Spec.hs (brings prop_* symbols into scope)"
   loadR <- Client.callTool c GhcLoad
              (object [ "module_path" .= ("test/Spec.hs" :: Text) ])
-  let loadOk = fieldBool "success" loadR == Just True
+  let loadOk = statusOk loadR == Just True
             && fieldArrayLen "errors" loadR == Just 0
   cLoad <- liveCheck $ checkPure
     "load · test/Spec.hs compiles (QuickCheck + 5 library modules)"
@@ -294,16 +295,6 @@ evalOutputIs needle v = case fieldString "output" v of
 -- tiny field accessors
 --------------------------------------------------------------------------------
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldInt :: Text -> Value -> Maybe Int
-fieldInt k v = case lookupField k v of
-  Just (Number n) -> Just (round n)
-  _               -> Nothing
-
 fieldString :: Text -> Value -> Maybe Text
 fieldString k v = case lookupField k v of
   Just (String s) -> Just s
@@ -313,10 +304,6 @@ fieldArrayLen :: Text -> Value -> Maybe Int
 fieldArrayLen k v = case lookupField k v of
   Just (Array a) -> Just (length a)
   _              -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

@@ -44,6 +44,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, fieldBool)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 sourceSrc :: Text
@@ -137,7 +138,7 @@ runFlow c projectDir = do
                 , "to"     .= ("Dst"   :: Text)
                 ])
   let okMove = fieldBool "applied" rMove == Just True
-            && fieldBool "success" rMove == Just True
+            && statusOk rMove == Just True
   cMove <- liveCheck $ checkPure
     "move applies cleanly (no rollback)"
     okMove
@@ -181,15 +182,6 @@ dirOf = reverse . dropWhile (/= '/') . reverse
 
 firstLines :: Int -> Text -> Text
 firstLines n = T.intercalate " ⏎ " . take n . T.lines
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

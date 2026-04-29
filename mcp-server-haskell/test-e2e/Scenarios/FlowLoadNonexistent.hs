@@ -30,6 +30,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, fieldText)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -54,7 +55,7 @@ runFlow c _projectDir = do
   t1 <- stepHeader 2 "ghc_load nonexistent module_path"
   r1 <- Client.callTool c GhcLoad
           (object [ "module_path" .= ("src/DoesNotExist.hs" :: Text) ])
-  let succ1   = fieldBool "success" r1
+  let succ1   = statusOk r1
       errText = fieldText "error"   r1
       refused = succ1 == Just False
       mentions s = case errText of
@@ -79,7 +80,7 @@ runFlow c _projectDir = do
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "session survives · ghc_load (no args) still loads"
   r2 <- Client.callTool c GhcLoad (object [])
-  let alive = fieldBool "success" r2 == Just True
+  let alive = statusOk r2 == Just True
   cAlive <- liveCheck $ checkPure
     "ghc_load #79 · session alive after rejected nonexistent path"
     alive
@@ -94,20 +95,6 @@ runFlow c _projectDir = do
 --------------------------------------------------------------------------------
 -- helpers (mirrored from FlowGracefulMiss to keep scenarios self-contained)
 --------------------------------------------------------------------------------
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldText :: Text -> Value -> Maybe Text
-fieldText k v = case lookupField k v of
-  Just (String s) -> Just s
-  _               -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

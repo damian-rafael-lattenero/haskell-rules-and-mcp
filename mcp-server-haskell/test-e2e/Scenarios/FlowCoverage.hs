@@ -43,6 +43,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 calcSrc :: Text
@@ -118,7 +119,7 @@ runFlow c projectDir = do
   -- Real oracle: if success=true, metrics[] MUST have content.
   -- The previous scenario would report green on an empty metrics
   -- array as long as the shape was right.
-  let happySuccess = fieldBool "success" r == Just True
+  let happySuccess = statusOk r == Just True
       metricsArr = case lookupField "metrics" r of
                      Just (Array xs) -> xs
                      _               -> V.empty
@@ -140,7 +141,7 @@ runFlow c projectDir = do
   t2 <- stepHeader 3 "failing · cabal test exits nonzero"
   TIO.writeFile (projectDir </> "test" </> "Spec.hs") specSrcFailing
   r2 <- Client.callTool c GhcCoverage (object [])
-  let failSuccess = fieldBool "success" r2
+  let failSuccess = statusOk r2
   c4 <- liveCheck $ checkPure
           "failing · success=false (cabal test's exitFailure surfaced)"
           (failSuccess == Just False)
@@ -180,7 +181,7 @@ runFlow c projectDir = do
   r3 <- Client.callTool c GhcCoverage (object [])
   c6 <- liveCheck $ checkPure
           "empty · structured response on unbuildable test-suite"
-          (case fieldBool "success" r3 of
+          (case statusOk r3 of
              Just _  -> True   -- any success Bool is structured
              Nothing -> False)
           ("The tool must always return a structured response with \
@@ -188,7 +189,7 @@ runFlow c projectDir = do
            \test-suite. Raw: " <> renderShort r3)
   c7 <- liveCheck $ checkPure
           "empty · success is NOT claimed when the test-suite is broken"
-          (fieldBool "success" r3 /= Just True)
+          (statusOk r3 /= Just True)
           ("Build-broken test-suite reported success=true. The tool \
            \is papering over a real failure. Raw: " <> renderShort r3)
   stepFooter 4 t3
@@ -202,16 +203,6 @@ runFlow c projectDir = do
 hasField :: Text -> Value -> Bool
 hasField k (Object o) = KeyMap.member (Key.fromText k) o
 hasField _ _          = False
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k (Object o) = case KeyMap.lookup (Key.fromText k) o of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-fieldBool _ _ = Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 renderShort :: Value -> Text
 renderShort v =

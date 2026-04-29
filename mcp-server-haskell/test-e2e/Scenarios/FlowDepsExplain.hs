@@ -27,6 +27,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 solverDump :: Text
@@ -54,7 +55,7 @@ runFlow c _projectDir = do
   t0 <- stepHeader 1 "ghc_deps_explain extracts root_cause (#63)"
   rConflict <- Client.callTool c GhcDepsExplain
                  (object [ "cabal_output" .= solverDump ])
-  let success = fieldBool "success" rConflict
+  let success = statusOk rConflict
       rootPkg = drillStr ["conflict", "root_cause", "package"] rConflict
       rootDepth = case drill ["conflict", "root_cause", "depth"] rConflict of
         Just (Number n) -> truncate (toRational n) :: Int
@@ -75,7 +76,7 @@ runFlow c _projectDir = do
   t1 <- stepHeader 2 "ghc_deps_explain returns null on clean dump (#63)"
   rClean <- Client.callTool c GhcDepsExplain
               (object [ "cabal_output" .= cleanDump ])
-  let cleanOk = fieldBool "success" rClean == Just True
+  let cleanOk = statusOk rClean == Just True
               && drill ["conflict"] rClean == Just Null
   cClean <- liveCheck $ checkPure
     "clean dump → success=true, conflict=null"
@@ -89,11 +90,6 @@ runFlow c _projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
 drill :: [Text] -> Value -> Maybe Value
 drill [] v = Just v
 drill (k : ks) v = case lookupField k v of
@@ -104,10 +100,6 @@ drillStr :: [Text] -> Value -> Maybe Text
 drillStr ks v = case drill ks v of
   Just (String s) -> Just s
   _               -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

@@ -44,6 +44,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | Module with exactly one local binding we /could/ rename. The
@@ -98,7 +99,7 @@ runFlow c projectDir = do
   ----------------------------------------------------------------
   after <- TIO.readFile srcPath
 
-  let succ_ = fieldBool "success" r
+  let succ_ = statusOk r
       refused = succ_ == Just False
       untouched = after == before
 
@@ -132,7 +133,7 @@ runFlow c projectDir = do
     , "scope_line_start"  .= (3 :: Int)
     , "scope_line_end"    .= (4 :: Int)
     ])
-  let happy = fieldBool "success" r2 == Just True
+  let happy = statusOk r2 == Just True
   cHappy <- liveCheck $ checkPure
     "sanity · the happy-path rename still succeeds after the refusal"
     happy
@@ -146,15 +147,6 @@ runFlow c projectDir = do
 --------------------------------------------------------------------------------
 -- helpers
 --------------------------------------------------------------------------------
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

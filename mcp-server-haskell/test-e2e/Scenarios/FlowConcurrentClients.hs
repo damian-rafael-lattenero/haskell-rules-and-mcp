@@ -56,6 +56,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | Main client 'c' is the one that comes in via runFlow — we
@@ -86,14 +87,14 @@ runFlow c projectDir = do
                  ])
   (rA, rB) <- concurrently addA addB
   let bothSucceeded =
-        fieldBool "success" rA == Just True
-        && fieldBool "success" rB == Just True
+        statusOk rA == Just True
+        && statusOk rB == Just True
   cBoth <- liveCheck $ checkPure
     "both concurrent adds returned success=true"
     bothSucceeded
     ("If either add failed mid-race, one client's call saw the other's \
-     \partial state. A=" <> T.pack (show (fieldBool "success" rA))
-     <> ", B=" <> T.pack (show (fieldBool "success" rB))
+     \partial state. A=" <> T.pack (show (statusOk rA))
+     <> ", B=" <> T.pack (show (statusOk rB))
      <> ". Raw A: " <> truncRender rA
      <> " | Raw B: " <> truncRender rB)
   stepFooter 1 t0
@@ -126,11 +127,11 @@ runFlow c projectDir = do
               (object [ "expression" .= ("1 + 1" :: Text) ])
   aliveB <- Client.callTool d GhcEval
               (object [ "expression" .= ("2 + 2" :: Text) ])
-  let aOk = fieldBool "success" aliveA == Just True
+  let aOk = statusOk aliveA == Just True
          && case lookupField "output" aliveA of
               Just (String s) -> "2" `T.isInfixOf` s
               _               -> False
-      bOk = fieldBool "success" aliveB == Just True
+      bOk = statusOk aliveB == Just True
          && case lookupField "output" aliveB of
               Just (String s) -> "4" `T.isInfixOf` s
               _               -> False
@@ -151,19 +152,10 @@ runFlow c projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
 buildDeps :: Value -> [Text]
 buildDeps v = case lookupField "build_depends" v of
   Just (Array xs) -> [ p | String p <- V.toList xs ]
   _               -> []
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

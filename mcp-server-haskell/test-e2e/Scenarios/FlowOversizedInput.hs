@@ -73,6 +73,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, fieldText, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | 256 KiB of 'A' wrapped in a Haskell String literal. 4× the
@@ -93,7 +94,7 @@ runFlow c _pd = do
            (object [ "expression" .= ("1 + 1" :: Text) ])
   cPre <- liveCheck $ checkPure
     "pre-flight · session responds to 1+1"
-    (fieldBool "success" pre == Just True)
+    (statusOk pre == Just True)
     ("pre-flight failed. Raw: " <> truncRender pre)
   stepFooter 1 t0
 
@@ -110,7 +111,7 @@ runFlow c _pd = do
   bigEnd <- getPOSIXTime
   let bigMs       = round ((realToFrac (bigEnd - bigStart) :: Double)
                            * 1000) :: Int
-      wasRejected = fieldBool "success" big == Just False
+      wasRejected = statusOk big == Just False
       returnedFast = bigMs < 2_000
       errText      = case fieldText "error" big of
                         Just t  -> T.map toLower t
@@ -123,7 +124,7 @@ runFlow c _pd = do
     (wasRejected && returnedFast)
     ("Expected: success=false in < 2 s. Got: elapsed="
       <> T.pack (show bigMs) <> " ms, success="
-      <> T.pack (show (fieldBool "success" big))
+      <> T.pack (show (statusOk big))
       <> ". A slow return with success=true means the 256 KiB string \
          \reached GHCi — 'sanitizeExpression' is missing its size cap. \
          \Raw: " <> truncRender big)
@@ -143,7 +144,7 @@ runFlow c _pd = do
   t2 <- stepHeader 3 "alive · session still responds after the reject"
   post <- Client.callTool c GhcEval
             (object [ "expression" .= ("2 + 3" :: Text) ])
-  let aliveOk = fieldBool "success" post == Just True
+  let aliveOk = statusOk post == Just True
              && case lookupField "output" post of
                   Just (String s) -> "5" `T.isInfixOf` s
                   _               -> False
@@ -160,20 +161,6 @@ runFlow c _pd = do
 --------------------------------------------------------------------------------
 -- helpers
 --------------------------------------------------------------------------------
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldText :: Text -> Value -> Maybe Text
-fieldText k v = case lookupField k v of
-  Just (String s) -> Just s
-  _               -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

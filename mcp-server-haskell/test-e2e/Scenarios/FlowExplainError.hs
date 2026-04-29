@@ -14,8 +14,6 @@ module Scenarios.FlowExplainError
   ) where
 
 import Data.Aeson (Value (..), object, (.=))
-import qualified Data.Aeson.Key as Key
-import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -31,6 +29,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (lookupField, statusOk)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 brokenSrc :: Text
@@ -57,7 +56,7 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "ghc_explain_error returns structured context (#59)"
   r <- Client.callTool c GhcExplainError
          (object [ "module_path" .= ("src/Broken.hs" :: Text) ])
-  let success     = fieldBool "success" r == Just True
+  let success     = statusOk r == Just True
       diagOk      = case drillField "diagnostic" "severity" r of
         Just (String "error") -> True
         _                     -> False
@@ -91,22 +90,9 @@ runFlow c projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
 drillField :: Text -> Text -> Value -> Maybe Value
-drillField outer inner v = case lookupField outer v of
-  Just o  -> lookupField inner o
-  Nothing -> Nothing
+drillField outer inner v = lookupField outer v >>= lookupField inner
 
 drillPath :: [Text] -> Value -> Maybe Value
-drillPath [] v = Just v
-drillPath (k : ks) v = case lookupField k v of
-  Just inner -> drillPath ks inner
-  Nothing    -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
+drillPath []       v = Just v
+drillPath (k : ks) v = lookupField k v >>= drillPath ks

@@ -38,6 +38,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
@@ -203,10 +204,6 @@ hasString k (Object o) = case KeyMap.lookup (Key.fromText k) o of
   Just (String _) -> True
   _               -> False
 hasString _ _          = False
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 -- suppress unused-binding warning for checkPure (helper pattern,
 -- kept for other flows in this module over time)

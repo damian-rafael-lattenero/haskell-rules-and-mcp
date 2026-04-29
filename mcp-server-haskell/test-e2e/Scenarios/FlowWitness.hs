@@ -32,6 +32,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, fieldText, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -51,7 +52,7 @@ runFlow c _projectDir = do
               , "runs"     .= (200 :: Int)
               ])
   let okShape =
-           fieldBool "success" rOk == Just True
+           statusOk rOk == Just True
         && fieldText "phase" rOk == Just "1-mvp"
         && hasField "distribution" rOk
         && hasField "warnings" rOk
@@ -68,7 +69,7 @@ runFlow c _projectDir = do
   -- contract for every tool: bad args are diagnosable, not fatal.
   t1 <- stepHeader 2 "ghc_witness rejects malformed args (#65)"
   rBad <- Client.callTool c GhcWitness (object [])
-  let okBad = fieldBool "success" rBad == Just False
+  let okBad = statusOk rBad == Just False
   cBad <- liveCheck $ checkPure
     "missing 'property' → success=false (no crash)"
     okBad
@@ -91,7 +92,7 @@ runFlow c _projectDir = do
                , "runs"     .= (300 :: Int)
                ])
   let buckets = bucketsArray rDist
-      okDist  = fieldBool "success" rDist == Just True
+      okDist  = statusOk rDist == Just True
              && not (null buckets)
   cDist <- liveCheck $ checkPure
     "distribution.by_size.buckets is non-empty post-#78"
@@ -120,24 +121,10 @@ bucketsArray v = case lookupField "distribution" v of
       _ -> []
   _ -> []
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldText :: Text -> Value -> Maybe Text
-fieldText k v = case lookupField k v of
-  Just (String s) -> Just s
-  _               -> Nothing
-
 hasField :: Text -> Value -> Bool
 hasField k v = case lookupField k v of
   Just _  -> True
   Nothing -> False
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

@@ -43,6 +43,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -64,7 +65,7 @@ runFlow c _projectDir = do
     (do
       r <- Client.callTool c GhcAddImport
              (object [ "name" .= ("fromMaybe" :: Text) ])
-      let success     = fieldBool "success" r
+      let success     = statusOk r
           errFieldOk  = case lookupField "error" r of
                           Just (String e) -> "hoogle" `T.isInfixOf` T.toLower e
                           _               -> False
@@ -83,15 +84,6 @@ runFlow c _projectDir = do
 --------------------------------------------------------------------------------
 -- helpers
 --------------------------------------------------------------------------------
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

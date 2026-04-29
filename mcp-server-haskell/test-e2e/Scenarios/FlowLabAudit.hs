@@ -32,6 +32,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, fieldInt, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 src :: Text
@@ -66,12 +67,12 @@ runFlow c projectDir = do
            [ "module_path"    .= ("src/Demo.hs" :: Text)
            , "min_confidence" .= ("low" :: Text)
            ])
-  let success     = fieldBool "success" r == Just True
+  let success     = statusOk r == Just True
       audited     = fieldInt "audited_bindings" r
       hasFunctions = arrayLen "functions" r >= 2
   cBasic <- liveCheck $ checkPure
     "ghc_lab returns success=true with audited_bindings ≥ 2"
-    (success && audited == 2 && hasFunctions)
+    (success && audited == Just 2 && hasFunctions)
     ("Expected: audited=2, functions array≥2. Got: success=" <> T.pack (show success)
        <> ", audited=" <> T.pack (show audited)
        <> ", n=" <> T.pack (show (arrayLen "functions" r))
@@ -98,16 +99,6 @@ runFlow c projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldInt :: Text -> Value -> Int
-fieldInt k v = case lookupField k v of
-  Just (Number n) -> truncate (toRational n)
-  _               -> -1
-
 arrayLen :: Text -> Value -> Int
 arrayLen k v = case lookupField k v of
   Just (Array xs) -> V.length xs
@@ -117,10 +108,6 @@ lookupString :: Text -> Value -> Maybe Text
 lookupString k v = case lookupField k v of
   Just (String s) -> Just s
   _               -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

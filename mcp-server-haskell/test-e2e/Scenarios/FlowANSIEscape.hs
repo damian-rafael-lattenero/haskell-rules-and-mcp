@@ -52,6 +52,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | A type error GHC will happily colourise on a TTY.
@@ -95,7 +96,7 @@ runFlow c projectDir = do
     Just t  -> setEnv "TERM" t
     Nothing -> unsetEnv "TERM"
 
-  let failed        = fieldBool "success" loadR == Just False
+  let failed        = statusOk loadR == Just False
   cFailed <- liveCheck $ checkPure
     "load · type error was reported (success=false)"
     failed
@@ -145,7 +146,7 @@ runFlow c projectDir = do
              (object [ "expression" .= ("1 + 1" :: Text) ])
   cAlive <- liveCheck $ checkPure
     "session alive · ghc_eval(1+1) returns 2"
-    (fieldBool "success" alive == Just True)
+    (statusOk alive == Just True)
     ("Raw: " <> truncRender alive)
   stepFooter 4 t3
 
@@ -166,15 +167,6 @@ flattenStrings = go
     go (Array xs) = T.intercalate "\n" (map go (foldr (:) [] xs))
     go (Object o) = T.intercalate "\n" (map go (KeyMap.elems o))
     go _          = T.empty
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

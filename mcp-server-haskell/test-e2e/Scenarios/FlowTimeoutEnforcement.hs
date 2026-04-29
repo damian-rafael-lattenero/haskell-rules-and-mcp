@@ -47,6 +47,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, errorKind, fieldText, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -60,7 +61,7 @@ runFlow c _pd = do
            (object [ "expression" .= ("1 + 1" :: Text) ])
   cPre <- liveCheck $ checkPure
     "pre-flight · session responds to 1+1"
-    (fieldBool "success" pre == Just True)
+    (statusOk pre == Just True)
     ("setup failed; no point diagnosing the timeout. Raw: "
       <> truncRender pre)
   stepFooter 1 t0
@@ -78,7 +79,7 @@ runFlow c _pd = do
   endedAt <- getPOSIXTime
   let elapsedMs = round ((realToFrac (endedAt - startedAt) :: Double)
                          * 1000) :: Int
-      abortedStructurally = fieldBool "success" slow == Just False
+      abortedStructurally = statusOk slow == Just False
       returnedInTime      = elapsedMs < 45_000
 
   cTime <- liveCheck $ checkPure
@@ -87,7 +88,7 @@ runFlow c _pd = do
     (abortedStructurally && returnedInTime)
     ("Expected: ghc_eval returns in < 45 s with success=false. \
      \Got: elapsed=" <> T.pack (show elapsedMs) <> " ms, success="
-     <> T.pack (show (fieldBool "success" slow))
+     <> T.pack (show (statusOk slow))
      <> ". If elapsed ≥ 60 s, 'executeNoLock' timeoutMicros is not \
         \being honoured. If success=true, a slow call is being \
         \reported as successful. Raw: " <> truncRender slow)
@@ -110,7 +111,7 @@ runFlow c _pd = do
   -- "timeout" (legacy). Accept any of those — the contract is
   -- still "structured JSON with a discriminator", not a specific
   -- wire string.
-  let errKind  = fieldText "error_kind" slow
+  let errKind  = errorKind slow
       legacyOk = errKind == Just "session_exhausted"
               || errKind == Just "timeout"
               || errKind == Just "inner_timeout"
@@ -140,7 +141,7 @@ runFlow c _pd = do
   recEnd <- getPOSIXTime
   let recMs        = round ((realToFrac (recEnd - recStart) :: Double)
                             * 1000) :: Int
-      recSucceeded = fieldBool "success" recov == Just True
+      recSucceeded = statusOk recov == Just True
                   && case lookupField "output" recov of
                        Just (String s) -> "5" `T.isInfixOf` s
                        _               -> False
@@ -150,7 +151,7 @@ runFlow c _pd = do
     (recSucceeded && recPrompt)
     ("After the inner timeout, the server should evict the session and \
      \respawn for the next call. Got: elapsed=" <> T.pack (show recMs)
-     <> " ms, success=" <> T.pack (show (fieldBool "success" recov))
+     <> " ms, success=" <> T.pack (show (statusOk recov))
      <> ". Raw: " <> truncRender recov)
   stepFooter 4 t2
 
@@ -160,20 +161,6 @@ runFlow c _pd = do
 -- helpers (mirror FlowSessionRobustness.hs so the two scenarios read
 -- the same way — no upstream sharing yet to avoid churning the harness)
 --------------------------------------------------------------------------------
-
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldText :: Text -> Value -> Maybe Text
-fieldText k v = case lookupField k v of
-  Just (String s) -> Just s
-  _               -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
 
 truncRender :: Value -> Text
 truncRender v =

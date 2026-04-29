@@ -33,6 +33,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
+import E2E.Envelope (statusOk, fieldInt, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -57,7 +58,7 @@ runFlow c projectDir = do
     [ "expression" .= ("sum [1 .. 100]" :: Text)
     , "runs"       .= (5 :: Int)
     ])
-  let success     = fieldBool "success" r == Just True
+  let success     = statusOk r == Just True
       runsExec    = fieldInt "runs_executed" r
       meanNs      = drillNumber ["measurements", "mean_ns"] r
       sampleLen   = case drillPath ["measurements", "samples"] r of
@@ -70,7 +71,7 @@ runFlow c projectDir = do
   cBasic <- liveCheck $ checkPure
     "success + runs=5 + measurements/mean_ns≥0 + samples=5 + phase=1-mvp"
     (success
-       && runsExec == 5
+       && runsExec == Just 5
        && meanNs >= 0
        && sampleLen == 5
        && phase == Just "1-mvp"
@@ -88,16 +89,6 @@ runFlow c projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
-fieldBool :: Text -> Value -> Maybe Bool
-fieldBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
-
-fieldInt :: Text -> Value -> Int
-fieldInt k v = case lookupField k v of
-  Just (Number n) -> truncate (toRational n)
-  _               -> -1
-
 drillNumber :: [Text] -> Value -> Double
 drillNumber ks v = case drillPath ks v of
   Just (Number n) -> realToFrac n
@@ -114,6 +105,3 @@ lookupString k v = case lookupField k v of
   Just (String s) -> Just s
   _               -> Nothing
 
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = KeyMap.lookup (Key.fromText k) o
-lookupField _ _          = Nothing
