@@ -513,6 +513,9 @@ main = do
       , test "fix_warning: underscorePrefix replaces token (#55)" testUnderscorePrefixToken
       , test "fix_warning: underscorePrefix respects word boundary (#55)" testUnderscorePrefixWordBoundary
       , test "fix_warning: underscorePrefix idempotent on _name (#55)" testUnderscorePrefixIdempotent
+      , test "remove_modules: scanImportersInBody plain (#41)" testRMScanImportPlain
+      , test "remove_modules: scanImportersInBody respects hierarchy (#41)" testRMScanRespectsHierarchy
+      , test "remove_modules: scanImportersInBody quiet on no match (#41)" testRMScanQuietOnNoMatch
       , test "workflow-state: initial empty"       testWorkflowStateInitial
       , test "workflow-state: tracks load + edits" testWorkflowStateTracks
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
@@ -4211,6 +4214,41 @@ testHandleRemoveModulesRefuses = withFixture $ \pd cabalFile -> do
     && before == after
     && hasField "rejected" (extractPayload result)
     )
+
+-- | Issue #41: 'parseImportLine' / 'scanImportersInBody' must
+-- recognise the canonical Haskell import shapes and ignore
+-- everything else.
+
+testRMScanImportPlain :: IO Bool
+testRMScanImportPlain =
+  let body = T.unlines
+        [ "module Other where"
+        , ""
+        , "import Foo"
+        , "import Bar.Baz (x, y)"
+        , "import qualified Foo as F"
+        , "import qualified Mtl"
+        ]
+      hits = RM.scanImportersInBody "test/Other.hs" ["Foo"] body
+  in pure (length hits == 2
+        && all ((== "Foo") . RM.iModule) hits
+        && all ((== "test/Other.hs") . RM.iFile) hits)
+
+-- | Issue #41 — module names match as whole tokens, NOT
+-- substrings. Removing 'Foo' must NOT flag 'import Foo.Bar'.
+testRMScanRespectsHierarchy :: IO Bool
+testRMScanRespectsHierarchy =
+  let body = T.unlines [ "import Foo.Bar", "import Foo.Baz" ]
+  in pure (null (RM.scanImportersInBody "x.hs" ["Foo"] body))
+
+-- | Issue #41 — empty body / no targets / unrelated body all
+-- yield no hits. (Defensive trio so regressions don't slip in
+-- via accidental sentinel matches.)
+testRMScanQuietOnNoMatch :: IO Bool
+testRMScanQuietOnNoMatch = pure $
+     null (RM.scanImportersInBody "f.hs" ["Foo"] "")
+  && null (RM.scanImportersInBody "f.hs" []      "import Foo\n")
+  && null (RM.scanImportersInBody "f.hs" ["Foo"] "module Other where\n")
 
 -- | Symmetric regression: 'ghc_remove_modules' still removes when
 -- given a valid name.

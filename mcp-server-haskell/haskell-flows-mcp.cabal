@@ -236,6 +236,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowCreateProjectNameValidation
                       Scenarios.FlowBootstrapDocs
                       Scenarios.FlowFixWarningUnusedBinding
+                      Scenarios.FlowRemoveModulesDownstream
                       Scenarios.FlowDogfoodReplay
                       Scenarios.FlowTypeBreakage
                       Scenarios.FlowScopeMgmt
