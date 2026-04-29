@@ -29,8 +29,6 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (findExecutable)
 import System.Exit (ExitCode (..))
 import System.IO (hClose, hGetContents)
@@ -44,6 +42,7 @@ import System.Process
   )
 import System.Timeout (timeout)
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
@@ -89,7 +88,10 @@ versionTimeoutMicros = 3_000_000  -- 3s per binary
 handle :: Value -> IO ToolResult
 handle rawArgs = case parseEither parseJSON rawArgs :: Either String Value of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope Env.MissingArg
+          (T.pack ("Invalid arguments: " <> parseError)))
+            { Env.eeCause = Just (T.pack parseError) })))
   Right _ -> do
     entries <- mapM probeOne probeTargets
     pure (renderResult entries)
@@ -158,20 +160,54 @@ firstLine t = case T.lines (T.strip t) of
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Build the response. After issue #90 Phase B, two outcomes are
+-- distinguished structurally on the wire:
+--
+-- * Every blocking gate available → 'Env.StatusOk'.
+-- * One or more optional binaries missing but every blocking gate
+--   present → 'Env.StatusPartial' with a 'Env.SlowPath' warning per
+--   missing optional. The result still carries the full @tools@
+--   inventory so a consumer that doesn't care about the discriminator
+--   keeps reading the same shape.
+-- * Any blocking gate missing → 'Env.StatusFailed' with
+--   'Env.BinaryUnavailable'. The dependency is structural; rerunning
+--   without installing the binary will fail again.
+--
+-- The legacy @success@ field on the wire is auto-derived by
+-- 'Env.isLegacySuccess'; clients that key on it keep working until
+-- Phase D removes the field.
 renderResult :: [Entry] -> ToolResult
 renderResult entries =
-  let blocking = filter (\e -> eCategory e == "gate" && not (eAvailable e)) entries
+  let blocking      = filter (\e -> eCategory e == "gate" && not (eAvailable e)) entries
+      missingOpt    = filter (\e -> eCategory e /= "gate" && not (eAvailable e)) entries
       payload =
         object
-          [ "success"         .= null blocking
-          , "tools"           .= map renderEntry entries
+          [ "tools"           .= map renderEntry entries
           , "blocking_gates"  .= map eName blocking
           , "summary"         .= summarise entries blocking
           ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False    -- missing tools are info, not server error
-       }
+      response = case (blocking, missingOpt) of
+        ([], [])   -> Env.mkOk payload
+        ([], opts) -> Env.withWarnings (map missingOptionalWarning opts)
+                        (Env.mkPartial payload)
+        (bs, _)    -> Env.mkFailed
+          ((Env.mkErrorEnvelope Env.BinaryUnavailable
+              ("blocking gate(s) unavailable: " <> T.intercalate ", " (map eName bs)))
+                { Env.eeRemediation =
+                    Just ("Install the missing binaries via ghcup / cabal: "
+                       <> T.intercalate ", " (map eName bs)) })
+  in Env.toolResponseToResult response
+
+missingOptionalWarning :: Entry -> Env.Warning
+missingOptionalWarning e = Env.Warning
+  { Env.wKind    = Env.SlowPath
+  , Env.wMessage = "optional binary '" <> eName e
+                <> "' is unavailable; tools that delegate to it will return status='unavailable'"
+  , Env.wExtra   = Just (object
+      [ "binary"   .= eName e
+      , "category" .= eCategory e
+      ])
+  }
 
 renderEntry :: Entry -> Value
 renderEntry e =
@@ -193,16 +229,3 @@ summarise entries blocking =
           bs -> "; blocking gates: "
              <> T.intercalate ", " (map eName bs)
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

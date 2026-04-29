@@ -70,12 +70,15 @@ module HaskellFlows.Mcp.Envelope
   , withWarnings
   , withNextStep
   , withMeta
+    -- * Wire-wrapper bridge
+  , toolResponseToResult
   ) where
 
 import Data.Aeson
   ( FromJSON (..)
   , ToJSON (..)
   , Value (..)
+  , encode
   , object
   , withObject
   , withText
@@ -89,6 +92,13 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
+
+import HaskellFlows.Mcp.Protocol
+  ( ToolContent (..)
+  , ToolResult (..)
+  )
 
 --------------------------------------------------------------------------------
 -- ToolStatus
@@ -587,3 +597,30 @@ withNextStep ns r = r { reNextStep = Just ns }
 -- | Attach instrumentation metadata.
 withMeta :: Meta -> ToolResponse -> ToolResponse
 withMeta m r = r { reMeta = Just m }
+
+--------------------------------------------------------------------------------
+-- Wire-wrapper bridge
+--------------------------------------------------------------------------------
+
+-- | Convert a 'ToolResponse' into the MCP-protocol 'ToolResult'
+-- wrapper (the @{content: [...], isError: bool}@ JSON-RPC payload).
+--
+-- The bridge encodes the envelope as a JSON string, packs it into a
+-- single 'TextContent' block, and derives @isError@ from
+-- 'isLegacySuccess' so existing JSON-RPC clients that key on the
+-- transport-level error flag keep working unchanged through the
+-- migration window.
+--
+-- Migrating a tool's response handling is therefore a 3-step move:
+--
+-- 1. Build a 'ToolResponse' via the smart constructors.
+-- 2. Apply any decorators ('withWarnings', 'withNextStep', 'withMeta').
+-- 3. Hand it to 'toolResponseToResult' at the very last step before
+--    returning from the handler.
+toolResponseToResult :: ToolResponse -> ToolResult
+toolResponseToResult r =
+  let body = TL.toStrict (TLE.decodeUtf8 (encode r))
+  in ToolResult
+       { trContent = [ TextContent body ]
+       , trIsError = not (isLegacySuccess (reStatus r))
+       }

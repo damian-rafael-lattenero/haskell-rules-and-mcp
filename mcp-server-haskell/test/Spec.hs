@@ -230,6 +230,7 @@ import HaskellFlows.Ghc.ApiSession
   , withGhcSession
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
+import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
 import qualified HaskellFlows.Tool.Type as TypeTool
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
 import HaskellFlows.Tool.SwitchProject
@@ -394,6 +395,12 @@ main = do
       , quickTest "prop_envelope_errorkind_total"  prop_envelopeErrorKindTotal
       , quickTest "prop_envelope_warningkind_total" prop_envelopeWarningKindTotal
       , quickTest "prop_envelope_legacy_success"   prop_envelopeLegacySuccess
+      , test "Envelope #90 Phase B: ghc_toolchain_status emits envelope shape"
+                                                   testToolchainStatusEnvelopeShape
+      , test "Envelope #90 Phase B: ghc_toolchain_status legacy success matches status"
+                                                   testToolchainStatusLegacyConsistent
+      , test "Envelope #90 Phase B: ghc_toolchain_status preserves tools/blocking_gates"
+                                                   testToolchainStatusBackcompatFields
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -2419,6 +2426,74 @@ prop_envelopeLegacySuccess = QC.forAll (QC.elements [minBound..maxBound]) $ \s -
   let derived  = Env.isLegacySuccess s
       expected = s == Env.StatusOk || s == Env.StatusPartial
   in derived === expected
+
+-- | Helper for Phase B tool-migration tests: drive the tool's
+-- handler, decode the JSON body inside the wire-level 'ToolResult',
+-- return the parsed 'Env.ToolResponse' (or a string-shaped failure
+-- describing why the decode failed).
+runToolEnvelope
+  :: (A.Value -> IO ToolResult)
+  -> A.Value
+  -> IO (Either String Env.ToolResponse)
+runToolEnvelope h args = do
+  result <- h args
+  case trContent result of
+    [TextContent body] ->
+      pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+    _ ->
+      pure (Left "expected exactly one TextContent in trContent")
+
+-- | Phase B oracle: 'ghc_toolchain_status' emits an envelope-shaped
+-- response whose status is one of @ok | partial | failed@. The exact
+-- status depends on the host's installed binaries — on a dev box
+-- with cabal/ghc/hlint present and (typically) fourmolu/hoogle
+-- absent, we'd see @partial@. CI may have different binaries; the
+-- test stays host-independent by accepting any of the three valid
+-- statuses.
+testToolchainStatusEnvelopeShape :: IO Bool
+testToolchainStatusEnvelopeShape = do
+  decoded <- runToolEnvelope ToolchainStatusTool.handle (A.object [])
+  pure $ case decoded of
+    Right env ->
+      Env.reStatus env
+        `elem` [Env.StatusOk, Env.StatusPartial, Env.StatusFailed]
+    Left _ -> False
+
+-- | Phase B legacy-window invariant: the deprecated @success@ field
+-- on the wire equals @isLegacySuccess(status)@. Catches the case
+-- where a future refactor splits the two paths and the legacy field
+-- drifts from the structured one.
+testToolchainStatusLegacyConsistent :: IO Bool
+testToolchainStatusLegacyConsistent = do
+  result <- ToolchainStatusTool.handle (A.object [])
+  case trContent result of
+    [TextContent body] ->
+      let bytes = TLE.encodeUtf8 (TL.fromStrict body)
+      in pure $ case A.decode bytes :: Maybe A.Value of
+           Just (A.Object o) ->
+             let mStatus  = AKM.lookup (AKey.fromText "status")  o
+                 mSuccess = AKM.lookup (AKey.fromText "success") o
+             in case (mStatus, mSuccess) of
+                  (Just (A.String s), Just (A.Bool b)) ->
+                    maybe False Env.isLegacySuccess (Env.textToStatus s) == b
+                  _ -> False
+           _ -> False
+    _ -> pure False
+
+-- | The migrated tool keeps the @tools@ + @blocking_gates@ + @summary@
+-- fields inside @result@ so any consumer keying on them via the
+-- legacy shape continues to function during the dual-shape window.
+testToolchainStatusBackcompatFields :: IO Bool
+testToolchainStatusBackcompatFields = do
+  decoded <- runToolEnvelope ToolchainStatusTool.handle (A.object [])
+  pure $ case decoded of
+    Right env -> case Env.reResult env of
+      Just (A.Object payload) ->
+        AKM.member (AKey.fromText "tools")          payload
+          && AKM.member (AKey.fromText "blocking_gates") payload
+          && AKM.member (AKey.fromText "summary")        payload
+      _ -> False
+    Left _ -> False
 
 --------------------------------------------------------------------------------
 -- Phase 9: Lint parser + Cabal validator + check_project + hole fits
