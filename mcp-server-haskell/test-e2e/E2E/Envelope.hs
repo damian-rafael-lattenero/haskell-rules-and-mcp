@@ -141,12 +141,38 @@ fieldInt k v = case lookupField k v of
 -- like @status@ that exist only at the top level are unaffected
 -- (the top-level lookup hits first).
 lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = case KeyMap.lookup (Key.fromText k) o of
+lookupField k v@(Object o) = case KeyMap.lookup (Key.fromText k) o of
   Just inner -> Just inner
-  Nothing    -> case KeyMap.lookup (Key.fromText "result") o of
-    Just (Object r) -> KeyMap.lookup (Key.fromText k) r
-    _               -> Nothing
+  Nothing -> case k of
+    -- Synthesised back-compat for the dropped legacy keys, so a
+    -- raw 'lookupField "success"' / 'lookupField "error_kind"'
+    -- on a post-#90 envelope still resolves to the value it
+    -- used to carry. New code should call 'statusOk' / 'errorKind'
+    -- directly; this branch is only for ergonomic survival of
+    -- the 60+ pre-existing assertion sites.
+    "success"    -> synthesizeSuccessV v
+    "error_kind" -> synthesizeErrorKindV v
+    _ -> case KeyMap.lookup (Key.fromText "result") o of
+      Just (Object r) -> KeyMap.lookup (Key.fromText k) r
+      _               -> Nothing
 lookupField _ _ = Nothing
+
+-- | Synthesise the dropped legacy 'success' field from 'status'.
+-- ok/partial → True; everything else → False; absent → Nothing.
+synthesizeSuccessV :: Value -> Maybe Value
+synthesizeSuccessV (Object o) = case KeyMap.lookup (Key.fromText "status") o of
+  Just (String s)
+    | s == "ok" || s == "partial" -> Just (Bool True)
+    | otherwise                   -> Just (Bool False)
+  _                               -> Nothing
+synthesizeSuccessV _ = Nothing
+
+-- | Synthesise the dropped legacy 'error_kind' from 'error.kind'.
+synthesizeErrorKindV :: Value -> Maybe Value
+synthesizeErrorKindV (Object o) = case KeyMap.lookup (Key.fromText "error") o of
+  Just (Object e) -> KeyMap.lookup (Key.fromText "kind") e
+  _               -> Nothing
+synthesizeErrorKindV _ = Nothing
 
 --------------------------------------------------------------------------------
 -- envelope drilling

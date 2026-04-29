@@ -83,28 +83,56 @@ checkJsonFieldMatches name payload key pred_ detail = Check
       Nothing     -> "field " <> key <> " not present"
   }
 
--- | Look up a field, auto-drilling through the @result@ envelope
--- when the field isn't at the top level (issue #90 Phase D step 2).
+-- | Look up a field with two backwards-compat layers (issue #90
+-- Phase D step 2):
 --
--- The pre-#90 wire format put tool-specific fields at the top
--- level (@type@, @output@, @file@, @raw@, @holes@, etc.); the
--- post-#90 envelope nests them under @result@. To keep oracles
--- ergonomic across the migration window, this helper checks
--- BOTH: top-level first (so envelope discriminators @status@ /
--- @error@ / @nextStep@ resolve directly), then under @result@
--- (so tool-specific payload fields resolve transparently).
+-- 1. Top-level lookup (the original pre-envelope behaviour).
+-- 2. Auto-drill through @result@ for tool-specific payload
+--    fields (@type@, @output@, @file@, @raw@, @holes@, etc.)
+--    that moved under @result@ post-#90 envelope.
+-- 3. Synthesise the deprecated top-level @success@ and
+--    @error_kind@ keys from the canonical @status@ /
+--    @error.kind@ when an oracle still queries them by name.
+--    This is purely a TEST-side shim so the 60+ pre-existing
+--    @checkJsonField "..." "success" (Bool True)@ assertions
+--    keep working without a 60-file mechanical sweep — the
+--    wire format itself no longer emits those fields (see
+--    'HaskellFlows.Mcp.Envelope' Phase D step 2 final).
 --
--- Mirrors the auto-drilling 'lookupField' in 'E2E.Envelope';
--- having both makes the migration survive whether a scenario
--- imports its helpers from Assert ('checkJsonField',
--- 'checkJsonFieldMatches') or from Envelope.
+-- Mirrors 'E2E.Envelope.lookupField' for the auto-drill half.
 lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = case KeyMap.lookup (Key.fromText k) o of
+lookupField k v@(Object o) = case KeyMap.lookup (Key.fromText k) o of
   Just inner -> Just inner
-  Nothing    -> case KeyMap.lookup (Key.fromText "result") o of
-    Just (Object r) -> KeyMap.lookup (Key.fromText k) r
-    _               -> Nothing
+  Nothing -> case k of
+    "success"    -> synthesizeSuccess v
+    "error_kind" -> synthesizeErrorKind v
+    _ -> case KeyMap.lookup (Key.fromText "result") o of
+      Just (Object r) -> KeyMap.lookup (Key.fromText k) r
+      _               -> Nothing
 lookupField _ _ = Nothing
+
+-- | Project the envelope's @status@ discriminator into the
+-- pre-envelope @success :: Bool@ shape: @ok@ / @partial@ → True;
+-- everything else → False. Returns 'Nothing' if the response
+-- has no @status@ field (i.e. it's not an envelope at all).
+synthesizeSuccess :: Value -> Maybe Value
+synthesizeSuccess (Object o) = case KeyMap.lookup (Key.fromText "status") o of
+  Just (String s)
+    | s == "ok"      -> Just (Bool True)
+    | s == "partial" -> Just (Bool True)
+    | otherwise      -> Just (Bool False)
+  _                  -> Nothing
+synthesizeSuccess _ = Nothing
+
+-- | Project the envelope's nested @error.kind@ into the
+-- pre-envelope top-level @error_kind :: Text@ shape. Returns
+-- 'Nothing' if the response has no @error@ object (i.e. a
+-- successful response).
+synthesizeErrorKind :: Value -> Maybe Value
+synthesizeErrorKind (Object o) = case KeyMap.lookup (Key.fromText "error") o of
+  Just (Object errObj) -> KeyMap.lookup (Key.fromText "kind") errObj
+  _                    -> Nothing
+synthesizeErrorKind _ = Nothing
 
 -- | Short, single-line JSON rendering for failure messages.
 -- Truncates at ~200 chars so a multi-KB payload doesn't drown
