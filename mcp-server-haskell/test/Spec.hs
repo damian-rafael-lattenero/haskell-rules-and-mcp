@@ -235,6 +235,7 @@ import qualified HaskellFlows.Tool.Browse as BrowseTool
 import qualified HaskellFlows.Tool.Complete as CompleteTool
 import qualified HaskellFlows.Tool.Doc as DocTool
 import qualified HaskellFlows.Tool.Eval as EvalTool
+import qualified HaskellFlows.Tool.Hole as HoleTool
 import qualified HaskellFlows.Tool.Goto as GotoTool
 import qualified HaskellFlows.Tool.Imports as ImportsTool
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
@@ -478,6 +479,12 @@ main = do
                                                    testEvalRefusesNewline
       , test "Envelope #90 Phase B: ghc_eval refuses sentinel string"
                                                    testEvalRefusesSentinel
+      , test "Envelope #90 Phase B: ghc_hole on module with hole → status=ok"
+                                                   testHoleWithHoleOk
+      , test "Envelope #90 Phase B: ghc_hole on hole-free module → status=no_match"
+                                                   testHoleNoHoleMatch
+      , test "Envelope #90 Phase B: ghc_hole rejects path traversal"
+                                                   testHoleRejectsTraversal
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -3368,6 +3375,76 @@ testEvalRefusesSentinel = do
       , Just err <- Env.reError env ->
           Env.eeKind err == Env.SentinelPoisoning
             && Env.eeField err == Just "expression"
+    _ -> False
+
+-- | Phase B helper: stage a tmpdir project + drive 'HoleTool.handle'.
+-- The stagedSource lets each test write whatever module body it
+-- wants (with or without an actual typed hole).
+runHole :: Text -> A.Value -> IO (Either String Env.ToolResponse)
+runHole stagedSource args = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-hole-test"
+  removePathForcibly dir
+  createDirectoryIfMissing True (dir </> "src")
+  TIO.writeFile (dir </> "src" </> "Foo.hs") stagedSource
+  result <- case mkProjectDir dir of
+    Left _   -> pure (Left "could not build ProjectDir")
+    Right pd -> do
+      sess <- startGhcSession pd
+      tr   <- HoleTool.handle sess pd args
+      killGhcSession sess
+      case trContent tr of
+        [TextContent body] ->
+          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+        _ -> pure (Left "expected exactly one TextContent")
+  removePathForcibly dir
+  pure result
+
+-- | A module with an explicit '_' hole produces status='ok' with
+-- result.holes carrying ≥ 1 entry. Anchors the happy-path
+-- contract: ghc_hole IS the right tool when there are holes.
+testHoleWithHoleOk :: IO Bool
+testHoleWithHoleOk = do
+  let src = T.pack "module Foo where\nfoo :: Int -> Int\nfoo x = _\n"
+  decoded <- runHole src (A.object [ "module_path" A..= ("src/Foo.hs" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          case AKM.lookup (AKey.fromText "hole_count") payload of
+            Just (A.Number n) -> n >= 1
+            _                 -> False
+    _ -> False
+
+-- | A module with no holes produces status='no_match' (the
+-- question — \"where are the typed holes?\" — was well-formed;
+-- the answer is the empty set). Pre-#90 this returned
+-- success=true with hole_count=0 — the same anti-pattern #87
+-- generalises.
+testHoleNoHoleMatch :: IO Bool
+testHoleNoHoleMatch = do
+  let src = T.pack "module Foo where\nfoo :: Int -> Int\nfoo x = x + 1\n"
+  decoded <- runHole src (A.object [ "module_path" A..= ("src/Foo.hs" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusNoMatch
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "hole_count") payload == Just (A.Number 0)
+    _ -> False
+
+-- | A path that escapes the project root is refused via the
+-- mkModulePath gate → status='refused' with kind='path_traversal'.
+testHoleRejectsTraversal :: IO Bool
+testHoleRejectsTraversal = do
+  let src = T.pack "module Foo where\nfoo :: Int\nfoo = 1\n"
+  decoded <- runHole src
+    (A.object [ "module_path" A..= ("../../etc/passwd" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusRefused
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.PathTraversal
+            && Env.eeField err == Just "module_path"
     _ -> False
 
 --------------------------------------------------------------------------------

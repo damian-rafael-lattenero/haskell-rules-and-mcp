@@ -15,9 +15,8 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
   , LoadFlavour (..)
@@ -81,41 +80,66 @@ instance FromJSON HoleArgs where
 handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKind parseError)
+          (T.pack ("Invalid arguments: " <> parseError)))
+            { Env.eeCause = Just (T.pack parseError) })))
   Right (HoleArgs rawPath filt) ->
     case mkModulePath pd (T.unpack rawPath) of
-      Left err -> pure (errorResult (formatPathError err))
+      Left err ->
+        pure (Env.toolResponseToResult (Env.mkRefused
+          ((Env.mkErrorEnvelope Env.PathTraversal (formatPathError err))
+              { Env.eeField = Just "module_path" })))
       Right _ -> do
         tgt <- targetForPath ghcSess (T.unpack rawPath)
         eRes <- try (loadForTarget ghcSess tgt Deferred)
         case eRes :: Either SomeException (Bool, [GhcError]) of
           Left ex ->
-            pure (errorResult ("loadForTarget failed: " <> T.pack (show ex)))
+            pure (Env.toolResponseToResult (Env.mkFailed
+              ((Env.mkErrorEnvelope Env.InternalError
+                  ("loadForTarget failed: " <> T.pack (show ex)))
+                    { Env.eeCause = Just (T.pack (show ex)) })))
           Right (_ok, diags) -> do
             let rendered = renderGhciStyle diags
                 allHoles = parseTypedHoles rendered
                 holes    = case filt of
                   Nothing  -> allHoles
                   Just nm  -> filter ((== nm) . thHole) allHoles
-            pure (successResult rawPath holes)
+                payload  = holesPayload rawPath holes
+            -- Issue #90 §3 + §6: zero-holes case maps to
+            -- 'no_match' (the question — "where are the typed
+            -- holes?" — was well-formed; the answer is the empty
+            -- set). Non-empty → 'ok'.
+            pure $ Env.toolResponseToResult $ case holes of
+              [] -> Env.mkNoMatch payload
+              _  -> Env.mkOk payload
+
+-- | Discriminate the FromJSON failure shape — same heuristic as
+-- the other Phase-B migrations.
+parseErrorKind :: String -> Env.ErrorKind
+parseErrorKind err
+  | "key" `isInfixOfStr` err = Env.MissingArg
+  | otherwise                = Env.TypeMismatch
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 --------------------------------------------------------------------------------
 -- response shaping
 --------------------------------------------------------------------------------
 
-successResult :: Text -> [TypedHole] -> ToolResult
-successResult mp holes =
-  let payload =
-        object
-          [ "success"     .= True
-          , "module_path" .= mp
-          , "hole_count"  .= length holes
-          , "holes"       .= map renderHole holes
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+-- | Holes payload (used by both ok and no_match paths). Issue #90
+-- Phase B keeps the legacy field shape ('module_path',
+-- 'hole_count', 'holes') inside 'result' for the dual-shape
+-- window.
+holesPayload :: Text -> [TypedHole] -> Value
+holesPayload mp holes = object
+  [ "module_path" .= mp
+  , "hole_count"  .= length holes
+  , "holes"       .= map renderHole holes
+  ]
 
 renderHole :: TypedHole -> Value
 renderHole h =
@@ -143,23 +167,9 @@ renderHole h =
         , "source" .= hfSource hf
         ]
 
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
 formatPathError :: PathError -> Text
 formatPathError = \case
   PathNotAbsolute p ->
     "Project directory is not absolute: " <> p
   PathEscapesProject a p _ ->
     "module_path '" <> a <> "' escapes project directory " <> p
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
