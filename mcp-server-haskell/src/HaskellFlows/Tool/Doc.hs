@@ -18,16 +18,15 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
 import GHC (Ghc, getDocs, getNamesInScope)
 import GHC.Types.Name (nameOccName)
 import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Utils.Outputable (showPprUnsafe)
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
-import HaskellFlows.Ghc.Sanitize (CommandError (..), sanitizeExpression)
+import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
@@ -68,21 +67,54 @@ instance FromJSON DocArgs where
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKind parseError)
+          (T.pack ("Invalid arguments: " <> parseError)))
+            { Env.eeCause = Just (T.pack parseError) })))
   Right (DocArgs nm) -> case sanitizeExpression nm of
-    Left e     -> pure (errorResult (formatCommandError e))
+    Left e ->
+      pure (Env.toolResponseToResult (Env.mkRefused (Env.sanitizeRejection "name" e)))
     Right safe -> do
       eRes <- try (withGhcSession ghcSess (queryDoc safe))
-      pure $ case eRes of
+      pure $ Env.toolResponseToResult $ case eRes of
         Left (se :: SomeException) ->
-          errorResult (T.pack ("GHC API error: " <> show se))
+          Env.mkFailed
+            ((Env.mkErrorEnvelope Env.InternalError
+                (T.pack ("GHC API error: " <> show se)))
+                  { Env.eeCause = Just (T.pack (show se)) })
         Right Nothing ->
-          noDocResult safe "Name not in scope"
+          -- Issue #87 + #90: name not in scope → no_match, NOT a
+          -- success-shaped 'hasDoc: false'. The previous response
+          -- was indistinguishable from 'name found, no doc' (also
+          -- success: true). Now the agent gets a clean
+          -- 'status: no_match' with the searched name and a
+          -- reason field for diagnostic context.
+          Env.mkNoMatch (noDocPayload safe "Name not in scope")
         Right (Just Nothing) ->
-          noDocResult safe
-            "No Haddock available (package may have been built without -haddock)"
+          -- Name found, but the package was built without
+          -- -haddock or the symbol carries no doc. Same status
+          -- as 'not in scope' — the request was well-formed and
+          -- the answer is the empty set — but the reason field
+          -- discriminates so the agent can pick a different
+          -- recovery (build with -haddock vs query a different
+          -- name).
+          Env.mkNoMatch (noDocPayload safe
+            "No Haddock available (package may have been built without -haddock)")
         Right (Just (Just t)) ->
-          hasDocResult safe t
+          Env.mkOk (hasDocPayload safe t)
+
+-- | Discriminate the FromJSON failure shape — a missing required
+-- field maps to 'MissingArg'; everything else falls back to
+-- 'TypeMismatch'.
+parseErrorKind :: String -> Env.ErrorKind
+parseErrorKind err
+  | "key" `isInfixOfStr` err = Env.MissingArg
+  | otherwise                = Env.TypeMismatch
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
 
 -- | Result shape:
 --
@@ -111,51 +143,25 @@ queryDoc nm = do
 -- response shaping (unchanged schema)
 --------------------------------------------------------------------------------
 
-hasDocResult :: Text -> Text -> ToolResult
-hasDocResult nm doc =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= True
-        , "name"    .= nm
-        , "hasDoc"  .= True
-        , "doc"     .= T.strip doc
-        ]))
-      ]
-    , trIsError = False
-    }
+-- | Doc-found payload. Issue #90 Phase B: result.{name, hasDoc=true,
+-- doc} — same field names as before so consumers continue to work
+-- during the dual-shape window.
+hasDocPayload :: Text -> Text -> Value
+hasDocPayload nm doc = object
+  [ "name"   .= nm
+  , "hasDoc" .= True
+  , "doc"    .= T.strip doc
+  ]
 
-noDocResult :: Text -> Text -> ToolResult
-noDocResult nm reason =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= True
-        , "name"    .= nm
-        , "hasDoc"  .= False
-        , "reason"  .= reason
-        ]))
-      ]
-    , trIsError = False
-    }
-
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-formatCommandError :: CommandError -> Text
-formatCommandError = \case
-  ContainsNewline  -> "name must be a single line (no newline characters)"
-  ContainsSentinel -> "name contains the internal framing sentinel and was rejected"
-  EmptyInput       -> "name is empty"
-  InputTooLarge sz cap ->
-    "name is too large (" <> T.pack (show sz) <> " chars, cap is "
-      <> T.pack (show cap) <> ")"
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+-- | No-doc payload (rides StatusNoMatch). result.{name, hasDoc=false,
+-- reason}. Two semantically-distinct cases share this shape — name
+-- not in scope vs name in scope but no doc — and the consumer
+-- discriminates via the 'reason' string. Both are 'no_match'
+-- because in both cases the question was well-formed and the
+-- answer is the empty set.
+noDocPayload :: Text -> Text -> Value
+noDocPayload nm reason = object
+  [ "name"   .= nm
+  , "hasDoc" .= False
+  , "reason" .= reason
+  ]

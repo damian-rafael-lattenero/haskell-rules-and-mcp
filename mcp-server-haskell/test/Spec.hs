@@ -233,6 +233,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
 import qualified HaskellFlows.Tool.Browse as BrowseTool
 import qualified HaskellFlows.Tool.Complete as CompleteTool
+import qualified HaskellFlows.Tool.Doc as DocTool
 import qualified HaskellFlows.Tool.Goto as GotoTool
 import qualified HaskellFlows.Tool.Imports as ImportsTool
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
@@ -458,6 +459,12 @@ main = do
                                                    testGotoUnknownNameNoMatch
       , test "Envelope #90 Phase B: ghc_goto refuses newline in name"
                                                    testGotoRefusesNewline
+      , test "Envelope #90 Phase B: ghc_doc with Haddock → status=ok"
+                                                   testDocHasDocOk
+      , test "Envelope #90 Phase B: ghc_doc on unknown name → status=no_match"
+                                                   testDocUnknownNameNoMatch
+      , test "Envelope #90 Phase B: ghc_doc refuses newline in name"
+                                                   testDocRefusesNewline
       , test "parseHlintJson parses list"          testHlintJson
       , test "ghc_lint #81: resolveTarget rejects relative traversal"
                                                    testLintResolveRejectsTraversal
@@ -3143,6 +3150,77 @@ testGotoUnknownNameNoMatch = do
 testGotoRefusesNewline :: IO Bool
 testGotoRefusesNewline = do
   decoded <- runGoto (A.object [ "name" A..= ("foo\n:quit" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusRefused
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.NewlineInjection
+            && Env.eeField err == Just "name"
+    _ -> False
+
+-- | Phase B helper: stage a tmpdir project, drive 'DocTool.handle'.
+runDoc :: A.Value -> IO (Either String Env.ToolResponse)
+runDoc args = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-doc-test"
+  removePathForcibly dir
+  createDirectoryIfMissing True (dir </> "src")
+  TIO.writeFile (dir </> "src" </> "Foo.hs")
+    (T.pack "module Foo where\nfoo :: Int\nfoo = 1\n")
+  result <- case mkProjectDir dir of
+    Left _   -> pure (Left "could not build ProjectDir")
+    Right pd -> do
+      sess <- startGhcSession pd
+      tr   <- DocTool.handle sess args
+      killGhcSession sess
+      case trContent tr of
+        [TextContent body] ->
+          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+        _ -> pure (Left "expected exactly one TextContent")
+  removePathForcibly dir
+  pure result
+
+-- | 'ghc_doc' on a Prelude name (e.g. 'map') usually has Haddock
+-- on a properly-installed base. Status='ok' with result.hasDoc=true.
+-- The test accepts BOTH 'ok' (Haddock available) and 'no_match'
+-- (Haddock missing on this build of base) — the contract is that
+-- a name-in-scope with no doc maps to no_match, not to an error.
+testDocHasDocOk :: IO Bool
+testDocHasDocOk = do
+  decoded <- runDoc (A.object [ "name" A..= ("map" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "hasDoc") payload == Just (A.Bool True)
+            && AKM.member (AKey.fromText "doc") payload
+      | Env.reStatus env == Env.StatusNoMatch
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "hasDoc") payload == Just (A.Bool False)
+            && AKM.member (AKey.fromText "reason") payload
+    _ -> False
+
+-- | 'ghc_doc' on a name that's not in scope → status='no_match'
+-- (NOT a success-shaped 'hasDoc: false', which #87 called out as
+-- the same anti-pattern as ghc_info).
+testDocUnknownNameNoMatch :: IO Bool
+testDocUnknownNameNoMatch = do
+  decoded <- runDoc
+    (A.object [ "name" A..= ("definitelyNotARealName123" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusNoMatch
+      , Just (A.Object payload) <- Env.reResult env ->
+          AKM.lookup (AKey.fromText "name") payload
+            == Just (A.String "definitelyNotARealName123")
+            && AKM.lookup (AKey.fromText "hasDoc") payload == Just (A.Bool False)
+            && AKM.member (AKey.fromText "reason") payload
+    _ -> False
+
+-- | A newline-laden name → status='refused' with kind='newline_injection'.
+testDocRefusesNewline :: IO Bool
+testDocRefusesNewline = do
+  decoded <- runDoc (A.object [ "name" A..= ("foo\n:quit" :: Text) ])
   pure $ case decoded of
     Right env
       | Env.reStatus env == Env.StatusRefused
