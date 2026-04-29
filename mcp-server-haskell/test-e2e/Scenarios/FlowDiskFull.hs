@@ -63,7 +63,7 @@ import E2E.Assert
   , stepHeader
   )
 import qualified E2E.Client as Client
-import E2E.Envelope (statusOk, fieldBool)
+import E2E.Envelope (statusOk, fieldBool, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -162,8 +162,9 @@ runFlow c projectDir = do
 --------------------------------------------------------------------------------
 
 hasField :: Text -> Value -> Bool
-hasField k (Object o) = KeyMap.member (Key.fromText k) o
-hasField _ _          = False
+hasField k v = case lookupField k v of
+  Just _  -> True
+  Nothing -> False
 
 truncRender :: Value -> Text
 truncRender v =

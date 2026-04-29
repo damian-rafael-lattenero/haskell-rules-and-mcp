@@ -200,8 +200,9 @@ runFlow c projectDir = do
 --------------------------------------------------------------------------------
 
 hasField :: Text -> Value -> Bool
-hasField k (Object o) = KeyMap.member (Key.fromText k) o
-hasField _ _          = False
+hasField k v = case lookupField k v of
+  Just _  -> True
+  Nothing -> False
 
 truncRender :: Value -> Text
 truncRender v =

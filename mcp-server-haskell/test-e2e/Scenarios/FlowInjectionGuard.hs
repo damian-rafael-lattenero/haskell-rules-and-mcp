@@ -160,8 +160,9 @@ errorShaped v =
   in success == Just (Bool False) && explanatory
 
 hasField :: Text -> Value -> Bool
-hasField k (Object o) = KeyMap.member (Key.fromText k) o
-hasField _ _          = False
+hasField k v = case lookupField k v of
+  Just _  -> True
+  Nothing -> False
 
 truncRender :: Value -> Text
 truncRender v =

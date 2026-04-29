@@ -68,7 +68,7 @@ import E2E.Assert
   )
 import qualified E2E.Client as Client
 import qualified E2E.Envelope as Env
-import E2E.Envelope (statusOk)
+import E2E.Envelope (statusOk, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 --------------------------------------------------------------------------------
@@ -528,5 +528,6 @@ renderShort v =
   in if T.length s > 300 then T.take 300 s <> "…" else s
 
 hasField :: Text -> Value -> Bool
-hasField k (Object o) = KeyMap.member (Key.fromText k) o
-hasField _ _          = False
+hasField k v = case lookupField k v of
+  Just _  -> True
+  Nothing -> False

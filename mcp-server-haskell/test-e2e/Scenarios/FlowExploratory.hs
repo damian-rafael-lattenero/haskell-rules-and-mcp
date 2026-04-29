@@ -200,10 +200,9 @@ renderShort v =
   in if T.length s > 180 then T.take 180 s <> "…" else s
 
 hasString :: Text -> Value -> Bool
-hasString k (Object o) = case KeyMap.lookup (Key.fromText k) o of
+hasString k v = case lookupField k v of
   Just (String _) -> True
   _               -> False
-hasString _ _          = False
 
 -- suppress unused-binding warning for checkPure (helper pattern,
 -- kept for other flows in this module over time)
