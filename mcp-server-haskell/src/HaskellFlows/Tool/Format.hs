@@ -21,8 +21,6 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (findExecutable)
 import System.Exit (ExitCode (..))
 import System.IO (hClose, hGetContents)
@@ -36,6 +34,7 @@ import System.Process
   )
 import System.Timeout (timeout)
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types
@@ -95,9 +94,9 @@ formatTimeoutMicros = 30 * 1_000_000  -- 30 s
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (parseErrorResult parseError)
   Right args -> case mkModulePath pd (T.unpack (faModulePath args)) of
-    Left e -> pure (errorResult (formatPathError e))
+    Left e -> pure (pathTraversalResult (formatPathError e))
     Right mp -> do
       mFormatter <- resolveFormatter
       case mFormatter of
@@ -106,6 +105,29 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
         Just f -> do
           outcome <- runFormatter pd f mp (faWrite args)
           pure (renderResult f mp (faWrite args) outcome)
+
+-- | Issue #90 Phase C: caller-side parse failure → status='failed'
+-- with kind='missing_arg' (missing key) or 'type_mismatch'.
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
+
+-- | Issue #90 Phase C: 'mkModulePath' rejected the input → that's
+-- a path-traversal refusal. Status='refused', kind='path_traversal'.
+pathTraversalResult :: Text -> ToolResult
+pathTraversalResult msg =
+  Env.toolResponseToResult
+    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
 
 -- | Which formatter we plan to invoke. 'fBinary' is the absolute path
 -- resolved at the time of the call so a mid-call PATH change can't
@@ -168,51 +190,48 @@ runFormatter pd f mp write = do
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: every outcome of the formatter subprocess
+-- maps to a typed envelope:
+--
+-- * 'FmtOk'      → status='ok' with the formatted text under
+--                  'result.formatted'.
+-- * 'FmtTimeout' → status='timeout' with kind='inner_timeout' and
+--                  the 30 s budget surfaced in 'cause' so callers
+--                  can distinguish from the 10-min outer guard.
+-- * 'FmtFailure' → status='failed' with kind='subprocess_error',
+--                  exit code under 'cause', stderr in the message.
 renderResult :: Formatter -> ModulePath -> Bool -> FmtOutcome -> ToolResult
 renderResult _ _ _ (FmtOk out) =
-  let payload =
-        object
-          [ "success"    .= True
-          , "formatted"  .= out
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "formatted" .= out
+    ]))
 renderResult _ _ _ FmtTimeout =
-  errorResult "formatter timed out after 30 seconds"
+  let envErr = (Env.mkErrorEnvelope Env.InnerTimeout
+                  ("formatter timed out after 30 seconds" :: Text))
+                 { Env.eeCause = Just "30s" }
+  in Env.toolResponseToResult (Env.mkTimeout envErr)
 renderResult _ _ _ (FmtFailure code err) =
-  errorResult ( "formatter exited with code " <> T.pack (show code)
-             <> ": " <> T.strip err )
+  let msg    = "formatter exited with code " <> T.pack (show code)
+                 <> ": " <> T.strip err
+      envErr = (Env.mkErrorEnvelope Env.SubprocessError msg)
+                 { Env.eeCause = Just (T.pack (show code)) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
 
+-- | Issue #90 Phase C: neither fourmolu nor ormolu on PATH →
+-- status='unavailable', kind='binary_unavailable'. The
+-- 'remediation' string lives under 'result' so it stays readable
+-- even when the consumer is showing an error banner.
 unavailableResult :: Text -> ToolResult
 unavailableResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success"     .= False
-        , "error"       .= msg
-        , "remediation" .= ( "Install fourmolu (`cabal install fourmolu`) \
+  let payload  = object
+        [ "remediation" .= ( "Install fourmolu (`cabal install fourmolu`) \
                             \or ormolu and retry." :: Text )
-        ]))
-      ]
-    , trIsError = True
-    }
-
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
+        ]
+      envErr   = Env.mkErrorEnvelope Env.BinaryUnavailable msg
+      response = (Env.mkUnavailable envErr) { Env.reResult = Just payload }
+  in Env.toolResponseToResult response
 
 formatPathError :: PathError -> Text
 formatPathError = \case
   PathNotAbsolute p        -> "Project directory is not absolute: " <> p
   PathEscapesProject a p _ -> "module_path '" <> a <> "' escapes project directory " <> p
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

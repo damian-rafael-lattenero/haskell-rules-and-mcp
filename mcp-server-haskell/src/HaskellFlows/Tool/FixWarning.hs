@@ -26,9 +26,8 @@ import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
@@ -250,42 +249,42 @@ writePatched full plan args body = do
         Left e  -> pure (errorResult (T.pack ("Could not write: " <> show e)))
         Right _ -> pure (appliedResult full plan args)
 
+-- | Issue #90 Phase C: read-only preview → status='ok' with the
+-- plan ('fixable', 'patch', 'hint', 'dropLine') under 'result'.
+-- 'applied=False' is the explicit signal callers branch on.
 previewResult :: FilePath -> FixPlan -> FixWarningArgs -> ToolResult
 previewResult path plan args =
-  let payload = object
-        [ "success"   .= True
-        , "applied"   .= False
-        , "fixable"   .= fpFixable plan
-        , "path"      .= T.pack path
-        , "code"      .= fwCode args
-        , "line"      .= fwLine args
-        , "hint"      .= fpHint plan
-        , "dropLine"  .= fpDrop plan
-        , "patch"     .= fpPatch plan
-        ]
-  in ToolResult { trContent = [ TextContent (encodeUtf8Text payload) ], trIsError = False }
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "applied"   .= False
+    , "fixable"   .= fpFixable plan
+    , "path"      .= T.pack path
+    , "code"      .= fwCode args
+    , "line"      .= fwLine args
+    , "hint"      .= fpHint plan
+    , "dropLine"  .= fpDrop plan
+    , "patch"     .= fpPatch plan
+    ]))
 
+-- | Issue #90 Phase C: in-place patch → status='ok' with
+-- 'applied=True'. Same shape as preview minus 'dropLine' (the
+-- caller doesn't need it once the patch is on disk).
 appliedResult :: FilePath -> FixPlan -> FixWarningArgs -> ToolResult
 appliedResult path plan args =
-  let payload = object
-        [ "success"  .= True
-        , "applied"  .= True
-        , "fixable"  .= fpFixable plan
-        , "path"     .= T.pack path
-        , "code"     .= fwCode args
-        , "line"     .= fwLine args
-        , "hint"     .= fpHint plan
-        , "patch"    .= fpPatch plan
-        ]
-  in ToolResult { trContent = [ TextContent (encodeUtf8Text payload) ], trIsError = False }
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "applied"  .= True
+    , "fixable"  .= fpFixable plan
+    , "path"     .= T.pack path
+    , "code"     .= fwCode args
+    , "line"     .= fwLine args
+    , "hint"     .= fpHint plan
+    , "patch"    .= fpPatch plan
+    ]))
 
+-- | Issue #90 Phase C: bad input / IO failure / 'patch would
+-- empty file' refusal → status='failed', kind='validation'.
+-- Path-traversal failures from 'mkModulePath' surface here too;
+-- the structured PathError is in the message body.
 errorResult :: Text -> ToolResult
 errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False, "error" .= msg ])) ]
-    , trIsError = True
-    }
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg))

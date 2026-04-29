@@ -33,8 +33,6 @@ import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
 import GHC
   ( Ghc
@@ -67,9 +65,9 @@ import HaskellFlows.Ghc.ApiSession
   , withGhcSession
   )
 import HaskellFlows.Ghc.Sanitize
-  ( CommandError (..)
-  , sanitizeExpression
+  ( sanitizeExpression
   )
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error (GhcError)
@@ -114,15 +112,18 @@ instance FromJSON ArbitraryArgs where
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+    pure (parseErrorResult parseError)
   Right (ArbitraryArgs tname) -> case sanitizeExpression tname of
-    Left cmdErr -> pure (errorResult (formatCommandError cmdErr))
+    Left cmdErr ->
+      pure (Env.toolResponseToResult
+              (Env.mkRefused (Env.sanitizeRejection "type_name" cmdErr)))
     Right safe -> do
       tgt <- firstLibraryOrTestSuite ghcSess
       eLoad <- try (loadForTarget ghcSess tgt Strict)
       case eLoad :: Either SomeException (Bool, [GhcError]) of
         Left ex ->
-          pure (errorResult ("loadForTarget failed: " <> T.pack (show ex)))
+          pure (subprocessErr
+                  ("loadForTarget failed: " <> T.pack (show ex)))
         Right _ -> do
           -- loadForTarget already primed the session with the
           -- correct stanza flags + setContext. Don't wrap in
@@ -132,20 +133,65 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
           eRes <- try (withGhcSession ghcSess (renderTyThing safe))
           case eRes :: Either SomeException (Maybe Text) of
             Left ex ->
-              pure (errorResult ("'" <> safe <> "' not in scope: " <> T.pack (show ex)))
+              pure (notInScopeErr
+                      ("'" <> safe <> "' not in scope: " <> T.pack (show ex)))
             Right Nothing ->
-              pure (errorResult ("'" <> safe <> "' not in scope (getInfo=Nothing)"))
+              pure (notInScopeErr
+                      ("'" <> safe <> "' not in scope (getInfo=Nothing)"))
             Right (Just rendered)
-              | isOutOfScope rendered -> pure (errorResult rendered)
+              | isOutOfScope rendered -> pure (notInScopeErr rendered)
               | otherwise -> do
                   let params = parseTypeParams rendered
                   case parseConstructors rendered of
-                    []    -> pure (errorResult
+                    []    -> pure (validationErr
                               ( "No constructors parsed for '" <> safe
                               <> "'. It may be a GADT, typeclass, or type synonym — "
                               <> "those need a hand-written Arbitrary." ))
                     ctors -> pure (successResult safe ctors
                                     (renderTemplate safe params ctors))
+
+-- | Issue #90 Phase C: caller-side parse failure → status='failed'
+-- with kind='missing_arg' or 'type_mismatch' (Aeson FromJSON
+-- failure messages tell us which).
+parseErrorResult :: String -> ToolResult
+parseErrorResult err =
+  let kind | "key" `isInfixOfStr` err = Env.MissingArg
+           | otherwise                = Env.TypeMismatch
+      envErr = (Env.mkErrorEnvelope kind
+                  (T.pack ("Invalid arguments: " <> err)))
+                    { Env.eeCause = Just (T.pack err) }
+  in Env.toolResponseToResult (Env.mkFailed envErr)
+  where
+    isInfixOfStr needle haystack =
+      let n = length needle
+      in any (\i -> take n (drop i haystack) == needle)
+             [0 .. length haystack - n]
+
+-- | Issue #90 Phase C: lookup miss (parseName/getInfo failed
+-- because the type isn't in scope) → status='no_match' with
+-- kind='not_in_scope'. Distinct from a validation failure: the
+-- input was syntactically fine, just absent.
+notInScopeErr :: Text -> ToolResult
+notInScopeErr msg =
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.NotInScope msg))
+
+-- | Issue #90 Phase C: structural rejection of types we can't
+-- template (GADTs, typeclasses, type synonyms) → kind='validation'.
+-- The input is syntactically a type name and is in scope; we just
+-- don't have a template generator for its shape.
+validationErr :: Text -> ToolResult
+validationErr msg =
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg))
+
+-- | Issue #90 Phase C: unexpected GHC API exception
+-- (loadForTarget threw) → kind='subprocess_error'. The exception
+-- text is preserved verbatim in the message body.
+subprocessErr :: Text -> ToolResult
+subprocessErr msg =
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
 
 -- | Resolve the name and render the resulting 'TyThing' in the
 -- exact @data T = A | B Int | ...@ shape @:info@ would print.
@@ -424,23 +470,20 @@ renderRhsSized typeName c = case cArgs c of
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | Issue #90 Phase C: rendered template → status='ok'. All the
+-- caller-facing fields ('type_name', 'constructors', 'template',
+-- 'hint') stay under 'result' so existing consumers keep working.
 successResult :: Text -> [Constructor] -> Text -> ToolResult
 successResult typeName ctors tmpl =
-  let payload =
-        object
-          [ "success"      .= True
-          , "type_name"    .= typeName
-          , "constructors" .= map renderCtor ctors
-          , "template"     .= tmpl
-          , "hint"         .= ( "Paste the template into the module that \
-                               \defines '" <> typeName <> "'. If the type is \
-                               \polymorphic, add an Arbitrary constraint on \
-                               \each type variable." :: Text )
-          ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = False
-       }
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "type_name"    .= typeName
+    , "constructors" .= map renderCtor ctors
+    , "template"     .= tmpl
+    , "hint"         .= ( "Paste the template into the module that \
+                         \defines '" <> typeName <> "'. If the type is \
+                         \polymorphic, add an Arbitrary constraint on \
+                         \each type variable." :: Text )
+    ]))
 
 renderCtor :: Constructor -> Value
 renderCtor c =
@@ -449,26 +492,3 @@ renderCtor c =
     , "arity" .= length (cArgs c)
     , "args"  .= cArgs c
     ]
-
-errorResult :: Text -> ToolResult
-errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False
-        , "error"   .= msg
-        ]))
-      ]
-    , trIsError = True
-    }
-
-formatCommandError :: CommandError -> Text
-formatCommandError = \case
-  ContainsNewline  -> "type_name must be a single line (no newline characters)"
-  ContainsSentinel -> "type_name contains the internal framing sentinel and was rejected"
-  EmptyInput       -> "type_name is empty"
-  InputTooLarge sz cap ->
-    "type_name is too large (" <> T.pack (show sz) <> " chars, cap is "
-      <> T.pack (show cap) <> ")"
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

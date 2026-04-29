@@ -14,9 +14,8 @@ import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.ModuleName (isReservedKeyword)
@@ -129,37 +128,45 @@ injectExports exports headerLine =
            <> ") where"
        _ -> headerLine
 
+-- | Issue #90 Phase C: applied rewrite → status='ok', payload
+-- carries the (path, exports) tuple so callers know what landed.
 successResult :: FilePath -> [Text] -> ToolResult
 successResult path exports =
-  let payload = object
-        [ "success"    .= True
-        , "path"       .= T.pack path
-        , "exports"    .= exports
-        ]
-  in ToolResult { trContent = [ TextContent (encodeUtf8Text payload) ], trIsError = False }
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "path"    .= T.pack path
+    , "exports" .= exports
+    ]))
 
+-- | Issue #90 Phase C: idempotent no-op → status='ok' with
+-- 'no_change=True' under 'result'. Same predicate as before
+-- (callers branched on @no_change@), unchanged.
 noChangeResult :: FilePath -> ToolResult
 noChangeResult path =
-  let payload = object
-        [ "success"   .= True
-        , "path"      .= T.pack path
-        , "no_change" .= True
-        , "reason"    .= ("The module header already has an export list, \
-                          \or no `module Foo where` line was found." :: Text)
-        ]
-  in ToolResult { trContent = [ TextContent (encodeUtf8Text payload) ], trIsError = False }
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "path"      .= T.pack path
+    , "no_change" .= True
+    , "reason"    .= ("The module header already has an export list, \
+                      \or no `module Foo where` line was found." :: Text)
+    ]))
 
+-- | Issue #90 Phase C: bad-input / IO failure path → status='failed',
+-- kind='validation' (input was structurally fine but failed a
+-- domain check or filesystem operation). Path-traversal cases are
+-- caught at 'mkModulePath' and surface here as 'Validation' too —
+-- the structured PathError is in the message body.
 errorResult :: Text -> ToolResult
 errorResult msg =
-  ToolResult
-    { trContent = [ TextContent (encodeUtf8Text (object
-        [ "success" .= False, "error" .= msg ])) ]
-    , trIsError = True
-    }
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg))
 
 -- | ISSUE-47: structured rejection when at least one export is a
 -- Haskell reserved keyword. The agent gets the offending names
 -- back so it can fix and retry in one shot.
+--
+-- Issue #90 Phase C: status='refused' (the input was rejected by
+-- a hard pre-flight gate, like newline injection / oversized
+-- input) with kind='validation'. The 'rejected' / 'hint' fields
+-- stay under 'result' so consumers can iterate per-bad-export.
 exportRejectionResult :: [Text] -> ToolResult
 exportRejectionResult badNames =
   let n        = length badNames
@@ -177,22 +184,16 @@ exportRejectionResult badNames =
                  | name <- badNames
                  ]
       payload = object
-        [ "success"  .= False
-        , "error"    .= summary
-        , "rejected" .= rendered
+        [ "rejected" .= rendered
         , "hint"     .= ("Exports must be valid Haskell entities: \
                          \function names, types, constructor sub-lists \
                          \('Foo (..)'), or module re-exports \
                          \('module Foo'). Keywords (module, where, \
                          \class, ...) are not legal exports." :: Text)
         ]
-  in ToolResult
-       { trContent = [ TextContent (encodeUtf8Text payload) ]
-       , trIsError = True
-       }
+      envErr   = Env.mkErrorEnvelope Env.Validation summary
+      response = (Env.mkRefused envErr) { Env.reResult = Just payload }
+  in Env.toolResponseToResult response
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show
-
-encodeUtf8Text :: Value -> Text
-encodeUtf8Text = TL.toStrict . TLE.decodeUtf8 . encode

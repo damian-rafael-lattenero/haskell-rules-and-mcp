@@ -6850,10 +6850,12 @@ testHandleApplyExportsRefusesKeyword = withFixture $ \pd _ -> do
         ]
   result <- ApplyExports.handle pd args
   bodyAfter <- TIO.readFile modulePath
+  -- Issue #90 Phase C: 'rejected' moved under 'result' inside the
+  -- envelope. The 'resultPayload' helper drills through.
   pure
     (  trIsError result
     && bodyAfter == original
-    && hasField "rejected" (extractPayload result)
+    && hasField "rejected" (resultPayload result)
     )
 
 -- | 'ghc_apply_exports' regression: lowercase function-name exports
