@@ -437,6 +437,10 @@ main = do
                                                    testEveryToolPublishesValidSchema
       , test "nextStep · every recommended tool is in the registry (#95)"
                                                    testNextStepReferencesRegisteredToolsOnly
+      , test "Tool descriptors · every tool has a non-empty description"
+                                                   testEveryToolHasNonEmptyDescription
+      , test "Tool descriptors · every tdName is in the canonical ADT"
+                                                   testEveryToolNameIsCanonical
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
       , test "validatePackageName accepts normal"  testPkgAccepts
@@ -2345,6 +2349,42 @@ testNextStepReferencesRegisteredToolsOnly = do
     toolsReferencedBy ns =
       nsTool ns
         : maybe [] (map csTool) (nsChain ns)
+
+-- | Every registered tool descriptor must carry a non-empty
+-- 'tdDescription'. The string surfaces in 'tools/list' and is
+-- the primary affordance an LLM agent has for picking the right
+-- tool — an empty / whitespace-only description is a real bug
+-- (a host's selector menu would just show the bare tool name
+-- with no context). This anchor catches a future contributor
+-- who adds a tool with an empty 'tdDescription'.
+testEveryToolHasNonEmptyDescription :: IO Bool
+testEveryToolHasNonEmptyDescription = do
+  let bad =
+        [ tdName d
+        | d <- allToolDescriptors
+        , T.null (T.strip (tdDescription d))
+        ]
+  unless (null bad) $
+    putStrLn ("Tools with empty description: " <> show bad)
+  pure (null bad)
+
+-- | Every tool's name must be in the canonical 'allToolNames'
+-- ADT enumeration — protects against a tool whose descriptor
+-- references a non-canonical or hand-stringified name. With
+-- 'tdName' currently typed as 'Text' (rather than 'ToolName'
+-- directly), this is the runtime invariant the type system
+-- doesn't enforce on its own.
+testEveryToolNameIsCanonical :: IO Bool
+testEveryToolNameIsCanonical = do
+  let nameSet = Set.fromList (map toolNameText allToolNames)
+      bad =
+        [ tdName d
+        | d <- allToolDescriptors
+        , tdName d `Set.notMember` nameSet
+        ]
+  unless (null bad) $
+    putStrLn ("Tools with non-canonical name: " <> show bad)
+  pure (null bad)
 
 -- | Round-trip a property through the on-disk store. Uses a unique
 -- temp project dir to keep repeated test runs independent.
