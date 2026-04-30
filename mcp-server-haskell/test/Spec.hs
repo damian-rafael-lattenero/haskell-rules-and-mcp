@@ -1758,14 +1758,19 @@ testBoolFieldRejectsTruthy =
 -- unusable from stringifying clients pre-fix).
 testRefactorPermissiveLineRange :: IO Bool
 testRefactorPermissiveLineRange = do
+  -- Issue #92 Phase B note: old_name is now a parse-time
+  -- requirement for rename_local (the schema declares it,
+  -- the FromJSON enforces it). The payload here includes it
+  -- so the test exercises the *stringified primitive* axis
+  -- without colliding with the per-action required-field axis.
   let nativeJson =
         "{\"action\":\"rename_local\",\"module_path\":\"src/X.hs\",\
-        \\"new_name\":\"newSym\",\"scope_line_start\":17,\
-        \\"scope_line_end\":42}"
+        \\"old_name\":\"oldSym\",\"new_name\":\"newSym\",\
+        \\"scope_line_start\":17,\"scope_line_end\":42}"
       stringJson =
         "{\"action\":\"rename_local\",\"module_path\":\"src/X.hs\",\
-        \\"new_name\":\"newSym\",\"scope_line_start\":\"17\",\
-        \\"scope_line_end\":\"42\"}"
+        \\"old_name\":\"oldSym\",\"new_name\":\"newSym\",\
+        \\"scope_line_start\":\"17\",\"scope_line_end\":\"42\"}"
   -- Both must decode (no parse error). The pre-fix behaviour was:
   -- nativeJson decoded, stringJson rejected with an Aeson error
   -- string. Post-fix both succeed.
