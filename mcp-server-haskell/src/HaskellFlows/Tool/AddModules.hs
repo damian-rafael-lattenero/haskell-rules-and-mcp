@@ -466,9 +466,9 @@ rejectionResult entries =
                               <> "; see 'rejected' for details"
       rendered = [ object
                      [ "name"   .= name
-                     , "reason" .= renderModuleNameError err
+                     , "reason" .= renderModuleNameError mnErr
                      ]
-                 | (name, err) <- entries
+                 | (name, mnErr) <- entries
                  ]
       err = (Env.mkErrorEnvelope Env.Validation summary)
               { Env.eeField = Just "modules"
