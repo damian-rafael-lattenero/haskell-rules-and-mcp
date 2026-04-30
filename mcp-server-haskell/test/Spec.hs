@@ -445,6 +445,10 @@ main = do
                                                    testEveryToolNameIsShort
       , test "Tool descriptors · tdDescription ≥ 20 chars"
                                                    testEveryToolDescriptionIsSubstantive
+      , test "nextStep · nsExample is JSON Object when present (#95)"
+                                                   testNextStepExampleIsObjectWhenPresent
+      , test "nextStep · every chain-step carries Object args (#95)"
+                                                   testNextStepChainStepsCarryObjectArgs
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
       , test "validatePackageName accepts normal"  testPkgAccepts
@@ -2421,6 +2425,51 @@ testEveryToolDescriptionIsSubstantive = do
   unless (null bad) $
     putStrLn ("Tools with too-short descriptions: " <> show bad)
   pure (null bad)
+
+-- | When 'suggestNext' attaches an 'nsExample', it must be a
+-- JSON Object — the @ghc_batch@ / direct-call shape an agent
+-- can pass straight to the recommended tool. An Array or
+-- primitive would never decode as args.
+testNextStepExampleIsObjectWhenPresent :: IO Bool
+testNextStepExampleIsObjectWhenPresent = do
+  let payload  = object []
+      attempts = [ (n, suggestNext n True payload) | n <- allToolNames ]
+      bad =
+        [ toolNameText n
+        | (n, Just ns) <- attempts
+        , Just v <- [nsExample ns]
+        , not (isObject v)
+        ]
+  unless (null bad) $
+    putStrLn ("Tools whose nextStep.example isn't an Object: " <> show bad)
+  pure (null bad)
+  where
+    isObject (A.Object _) = True
+    isObject _            = False
+
+-- | Every 'nsChain' step must carry an Object as its args. A
+-- non-Object would crash 'ghc_batch' when the agent forwards
+-- the chain. This is the chain-time analogue of the
+-- nsExample invariant above.
+testNextStepChainStepsCarryObjectArgs :: IO Bool
+testNextStepChainStepsCarryObjectArgs = do
+  let payload  = object []
+      attempts = [ (n, suggestNext n True payload) | n <- allToolNames ]
+      bad =
+        [ (toolNameText n, toolNameText (csTool s))
+        | (n, Just ns) <- attempts
+        , chain        <- maybeToList (nsChain ns)
+        , s            <- chain
+        , not (isObject (csArgs s))
+        ]
+  unless (null bad) $
+    putStrLn ("Chain steps with non-Object args: " <> show bad)
+  pure (null bad)
+  where
+    isObject (A.Object _) = True
+    isObject _            = False
+    maybeToList Nothing   = []
+    maybeToList (Just xs) = [xs]
 
 -- | Round-trip a property through the on-disk store. Uses a unique
 -- temp project dir to keep repeated test runs independent.
