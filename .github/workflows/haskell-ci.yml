@@ -94,23 +94,29 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        cabal: ["3.12.1.0"]
         # Asymmetric matrix: each (GHC) gets a unique shard
         # divisor so the same "i/N" pattern never repeats across
         # cells. 9.10.1 splits 2-way (smaller, older GHC), 9.12.2
         # splits 4-way (newer, gating GHC; finer-grained for
         # faster per-cell wall-clock). Total = 2 + 4 = 6 ubuntu
-        # cells, all blocking. The E2E.Sharding harness honours
-        # arbitrary "i/n" so both split widths work without harness
-        # changes; full e2e coverage is achieved per-GHC via the
-        # union of that GHC's cells.
+        # cells, all blocking.
+        #
+        # include-ONLY (no base keys); each entry is a full cell.
+        # If we kept e.g. `cabal: ["3.12.1.0"]` as a base key,
+        # GitHub Actions would treat the include entries as
+        # overrides on the single base cell rather than as
+        # standalone cells, collapsing the whole matrix to one
+        # cell with the values of the LAST include entry. (The
+        # previous shape of this matrix did exactly that — one
+        # commit shipped with a single ubuntu/9.12.2 shard 4/4
+        # cell instead of all six. Lesson pinned in the comment.)
         include:
-          - { ghc: "9.10.1", shard: "1/2" }
-          - { ghc: "9.10.1", shard: "2/2" }
-          - { ghc: "9.12.2", shard: "1/4" }
-          - { ghc: "9.12.2", shard: "2/4" }
-          - { ghc: "9.12.2", shard: "3/4" }
-          - { ghc: "9.12.2", shard: "4/4" }
+          - { ghc: "9.10.1", cabal: "3.12.1.0", shard: "1/2" }
+          - { ghc: "9.10.1", cabal: "3.12.1.0", shard: "2/2" }
+          - { ghc: "9.12.2", cabal: "3.12.1.0", shard: "1/4" }
+          - { ghc: "9.12.2", cabal: "3.12.1.0", shard: "2/4" }
+          - { ghc: "9.12.2", cabal: "3.12.1.0", shard: "3/4" }
+          - { ghc: "9.12.2", cabal: "3.12.1.0", shard: "4/4" }
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -253,18 +259,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        cabal: ["3.12.1.0"]
         # Asymmetric matrix: 9.10.1 splits 2-way, 9.12.2 splits
-        # 3-way. Use 'include' instead of a cross-product because
-        # the shard list differs per GHC version. Total = 5 cells,
-        # which fits the free-tier macOS concurrent-runner cap for
-        # a single in-flight run.
+        # 3-way. include-ONLY (no base keys) — see ubuntu matrix
+        # comment above for why. Total = 5 cells, which fits the
+        # free-tier macOS concurrent-runner cap for a single
+        # in-flight run.
         include:
-          - { ghc: "9.10.1", shard: "1/2" }
-          - { ghc: "9.10.1", shard: "2/2" }
-          - { ghc: "9.12.2", shard: "1/3" }
-          - { ghc: "9.12.2", shard: "2/3" }
-          - { ghc: "9.12.2", shard: "3/3" }
+          - { ghc: "9.10.1", cabal: "3.12.1.0", shard: "1/2" }
+          - { ghc: "9.10.1", cabal: "3.12.1.0", shard: "2/2" }
+          - { ghc: "9.12.2", cabal: "3.12.1.0", shard: "1/3" }
+          - { ghc: "9.12.2", cabal: "3.12.1.0", shard: "2/3" }
+          - { ghc: "9.12.2", cabal: "3.12.1.0", shard: "3/3" }
     runs-on: macos-latest
     continue-on-error: true
     steps:
