@@ -47,12 +47,22 @@ module PathTraversal
     -- * Generator (exposed so Spec can also use it for ad-hoc tests)
   , arbitraryAdversarialPath
   , shrinkAdversarialPath
+    -- * Filesystem-aware fuzz (Issue #100 Phase B)
+  , testSymlinkEscapeAcceptedByPureGuard
   ) where
 
+import Control.Exception (IOException, try)
+import Control.Monad (unless)
 import Data.Either (isLeft)
 import qualified Data.List as L
 import qualified Data.Text as T
-import System.Directory (createDirectoryIfMissing, getTemporaryDirectory)
+import System.Directory
+  ( canonicalizePath
+  , createDirectoryIfMissing
+  , createFileLink
+  , getTemporaryDirectory
+  , removeFile
+  )
 import System.FilePath ((</>), normalise)
 import Test.QuickCheck
 
@@ -314,3 +324,110 @@ getPropertyProjectDir = do
   case mkProjectDir dir of
     Right pd -> pure pd
     Left  e  -> error ("getPropertyProjectDir: " <> show e)
+
+--------------------------------------------------------------------------------
+-- Issue #100 Phase B: filesystem-aware fuzz layer
+--
+-- Phase A's properties operate purely lexically — they never touch
+-- the filesystem. That's correct for what 'mkModulePath' actually
+-- implements (segment-based string manipulation), but leaves a
+-- documented gap: a symlink that the pure guard accepts can still
+-- escape to anywhere on disk once the kernel resolves it.
+--
+-- Concrete shape:
+--
+--   project_root/
+--   └── src/
+--       └── escape  →  /etc            (symlink planted at setup)
+--
+--   mkModulePath project_root \"src/escape/passwd\"
+--     ↦ Right (modulePath = project_root/src/escape/passwd)   (ACCEPTS)
+--   System.Directory.canonicalizePath that result
+--     ↦ /etc/passwd                                           (ESCAPES)
+--
+-- Phase D (defence-in-depth) would close that gap by adding a
+-- runtime canonicalize-and-check at every read/write site.
+-- Phase B (here) DOCUMENTS the gap as a test so a future
+-- contributor who lands Phase D can flip this assertion to its
+-- complement (canonical IS inside) and have a regression-fast
+-- canary.
+--
+-- This test is structured as a one-shot 'IO Bool' — wired into
+-- the unit-test list in Spec.hs without any QuickCheck
+-- generator. Cheap (one symlink + one canonicalize call) and
+-- self-contained.
+--------------------------------------------------------------------------------
+
+-- | Plant a symlink inside a fresh tmp project, then exercise
+-- both the pure guard and the canonical resolution.
+--
+-- Asserts:
+--
+--   1. 'mkModulePath' ACCEPTS @\"src/escape/whatever\"@ (no @..@
+--      segments — segment-based guard sees nothing wrong).
+--   2. 'canonicalizePath' on the accepted path resolves OUTSIDE
+--      the project root (escapes via the symlink).
+--
+-- The second assertion is the load-bearing one: it pins the gap
+-- the meta-issue calls out. When Phase D lands and adds the
+-- canonical-prefix check at read time, this test should be
+-- updated to assert the OPPOSITE invariant — and the symlink
+-- attack stops working.
+--
+-- Skipped silently if the test environment doesn't support
+-- symlinks (Windows without admin privileges, exotic
+-- filesystems, etc.) — there's no value in a flake.
+testSymlinkEscapeAcceptedByPureGuard :: IO Bool
+testSymlinkEscapeAcceptedByPureGuard = do
+  tmp <- getTemporaryDirectory
+  let projectDir = tmp </> "haskell-flows-symlink-fuzz"
+      srcDir     = projectDir </> "src"
+      linkPath   = srcDir </> "escape"
+      -- /etc is universally readable on POSIX and exists on
+      -- every CI runner. We never actually read through the
+      -- symlink — only assert that canonicalize sees it land
+      -- outside the project root.
+      attackTgt  = "/etc"
+  createDirectoryIfMissing True srcDir
+  -- Use bracket-style cleanup: remove pre-existing link, then
+  -- plant a fresh one. Ignore errors (test-environment-permissive).
+  _ <- (try (removeFile linkPath) :: IO (Either IOException ()))
+  symlinkResult <- (try (createFileLink attackTgt linkPath)
+                      :: IO (Either IOException ()))
+  case symlinkResult of
+    Left _  -> do
+      -- Symlinks unavailable on this filesystem; treat as PASS
+      -- (the test had nothing to verify). A noisy skip would
+      -- cause flakes on Windows runners; silent skip keeps CI
+      -- predictable.
+      putStrLn "  (skipped: symlinks unavailable on this filesystem)"
+      pure True
+    Right () -> do
+      let pdRes = mkProjectDir projectDir
+      case pdRes of
+        Left e   -> do
+          putStrLn ("  symlink-fuzz setup failed: " <> show e)
+          pure False
+        Right pd ->
+          case mkModulePath pd "src/escape/some_target" of
+            Left _ -> do
+              putStrLn "  pure guard rejected — symlink escape impossible \
+                       \(unexpected; was supposed to surface the gap)"
+              pure False
+            Right mp -> do
+              -- The pure guard accepted. Now ask the kernel:
+              -- where does the resolved path actually point?
+              canon <- canonicalizePath (unModulePath mp)
+              rootCanon <- canonicalizePath (unProjectDir pd)
+              -- If 'canon' starts with 'rootCanon', symlink got
+              -- resolved within the project; otherwise we've
+              -- escaped — exactly the failure shape the test
+              -- documents. PASS = escape detected (gap exists,
+              -- Phase D needed).
+              let escaped =
+                    not (rootCanon == canon
+                          || (rootCanon <> "/") `L.isPrefixOf` canon)
+              unless escaped $
+                putStrLn ("  symlink resolved INSIDE root unexpectedly. \
+                          \root=" <> rootCanon <> " resolved=" <> canon)
+              pure escaped

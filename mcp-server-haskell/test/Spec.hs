@@ -392,6 +392,8 @@ main = do
                                                    PathTraversal.prop_pathGuard_lint_resolveTarget_consistent
       , quickTest "path guard · any '..' segment always rejected (#100)"
                                                    PathTraversal.prop_pathGuard_dotdot_always_rejected
+      , test "path guard · symlink escape detected (#100 Phase B)"
+                                                   PathTraversal.testSymlinkEscapeAcceptedByPureGuard
       -- Issue #92 Phase A · discriminated schema helpers
       , test "Schema · top-level oneOf shape (#92)"
                                                    testSchemaTopLevelOneOf
