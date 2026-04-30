@@ -52,7 +52,7 @@ module PathTraversal
 import Data.Either (isLeft)
 import qualified Data.List as L
 import qualified Data.Text as T
-import System.Directory (canonicalizePath, createDirectoryIfMissing, getTemporaryDirectory)
+import System.Directory (createDirectoryIfMissing, getTemporaryDirectory)
 import System.FilePath ((</>), normalise)
 import Test.QuickCheck
 
@@ -228,36 +228,35 @@ instance Arbitrary AdversarialPath where
 --------------------------------------------------------------------------------
 
 -- | The load-bearing security invariant. For any path the pure
--- guard accepts, the canonically-resolved absolute form must live
--- strictly inside the canonical project root. Any divergence is
--- a CWE-22 bypass.
+-- guard accepts, the resolved absolute form must lexically live
+-- inside the project root.
 --
--- Uses 'ioProperty' because canonicalization is impure (it walks
--- the filesystem). Each test case sets up a tmp project root once
--- and reuses it across samples — the project root is not mutated
--- by the property, only inspected.
+-- Compared lexically (NOT via 'canonicalizePath'). The Phase-A
+-- guard is segment-based and operates entirely on lexical paths;
+-- this property witnesses what the guard actually does. Phase D
+-- (defence-in-depth) is the place to add a canonical-path check —
+-- doing it here would diverge from what the guard implements and
+-- spuriously fail on systems where the tmp dir is itself a
+-- symlink (macOS: @\/var\/folders\/...@ canonicalises to
+-- @\/private\/var\/folders\/...@; the lexical check stays
+-- consistent).
 prop_pathGuard_canonical_invariant :: Property
 prop_pathGuard_canonical_invariant =
   withMaxSuccess 1000 $
     forAllShrink (unAdversarialPath <$> arbitrary) shrinkAdversarialPath $
       \rawPath -> ioProperty $ do
-        pd       <- getPropertyProjectDir
-        rootCanon <- canonicalizePath (unProjectDir pd)
+        pd <- getPropertyProjectDir
         case mkModulePath pd rawPath of
           Left _    -> pure True   -- rejection is always safe
           Right mp  -> do
-            -- The accepted path needn't physically exist (most
-            -- generated paths refer to nonexistent files). What
-            -- matters is the resolved-absolute form lexically lies
-            -- inside the canonical root: 'normalise' joins root +
-            -- raw without filesystem access, and the guard already
+            -- Lexical comparison: 'normalise' joins root + raw and
+            -- collapses redundant separators; the guard already
             -- rejected ".." segments — so we just check the
-            -- resulting absolute path's prefix against rootCanon.
-            -- The failure mode we're guarding against would surface
-            -- as "_mpAbsolute is outside rootCanon" without ever
-            -- needing to call 'canonicalizePath' on a missing path.
+            -- resulting absolute path's prefix against the project
+            -- root verbatim. The accepted path needn't physically
+            -- exist; we never touch the filesystem here.
             let absResolved = normalise (unModulePath mp)
-                rootPrefix  = rootCanon
+                rootPrefix  = normalise (unProjectDir pd)
             pure ( absResolved == rootPrefix
                 || (rootPrefix <> "/") `L.isPrefixOf` absResolved )
 
