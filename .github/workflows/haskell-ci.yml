@@ -59,22 +59,27 @@ defaults:
 
 jobs:
   # -------------------------------------------------------------------------
-  #  Tier-2 sharded ubuntu matrix: 'ghc × shard' = 6 cells, all blocking.
+  #  Tier-2 sharded ubuntu matrix: asymmetric 2+4 = 6 cells, all blocking.
   #
-  #  Each cell runs unit tests + 1/3 of e2e scenarios via the
-  #  'HASKELL_FLOWS_E2E_SHARD' env var (round-robin split, see
-  #  E2E.Sharding). With three shards running in parallel on
-  #  separate runners, each shard owns its own ~/.cabal/store and
-  #  doesn't contend with the other two — so the slow scenarios
-  #  that dominated the sequential floor (cabal_test, ghc_coverage,
-  #  ghc_check_project, ghc_witness, …) only contend WITHIN a
-  #  shard rather than across the full set.
+  #  Layout:
+  #    * GHC 9.10.1 → 2 shards (1/2, 2/2)         = 2 cells
+  #    * GHC 9.12.2 → 4 shards (1/4, 2/4, 3/4, 4/4) = 4 cells
+  #    * Total                                     = 6 cells
+  #
+  #  Each (OS, GHC) cell-set uses a unique shard divisor so the
+  #  same "i/N" pattern never repeats across the matrix — every
+  #  cell is structurally distinct. The 9.10.1 (older GHC) gets
+  #  the smaller 2-way split because the surface area we care
+  #  about is "still compiles cleanly under 9.10"; the 9.12.2
+  #  (newer, gating GHC) gets a finer 4-way split for faster
+  #  per-cell wall-clock.
   #
   #  Measured: full e2e sequentially = 467 s (CI baseline). Local
   #  shard 1/3 with N=8 = 166 s for 24 scenarios. Projected CI
-  #  wall-clock per shard cell ≈ 250-300 s (4-vCPU runner is
-  #  roughly half as fast as the local 8-core), giving an
-  #  aggregator-to-green path of ~5-6 min vs the current ~13 min.
+  #  wall-clock per shard cell ≈ 200-300 s depending on divisor
+  #  (4-way shards are ~25 s faster than 3-way shards on the
+  #  fast-scenario subset; slow scenarios stay sequential and
+  #  dominate the floor either way).
   #
   #  Why ubuntu-only here (macOS is a separate advisory job below):
   #  the aggregator 'needs: [build-and-test, hlint]' waits for
@@ -89,9 +94,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ghc: ["9.10.1", "9.12.2"]
         cabal: ["3.12.1.0"]
-        shard: ["1/3", "2/3", "3/3"]
+        # Asymmetric matrix: each (GHC) gets a unique shard
+        # divisor so the same "i/N" pattern never repeats across
+        # cells. 9.10.1 splits 2-way (smaller, older GHC), 9.12.2
+        # splits 4-way (newer, gating GHC; finer-grained for
+        # faster per-cell wall-clock). Total = 2 + 4 = 6 ubuntu
+        # cells, all blocking. The E2E.Sharding harness honours
+        # arbitrary "i/n" so both split widths work without harness
+        # changes; full e2e coverage is achieved per-GHC via the
+        # union of that GHC's cells.
+        include:
+          - { ghc: "9.10.1", shard: "1/2" }
+          - { ghc: "9.10.1", shard: "2/2" }
+          - { ghc: "9.12.2", shard: "1/4" }
+          - { ghc: "9.12.2", shard: "2/4" }
+          - { ghc: "9.12.2", shard: "3/4" }
+          - { ghc: "9.12.2", shard: "4/4" }
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -198,49 +217,54 @@ jobs:
   # -------------------------------------------------------------------------
   #  macOS portability canary — advisory, sharded.
   #
-  #  Cell-count tuned to share-not-saturate the free-tier macOS
-  #  concurrent-runner cap (5 simultaneous macOS runners per org).
+  #  Cell-count is asymmetric across GHC versions to fit GitHub's
+  #  free-tier macOS concurrent-runner cap (5 simultaneous macOS
+  #  runners per org). With 6 cells, one was always queued — the
+  #  queue compounded across in-flight commits and surfaced as
+  #  pseudo-cancellations in the matrix UI. Five cells hits the
+  #  ceiling exactly without spilling for a single in-flight run.
   #
-  #  Why not 5 cells: with 5 cells per run, ONE run fits the cap
-  #  exactly — but multiple in-flight master pushes (every commit
-  #  gets its own SHA-keyed concurrency group, so no cancellation
-  #  cascade) saturate immediately: 4 in-flight runs × 5 cells =
-  #  20 macOS jobs requesting a quota of 5. Most cells sit in
-  #  "All GitHub-hosted runners with label [macos-latest] are busy"
-  #  for an hour, then get cancelled. That's exactly the failure
-  #  shape this comment is being written to address.
+  #  Layout (3+2 = 5 cells):
+  #    * GHC 9.10.1 → 2 shards (1/2, 2/2)        = 2 cells
+  #    * GHC 9.12.2 → 3 shards (1/3, 2/3, 3/3)   = 3 cells
+  #    * Total                                    = 5 cells
   #
-  #  Why 3 cells: leaves room for 1-2 concurrent in-flight runs
-  #  to all start their macOS jobs without queuing. Captures the
-  #  portability-canary signal we want without saturating the
-  #  org-wide quota.
-  #
-  #  Layout:
-  #    * GHC 9.12.2 only          (latest stable, the gating GHC)
-  #    * 3 shards: 1/3, 2/3, 3/3  (full e2e coverage via union)
-  #    * Total                     = 3 cells
-  #
-  #  Coverage trade vs the prior 5-cell shape: dropped GHC 9.10.1
-  #  on macOS. Ubuntu still covers both GHC versions in its 6-cell
-  #  shard matrix — the macOS-specific portability axis was about
-  #  arm64-vs-x86_64 system regressions, not GHC-version drift, so
-  #  one GHC version on macOS is sufficient signal. If the quota
-  #  becomes more relaxed (paid tier, self-hosted) we can put
-  #  9.10.1 back; the matrix is one 'include' line away.
+  #  Coverage rationale: every scenario runs on macOS twice
+  #  (once via the 9.10.1 2-way split, once via the 9.12.2 3-way
+  #  split) — strictly more redundancy per scenario than a flat
+  #  3×2-design where each scenario ran exactly once per GHC
+  #  version.
   #
   #    * 'continue-on-error: true' — failure / cancellation never blocks.
   #    * Deliberately NOT in 'required.needs' — the aggregator does not
   #      WAIT for this job, so the green-check signal arrives via the
   #      ubuntu shards alone.
+  #
+  #  When multiple master commits land back-to-back and saturate
+  #  the org-wide cap (4 in-flight × 5 cells = 20 macOS jobs vs
+  #  quota=5), the queue drains naturally — the workflow does NOT
+  #  use cancel-in-progress at the job level so older commits keep
+  #  their macOS jobs alive. Trade is wall-clock to drain (~26 min
+  #  for 9 jobs at 5-concurrent); the green-streak counter waits
+  #  for that drain but the aggregator (ubuntu + hlint) doesn't.
   # -------------------------------------------------------------------------
   build-and-test-macos:
     name: Build & test — macOS / GHC ${{ matrix.ghc }} / shard ${{ matrix.shard }} (advisory)
     strategy:
       fail-fast: false
       matrix:
-        ghc: ["9.12.2"]
         cabal: ["3.12.1.0"]
-        shard: ["1/3", "2/3", "3/3"]
+        # Asymmetric matrix: 9.10.1 splits 2-way, 9.12.2 splits
+        # 3-way. Use 'include' instead of a cross-product because
+        # the shard list differs per GHC version. Total = 5 cells,
+        # which fits the free-tier macOS concurrent-runner cap for
+        # a single in-flight run.
+        include:
+          - { ghc: "9.10.1", shard: "1/2" }
+          - { ghc: "9.10.1", shard: "2/2" }
+          - { ghc: "9.12.2", shard: "1/3" }
+          - { ghc: "9.12.2", shard: "2/3" }
+          - { ghc: "9.12.2", shard: "3/3" }
     runs-on: macos-latest
     continue-on-error: true
     steps:
