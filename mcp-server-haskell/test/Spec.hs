@@ -26,7 +26,6 @@ import qualified Data.Text.IO as TIO
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (exitFailure, exitSuccess)
-import qualified System.Environment
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Timeout (timeout)
 import qualified Test.QuickCheck as QC
@@ -222,7 +221,6 @@ import HaskellFlows.Tool.Hoogle
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (SomeException, bracket_, try)
 import qualified HaskellFlows.Mcp.PathBootstrap
-import qualified HaskellFlows.Parser.TypeSignature
 import qualified System.Directory
 import qualified System.FilePath
 import Control.Monad (when)

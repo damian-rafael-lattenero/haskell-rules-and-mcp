@@ -242,7 +242,7 @@ instance Arbitrary AdversarialPath where
 -- consistent).
 prop_pathGuard_canonical_invariant :: Property
 prop_pathGuard_canonical_invariant =
-  withMaxSuccess 1000 $
+  withNumTests 1000 $
     forAllShrink (unAdversarialPath <$> arbitrary) shrinkAdversarialPath $
       \rawPath -> ioProperty $ do
         pd <- getPropertyProjectDir
@@ -269,7 +269,7 @@ prop_pathGuard_canonical_invariant =
 -- accept; any divergence is a CWE-22 bypass.
 prop_pathGuard_lint_resolveTarget_consistent :: Property
 prop_pathGuard_lint_resolveTarget_consistent =
-  withMaxSuccess 1000 $
+  withNumTests 1000 $
     forAllShrink (unAdversarialPath <$> arbitrary) shrinkAdversarialPath $
       \rawPath -> ioProperty $ do
         pd <- getPropertyProjectDir
@@ -289,7 +289,7 @@ prop_pathGuard_lint_resolveTarget_consistent =
 -- the project documentation explicitly claims.
 prop_pathGuard_dotdot_always_rejected :: Property
 prop_pathGuard_dotdot_always_rejected =
-  withMaxSuccess 500 $
+  withNumTests 500 $
     forAllShrink (unAdversarialPath <$> arbitrary) shrinkAdversarialPath $
       \rawPath -> ioProperty $ do
         pd <- getPropertyProjectDir
