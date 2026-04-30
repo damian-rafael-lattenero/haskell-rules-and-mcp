@@ -1079,6 +1079,10 @@ main = do
                                                                  testLogging_RedactionPolicy
       , test "#98B: Logging · trace_id is 6 lowercase hex chars"
                                                                  testLogging_TraceIdGeneration
+      , test "#98D: Logging · audit path absent when HASKELL_FLOWS_AUDIT unset"
+                                                                 testLogging_AuditPathAbsentByDefault
+      , test "#98D: Logging · audit path present when HASKELL_FLOWS_AUDIT=1"
+                                                                 testLogging_AuditPathPresentWhenEnabled
       ]
   if and results then exitSuccess else exitFailure
 
@@ -10361,3 +10365,29 @@ testLogging_TraceIdGeneration = do
   pure ( T.length tid == 6
       && T.all (\c -> c `elem` ("0123456789abcdef" :: String)) tid
       )
+
+-- | When 'HASKELL_FLOWS_AUDIT' is not set, 'lcAuditPath' must be 'Nothing'.
+testLogging_AuditPathAbsentByDefault :: IO Bool
+testLogging_AuditPathAbsentByDefault = do
+  -- Ensure the env var is absent for this test.
+  unsetEnv "HASKELL_FLOWS_AUDIT"
+  ctx <- Logging.newLogContext "ghc_test"
+  pure (Logging.lcAuditPath ctx == Nothing)
+
+-- | When 'HASKELL_FLOWS_AUDIT=1' is set, 'lcAuditPath' must be 'Just _'
+-- pointing to a path ending in @".haskell-flows/audit.jsonl"@.
+testLogging_AuditPathPresentWhenEnabled :: IO Bool
+testLogging_AuditPathPresentWhenEnabled = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "hf-audit-test"
+  removePathForcibly dir
+  createDirectoryIfMissing True dir
+  setEnv "HASKELL_FLOWS_AUDIT" "1"
+  setEnv "HASKELL_PROJECT_DIR" dir
+  ctx <- Logging.newLogContext "ghc_test"
+  unsetEnv "HASKELL_FLOWS_AUDIT"
+  unsetEnv "HASKELL_PROJECT_DIR"
+  removePathForcibly dir
+  pure $ case Logging.lcAuditPath ctx of
+    Nothing   -> False
+    Just path -> List.isSuffixOf ".haskell-flows/audit.jsonl" path

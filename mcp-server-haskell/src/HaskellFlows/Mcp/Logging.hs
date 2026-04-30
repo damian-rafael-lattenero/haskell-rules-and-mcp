@@ -1,6 +1,6 @@
 -- | Structured logging for the haskell-flows-mcp server.
 --
--- Issue #98 Phase A — the closed-enum event API.
+-- Issue #98 Phases A–D — the closed-enum event API + audit log.
 --
 -- Design principles
 -- ~~~~~~~~~~~~~~~~~
@@ -18,6 +18,11 @@
 -- * The module is /always-on/ by design (not opt-in via env var), because
 --   the cost is one 'hPutStrLn stderr' per tool call — negligible against
 --   any real Haskell workload.
+-- * Phase D audit log: when @HASKELL_FLOWS_AUDIT=1@ is set, every
+--   log line is also appended to @.haskell-flows\/audit.jsonl@ in the
+--   project directory (resolved from @HASKELL_PROJECT_DIR@ or CWD).
+--   The audit path is resolved once per 'LogContext' in 'newLogContext',
+--   so the env-var cost is paid at tool-call start rather than per event.
 module HaskellFlows.Mcp.Logging
   ( -- * Log context
     LogContext (..)
@@ -37,7 +42,6 @@ module HaskellFlows.Mcp.Logging
   ) where
 
 import Data.Aeson
-import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -47,7 +51,9 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Time.Clock (getCurrentTime)
 import Numeric (showHex)
+import System.Directory (createDirectoryIfMissing, getCurrentDirectory)
 import System.Environment (lookupEnv)
+import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
 
 -- ---------------------------------------------------------------------------
@@ -56,19 +62,44 @@ import System.IO (hPutStrLn, stderr)
 
 -- | Per-request logging context.
 data LogContext = LogContext
-  { lcTraceId :: !Text   -- ^ Correlation ID for this tool call
-  , lcTool    :: !Text   -- ^ Tool name (empty string for non-tool events)
+  { lcTraceId   :: !Text          -- ^ Correlation ID for this tool call
+  , lcTool      :: !Text          -- ^ Tool name (empty string for server events)
+  , lcAuditPath :: !(Maybe FilePath)
+    -- ^ Phase D: absolute path to @.haskell-flows\/audit.jsonl@, or
+    -- 'Nothing' when @HASKELL_FLOWS_AUDIT@ is unset. Resolved once
+    -- per context so the env-var lookup is paid at call setup, not
+    -- per log line.
   } deriving (Show)
 
 -- | Create a fresh 'LogContext' with a generated trace_id.
+-- Checks 'HASKELL_FLOWS_AUDIT' and 'HASKELL_PROJECT_DIR' once to
+-- resolve the audit log path (Phase D).
 newLogContext :: Text -> IO LogContext
 newLogContext toolName = do
-  tid <- generateTraceId
-  pure LogContext { lcTraceId = tid, lcTool = toolName }
+  tid   <- generateTraceId
+  audit <- resolveAuditPath
+  pure LogContext { lcTraceId = tid, lcTool = toolName, lcAuditPath = audit }
 
 -- | Override the trace_id on an existing context (client-supplied id).
 withTraceId :: Text -> LogContext -> LogContext
 withTraceId tid ctx = ctx { lcTraceId = tid }
+
+-- | Phase D: resolve the audit log path from env vars.
+-- Returns 'Nothing' when @HASKELL_FLOWS_AUDIT@ is absent or empty.
+-- Creates @.haskell-flows\/@ if it doesn't exist.
+resolveAuditPath :: IO (Maybe FilePath)
+resolveAuditPath = do
+  mAudit <- lookupEnv "HASKELL_FLOWS_AUDIT"
+  case mAudit of
+    Nothing -> pure Nothing
+    Just "" -> pure Nothing
+    Just _  -> do
+      mProjDir <- lookupEnv "HASKELL_PROJECT_DIR"
+      base <- maybe getCurrentDirectory pure mProjDir
+      let dir  = base </> ".haskell-flows"
+          path = dir  </> "audit.jsonl"
+      createDirectoryIfMissing True dir
+      pure (Just path)
 
 -- | Generate a pseudo-unique 6-character hex trace_id.
 -- Derived from POSIX microseconds — good enough for local session correlation.
@@ -119,6 +150,7 @@ configuredLogLevel = do
 -- ---------------------------------------------------------------------------
 
 -- | Emit a single JSON Lines event to stderr, gated by the configured level.
+-- Phase D: also appends to 'lcAuditPath' when 'HASKELL_FLOWS_AUDIT=1'.
 logEvent :: LogLevel -> LogContext -> Text -> Value -> IO ()
 logEvent level ctx event payload = do
   threshold <- configuredLogLevel
@@ -134,7 +166,12 @@ logEvent level ctx event payload = do
             , "tool"     .= (if T.null (lcTool ctx) then Null else String (lcTool ctx))
             , "data"     .= payload
             ]
-      hPutStrLn stderr (TL.unpack (TLE.decodeUtf8 (encode obj)))
+          line = TL.unpack (TLE.decodeUtf8 (encode obj))
+      hPutStrLn stderr line
+      -- Phase D: opt-in audit log (HASKELL_FLOWS_AUDIT=1)
+      case lcAuditPath ctx of
+        Nothing   -> pure ()
+        Just path -> appendFile path (line <> "\n")
 
 -- | @tool_call_start@: emit before invoking a tool handler.
 logToolStart :: LogContext -> Value -> IO ()
