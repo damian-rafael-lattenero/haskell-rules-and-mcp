@@ -32,7 +32,9 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.ByteString.Lazy as BL
-import Data.Foldable (for_)
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
+import Data.Foldable (for_, toList)
 import Data.IORef (IORef, newIORef, readIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -44,6 +46,13 @@ import System.Environment (getExecutablePath, lookupEnv)
 import System.Timeout (timeout)
 
 import HaskellFlows.Data.PropertyStore (Store, openStore)
+import HaskellFlows.Mcp.Logging
+  ( LogContext (..)
+  , logToolEnd
+  , logToolStart
+  , newLogContext
+  , redactArgs
+  )
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
   , invalidateLoadCache
@@ -311,7 +320,7 @@ handleToolCall srv call rid = case parseToolName (tcName call) of
     -- catch-all branch. We skip 'runTool' (no state tracking, no
     -- nextStep injection — there is no canonical ToolName to key by).
     pure (ok rid (toJSON (unknownToolResult (tcName call))))
-  Just GhcBatch ->
+  Just GhcBatch -> do
     -- Special case: batch has to be routed here (not inside
     -- dispatchTool) because it needs the dispatcher as a callback
     -- and dispatchTool would recurse with no termination on
@@ -323,10 +332,29 @@ handleToolCall srv call rid = case parseToolName (tcName call) of
     -- 'dispatchTool' -> 'runTool'. A global 6-minute bound here is
     -- the defence of last resort against a pathological batch, not
     -- the per-action cap.
-    runTool srv GhcBatch rid
-      (BatchTool.handle (dispatchTool srv) (tcArguments call))
-  Just tn ->
-    runTool srv tn rid (dispatchByName srv (tcArguments call) tn)
+    --
+    -- Issue #98 Phase B: emit tool_call_start / tool_call_end log
+    -- events and splice trace_id into the ToolResponse meta.
+    ctx  <- newLogContext "ghc_batch"
+    logToolStart ctx (redactArgs (tcArguments call))
+    t0   <- getPOSIXTime
+    resp <- runTool srv GhcBatch rid
+              (BatchTool.handle (dispatchTool srv) (tcArguments call))
+    t1   <- getPOSIXTime
+    logToolEnd ctx (extractResponseStatus resp)
+               (round ((t1 - t0) * 1000) :: Int)
+    pure (injectTraceId (lcTraceId ctx) resp)
+  Just tn -> do
+    -- Issue #98 Phase B: emit tool_call_start / tool_call_end log
+    -- events and splice trace_id into the ToolResponse meta.
+    ctx  <- newLogContext (toolNameText tn)
+    logToolStart ctx (redactArgs (tcArguments call))
+    t0   <- getPOSIXTime
+    resp <- runTool srv tn rid (dispatchByName srv (tcArguments call) tn)
+    t1   <- getPOSIXTime
+    logToolEnd ctx (extractResponseStatus resp)
+               (round ((t1 - t0) * 1000) :: Int)
+    pure (injectTraceId (lcTraceId ctx) resp)
 
 -- | Pure (non-response-wrapping) tool dispatcher. Exposed so
 -- 'HaskellFlows.Tool.Batch' can recurse without pulling Server's
@@ -589,6 +617,80 @@ unknownToolResult name =
     { trContent = [ TextContent ("Unknown tool: " <> name) ]
     , trIsError = True
     }
+
+-- ---------------------------------------------------------------------------
+-- Logging helpers (Issue #98 Phase B)
+-- ---------------------------------------------------------------------------
+
+-- | Navigate the nested JSON path
+--   Response → ToolResult JSON → content[0].text → ToolResponse JSON → status
+-- and return the @status@ text field.
+--
+-- Falls back to @"ok"@ if any step of the path is missing or mistyped —
+-- for example the unknown-tool result whose content is plain text rather than
+-- a JSON-encoded 'ToolResponse'. The fallback is intentionally benign: the
+-- log entry is still emitted; it just carries a slightly inaccurate status.
+extractResponseStatus :: Response -> Text
+extractResponseStatus resp = fromMaybe "ok" $ do
+  v <- either (const Nothing) Just (respPayload resp)
+  case v of
+    Object top -> case KeyMap.lookup "content" top of
+      Just (Array arr) -> case toList arr of
+        (Object c : _) -> case KeyMap.lookup "text" c of
+          Just (String txt) ->
+            case decode (BL.fromStrict (TE.encodeUtf8 txt)) of
+              Just (Object inner) -> case KeyMap.lookup "status" inner of
+                Just (String s) -> Just s
+                _               -> Nothing
+              _                   -> Nothing
+          _ -> Nothing
+        _ -> Nothing
+      _ -> Nothing
+    _ -> Nothing
+
+-- | Splice @trace_id@ into the @meta@ object of the 'ToolResponse' that
+-- is encoded as the first 'TextContent' block inside an MCP 'Response'.
+--
+-- * If the ToolResponse already has a @meta@ object, the @trace_id@ key is
+--   inserted (or replaced) there without disturbing any other meta fields.
+-- * If there is no @meta@ object yet, a minimal one is created containing
+--   only the @trace_id@.
+-- * The 'Response' is returned unchanged if any step of the JSON path fails
+--   (e.g. an error response at the RPC level, or a non-JSON text block).
+injectTraceId :: Text -> Response -> Response
+injectTraceId tid resp = case respPayload resp of
+  Left _  -> resp
+  Right v ->
+    let v' = case v of
+               Object top ->
+                 case KeyMap.lookup "content" top of
+                   Just (Array arr) ->
+                     let arr' = fmap patchItem arr
+                     in Object (KeyMap.insert "content" (Array arr') top)
+                   _ -> v
+               _ -> v
+    in resp { respPayload = Right v' }
+  where
+    patchItem item = case item of
+      Object c ->
+        case KeyMap.lookup "text" c of
+          Just (String txt) ->
+            Object (KeyMap.insert "text" (String (patchText txt)) c)
+          _ -> item
+      _ -> item
+
+    -- Re-encode the ToolResponse JSON with trace_id spliced into meta.
+    patchText txt =
+      case decode (BL.fromStrict (TE.encodeUtf8 txt)) of
+        Just (Object inner) ->
+          let meta = case KeyMap.lookup "meta" inner of
+                Just (Object m) ->
+                  Object (KeyMap.insert "trace_id" (String tid) m)
+                _ ->
+                  object ["trace_id" .= tid]
+              inner' = KeyMap.insert "meta" meta inner
+          in TL.toStrict (TLE.decodeUtf8 (encode (Object inner')))
+        _ -> txt
 
 --------------------------------------------------------------------------------
 -- tool registry — single source of truth for both tools/list and

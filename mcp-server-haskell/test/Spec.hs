@@ -137,6 +137,7 @@ import qualified HaskellFlows.Tool.AddModules as AddModules
 import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
 import qualified HaskellFlows.Mcp.WorkflowState as WS
+import qualified HaskellFlows.Mcp.Logging as Logging
 import qualified HaskellFlows.Mcp.Guidance as Guidance
 import HaskellFlows.Mcp.ResourceUri
   ( ResourceUri (..)
@@ -1073,6 +1074,11 @@ main = do
                                                                  testNextStepFixableWarn
       , test "nextStep: ghc_load with no warnings \8594 ghc_suggest"
                                                                  testNextStepCleanLoad
+      -- Issue #98 Phase B · structured logging
+      , test "#98B: Logging · redaction truncates strings > 40 chars"
+                                                                 testLogging_RedactionPolicy
+      , test "#98B: Logging · trace_id is 6 lowercase hex chars"
+                                                                 testLogging_TraceIdGeneration
       ]
   if and results then exitSuccess else exitFailure
 
@@ -10308,3 +10314,50 @@ testRefactorRejectsTraversal = do
               (undefined :: GhcSession)
               pd args
       pure (isTraversalRefused (decodeToolResult tr))
+
+-- ---------------------------------------------------------------------------
+-- Issue #98 Phase B · structured logging unit tests
+-- ---------------------------------------------------------------------------
+
+-- | 'redactArgs' must truncate string values longer than 'maxArgStringLen'
+-- (40 chars) to exactly 40 chars + the Unicode ellipsis "…", while leaving
+-- short strings, numbers, and bools verbatim.
+testLogging_RedactionPolicy :: IO Bool
+testLogging_RedactionPolicy = do
+  let longStr  = T.replicate 50 "x"   -- 50 chars, will be truncated
+      shortStr = T.replicate 20 "y"   -- 20 chars, kept verbatim
+      args = A.object
+        [ "long"  A..= longStr
+        , "short" A..= shortStr
+        , "num"   A..= (42 :: Int)
+        , "flag"  A..= True
+        ]
+  case Logging.redactArgs args of
+    A.Object km ->
+      let longOk  = case AKM.lookup (AKey.fromString "long") km of
+                      Just (A.String t) ->
+                        -- Exactly maxArgStringLen chars + one "…" code point
+                        T.length t == Logging.maxArgStringLen + 1
+                        && T.last t == '\8230'   -- U+2026 HORIZONTAL ELLIPSIS
+                      _ -> False
+          shortOk = case AKM.lookup (AKey.fromString "short") km of
+                      Just (A.String t) -> t == shortStr
+                      _                 -> False
+          numOk   = case AKM.lookup (AKey.fromString "num") km of
+                      Just (A.Number _) -> True
+                      _                 -> False
+          flagOk  = case AKM.lookup (AKey.fromString "flag") km of
+                      Just (A.Bool True) -> True
+                      _                  -> False
+      in pure (longOk && shortOk && numOk && flagOk)
+    _ -> pure False
+
+-- | 'newLogContext' must produce a 'LogContext' whose 'lcTraceId' is
+-- exactly 6 characters long and consists solely of lowercase hex digits.
+testLogging_TraceIdGeneration :: IO Bool
+testLogging_TraceIdGeneration = do
+  ctx <- Logging.newLogContext "ghc_test"
+  let tid = Logging.lcTraceId ctx
+  pure ( T.length tid == 6
+      && T.all (\c -> c `elem` ("0123456789abcdef" :: String)) tid
+      )

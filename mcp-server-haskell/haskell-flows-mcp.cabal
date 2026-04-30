@@ -42,6 +42,7 @@ library
                       HaskellFlows.Mcp.Envelope
                       HaskellFlows.Mcp.ErrorKind
                       HaskellFlows.Mcp.Guidance
+                      HaskellFlows.Mcp.Logging
                       HaskellFlows.Mcp.NextStep
                       HaskellFlows.Mcp.ToolName
                       HaskellFlows.Mcp.ParseError
