@@ -408,6 +408,19 @@ main = do
                                                    testSchemaFlatObject
       , test "Schema · field builders surface correct type+description (#92)"
                                                    testSchemaFieldBuilders
+      -- Issue #92 Phase B: ghc_refactor migration
+      , test "Refactor · rename_local complete payload parses (#92B)"
+                                                   testRefactorRenameLocalCompleteParses
+      , test "Refactor · rename_local missing old_name fails parse (#92B)"
+                                                   testRefactorRenameLocalMissingOldName
+      , test "Refactor · rename_local missing scope_line_start fails (#92B)"
+                                                   testRefactorRenameLocalMissingScopeStart
+      , test "Refactor · extract_binding doesn't need old_name (#92B)"
+                                                   testRefactorExtractBindingNoOldName
+      , test "Refactor · extract_binding still needs both scope lines (#92B)"
+                                                   testRefactorExtractBindingMissingScope
+      , test "Refactor · published schema uses discriminatedSchema (#92B)"
+                                                   testRefactorSchemaIsDiscriminated
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
       , test "validatePackageName accepts normal"  testPkgAccepts
@@ -2058,6 +2071,104 @@ testSchemaFieldBuilders =
                   && AKM.lookup "description" km == Just (A.String "x")
         _         -> False
   in pure (all ok cases)
+
+--------------------------------------------------------------------------------
+-- Issue #92 Phase B: ghc_refactor migration anchors
+--
+-- These pin the per-action contract that #92 Phase A's
+-- discriminatedSchema helper now expresses on the request side.
+-- Pre-fix, the schema declared required = [action, module_path,
+-- new_name] and the runtime emitted "scope_line_start is required
+-- for rename_local" — the schema lied. Post-fix, the parser
+-- enforces per-action requirements and a host that reads
+-- 'tools/list' learns the right shape from the schema's
+-- per-branch required list.
+--------------------------------------------------------------------------------
+
+-- | rename_local with the FULL required set must parse cleanly.
+testRefactorRenameLocalCompleteParses :: IO Bool
+testRefactorRenameLocalCompleteParses = do
+  let raw =
+        "{\"action\":\"rename_local\",\"module_path\":\"src/X.hs\",\
+        \\"old_name\":\"oldSym\",\"new_name\":\"newSym\",\
+        \\"scope_line_start\":17,\"scope_line_end\":42}"
+  pure $ case A.decode raw :: Maybe A.Value of
+    Just v -> case A.fromJSON v :: A.Result RefactorTool.RefactorArgs of
+      A.Success _ -> True
+      _           -> False
+    _      -> False
+
+-- | rename_local without old_name must FAIL at parse time
+-- (post-#92). Pre-fix this parsed and the handler returned
+-- "'old_name' is required for rename_local" at runtime — the
+-- schema-vs-runtime contract drift this issue closes.
+testRefactorRenameLocalMissingOldName :: IO Bool
+testRefactorRenameLocalMissingOldName = do
+  let raw =
+        "{\"action\":\"rename_local\",\"module_path\":\"src/X.hs\",\
+        \\"new_name\":\"newSym\",\
+        \\"scope_line_start\":17,\"scope_line_end\":42}"
+  pure $ case A.decode raw :: Maybe A.Value of
+    Just v -> case A.fromJSON v :: A.Result RefactorTool.RefactorArgs of
+      A.Error _ -> True   -- expected: parser rejects
+      _         -> False
+    _      -> False
+
+-- | rename_local without scope_line_start must FAIL at parse
+-- time. Same contract: schema declares it required, parser must
+-- enforce.
+testRefactorRenameLocalMissingScopeStart :: IO Bool
+testRefactorRenameLocalMissingScopeStart = do
+  let raw =
+        "{\"action\":\"rename_local\",\"module_path\":\"src/X.hs\",\
+        \\"old_name\":\"oldSym\",\"new_name\":\"newSym\",\
+        \\"scope_line_end\":42}"
+  pure $ case A.decode raw :: Maybe A.Value of
+    Just v -> case A.fromJSON v :: A.Result RefactorTool.RefactorArgs of
+      A.Error _ -> True
+      _         -> False
+    _      -> False
+
+-- | extract_binding does NOT need old_name — it only renames the
+-- extracted binding's name, not an existing identifier. Anchor:
+-- the parser must ACCEPT extract_binding without old_name.
+testRefactorExtractBindingNoOldName :: IO Bool
+testRefactorExtractBindingNoOldName = do
+  let raw =
+        "{\"action\":\"extract_binding\",\"module_path\":\"src/X.hs\",\
+        \\"new_name\":\"helperFn\",\
+        \\"scope_line_start\":10,\"scope_line_end\":20}"
+  pure $ case A.decode raw :: Maybe A.Value of
+    Just v -> case A.fromJSON v :: A.Result RefactorTool.RefactorArgs of
+      A.Success _ -> True
+      _           -> False
+    _      -> False
+
+-- | extract_binding STILL requires both scope lines. The
+-- per-action contract: dropping just one of the scope lines fails
+-- at parse time (Aeson 'fromJSON' returns 'Error').
+testRefactorExtractBindingMissingScope :: IO Bool
+testRefactorExtractBindingMissingScope = do
+  let raw =
+        "{\"action\":\"extract_binding\",\"module_path\":\"src/X.hs\",\
+        \\"new_name\":\"helperFn\",\"scope_line_start\":10}"
+  pure $ case A.decode raw :: Maybe A.Value of
+    Just v -> case A.fromJSON v :: A.Result RefactorTool.RefactorArgs of
+      A.Error _ -> True
+      _         -> False
+    _      -> False
+
+-- | The published 'tdInputSchema' for ghc_refactor must use the
+-- discriminatedSchema shape — top-level 'oneOf' with two branches.
+-- Anchor: a future drift back to the flat schema would fail this.
+testRefactorSchemaIsDiscriminated :: IO Bool
+testRefactorSchemaIsDiscriminated =
+  let s = tdInputSchema RefactorTool.descriptor
+  in pure $ case s of
+       A.Object km -> case AKM.lookup "oneOf" km of
+         Just (A.Array xs) -> length xs == 2
+         _                 -> False
+       _ -> False
 
 -- | Round-trip a property through the on-disk store. Uses a unique
 -- temp project dir to keep repeated test runs independent.

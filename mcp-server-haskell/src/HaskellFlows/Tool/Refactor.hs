@@ -51,6 +51,7 @@ import HaskellFlows.Ghc.ApiSession
   , targetForPath
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
+import qualified HaskellFlows.Mcp.Schema as Schema
 import HaskellFlows.Mcp.PermissiveJSON
   ( IntField (unIntField)
   , BoolField (unBoolField)
@@ -92,47 +93,56 @@ descriptor =
     , tdInputSchema = schema
     }
 
+-- | Issue #92 Phase B: per-action discriminated schema. Each
+-- branch declares its OWN required-field set so a host that
+-- respects the schema sends a valid-by-spec request that the
+-- runtime accepts. Pre-#92 the schema declared a flat
+-- @required: [action, module_path, new_name]@ that lied about
+-- @rename_local@ (which actually needs old_name + scope_line_*)
+-- and @extract_binding@ (scope_line_*).
 schema :: Value
-schema = object
-  [ "type"       .= ("object" :: Text)
-  , "properties" .= object
-      [ "action" .= object
-          [ "type" .= ("string" :: Text)
-          , "enum" .= (["rename_local", "extract_binding"] :: [Text])
+schema = Schema.discriminatedSchema "action"
+  [ Schema.SchemaBranch
+      { Schema.sbDiscriminantValue = "rename_local"
+      , Schema.sbDescription       =
+          "Scoped identifier rename within an explicit line range."
+      , Schema.sbProperties        =
+          [ ("module_path",      Schema.stringField  "Relative module path.")
+          , ("old_name",         Schema.stringField  "Identifier to replace.")
+          , ("new_name",         Schema.stringField
+              "Replacement identifier (must be a valid Haskell varid).")
+          , ("scope_line_start", Schema.integerField
+              "Inclusive 1-based start line of the rename scope.")
+          , ("scope_line_end",   Schema.integerField
+              "Inclusive 1-based end line of the rename scope.")
+          , ("dry_run",          Schema.booleanField
+              "If true, compute the rewrite and return without touching disk.")
           ]
-      , "module_path" .= object
-          [ "type"        .= ("string" :: Text)
-          , "description" .= ("Relative module path." :: Text)
+      , Schema.sbRequired
+          = [ "module_path", "old_name", "new_name"
+            , "scope_line_start", "scope_line_end"
+            ]
+      }
+  , Schema.SchemaBranch
+      { Schema.sbDiscriminantValue = "extract_binding"
+      , Schema.sbDescription       =
+          "Extract a line range into a named top-level binding."
+      , Schema.sbProperties        =
+          [ ("module_path",      Schema.stringField  "Relative module path.")
+          , ("new_name",         Schema.stringField
+              "New top-level binding name (must be a valid Haskell varid).")
+          , ("scope_line_start", Schema.integerField
+              "Inclusive 1-based start line of the range to extract.")
+          , ("scope_line_end",   Schema.integerField
+              "Inclusive 1-based end line of the range to extract.")
+          , ("dry_run",          Schema.booleanField
+              "If true, compute the rewrite and return without touching disk.")
           ]
-      , "old_name" .= object
-          [ "type"        .= ("string" :: Text)
-          , "description" .=
-              ("Identifier to replace. Required for rename_local."
-               :: Text)
-          ]
-      , "new_name" .= object
-          [ "type"        .= ("string" :: Text)
-          , "description" .=
-              ("Replacement (rename_local) or new binding name \
-               \(extract_binding)." :: Text)
-          ]
-      , "scope_line_start" .= object
-          [ "type"        .= ("integer" :: Text)
-          , "description" .= ("Inclusive 1-based start line." :: Text)
-          ]
-      , "scope_line_end" .= object
-          [ "type"        .= ("integer" :: Text)
-          , "description" .= ("Inclusive 1-based end line." :: Text)
-          ]
-      , "dry_run" .= object
-          [ "type"        .= ("boolean" :: Text)
-          , "description" .=
-              ("If true, compute the rewrite and return without \
-               \touching disk. Default: false." :: Text)
-          ]
-      ]
-  , "required"             .= (["action", "module_path", "new_name"] :: [Text])
-  , "additionalProperties" .= False
+      , Schema.sbRequired
+          = [ "module_path", "new_name"
+            , "scope_line_start", "scope_line_end"
+            ]
+      }
   ]
 
 data Action = ActRename | ActExtract
@@ -149,30 +159,54 @@ data RefactorArgs = RefactorArgs
   }
   deriving stock (Show)
 
+-- | Issue #92 Phase B: per-action validation at parse time.
+-- The flat record stays for handler convenience, but the parser
+-- now enforces the *same* required-field set the schema
+-- advertises — failures surface as Aeson \"missing_arg\" /
+-- \"type_mismatch\" via the friendly ParseError formatter (#85)
+-- rather than as a runtime "is required for rename_local" check
+-- buried in the handler. Schema and runtime stop disagreeing.
 instance FromJSON RefactorArgs where
   parseJSON = withObject "RefactorArgs" $ \o -> do
     a   <- o .:  "action"
     mp  <- o .:  "module_path"
-    old <- o .:? "old_name"
     new <- o .:  "new_name"
     -- Issue #88: accept stringified numerics / booleans from MCP
     -- host wrappers that serialise primitives as strings.
-    ls  <- fmap unIntField  <$> o .:? "scope_line_start"
-    le  <- fmap unIntField  <$> o .:? "scope_line_end"
     dr  <- maybe False unBoolField <$> o .:? "dry_run"
     act <- case (a :: Text) of
       "rename_local"    -> pure ActRename
       "extract_binding" -> pure ActExtract
       other             -> fail ("unknown action: " <> T.unpack other)
-    pure RefactorArgs
-      { raAction         = act
-      , raModulePath     = mp
-      , raOldName        = old
-      , raNewName        = new
-      , raScopeLineStart = ls
-      , raScopeLineEnd   = le
-      , raDryRun         = dr
-      }
+    case act of
+      ActRename -> do
+        -- rename_local REQUIRES old_name + both scope lines.
+        -- Per-action enforcement at the parser boundary is the
+        -- single-source-of-truth fix for #92.
+        old <- o .:  "old_name"
+        ls  <- unIntField <$> o .:  "scope_line_start"
+        le  <- unIntField <$> o .:  "scope_line_end"
+        pure RefactorArgs
+          { raAction         = act
+          , raModulePath     = mp
+          , raOldName        = Just old
+          , raNewName        = new
+          , raScopeLineStart = Just ls
+          , raScopeLineEnd   = Just le
+          , raDryRun         = dr
+          }
+      ActExtract -> do
+        ls  <- unIntField <$> o .:  "scope_line_start"
+        le  <- unIntField <$> o .:  "scope_line_end"
+        pure RefactorArgs
+          { raAction         = act
+          , raModulePath     = mp
+          , raOldName        = Nothing
+          , raNewName        = new
+          , raScopeLineStart = Just ls
+          , raScopeLineEnd   = Just le
+          , raDryRun         = dr
+          }
 
 handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
