@@ -59,27 +59,20 @@ defaults:
 
 jobs:
   # -------------------------------------------------------------------------
-  #  Tier-2 sharded ubuntu matrix: asymmetric 2+4 = 6 cells, all blocking.
+  #  Tier-2 sharded ubuntu matrix: symmetric 3 × 2 = 6 cells, all blocking.
   #
   #  Layout:
-  #    * GHC 9.10.1 → 2 shards (1/2, 2/2)         = 2 cells
-  #    * GHC 9.12.2 → 4 shards (1/4, 2/4, 3/4, 4/4) = 4 cells
-  #    * Total                                     = 6 cells
+  #    * 2 GHC versions × 3 shards (1/3, 2/3, 3/3) = 6 cells
   #
-  #  Each (OS, GHC) cell-set uses a unique shard divisor so the
-  #  same "i/N" pattern never repeats across the matrix — every
-  #  cell is structurally distinct. The 9.10.1 (older GHC) gets
-  #  the smaller 2-way split because the surface area we care
-  #  about is "still compiles cleanly under 9.10"; the 9.12.2
-  #  (newer, gating GHC) gets a finer 4-way split for faster
-  #  per-cell wall-clock.
+  #  Symmetric on the gating-OS side: every shard divisor matches
+  #  on both GHC versions so the per-cell partition is identical
+  #  regardless of which compiler is running it. The macOS job
+  #  below uses the asymmetric variant (different divisors per
+  #  GHC) for variety and to fit its smaller cell budget.
   #
   #  Measured: full e2e sequentially = 467 s (CI baseline). Local
   #  shard 1/3 with N=8 = 166 s for 24 scenarios. Projected CI
-  #  wall-clock per shard cell ≈ 200-300 s depending on divisor
-  #  (4-way shards are ~25 s faster than 3-way shards on the
-  #  fast-scenario subset; slow scenarios stay sequential and
-  #  dominate the floor either way).
+  #  wall-clock per shard cell ≈ 250-300 s.
   #
   #  Why ubuntu-only here (macOS is a separate advisory job below):
   #  the aggregator 'needs: [build-and-test, hlint]' waits for
@@ -94,29 +87,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Asymmetric matrix: each (GHC) gets a unique shard
-        # divisor so the same "i/N" pattern never repeats across
-        # cells. 9.10.1 splits 2-way (smaller, older GHC), 9.12.2
-        # splits 4-way (newer, gating GHC; finer-grained for
-        # faster per-cell wall-clock). Total = 2 + 4 = 6 ubuntu
-        # cells, all blocking.
-        #
-        # include-ONLY (no base keys); each entry is a full cell.
-        # If we kept e.g. `cabal: ["3.12.1.0"]` as a base key,
-        # GitHub Actions would treat the include entries as
-        # overrides on the single base cell rather than as
-        # standalone cells, collapsing the whole matrix to one
-        # cell with the values of the LAST include entry. (The
-        # previous shape of this matrix did exactly that — one
-        # commit shipped with a single ubuntu/9.12.2 shard 4/4
-        # cell instead of all six. Lesson pinned in the comment.)
-        include:
-          - { ghc: "9.10.1", cabal: "3.12.1.0", shard: "1/2" }
-          - { ghc: "9.10.1", cabal: "3.12.1.0", shard: "2/2" }
-          - { ghc: "9.12.2", cabal: "3.12.1.0", shard: "1/4" }
-          - { ghc: "9.12.2", cabal: "3.12.1.0", shard: "2/4" }
-          - { ghc: "9.12.2", cabal: "3.12.1.0", shard: "3/4" }
-          - { ghc: "9.12.2", cabal: "3.12.1.0", shard: "4/4" }
+        ghc: ["9.10.1", "9.12.2"]
+        cabal: ["3.12.1.0"]
+        shard: ["1/3", "2/3", "3/3"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
