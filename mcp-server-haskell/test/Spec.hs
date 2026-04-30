@@ -435,6 +435,8 @@ main = do
                                                    testDepsSchemaIsDiscriminated
       , test "Schema · every registered tool publishes valid JSON Schema (#92D)"
                                                    testEveryToolPublishesValidSchema
+      , test "nextStep · every recommended tool is in the registry (#95)"
+                                                   testNextStepReferencesRegisteredToolsOnly
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
       , test "validatePackageName accepts normal"  testPkgAccepts
@@ -2304,6 +2306,45 @@ testEveryToolPublishesValidSchema = do
              Just (A.Object _) -> True
              _                 -> False
     isValidBranch _ = False
+
+--------------------------------------------------------------------------------
+-- Issue #95 Phase A (lite): nextStep dangling-reference detector
+--
+-- The full nextStep audit (suppression rules, signal-to-noise gates,
+-- per-tool golden tests) is a multi-PR effort tracked on the
+-- meta-issue. This commit lands one of its load-bearing anchors:
+-- whenever 'suggestNext' returns a NextStep recommending some
+-- tool, that tool MUST exist in 'allToolNames'. The type system
+-- already enforces this at compile time (nsTool :: ToolName, an
+-- ADT), but a runtime test is still useful as documentation of
+-- the contract — a contributor renaming a tool sees the link
+-- between the registry and the nextStep recommendations.
+--
+-- The chain (nsChain) is also covered: every step in a multi-step
+-- plan must point at a registered tool.
+--------------------------------------------------------------------------------
+
+-- | Drive 'suggestNext' across all 46 tools with a generic
+-- payload and assert every recommended tool (primary + chain) is
+-- in 'allToolNames'.
+testNextStepReferencesRegisteredToolsOnly :: IO Bool
+testNextStepReferencesRegisteredToolsOnly = do
+  let nameSet  = Set.fromList allToolNames
+      payload  = object []
+      attempts = [ suggestNext n True payload | n <- allToolNames ]
+      bad      =
+        [ recName
+        | Just ns <- attempts
+        , recName <- toolsReferencedBy ns
+        , recName `Set.notMember` nameSet
+        ]
+  unless (null bad) $
+    putStrLn ("Dangling nextStep tool refs: " <> show bad)
+  pure (null bad)
+  where
+    toolsReferencedBy ns =
+      nsTool ns
+        : maybe [] (map csTool) (nsChain ns)
 
 -- | Round-trip a property through the on-disk store. Uses a unique
 -- temp project dir to keep repeated test runs independent.
