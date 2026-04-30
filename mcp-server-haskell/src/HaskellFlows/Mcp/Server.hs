@@ -48,6 +48,7 @@ import System.Timeout (timeout)
 import HaskellFlows.Data.PropertyStore (Store, openStore)
 import HaskellFlows.Mcp.Logging
   ( LogContext (..)
+  , logInternalEvent
   , logToolEnd
   , logToolStart
   , newLogContext
@@ -85,7 +86,7 @@ import HaskellFlows.Mcp.WorkflowState
   , readState
   , trackTool
   )
-import HaskellFlows.Types (ProjectDir, mkProjectDir)
+import HaskellFlows.Types (ProjectDir, mkProjectDir, unProjectDir)
 import qualified HaskellFlows.Tool.AddImport       as AddImportTool
 import qualified HaskellFlows.Tool.AddModules      as AddModulesTool
 import qualified HaskellFlows.Tool.ApplyExports    as ApplyExportsTool
@@ -849,22 +850,37 @@ timeoutMsg tool =
 
 -- | Reset the in-process GhcSession. Idempotent; catches any
 -- failure so an evict from a watchdog path cannot raise.
+--
+-- Issue #98 Phase C: emits @ghc_session_evict@ at DEBUG level so
+-- operators can observe session churn (evictions triggered by
+-- exception handlers or hard timeout trips).
 evictGhcSession :: Server -> IO ()
 evictGhcSession srv = modifyMVar_ (srvGhcSession srv) $ \case
   Nothing -> pure Nothing
   Just s  -> do
     _ <- try (killGhcSession s) :: IO (Either SomeException ())
+    ctx <- newLogContext ""
+    logInternalEvent ctx "ghc_session_evict" (object [])
     pure Nothing
 
 -- | Phase-1 analogue of 'getOrStartSession' for the in-process GHC
 -- API session. Unused by any tool yet — Phase 2 starts calling this
 -- when the first read-only tools (type, info) migrate.
+--
+-- Issue #98 Phase C: emits @ghc_session_hit@ (cache hit, DEBUG) or
+-- @ghc_session_start@ (new session, DEBUG + project_dir).
 getOrStartGhcSession :: Server -> IO GhcSession
 getOrStartGhcSession srv = modifyMVar (srvGhcSession srv) $ \case
-  Just s  -> pure (Just s, s)
+  Just s  -> do
+    ctx <- newLogContext ""
+    logInternalEvent ctx "ghc_session_hit" (object [])
+    pure (Just s, s)
   Nothing -> do
-    pd <- readIORef (srvProjectDir srv)
-    s  <- startGhcSession pd
+    pd  <- readIORef (srvProjectDir srv)
+    ctx <- newLogContext ""
+    logInternalEvent ctx "ghc_session_start"
+      (object ["project_dir" .= unProjectDir pd])
+    s   <- startGhcSession pd
     pure (Just s, s)
 
 -- | Drop the GhcSession auto-load cache iff a session has already
@@ -873,18 +889,28 @@ getOrStartGhcSession srv = modifyMVar (srvGhcSession srv) $ \case
 -- format) so the next Phase-2 read re-scans disk and sees their
 -- edits. Intentionally DOES NOT boot a session if one doesn't exist —
 -- that would burn an HscEnv for a cache-invalidation side-effect.
+--
+-- Issue #98 Phase C: emits @ghc_cache_invalidate@ at DEBUG level.
 invalidateGhcSessionIfPresent :: Server -> IO ()
 invalidateGhcSessionIfPresent srv = do
   m <- readMVar (srvGhcSession srv)
-  for_ m invalidateLoadCache
+  for_ m $ \s -> do
+    ctx <- newLogContext ""
+    logInternalEvent ctx "ghc_cache_invalidate" (object ["kind" .= ("load_cache" :: Text)])
+    invalidateLoadCache s
 
 -- | Heavier-hammer cousin for tools that change the .cabal dep
 -- graph or stanza layout. Forces a re-bootstrap of stanza flags
 -- and a fresh HscEnv on the next session use.
+--
+-- Issue #98 Phase C: emits @ghc_cache_invalidate@ (stanza_flags) at DEBUG.
 invalidateStanzaFlagsIfPresent :: Server -> IO ()
 invalidateStanzaFlagsIfPresent srv = do
   m <- readMVar (srvGhcSession srv)
-  for_ m invalidateStanzaFlags
+  for_ m $ \s -> do
+    ctx <- newLogContext ""
+    logInternalEvent ctx "ghc_cache_invalidate" (object ["kind" .= ("stanza_flags" :: Text)])
+    invalidateStanzaFlags s
 
 --------------------------------------------------------------------------------
 -- small response helpers
