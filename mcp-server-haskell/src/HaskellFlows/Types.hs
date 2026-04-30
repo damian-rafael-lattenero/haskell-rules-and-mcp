@@ -22,12 +22,16 @@ module HaskellFlows.Types
   , modulePathRelative
   , modulePathProject
   , mkModulePath
+    -- * Phase D (#100): runtime canonical-path defence-in-depth
+  , canonicalModulePathCheck
     -- * Errors
   , PathError (..)
   ) where
 
+import Data.List (isPrefixOf)
 import Data.Text (Text)
 import qualified Data.Text as T
+import System.Directory (canonicalizePath)
 import System.FilePath
   ( (</>)
   , equalFilePath
@@ -35,6 +39,7 @@ import System.FilePath
   , normalise
   , pathSeparator
   , splitDirectories
+  , addTrailingPathSeparator
   )
 
 -- | An absolute, canonical path to a Haskell project root directory.
@@ -111,6 +116,43 @@ mkModulePath pd raw =
                  (T.pack raw)
                  (T.pack root)
                  (T.pack joined))
+
+-- | Issue #100 Phase D — runtime canonical-path defence-in-depth.
+--
+-- 'mkModulePath' is a pure, segment-based traversal guard: it rejects
+-- any path that contains a @..@ segment after joining with the project
+-- root. It is intentionally non-IO and catches the common case.
+--
+-- Symlinks defeat the pure guard: a symlink @src\/escape -> \/etc@ passes
+-- the @..@-free check but resolves outside the project at runtime.
+-- This function is the IO-level second line of defence. It:
+--
+-- 1. Calls 'canonicalizePath' on the resolved file path (follows all symlinks).
+-- 2. Calls 'canonicalizePath' on the project root.
+-- 3. Verifies the canonical file path is prefixed by the canonical root.
+--
+-- macOS note: @\/var\/folders\/...@ canonicalises to
+-- @\/private\/var\/folders\/...@. Canonicalising both paths neutralises
+-- this asymmetry — the prefix check works correctly on all platforms.
+--
+-- Usage: call this after 'mkModulePath' succeeds, immediately before any
+-- file-writing operation. Read-only sites may skip it (cost: one extra
+-- 'stat' per call); write sites must use it as defence-in-depth against
+-- symlink-based write injection.
+canonicalModulePathCheck :: ProjectDir -> ModulePath -> IO (Either PathError ())
+canonicalModulePathCheck pd mp = do
+  canonRoot <- canonicalizePath (unProjectDir pd)
+  canonFile <- canonicalizePath (unModulePath mp)
+  let rootPrefix = addTrailingPathSeparator canonRoot
+  pure $
+    if addTrailingPathSeparator canonFile == rootPrefix
+         || rootPrefix `isPrefixOf` canonFile
+      then Right ()
+      else Left
+             (PathEscapesProject
+                (T.pack (unModulePath mp))
+                (T.pack (unProjectDir pd))
+                (T.pack canonFile))
 
 -- | Path-validation failures. Constructor fields are positional to avoid
 -- @-Wpartial-fields@ on named accessors that would only project out of

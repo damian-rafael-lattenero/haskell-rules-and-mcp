@@ -213,7 +213,7 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
   Right args -> case mkModulePath pd (T.unpack (raModulePath args)) of
-    Left e   -> pure (errorResult (formatPathError e))
+    Left e   -> pure (pathTraversalResult (formatPathError e))
     Right mp -> do
       r <- handleAction ghcSess mp args
       invalidateLoadCache ghcSess
@@ -489,12 +489,18 @@ compileFailResult errs raw restoreMsg =
 -- | Issue #90 Phase C: routed through the envelope. Most refactor
 -- failures map to kind='validation' (the input was structurally
 -- fine but failed a domain check — missing 'old_name', wrong
--- scope, etc.). Path-traversal cases still emit kind='path_traversal'
--- via the matching path in 'handle'.
+-- scope, etc.).
 errorResult :: Text -> ToolResult
 errorResult msg =
   Env.toolResponseToResult (Env.mkFailed
     (Env.mkErrorEnvelope Env.Validation msg))
+
+-- | Issue #100 Phase C: 'mkModulePath' rejected the path →
+-- status='refused', kind='path_traversal'.
+pathTraversalResult :: Text -> ToolResult
+pathTraversalResult msg =
+  Env.toolResponseToResult
+    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
 
 formatPathError :: PathError -> Text
 formatPathError = \case

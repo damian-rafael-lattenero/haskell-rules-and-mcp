@@ -173,7 +173,8 @@ import HaskellFlows.Tool.Arbitrary
   , renderTemplate
   )
 import HaskellFlows.Data.PropertyStore
-  ( StoredProperty (..)
+  ( Store
+  , StoredProperty (..)
   , loadAll
   , openStore
   , save
@@ -236,7 +237,8 @@ import HaskellFlows.Types
   , mkProjectDir
   )
 import HaskellFlows.Ghc.ApiSession
-  ( evalIOString
+  ( GhcSession
+  , evalIOString
   , killGhcSession
   , startGhcSession
   , withGhcSession
@@ -248,6 +250,7 @@ import qualified HaskellFlows.Tool.Complete as CompleteTool
 import qualified HaskellFlows.Tool.Doc as DocTool
 import qualified HaskellFlows.Tool.Eval as EvalTool
 import qualified HaskellFlows.Tool.AddImport as AddImportTool
+import qualified HaskellFlows.Tool.Format as FormatTool
 import qualified HaskellFlows.Tool.Hole as HoleTool
 import qualified HaskellFlows.Tool.Hoogle as HoogleTool
 import qualified HaskellFlows.Tool.Goto as GotoTool
@@ -394,6 +397,25 @@ main = do
                                                    PathTraversal.prop_pathGuard_dotdot_always_rejected
       , test "path guard · symlink escape detected (#100 Phase B)"
                                                    PathTraversal.testSymlinkEscapeAcceptedByPureGuard
+      , test "path guard · canonicalCheck catches symlink (#100 Phase D)"
+                                                   PathTraversal.testCanonicalCheckCatchesSymlink
+      -- Issue #100 Phase C · cross-tool traversal harness
+      , test "#100C: ghc_apply_exports rejects traversal path"
+                                                   testApplyExportsRejectsTraversal
+      , test "#100C: ghc_fix_warning rejects traversal path"
+                                                   testFixWarningRejectsTraversal
+      , test "#100C: ghc_format rejects traversal path"
+                                                   testFormatRejectsTraversal
+      , test "#100C: ghc_check_module rejects traversal path"
+                                                   testCheckModuleRejectsTraversal
+      , test "#100C: ghc_explain_error rejects traversal path"
+                                                   testExplainErrorRejectsTraversal
+      , test "#100C: ghc_lab rejects traversal path"
+                                                   testLabRejectsTraversal
+      , test "#100C: ghc_load rejects traversal path"
+                                                   testLoadRejectsTraversal
+      , test "#100C: ghc_refactor rejects traversal path"
+                                                   testRefactorRejectsTraversal
       -- Issue #92 Phase A · discriminated schema helpers
       , test "Schema · top-level oneOf shape (#92)"
                                                    testSchemaTopLevelOneOf
@@ -10147,3 +10169,142 @@ getTestTimestamp :: IO Int
 getTestTimestamp = do
   t <- getPOSIXTime
   pure (floor (t * 1_000_000))
+
+--------------------------------------------------------------------------------
+-- Issue #100 Phase C — cross-tool path-traversal harness
+--
+-- Every tool that accepts a 'module_path' argument must reject paths
+-- that escape the project root with status='refused', kind='path_traversal'.
+-- The GhcSession / Store arguments are safely 'undefined' in these tests
+-- because 'mkModulePath' fires in the Left branch before any session or
+-- store access.
+--------------------------------------------------------------------------------
+
+-- | Shared helper: decode a 'ToolResult' to 'Env.ToolResponse'.
+decodeToolResult :: ToolResult -> Either String Env.ToolResponse
+decodeToolResult tr = case trContent tr of
+  [TextContent body] ->
+    A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body))
+  _ -> Left "expected exactly one TextContent"
+
+-- | Assert that the response is status='refused', kind='path_traversal'.
+isTraversalRefused :: Either String Env.ToolResponse -> Bool
+isTraversalRefused (Right env) =
+  Env.reStatus env == Env.StatusRefused &&
+  maybe False ((== Env.PathTraversal) . Env.eeKind) (Env.reError env)
+isTraversalRefused _ = False
+
+-- | #100C: 'ghc_apply_exports' must refuse traversal paths.
+-- No GhcSession needed — 'mkModulePath' guard fires before any filesystem access.
+testApplyExportsRejectsTraversal :: IO Bool
+testApplyExportsRejectsTraversal = do
+  case mkProjectDir "/tmp/project" of
+    Left _ -> pure False
+    Right pd -> do
+      let args = A.object
+            [ "module_path" A..= ("../../etc/passwd" :: Text)
+            , "exports"     A..= ([] :: [Text])
+            ]
+      tr <- ApplyExports.handle pd args
+      pure (isTraversalRefused (decodeToolResult tr))
+
+-- | #100C: 'ghc_fix_warning' must refuse traversal paths.
+testFixWarningRejectsTraversal :: IO Bool
+testFixWarningRejectsTraversal = do
+  case mkProjectDir "/tmp/project" of
+    Left _ -> pure False
+    Right pd -> do
+      let args = A.object
+            [ "module_path" A..= ("../../etc/passwd" :: Text)
+            , "line"        A..= (1 :: Int)
+            , "code"        A..= ("-Wunused-imports" :: Text)
+            ]
+      tr <- FixWarning.handle pd args
+      pure (isTraversalRefused (decodeToolResult tr))
+
+-- | #100C: 'ghc_format' must refuse traversal paths.
+testFormatRejectsTraversal :: IO Bool
+testFormatRejectsTraversal = do
+  case mkProjectDir "/tmp/project" of
+    Left _ -> pure False
+    Right pd -> do
+      let args = A.object
+            [ "module_path" A..= ("../../etc/passwd" :: Text) ]
+      tr <- FormatTool.handle pd args
+      pure (isTraversalRefused (decodeToolResult tr))
+
+-- | #100C: 'ghc_check_module' must refuse traversal paths.
+-- 'mkModulePath' fires before the GhcSession or Store are touched.
+testCheckModuleRejectsTraversal :: IO Bool
+testCheckModuleRejectsTraversal = do
+  case mkProjectDir "/tmp/project" of
+    Left _ -> pure False
+    Right pd -> do
+      let args = A.object
+            [ "module_path" A..= ("../../etc/passwd" :: Text) ]
+      tr <- CheckModule.handle
+              (undefined :: GhcSession)
+              (undefined :: Store)
+              pd args
+      pure (isTraversalRefused (decodeToolResult tr))
+
+-- | #100C: 'ghc_explain_error' must refuse traversal paths.
+testExplainErrorRejectsTraversal :: IO Bool
+testExplainErrorRejectsTraversal = do
+  case mkProjectDir "/tmp/project" of
+    Left _ -> pure False
+    Right pd -> do
+      let args = A.object
+            [ "module_path" A..= ("../../etc/passwd" :: Text) ]
+      tr <- ExplainError.handle
+              (undefined :: GhcSession)
+              pd args
+      pure (isTraversalRefused (decodeToolResult tr))
+
+-- | #100C: 'ghc_lab' must refuse traversal paths.
+testLabRejectsTraversal :: IO Bool
+testLabRejectsTraversal = do
+  case mkProjectDir "/tmp/project" of
+    Left _ -> pure False
+    Right pd -> do
+      let args = A.object
+            [ "module_path" A..= ("../../etc/passwd" :: Text) ]
+      tr <- LabTool.handle
+              (undefined :: GhcSession)
+              (undefined :: Store)
+              pd args
+      pure (isTraversalRefused (decodeToolResult tr))
+
+-- | #100C: 'ghc_load' must refuse traversal paths when 'module_path' is supplied.
+-- 'mkModulePath' fires in the Just-path branch before 'countHaskellSources'
+-- or any GhcSession usage.
+testLoadRejectsTraversal :: IO Bool
+testLoadRejectsTraversal = do
+  case mkProjectDir "/tmp/project" of
+    Left _ -> pure False
+    Right pd -> do
+      let args = A.object
+            [ "module_path" A..= ("../../etc/passwd" :: Text) ]
+      tr <- LoadTool.handle
+              (undefined :: GhcSession)
+              pd args
+      pure (isTraversalRefused (decodeToolResult tr))
+
+-- | #100C: 'ghc_refactor' must refuse traversal paths.
+testRefactorRejectsTraversal :: IO Bool
+testRefactorRejectsTraversal = do
+  case mkProjectDir "/tmp/project" of
+    Left _ -> pure False
+    Right pd -> do
+      let args = A.object
+            [ "action"           A..= ("rename_local" :: Text)
+            , "module_path"      A..= ("../../etc/passwd" :: Text)
+            , "old_name"         A..= ("foo" :: Text)
+            , "new_name"         A..= ("bar" :: Text)
+            , "scope_line_start" A..= (1 :: Int)
+            , "scope_line_end"   A..= (10 :: Int)
+            ]
+      tr <- RefactorTool.handle
+              (undefined :: GhcSession)
+              pd args
+      pure (isTraversalRefused (decodeToolResult tr))

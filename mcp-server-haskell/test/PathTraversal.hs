@@ -49,6 +49,8 @@ module PathTraversal
   , shrinkAdversarialPath
     -- * Filesystem-aware fuzz (Issue #100 Phase B)
   , testSymlinkEscapeAcceptedByPureGuard
+    -- * Runtime canonical check (Issue #100 Phase D)
+  , testCanonicalCheckCatchesSymlink
   ) where
 
 import Control.Exception (IOException, try)
@@ -68,6 +70,7 @@ import Test.QuickCheck
 
 import HaskellFlows.Types
   ( ProjectDir
+  , canonicalModulePathCheck
   , mkModulePath
   , mkProjectDir
   , unModulePath
@@ -252,7 +255,7 @@ instance Arbitrary AdversarialPath where
 -- consistent).
 prop_pathGuard_canonical_invariant :: Property
 prop_pathGuard_canonical_invariant =
-  withNumTests 1000 $
+  withMaxSuccess 1000 $
     forAllShrink (unAdversarialPath <$> arbitrary) shrinkAdversarialPath $
       \rawPath -> ioProperty $ do
         pd <- getPropertyProjectDir
@@ -279,7 +282,7 @@ prop_pathGuard_canonical_invariant =
 -- accept; any divergence is a CWE-22 bypass.
 prop_pathGuard_lint_resolveTarget_consistent :: Property
 prop_pathGuard_lint_resolveTarget_consistent =
-  withNumTests 1000 $
+  withMaxSuccess 1000 $
     forAllShrink (unAdversarialPath <$> arbitrary) shrinkAdversarialPath $
       \rawPath -> ioProperty $ do
         pd <- getPropertyProjectDir
@@ -299,7 +302,7 @@ prop_pathGuard_lint_resolveTarget_consistent =
 -- the project documentation explicitly claims.
 prop_pathGuard_dotdot_always_rejected :: Property
 prop_pathGuard_dotdot_always_rejected =
-  withNumTests 500 $
+  withMaxSuccess 500 $
     forAllShrink (unAdversarialPath <$> arbitrary) shrinkAdversarialPath $
       \rawPath -> ioProperty $ do
         pd <- getPropertyProjectDir
@@ -431,3 +434,42 @@ testSymlinkEscapeAcceptedByPureGuard = do
                 putStrLn ("  symlink resolved INSIDE root unexpectedly. \
                           \root=" <> rootCanon <> " resolved=" <> canon)
               pure escaped
+
+--------------------------------------------------------------------------------
+-- Phase D — 'canonicalModulePathCheck' catches symlink escapes
+--------------------------------------------------------------------------------
+
+-- | Issue #100 Phase D: 'canonicalModulePathCheck' must catch a symlink
+-- that the pure guard passed. Mirrors 'testSymlinkEscapeAcceptedByPureGuard'
+-- but calls the IO-level canonical check instead of raw 'canonicalizePath'.
+-- PASS = the canonical check returned Left (escape detected).
+testCanonicalCheckCatchesSymlink :: IO Bool
+testCanonicalCheckCatchesSymlink = do
+  tmp         <- getTemporaryDirectory
+  let projectDir = tmp </> "haskell-flows-phaseD-symlink"
+      srcDir     = projectDir </> "src" </> "escape"
+      attackTgt  = tmp </> "etc"           -- target outside the project
+      linkPath   = srcDir </> "some_target"
+  mapM_ (createDirectoryIfMissing True) [srcDir, attackTgt]
+  _ <- (try (removeFile linkPath) :: IO (Either IOException ()))
+  symlinkResult <- (try (createFileLink attackTgt linkPath)
+                      :: IO (Either IOException ()))
+  case symlinkResult of
+    Left _ -> do
+      putStrLn "  (skipped: symlinks unavailable on this filesystem)"
+      pure True   -- silent skip, same policy as Phase B
+    Right () ->
+      case mkProjectDir projectDir of
+        Left e -> do
+          putStrLn ("  setup failed: " <> show e)
+          pure False
+        Right pd ->
+          case mkModulePath pd "src/escape/some_target" of
+            Left _ -> do
+              putStrLn "  pure guard rejected — cannot reach canonicalCheck"
+              pure False        -- unexpected; Phase B covers this branch
+            Right mp -> do
+              -- Pure guard passed (symlink's path has no '..'). Now
+              -- ask the IO-level canonical check:
+              result <- canonicalModulePathCheck pd mp
+              pure (isLeft result)     -- PASS = canonical check caught escape

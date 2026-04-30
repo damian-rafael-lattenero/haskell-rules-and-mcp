@@ -216,7 +216,7 @@ handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
   Right args -> case mkModulePath pd (T.unpack (fwModulePath args)) of
-    Left e -> pure (errorResult (T.pack (show e)))
+    Left e -> pure (pathTraversalResult (T.pack (show e)))
     Right mp -> do
       let full  = unModulePath mp
       eRead <- try (TIO.readFile full) :: IO (Either SomeException Text)
@@ -291,9 +291,14 @@ appliedResult path plan args =
 
 -- | Issue #90 Phase C: bad input / IO failure / 'patch would
 -- empty file' refusal → status='failed', kind='validation'.
--- Path-traversal failures from 'mkModulePath' surface here too;
--- the structured PathError is in the message body.
 errorResult :: Text -> ToolResult
 errorResult msg =
   Env.toolResponseToResult
     (Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg))
+
+-- | Issue #100 Phase C: 'mkModulePath' rejected the path (escapes
+-- project root) → status='refused', kind='path_traversal'.
+pathTraversalResult :: Text -> ToolResult
+pathTraversalResult msg =
+  Env.toolResponseToResult
+    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))

@@ -70,7 +70,7 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
     case rejectedExports (aeExports args) of
       bad@(_:_) -> pure (exportRejectionResult bad)
       [] -> case mkModulePath pd (T.unpack (aeModulePath args)) of
-        Left e -> pure (errorResult (T.pack (show e)))
+        Left e -> pure (pathTraversalResult (T.pack (show e)))
         Right mp -> do
           let full = unModulePath mp
           eRead <- try (TIO.readFile full) :: IO (Either SomeException Text)
@@ -152,12 +152,18 @@ noChangeResult path =
 -- | Issue #90 Phase C: bad-input / IO failure path → status='failed',
 -- kind='validation' (input was structurally fine but failed a
 -- domain check or filesystem operation). Path-traversal cases are
--- caught at 'mkModulePath' and surface here as 'Validation' too —
--- the structured PathError is in the message body.
+-- caught at 'mkModulePath'.
 errorResult :: Text -> ToolResult
 errorResult msg =
   Env.toolResponseToResult
     (Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg))
+
+-- | Issue #100 Phase C: 'mkModulePath' rejected the path (escapes
+-- project root) → status='refused', kind='path_traversal'.
+pathTraversalResult :: Text -> ToolResult
+pathTraversalResult msg =
+  Env.toolResponseToResult
+    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
 
 -- | ISSUE-47: structured rejection when at least one export is a
 -- Haskell reserved keyword. The agent gets the offending names

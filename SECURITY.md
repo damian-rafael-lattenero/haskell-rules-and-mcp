@@ -75,6 +75,81 @@ Response expectations (best-effort, single maintainer):
   developer would — the sandbox is whatever GHCi provides.
 - Issues that require physical access to the developer's machine.
 
+## Path-traversal threat model (#100)
+
+**Issue**: MCP tools accept a `module_path` argument that is a
+project-relative file path. Without validation, an agent (or malicious
+prompt injection) can pass `../../etc/passwd` to read or overwrite files
+outside the project root. This is CWE-22.
+
+**Defence — two layers (as of 2026-04-30)**:
+
+### Layer 1 — Pure lexical guard (`mkModulePath`, always active)
+
+Every tool that accepts `module_path` routes the value through
+`HaskellFlows.Types.mkModulePath` before any filesystem access. This
+function:
+
+1. Joins the project root with the raw path using
+   `System.FilePath.normalise` (no IO, no kernel call).
+2. Splits the result into directory segments.
+3. Rejects any path containing a `..` segment, or whose normalised
+   absolute form does not share a prefix with the project root.
+
+Tools covered: `ghc_apply_exports`, `ghc_check_module`,
+`ghc_explain_error`, `ghc_fix_warning`, `ghc_format`, `ghc_hole`,
+`ghc_lab`, `ghc_lint` (via `resolveTarget`), `ghc_load`, `ghc_refactor`,
+and `ghc_check_project`. All return `status=refused, kind=path_traversal`
+when the guard fires, with an `eeField` identifying `"module_path"`.
+
+Property-based regression: `prop_pathGuard_dotdot_always_rejected`
+(in `test/PathTraversal.hs`) exhaustively fuzz-tests this guard on
+adversarial inputs across seven historical CVE categories.
+
+### Layer 2 — IO canonical check (`canonicalModulePathCheck`, defence-in-depth)
+
+After the lexical guard accepts a path, tools that **write files** call
+`HaskellFlows.Types.canonicalModulePathCheck` before touching the disk.
+This function:
+
+1. Calls `System.Directory.canonicalizePath` on the resolved file path
+   (follows all symlinks to their real destination).
+2. Calls `canonicalizePath` on the project root.
+3. Verifies the canonical file path is prefixed by the canonical root.
+
+Currently applied at: `ghc_format` (write site, `write=true` mode).
+
+**Why write sites only**: `canonicalizePath` requires the path to exist
+on disk (it calls `realpath(3)`). For read-only tools the lexical guard
+is sufficient; write tools carry more risk so they use both layers.
+
+**macOS note**: on macOS, `/var/folders/...` canonicalises to
+`/private/var/folders/...`. Canonicalising _both_ paths (root and file)
+neutralises the asymmetry — the prefix check works correctly on all
+platforms.
+
+### Known gap — symlinks in lexical-only tools
+
+The lexical guard does not follow symlinks. A symlink at
+`src/escape -> /etc` passes the `..`-free check because the link's
+filesystem name contains no `..`. The canonical check (Layer 2) catches
+this, but it is currently only applied at write sites.
+
+Implication: a read-only tool (`ghc_hole`, `ghc_load`, etc.) can be
+tricked into reading a file outside the project root via a pre-planted
+symlink. This is documented as a known limitation rather than a
+vulnerability, because:
+
+- The MCP runs with the developer's own filesystem permissions.
+- Symlinks are physical files the developer themselves would have had to
+  create (or an attacker would need separate write access to create them).
+- The canonical check is being progressively rolled out to read sites in
+  subsequent phases.
+
+Test canary: `testSymlinkEscapeAcceptedByPureGuard` and
+`testCanonicalCheckCatchesSymlink` in `test/PathTraversal.hs` document
+this gap and verify that Layer 2 closes it.
+
 ## Known trust boundaries
 
 Two external trust decisions are explicit:

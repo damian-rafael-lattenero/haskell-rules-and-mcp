@@ -42,6 +42,7 @@ import HaskellFlows.Types
   ( ModulePath
   , PathError (..)
   , ProjectDir
+  , canonicalModulePathCheck
   , mkModulePath
   , unModulePath
   , unProjectDir
@@ -99,13 +100,22 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
   Right args -> case mkModulePath pd (T.unpack (faModulePath args)) of
     Left e -> pure (pathTraversalResult (formatPathError e))
     Right mp -> do
-      mFormatter <- resolveFormatter
-      case mFormatter of
-        Nothing ->
-          pure (unavailableResult "Neither fourmolu nor ormolu was found on PATH")
-        Just f -> do
-          outcome <- runFormatter pd f mp (faWrite args)
-          pure (renderResult f mp (faWrite args) outcome)
+      -- Issue #100 Phase D: defence-in-depth canonical check before any
+      -- file write. 'mkModulePath' is a pure lexical guard; this IO-level
+      -- check canonicalises both paths (resolves symlinks) so a symlink
+      -- pointing outside the project root is caught here even if the
+      -- lexical guard passed.
+      canonResult <- canonicalModulePathCheck pd mp
+      case canonResult of
+        Left e -> pure (pathTraversalResult (formatPathError e))
+        Right () -> do
+          mFormatter <- resolveFormatter
+          case mFormatter of
+            Nothing ->
+              pure (unavailableResult "Neither fourmolu nor ormolu was found on PATH")
+            Just f -> do
+              outcome <- runFormatter pd f mp (faWrite args)
+              pure (renderResult f mp (faWrite args) outcome)
 
 -- | Issue #90 Phase C: caller-side parse failure → status='failed'
 -- with kind='missing_arg' (missing key) or 'type_mismatch'.
