@@ -23,7 +23,7 @@ import qualified Data.List as List
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (exitFailure, exitSuccess)
 import qualified System.Environment
@@ -1901,7 +1901,7 @@ testParseErrorRawAlwaysPreserved =
 --------------------------------------------------------------------------------
 
 -- | Sample two-branch schema modelled on ghc_refactor's eventual shape.
-sampleRefactorSchema :: Value
+sampleRefactorSchema :: A.Value
 sampleRefactorSchema = Schema.discriminatedSchema "action"
   [ Schema.SchemaBranch
       { Schema.sbDiscriminantValue = "rename_local"
@@ -1938,10 +1938,10 @@ sampleRefactorSchema = Schema.discriminatedSchema "action"
 -- branch-aware hosts will see what they expect.
 testSchemaTopLevelOneOf :: IO Bool
 testSchemaTopLevelOneOf = pure $ case sampleRefactorSchema of
-  Object km ->
-       AKM.lookup "type" km == Just (String "object")
+  A.Object km ->
+       AKM.lookup "type" km == Just (A.String "object")
     && case AKM.lookup "oneOf" km of
-         Just (Array xs) -> length xs == 2
+         Just (A.Array xs) -> length xs == 2
          _               -> False
   _ -> False
 
@@ -1951,17 +1951,17 @@ testSchemaTopLevelOneOf = pure $ case sampleRefactorSchema of
 testSchemaDiscriminantInEveryBranch :: IO Bool
 testSchemaDiscriminantInEveryBranch = pure $
   case sampleRefactorSchema of
-    Object km -> case AKM.lookup "oneOf" km of
-      Just (Array xs) -> all branchHasDiscriminant (V.toList xs)
+    A.Object km -> case AKM.lookup "oneOf" km of
+      Just (A.Array xs) -> all branchHasDiscriminant (Vector.toList xs)
       _               -> False
     _ -> False
   where
-    branchHasDiscriminant (Object km) =
+    branchHasDiscriminant (A.Object km) =
       let inProps = case AKM.lookup "properties" km of
-            Just (Object p) -> AKey.fromText "action" `AKM.member` p
+            Just (A.Object p) -> AKey.fromText "action" `AKM.member` p
             _               -> False
           inRequired = case AKM.lookup "required" km of
-            Just (Array reqs) -> String "action" `V.elem` reqs
+            Just (A.Array reqs) -> A.String "action" `Vector.elem` reqs
             _                 -> False
       in inProps && inRequired
     branchHasDiscriminant _ = False
@@ -1974,17 +1974,17 @@ testSchemaDiscriminantInEveryBranch = pure $
 testSchemaDiscriminantConstMatchesValue :: IO Bool
 testSchemaDiscriminantConstMatchesValue = pure $
   case sampleRefactorSchema of
-    Object km -> case AKM.lookup "oneOf" km of
-      Just (Array xs) ->
-        let consts = mapMaybe extractActionConst (V.toList xs)
+    A.Object km -> case AKM.lookup "oneOf" km of
+      Just (A.Array xs) ->
+        let consts = mapMaybe extractActionConst (Vector.toList xs)
         in consts == ["rename_local", "extract_binding"]
       _ -> False
     _ -> False
   where
-    extractActionConst (Object km) = do
-      Object props <- AKM.lookup "properties" km
-      Object actObj <- AKM.lookup "action" props
-      String c <- AKM.lookup "const" actObj
+    extractActionConst (A.Object km) = do
+      A.Object props <- AKM.lookup "properties" km
+      A.Object actObj <- AKM.lookup "action" props
+      A.String c <- AKM.lookup "const" actObj
       pure c
     extractActionConst _ = Nothing
 
@@ -1996,9 +1996,9 @@ testSchemaDiscriminantConstMatchesValue = pure $
 testSchemaRequiredSetsAreCorrect :: IO Bool
 testSchemaRequiredSetsAreCorrect = pure $
   case sampleRefactorSchema of
-    Object km -> case AKM.lookup "oneOf" km of
-      Just (Array xs) ->
-        let reqs = mapMaybe extractRequired (V.toList xs)
+    A.Object km -> case AKM.lookup "oneOf" km of
+      Just (A.Array xs) ->
+        let reqs = mapMaybe extractRequired (Vector.toList xs)
             renameSet  = ["action", "module_path", "new_name", "old_name"
                          , "scope_line_start", "scope_line_end"]
             extractSet = ["action", "module_path", "new_name"
@@ -2007,9 +2007,9 @@ testSchemaRequiredSetsAreCorrect = pure $
       _ -> False
     _ -> False
   where
-    extractRequired (Object km) = do
-      Array reqs <- AKM.lookup "required" km
-      pure [ s | String s <- V.toList reqs ]
+    extractRequired (A.Object km) = do
+      A.Array reqs <- AKM.lookup "required" km
+      pure [ s | A.String s <- Vector.toList reqs ]
     extractRequired _ = Nothing
 
 -- | additionalProperties: false is essential so a host doesn't
@@ -2017,13 +2017,13 @@ testSchemaRequiredSetsAreCorrect = pure $
 testSchemaAdditionalPropertiesFalse :: IO Bool
 testSchemaAdditionalPropertiesFalse = pure $
   case sampleRefactorSchema of
-    Object km -> case AKM.lookup "oneOf" km of
-      Just (Array xs) -> all checkBranch (V.toList xs)
+    A.Object km -> case AKM.lookup "oneOf" km of
+      Just (A.Array xs) -> all checkBranch (Vector.toList xs)
       _               -> False
     _ -> False
   where
-    checkBranch (Object km) =
-      AKM.lookup "additionalProperties" km == Just (Bool False)
+    checkBranch (A.Object km) =
+      AKM.lookup "additionalProperties" km == Just (A.Bool False)
     checkBranch _ = False
 
 -- | Anchor: 'flatObjectSchema' for non-discriminated tools matches
@@ -2036,11 +2036,11 @@ testSchemaFlatObject =
             [ ("expression", Schema.stringField "Haskell expression to eval.") ]
             [ "expression" ]
   in pure $ case s of
-       Object km ->
-            AKM.lookup "type" km == Just (String "object")
-         && AKM.lookup "additionalProperties" km == Just (Bool False)
+       A.Object km ->
+            AKM.lookup "type" km == Just (A.String "object")
+         && AKM.lookup "additionalProperties" km == Just (A.Bool False)
          && case AKM.lookup "required" km of
-              Just (Array reqs) -> reqs == V.fromList [String "expression"]
+              Just (A.Array reqs) -> reqs == Vector.fromList [A.String "expression"]
               _                 -> False
        _ -> False
 
@@ -2054,8 +2054,8 @@ testSchemaFieldBuilders =
               , ("array",   Schema.arrayField   "x")
               ]
       ok (expected, v) = case v of
-        Object km -> AKM.lookup "type" km == Just (String expected)
-                  && AKM.lookup "description" km == Just (String "x")
+        A.Object km -> AKM.lookup "type" km == Just (A.String expected)
+                  && AKM.lookup "description" km == Just (A.String "x")
         _         -> False
   in pure (all ok cases)
 
