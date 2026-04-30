@@ -52,7 +52,7 @@ import HaskellFlows.Ghc.ApiSession
   , startGhcSession
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.ErrorKind (ErrorKind (..), renderErrorKind)
+import HaskellFlows.Mcp.ErrorKind (ErrorKind (..))
 import HaskellFlows.Mcp.Guidance (sessionInstructionsText, workflowRulesMarkdown)
 import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
 import HaskellFlows.Mcp.Protocol

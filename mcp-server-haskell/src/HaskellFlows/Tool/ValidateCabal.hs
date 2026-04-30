@@ -31,8 +31,6 @@ import Data.List (group, sort)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (doesDirectoryExist, doesFileExist, findExecutable, listDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeExtension, (</>))

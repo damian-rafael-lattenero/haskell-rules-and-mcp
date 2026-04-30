@@ -25,7 +25,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import System.Directory (findExecutable)
 import System.Exit (ExitCode (..))
-import System.FilePath (takeDirectory, (</>))
+import System.FilePath ((</>))
 import System.IO (hClose, hGetContents)
 import System.Process
   ( CreateProcess (..)
