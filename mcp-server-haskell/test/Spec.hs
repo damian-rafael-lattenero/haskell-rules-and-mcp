@@ -441,6 +441,10 @@ main = do
                                                    testEveryToolHasNonEmptyDescription
       , test "Tool descriptors · every tdName is in the canonical ADT"
                                                    testEveryToolNameIsCanonical
+      , test "Tool descriptors · tdName ≤ 50 chars"
+                                                   testEveryToolNameIsShort
+      , test "Tool descriptors · tdDescription ≥ 20 chars"
+                                                   testEveryToolDescriptionIsSubstantive
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
       , test "validatePackageName accepts normal"  testPkgAccepts
@@ -2384,6 +2388,38 @@ testEveryToolNameIsCanonical = do
         ]
   unless (null bad) $
     putStrLn ("Tools with non-canonical name: " <> show bad)
+  pure (null bad)
+
+-- | Tool names should be reasonably short — they appear in
+-- 'tools/list', in selector menus, and in nextStep
+-- recommendations. Anchor: nothing should exceed 50 chars.
+-- The current longest is well under that (around 24 chars
+-- for 'ghc_quickcheck_export'); the invariant catches a
+-- runaway case like a future @ghc_some_extremely_long_name@
+-- before it ships.
+testEveryToolNameIsShort :: IO Bool
+testEveryToolNameIsShort = do
+  let bad =
+        [ (tdName d, T.length (tdName d))
+        | d <- allToolDescriptors
+        , T.length (tdName d) > 50
+        ]
+  unless (null bad) $
+    putStrLn ("Tool names exceeding 50 chars: " <> show bad)
+  pure (null bad)
+
+-- | Tool descriptions should be substantive — at least 20
+-- characters after stripping. Protects against a future
+-- placeholder like 'tdDescription = "TODO"'.
+testEveryToolDescriptionIsSubstantive :: IO Bool
+testEveryToolDescriptionIsSubstantive = do
+  let bad =
+        [ tdName d
+        | d <- allToolDescriptors
+        , T.length (T.strip (tdDescription d)) < 20
+        ]
+  unless (null bad) $
+    putStrLn ("Tools with too-short descriptions: " <> show bad)
   pure (null bad)
 
 -- | Round-trip a property through the on-disk store. Uses a unique
