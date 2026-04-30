@@ -199,6 +199,7 @@ import HaskellFlows.Tool.Deps
   , validatePackageName
   , validateVersionConstraint
   )
+import qualified HaskellFlows.Tool.Deps as DepsTool
 import HaskellFlows.Refactor.Extract
   ( ExtractResult (..)
   , extractBinding
@@ -421,6 +422,17 @@ main = do
                                                    testRefactorExtractBindingMissingScope
       , test "Refactor · published schema uses discriminatedSchema (#92B)"
                                                    testRefactorSchemaIsDiscriminated
+      -- Issue #92 Phase B: ghc_deps migration
+      , test "Deps · 'list' bare {action:list} parses (#92B)"
+                                                   testDepsListBareParses
+      , test "Deps · 'add' missing package fails parse (#92B)"
+                                                   testDepsAddMissingPackage
+      , test "Deps · 'remove' missing package fails parse (#92B)"
+                                                   testDepsRemoveMissingPackage
+      , test "Deps · 'add' with package + version parses (#92B)"
+                                                   testDepsAddCompleteParses
+      , test "Deps · published schema uses discriminatedSchema (#92B)"
+                                                   testDepsSchemaIsDiscriminated
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
       , test "validatePackageName accepts normal"  testPkgAccepts
@@ -2172,6 +2184,69 @@ testRefactorSchemaIsDiscriminated =
   in pure $ case s of
        A.Object km -> case AKM.lookup "oneOf" km of
          Just (A.Array xs) -> length xs == 2
+         _                 -> False
+       _ -> False
+
+--------------------------------------------------------------------------------
+-- Issue #92 Phase B: ghc_deps migration anchors
+--
+-- Same shape as the Refactor anchors above — pre-#92 the schema
+-- declared @required: [\"action\"]@ for ghc_deps but the runtime
+-- emitted "'package' is required for add" at runtime. Each
+-- branch now declares its own required-field set.
+--------------------------------------------------------------------------------
+
+-- | 'list' has no extra required fields — bare {action: list} parses.
+testDepsListBareParses :: IO Bool
+testDepsListBareParses = do
+  let raw = "{\"action\":\"list\"}"
+  pure $ case A.decode raw :: Maybe A.Value of
+    Just v -> case A.fromJSON v :: A.Result DepsTool.DepsArgs of
+      A.Success _ -> True
+      _           -> False
+    _      -> False
+
+-- | 'add' without 'package' must FAIL at parse time — the
+-- bug-class anchor that #92 closes.
+testDepsAddMissingPackage :: IO Bool
+testDepsAddMissingPackage = do
+  let raw = "{\"action\":\"add\"}"
+  pure $ case A.decode raw :: Maybe A.Value of
+    Just v -> case A.fromJSON v :: A.Result DepsTool.DepsArgs of
+      A.Error _ -> True
+      _         -> False
+    _      -> False
+
+-- | 'remove' without 'package' must FAIL at parse time.
+testDepsRemoveMissingPackage :: IO Bool
+testDepsRemoveMissingPackage = do
+  let raw = "{\"action\":\"remove\"}"
+  pure $ case A.decode raw :: Maybe A.Value of
+    Just v -> case A.fromJSON v :: A.Result DepsTool.DepsArgs of
+      A.Error _ -> True
+      _         -> False
+    _      -> False
+
+-- | 'add' with 'package' parses cleanly. 'version' is optional
+-- (constraint-as-cabal-text), 'stanza' is optional (defaults to
+-- the first build-depends block). Anchor for the positive path.
+testDepsAddCompleteParses :: IO Bool
+testDepsAddCompleteParses = do
+  let raw = "{\"action\":\"add\",\"package\":\"text\",\"version\":\">= 2.0\"}"
+  pure $ case A.decode raw :: Maybe A.Value of
+    Just v -> case A.fromJSON v :: A.Result DepsTool.DepsArgs of
+      A.Success _ -> True
+      _           -> False
+    _      -> False
+
+-- | The published 'tdInputSchema' for ghc_deps must use
+-- discriminatedSchema with 3 branches (list / add / remove).
+testDepsSchemaIsDiscriminated :: IO Bool
+testDepsSchemaIsDiscriminated =
+  let s = tdInputSchema DepsTool.descriptor
+  in pure $ case s of
+       A.Object km -> case AKM.lookup "oneOf" km of
+         Just (A.Array xs) -> length xs == 3
          _                 -> False
        _ -> False
 

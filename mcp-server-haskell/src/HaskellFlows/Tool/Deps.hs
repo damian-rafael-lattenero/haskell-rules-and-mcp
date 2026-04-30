@@ -54,6 +54,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import qualified System.Process as Proc
 
 import qualified HaskellFlows.Mcp.Envelope as Env
+import qualified HaskellFlows.Mcp.Schema as Schema
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
@@ -107,46 +108,56 @@ descriptor =
           <> "version constraint), 'remove' (delete by name). After "
           <> "add/remove, the next ghc_load picks up the new "
           <> "package graph — no explicit session restart needed."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "action"  .= object
-                  [ "type" .= ("string" :: Text)
-                  , "enum" .= (["list", "add", "remove"] :: [Text])
-                  ]
-              , "package" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Hackage package name. Required for add/remove."
-                       :: Text)
-                  ]
-              , "version" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Optional cabal version constraint. Example: \
-                       \\">= 2.14\", \"^>= 1.4\". Only used on 'add'."
-                       :: Text)
-                  ]
-              , "stanza" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Optional stanza selector. Restrict the edit to a \
-                       \specific stanza of the .cabal file. Accepted: \
-                       \\"library\" (main library), \"test-suite\" (first \
-                       \occurrence), \"test-suite:NAME\", \"executable\" / \
-                       \\"executable:NAME\", \"benchmark\" / \
-                       \\"benchmark:NAME\", \"foreign-library\" / \
-                       \\"foreign-library:NAME\". Omit to target the first \
-                       \build-depends block in the file \
-                       \(backwards-compatible default)."
-                       :: Text)
-                  ]
-              ]
-          , "required"             .= ["action" :: Text]
-          , "additionalProperties" .= False
-          ]
+    , tdInputSchema = schema
     }
+
+-- | Issue #92 Phase B: per-action discriminated schema. The flat
+-- 'required: [action]' shape pre-#92 lied about 'add' / 'remove'
+-- (which both need 'package'); a host that respected it sent
+-- 'add' without a package and the runtime emitted the
+-- now-removed "'package' is required for add" message. Each
+-- branch now declares its own required-field set.
+schema :: Value
+schema = Schema.discriminatedSchema "action"
+  [ Schema.SchemaBranch
+      { Schema.sbDiscriminantValue = "list"
+      , Schema.sbDescription       =
+          "List the current build-depends of the targeted stanza."
+      , Schema.sbProperties        = [ ("stanza", stanzaField) ]
+      , Schema.sbRequired          = []
+      }
+  , Schema.SchemaBranch
+      { Schema.sbDiscriminantValue = "add"
+      , Schema.sbDescription       =
+          "Insert a package + optional version constraint into the \
+          \build-depends of the targeted stanza."
+      , Schema.sbProperties        =
+          [ ("package", Schema.stringField "Hackage package name.")
+          , ("version", Schema.stringField
+              "Optional cabal version constraint (e.g. '>= 2.14', '^>= 1.4').")
+          , ("stanza",  stanzaField)
+          ]
+      , Schema.sbRequired          = ["package"]
+      }
+  , Schema.SchemaBranch
+      { Schema.sbDiscriminantValue = "remove"
+      , Schema.sbDescription       =
+          "Remove a package from the build-depends of the targeted stanza."
+      , Schema.sbProperties        =
+          [ ("package", Schema.stringField "Package name to remove.")
+          , ("stanza",  stanzaField)
+          ]
+      , Schema.sbRequired          = ["package"]
+      }
+  ]
+  where
+    stanzaField = Schema.typedField "string"
+      "Optional stanza selector. \"library\" (main library), \
+      \\"test-suite\" (first occurrence), \"test-suite:NAME\", \
+      \\"executable\" / \"executable:NAME\", \"benchmark\" / \
+      \\"benchmark:NAME\", \"foreign-library\" / \
+      \\"foreign-library:NAME\". Omit to target the first build-depends \
+      \block in the file (backwards-compatible default)."
 
 data Action = ActList | ActAdd | ActRemove
   deriving stock (Eq, Show)
@@ -159,23 +170,45 @@ data DepsArgs = DepsArgs
   }
   deriving stock (Show)
 
+-- | Issue #92 Phase B: per-action validation at parse time. The
+-- flat record stays for handler convenience, but the parser now
+-- enforces the same required-field set the schema advertises —
+-- 'add' and 'remove' both require 'package' at parse time so the
+-- contract drift documented in #92 (schema lying about 'add'
+-- requiring only 'action') goes away.
 instance FromJSON DepsArgs where
   parseJSON = withObject "DepsArgs" $ \o -> do
     a <- o .:  "action"
-    p <- o .:? "package"
-    v <- o .:? "version"
     s <- o .:? "stanza"
     act <- case (a :: Text) of
       "list"   -> pure ActList
       "add"    -> pure ActAdd
       "remove" -> pure ActRemove
       other    -> fail ("unknown action: " <> T.unpack other)
-    pure DepsArgs
-      { daAction  = act
-      , daPackage = p
-      , daVersion = v
-      , daStanza  = s
-      }
+    case act of
+      ActList -> pure DepsArgs
+        { daAction  = act
+        , daPackage = Nothing
+        , daVersion = Nothing
+        , daStanza  = s
+        }
+      ActAdd -> do
+        p <- o .:  "package"
+        v <- o .:? "version"
+        pure DepsArgs
+          { daAction  = act
+          , daPackage = Just p
+          , daVersion = v
+          , daStanza  = s
+          }
+      ActRemove -> do
+        p <- o .:  "package"
+        pure DepsArgs
+          { daAction  = act
+          , daPackage = Just p
+          , daVersion = Nothing
+          , daStanza  = s
+          }
 
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
