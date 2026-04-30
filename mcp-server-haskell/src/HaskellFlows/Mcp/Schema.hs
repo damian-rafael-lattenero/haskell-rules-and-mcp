@@ -1,5 +1,5 @@
--- | Issue #92 Phase A — JSON Schema builder helpers for action-discriminated
--- tools.
+-- | Issue #92 Phase A — JSON Schema builder helpers for
+-- action-discriminated tools.
 --
 -- Background: 'tools/list' is the canonical truth-source for /\"what
 -- arguments does this tool accept?\"/, but pre-#92 tools whose
