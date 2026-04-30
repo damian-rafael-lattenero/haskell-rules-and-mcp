@@ -35,3 +35,7 @@ playground/*/
 
 # Local MCP config (may contain personal paths/env). Copy from .mcp.example.json
 .mcp.json
+
+# ghc_deps writes a per-machine cabal.lock during dependency edits;
+# the file is empty/transient and not part of the project's version graph.
+*.cabal.lock
