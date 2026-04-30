@@ -223,7 +223,7 @@ import Control.Exception (SomeException, bracket_, try)
 import qualified HaskellFlows.Mcp.PathBootstrap
 import qualified System.Directory
 import qualified System.FilePath
-import Control.Monad (when)
+import Control.Monad (unless, when)
 import Control.Concurrent.MVar
   ( newEmptyMVar, putMVar, takeMVar, newMVar, readMVar )
 import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, removePathForcibly)
@@ -431,6 +431,8 @@ main = do
                                                    testDepsAddCompleteParses
       , test "Deps · published schema uses discriminatedSchema (#92B)"
                                                    testDepsSchemaIsDiscriminated
+      , test "Schema · every registered tool publishes valid JSON Schema (#92D)"
+                                                   testEveryToolPublishesValidSchema
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
       , test "validatePackageName accepts normal"  testPkgAccepts
@@ -2247,6 +2249,59 @@ testDepsSchemaIsDiscriminated =
          Just (A.Array xs) -> length xs == 3
          _                 -> False
        _ -> False
+
+--------------------------------------------------------------------------------
+-- Issue #92 Phase D (lite): every registered tool's input schema is
+-- well-formed JSON-Schema-shaped (Object with either the flat or the
+-- oneOf-discriminated layout).
+--
+-- This is the CI lint rule the meta-issue called out as Phase D —
+-- catches a contributor who hand-writes a malformed 'tdInputSchema'
+-- that 'tools/list' would publish to every host. We don't yet do the
+-- "if oneOf, runtime FromJSON must be sum-typed" inverse check
+-- (that requires runtime introspection of the parser); the
+-- structural anchor here covers the common drift modes:
+--
+--   * 'tdInputSchema' must be a JSON Object (not an Array, not a
+--     primitive — Aeson's 'object' helper guarantees this, but a
+--     refactor that swaps in a hand-built Value could regress).
+--   * The Object must declare 'type: "object"'.
+--   * Either 'properties' is present (flat) OR 'oneOf' is a
+--     non-empty array of well-formed branches (discriminated).
+--   * No tool ships a Null/empty schema.
+--------------------------------------------------------------------------------
+
+testEveryToolPublishesValidSchema :: IO Bool
+testEveryToolPublishesValidSchema = do
+  let invalid =
+        [ tdName d
+        | d <- allToolDescriptors
+        , not (isValidSchema (tdInputSchema d))
+        ]
+  unless (null invalid) $
+    putStrLn ("Tools with malformed schemas: " <> show invalid)
+  pure (null invalid)
+  where
+    isValidSchema (A.Object km) =
+      AKM.lookup "type" km == Just (A.String "object")
+        && (isFlat km || isDiscriminated km)
+    isValidSchema _ = False
+
+    isFlat km = case AKM.lookup "properties" km of
+      Just (A.Object _) -> True
+      _                 -> False
+
+    isDiscriminated km = case AKM.lookup "oneOf" km of
+      Just (A.Array xs) ->
+        not (Vector.null xs) && all isValidBranch (Vector.toList xs)
+      _ -> False
+
+    isValidBranch (A.Object km) =
+      AKM.lookup "type" km == Just (A.String "object")
+        && case AKM.lookup "properties" km of
+             Just (A.Object _) -> True
+             _                 -> False
+    isValidBranch _ = False
 
 -- | Round-trip a property through the on-disk store. Uses a unique
 -- temp project dir to keep repeated test runs independent.
