@@ -29,6 +29,10 @@ module HaskellFlows.Mcp.ToolName
   , parseToolName
   , allToolNames
   , allToolNameTexts
+    -- * Tool taxonomy (issue #94 Phase A)
+  , ToolCategory (..)
+  , toolCategoryText
+  , toolCategory
   ) where
 
 import qualified Data.Map.Strict as Map
@@ -159,3 +163,95 @@ allToolNames = [minBound .. maxBound]
 -- 'allToolNames'.
 allToolNameTexts :: [Text]
 allToolNameTexts = map toolNameText allToolNames
+
+------------------------------------------------------------------------
+-- Tool taxonomy (issue #94 Phase A)
+------------------------------------------------------------------------
+
+-- | Four-way classification of every MCP tool (issue #94).
+--
+-- * 'CatPrimitive'    — atomic operation the agent can compose; no
+--   other tool in this list provides the same capability.
+-- * 'CatComposite'    — internally chains ≥2 primitives; exposed as a
+--   single surface point for round-trip convenience.
+-- * 'CatGate'         — zero-argument (or single-flavour) composite
+--   that returns a binary green\/red decision; used as a pre-push hook.
+-- * 'CatControlPlane' — talks *about* the MCP or toolchain, not about
+--   Haskell source; used for orientation and recovery.
+data ToolCategory
+  = CatPrimitive
+  | CatComposite
+  | CatGate
+  | CatControlPlane
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+-- | Render a 'ToolCategory' as a lowercase text label suitable for
+-- JSON or log output.
+toolCategoryText :: ToolCategory -> Text
+toolCategoryText = \case
+  CatPrimitive    -> "primitive"
+  CatComposite    -> "composite"
+  CatGate         -> "gate"
+  CatControlPlane -> "control_plane"
+
+-- | Classify every registered tool into the four-category taxonomy.
+-- This is the authoritative mapping; 'docs/TOOL_TAXONOMY.md' is
+-- generated from it.  Adding a new constructor to 'ToolName' without
+-- adding an arm here is a compile error.
+toolCategory :: ToolName -> ToolCategory
+toolCategory = \case
+  -- ── Primitives ──────────────────────────────────────────────────
+  -- Read / inspect
+  GhcLoad              -> CatPrimitive
+  GhcType              -> CatPrimitive
+  GhcInfo              -> CatPrimitive
+  GhcEval              -> CatPrimitive
+  GhcHole              -> CatPrimitive
+  GhcComplete          -> CatPrimitive
+  GhcGoto              -> CatPrimitive
+  GhcBrowse            -> CatPrimitive
+  GhcImports           -> CatPrimitive
+  GhcDoc               -> CatPrimitive
+  HoogleSearch         -> CatPrimitive
+  -- Write / refactor
+  GhcRefactor          -> CatPrimitive
+  GhcMove              -> CatPrimitive   -- future: refactor action=move_symbol
+  GhcFormat            -> CatPrimitive
+  GhcApplyExports      -> CatPrimitive
+  GhcFixWarning        -> CatPrimitive
+  GhcAddImport         -> CatPrimitive
+  GhcArbitrary         -> CatPrimitive
+  -- Dependency + project management
+  GhcDeps              -> CatPrimitive
+  GhcDepsExplain       -> CatPrimitive   -- future: deps action=explain
+  GhcAddModules        -> CatPrimitive   -- future: modules action=add
+  GhcRemoveModules     -> CatPrimitive   -- future: modules action=remove
+  GhcCreateProject     -> CatPrimitive   -- future: project action=create
+  GhcSwitchProject     -> CatPrimitive   -- future: project action=switch
+  GhcValidateCabal     -> CatPrimitive   -- future: project action=validate
+  GhcBootstrap         -> CatPrimitive   -- future: project action=bootstrap
+  -- Property-first testing
+  GhcQuickCheck        -> CatPrimitive
+  GhcDeterminism       -> CatPrimitive   -- future: quickcheck runs=N
+  GhcSuggest           -> CatPrimitive
+  GhcPropertyLifecycle -> CatPrimitive   -- future: property_store action=list|drop
+  GhcRegression        -> CatPrimitive   -- future: property_store action=run
+  GhcQuickCheckExport  -> CatPrimitive   -- future: property_store action=export
+  GhcPropertyAudit     -> CatPrimitive   -- future: property_store action=audit
+  -- Phase-2 advanced
+  GhcPerf              -> CatPrimitive
+  GhcWitness           -> CatPrimitive
+  GhcExplainError      -> CatPrimitive
+  -- ── Composites ──────────────────────────────────────────────────
+  GhcGate              -> CatComposite  -- regression + cabal-test + cabal-build
+  GhcLab               -> CatComposite  -- browse + suggest + quickcheck per binding
+  GhcCoverage          -> CatComposite  -- cabal-test --enable-coverage + HPC parse
+  GhcBatch             -> CatComposite  -- N sequential tool calls
+  -- ── Gates ───────────────────────────────────────────────────────
+  GhcCheckModule       -> CatGate       -- per-file compile + warnings + holes + props
+  GhcCheckProject      -> CatGate       -- whole-project compile + warnings + holes + props
+  GhcLint              -> CatGate       -- hlint over the project
+  -- ── Control-plane ───────────────────────────────────────────────
+  GhcWorkflow          -> CatControlPlane
+  GhcToolchainStatus   -> CatControlPlane
+  GhcToolchainWarmup   -> CatControlPlane

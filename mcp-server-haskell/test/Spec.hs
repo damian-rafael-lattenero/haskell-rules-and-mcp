@@ -89,9 +89,12 @@ import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescripto
 import qualified HaskellFlows.Bench.Budget as Budget
 import qualified HaskellFlows.Bench.Runner as Runner
 import HaskellFlows.Mcp.ToolName
-  ( ToolName (..)
+  ( ToolCategory (..)
+  , ToolName (..)
   , allToolNames
   , parseToolName
+  , toolCategory
+  , toolCategoryText
   , toolNameText
   )
 import HaskellFlows.Mcp.ErrorKind
@@ -1116,6 +1119,10 @@ main = do
       , test "#95D: nextStep Gate E — chain ≤ 4 steps"               testNextStepGateEChainLength
       -- Issue #95 Phase C · golden dispatch snapshot
       , test "#95C: nextStep golden dispatch table"                    testNextStepGoldenDispatch
+      -- Issue #94 Phase A · tool taxonomy invariants
+      , test "#94A: tool count ≤ 50 (surface-bloat cap)"              testToolCountWithinCap
+      , test "#94A: every ToolName has a category"                     testEveryToolHasCategory
+      , test "#94A: category counts match taxonomy"                    testCategoryCountsMatchTaxonomy
       ]
   if and results then exitSuccess else exitFailure
 
@@ -10789,3 +10796,40 @@ testNextStepGoldenDispatch = do
                  ]
   mapM_ (\d -> putStrLn ("  GOLDEN MISMATCH: " ++ d)) failures
   pure (null failures)
+
+------------------------------------------------------------------------
+-- Issue #94 Phase A — tool taxonomy invariants
+------------------------------------------------------------------------
+
+-- | Invariant 1: the total registered-tool count must not exceed the
+-- documented cap of 50.  The cap is bumped only via an explicit PR
+-- with rationale — this prevents silent surface-bloat regressions.
+--
+-- Current count: 46 tools.  Cap: 50 (4 slots of headroom).
+testToolCountWithinCap :: IO Bool
+testToolCountWithinCap = do
+  let n   = length allToolNames
+      cap = 50 :: Int
+  when (n > cap) $
+    putStrLn $ "  SURFACE BLOAT: " ++ show n ++ " tools > cap " ++ show cap
+  pure (n <= cap)
+
+-- | Invariant 2: every 'ToolName' constructor must map to a non-empty
+-- category text string via 'toolCategory' + 'toolCategoryText'.
+-- Enforces that adding a new constructor also adds an arm to the
+-- 'toolCategory' exhaustive case (otherwise it's a compile error).
+testEveryToolHasCategory :: IO Bool
+testEveryToolHasCategory = pure $
+  not (any (T.null . toolCategoryText . toolCategory) allToolNames)
+
+-- | Invariant 3: the count per category must match the taxonomy
+-- published in @docs/TOOL_TAXONOMY.md@ (issue #94 §2).
+-- Current breakdown: 36 primitives, 4 composites, 3 gates, 3 control-plane.
+testCategoryCountsMatchTaxonomy :: IO Bool
+testCategoryCountsMatchTaxonomy = pure $
+  countCat CatPrimitive    == 36
+  && countCat CatComposite    ==  4
+  && countCat CatGate         ==  3
+  && countCat CatControlPlane ==  3
+  where
+    countCat c = length [ t | t <- allToolNames, toolCategory t == c ]
