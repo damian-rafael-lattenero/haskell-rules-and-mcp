@@ -7,12 +7,156 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Future work is tracked in the plan file (`docs/community-launch/`) and the
-[GitHub issues](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues):
+The headline of `0.2.0` (planned) is **a smaller, more orthogonal tool
+surface**: 47 wire surfaces collapsed to 31 via six action-discriminated
+primitives. Every action that existed in 0.1.0 still exists; the verb
+moved into an `action` field instead of a separate tool name.
+
+### Changed (BREAKING — wire surface consolidation, issue #94)
+
+The legacy per-verb tools are **removed outright** (single-internal-consumer
+project — no deprecation period). Migrate by inlining the verb into an
+`action` field on the consolidated tool. Behaviour is byte-identical: the
+new tool's dispatcher forwards to the same handler.
+
+| Before (0.1.0)                                                                | After (`0.2.0`)                                                                  | Issue        |
+|-------------------------------------------------------------------------------|----------------------------------------------------------------------------------|--------------|
+| `ghc_add_modules` + `ghc_remove_modules`                                      | `ghc_modules { action: "add" \| "remove" }`                                      | #94 Phase B  |
+| `ghc_deps_explain`                                                            | `ghc_deps { action: "explain", cabal_output }`                                   | #94 Phase C₁ |
+| `ghc_toolchain_status` + `ghc_toolchain_warmup`                               | `ghc_toolchain { action: "status" \| "warmup" }` (defaults to status)            | #94 Phase C₂ |
+| `ghc_determinism`                                                             | `ghc_quickcheck { runs: N }` — pass `runs >= 2` for flakiness detection          | #94 Phase C₃ |
+| `ghc_move`                                                                    | `ghc_refactor { action: "move_symbol", from, to, symbol }`                       | #94 Phase C₄ |
+| `ghc_create_project` + `ghc_switch_project` + `ghc_validate_cabal` + `ghc_bootstrap` | `ghc_project { action: "create" \| "switch" \| "validate" \| "bootstrap" }` | #94 Phase C₅ |
+| `ghc_property_lifecycle` + `ghc_regression` + `ghc_quickcheck_export` + `ghc_property_audit` | `ghc_property_store { action: "list" \| "run" \| "export" \| "audit" }` | #94 Phase C₆ |
+
+Tool count: **47 → 31** (16 fewer wire surfaces, six new
+action-discriminated primitives). Concept count drops from ~38 to ~22 —
+the agent now memorises one tool per verb-cluster rather than four.
+
+The four-category taxonomy in `docs/TOOL_TAXONOMY.md`
+(Primitive / Composite / Gate / Control-plane) is now CI-enforced via
+`testCategoryCountsMatchTaxonomy` so future drift between the taxonomy
+table and the live registry is a compile-error.
+
+### Added
+
+- **Per-tool versioning** (#99 Phases A+B) — every `tools/list` entry
+  now publishes a `version` field, and every tool response carries a
+  `meta.tool_version`. Bump rules: MAJOR on input/output shape change,
+  MINOR on additive fields, PATCH on bug fixes within shape.
+- **`--version` / `--help` CLI flags** (#99 Phase A) — the binary can
+  be queried at the OS boundary without booting the JSON-RPC loop.
+- **Discriminated schemas** (#92) — tools whose per-action required
+  fields differ (`ghc_refactor`, `ghc_deps`, the new `ghc_modules` /
+  `ghc_project` / `ghc_property_store`) publish a `oneOf` schema that
+  tells hosts the *real* contract instead of a flat `required` list
+  that lied. A property test in the test suite forbids regressions.
+- **`Mcp.Schema` builder module** (#92 Phase A) — `discriminatedSchema`
+  + `SchemaBranch` + the field-shape helpers
+  (`stringField` / `integerField` / `booleanField` / `arrayField` /
+  `constString`) are the canonical way to declare a tool's input shape.
+- **Latency-budget scaffold** (#96 Phases A+B) — every tool has a
+  `(p50, p95)` budget in `Bench/Budget.hs`; an in-process bench harness
+  measures the reference project; CI gate (Phase C, pending) will refuse
+  sustained p95 violations.
+- **Bench `benchmark` stanza** in the cabal file — `cabal bench` runs
+  the suite locally; the methodology lives in `docs/Bench.md`.
+- **Tool taxonomy** (#94 Phase A) — `ToolCategory` ADT + `toolCategory`
+  total function with exhaustive case; published as a four-bucket table
+  in `docs/TOOL_TAXONOMY.md` and CI-locked against drift.
+- **Structured JSON-Lines logging** (#98 Phases A+B+C+D) — every tool
+  call emits `tool_call_start` / `tool_call_end` events with
+  `trace_id`; `--debug-events` adds GHC-session lifecycle events;
+  opt-in audit log writes to `.haskell-flows/audit.jsonl`.
+- **NextStep golden dispatch snapshot** (#95 Phase C) — 62-row table
+  pins the post-success hint for every (tool, payload) combination;
+  drift is review-gated.
+- **NextStep quality gates D + E** (#95) — `nsWhy` ≥ 10 chars + ends
+  with a period; `nsChain` ≤ 4 steps. The agent never sees a
+  one-word "why" or a 12-step plan.
+- **NextStep dangling-reference detector** (#95 Phase A lite) — every
+  recommendation's `tool` field must resolve to a registered tool.
+  Catches the bug class where a renamed tool leaves a stale hint.
+- **NextStep suppression API** (#95 Phase A) — `suppressIf` /
+  `suppressOnZero` / `suppressOnDegraded` make it explicit when a
+  successful response should *not* emit a hint.
+- **Cross-tool stringification harness** (#91 Phase A) — four post-#88
+  migrated tools (`ghc_load`, `ghc_check_module`, `ghc_check_project`,
+  `ghc_quickcheck`) get a single test that proves their JSON shape is
+  byte-stable across an in-process round-trip.
+- **`ghc_perf` / `ghc_lab` / `ghc_property_audit` / `ghc_explain_error`
+  / `ghc_witness` Phase 2** (#93) — baseline persistence, vacuous-
+  property detection, structured explanation context, distribution
+  labelling. Surfaces are additive (MAJOR=1).
+- **Cross-tool security harness** (#100 Phases C+D+E) — every tool
+  that takes a path runs through the same canonical-path check;
+  `SECURITY.md` documents the trust boundary.
+
+### Fixed
+
+- **Schema lied about `ghc_refactor` required fields** (#92 Phase B) —
+  pre-fix the schema said `[action]` was required for both
+  `rename_local` and `extract_binding`, but the runtime demanded
+  more. A host that respected the schema sent plausible-but-rejected
+  requests. The new `oneOf` shape mirrors runtime exactly.
+- **Same fix for `ghc_deps`** (#92 Phase B continued) — `add` /
+  `remove` both require `package` at parse time AND in the published
+  schema.
+- **Stanza-flag invalidation after dep edit** — `ghc_deps(add|remove)`
+  invalidates the cached stanza-flag bootstrap so the next tool call
+  rebuilds with the new package set.
+- **`ghc_property_audit` Phase 2** — vacuous-property detection
+  (precondition is never satisfied) added; UNIQUE-key prefix
+  collision in the canonical-form dedupe fixed.
+- **NextStep dispatch table is exhaustive** — every `ToolName`
+  constructor must be handled; adding a new tool without a
+  `nextStep` arm is a compile error.
+- **`ghc_check_module` diagnostic filter** — diagnostics from
+  unrelated modules in the load batch no longer leak into the
+  per-module gate (filter by `geFile` suffix).
+
+### Security
+
+- **Path-traversal property fuzzer** (#100 Phase A) — QuickCheck
+  generator against `mkModulePath`'s smart-constructor invariant.
+- **Symlink-escape canary test** (#100 Phase B) — confirms
+  `mkModulePath` rejects symlinks that resolve outside the project
+  root.
+- **Cross-tool canonical check** (#100 Phases C-E) — every
+  path-accepting tool routes through the same guard; documented
+  in `SECURITY.md`.
+
+### Docs
+
+- **`docs/TOOL_TAXONOMY.md`** — four-category breakdown of the live
+  tool registry, CI-enforced.
+- **`docs/Bench.md`** (#96) — measurement methodology + how to
+  interpret `(p50, p95)` budgets.
+- **`docs/concurrency.md`** (#97 Phase A) — explicit contract for
+  the property store + GHCi session under concurrent calls.
+- **`docs/binary-size.md`** (#101 Phase A) — baseline measurement;
+  Phase B will add `strip` + `-split-sections` to reduce
+  the 199 MB → ~135 MB.
+
+### Known limitations
+
+(unchanged from `0.1.0`)
+
+- **Platform reality** — only `darwin-arm64` is verified end-to-end.
+  Other platforms fall through to host PATH.
+- **Single maintainer** — bus factor of 1.
+- **Advanced types** — regex-based type-string parsing; tail shapes
+  (higher-rank polymorphism, type families, GADTs) silently produce
+  zero suggestions.
+
+### Pending (tracked in [GitHub issues](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues))
 
 - Phase D — upstream-first tool resolution (mirror becomes fallback).
 - Phase E — Nix flake for declarative dev shell.
 - Phase F — Discourse Haskell announcement.
+- #97 Phase B — file-locking the property store.
+- #101 Phase B — `strip` + `-split-sections` in `install-mcp.sh`.
+- #96 Phase C — wire bench into CI gate.
 
 ## [0.1.0] - 2026-04-19
 
