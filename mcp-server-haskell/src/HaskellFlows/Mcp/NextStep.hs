@@ -35,6 +35,11 @@ module HaskellFlows.Mcp.NextStep
   , ChainStep (..)
   , suggestNext
   , injectNextStep
+    -- * Issue #95 Phase A: suppression rule API
+  , RecommendCtx (..)
+  , suppressIf
+  , suppressOnZero
+  , suppressOnDegraded
   ) where
 
 import Data.Aeson
@@ -93,6 +98,40 @@ instance ToJSON NextStep where
       ]
       <> maybe [] (\e -> ["example" .= e]) (nsExample ns)
       <> maybe [] (\c -> ["chain"   .= c]) (nsChain ns)
+
+--------------------------------------------------------------------------------
+-- Issue #95 Phase A: suppression rule API
+--------------------------------------------------------------------------------
+
+-- | Per-call context the suppression rules inspect. Built once from
+-- the tool name, response status, and payload.
+data RecommendCtx = RecommendCtx
+  { rcTool    :: !ToolName
+  , rcStatus  :: !Text    -- ^ wire-format status: "ok" | "partial" | …
+  , rcPayload :: !Value
+  }
+  deriving stock (Show)
+
+-- | Apply a predicate to a 'NextStep'; return 'Nothing' (suppressed)
+-- when the predicate holds, otherwise 'Just' the original hint.
+-- Compose with @(>>= suppressIf p)@ for multiple rules.
+suppressIf :: (RecommendCtx -> Bool) -> RecommendCtx -> Maybe NextStep -> Maybe NextStep
+suppressIf _rule _ctx Nothing   = Nothing
+suppressIf rule  ctx  (Just ns) = if rule ctx then Nothing else Just ns
+
+-- | Suppression rule #1: suppress when a *count* field in the payload
+-- is zero. Used when the recommendation only makes sense when the
+-- previous step found at least one candidate (e.g. 'GhcAddImport').
+suppressOnZero :: Text -> RecommendCtx -> Bool
+suppressOnZero field ctx = case intField field (rcPayload ctx) of
+  Just n  -> n <= 0
+  Nothing -> False
+
+-- | Suppression rule #2: suppress forward-chaining suggestions when
+-- the current response is degraded (@status ∉ {ok, partial}@).
+-- Error states should speak for themselves without adding noise.
+suppressOnDegraded :: RecommendCtx -> Bool
+suppressOnDegraded ctx = rcStatus ctx `notElem` ["ok", "partial"]
 
 --------------------------------------------------------------------------------
 -- smart constructors
@@ -346,26 +385,37 @@ dispatch name payload = case name of
     \run ghc_check_project."
     Nothing)
 
-  -- Issue #61 Phase 1: the perf harness just returned wall-clock
-  -- statistics. Without baseline persistence (Phase 2) the agent's
-  -- next move is to compare against an earlier capture by hand
-  -- or call ghc_perf again on a different optimisation level.
+  -- Issue #61 Phase 2: baseline persistence is live.
+  -- If the caller set save_baseline=true the mean is now persisted;
+  -- the canonical follow-up is a second run with compare_baseline=true
+  -- to detect regressions. For first-time profiling, recommend saving.
   GhcPerf -> Just (simple GhcPerf
-    "Phase 1 returned wall-clock statistics. Re-run with a different \
-    \implementation to compare; Phase 2 will persist baselines so the \
-    \tool can compute the delta automatically."
-    Nothing)
+    "Phase 2: use save_baseline=true to persist this mean_ns, then \
+    \compare_baseline=true on the next run to detect regressions \
+    \(>10% slower triggers status='refused'). Run with a different \
+    \implementation to compare wall-clock performance."
+    (Just (object
+        [ "expression"       .= ("<same expression>" :: Text)
+        , "compare_baseline" .= True
+        ])))
 
-  -- Issue #59: the explainer returned context but no patch.
-  -- The agent's LLM step belongs OUT-OF-MCP — once it has a
-  -- candidate, the natural follow-up is ghc_refactor /
-  -- hand-edit, then ghc_load to confirm.
-  GhcExplainError -> Just (simple GhcLoad
-    "Phase 1 returns the explanation context. Use your LLM to \
-    \propose fix candidates from the {diagnostic, context} payload, \
-    \apply the chosen patch via ghc_refactor (or hand-edit), then \
-    \ghc_load to confirm the original error is gone."
-    Nothing)
+  -- Issue #59 Phase 2: verify_patch is live.
+  -- The canonical flow: agent uses its LLM to propose a patch,
+  -- feeds it as verify_patch, tool applies/recompiles/restores,
+  -- and reports error_resolved. Then ghc_load to confirm.
+  GhcExplainError -> Just (simple GhcExplainError
+    "Phase 2: feed a candidate fix as verify_patch={line, old, new} \
+    \to let the tool apply it, recompile, check error_resolved, then \
+    \restore the file. Iterate until error_resolved=true, then \
+    \ghc_load to confirm the final state."
+    (Just (object
+        [ "module_path"  .= ("<same module>" :: Text)
+        , "verify_patch" .= object
+            [ "line" .= (0 :: Int)
+            , "old"  .= ("<old text>" :: Text)
+            , "new"  .= ("<new text>" :: Text)
+            ]
+        ])))
 
   -- Issue #60: the audit just persisted a batch of properties;
   -- the natural follow-up is the project-level gate that
@@ -629,12 +679,6 @@ isTypedHoleWarning (Object o) = case KeyMap.lookup "message" o of
   _ -> False
 isTypedHoleWarning _ = False
 
--- | Kept for callers that only need \"is there any warning at
--- all\" semantics (pre-LWFixable code paths). New 'ghc_load'
--- dispatch uses 'loadWarningKind' instead.
-loadHasWarnings :: Value -> Bool
-loadHasWarnings v = loadWarningKind v /= LWNone
-
 loadHasErrors :: Value -> Bool
 loadHasErrors v = case envField "errors" v of
   Just (Array a) -> not (null a)
@@ -675,12 +719,6 @@ statusOk_ v = case envField "status" v of
   Nothing                 -> case envField "success" v of
     Just (Bool b) -> b
     _             -> False
-
--- | Extract a boolean field; auto-drills through @result@.
-boolField :: Text -> Value -> Bool
-boolField k v = case envField k v of
-  Just (Bool b) -> b
-  _             -> False
 
 --------------------------------------------------------------------------------
 -- injection

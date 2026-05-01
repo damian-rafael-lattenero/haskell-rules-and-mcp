@@ -84,6 +84,7 @@ import HaskellFlows.Mcp.NextStep
   , injectNextStep
   , suggestNext
   )
+import qualified HaskellFlows.Mcp.NextStep as NextStep
 import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescriptor (..), ToolResult (..))
 import HaskellFlows.Mcp.ToolName
   ( ToolName (..)
@@ -730,6 +731,11 @@ main = do
       , test "nextStep: check_project -> coverage" testNextStepCheckProject
       , test "nextStep: errors -> no suggestion"   testNextStepErrorsSuppressed
       , test "nextStep: exploratory -> no suggestion" testNextStepExploratoryNothing
+      , test "nextStep: suppressIf suppresses when rule holds (#95)"  testNextStepSuppressIfTrue
+      , test "nextStep: suppressIf passes when rule false (#95)"      testNextStepSuppressIfFalse
+      , test "nextStep: suppressOnDegraded active for failed (#95)"   testNextStepSuppressOnDegraded
+      , test "nextStep: suppressOnZero suppresses zero count (#95)"   testNextStepSuppressOnZero
+      , test "nextStep: suppressOnZero passes nonzero count (#95)"    testNextStepSuppressOnZeroPass
       , test "injectNextStep splices into payload" testInjectSplices
       , test "injectNextStep no-op on non-JSON"    testInjectSkipsNonJson
       , test "suggest: functor fmap two laws"      testSuggestFunctorFmap
@@ -8521,6 +8527,51 @@ testNextStepExploratoryNothing = pure $
   where
     nothing Nothing = True
     nothing _       = False
+
+-- Issue #95 Phase A: suppression rule unit tests --------------------------------
+
+-- | suppressIf suppresses when the predicate returns True.
+testNextStepSuppressIfTrue :: IO Bool
+testNextStepSuppressIfTrue =
+  let ns   = NextStep { nsTool = GhcLoad, nsWhy = "w", nsExample = Nothing, nsChain = Nothing }
+      ctx  = NextStep.RecommendCtx { NextStep.rcTool = GhcLoad, NextStep.rcStatus = "ok", NextStep.rcPayload = A.object [] }
+      rule = const True
+  in pure (isNothing (NextStep.suppressIf rule ctx (Just ns)))
+
+-- | suppressIf passes through when the predicate returns False.
+testNextStepSuppressIfFalse :: IO Bool
+testNextStepSuppressIfFalse =
+  let ns   = NextStep { nsTool = GhcLoad, nsWhy = "w", nsExample = Nothing, nsChain = Nothing }
+      ctx  = NextStep.RecommendCtx { NextStep.rcTool = GhcLoad, NextStep.rcStatus = "ok", NextStep.rcPayload = A.object [] }
+      rule = const False
+  in pure (isJust (NextStep.suppressIf rule ctx (Just ns)))
+
+-- | suppressOnDegraded returns True (suppress) for "failed" status.
+testNextStepSuppressOnDegraded :: IO Bool
+testNextStepSuppressOnDegraded =
+  let ctx = NextStep.RecommendCtx { NextStep.rcTool = GhcLoad
+                                  , NextStep.rcStatus = "failed"
+                                  , NextStep.rcPayload = A.object []
+                                  }
+  in pure (NextStep.suppressOnDegraded ctx)
+
+-- | suppressOnZero suppresses when count field is zero.
+testNextStepSuppressOnZero :: IO Bool
+testNextStepSuppressOnZero =
+  let ctx = NextStep.RecommendCtx { NextStep.rcTool = GhcAddImport
+                                  , NextStep.rcStatus = "ok"
+                                  , NextStep.rcPayload = A.object ["count" A..= (0 :: Int)]
+                                  }
+  in pure (NextStep.suppressOnZero "count" ctx)
+
+-- | suppressOnZero passes when count field is nonzero.
+testNextStepSuppressOnZeroPass :: IO Bool
+testNextStepSuppressOnZeroPass =
+  let ctx = NextStep.RecommendCtx { NextStep.rcTool = GhcAddImport
+                                  , NextStep.rcStatus = "ok"
+                                  , NextStep.rcPayload = A.object ["count" A..= (3 :: Int)]
+                                  }
+  in pure (not (NextStep.suppressOnZero "count" ctx))
 
 -- | injectNextStep splices the nextStep into the first TextContent
 -- block's JSON payload.
