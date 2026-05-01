@@ -82,7 +82,6 @@ data ToolName
   | GhcPropertyLifecycle
   | GhcToolchainWarmup
   | GhcMove
-  | GhcDepsExplain
   | GhcLab
   | GhcExplainError
   | GhcPerf
@@ -141,7 +140,6 @@ toolNameText = \case
   GhcPropertyLifecycle -> "ghc_property_lifecycle"
   GhcToolchainWarmup   -> "ghc_toolchain_warmup"
   GhcMove              -> "ghc_move"
-  GhcDepsExplain       -> "ghc_deps_explain"
   GhcLab               -> "ghc_lab"
   GhcExplainError      -> "ghc_explain_error"
   GhcPerf              -> "ghc_perf"
@@ -230,7 +228,6 @@ toolCategory = \case
   GhcArbitrary         -> CatPrimitive
   -- Dependency + project management
   GhcDeps              -> CatPrimitive
-  GhcDepsExplain       -> CatPrimitive   -- future: deps action=explain
   GhcModules           -> CatPrimitive   -- #94 Phase B: action-discriminated successor
   GhcCreateProject     -> CatPrimitive   -- future: project action=create
   GhcSwitchProject     -> CatPrimitive   -- future: project action=switch
@@ -310,7 +307,6 @@ toolVersion = \case
   GhcArbitrary         -> "1.0.0"
   -- ── Dependency + project management ─────────────────────────────
   GhcDeps              -> "1.0.0"
-  GhcDepsExplain       -> "1.0.0"
   GhcCreateProject     -> "1.0.0"
   GhcSwitchProject     -> "1.0.0"
   GhcValidateCabal     -> "1.0.0"

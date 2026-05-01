@@ -120,7 +120,6 @@ import qualified HaskellFlows.Tool.QuickCheck      as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExportTool
 import qualified HaskellFlows.Tool.Refactor        as RefactorTool
 import qualified HaskellFlows.Tool.Move             as MoveTool
-import qualified HaskellFlows.Tool.DepsExplain      as DepsExplainTool
 import qualified HaskellFlows.Tool.Lab              as LabTool
 import qualified HaskellFlows.Tool.ExplainError     as ExplainErrorTool
 import qualified HaskellFlows.Tool.Perf             as PerfTool
@@ -482,12 +481,6 @@ dispatchByName srv args = \case
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
     MoveTool.handle ghcSess pd args
-  GhcDepsExplain -> do
-    -- Issue #63 Phase 1: cabal solver-output translator. Spawns
-    -- 'cabal v2-build --dry-run' under Proc.cwd = projectDir;
-    -- otherwise pure parsing. No GhcSession needed.
-    pd <- readIORef (srvProjectDir srv)
-    DepsExplainTool.handle pd args
   GhcLab -> do
     -- Issue #60 Phase 1: module-wide property audit. Composes
     -- Suggest.applyRules + Tool.QuickCheck per top-level binding.
@@ -735,7 +728,6 @@ allToolDescriptors =
   , GotoTool.descriptor
   , RefactorTool.descriptor
   , MoveTool.descriptor
-  , DepsExplainTool.descriptor
   , LabTool.descriptor
   , ExplainErrorTool.descriptor
   , PerfTool.descriptor

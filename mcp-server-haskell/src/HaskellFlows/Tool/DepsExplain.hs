@@ -1,11 +1,10 @@
--- | @ghc_deps_explain@ — cabal-solver translator (#63).
+-- | Internal handler for the @explain@ branch of @ghc_deps@ (#63 + #94).
 --
 -- Phase 1 scope (MVP): parse a cabal solver dump and extract
 -- the root conflict (deepest @rejecting:@) so the agent gets a
 -- structured @conflict@ field instead of 200 lines of free text.
 -- Candidate generation (bump-our-constraint / allow-newer /
--- Stackage LTS) is deferred to Phase 2 — the issue itself
--- estimates ~2 weeks total.
+-- Stackage LTS) is deferred to Phase 2.
 --
 -- Two input modes:
 --
@@ -15,9 +14,13 @@
 --   * @cabal_output@ omitted → run @cabal v2-build all
 --     --dry-run --enable-tests --enable-benchmarks@ in the
 --     project root and parse its stderr.
+--
+-- Issue #94 Phase C retired the @ghc_deps_explain@ wire surface;
+-- 'HaskellFlows.Tool.Deps' is the single externally-advertised tool.
+-- This module's 'handle' is the implementation 'Deps.handle'
+-- forwards to when @action="explain"@.
 module HaskellFlows.Tool.DepsExplain
-  ( descriptor
-  , handle
+  ( handle
   , DepsExplainArgs (..)
     -- * Pure helpers (exported for unit tests)
   , Conflict (..)
@@ -42,33 +45,6 @@ import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcDepsExplain
-    , tdDescription =
-        "Translate a cabal solver dump into a structured conflict "
-          <> "report. Phase 1: extracts the root cause + involved "
-          <> "packages from any 'cabal v2-build --dry-run' stderr. "
-          <> "Phase 2 (planned) will generate verified fix candidates "
-          <> "(bump-constraint / allow-newer / Stackage LTS pin)."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "cabal_output" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Optional. The stderr/stdout of a previously-run \
-                       \'cabal v2-build --dry-run'. When omitted the tool \
-                       \runs cabal itself; provide this when you already \
-                       \have the output and don't want to wait for \
-                       \another solver pass." :: Text)
-                  ]
-              ]
-          , "additionalProperties" .= False
-          ]
-    }
 
 newtype DepsExplainArgs = DepsExplainArgs
   { daCabalOutput :: Maybe Text

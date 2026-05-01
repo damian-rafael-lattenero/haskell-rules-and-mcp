@@ -207,9 +207,22 @@ dispatch name payload = case name of
 
   -- After editing deps, reload to pick up the new package graph.
   GhcDeps -> case depsAction payload of
-    Just "add"    -> Just loadAfterDepsEdit
-    Just "remove" -> Just loadAfterDepsEdit
-    _             -> Nothing
+    Just "add"     -> Just loadAfterDepsEdit
+    Just "remove"  -> Just loadAfterDepsEdit
+    -- #94 Phase C: explain hands the agent the conflicting package's
+    -- name; the canonical follow-up is bumping that constraint via
+    -- another ghc_deps call (action=add or remove).
+    Just "explain" -> Just (simple GhcDeps
+      "The conflict's root_cause names the package whose pin is forcing \
+      \the solver into the dead end. Either bump that constraint via \
+      \ghc_deps action=add (with a wider version range) or remove it via \
+      \ghc_deps action=remove."
+      (Just (object
+          [ "action"  .= ("add" :: Text)
+          , "package" .= ("<conflicting-pkg>" :: Text)
+          , "version" .= (">= <wider-range>" :: Text)
+          ])))
+    _              -> Nothing
     where
       loadAfterDepsEdit = simple GhcLoad
         "Dependency set changed. Reload your entry module so the \
@@ -428,15 +441,6 @@ dispatch name payload = case name of
     \project, then ghc_gate before push."
     Nothing)
 
-  -- Issue #63: the explainer just told you which packages
-  -- conflict. The natural follow-up is editing the .cabal
-  -- bound that prevents resolution.
-  GhcDepsExplain -> Just (simple GhcDeps
-    "The conflict's root_cause names the package whose pin is forcing \
-    \the solver into the dead end. Either bump that constraint via \
-    \ghc_deps or add an 'allow-newer' entry to cabal.project. Phase 2 \
-    \will generate verified candidates automatically."
-    Nothing)
 
   -- Issue #65 Phase 1: witness already emitted its own nextStep
   -- pointing back at ghc_quickcheck (re-run without instrumentation

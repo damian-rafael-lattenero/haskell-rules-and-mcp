@@ -53,8 +53,8 @@ runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _projectDir = do
   -- Step 1 — supplied dump → conflict extracted.
   t0 <- stepHeader 1 "ghc_deps_explain extracts root_cause (#63)"
-  rConflict <- Client.callTool c GhcDepsExplain
-                 (object [ "cabal_output" .= solverDump ])
+  rConflict <- Client.callTool c GhcDeps
+                 (object [ "action" .= ("explain" :: Text), "cabal_output" .= solverDump ])
   let success = statusOk rConflict
       rootPkg = drillStr ["conflict", "root_cause", "package"] rConflict
       rootDepth = case drill ["conflict", "root_cause", "depth"] rConflict of
@@ -74,8 +74,8 @@ runFlow c _projectDir = do
 
   -- Step 2 — clean dump → conflict: null.
   t1 <- stepHeader 2 "ghc_deps_explain returns null on clean dump (#63)"
-  rClean <- Client.callTool c GhcDepsExplain
-              (object [ "cabal_output" .= cleanDump ])
+  rClean <- Client.callTool c GhcDeps
+              (object [ "action" .= ("explain" :: Text), "cabal_output" .= cleanDump ])
   -- Issue #90: 'no conflict found' is semantically status='no_match'
 -- post-envelope (the tool was asked "is there a conflict?" and
 -- the answer was no). Accept either 'ok' or 'no_match' — both

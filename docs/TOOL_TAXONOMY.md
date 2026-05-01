@@ -52,8 +52,7 @@
 
 | Tool | Wire name | Notes |
 |---|---|---|
-| `GhcDeps` | `ghc_deps` | `list` / `add` / `remove` build-depends |
-| `GhcDepsExplain` | `ghc_deps_explain` | Explain a dependency conflict (future: `deps action=explain`) |
+| `GhcDeps` | `ghc_deps` | `list` / `add` / `remove` / `explain` build-depends (#94 Phase C: `explain` subsumes the retired `ghc_deps_explain`) |
 | `GhcModules` | `ghc_modules` | Action-discriminated module registry: `action=add` registers + scaffolds; `action=remove` de-registers (#94 Phase B) |
 | `GhcCreateProject` | `ghc_create_project` | Scaffold a new cabal package (future: `project action=create`) |
 | `GhcSwitchProject` | `ghc_switch_project` | Switch the active project root (future: `project action=switch`) |
@@ -117,17 +116,20 @@
 
 | Category | Count |
 |---|---|
-| Primitive | 35 |
+| Primitive | 34 |
 | Composite | 4 |
 | Gate | 3 |
 | Control-plane | 3 |
-| **Total** | **45** |
+| **Total** | **44** |
 
-Phase B (retrofit): `GhcModules` replaces `GhcAddModules` +
-`GhcRemoveModules` outright. With a single internal consumer there
-was no deprecation cost to honour, so the legacy wire surface was
-removed in the same commit as the new tool's introduction.
-Net surface change: 46 → 45 tools (one less primitive concept).
+* Phase B retrofit: `GhcModules` replaced `GhcAddModules` +
+  `GhcRemoveModules` outright (47 → 45 — two less, one new).
+* Phase C step 1: `GhcDeps action="explain"` replaced
+  `GhcDepsExplain` outright (45 → 44 — one less).
+
+With a single internal consumer there was no deprecation cost to
+honour, so the legacy wire surface was removed in the same commit as
+each new action's introduction.
 
 Cap: **50** tools (enforced by `testToolCountWithinCap` in `test/Spec.hs`).
 Bumping the cap requires an explicit PR with rationale.
@@ -142,7 +144,7 @@ action-discriminated primitives in later phases:
 | Today (14 tools) | Replacement |
 |---|---|
 | `ghc_add_modules` + `ghc_remove_modules` | `modules { action: "add" \| "remove" }` |
-| `ghc_deps_explain` | `deps { action: "explain" }` |
+| ~~`ghc_deps_explain`~~ | ✅ landed: `deps { action: "explain" }` (#94 Phase C) |
 | `ghc_create_project` + `ghc_switch_project` + `ghc_validate_cabal` + `ghc_bootstrap` | `project { action: "create" \| "switch" \| "validate" \| "bootstrap" }` |
 | `ghc_property_lifecycle` + `ghc_regression` + `ghc_quickcheck_export` + `ghc_property_audit` | `property_store { action: "list" \| "drop" \| "run" \| "export" \| "audit" }` |
 | `ghc_toolchain_warmup` | `toolchain { action: "warmup" }` |

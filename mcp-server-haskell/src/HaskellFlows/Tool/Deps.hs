@@ -53,10 +53,13 @@ import System.IO (IOMode (..), openFile, hClose)
 import System.IO.Unsafe (unsafePerformIO)
 import qualified System.Process as Proc
 
+import qualified Data.Aeson.KeyMap as KeyMap
+
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Schema as Schema
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import qualified HaskellFlows.Tool.DepsExplain as DepsExplain
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 -- | Serialise concurrent .cabal edits across every call originating
@@ -105,7 +108,10 @@ descriptor =
     , tdDescription =
         "Manage build-depends in the project's .cabal file. Actions: "
           <> "'list' (current deps), 'add' (insert pkg + optional "
-          <> "version constraint), 'remove' (delete by name). After "
+          <> "version constraint), 'remove' (delete by name), "
+          <> "'explain' (translate a cabal solver dump into a "
+          <> "structured root-cause + verified fix candidates — #94 "
+          <> "Phase C: subsumes the retired ghc_deps_explain). After "
           <> "add/remove, the next ghc_load picks up the new "
           <> "package graph — no explicit session restart needed."
     , tdInputSchema = schema
@@ -148,6 +154,21 @@ schema = Schema.discriminatedSchema "action"
           , ("stanza",  stanzaField)
           ]
       , Schema.sbRequired          = ["package"]
+      }
+  , Schema.SchemaBranch
+      { Schema.sbDiscriminantValue = "explain"
+      , Schema.sbDescription       =
+          "Translate a cabal solver dependency-conflict dump into a \
+          \structured root cause + verified fix candidates. Pass the \
+          \cabal output verbatim under 'cabal_output'. (#94 Phase C: \
+          \this subsumes the retired ghc_deps_explain.)"
+      , Schema.sbProperties        =
+          [ ("cabal_output", Schema.stringField
+              "Verbatim cabal solver output (the 'Could not resolve \
+              \dependencies' block). Pass the whole dump including the \
+              \'next goal' / 'rejecting' lines.")
+          ]
+      , Schema.sbRequired          = ["cabal_output"]
       }
   ]
   where
@@ -211,22 +232,36 @@ instance FromJSON DepsArgs where
           }
 
 handle :: ProjectDir -> Value -> IO ToolResult
-handle pd rawArgs = case parseEither parseJSON rawArgs of
-  Left parseError ->
-    pure (Env.toolResponseToResult (Env.mkFailed
-      ((Env.mkErrorEnvelope (parseErrorKindD parseError)
-          (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) })))
-  Right args -> do
-    mCabal <- findCabalFile pd
-    case mCabal of
-      Nothing ->
+handle pd rawArgs
+  -- #94 Phase C: 'explain' is a passthrough to DepsExplain.handle.
+  -- Intercepted before the list/add/remove parser because its
+  -- payload shape (cabal_output: String) doesn't match DepsArgs.
+  | actionTextOf rawArgs == Just "explain" = DepsExplain.handle pd rawArgs
+  | otherwise = case parseEither parseJSON rawArgs of
+      Left parseError ->
         pure (Env.toolResponseToResult (Env.mkFailed
-          ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
-              "No .cabal file found in project root")
-                { Env.eeRemediation =
-                    Just "Run ghc_create_project to scaffold a cabal package first." })))
-      Just file -> handleAction file args
+          ((Env.mkErrorEnvelope (parseErrorKindD parseError)
+              (T.pack ("Invalid arguments: " <> parseError)))
+                { Env.eeCause = Just (T.pack parseError) })))
+      Right args -> do
+        mCabal <- findCabalFile pd
+        case mCabal of
+          Nothing ->
+            pure (Env.toolResponseToResult (Env.mkFailed
+              ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
+                  "No .cabal file found in project root")
+                    { Env.eeRemediation =
+                        Just "Run ghc_create_project to scaffold a cabal package first." })))
+          Just file -> handleAction file args
+  where
+    -- Peek at the 'action' field without committing to DepsArgs's
+    -- parser; cheap helper used only for the explain dispatch above.
+    actionTextOf :: Value -> Maybe Text
+    actionTextOf v = case v of
+      Object o -> case KeyMap.lookup "action" o of
+        Just (String s) -> Just s
+        _               -> Nothing
+      _ -> Nothing
 
 handleAction :: FilePath -> DepsArgs -> IO ToolResult
 handleAction file args = case daAction args of

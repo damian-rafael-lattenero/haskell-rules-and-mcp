@@ -2339,10 +2339,12 @@ testDepsAddCompleteParses = do
 -- discriminatedSchema with 3 branches (list / add / remove).
 testDepsSchemaIsDiscriminated :: IO Bool
 testDepsSchemaIsDiscriminated =
+  -- #94 Phase C: schema now has FOUR branches — list / add / remove
+  -- / explain (the latter subsumed the retired ghc_deps_explain).
   let s = tdInputSchema DepsTool.descriptor
   in pure $ case s of
        A.Object km -> case AKM.lookup "oneOf" km of
-         Just (A.Array xs) -> length xs == 3
+         Just (A.Array xs) -> length xs == 4
          _                 -> False
        _ -> False
 
@@ -10707,7 +10709,7 @@ goldenDispatchTable =
   , ("perf → perf",                      GhcPerf,               object [],    Just GhcPerf)
   , ("explain_error → explain_error",    GhcExplainError,       object [],    Just GhcExplainError)
   , ("lab → check_project",             GhcLab,                object [],    Just GhcCheckProject)
-  , ("deps_explain → deps",             GhcDepsExplain,        object [],    Just GhcDeps)
+  , ("deps explain → deps add",         GhcDeps,               object [ "action" .= ("explain" :: T.Text) ], Just GhcDeps)
   , ("witness → quickcheck",            GhcWitness,            object [],    Just GhcQuickCheck)
   , ("move → check_project",            GhcMove,               object [],    Just GhcCheckProject)
   , ("add_import(0) → suppress",        GhcAddImport,          object [],    Nothing)
@@ -10837,11 +10839,12 @@ testEveryToolHasCategory = pure $
 -- Current breakdown: 36 primitives, 4 composites, 3 gates, 3 control-plane.
 testCategoryCountsMatchTaxonomy :: IO Bool
 testCategoryCountsMatchTaxonomy = pure $
-  countCat CatPrimitive    == 35
-  -- ^ #94 Phase B (retrofit): GhcModules replaces GhcAddModules +
-  -- GhcRemoveModules outright (no deprecation period — single
-  -- internal consumer). Net delta: 36 → 35 primitives (two removed,
-  -- one added since the prior cycle).
+  countCat CatPrimitive    == 34
+  -- ^ #94 Phase B retrofit: GhcModules replaces GhcAddModules +
+  -- GhcRemoveModules (36 → 35).
+  -- #94 Phase C step 1: GhcDeps action="explain" replaces
+  -- GhcDepsExplain outright (35 → 34). No deprecation period
+  -- because the project has a single internal consumer.
   && countCat CatComposite    ==  4
   && countCat CatGate         ==  3
   && countCat CatControlPlane ==  3

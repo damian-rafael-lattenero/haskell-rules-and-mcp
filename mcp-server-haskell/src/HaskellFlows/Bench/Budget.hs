@@ -163,9 +163,6 @@ allBudgets = Map.fromList
   , ( GhcMove
     , ToolBudget 1500 4000  Nothing
         "multi-file rename + export fixup + compile-verify roundtrip")
-  , ( GhcDepsExplain
-    , ToolBudget  50  200   Nothing
-        "dependency graph lookup; pure read from store")
   , ( GhcLab
     , ToolBudget 5000 15000 Nothing
         "per-binding suggest + QC across whole module; scales with module size")
