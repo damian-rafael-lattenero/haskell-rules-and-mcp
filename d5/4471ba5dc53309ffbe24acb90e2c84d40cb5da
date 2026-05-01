@@ -1,0 +1,29 @@
+scripts/bench-mcp.sh
+  b9182aefd71cfb20 5-8,11-15,21-33,36-38,42-44
+.github/workflows/haskell-ci.yml
+  b9182aefd71cfb20 409-461
+CHANGELOG.md
+  b9182aefd71cfb20 58-65,163-165
+mcp-server-haskell/benchmarks/Main.hs
+  b9182aefd71cfb20 42-43,57-74,78-79,105-110,114-124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "d54471ba5dc53309ffbe24acb90e2c84d40cb5da",
+  "prompts": {
+    "b9182aefd71cfb20": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3348794-a74f-41bc-8f83-210435252065",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 426,
+      "total_deletions": 308,
+      "accepted_lines": 11789,
+      "overriden_lines": 0
+    }
+  }
+}
