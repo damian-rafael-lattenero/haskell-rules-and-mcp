@@ -11,6 +11,7 @@ module HaskellFlows.Tool.Doc
   ( descriptor
   , handle
   , DocArgs (..)
+  , extractHaddockAbove
   ) where
 
 import Control.Exception (SomeException, try)
@@ -18,10 +19,14 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 
+import Control.Monad.IO.Class (liftIO)
 import GHC (Ghc, getDocs, getNamesInScope)
-import GHC.Types.Name (nameOccName)
+import GHC.Data.FastString (unpackFS)
+import GHC.Types.Name (nameOccName, nameSrcSpan)
 import GHC.Types.Name.Occurrence (occNameString)
+import GHC.Types.SrcLoc (SrcSpan (RealSrcSpan), srcSpanFile, srcSpanStartLine)
 import GHC.Utils.Outputable (showPprUnsafe)
 
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -76,32 +81,34 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
       pure (Env.toolResponseToResult (Env.mkRefused (Env.sanitizeRejection "name" e)))
     Right safe -> do
       eRes <- try (withGhcSession ghcSess (queryDoc safe))
-      pure $ Env.toolResponseToResult $ case eRes of
+      case eRes of
         Left (se :: SomeException) ->
-          Env.mkFailed
-            ((Env.mkErrorEnvelope Env.InternalError
-                (T.pack ("GHC API error: " <> show se)))
-                  { Env.eeCause = Just (T.pack (show se)) })
+          pure $ Env.toolResponseToResult $
+            Env.mkFailed
+              ((Env.mkErrorEnvelope Env.InternalError
+                  (T.pack ("GHC API error: " <> show se)))
+                    { Env.eeCause = Just (T.pack (show se)) })
         Right Nothing ->
           -- Issue #87 + #90: name not in scope → no_match, NOT a
-          -- success-shaped 'hasDoc: false'. The previous response
-          -- was indistinguishable from 'name found, no doc' (also
-          -- success: true). Now the agent gets a clean
-          -- 'status: no_match' with the searched name and a
-          -- reason field for diagnostic context.
-          Env.mkNoMatch (noDocPayload safe "Name not in scope")
-        Right (Just Nothing) ->
-          -- Name found, but the package was built without
-          -- -haddock or the symbol carries no doc. Same status
-          -- as 'not in scope' — the request was well-formed and
-          -- the answer is the empty set — but the reason field
-          -- discriminates so the agent can pick a different
-          -- recovery (build with -haddock vs query a different
-          -- name).
-          Env.mkNoMatch (noDocPayload safe
-            "No Haddock available (package may have been built without -haddock)")
+          -- success-shaped 'hasDoc: false'.
+          pure $ Env.toolResponseToResult $
+            Env.mkNoMatch (noDocPayload safe "Name not in scope")
         Right (Just (Just t)) ->
-          Env.mkOk (hasDocPayload safe t)
+          pure $ Env.toolResponseToResult $ Env.mkOk (hasDocPayload safe t)
+        Right (Just Nothing) ->
+          -- Name is in scope but the package was built without
+          -- -haddock (or carries no doc string).  Fall back to
+          -- scanning the source file for a @-- |@ comment block
+          -- directly above the definition (issue #103).
+          do
+            mSrc <- (try (withGhcSession ghcSess (sourceDoc safe))
+                      :: IO (Either SomeException (Maybe Text)))
+            pure $ Env.toolResponseToResult $ case mSrc of
+              Right (Just txt) ->
+                Env.mkOk (hasDocPayload safe txt)
+              _ ->
+                Env.mkNoMatch (noDocPayload safe
+                  "No Haddock available (package may have been built without -haddock)")
 
 -- | Discriminate the FromJSON failure shape — a missing required
 -- field maps to 'MissingArg'; everything else falls back to
@@ -138,6 +145,62 @@ queryDoc nm = do
         Left _                   -> Nothing
         Right (Nothing, _)       -> Nothing
         Right (Just docStr, _)   -> Just (T.pack (showPprUnsafe docStr))
+
+-- | Source-file fallback for 'queryDoc': locate the binding via its
+-- 'SrcSpan', read the file, and extract contiguous @-- |@ / @--@
+-- comment lines immediately above the definition (issue #103).
+--
+-- Returns 'Nothing' when the name has no 'RealSrcSpan' (e.g. it was
+-- compiled without debug info), when the file cannot be read, or
+-- when there is no Haddock block above the definition.
+sourceDoc :: Text -> Ghc (Maybe Text)
+sourceDoc nm = do
+  names <- getNamesInScope
+  let target = T.unpack nm
+      matches = [n | n <- names, occNameString (nameOccName n) == target]
+  case matches of
+    []    -> pure Nothing
+    (n:_) -> case nameSrcSpan n of
+      RealSrcSpan rspan _ ->
+        let file    = unpackFS (srcSpanFile rspan)
+            defLine = srcSpanStartLine rspan
+        in liftIO (extractHaddockAbove file defLine)
+      _ -> pure Nothing
+
+-- | Read @file@, collect the contiguous comment block immediately
+-- above @defLine@ (1-indexed), and return the cleaned text.
+--
+-- Rules (per Haskell Haddock spec):
+--   * Scan upward from @defLine - 1@.
+--   * Collect lines that start with @--@ (after stripping leading
+--     whitespace).
+--   * Stop at the first non-comment line.
+--   * The block is a Haddock block if its topmost collected line
+--     starts with @-- |@.  Otherwise return 'Nothing'.
+--   * Strip comment prefixes (@-- | @, @-- @, @--@) before returning.
+extractHaddockAbove :: FilePath -> Int -> IO (Maybe Text)
+extractHaddockAbove file defLine = do
+  eContent <- try (TIO.readFile file) :: IO (Either SomeException Text)
+  case eContent of
+    Left _        -> pure Nothing
+    Right content -> do
+      let ls         = T.lines content
+          above      = reverse (take (defLine - 1) ls)
+          collected  = takeWhile isComment above
+      if null collected || not (any isHaddockStart collected)
+        then pure Nothing
+        else pure (Just (T.unlines (map stripCommentPrefix (reverse collected))))
+  where
+    isComment ln     = "--" `T.isPrefixOf` T.strip ln
+    isHaddockStart ln = "-- |" `T.isPrefixOf` T.strip ln
+    stripCommentPrefix ln =
+      let s = T.strip ln
+      in if "-- | " `T.isPrefixOf` s then T.drop 5 s
+         else if "-- |" `T.isPrefixOf` s then T.drop 4 s
+         else if "-- " `T.isPrefixOf` s  then T.drop 3 s
+         else if "--" `T.isPrefixOf` s   then T.drop 2 s
+         else ln
+
 
 --------------------------------------------------------------------------------
 -- response shaping (unchanged schema)

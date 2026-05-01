@@ -6,6 +6,7 @@ module HaskellFlows.Tool.AddImport
   , handle
   , AddImportArgs (..)
   , renderImportLine
+  , extractModules
   ) where
 
 import Data.Aeson
@@ -149,19 +150,29 @@ shortAlias m =
       last_ = if null parts then m else last parts
   in T.take 1 (if T.null last_ then m else last_)
 
--- | Pull unique module names from a Hoogle JSON response's
--- `results[*].module` field. Best-effort — if the response shape
--- drifts we return [].
+-- | Pull unique module names from a Hoogle 'ToolResult'.
+--
+-- 'Hoogle.handle' wraps its payload in the standard envelope:
+-- @{"status":"ok","result":{"hits":[{"module":"..."},...]}@.
+-- We must peel the @result@ wrapper before looking for @hits@.
+-- Previously this function looked for a @results@ key at the
+-- top level — both the wrong key name and the wrong nesting
+-- level (issue #105).
 extractModules :: ToolResult -> [Text]
 extractModules tr = case trContent tr of
   (TextContent t : _) ->
     case decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-      Just (Object o) -> case KeyMap.lookup "results" o of
-        Just (Array xs) ->
-          [ m | Object r <- F.toList xs
-              , Just (String m) <- [KeyMap.lookup "module" r]
-          ]
-        _               -> []
+      Just (Object o) ->
+        -- Peel the envelope wrapper: the actual payload lives under "result".
+        let inner = case KeyMap.lookup "result" o of
+                      Just (Object r) -> r
+                      _               -> o
+        in case KeyMap.lookup "hits" inner of
+          Just (Array xs) ->
+            [ m | Object r <- F.toList xs
+                , Just (String m) <- [KeyMap.lookup "module" r]
+            ]
+          _               -> []
       _ -> []
   _ -> []
 

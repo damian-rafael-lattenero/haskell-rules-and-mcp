@@ -371,8 +371,22 @@ runProperty ghcSess store pd args modulePath sug = do
     }
   where
     _ = pd  -- pd kept in signature for cohesion; unused in Phase 1
+    -- Decode the tool-response envelope and peel the @result@ wrapper
+    -- so downstream field lookups (@"state"@, @"passed"@) find what
+    -- they expect.  'Qc.handle' returns
+    -- @{"status":"ok","result":{"state":"passed",...}}@ — before this
+    -- fix, @lookupString "state"@ was searching the top-level object
+    -- (which has @"status"@, not @"state"@) and always fell back to
+    -- @"unknown"@.  That made the lab report @properties_passed: 0@
+    -- even when the store was growing (issue #104).
     decodeFirst (TextContent t : _) =
-      fromMaybe Null (decode (TLE.encodeUtf8 (TL.fromStrict t)))
+      case decode (TLE.encodeUtf8 (TL.fromStrict t)) of
+        Just (Object o) ->
+          case AKM.lookup (AKey.fromText "result") o of
+            Just r -> r
+            Nothing -> Object o
+        Just v  -> v
+        Nothing -> Null
     decodeFirst _ = Null
 
 -- | Phase 2: run a passing property via 'DeterminismTool' to check

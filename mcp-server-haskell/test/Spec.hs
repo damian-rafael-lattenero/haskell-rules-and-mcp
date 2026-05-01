@@ -1131,6 +1131,22 @@ main = do
       -- Issue #94 Phase B · action-discriminated 'modules' primitive
       , test "#94B: ghc_modules registered with category=primitive"   testModulesRegistered
       , test "#94B: ghc_modules rejects unknown action"               testModulesRejectsBadAction
+      -- Issue #105: extractModules envelope peeling
+      , test "#105: extractModules reads hits inside result envelope"  testExtractModulesEnvelope
+      , test "#105: extractModules ignores wrong key 'results'"        testExtractModulesTopLevel
+      -- Issue #104c: injectTypeAnnotations safety-net
+      , test "#104c: injectTypeAnnotations annotates bare x"          testInjectAnnotateBareX
+      , test "#104c: injectTypeAnnotations annotates xs as list"      testInjectAnnotateXs
+      , test "#104c: injectTypeAnnotations passes through annotated"   testInjectAnnotateAlreadyAnnotated
+      , test "#104c: injectTypeAnnotations no-op on non-lambda"        testInjectAnnotateNonLambda
+      , test "#104c: injectTypeAnnotations multi-param x y"           testInjectAnnotateMultiParam
+      -- Issue #104a: Suggest/Rules.hs annotated lambda output
+      , test "#104a: suggest idempotent rule emits :: Int annotation"  testSuggestIdempotentAnnotated
+      , test "#104a: suggest involutive rule emits :: Int annotation"  testSuggestInvolutiveAnnotated
+      -- Issue #103: extractHaddockAbove source fallback
+      , test "#103: extractHaddockAbove finds -- | comment"           testExtractHaddockFindsDoc
+      , test "#103: extractHaddockAbove returns Nothing for plain --" testExtractHaddockNoHaddock
+      , test "#103: extractHaddockAbove returns Nothing for no comment" testExtractHaddockNoComment
       ]
   if and results then exitSuccess else exitFailure
 
@@ -10965,3 +10981,137 @@ testModulesRejectsBadAction =
             , "modules" .= (["Foo"] :: [T.Text])
             ])
       pure (isErr && not (null content))
+
+--------------------------------------------------------------------------------
+-- Issue #105 · extractModules envelope peeling
+--------------------------------------------------------------------------------
+
+-- | Build a 'ToolResult' that mirrors what 'Hoogle.handle' actually
+-- produces: the hits list is nested inside the \"result\" sub-object, not
+-- at the top level.  The bug was that 'extractModules' looked for
+-- \"results\" (wrong key) at the top level (wrong nesting depth).
+testExtractModulesEnvelope :: IO Bool
+testExtractModulesEnvelope = do
+  let hitsPayload = A.object
+        [ "hits" .=
+            [ A.object ["module" .= ("Data.Maybe" :: T.Text)]
+            , A.object ["module" .= ("Data.List"  :: T.Text)]
+            ]
+        , "count" .= (2 :: Int)
+        ]
+      tr = Env.toolResponseToResult (Env.mkOk hitsPayload)
+      mods = AddImport.extractModules tr
+  pure (mods == ["Data.Maybe", "Data.List"])
+
+-- | The old bug looked for \"results\" (plural, wrong key). Verify that
+-- a payload with only a \"results\" key — but no \"hits\" — returns [].
+-- Regression pin: the wrong key must remain unrecognised.
+testExtractModulesTopLevel :: IO Bool
+testExtractModulesTopLevel = do
+  let rawJson = "{\"status\":\"ok\",\"result\":{\"results\":[{\"module\":\"Data.Maybe\"}]}}"
+      tr = ToolResult [TextContent (T.pack rawJson)] False
+      mods = AddImport.extractModules tr
+  pure (null mods)
+
+--------------------------------------------------------------------------------
+-- Issue #104c · injectTypeAnnotations
+--------------------------------------------------------------------------------
+
+-- | A bare @\\x ->@ lambda acquires @:: Int@.
+testInjectAnnotateBareX :: IO Bool
+testInjectAnnotateBareX = pure $
+  QcExport.injectTypeAnnotations "\\x -> foo x == foo (foo x)"
+    == "\\(x :: Int) -> foo x == foo (foo x)"
+
+-- | A parameter whose name ends in @s@ (list convention) acquires @:: [Int]@.
+testInjectAnnotateXs :: IO Bool
+testInjectAnnotateXs = pure $
+  QcExport.injectTypeAnnotations "\\xs -> reverse (reverse xs) == xs"
+    == "\\(xs :: [Int]) -> reverse (reverse xs) == xs"
+
+-- | Already-annotated lambda heads pass through unchanged.
+testInjectAnnotateAlreadyAnnotated :: IO Bool
+testInjectAnnotateAlreadyAnnotated =
+  let expr = "\\(x :: Int) -> foo x == x"
+  in pure (QcExport.injectTypeAnnotations expr == expr)
+
+-- | Non-lambda expressions are returned verbatim.
+testInjectAnnotateNonLambda :: IO Bool
+testInjectAnnotateNonLambda =
+  let expr = "foo x == foo (foo x)"
+  in pure (QcExport.injectTypeAnnotations expr == expr)
+
+-- | Two bare params — @x@ and @y@ — both get @:: Int@.
+testInjectAnnotateMultiParam :: IO Bool
+testInjectAnnotateMultiParam = pure $
+  QcExport.injectTypeAnnotations "\\x y -> x + y == y + x"
+    == "\\(x :: Int) (y :: Int) -> x + y == y + x"
+
+--------------------------------------------------------------------------------
+-- Issue #104a · Suggest/Rules emits annotated lambda params
+--------------------------------------------------------------------------------
+
+-- | The idempotent rule for @a -> a@ must now emit @\\(x :: Int) ->@
+-- rather than a bare @\\x ->@.  Without the annotation, exporting the
+-- property to a compiled Spec.hs triggers \"Ambiguous type variable\".
+testSuggestIdempotentAnnotated :: IO Bool
+testSuggestIdempotentAnnotated =
+  case parseSignature "a -> a" of
+    Nothing  -> pure False
+    Just sig ->
+      let props = [ sProperty s | s <- applyRules "normalise" sig
+                                 , sLaw s == "Idempotent" ]
+      in pure $ case props of
+           (p:_) -> T.isInfixOf ":: Int" p
+                 || T.isInfixOf ":: [Int]" p
+           []    -> False
+
+-- | The involutive rule for @a -> a@ must also emit an annotated param.
+testSuggestInvolutiveAnnotated :: IO Bool
+testSuggestInvolutiveAnnotated =
+  case parseSignature "a -> a" of
+    Nothing  -> pure False
+    Just sig ->
+      let props = [ sProperty s | s <- applyRules "rev" sig
+                                 , sLaw s == "Involutive" ]
+      in pure $ case props of
+           (p:_) -> T.isInfixOf ":: Int" p
+                 || T.isInfixOf ":: [Int]" p
+           []    -> False
+
+--------------------------------------------------------------------------------
+-- Issue #103 · extractHaddockAbove source fallback
+--------------------------------------------------------------------------------
+
+-- | A @-- |@ block immediately above a definition is extracted and the
+-- comment prefix is stripped.
+testExtractHaddockFindsDoc :: IO Bool
+testExtractHaddockFindsDoc = do
+  tmp <- getTemporaryDirectory
+  let path = tmp </> "haskell-flows-103-haddock1.hs"
+  TIO.writeFile path "-- | Compute the identity of a value.\nidentity :: a -> a\nidentity x = x\n"
+  result <- DocTool.extractHaddockAbove path 2  -- defLine=2 is the type sig line
+  removePathForcibly path
+  pure $ case result of
+    Just txt -> T.isInfixOf "Compute the identity" txt
+    Nothing  -> False
+
+-- | A plain @--@ comment (without @|@) is NOT a Haddock block.
+testExtractHaddockNoHaddock :: IO Bool
+testExtractHaddockNoHaddock = do
+  tmp <- getTemporaryDirectory
+  let path = tmp </> "haskell-flows-103-haddock2.hs"
+  TIO.writeFile path "-- Not a haddock comment\nfoo :: Int -> Int\nfoo x = x\n"
+  result <- DocTool.extractHaddockAbove path 2
+  removePathForcibly path
+  pure (isNothing result)
+
+-- | No comment at all above the definition → 'Nothing'.
+testExtractHaddockNoComment :: IO Bool
+testExtractHaddockNoComment = do
+  tmp <- getTemporaryDirectory
+  let path = tmp </> "haskell-flows-103-haddock3.hs"
+  TIO.writeFile path "foo :: Int -> Int\nfoo x = x\n"
+  result <- DocTool.extractHaddockAbove path 1
+  removePathForcibly path
+  pure (isNothing result)

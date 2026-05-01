@@ -21,6 +21,7 @@ module HaskellFlows.Suggest.Rules
   , Suggestion (..)
   ) where
 
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -102,6 +103,36 @@ legacy :: (Text -> ParsedSig -> Maybe Suggestion)
        -> (RuleContext -> [Suggestion])
 legacy f ctx = maybe [] pure (f (rcName ctx) (rcSig ctx))
 
+-- | Wrap a lambda parameter name in a GHC-acceptable monomorphic
+-- type annotation when the 'SigType' is polymorphic (a free type
+-- variable).  Concrete types are returned as-is.
+--
+-- Motivation: rules like 'ruleIdempotent' emit @\\x ->@ where @x@
+-- has type @a@ in a GHCi session (which defaults ambiguous types
+-- silently).  When the same expression is exported to @test/Spec.hs@
+-- and compiled by @cabal test@, GHC raises
+-- @Ambiguous type variable 'a0'@ because @-Wall@ blocks
+-- @ExtendedDefaultRules@.  Adding @:: Int@ (or @:: [Int]@ for list
+-- shapes) pins the type and lets the generated file compile cleanly
+-- (issue #104).
+--
+-- 'constraints' are the surrounding @Monoid a@ / @Eq a@ etc.
+-- When a @Monoid@ constraint is present, the default lifts from
+-- @Int@ (no @Monoid@ instance) to @[Int]@ (lists are monoids).
+annotateParam :: [Text]   -- ^ psConstraints of the enclosing sig
+              -> SigType  -- ^ type of this lambda parameter
+              -> Text     -- ^ bare parameter name
+              -> Text     -- ^ name, or @(name :: T)@ when T injected
+annotateParam constraints st nm =
+  let hasMonoid = any ("Monoid " `T.isPrefixOf`) constraints
+      mAnn = case st of
+        TyVar _          -> Just (if hasMonoid then "[Int]" else "Int")
+        TyList (TyVar _) -> Just "[Int]"
+        _                -> Nothing
+  in case mAnn of
+       Nothing  -> nm
+       Just ann -> "(" <> nm <> " :: " <> ann <> ")"
+
 --------------------------------------------------------------------------------
 -- the catalog
 --------------------------------------------------------------------------------
@@ -139,10 +170,11 @@ ruleIdempotent = Rule
       if argCount sig == 1 && isSameTypeThroughout sig
         then
           let conf = idempotentConfidence nm sig
+              xAnn = annotateParam (psConstraints sig) (fromMaybe (TyVar "a") (listToMaybe (psArgs sig))) "x"
           in Just Suggestion
             { sLaw        = "Idempotent"
             , sProperty   =
-                "\\x -> " <> nm <> " (" <> nm <> " x) == " <> nm <> " x"
+                "\\" <> xAnn <> " -> " <> nm <> " (" <> nm <> " x) == " <> nm <> " x"
             , sRationale  = case conf of
                 Medium ->
                   "Type is `a -> a`; idempotence is worth checking \
@@ -201,32 +233,35 @@ ruleInvolutive = Rule
   { rId = "involutive"
   , rMatches = legacy $ \nm sig ->
       if argCount sig == 1 && isSameTypeThroughout sig
-        then Just (mkInvolutive nm)
+        then Just (mkInvolutive nm sig)
         else Nothing
   }
   where
-    mkInvolutive nm
-      | nameHintsOptimization nm = Suggestion
-          { sLaw        = "Involutive"
-          , sProperty   = "\\x -> " <> nm <> " (" <> nm <> " x) == x"
-          , sRationale  = "Type is `a -> a` but the name hints at a \
-                          \normaliser (simplify / normalize / canon / fold / \
-                          \reduce / rewrite). Normalisers are idempotent, \
-                          \not involutive — running this almost certainly \
-                          \fails on the first non-canonical input. \
-                          \Consider the idempotent or evaluator-preservation \
-                          \law instead."
-          , sConfidence = Low
-          , sCategory   = "algebraic"
-          }
-      | otherwise = Suggestion
-          { sLaw        = "Involutive"
-          , sProperty   = "\\x -> " <> nm <> " (" <> nm <> " x) == x"
-          , sRationale  = "Type is `a -> a`; involutive functions are their \
-                          \own inverse (e.g. reverse, negate)."
-          , sConfidence = Medium
-          , sCategory   = "algebraic"
-          }
+    mkInvolutive nm sig =
+      let xAnn = annotateParam (psConstraints sig) (fromMaybe (TyVar "a") (listToMaybe (psArgs sig))) "x"
+          prop  = "\\" <> xAnn <> " -> " <> nm <> " (" <> nm <> " x) == x"
+      in if nameHintsOptimization nm
+           then Suggestion
+             { sLaw        = "Involutive"
+             , sProperty   = prop
+             , sRationale  = "Type is `a -> a` but the name hints at a \
+                             \normaliser (simplify / normalize / canon / fold / \
+                             \reduce / rewrite). Normalisers are idempotent, \
+                             \not involutive — running this almost certainly \
+                             \fails on the first non-canonical input. \
+                             \Consider the idempotent or evaluator-preservation \
+                             \law instead."
+             , sConfidence = Low
+             , sCategory   = "algebraic"
+             }
+           else Suggestion
+             { sLaw        = "Involutive"
+             , sProperty   = prop
+             , sRationale  = "Type is `a -> a`; involutive functions are their \
+                             \own inverse (e.g. reverse, negate)."
+             , sConfidence = Medium
+             , sCategory   = "algebraic"
+             }
 
 -- | @op :: a -> a -> a@ ⇒ check @op (op x y) z == op x (op y z)@.
 --
@@ -241,10 +276,17 @@ ruleAssociative = Rule
   { rId = "associative"
   , rMatches = legacy $ \nm sig ->
       if argCount sig == 2 && isSameTypeThroughout sig
-        then Just Suggestion
+        then
+          let argT = fromMaybe (TyVar "a") (listToMaybe (psArgs sig))
+              cons = psConstraints sig
+              xAnn = annotateParam cons argT "x"
+              yAnn = annotateParam cons argT "y"
+              zAnn = annotateParam cons argT "z"
+          in Just Suggestion
           { sLaw        = "Associative"
           , sProperty   =
-              "\\x y z -> " <> nm <> " (" <> nm <> " x y) z == "
+              "\\" <> xAnn <> " " <> yAnn <> " " <> zAnn <> " -> "
+              <> nm <> " (" <> nm <> " x y) z == "
               <> nm <> " x (" <> nm <> " y z)"
           , sRationale  = "Type is `a -> a -> a`; associativity is a core \
                           \law for monoids / semigroups."
@@ -260,9 +302,14 @@ ruleCommutative = Rule
   { rId = "commutative"
   , rMatches = legacy $ \nm sig ->
       if argCount sig == 2 && isSameTypeThroughout sig
-        then Just Suggestion
+        then
+          let argT = fromMaybe (TyVar "a") (listToMaybe (psArgs sig))
+              cons = psConstraints sig
+              xAnn = annotateParam cons argT "x"
+              yAnn = annotateParam cons argT "y"
+          in Just Suggestion
           { sLaw        = "Commutative"
-          , sProperty   = "\\x y -> " <> nm <> " x y == " <> nm <> " y x"
+          , sProperty   = "\\" <> xAnn <> " " <> yAnn <> " -> " <> nm <> " x y == " <> nm <> " y x"
           , sRationale  = "Type is `a -> a -> a`; commutativity holds for \
                           \addition, multiplication, union, but NOT for \
                           \subtraction, division, string concat."
@@ -356,9 +403,11 @@ ruleReturnsBool :: Rule
 ruleReturnsBool = Rule
   { rId = "returns-bool"
   , rMatches = legacy $ \nm sig -> case psReturn sig of
-      TyCon "Bool" | argCount sig >= 1 -> Just Suggestion
+      TyCon "Bool" | argCount sig >= 1 ->
+        let xAnn = annotateParam (psConstraints sig) (fromMaybe (TyVar "a") (listToMaybe (psArgs sig))) "x"
+        in Just Suggestion
         { sLaw        = "Predicate not constant"
-        , sProperty   = "\\x -> " <> nm <> " x || not (" <> nm <> " x)"
+        , sProperty   = "\\" <> xAnn <> " -> " <> nm <> " x || not (" <> nm <> " x)"
         , sRationale  = "Return type is Bool; this is a trivially-true \
                         \tautology that catches pathological cases where \
                         \the predicate throws or loops."
@@ -377,10 +426,12 @@ ruleMonoidIdentity = Rule
       let hasMonoidContext =
             any (\c -> "Monoid " `T.isPrefixOf` c) (psConstraints sig)
       in if hasMonoidContext && argCount sig == 2 && isSameTypeThroughout sig
-           then Just Suggestion
+           then
+             let xAnn = annotateParam (psConstraints sig) (fromMaybe (TyVar "a") (listToMaybe (psArgs sig))) "x"
+             in Just Suggestion
              { sLaw        = "Monoid identity"
              , sProperty   =
-                 "\\x -> " <> nm <> " mempty x == x && " <> nm <> " x mempty == x"
+                 "\\" <> xAnn <> " -> " <> nm <> " mempty x == x && " <> nm <> " x mempty == x"
              , sRationale  = "Type is `Monoid a => a -> a -> a`; mempty \
                              \must be a left + right identity."
              , sConfidence = High

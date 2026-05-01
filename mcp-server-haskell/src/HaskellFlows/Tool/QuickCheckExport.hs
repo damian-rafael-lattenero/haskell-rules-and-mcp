@@ -30,12 +30,13 @@ module HaskellFlows.Tool.QuickCheckExport
   , renderTestFileWith
   , sanitizeLabel
   , modulePathToModule
+  , injectTypeAnnotations
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import Data.Char (isAlphaNum, isAsciiLower, isAsciiUpper, isDigit)
+import Data.Char (isAlphaNum, isAsciiLower, isAsciiUpper, isDigit, isAlpha)
 import Data.List (nub, sort)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
@@ -190,8 +191,51 @@ renderTestFileWith selfHint libMods props =
 renderPropBinding :: Int -> StoredProperty -> Text
 renderPropBinding i sp =
   let label = "prop_" <> T.pack (show i)
-      expr  = spExpression sp
+      expr  = injectTypeAnnotations (spExpression sp)
   in label <> " = " <> expr
+
+-- | Inject @:: T@ type annotations into unannotated lambda parameters.
+--
+-- This is a belt-and-suspenders catch-all for properties persisted
+-- before 'Suggest.Rules' started emitting annotated forms (issue #104).
+-- Without annotations, polymorphic lambda parameters cause
+-- @Ambiguous type variable@ errors when @cabal test@ compiles the
+-- exported @Spec.hs@ (GHC's @ExtendedDefaultRules@ only applies
+-- inside a GHCi session, not in compiled modules).
+--
+-- Heuristic: parameters whose name ends in @s@ (xs, ys, vals …)
+-- are annotated @:: [Int]@; all others get @:: Int@.  Already-annotated
+-- parameters (those whose param block contains @::@) pass through
+-- unchanged.
+--
+-- Only the outermost lambda head is examined; inner lambdas in the
+-- body are left untouched.
+injectTypeAnnotations :: Text -> Text
+injectTypeAnnotations expr =
+  case T.stripPrefix "\\" (T.strip expr) of
+    Nothing   -> expr   -- not a lambda
+    Just rest ->
+      case T.breakOn " -> " rest of
+        (_, "")          -> expr  -- no lambda arrow found
+        (paramPart, arrowAndBody)
+          | "::" `T.isInfixOf` paramPart -> expr  -- already annotated
+          | otherwise ->
+              let params    = filter (not . T.null) (T.words paramPart)
+                  annotated = map annotateOne params
+                  body      = T.drop 1 arrowAndBody  -- drop leading space
+              in "\\" <> T.intercalate " " annotated <> " " <> body
+  where
+    annotateOne p
+      | "(" `T.isPrefixOf` p = p
+      | T.null p             = p
+      | otherwise            =
+          let ann = if isList p then "[Int]" else "Int"
+          in "(" <> p <> " :: " <> ann <> ")"
+
+    isList p =
+      T.length p >= 2
+        && T.last p == 's'
+        && T.all (\c -> isAlpha c || c == '_' || c == '\'') p
 
 renderRunLine :: Int -> StoredProperty -> Text
 renderRunLine i sp =
