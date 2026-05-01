@@ -117,6 +117,9 @@ library
                       HaskellFlows.Tool.ValidateCabal
                       HaskellFlows.Tool.Witness
                       HaskellFlows.Tool.Workflow
+                      -- Bench modules (#96 Phase A)
+                      HaskellFlows.Bench.Budget
+                      HaskellFlows.Bench.Runner
     build-depends:    base              >= 4.20 && < 5
                     , aeson             >= 2.2  && < 2.3
                     , bytestring        >= 0.11 && < 0.13
@@ -291,3 +294,23 @@ test-suite haskell-flows-mcp-e2e
                     , text
                     , time              >= 1.12 && < 1.16
                     , vector            >= 0.13 && < 0.14
+
+-- --------------------------------------------------------------------------
+--  Performance benchmark harness (#96 Phase A).
+--  Phase A: budget table + timing helpers + reference project scaffold.
+--  Phase B will add actual per-tool timing calls (not yet enforced).
+--  Phase C will wire the gate into CI.
+--
+--  Run via:
+--    cabal run haskell-flows-mcp-bench
+--    scripts/bench-mcp.sh
+-- --------------------------------------------------------------------------
+benchmark haskell-flows-mcp-bench
+    import:           shared
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   benchmarks
+    main-is:          Main.hs
+    build-depends:    base              >= 4.20 && < 5
+                    , containers        >= 0.6  && < 0.9
+                    , text              >= 2.0  && < 2.2
+                    , haskell-flows-mcp

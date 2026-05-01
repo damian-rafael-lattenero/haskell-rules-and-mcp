@@ -86,6 +86,8 @@ import HaskellFlows.Mcp.NextStep
   )
 import qualified HaskellFlows.Mcp.NextStep as NextStep
 import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescriptor (..), ToolResult (..))
+import qualified HaskellFlows.Bench.Budget as Budget
+import qualified HaskellFlows.Bench.Runner as Runner
 import HaskellFlows.Mcp.ToolName
   ( ToolName (..)
   , allToolNames
@@ -1105,6 +1107,10 @@ main = do
                                                                  testLoggingAuditPathAbsentByDefault
       , test "#98D: Logging · audit path present when HASKELL_FLOWS_AUDIT=1"
                                                                  testLoggingAuditPathPresentWhenEnabled
+      -- Issue #96 Phase A · performance budget scaffold
+      , test "#96A: Budget · every ToolName has an entry"         testBudgetParsesCleanly
+      , test "#96A: Budget · no budget is 0 ms"                   testBudgetNoZeroValues
+      , test "#96A: Runner · discardFirst drops cold-start sample" testRunnerDiscardFirstSample
       ]
   if and results then exitSuccess else exitFailure
 
@@ -10543,3 +10549,42 @@ testLoggingAuditPathPresentWhenEnabled = do
   pure $ case Logging.lcAuditPath ctx of
     Nothing   -> False
     Just path -> ".haskell-flows/audit.jsonl" `List.isSuffixOf` path
+
+------------------------------------------------------------------------
+-- Issue #96 Phase A — performance budget scaffold
+------------------------------------------------------------------------
+
+-- | Every constructor in 'ToolName' must have an entry in 'Budget.allBudgets'.
+-- Catches gaps introduced when a new tool is added to 'ToolName' without
+-- a corresponding budget row.
+testBudgetParsesCleanly :: IO Bool
+testBudgetParsesCleanly =
+  pure $ all (isJust . Budget.lookupBudget) allToolNames
+
+-- | No budget value is 0 ms — a zero p50 or p95 would always pass and
+-- would be useless as a regression gate.
+testBudgetNoZeroValues :: IO Bool
+testBudgetNoZeroValues = pure $ all okBudget allToolNames
+  where
+    okBudget t = case Budget.lookupBudget t of
+      Nothing -> False
+      Just b  ->
+        Budget.tbP50Ms b > 0
+        && Budget.tbP95Ms b > 0
+        && Budget.tbP50Ms b <= Budget.tbP95Ms b
+
+-- | 'Runner.discardFirst' removes exactly the first element.
+-- Simulates discarding the cold-start sample before computing p50\/p95.
+testRunnerDiscardFirstSample :: IO Bool
+testRunnerDiscardFirstSample = pure $
+  -- non-empty list: first element gone
+  Runner.discardFirst ([4800, 310, 290] :: [Int]) == [310, 290]
+  -- singleton: result is empty
+  && null (Runner.discardFirst ([42] :: [Int]))
+  -- empty list: still empty (no error)
+  && null (Runner.discardFirst ([] :: [Int]))
+  -- computeStats picks up warm samples correctly
+  && let r = Runner.computeStats [5000, 100, 200, 300]
+     in Runner.prSamples r == [100, 200, 300]
+        && Runner.prP50 r == 200
+        && Runner.prP95 r == 300

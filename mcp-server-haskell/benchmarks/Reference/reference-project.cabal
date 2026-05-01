@@ -1,0 +1,53 @@
+cabal-version:      3.0
+name:               reference-project
+version:            0.1.0.0
+synopsis:           Benchmark reference project for haskell-flows-mcp (#96)
+description:
+  A small but realistic multi-module Haskell project used as the
+  measurement target for the haskell-flows-mcp latency harness.
+  .
+  10 library modules + 1 test module.  Depends on QuickCheck, aeson,
+  and text — the same dependencies the real haskell-flows-mcp toolchain
+  exercises most often.  Intentionally kept small so the benchmark
+  measures per-tool overhead, not project-size effects.
+license:            BSD-3-Clause
+author:             haskell-flows-mcp benchmark harness
+build-type:         Simple
+
+common shared
+  default-language:   GHC2024
+  ghc-options:        -Wall -Wcompat
+  default-extensions: OverloadedStrings
+                      DerivingStrategies
+                      DeriveGeneric
+
+library
+  import:          shared
+  hs-source-dirs:  src
+  exposed-modules:
+    Ref
+    Ref.Core
+    Ref.Types
+    Ref.Codec
+    Ref.Parse
+    Ref.Validate
+    Ref.Transform
+    Ref.Filter
+    Ref.Stats
+    Ref.Util
+  build-depends:
+      base       >= 4.18 && < 5
+    , aeson      >= 2.2  && < 2.3
+    , text       >= 2.0  && < 2.2
+    , containers >= 0.6  && < 0.8
+
+test-suite reference-project-test
+  import:          shared
+  type:            exitcode-stdio-1.0
+  hs-source-dirs:  test
+  main-is:         Spec.hs
+  build-depends:
+      base              >= 4.18 && < 5
+    , QuickCheck        >= 2.14 && < 2.16
+    , reference-project
+    , text              >= 2.0  && < 2.2
