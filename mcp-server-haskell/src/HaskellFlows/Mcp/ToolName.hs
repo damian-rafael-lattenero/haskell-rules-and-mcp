@@ -67,7 +67,6 @@ data ToolName
   | GhcRefactor
   | GhcBatch
   | GhcLint
-  | GhcToolchainStatus
   | GhcValidateCabal
   | GhcCheckProject
   | GhcSuggest
@@ -80,7 +79,6 @@ data ToolName
   | GhcDeterminism
   | GhcBootstrap
   | GhcPropertyLifecycle
-  | GhcToolchainWarmup
   | GhcMove
   | GhcLab
   | GhcExplainError
@@ -88,6 +86,11 @@ data ToolName
   | GhcPropertyAudit
   | GhcWitness
   | GhcModules
+  | GhcToolchain
+    -- ^ #94 Phase C: action-discriminated 'toolchain' primitive
+    -- (action: "status" \| "warmup"). Replaced the per-verb
+    -- 'GhcToolchainStatus' + 'GhcToolchainWarmup' constructors
+    -- outright (no deprecation period — single internal consumer).
     -- ^ #94 Phase B: action-discriminated 'modules' primitive
     -- (action: "add" \| "remove"). Replaced the per-verb
     -- 'GhcAddModules' + 'GhcRemoveModules' constructors outright —
@@ -125,7 +128,6 @@ toolNameText = \case
   GhcRefactor          -> "ghc_refactor"
   GhcBatch             -> "ghc_batch"
   GhcLint              -> "ghc_lint"
-  GhcToolchainStatus   -> "ghc_toolchain_status"
   GhcValidateCabal     -> "ghc_validate_cabal"
   GhcCheckProject      -> "ghc_check_project"
   GhcSuggest           -> "ghc_suggest"
@@ -138,7 +140,7 @@ toolNameText = \case
   GhcDeterminism       -> "ghc_determinism"
   GhcBootstrap         -> "ghc_bootstrap"
   GhcPropertyLifecycle -> "ghc_property_lifecycle"
-  GhcToolchainWarmup   -> "ghc_toolchain_warmup"
+  GhcToolchain         -> "ghc_toolchain"
   GhcMove              -> "ghc_move"
   GhcLab               -> "ghc_lab"
   GhcExplainError      -> "ghc_explain_error"
@@ -256,8 +258,7 @@ toolCategory = \case
   GhcLint              -> CatGate       -- hlint over the project
   -- ── Control-plane ───────────────────────────────────────────────
   GhcWorkflow          -> CatControlPlane
-  GhcToolchainStatus   -> CatControlPlane
-  GhcToolchainWarmup   -> CatControlPlane
+  GhcToolchain         -> CatControlPlane
 
 ------------------------------------------------------------------------
 -- Tool versioning (issue #99 Phase B)
@@ -334,7 +335,6 @@ toolVersion = \case
   GhcLint              -> "1.0.0"
   -- ── Control-plane ───────────────────────────────────────────────
   GhcWorkflow          -> "1.0.0"
-  GhcToolchainStatus   -> "1.0.0"
-  GhcToolchainWarmup   -> "1.0.0"
+  GhcToolchain         -> "1.0.0"
   -- ── #94 Phase B: action-discriminated successors ────────────────
   GhcModules           -> "1.0.0"

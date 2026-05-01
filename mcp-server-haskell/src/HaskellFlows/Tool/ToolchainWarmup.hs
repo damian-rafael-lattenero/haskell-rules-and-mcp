@@ -1,18 +1,15 @@
--- | @ghc_toolchain_warmup@ — probe each optional binary the MCP
--- delegates to and cache availability in the response. Lean vs
--- the TS version (no background download infrastructure — we
--- install via ghcup, which has its own concurrency model) but
--- still useful because it triggers the cabal repl spawn early
--- so the FIRST real tool call doesn't eat the startup cost.
+-- | Internal handler for the @warmup@ branch of @ghc_toolchain@.
 --
--- Issue #90 Phase B: returns the unified envelope shape — the wire
--- payload now carries both 'status' (\"ok\" when every probed
--- binary is present, \"partial\" when ≥1 optional is missing) and
--- the legacy 'success' field for backwards compatibility during
--- the migration window.
+-- Probes each optional binary the MCP delegates to and caches
+-- availability in the response. Triggers the cabal repl spawn
+-- early so the FIRST real tool call doesn't eat the startup cost.
+--
+-- Issue #94 Phase C retired the @ghc_toolchain_warmup@ wire surface;
+-- 'HaskellFlows.Tool.Toolchain' is the single externally-advertised
+-- tool. This module's 'handle' is the implementation
+-- 'Toolchain.handle' forwards to when @action="warmup"@.
 module HaskellFlows.Tool.ToolchainWarmup
-  ( descriptor
-  , handle
+  ( handle
   ) where
 
 import Data.Aeson
@@ -25,22 +22,6 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcToolchainWarmup
-    , tdDescription =
-        "Probe every optional toolchain binary (fourmolu, ormolu, hls, "
-          <> "hoogle) and return availability so subsequent calls do not "
-          <> "pay the lookup cost. Non-blocking; unavailable tools are "
-          <> "reported cleanly."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object []
-          , "additionalProperties" .= False
-          ]
-    }
 
 -- | Optional binaries the MCP probes. Every entry is *optional* —
 -- missing binaries don't break the warmup, they just narrow the

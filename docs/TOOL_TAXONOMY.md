@@ -107,8 +107,7 @@
 | Tool | Wire name | What it does |
 |---|---|---|
 | `GhcWorkflow` | `ghc_workflow` | `status` / `help` / `next` — session-state-aware orientation |
-| `GhcToolchainStatus` | `ghc_toolchain_status` | Probe cabal / ghc / hlint / fourmolu / hoogle / hls |
-| `GhcToolchainWarmup` | `ghc_toolchain_warmup` | Pre-warm optional binaries (hoogle index, formatter) |
+| `GhcToolchain` | `ghc_toolchain` | Action-discriminated probe / warmup of cabal / ghc / hlint / fourmolu / hoogle / hls (`action=status` \| `warmup`) — #94 Phase C: subsumes the retired `ghc_toolchain_status` + `ghc_toolchain_warmup` |
 
 ---
 
@@ -119,13 +118,16 @@
 | Primitive | 34 |
 | Composite | 4 |
 | Gate | 3 |
-| Control-plane | 3 |
-| **Total** | **44** |
+| Control-plane | 2 |
+| **Total** | **43** |
 
 * Phase B retrofit: `GhcModules` replaced `GhcAddModules` +
   `GhcRemoveModules` outright (47 → 45 — two less, one new).
 * Phase C step 1: `GhcDeps action="explain"` replaced
   `GhcDepsExplain` outright (45 → 44 — one less).
+* Phase C step 2: `GhcToolchain action="status"|"warmup"` replaced
+  `GhcToolchainStatus` + `GhcToolchainWarmup` outright (44 → 43 —
+  two less, one new).
 
 With a single internal consumer there was no deprecation cost to
 honour, so the legacy wire surface was removed in the same commit as
@@ -147,7 +149,7 @@ action-discriminated primitives in later phases:
 | ~~`ghc_deps_explain`~~ | ✅ landed: `deps { action: "explain" }` (#94 Phase C) |
 | `ghc_create_project` + `ghc_switch_project` + `ghc_validate_cabal` + `ghc_bootstrap` | `project { action: "create" \| "switch" \| "validate" \| "bootstrap" }` |
 | `ghc_property_lifecycle` + `ghc_regression` + `ghc_quickcheck_export` + `ghc_property_audit` | `property_store { action: "list" \| "drop" \| "run" \| "export" \| "audit" }` |
-| `ghc_toolchain_warmup` | `toolchain { action: "warmup" }` |
+| ~~`ghc_toolchain_warmup` + `ghc_toolchain_status`~~ | ✅ landed: `ghc_toolchain { action: "status" \| "warmup" }` (#94 Phase C) |
 | `ghc_move` | `refactor { action: "move_symbol" }` |
 | `ghc_determinism` | `quickcheck { runs: N }` |
 

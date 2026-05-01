@@ -1,13 +1,7 @@
--- | @ghc_toolchain_status@ — single-call availability inventory for
--- every external binary the MCP can delegate to.
+-- | Internal handler for the @status@ branch of @ghc_toolchain@.
 --
--- The TS port solves this ad-hoc per tool (each one has its own
--- \"tool unavailable\" branch). That's fine until an agent asks
--- \"can I use hoogle right now?\" without actually wanting to run
--- one — the only way to know is to try and parse the failure.
--- This tool gives a structured answer in one call.
---
--- Returns, for every probed binary:
+-- Single-call availability inventory for every external binary the
+-- MCP can delegate to. Returns, per binary:
 --
 -- * @available@ — boolean, from 'findExecutable'
 -- * @path@ — absolute resolved path, when available
@@ -17,9 +11,13 @@
 -- * @category@ — @gate@ (blocks CI), @workflow@ (optional), @query@
 --
 -- Pure query; does not mutate session state.
+--
+-- Issue #94 Phase C retired the @ghc_toolchain_status@ wire surface;
+-- 'HaskellFlows.Tool.Toolchain' is the single externally-advertised
+-- tool. This module's 'handle' is the implementation
+-- 'Toolchain.handle' forwards to when @action="status"@.
 module HaskellFlows.Tool.ToolchainStatus
-  ( descriptor
-  , handle
+  ( handle
   ) where
 
 import Control.Concurrent (forkIO)
@@ -45,22 +43,6 @@ import System.Timeout (timeout)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
-
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcToolchainStatus
-    , tdDescription =
-        "Report availability + version of every external binary the "
-          <> "MCP can delegate to (cabal, ghc, hlint, fourmolu, "
-          <> "ormolu, hoogle, hls). Read-only; no session mutation."
-    , tdInputSchema =
-        object
-          [ "type"                 .= ("object" :: Text)
-          , "properties"           .= object []
-          , "additionalProperties" .= False
-          ]
-    }
 
 -- | (binary name, version-flag, category).
 --

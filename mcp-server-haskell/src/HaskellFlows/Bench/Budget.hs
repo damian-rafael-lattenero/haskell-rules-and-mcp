@@ -118,9 +118,12 @@ allBudgets = Map.fromList
   , ( GhcLint
     , ToolBudget 2500 5000  Nothing
         "hlint subprocess; recursive project scan")
-  , ( GhcToolchainStatus
-    , ToolBudget 100  300   Nothing
-        "binary-probe only; no GHCi interaction")
+  , ( GhcToolchain
+    , ToolBudget 200  500   Nothing
+        "#94 Phase C: action-discriminated successor to \
+        \ghc_toolchain_status + ghc_toolchain_warmup; budget covers \
+        \binary-probe (status) and PATH warm-up (warmup) — both are \
+        \subprocess-bound but cheap")
   , ( GhcValidateCabal
     , ToolBudget 200  500   Nothing
         "cabal check + duplicate-dep heuristic scan")
@@ -157,9 +160,6 @@ allBudgets = Map.fromList
   , ( GhcPropertyLifecycle
     , ToolBudget 100  300   Nothing
         "property store list/drop; file I/O only")
-  , ( GhcToolchainWarmup
-    , ToolBudget 200  500   Nothing
-        "binary-probe + PATH-search warmup sequence")
   , ( GhcMove
     , ToolBudget 1500 4000  Nothing
         "multi-file rename + export fixup + compile-verify roundtrip")

@@ -132,11 +132,11 @@ situationTable =
                  GhcValidateCabal
                  "(no args)"
   , SituationRow "toolchain gates (cabal/ghc/hlint)"
-                 GhcToolchainStatus
-                 "(no args)"
+                 GhcToolchain
+                 "action=\"status\""
   , SituationRow "toolchain warmup (probe optional bins)"
-                 GhcToolchainWarmup
-                 "(no args)"
+                 GhcToolchain
+                 "action=\"warmup\""
   , SituationRow "batch N tool calls"
                  GhcBatch
                  "actions=[{tool,args},...]"
@@ -169,7 +169,7 @@ sessionInstructionsText descriptors =
       , "Start-of-session handshake:"
       , "  1. ghc_workflow(action=\"status\")     — confirm alive + "
           <> tshow nTools <> " tools"
-      , "  2. ghc_toolchain_status()              — cabal/ghc/hlint gates"
+      , "  2. ghc_toolchain(action=\"status\")    — cabal/ghc/hlint gates"
       , "  3. ghc_workflow(action=\"help\")       — state-aware nudges"
       , ""
       , "Situation -> tool (canonical shortlist):"
@@ -247,7 +247,7 @@ workflowRulesMarkdown descriptors =
       , ""
       , "1. `ghc_workflow(action=\"status\")` — confirm alive + "
           <> tshow nTools <> " tools"
-      , "2. `ghc_toolchain_status()` — external-binary gates"
+      , "2. `ghc_toolchain(action=\"status\")` — external-binary gates"
       , "3. `ghc_workflow(action=\"help\")` — state-aware nudges"
       , ""
       , "## Situation → tool"

@@ -336,8 +336,8 @@ dispatch name payload = case name of
     , step GhcCoverage (object [])
     ])
 
-  -- Toolchain — if everything green, go build.
-  GhcToolchainStatus -> Just (simple GhcWorkflow
+  -- #94 Phase C: toolchain (status or warmup) — if everything green, go build.
+  GhcToolchain -> Just (simple GhcWorkflow
     "With the toolchain confirmed, 'ghc_workflow(action=\"help\")' \
     \gives you the next action tailored to the session's current \
     \state (alive GHCi, loaded modules, etc)."
@@ -528,12 +528,6 @@ dispatch name payload = case name of
       \should be pruned before the next push."
       (Just (object [ "action" .= ("run" :: Text) ])))
     _ -> Nothing
-
-  -- Optional toolchain warmup — next step is the status/help router.
-  GhcToolchainWarmup -> Just (simple GhcWorkflow
-    "Optional binaries probed. Ask 'ghc_workflow(action=\"help\")' \
-    \for a session-state-aware pointer at the next action."
-    (Just (object [ "action" .= ("help" :: Text) ])))
 
   -- Bootstrap — previewed content; suggest writing or moving on.
   GhcBootstrap -> Just (simple GhcWorkflow

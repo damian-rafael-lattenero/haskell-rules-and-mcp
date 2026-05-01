@@ -10,7 +10,7 @@ module Scenarios.FlowToolchain
   ( runFlow
   ) where
 
-import Data.Aeson (Value (..), object)
+import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Text (Text)
@@ -29,9 +29,9 @@ import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _pd = do
-  -- ghc_toolchain_status
-  t0 <- stepHeader 1 "ghc_toolchain_status"
-  r1 <- Client.callTool c GhcToolchainStatus (object [])
+  -- ghc_toolchain action=status (#94 Phase C: subsumed ghc_toolchain_status)
+  t0 <- stepHeader 1 "ghc_toolchain action=status"
+  r1 <- Client.callTool c GhcToolchain (object [ "action" .= ("status" :: Text) ])
   -- Dropped: "status success" — the 'cabal/ghc/hlint available'
   -- check below is a stronger semantic oracle (fails if any of the
   -- three binaries are missing, which is the real failure mode).
@@ -51,9 +51,9 @@ runFlow c _pd = do
           \crashed earlier. Check your PATH and rerun."
   stepFooter 1 t0
 
-  -- ghc_toolchain_warmup
-  t1 <- stepHeader 2 "ghc_toolchain_warmup (probe + report)"
-  r2 <- Client.callTool c GhcToolchainWarmup (object [])
+  -- ghc_toolchain action=warmup (#94 Phase C: subsumed ghc_toolchain_warmup)
+  t1 <- stepHeader 2 "ghc_toolchain action=warmup (probe + report)"
+  r2 <- Client.callTool c GhcToolchain (object [ "action" .= ("warmup" :: Text) ])
   -- Dropped: "warmup success" — redundant with 'tools array non-empty'
   -- which is the shape the tool is actually producing.
   c6 <- liveCheck $ checkJsonFieldMatches

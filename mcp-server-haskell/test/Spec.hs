@@ -5326,7 +5326,7 @@ testBajaRegistered = pure $
     [ "ghc_browse"
     , "ghc_determinism"
     , "ghc_property_lifecycle"
-    , "ghc_toolchain_warmup"
+    , "ghc_toolchain"  -- #94 Phase C: subsumes ghc_toolchain_warmup
     ]
 
 -- | Phase 11l: resources/read for the rules URI returns the
@@ -5954,8 +5954,11 @@ testNextStepBrowse =
 
 testNextStepToolchainWarmup :: IO Bool
 testNextStepToolchainWarmup =
-  let payload = A.object [ "success" .= True ]
-  in pure (assertNext GhcToolchainWarmup payload GhcWorkflow)
+  -- #94 Phase C: GhcToolchainWarmup merged into GhcToolchain
+  -- (action="warmup"). The dispatch arm is action-agnostic — both
+  -- status and warmup recommend ghc_workflow help.
+  let payload = A.object [ "success" .= True, "action" .= ("warmup" :: Text) ]
+  in pure (assertNext GhcToolchain payload GhcWorkflow)
 
 testNextStepPropertyLifecycleList :: IO Bool
 testNextStepPropertyLifecycleList =
@@ -10697,7 +10700,7 @@ goldenDispatchTable =
   , ("refactor → load",                  GhcRefactor,           object [],    Just GhcLoad)
   , ("check_module → check_project",     GhcCheckModule,        object [],    Just GhcCheckProject)
   , ("check_project → gate chain",       GhcCheckProject,       object [],    Just GhcGate)
-  , ("toolchain_status → workflow",      GhcToolchainStatus,    object [],    Just GhcWorkflow)
+  , ("toolchain status → workflow",     GhcToolchain,          object [ "action" .= ("status" :: T.Text) ], Just GhcWorkflow)
   , ("validate_cabal(clean) → suppress", GhcValidateCabal,      object [],    Nothing)
   , ("lint → suppress",                  GhcLint,               object [],    Nothing)
   , ("format → load",                    GhcFormat,             object [],    Just GhcLoad)
@@ -10720,7 +10723,7 @@ goldenDispatchTable =
   , ("browse → suggest",                GhcBrowse,             object [],    Just GhcSuggest)
   , ("imports → suppress",              GhcImports,            object [],    Nothing)
   , ("property_lifecycle(default) → suppress", GhcPropertyLifecycle, object [], Nothing)
-  , ("toolchain_warmup → workflow",     GhcToolchainWarmup,    object [],    Just GhcWorkflow)
+  , ("toolchain warmup → workflow",     GhcToolchain,          object [ "action" .= ("warmup" :: T.Text) ], Just GhcWorkflow)
   , ("bootstrap → workflow",            GhcBootstrap,          object [],    Just GhcWorkflow)
   , ("workflow → suppress",             GhcWorkflow,           object [],    Nothing)
   , ("type → suppress",                 GhcType,               object [],    Nothing)
@@ -10847,7 +10850,10 @@ testCategoryCountsMatchTaxonomy = pure $
   -- because the project has a single internal consumer.
   && countCat CatComposite    ==  4
   && countCat CatGate         ==  3
-  && countCat CatControlPlane ==  3
+  && countCat CatControlPlane ==  2
+  -- ^ #94 Phase C step 2: GhcToolchain (action="status"|"warmup")
+  -- replaces GhcToolchainStatus + GhcToolchainWarmup outright.
+  -- Net delta on control-plane: 3 → 2 (two removed, one added).
   where
     countCat c = length [ t | t <- allToolNames, toolCategory t == c ]
 

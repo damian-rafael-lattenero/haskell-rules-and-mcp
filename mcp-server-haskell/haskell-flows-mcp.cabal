@@ -112,6 +112,7 @@ library
                       HaskellFlows.Tool.RemoveModules
                       HaskellFlows.Tool.Suggest
                       HaskellFlows.Tool.SwitchProject
+                      HaskellFlows.Tool.Toolchain
                       HaskellFlows.Tool.ToolchainStatus
                       HaskellFlows.Tool.ToolchainWarmup
                       HaskellFlows.Tool.Type

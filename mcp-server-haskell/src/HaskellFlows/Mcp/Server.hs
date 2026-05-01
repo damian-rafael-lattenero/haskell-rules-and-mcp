@@ -97,7 +97,7 @@ import qualified HaskellFlows.Tool.Bootstrap       as BootstrapTool
 import qualified HaskellFlows.Tool.Browse          as BrowseTool
 import qualified HaskellFlows.Tool.Determinism     as DeterminismTool
 import qualified HaskellFlows.Tool.PropertyLifecycle as PropertyLifecycleTool
-import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmupTool
+import qualified HaskellFlows.Tool.Toolchain       as ToolchainTool
 import qualified HaskellFlows.Tool.CheckModule     as CheckModuleTool
 import qualified HaskellFlows.Tool.CheckProject    as CheckProjectTool
 import qualified HaskellFlows.Tool.Complete        as CompleteTool
@@ -129,7 +129,6 @@ import qualified HaskellFlows.Tool.Regression      as RegressionTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
 import qualified HaskellFlows.Mcp.PathBootstrap    as PathBootstrap
 import qualified HaskellFlows.Tool.SwitchProject   as SwitchProjectTool
-import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
 import qualified HaskellFlows.Tool.Type            as TypeTool
 import qualified HaskellFlows.Tool.ValidateCabal   as ValidateCabalTool
 import qualified HaskellFlows.Tool.Workflow        as WorkflowTool
@@ -518,8 +517,12 @@ dispatchByName srv args = \case
   GhcLint -> do
     pd <- readIORef (srvProjectDir srv)
     LintTool.handle pd args
-  GhcToolchainStatus ->
-    ToolchainStatusTool.handle args
+  GhcToolchain ->
+    -- #94 Phase C: action-discriminated successor to
+    -- GhcToolchainStatus + GhcToolchainWarmup. ToolchainTool.handle
+    -- defaults action to "status" so an empty payload behaves the
+    -- same as the old ghc_toolchain_status no-arg call.
+    ToolchainTool.handle args
   GhcValidateCabal -> do
     pd <- readIORef (srvProjectDir srv)
     ValidateCabalTool.handle pd args
@@ -580,8 +583,6 @@ dispatchByName srv args = \case
   GhcPropertyLifecycle -> do
     store <- readIORef (srvStore srv)
     PropertyLifecycleTool.handle store args
-  GhcToolchainWarmup ->
-    ToolchainWarmupTool.handle args
   GhcBootstrap -> do
     pd <- readIORef (srvProjectDir srv)
     BootstrapTool.handle pd allToolDescriptors args
@@ -735,7 +736,7 @@ allToolDescriptors =
   , WitnessTool.descriptor
   , BatchTool.descriptor
   , LintTool.descriptor
-  , ToolchainStatusTool.descriptor
+  , ToolchainTool.descriptor       -- #94 Phase C: action-discriminated successor
   , ValidateCabalTool.descriptor
   , CheckProjectTool.descriptor
   , SuggestTool.descriptor
@@ -749,7 +750,6 @@ allToolDescriptors =
   , ModulesTool.descriptor       -- #94 Phase B: action-discriminated 'modules' primitive
   , BootstrapTool.descriptor
   , PropertyLifecycleTool.descriptor
-  , ToolchainWarmupTool.descriptor
   ]
 
 -- 'allToolNames :: [ToolName]' / 'allToolNameTexts :: [Text]' both
