@@ -398,9 +398,16 @@ dispatchByName srv args = \case
   GhcQuickCheck -> do
     -- Wave-3 full in-process: compileExpr + unsafeCoerce of a
     -- Test.QuickCheck.quickCheckWithResult invocation.
+    -- #94 Phase C: 'runs' >= 2 routes to the Determinism handler
+    -- (the same N-runs-flakiness-detector that ghc_determinism
+    -- used to expose). 'runs' absent or <= 1 → single QC run as
+    -- before. Behaviour-preserving relative to the legacy paths.
     ghcSess <- getOrStartGhcSession srv
-    store   <- readIORef (srvStore srv)
-    QcTool.handle store ghcSess args
+    case quickCheckRuns args of
+      Just n | n >= 2 -> DeterminismTool.handle ghcSess args
+      _              -> do
+        store <- readIORef (srvStore srv)
+        QcTool.handle store ghcSess args
   GhcHole -> do
     -- Wave-2 full GhcSession: Deferred compile via stanza flags,
     -- diagnostics captured through the logger hook, rendered to
@@ -576,10 +583,6 @@ dispatchByName srv args = \case
     -- Phase-2 migrated: in-process getModuleInfo + modInfoExports.
     ghcSess <- getOrStartGhcSession srv
     BrowseTool.handle ghcSess args
-  GhcDeterminism -> do
-    -- Wave-3 full in-process via evalIOString.
-    ghcSess <- getOrStartGhcSession srv
-    DeterminismTool.handle ghcSess args
   GhcPropertyLifecycle -> do
     store <- readIORef (srvStore srv)
     PropertyLifecycleTool.handle store args
@@ -625,6 +628,18 @@ unknownToolResult name =
 -- for example the unknown-tool result whose content is plain text rather than
 -- a JSON-encoded 'ToolResponse'. The fallback is intentionally benign: the
 -- log entry is still emitted; it just carries a slightly inaccurate status.
+-- | Issue #94 Phase C: peek at the @runs@ field of a ghc_quickcheck
+-- payload without committing to its FromJSON parser. When present
+-- and >= 2, the dispatcher routes to the determinism handler (the
+-- legacy ghc_determinism flakiness detector) instead of the single
+-- QC run; otherwise the standard QC path fires.
+quickCheckRuns :: Value -> Maybe Int
+quickCheckRuns v = case v of
+  Object o -> case KeyMap.lookup "runs" o of
+    Just (Number n) -> Just (round n)
+    _               -> Nothing
+  _ -> Nothing
+
 extractResponseStatus :: Response -> Text
 extractResponseStatus resp = fromMaybe "ok" $ do
   v <- either (const Nothing) Just (respPayload resp)
@@ -746,7 +761,6 @@ allToolDescriptors =
   , FixWarningTool.descriptor
   , ImportsTool.descriptor
   , BrowseTool.descriptor
-  , DeterminismTool.descriptor
   , ModulesTool.descriptor       -- #94 Phase B: action-discriminated 'modules' primitive
   , BootstrapTool.descriptor
   , PropertyLifecycleTool.descriptor

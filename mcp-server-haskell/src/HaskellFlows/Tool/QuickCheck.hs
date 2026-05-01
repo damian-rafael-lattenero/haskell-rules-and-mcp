@@ -30,6 +30,7 @@ module HaskellFlows.Tool.QuickCheck
 import Control.Applicative ((<|>))
 import Control.Exception (SomeException, try)
 import Data.Aeson
+import qualified Data.Aeson.Types as AesonTypes
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAlpha, isAlphaNum)
 import Data.Text (Text)
@@ -84,7 +85,9 @@ descriptor =
           <> "The property is passed directly to quickCheckWithResult, "
           <> "so it must be a value of type Testable (e.g. "
           <> "`\\x -> reverse (reverse x) == x`). Returns structured "
-          <> "pass/fail/gave-up/exception output."
+          <> "pass/fail/gave-up/exception output. Pass `runs` >= 2 to "
+          <> "run the same property N times for flakiness detection "
+          <> "(#94 Phase C: subsumes the retired ghc_determinism)."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -104,6 +107,15 @@ descriptor =
                        \the right scope before re-running. Example: \
                        \\"src/Foo.hs\"." :: Text)
                   ]
+              , "runs" .= object
+                  [ "type"        .= ("integer" :: Text)
+                  , "description" .=
+                      ("Optional: number of runs. Default 1 (single QC run). \
+                       \Pass >= 2 to run the same property N times and report \
+                       \flakiness — the determinism mode that used to be \
+                       \exposed as the separate ghc_determinism tool." :: Text)
+                  , "minimum"     .= (1 :: Int)
+                  ]
               ]
           , "required"             .= ["property" :: Text]
           , "additionalProperties" .= False
@@ -120,6 +132,12 @@ instance FromJSON QuickCheckArgs where
   parseJSON = withObject "QuickCheckArgs" $ \o -> do
     prop <- o .: "property"
     md   <- o .:? "module"
+    -- #94 Phase C: 'runs' is consumed by the dispatcher (Server.hs)
+    -- to route to the determinism handler when >= 2. Pinning it
+    -- in the parser would force every QC call to declare it; we
+    -- accept the field as a no-op when it's <= 1 / absent and let
+    -- the dispatcher do the routing.
+    _    <- o .:? "runs" :: AesonTypes.Parser (Maybe Int)
     pure QuickCheckArgs { qaProperty = prop, qaModule = md }
 
 -- | Runtime ceiling for a single quickCheck invocation. Mirrors the

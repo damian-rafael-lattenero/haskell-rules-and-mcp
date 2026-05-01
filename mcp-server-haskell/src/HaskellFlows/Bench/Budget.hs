@@ -151,9 +151,6 @@ allBudgets = Map.fromList
   , ( GhcBrowse
     , ToolBudget 100  300   Nothing
         "module member listing; cached env query")
-  , ( GhcDeterminism
-    , ToolBudget 1000 3000  Nothing
-        "3 QC re-runs comparing output stability")
   , ( GhcBootstrap
     , ToolBudget  50  200   Nothing
         "preview/apply cabal.project bootstrap; no GHCi")

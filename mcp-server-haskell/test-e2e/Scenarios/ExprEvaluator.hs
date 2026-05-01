@@ -424,7 +424,8 @@ step10_runProperties c = do
 
 step11_determinism :: Client.McpClient -> IO [Check]
 step11_determinism c = do
-  r <- Client.callTool c GhcDeterminism (object
+  -- #94 Phase C: ghc_determinism merged into ghc_quickcheck (runs>=2).
+  r <- Client.callTool c GhcQuickCheck (object
     [ "property" .= (
         "\\(env :: Env) (x :: Expr) -> eval env (simplify x) == eval env x"
         :: Text)

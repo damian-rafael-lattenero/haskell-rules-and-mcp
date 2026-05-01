@@ -69,7 +69,7 @@ situationTable =
                  GhcQuickCheck
                  "property=\"\\\\x -> ...\", module=\"src/X.hs\""
   , SituationRow "check property stability"
-                 GhcDeterminism
+                 GhcQuickCheck
                  "property=\"...\", runs=5"
   , SituationRow "replay persisted properties"
                  GhcRegression

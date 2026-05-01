@@ -196,9 +196,9 @@ historyNudges hist = concat
     -- rather than editing. Suggest a flakiness / stability
     -- check instead of another reload.
     [ "The last 5 tool calls were all ghc_load — you're polling \
-      \rather than progressing. Try ghc_determinism on a recent \
-      \property for flakiness, or ghc_check_project to surface \
-      \module-level gates you can knock out in parallel."
+      \rather than progressing. Try ghc_quickcheck(runs=3) on a \
+      \recent property for flakiness, or ghc_check_project to \
+      \surface module-level gates you can knock out in parallel."
     | length recent5 >= 5, all (== GhcLoad) recent5
     ]
     -- ghc_suggest recent, no ghc_quickcheck since.
@@ -271,8 +271,9 @@ renderPhaseHint p = case p of
   PhaseTestingLaws ->
     "Phase: testing laws. Feed the highest-confidence proposal from \
     \ghc_suggest into ghc_quickcheck; every pass auto-persists \
-    \to .haskell-flows/properties.json. Use ghc_determinism to \
-    \check stability before adding to the regression suite."
+    \to .haskell-flows/properties.json. Pass runs>=3 to \
+    \ghc_quickcheck for flakiness check before adding to the \
+    \regression suite."
   PhaseReadyToPush ->
     "Phase: ready to push. ghc_regression(action=\"run\") replays \
     \the full set; ghc_quickcheck_export materialises them as \

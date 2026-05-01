@@ -1,12 +1,15 @@
--- | @ghc_determinism@ — Wave-3 full in-process.
+-- | Internal handler for @ghc_quickcheck@ when called with @runs >= 2@.
 --
--- Re-run a QuickCheck property N times (default 3) with independent
--- 'stdArgs' seeds and report whether every run passes. Uses the same
+-- Re-runs a QuickCheck property N times (default 3) with independent
+-- 'stdArgs' seeds and reports whether every run passes. Uses the same
 -- 'evalIOString' primitive as 'ghc_quickcheck' — compile the property
 -- once per run, coerce the HValue to @IO String@, execute it, parse.
+--
+-- Issue #94 Phase C retired the @ghc_determinism@ wire surface;
+-- @ghc_quickcheck@ now accepts an optional @runs: Int@ field, and
+-- the dispatcher routes to this handler when @runs >= 2@.
 module HaskellFlows.Tool.Determinism
-  ( descriptor
-  , handle
+  ( handle
   , DeterminismArgs (..)
   ) where
 
@@ -27,30 +30,6 @@ import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..), parseQuickCheckOutput)
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcDeterminism
-    , tdDescription =
-        "Run a property 3 times (or `runs` param) to confirm every "
-          <> "run passes. Any failing or non-passed run makes the tool "
-          <> "return overall: false. Use to catch flakiness before "
-          <> "committing a property. Pass `module` to load a project "
-          <> "source file before each run — required when the property "
-          <> "references types/instances that aren't in the test-suite "
-          <> "stanza's default auto-load set."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "property" .= object [ "type" .= ("string" :: Text) ]
-              , "runs"     .= object [ "type" .= ("integer" :: Text) ]
-              , "module"   .= object [ "type" .= ("string" :: Text) ]
-              ]
-          , "required"             .= ["property" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data DeterminismArgs = DeterminismArgs
   { daProperty :: !Text

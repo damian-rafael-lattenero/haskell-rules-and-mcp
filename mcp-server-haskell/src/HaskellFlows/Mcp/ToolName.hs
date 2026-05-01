@@ -76,7 +76,6 @@ data ToolName
   | GhcFixWarning
   | GhcImports
   | GhcBrowse
-  | GhcDeterminism
   | GhcBootstrap
   | GhcPropertyLifecycle
   | GhcMove
@@ -137,7 +136,6 @@ toolNameText = \case
   GhcFixWarning        -> "ghc_fix_warning"
   GhcImports           -> "ghc_imports"
   GhcBrowse            -> "ghc_browse"
-  GhcDeterminism       -> "ghc_determinism"
   GhcBootstrap         -> "ghc_bootstrap"
   GhcPropertyLifecycle -> "ghc_property_lifecycle"
   GhcToolchain         -> "ghc_toolchain"
@@ -237,7 +235,6 @@ toolCategory = \case
   GhcBootstrap         -> CatPrimitive   -- future: project action=bootstrap
   -- Property-first testing
   GhcQuickCheck        -> CatPrimitive
-  GhcDeterminism       -> CatPrimitive   -- future: quickcheck runs=N
   GhcSuggest           -> CatPrimitive
   GhcPropertyLifecycle -> CatPrimitive   -- future: property_store action=list|drop
   GhcRegression        -> CatPrimitive   -- future: property_store action=run
@@ -314,7 +311,6 @@ toolVersion = \case
   GhcBootstrap         -> "1.0.0"
   -- ── Property-first testing ──────────────────────────────────────
   GhcQuickCheck        -> "1.0.0"
-  GhcDeterminism       -> "1.0.0"
   GhcSuggest           -> "1.0.0"
   GhcPropertyLifecycle -> "1.0.0"
   GhcRegression        -> "1.0.0"

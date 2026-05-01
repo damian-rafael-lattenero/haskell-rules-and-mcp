@@ -287,17 +287,23 @@ dispatch name payload = case name of
         ])))
 
   -- QuickCheck passed → keep chaining, or gate.
-  GhcQuickCheck -> case qcState payload of
-    Just "passed" -> Just (simple GhcCheckModule
-      "Law holds. Either run 'ghc_suggest' for the next candidate, \
-      \or roll up into a per-module gate. For flakiness confidence, \
-      \ghc_determinism re-runs the property 3+ times."
-      (Just (object [ "module_path" .= ("<same module>" :: Text) ])))
-    Just "failed" -> Just (simple GhcEval
-      "Property failed. Evaluate the reported counter-example with \
-      \'ghc_eval' to see intermediate values before editing."
-      Nothing)
-    _ -> Nothing
+  -- #94 Phase C: ghc_quickcheck now also handles the determinism
+  -- mode (runs >= 2). Multi-run responses carry a 'runs' field in
+  -- the payload (the single-run path does not), so we use that as
+  -- the discriminator and route to the legacy determinismNext logic.
+  GhcQuickCheck
+    | isDeterminismPayload payload -> Just (determinismNext payload)
+    | otherwise -> case qcState payload of
+        Just "passed" -> Just (simple GhcCheckModule
+          "Law holds. Either run 'ghc_suggest' for the next candidate, \
+          \or roll up into a per-module gate. For flakiness confidence, \
+          \re-run ghc_quickcheck with runs>=3."
+          (Just (object [ "module_path" .= ("<same module>" :: Text) ])))
+        Just "failed" -> Just (simple GhcEval
+          "Property failed. Evaluate the reported counter-example with \
+          \'ghc_eval' to see intermediate values before editing."
+          Nothing)
+        _ -> Nothing
 
   -- Regression list → run the set.
   GhcRegression -> case regressionAction payload of
@@ -383,10 +389,6 @@ dispatch name payload = case name of
     \export + push."
     Nothing)
 
-  -- Determinism check → if stable, propagate to regression; if
-  -- flaky, ask for a fresh ghc_quickcheck run to see counter-
-  -- example before deleting.
-  GhcDeterminism -> Just (determinismNext payload)
 
   -- Issue #64: the auditor flagged contradictory pairs (or
   -- nothing). When findings exist, the canonical follow-up is
@@ -585,6 +587,16 @@ gateNext payload
       \ghc_check_project to isolate the red module, then drill in \
       \with ghc_check_module + ghc_load(diagnostics=true)."
       Nothing
+
+-- | #94 Phase C: discriminate ghc_quickcheck single-run vs multi-run
+-- (determinism) responses. The Determinism handler emits a payload
+-- with a top-level @runs@ field (the requested run count); the
+-- single-run handler does not. We auto-drill the @result@ envelope
+-- because tool payloads sit under @result.runs@ post-#90.
+isDeterminismPayload :: Value -> Bool
+isDeterminismPayload payload = case envField "runs" payload of
+  Just _  -> True
+  Nothing -> False
 
 -- | 'ghc_determinism' payload has a top-level @success@ bool.
 -- Stable → trust for regression; flaky → show the counter-example.

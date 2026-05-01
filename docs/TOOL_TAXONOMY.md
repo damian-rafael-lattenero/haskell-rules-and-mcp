@@ -63,8 +63,7 @@
 
 | Tool | Wire name | Notes |
 |---|---|---|
-| `GhcQuickCheck` | `ghc_quickcheck` | Run a single QC property; auto-persist on pass |
-| `GhcDeterminism` | `ghc_determinism` | Run property N times for flakiness detection (future: `quickcheck runs=N`) |
+| `GhcQuickCheck` | `ghc_quickcheck` | Run a QC property; auto-persist on pass. Pass `runs >= 2` to repeat the property for flakiness detection (#94 Phase C: subsumes the retired `ghc_determinism`) |
 | `GhcSuggest` | `ghc_suggest` | Propose QuickCheck laws for a function signature |
 | `GhcPropertyLifecycle` | `ghc_property_lifecycle` | `list` / `drop` the property store (future: `property_store action=list|drop`) |
 | `GhcRegression` | `ghc_regression` | Replay all persisted properties (future: `property_store action=run`) |
@@ -115,11 +114,11 @@
 
 | Category | Count |
 |---|---|
-| Primitive | 34 |
+| Primitive | 33 |
 | Composite | 4 |
 | Gate | 3 |
 | Control-plane | 2 |
-| **Total** | **43** |
+| **Total** | **42** |
 
 * Phase B retrofit: `GhcModules` replaced `GhcAddModules` +
   `GhcRemoveModules` outright (47 → 45 — two less, one new).
@@ -128,6 +127,8 @@
 * Phase C step 2: `GhcToolchain action="status"|"warmup"` replaced
   `GhcToolchainStatus` + `GhcToolchainWarmup` outright (44 → 43 —
   two less, one new).
+* Phase C step 3: `GhcQuickCheck runs>=2` replaced `GhcDeterminism`
+  outright (43 → 42 — one less).
 
 With a single internal consumer there was no deprecation cost to
 honour, so the legacy wire surface was removed in the same commit as
@@ -151,6 +152,6 @@ action-discriminated primitives in later phases:
 | `ghc_property_lifecycle` + `ghc_regression` + `ghc_quickcheck_export` + `ghc_property_audit` | `property_store { action: "list" \| "drop" \| "run" \| "export" \| "audit" }` |
 | ~~`ghc_toolchain_warmup` + `ghc_toolchain_status`~~ | ✅ landed: `ghc_toolchain { action: "status" \| "warmup" }` (#94 Phase C) |
 | `ghc_move` | `refactor { action: "move_symbol" }` |
-| `ghc_determinism` | `quickcheck { runs: N }` |
+| ~~`ghc_determinism`~~ | ✅ landed: `quickcheck { runs: N }` (#94 Phase C) |
 
 Post-consolidation: **31 tools**, ~**22 distinct concepts**.

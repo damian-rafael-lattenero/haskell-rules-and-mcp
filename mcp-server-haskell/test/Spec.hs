@@ -5324,7 +5324,7 @@ testBajaRegistered :: IO Bool
 testBajaRegistered = pure $
   all (`elem` allToolNameTexts)
     [ "ghc_browse"
-    , "ghc_determinism"
+    , "ghc_quickcheck"  -- #94 Phase C: ghc_determinism merged in (runs>=N)
     , "ghc_property_lifecycle"
     , "ghc_toolchain"  -- #94 Phase C: subsumes ghc_toolchain_warmup
     ]
@@ -5900,13 +5900,16 @@ testNextStepQcExport =
 
 testNextStepDeterminismPass :: IO Bool
 testNextStepDeterminismPass =
+  -- #94 Phase C: ghc_determinism merged into ghc_quickcheck (runs>=2).
+  -- The 'runs' field in the payload is the discriminator that tells
+  -- the dispatcher this was a multi-run call.
   let payload = A.object [ "success" .= True, "runs" .= (3 :: Int) ]
-  in pure (assertNext GhcDeterminism payload GhcRegression)
+  in pure (assertNext GhcQuickCheck payload GhcRegression)
 
 testNextStepDeterminismFail :: IO Bool
 testNextStepDeterminismFail =
   let payload = A.object [ "success" .= False, "runs" .= (3 :: Int) ]
-  in pure (assertNext GhcDeterminism payload GhcQuickCheck)
+  in pure (assertNext GhcQuickCheck payload GhcQuickCheck)
 
 testNextStepAddImport :: IO Bool
 testNextStepAddImport =
@@ -5998,12 +6001,12 @@ testStalenessWired = do
       && T.isInfixOf "getExecutablePath"       src
 
 -- | BUG-08 — 5 @ghc_load@ calls in a row must trigger the
--- polling nudge that points at ghc_determinism / check_project.
+-- polling nudge that points at ghc_quickcheck / check_project.
 testHistoryPolling :: IO Bool
 testHistoryPolling =
   let nudges = WS.historyNudges (replicate 5 GhcLoad)
   in pure $ any ("polling" `T.isInfixOf`) nudges
-         && any ("ghc_determinism" `T.isInfixOf`) nudges
+         && any ("ghc_quickcheck" `T.isInfixOf`) nudges
 
 -- | BUG-08 — ghc_suggest followed by non-quickcheck activity
 -- surfaces the "pick a law" nudge.
@@ -10631,7 +10634,8 @@ allDispatchedHints = catMaybes $
   ++
   -- Per-tool payload variants that select alternate branches:
   [ suggestNext GhcGate         True (object ["status" .= ("ok"     :: Text)])
-  , suggestNext GhcDeterminism  True (object ["status" .= ("ok"     :: Text)])
+  -- #94 Phase C: determinism (runs>=2) merged into quickcheck.
+  , suggestNext GhcQuickCheck   True (object ["runs"   .= (3 :: Int), "status" .= ("ok" :: Text)])
   , suggestNext GhcRegression   True (object ["action" .= ("run"    :: Text)])
   , suggestNext GhcRegression   True (object ["action" .= ("list"   :: Text)])
   , suggestNext GhcPropertyLifecycle True (object ["action" .= ("list" :: Text)])
@@ -10707,7 +10711,7 @@ goldenDispatchTable =
   , ("batch → suppress",                 GhcBatch,              object [],    Nothing)
   , ("gate(fail) → check_project",       GhcGate,               object [],    Just GhcCheckProject)
   , ("qcexport → gate",                  GhcQuickCheckExport,   object [],    Just GhcGate)
-  , ("determinism(fail) → quickcheck",   GhcDeterminism,        object [],    Just GhcQuickCheck)
+  , ("quickcheck(runs=3,fail) → quickcheck",  GhcQuickCheck,    object [ "runs" .= (3 :: Int), "success" .= False ],  Just GhcQuickCheck)
   , ("property_audit → lifecycle",       GhcPropertyAudit,      object [],    Just GhcPropertyLifecycle)
   , ("perf → perf",                      GhcPerf,               object [],    Just GhcPerf)
   , ("explain_error → explain_error",    GhcExplainError,       object [],    Just GhcExplainError)
@@ -10776,9 +10780,9 @@ goldenDispatchTable =
         GhcGate,
         object ["status" .= ("ok" :: Text)],
         Just GhcCoverage)
-  , ("determinism(pass) → regression",
-        GhcDeterminism,
-        object ["status" .= ("ok" :: Text)],
+  , ("quickcheck(runs=3,pass) → regression",
+        GhcQuickCheck,
+        object ["runs" .= (3 :: Int), "status" .= ("ok" :: Text)],
         Just GhcRegression)
   , ("property_lifecycle(list) → regression",
         GhcPropertyLifecycle,
@@ -10842,11 +10846,13 @@ testEveryToolHasCategory = pure $
 -- Current breakdown: 36 primitives, 4 composites, 3 gates, 3 control-plane.
 testCategoryCountsMatchTaxonomy :: IO Bool
 testCategoryCountsMatchTaxonomy = pure $
-  countCat CatPrimitive    == 34
+  countCat CatPrimitive    == 33
   -- ^ #94 Phase B retrofit: GhcModules replaces GhcAddModules +
   -- GhcRemoveModules (36 → 35).
   -- #94 Phase C step 1: GhcDeps action="explain" replaces
-  -- GhcDepsExplain outright (35 → 34). No deprecation period
+  -- GhcDepsExplain outright (35 → 34).
+  -- #94 Phase C step 3: ghc_quickcheck runs>=2 replaces
+  -- GhcDeterminism outright (34 → 33). No deprecation period
   -- because the project has a single internal consumer.
   && countCat CatComposite    ==  4
   && countCat CatGate         ==  3
