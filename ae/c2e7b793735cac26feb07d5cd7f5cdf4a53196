@@ -1,0 +1,52 @@
+mcp-server-haskell/src/HaskellFlows/Mcp/NextStep.hs
+  033795528ddcaec0 290-306,591-600
+mcp-server-haskell/test-e2e/Scenarios/ExprEvaluator.hs
+  033795528ddcaec0 427-428
+mcp-server-haskell/src/HaskellFlows/Tool/Determinism.hs
+  033795528ddcaec0 1,3-4,7-10,12
+mcp-server-haskell/test/Spec.hs
+  033795528ddcaec0 5327,5903-5905,5907,5912,6004,6009,10637-10638,10714,10783-10785,10849,10853-10855
+docs/TOOL_TAXONOMY.md
+  033795528ddcaec0 66,117,121,130-131,155
+mcp-server-haskell/src/HaskellFlows/Mcp/Guidance.hs
+  033795528ddcaec0 72
+mcp-server-haskell/src/HaskellFlows/Mcp/WorkflowState.hs
+  033795528ddcaec0 199-201,274-276
+mcp-server-haskell/src/HaskellFlows/Mcp/Server.hs
+  033795528ddcaec0 401-404,406-410,631-642
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheck.hs
+  033795528ddcaec0 33,88-90,110-118,135-140
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "aec2e7b793735cac26feb07d5cd7f5cdf4a53196",
+  "prompts": {
+    "033795528ddcaec0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c2325b8-3973-461e-9af9-e12d8c594bf0",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 208,
+      "total_deletions": 15248,
+      "accepted_lines": 31794,
+      "overriden_lines": 0
+    },
+    "3bb97c89e392c4c6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "57129bc6-a7d2-41a5-8549-0c8ffca0cd67",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 2,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    }
+  }
+}
