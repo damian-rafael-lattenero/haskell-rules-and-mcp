@@ -6,34 +6,18 @@
 -- usual signal — instead of \"did it pass?\" it answers \"what
 -- was tested, and what wasn't?\".
 --
--- Phase 1 (MVP, total ~1 week):
+-- Phase 1 (MVP): size-based distribution via @show@-length proxy.
 --
---   * @bucketSize@ — pure helper that maps an input size to one
---     of four canonical buckets ("0", "1-5", "6-20", ">20").
---   * @buildInstrumentedProperty@ — pure helper that wraps the
---     user-supplied property body with @Test.QuickCheck.collect
---     (sizeBucket (length (show args))) (... original body ...)@.
---     Works for any @Show@-able input (the common case) and
---     Phase 1 deliberately uses the @show@-length proxy so we
---     don't need to know the input's structural shape.
---   * @parseLabelDistribution@ — pure helper that walks
---     QuickCheck's formatted output (@\"35.5% size:0-1\"@) and
---     produces @[(label, percent)]@.
---   * @ghc_witness@ tool — runs the instrumented property via
---     the existing @runQuickCheckViaCabalRepl@ harness, parses
---     the distribution, and surfaces \"biased\" warnings when
---     any bucket holds < 1 % of the runs.
+-- Phase 2 (this commit): @classify_by=\"constructor\"@ uses
+-- @head (words (show args))@ as the label, yielding per-constructor
+-- counts for any @Show@-able algebraic type. No GHC API dependency —
+-- the @show@ output directly exposes the leading constructor name.
+-- Set @classify_by=\"size\"@ (the default) for Phase-1 behaviour.
 --
--- Phase 1 deferrals (documented in the descriptor):
---
---   * Constructor-level distribution — needs to know the type
---     declaration of the input via 'tyConDataCons' (same path
---     'ghc_arbitrary' uses).
---   * Uncovered-branch detection — same dependency.
---   * Smallest-witness extraction — QuickCheck shrinks naturally
---     on failure; for passing properties we'd need an inverted
---     probe and re-execution.
---   * Custom 'classify_by' fields beyond size — Phase 2.
+-- Remaining deferrals:
+--   * Uncovered-branch detection — needs data-constructor enumeration
+--     via the GHC API to know which constructors are ABSENT.
+--   * Smallest-witness extraction — requires an inverted probe + re-run.
 module HaskellFlows.Tool.Witness
   ( descriptor
   , handle
@@ -41,6 +25,7 @@ module HaskellFlows.Tool.Witness
     -- * Pure helpers (exported for unit tests)
   , bucketSize
   , buildInstrumentedProperty
+  , buildConstructorProperty
   , parseLabelDistribution
   , parseLabelCounts
   , countsToDistribution
@@ -74,22 +59,22 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcWitness
     , tdDescription =
-        "Phase 1 property-witness explorer. Runs the property "
-          <> "through QuickCheck with size-bucket instrumentation, "
-          <> "then surfaces the input distribution and flags biased "
-          <> "buckets (< 1 %% of total runs). Useful when a "
-          <> "'+++ OK, passed N tests' looks suspicious — e.g. all "
-          <> "passes were on size-1 inputs. Phase 2 will add "
-          <> "constructor-level distribution and uncovered-branch "
-          <> "detection via the GHC API."
+        "Property-witness explorer. Runs the property through QuickCheck "
+          <> "with distribution instrumentation, then surfaces the input "
+          <> "histogram and flags biased buckets (< 1 %% of total runs). "
+          <> "Useful when '+++ OK, passed N tests' looks suspicious. "
+          <> "classify_by='size' (default) buckets by show-length. "
+          <> "classify_by='constructor' extracts the leading constructor "
+          <> "name from show-output — useful for Maybe/Either/list inputs."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
           , "required"   .= (["property"] :: [Text])
           , "properties" .= object
-              [ "property"    .= obj "string"
-              , "module_path" .= obj "string"
-              , "runs"        .= obj "integer"
+              [ "property"      .= obj "string"
+              , "module_path"   .= obj "string"
+              , "runs"          .= obj "integer"
+              , "classify_by"   .= obj "string"
               ]
           , "additionalProperties" .= False
           ]
@@ -98,10 +83,24 @@ descriptor =
     obj :: Text -> Value
     obj t = object [ "type" .= t ]
 
+-- | Phase 2: classification mode.
+data ClassifyBy
+  = ClassifyBySize         -- ^ Phase 1 default: show-length buckets
+  | ClassifyByConstructor  -- ^ Phase 2: leading constructor name from show
+  deriving stock (Show, Eq)
+
+parseClassifyBy :: Text -> ClassifyBy
+parseClassifyBy t
+  | T.strip t == "constructor" = ClassifyByConstructor
+  | otherwise                  = ClassifyBySize
+
 data WitnessArgs = WitnessArgs
-  { waProperty   :: !Text
-  , waModulePath :: !(Maybe Text)
-  , waRuns       :: !Int
+  { waProperty    :: !Text
+  , waModulePath  :: !(Maybe Text)
+  , waRuns        :: !Int
+  , waClassifyBy  :: !ClassifyBy
+    -- ^ Phase 2: 'ClassifyByConstructor' uses the leading constructor
+    -- name from @show args@ as the label. Default: 'ClassifyBySize'.
   }
   deriving stock (Show)
 
@@ -109,11 +108,13 @@ instance FromJSON WitnessArgs where
   parseJSON = withObject "WitnessArgs" $ \o -> do
     prop <- o .:  "property"
     mp   <- o .:? "module_path"
-    rs   <- o .:? "runs" .!= 1000
+    rs   <- o .:? "runs"        .!= 1000
+    cb   <- o .:? "classify_by" .!= ("size" :: Text)
     pure WitnessArgs
       { waProperty   = prop
       , waModulePath = mp
       , waRuns       = max 100 (min 10000 rs)
+      , waClassifyBy = parseClassifyBy cb
       }
 
 handle :: GhcSession -> Value -> IO ToolResult
@@ -121,7 +122,9 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> do
     t0 <- realToFrac <$> getPOSIXTime :: IO Double
-    let instrumented = buildInstrumentedProperty (waProperty args) (waRuns args)
+    let instrumented = case waClassifyBy args of
+          ClassifyBySize        -> buildInstrumentedProperty   (waProperty args) (waRuns args)
+          ClassifyByConstructor -> buildConstructorProperty    (waProperty args) (waRuns args)
     -- Issue #78: use the labels-aware harness so the structured
     -- 'Result.labels' map reaches us regardless of QuickCheck's
     -- 'chatty' setting. The pre-#78 path read 'output r', which
@@ -209,6 +212,25 @@ buildInstrumentedProperty prop runs =
       \else if n <= 5 then \"1-5\" \
       \else if n <= 20 then \"6-20\" \
       \else \">20\")"
+
+-- | Phase 2: synthesise an instrumented property that labels each
+-- input by the leading constructor name extracted from @show args@.
+--
+-- @head (words (show args))@ gives the constructor name for any
+-- algebraic @Show@ instance: @show (Just 5)@ → @\"Just 5\"@,
+-- @head (words ...)@ → @\"Just\"@. For numeric scalars this
+-- gives the number itself, which is still useful.
+--
+-- Label format: @"ctor:X"@ (parallel to Phase 1's @"size:Y"@).
+buildConstructorProperty :: Text -> Int -> Text
+buildConstructorProperty prop runs =
+  T.concat
+    [ "Test.QuickCheck.withMaxSuccess "
+    , T.pack (show runs)
+    , " (\\args -> Test.QuickCheck.collect "
+    , "(\"ctor:\" ++ head (words (show args))) "
+    , "((", T.strip prop, ") args))"
+    ]
 
 -- | Issue #65: parse QuickCheck's label histogram. Lines look like
 -- @"35.5% size:0-1"@ or @"100.0% size:>20"@. We tolerate both
@@ -307,28 +329,38 @@ renderReport
 renderReport args qc dist warnings rawForResponse wallMs =
   let (passed, failed, _qcRaw) = qcCounts qc
       raw = rawForResponse
+      -- Phase 2: route labels to the right distribution field based on mode.
+      isCtor = waClassifyBy args == ClassifyByConstructor
+      ctorDist = filter (("ctor:" `T.isPrefixOf`) . fst) dist
       sizeDist = filter (("size:" `T.isPrefixOf`) . fst) dist
+      distObj = if isCtor
+        then object
+          [ "by_constructor" .= object
+              [ "buckets"       .= map renderBucket ctorDist
+              , "total_labels"  .= length ctorDist
+              ]
+          ]
+        else object
+          [ "by_size" .= object
+              [ "buckets"      .= map renderBucket sizeDist
+              , "total_labels" .= length sizeDist
+              ]
+          ]
       payload = object
         [ "property"     .= waProperty args
         , "module"       .= waModulePath args
         , "runs"         .= waRuns args
+        , "classify_by"  .= (if isCtor then "constructor" else "size" :: Text)
         , "passed"       .= passed
         , "failed"       .= failed
-        , "distribution" .= object
-            [ "by_size" .= object
-                [ "buckets" .= map renderBucket sizeDist
-                , "total_labels" .= length sizeDist
-                ]
-            ]
+        , "distribution" .= distObj
         , "warnings"     .= map (\w -> object [ "kind" .= ("biased-distribution" :: Text)
                                               , "message" .= w
                                               ]) warnings
         , "wall_time_ms" .= wallMs
-        , "phase"        .= ("1-mvp" :: Text)
-        , "deferred"     .= ([ "by-constructor"
-                             , "uncovered-branches"
+        , "phase"        .= ("2-constructor" :: Text)
+        , "deferred"     .= ([ "uncovered-branches"
                              , "smallest-witness"
-                             , "custom-classify-by"
                              ] :: [Text])
         , "qc_raw_output" .= T.take 1000 raw
         , "nextStep"      .= object

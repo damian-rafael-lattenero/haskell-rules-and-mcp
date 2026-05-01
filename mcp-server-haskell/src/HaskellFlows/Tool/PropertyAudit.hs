@@ -1,23 +1,27 @@
 -- | @ghc_property_audit@ — cross-property contradiction detector
 -- (#64).
 --
--- Phase 1 (MVP, total ~1 week): for every pair of stored
--- properties (filtered by 'module_path' when supplied), build
--- the contradiction probe @\\args -> P1 args && not (P2 args)@
--- and run it via the existing ghc_quickcheck path. If
--- QuickCheck finds a counterexample for the probe, the two
--- properties disagree on at least one input — flag the pair.
+-- Phase 1 (MVP): for every pair of stored properties (filtered
+-- by 'module_path' when supplied), build the contradiction probe
+-- @\\args -> P1 args && not (P2 args)@ and run it via the existing
+-- ghc_quickcheck path. If QuickCheck finds a counterexample for
+-- the probe, the two properties disagree on at least one input —
+-- flag the pair.
 --
--- Phase 1 deferrals (documented in the descriptor):
+-- Phase 2 (this commit): vacuous-property check.
+-- Set @check_vacuous=true@ to run each property individually and
+-- flag ones that QuickCheck gives up on (too many discards), which
+-- indicates the precondition filter is so tight that no concrete
+-- test actually runs. Vacuous properties are not wrong, but they
+-- give false confidence.
 --
---   * Vacuous-property check (run @\\_ -> not (P args)@ to
---     detect tautologies) — Phase 2.
+-- Remaining deferrals:
 --   * Same-arity / same-quantified-type heuristic — Phase 1
 --     pairs every property with every other property in the
 --     filter set; the probe simply fails to compile when the
 --     arities mismatch and we surface that as @skipped@.
---   * LLM-friendly conclusion-text generation — Phase 2 will
---     hand the counterexample to the agent for narration.
+--   * LLM-friendly conclusion-text generation — hand the
+--     counterexample to the agent for narration.
 module HaskellFlows.Tool.PropertyAudit
   ( descriptor
   , handle
@@ -27,11 +31,14 @@ module HaskellFlows.Tool.PropertyAudit
   , buildContradictionProbe
   , interpretProbeResult
   , dedupByExpression
+    -- * Phase 2 helpers (exported for unit tests)
+  , isVacuousResult
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -57,20 +64,23 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcPropertyAudit
     , tdDescription =
-        "Phase 1 cross-property contradiction detector. For every "
-          <> "pair of persisted properties (optionally filtered by "
-          <> "module_path), build the probe '\\args -> P1 args && "
-          <> "not (P2 args)' and run it via QuickCheck. A passing "
-          <> "probe (counterexample found) means the two properties "
-          <> "disagree somewhere — the pair is logically inconsistent. "
-          <> "Phase 2 (planned) will add vacuous-property detection "
-          <> "and arity-aware filtering."
+        "Cross-property contradiction detector + vacuous-property check. "
+          <> "Phase 1: for every pair of persisted properties (optionally "
+          <> "filtered by module_path), build the probe "
+          <> "'\\args -> P1 args && not (P2 args)' and run it via QuickCheck. "
+          <> "A passing probe means the two properties disagree somewhere — "
+          <> "the pair is logically inconsistent. "
+          <> "Phase 2: set check_vacuous=true to also run each property "
+          <> "individually; properties QuickCheck gives up on (too many "
+          <> "discards) are flagged as potentially vacuous (precondition "
+          <> "is never satisfied)."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
           , "properties" .= object
-              [ "module_path"   .= obj "string"
-              , "runs_per_pair" .= obj "integer"
+              [ "module_path"    .= obj "string"
+              , "runs_per_pair"  .= obj "integer"
+              , "check_vacuous"  .= obj "boolean"
               ]
           , "additionalProperties" .= False
           ]
@@ -80,18 +90,23 @@ descriptor =
     obj t = object [ "type" .= t ]
 
 data PropertyAuditArgs = PropertyAuditArgs
-  { paModulePath  :: !(Maybe Text)
-  , paRunsPerPair :: !Int
+  { paModulePath   :: !(Maybe Text)
+  , paRunsPerPair  :: !Int
+  , paCheckVacuous :: !Bool
+    -- ^ Phase 2: when True, also run each property individually and
+    -- flag ones QuickCheck gives up on as potentially vacuous.
   }
   deriving stock (Show)
 
 instance FromJSON PropertyAuditArgs where
   parseJSON = withObject "PropertyAuditArgs" $ \o -> do
     mp <- o .:? "module_path"
-    rs <- o .:? "runs_per_pair" .!= 200
+    rs <- o .:? "runs_per_pair"  .!= 200
+    cv <- o .:? "check_vacuous"  .!= False
     pure PropertyAuditArgs
-      { paModulePath  = mp
-      , paRunsPerPair = max 10 (min 1000 rs)
+      { paModulePath   = mp
+      , paRunsPerPair  = max 10 (min 1000 rs)
+      , paCheckVacuous = cv
       }
 
 handle :: Store -> GhcSession -> Value -> IO ToolResult
@@ -112,10 +127,14 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
           Nothing -> deduped
           Just m  -> [ p | p <- deduped, spModule p == Just m ]
         propPairs = pairCombinations filtered
-    findings <- mapM (runPairProbe ghcSess args) propPairs
+    findings       <- mapM (runPairProbe ghcSess args) propPairs
+    -- Phase 2: optional vacuous-property check.
+    vacuousFindings <- if paCheckVacuous args
+                         then mapM (runVacuousCheck ghcSess) filtered
+                         else pure []
     t1 <- realToFrac <$> getPOSIXTime :: IO Double
     pure (renderReport args (length filtered) (length propPairs)
-                       findings (truncate ((t1 - t0) * 1000)))
+                       findings vacuousFindings (truncate ((t1 - t0) * 1000)))
 
 --------------------------------------------------------------------------------
 -- pair generation
@@ -184,23 +203,51 @@ runPairProbe ghcSess _args (p1, p2) = do
            }
 
 --------------------------------------------------------------------------------
+-- Phase 2: vacuous-property check
+--------------------------------------------------------------------------------
+
+-- | Phase 2: run a single property via QuickCheck; if QC gives up
+-- (too many discards), the property is potentially vacuous.
+-- Returns @Just expression@ when vacuous, @Nothing@ otherwise.
+runVacuousCheck :: GhcSession -> StoredProperty -> IO (Maybe StoredProperty)
+runVacuousCheck ghcSess sp = do
+  res <- try @SomeException $
+    Qc.runQuickCheckViaCabalRepl (gsProject ghcSess)
+      (spModule sp) (spExpression sp)
+  pure $ case res of
+    Left  _ -> Nothing  -- subprocess failure: can't classify
+    Right (out, _) ->
+      let qcr = parseQuickCheckOutput (spExpression sp) out
+      in if isVacuousResult qcr then Just sp else Nothing
+
+-- | Pure predicate: a QuickCheck result is "vacuous" when
+-- QuickCheck gave up — indicating the implicit precondition
+-- (e.g. @==>@) was so restrictive that no concrete input could
+-- be generated.
+isVacuousResult :: QuickCheckResult -> Bool
+isVacuousResult QcGaveUp {} = True
+isVacuousResult _           = False
+
+--------------------------------------------------------------------------------
 -- response shaping
 --------------------------------------------------------------------------------
 
--- | Issue #90 Phase C: the audit report is informational — even
--- when contradictions exist, this is data the agent uses to act
--- on, not a hard failure of the tool. status='ok' always; the
--- structured 'pairs_inconsistent' / 'findings' fields under
--- 'result' carry the verdict.
+-- | The audit report is informational — even when contradictions
+-- exist, this is data the agent uses to act on, not a hard failure.
+-- status='ok' always; the structured 'pairs_inconsistent' / 'findings'
+-- fields under 'result' carry the verdict.
+-- Phase 2: when 'paCheckVacuous' is set, also includes
+-- 'vacuous_properties' count + details.
 renderReport
   :: PropertyAuditArgs -> Int -> Int
-  -> [PairFinding] -> Int
+  -> [PairFinding] -> [Maybe StoredProperty] -> Int
   -> ToolResult
-renderReport args nProps nPairs findings wallMs =
+renderReport args nProps nPairs findings vacuousFindings wallMs =
   let contradictory = filter ((== "contradictory") . pfStatus) findings
       skipped       = filter ((== "skipped") . pfStatus)       findings
       compatible    = length findings - length contradictory - length skipped
-      payload = object
+      vacuous       = catMaybes vacuousFindings
+      payload = object $
         [ "module_filter"       .= paModulePath args
         , "properties_checked"  .= nProps
         , "pairs_checked"       .= nPairs
@@ -210,12 +257,16 @@ renderReport args nProps nPairs findings wallMs =
         , "wall_time_ms"        .= wallMs
         , "findings"            .= map renderFinding contradictory
         , "skipped_pairs"       .= map renderFinding skipped
-        , "phase"               .= ("1-mvp" :: Text)
-        , "deferred"            .= ([ "vacuous-property-check"
-                                    , "arity-aware-pairing"
+        , "phase"               .= ("2-vacuous" :: Text)
+        , "deferred"            .= ([ "arity-aware-pairing"
                                     , "llm-conclusion-text"
                                     ] :: [Text])
-        ]
+        ] <>
+        if paCheckVacuous args
+          then [ "vacuous_properties" .= length vacuous
+               , "vacuous_details"    .= map renderVacuous vacuous
+               ]
+          else []
   in Env.toolResponseToResult (Env.mkOk payload)
 
 renderFinding :: PairFinding -> Value
@@ -229,6 +280,13 @@ renderFinding f = object
   , "counterexample" .= pfDetail f
   ]
 
+renderVacuous :: StoredProperty -> Value
+renderVacuous sp = object
+  [ "kind"       .= ("vacuous-property" :: Text)
+  , "expression" .= spExpression sp
+  , "module"     .= spModule sp
+  , "reason"     .= ("QuickCheck gave up: precondition may never be satisfied" :: Text)
+  ]
 
 --------------------------------------------------------------------------------
 -- Issue #77 — pure interpretation of the contradiction probe

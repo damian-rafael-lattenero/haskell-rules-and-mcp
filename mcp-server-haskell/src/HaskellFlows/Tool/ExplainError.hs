@@ -1,24 +1,22 @@
 -- | @ghc_explain_error@ — type-error therapist (#59).
 --
--- Phase 1 scope (issue itself estimates 1-2 weeks total): build a
--- structured \"explanation context\" the agent can feed to its
--- own LLM. The two-call protocol the issue describes — context
--- collection + agent-driven candidate verification — is delivered
--- in two iterations:
+-- Phase 1: 'ghc_explain_error' loads the module, picks the target
+-- diagnostic, and returns @{diagnostic, context}@ where @context@
+-- packages the module source, the import list, and the diagnostic's
+-- enclosing line range. The agent uses its own LLM to propose fix
+-- candidates.
 --
---   * THIS commit: 'ghc_explain_error' loads the module, picks
---     the target diagnostic, and returns @{diagnostic, context}@
---     where @context@ packages the module source, the import
---     list, and the diagnostic's enclosing line range. The agent
---     uses its own LLM to propose candidates.
---   * Phase 2 (planned): 'ghc_explain_error_verify' receives an
---     array of agent-proposed @{patch}@ objects, applies each to
---     a snapshot via the same machinery 'ghc_refactor' uses, and
---     returns ranked verified candidates.
+-- Phase 2 (this commit): optional @verify_patch@ argument.
+-- When present, the tool applies the patch to the file (same
+-- snapshot-and-recompile safety as 'ghc_refactor'), checks whether
+-- the original error is gone from the post-compile diagnostic set,
+-- and always restores the original file regardless of outcome.
+-- The caller gets a 'verify_result' field with:
+--   @{patch_applied, error_resolved, diagnostics_after}@
 --
 -- The split keeps the MCP free of an LLM dependency (Option A in
 -- the issue) — the agent already has an LLM, the MCP provides
--- the evidence package and (Phase 2) the verification harness.
+-- the evidence package and verification harness.
 module HaskellFlows.Tool.ExplainError
   ( descriptor
   , handle
@@ -27,6 +25,9 @@ module HaskellFlows.Tool.ExplainError
   , pickDiagnostic
   , extractImports
   , enclosingLineRange
+    -- * Phase 2 helpers (exported for unit tests)
+  , PatchSpec (..)
+  , applyLinePatch
   ) where
 
 import Control.Exception (SomeException, try)
@@ -40,6 +41,7 @@ import qualified Data.Text.IO as TIO
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
   , LoadFlavour (..)
+  , invalidateLoadCache
   , loadAndCaptureDiagnostics
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -47,7 +49,7 @@ import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
-import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
+import HaskellFlows.Types (ProjectDir, ModulePath, mkModulePath, unModulePath)
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -67,6 +69,15 @@ descriptor =
           , "properties" .= object
               [ "module_path"      .= obj "string"
               , "diagnostic_index" .= obj "integer"
+              , "verify_patch"     .= object
+                  [ "type" .= ("object" :: Text)
+                  , "properties" .= object
+                      [ "line" .= obj "integer"
+                      , "old"  .= obj "string"
+                      , "new"  .= obj "string"
+                      ]
+                  , "required" .= (["line", "old", "new"] :: [Text])
+                  ]
               ]
           , "required"             .= (["module_path"] :: [Text])
           , "additionalProperties" .= False
@@ -76,9 +87,29 @@ descriptor =
     obj :: Text -> Value
     obj t = object [ "type" .= t ]
 
+-- | Line-level patch specification. @line@ is 1-based.
+-- The tool replaces the first occurrence of @old@ on that line
+-- with @new@.
+data PatchSpec = PatchSpec
+  { psLine :: !Int
+  , psOld  :: !Text
+  , psNew  :: !Text
+  }
+  deriving stock (Show)
+
+instance FromJSON PatchSpec where
+  parseJSON = withObject "PatchSpec" $ \o ->
+    PatchSpec
+      <$> o .: "line"
+      <*> o .: "old"
+      <*> o .: "new"
+
 data ExplainErrorArgs = ExplainErrorArgs
   { eaModulePath      :: !Text
   , eaDiagnosticIndex :: !(Maybe Int)
+  , eaVerifyPatch     :: !(Maybe PatchSpec)
+    -- ^ Phase 2: when set, apply this patch, recompile, check if
+    -- the original error is resolved, then restore the file.
   }
   deriving stock (Show)
 
@@ -87,6 +118,7 @@ instance FromJSON ExplainErrorArgs where
     ExplainErrorArgs
       <$> o .:  "module_path"
       <*> o .:? "diagnostic_index"
+      <*> o .:? "verify_patch"
 
 handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
@@ -108,8 +140,12 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
           case pickDiagnostic (eaDiagnosticIndex args) ownDiags of
             Nothing ->
               pure (renderNoErrors (eaModulePath args) ownDiags)
-            Just diag ->
-              pure (renderContext (eaModulePath args) body diag ownDiags)
+            Just diag -> do
+              -- Phase 2: optional patch verification.
+              mVerify <- case eaVerifyPatch args of
+                Nothing    -> pure Nothing
+                Just patch -> Just <$> runVerifyPatch ghcSess mp body diag patch
+              pure (renderContext (eaModulePath args) body diag ownDiags mVerify)
 
 ownsThisModule :: Text -> GhcError -> Bool
 ownsThisModule rel diag = rel `T.isSuffixOf` geFile diag
@@ -180,21 +216,87 @@ enclosingLineRange totalLines padding lineNum =
   in (min lo hi, max lo hi)
 
 --------------------------------------------------------------------------------
+-- Phase 2: patch verification
+--------------------------------------------------------------------------------
+
+-- | Apply @patch@ to @body@, overwriting the file, recompile, then
+-- always restore the original. Returns a JSON 'Value' with the
+-- verify result.
+runVerifyPatch
+  :: GhcSession -> ModulePath -> Text -> GhcError -> PatchSpec
+  -> IO Value
+runVerifyPatch ghcSess mp body origDiag patch = do
+  let path = unModulePath mp
+  case applyLinePatch body patch of
+    Nothing ->
+      pure (object
+        [ "patch_applied"   .= False
+        , "error_resolved"  .= False
+        , "reason"          .= ("patch target not found on specified line" :: Text)
+        ])
+    Just patched -> do
+      writeRes <- try (TIO.writeFile path patched) :: IO (Either SomeException ())
+      case writeRes of
+        Left e ->
+          pure (object
+            [ "patch_applied"  .= False
+            , "error_resolved" .= False
+            , "reason"         .= T.pack ("write failed: " <> show e)
+            ])
+        Right _ -> do
+          invalidateLoadCache ghcSess
+          (_, postDiags) <- loadAndCaptureDiagnostics ghcSess Strict
+          -- Restore original regardless of outcome.
+          _ <- try (TIO.writeFile path body) :: IO (Either SomeException ())
+          invalidateLoadCache ghcSess
+          let origKey     = (geFile origDiag, geLine origDiag, geColumn origDiag)
+              origGone    = all (\d -> (geFile d, geLine d, geColumn d) /= origKey
+                                    || geMessage d /= geMessage origDiag)
+                                postDiags
+              postErrDiags = filter ((== SevError) . geSeverity) postDiags
+          pure (object
+            [ "patch_applied"      .= True
+            , "error_resolved"     .= origGone
+            , "diagnostics_after"  .= map renderDiag postErrDiags
+            ])
+
+-- | Pure helper: apply a line-level text patch to @body@.
+-- Returns @Nothing@ when the old text is not found on the
+-- specified line (1-based). Returns @Just@ the patched content.
+applyLinePatch :: Text -> PatchSpec -> Maybe Text
+applyLinePatch body patch =
+  let lns        = T.lines body
+      idx        = psLine patch - 1   -- 0-based index
+  in if idx < 0 || idx >= length lns
+       then Nothing
+       else
+         let ln = lns !! idx
+         in if psOld patch `T.isInfixOf` ln
+              then
+                let replaced = T.replace (psOld patch) (psNew patch) ln
+                    newLns   = take idx lns <> [replaced] <> drop (idx + 1) lns
+                in Just (T.unlines newLns)
+              else Nothing
+
+--------------------------------------------------------------------------------
 -- response shaping
 --------------------------------------------------------------------------------
 
--- | Issue #90 Phase C: a found-error context is informational —
+-- | Phase C + Phase 2: a found-error context is informational —
 -- the tool's job is to package evidence for the agent's LLM, not
 -- to fail. status='ok' always; the agent reads
 -- 'result.diagnostic' and decides what to do next.
-renderContext :: Text -> Text -> GhcError -> [GhcError] -> ToolResult
-renderContext modulePath body diag ownDiags =
+renderContext :: Text -> Text -> GhcError -> [GhcError] -> Maybe Value -> ToolResult
+renderContext modulePath body diag ownDiags mVerify =
   let lns      = T.lines body
       total    = length lns
       (lo, hi) = enclosingLineRange total 50 (geLine diag)
       sliced   = T.unlines
         [ ln | (i, ln) <- zip [1 :: Int ..] lns, i >= lo, i <= hi ]
-      payload = object
+      verifyFields = case mVerify of
+        Nothing -> []
+        Just v  -> [ "verify_result" .= v ]
+      payload = object $
         [ "module_path" .= modulePath
         , "diagnostic"  .= renderDiag diag
         , "context"     .= object
@@ -209,13 +311,11 @@ renderContext modulePath body diag ownDiags =
             , "all_errors"      .= map renderDiag ownDiags
             ]
         , "instructions_for_agent" .=
-            ( "Propose 3 fix candidates as JSON {explanation, patch{line, \
-              \old, new}, rationale}. Phase 1 has no verify endpoint — \
-              \apply your top candidate via ghc_refactor (rename_local) \
-              \or hand-edit. Phase 2 will route candidates through a \
-              \verify endpoint that snapshots, applies, recompiles, and \
-              \ranks." :: Text )
-        ]
+            ( "Propose fix candidates as JSON {explanation, patch{line, \
+              \old, new}, rationale}. Pass the patch as verify_patch to \
+              \let the tool apply it, recompile, and report whether the \
+              \error is resolved. The original file is always restored." :: Text )
+        ] <> verifyFields
   in Env.toolResponseToResult (Env.mkOk payload)
 
 -- | Issue #90 Phase C: no error to explain → status='ok' with

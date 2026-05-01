@@ -905,6 +905,18 @@ main = do
       , test "witness: countsToDistribution sums to 100 (#78)"   testWitCountsToDistribution
       , test "witness: countsToDistribution empty input → []  (#78)"
                                                                  testWitCountsEmpty
+      , test "witness: buildConstructorProperty wraps with ctor label (#65 Phase2)"
+                                                                 testWitBuildConstructorProperty
+      , test "property_audit: isVacuousResult true for QcGaveUp (#64 Phase2)"
+                                                                 testPAIsVacuousGaveUp
+      , test "property_audit: isVacuousResult false for QcPassed (#64 Phase2)"
+                                                                 testPAIsVacuousNotPassed
+      , test "explain_error: applyLinePatch replaces old text (#59 Phase2)"
+                                                                 testEEApplyLinePatch
+      , test "explain_error: applyLinePatch returns Nothing when old not found (#59 Phase2)"
+                                                                 testEEApplyLinePatchMiss
+      , test "explain_error: applyLinePatch rejects out-of-bounds line (#59 Phase2)"
+                                                                 testEEApplyLinePatchOob
       , test "workflow-state: initial empty"       testWorkflowStateInitial
       , test "workflow-state: tracks load + edits" testWorkflowStateTracks
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
@@ -7937,6 +7949,65 @@ testWitCountsToDistribution =
 testWitCountsEmpty :: IO Bool
 testWitCountsEmpty =
   pure $ null (WitnessTool.countsToDistribution [])
+
+-- Phase 2: constructor property builder (#65) ----------------------------------
+
+-- | buildConstructorProperty wraps with 'ctor:' label extraction.
+testWitBuildConstructorProperty :: IO Bool
+testWitBuildConstructorProperty =
+  let built = WitnessTool.buildConstructorProperty "\\x -> x > 0" 500
+  in pure ("ctor:" `T.isInfixOf` built
+        && "head (words (show args))" `T.isInfixOf` built
+        && "withMaxSuccess 500" `T.isInfixOf` built)
+
+-- Phase 2: vacuous-property check (#64) ----------------------------------------
+
+-- | isVacuousResult: QcGaveUp → True.
+testPAIsVacuousGaveUp :: IO Bool
+testPAIsVacuousGaveUp =
+  let qcr = QcGaveUp "\\x -> x > 0" 2 98
+  in pure (PropertyAuditTool.isVacuousResult qcr)
+
+-- | isVacuousResult: QcPassed → False.
+testPAIsVacuousNotPassed :: IO Bool
+testPAIsVacuousNotPassed =
+  let qcr = QcPassed "\\x -> True" 100
+  in pure (not (PropertyAuditTool.isVacuousResult qcr))
+
+-- Phase 2: explain_error patch verification (#59) ------------------------------
+
+-- | applyLinePatch replaces old text on the target line.
+testEEApplyLinePatch :: IO Bool
+testEEApplyLinePatch =
+  let body  = T.unlines ["line1", "foo bar baz", "line3"]
+      patch = ExplainError.PatchSpec { ExplainError.psLine = 2
+                                     , ExplainError.psOld  = "bar"
+                                     , ExplainError.psNew  = "REPLACED"
+                                     }
+  in pure $ case ExplainError.applyLinePatch body patch of
+       Just result -> "REPLACED" `T.isInfixOf` result
+                   && "foo" `T.isInfixOf` result
+       Nothing     -> False
+
+-- | applyLinePatch returns Nothing when old text not on that line.
+testEEApplyLinePatchMiss :: IO Bool
+testEEApplyLinePatchMiss =
+  let body  = T.unlines ["line1", "line2"]
+      patch = ExplainError.PatchSpec { ExplainError.psLine = 1
+                                     , ExplainError.psOld  = "NOTHERE"
+                                     , ExplainError.psNew  = "X"
+                                     }
+  in pure (isNothing (ExplainError.applyLinePatch body patch))
+
+-- | applyLinePatch returns Nothing for out-of-bounds line number.
+testEEApplyLinePatchOob :: IO Bool
+testEEApplyLinePatchOob =
+  let body  = T.unlines ["line1"]
+      patch = ExplainError.PatchSpec { ExplainError.psLine = 99
+                                     , ExplainError.psOld  = "line1"
+                                     , ExplainError.psNew  = "X"
+                                     }
+  in pure (isNothing (ExplainError.applyLinePatch body patch))
 
 testLabConfidence :: IO Bool
 testLabConfidence = pure $
