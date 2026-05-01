@@ -1,5 +1,5 @@
--- | Flow: 'ghc_perf' Phase 1 — basic wall-clock benchmarking
--- harness (#61).
+-- | Flow: 'ghc_perf' Phase 2 — wall-clock benchmarking + baseline
+-- compare (#61, #93).
 --
 -- Plant a simple library module, scaffold a test-suite so the
 -- evalIOString harness can resolve the function, and call
@@ -8,7 +8,8 @@
 --   * @success: true@.
 --   * @measurements@ contains a non-zero @mean_ns@ and the
 --     samples array length matches @runs_executed@.
---   * @phase@ is @"1-mvp"@ (declares Phase 2 hasn't shipped yet).
+--   * @phase@ is @"2-baseline"@ (Phase 2 baseline-compare landed
+--     in commit a29fbab — issue #93).
 --   * The narration evidence package + agent instructions are
 --     present so the next iteration can wire an LLM.
 module Scenarios.FlowPerfBasic
@@ -69,12 +70,12 @@ runFlow c projectDir = do
         Just (String _) -> True
         _               -> False
   cBasic <- liveCheck $ checkPure
-    "success + runs=5 + measurements/mean_ns≥0 + samples=5 + phase=1-mvp"
+    "success + runs=5 + measurements/mean_ns≥0 + samples=5 + phase=2-baseline"
     (success
        && runsExec == Just 5
        && meanNs >= 0
        && sampleLen == 5
-       && phase == Just "1-mvp"
+       && phase == Just "2-baseline"
        && hasInstr)
     ( "Got: success=" <> T.pack (show success)
       <> ", runs=" <> T.pack (show runsExec)

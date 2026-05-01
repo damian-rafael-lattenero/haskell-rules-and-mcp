@@ -1,19 +1,20 @@
--- | Flow: 'ghc_witness' Phase 1 — distribution + bias surface (#65).
+-- | Flow: 'ghc_witness' Phase 2 — distribution + constructor classify (#65, #93).
 --
--- Phase 1 verifies the structural surface and the live cabal-repl
--- probe path:
+-- Verifies the structural surface and the live cabal-repl probe path:
 --
 --   * The tool runs against an existing project and returns a
 --     'success: true' payload with the expected fields
 --     (passed, distribution.by_size, warnings, wall_time_ms).
---   * The 'phase' marker is the documented '1-mvp' string.
---   * The 'deferred' field lists the four Phase 2 follow-ups.
+--   * The 'phase' marker is the documented '2-constructor' string
+--     (Phase 2 constructor-classify shipped in commit 106eda1 — #93).
+--   * The 'deferred' field lists the remaining Phase 3 follow-ups
+--     (uncovered-branches, smallest-witness).
 --
 -- Running the actual instrumented property is left to the live
--- cabal-repl harness — Phase 1 of the witness tool talks to the
--- same channel that ghc_quickcheck uses, so a green check on the
--- shape implies the underlying Test.QuickCheck.collect wrapper
--- compiled and executed at least once.
+-- cabal-repl harness — the witness tool talks to the same channel
+-- that ghc_quickcheck uses, so a green check on the shape implies
+-- the underlying Test.QuickCheck.collect wrapper compiled and
+-- executed at least once.
 module Scenarios.FlowWitness
   ( runFlow
   ) where
@@ -42,9 +43,9 @@ runFlow c _projectDir = do
          (object [ "name" .= ("witness-demo" :: Text) ])
 
   -- Step 2 — drive a tiny tautology that only depends on `length`,
-  -- which exists in Prelude. Phase 1 just needs the harness to
-  -- come back with a structurally valid payload — it doesn't have
-  -- to flag a contradiction.
+  -- which exists in Prelude. The harness needs to come back with
+  -- a structurally valid payload — it doesn't have to flag a
+  -- contradiction.
   t0 <- stepHeader 1 "ghc_witness on tautology (#65)"
   rOk <- Client.callTool c GhcWitness
            (object
@@ -53,13 +54,13 @@ runFlow c _projectDir = do
               ])
   let okShape =
            statusOk rOk == Just True
-        && fieldText "phase" rOk == Just "1-mvp"
+        && fieldText "phase" rOk == Just "2-constructor"
         && hasField "distribution" rOk
         && hasField "warnings" rOk
         && hasField "wall_time_ms" rOk
         && hasField "deferred" rOk
   cOk <- liveCheck $ checkPure
-    "ghc_witness returns success with Phase 1 structural surface"
+    "ghc_witness returns success with Phase 2 structural surface"
     okShape
     ("Got: " <> truncRender rOk)
   stepFooter 1 t0
