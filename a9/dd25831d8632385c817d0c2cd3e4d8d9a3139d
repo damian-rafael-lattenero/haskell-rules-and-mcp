@@ -1,0 +1,73 @@
+mcp-server-haskell/test-e2e/Scenarios/ExprEvaluator.hs
+  b9182aefd71cfb20 441-446
+mcp-server-haskell/test-e2e/Scenarios/FlowSwitchProjectStore.hs
+  b9182aefd71cfb20 76,103,124,142
+mcp-server-haskell/haskell-flows-mcp.cabal
+  b9182aefd71cfb20 109
+mcp-server-haskell/test-e2e/Scenarios/FlowMutation.hs
+  b9182aefd71cfb20 172-173
+mcp-server-haskell/test-e2e/Scenarios/FlowPropertyLifecycle.hs
+  b9182aefd71cfb20 76
+mcp-server-haskell/test-e2e/Scenarios/FlowWorkflowHelp.hs
+  b9182aefd71cfb20 108-111,113
+mcp-server-haskell/src/HaskellFlows/Bench/Budget.hs
+  b9182aefd71cfb20 151-159
+mcp-server-haskell/src/HaskellFlows/Tool/Regression.hs
+  b9182aefd71cfb20 11,46-51
+README.md
+  b9182aefd71cfb20 26,31-35,100
+mcp-server-haskell/src/HaskellFlows/Mcp/WorkflowState.hs
+  b9182aefd71cfb20 175-177,278-281
+mcp-server-haskell/src/HaskellFlows/Tool/PropertyStore.hs
+  b9182aefd71cfb20 1-97
+mcp-server-haskell/test-e2e/Scenarios/FlowPropertyAudit.hs
+  b9182aefd71cfb20 48,66,86
+mcp-server-haskell/README.md
+  b9182aefd71cfb20 68,125-126
+mcp-server-haskell/test-e2e/Scenarios/FlowExprEvaluatorDogfood.hs
+  b9182aefd71cfb20 196-197
+mcp-server-haskell/test-e2e/Scenarios/FlowRegressionScopeFix.hs
+  b9182aefd71cfb20 134,178-179
+mcp-server-haskell/src/HaskellFlows/Tool/PropertyLifecycle.hs
+  b9182aefd71cfb20 6,15-23
+mcp-server-haskell/src/HaskellFlows/Mcp/ToolName.hs
+  b9182aefd71cfb20 81,88-92,140,234-236,305
+mcp-server-haskell/test-e2e/Scenarios/FlowRegressionLoadFailure.hs
+  b9182aefd71cfb20 71-72
+mcp-server-haskell/src/HaskellFlows/Mcp/NextStep.hs
+  b9182aefd71cfb20 293-300,592-595,598,600,609-649
+mcp-server-haskell/src/HaskellFlows/Mcp/Server.hs
+  b9182aefd71cfb20 100-105,144,581-588,701-749,866
+mcp-server-haskell/test/Spec.hs
+  b9182aefd71cfb20 5331,5901-5909,5916,5918,5979-5981,5983,6451-6454,8293-8296,8529-8532,8536-8537,10676-10679,10741,10751,10753,10767-10768,10810-10811,10813-10815,10822,10825-10828,10887,10901-10904
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheckExport.hs
+  b9182aefd71cfb20 27,54-60
+mcp-server-haskell/src/HaskellFlows/Mcp/Guidance.hs
+  b9182aefd71cfb20 75,78-81,83-85
+docs/TOOL_TAXONOMY.md
+  b9182aefd71cfb20 64,110,114,130-132,153,158
+mcp-server-haskell/src/HaskellFlows/Tool/PropertyAudit.hs
+  b9182aefd71cfb20 26,60-66
+mcp-server-haskell/test-e2e/Scenarios/FlowQuickCheckExportImports.hs
+  b9182aefd71cfb20 75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "a9dd25831d8632385c817d0c2cd3e4d8d9a3139d",
+  "prompts": {
+    "b9182aefd71cfb20": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3348794-a74f-41bc-8f83-210435252065",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 14180,
+      "total_deletions": 304,
+      "accepted_lines": 11994,
+      "overriden_lines": 52
+    }
+  }
+}
