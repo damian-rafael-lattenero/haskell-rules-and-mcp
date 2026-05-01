@@ -501,10 +501,11 @@ dispatchByName srv args = \case
     pd      <- readIORef (srvProjectDir srv)
     ExplainErrorTool.handle ghcSess pd args
   GhcPerf -> do
-    -- Issue #61 Phase 1: wall-clock perf harness via the in-process
-    -- evalIOString path.
+    -- Issue #61 Phase 2: wall-clock perf harness with baseline persistence
+    -- and regression detection (>10% slower triggers status='refused').
     ghcSess <- getOrStartGhcSession srv
-    PerfTool.handle ghcSess args
+    pd      <- readIORef (srvProjectDir srv)
+    PerfTool.handle ghcSess pd args
   GhcPropertyAudit -> do
     -- Issue #64 Phase 1: pairwise contradiction detector over the
     -- persisted property store. Re-uses the QuickCheck cabal-repl

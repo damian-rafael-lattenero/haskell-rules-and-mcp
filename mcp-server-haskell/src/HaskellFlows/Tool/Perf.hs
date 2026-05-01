@@ -1,23 +1,16 @@
 -- | @ghc_perf@ — performance microscope (#61).
 --
--- The issue describes a four-phase tool (criterion-in-process,
--- Core dump parsing, baseline persistence, AI narration) totalling
--- ~2 weeks. This commit lands Phase 1: a minimal wall-clock
--- harness that compiles + runs a Haskell expression N times
--- in-process and returns aggregate statistics (mean / median /
--- min / max in nanoseconds).
+-- Phase 2 (this commit): adds baseline persistence to
+-- @.haskell-flows\/perf.json@. The file maps expression strings to
+-- their last-recorded mean_ns. Use @save_baseline=true@ to record a
+-- measurement and @compare_baseline=true@ to check for regressions
+-- (threshold: >10 % slower than stored mean).
 --
--- Phase 1 deferrals (documented in the descriptor and response):
---
+-- Remaining deferrals (still Phase 3+):
 --   * Criterion-style autotuning + warmup loops.
 --   * Core dump parsing + hotspot detection.
---   * Allocation tracking (would need @+RTS -T@ instrumentation).
---   * Baseline persistence in @.haskell-flows/perf.json@.
+--   * Allocation tracking (@+RTS -T@ instrumentation).
 --   * AI narration / agent-driven optimisation candidates.
---
--- The structural shape (tool dispatch, evidence package, two-call
--- narration protocol) is in place so Phase 2 can grow without
--- touching the response schema.
 module HaskellFlows.Tool.Perf
   ( descriptor
   , handle
@@ -25,16 +18,26 @@ module HaskellFlows.Tool.Perf
     -- * Pure statistics helpers (exported for unit tests)
   , aggregate
   , Stats (..)
+    -- * Baseline helpers (exported for unit tests)
+  , BaselineEntry (..)
+  , regressionPct
   ) where
 
 import Control.Exception (SomeException, try)
+import Control.Monad (when)
 import Data.Aeson
+import qualified Data.Aeson.Key as AesonKey
+import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (parseEither)
 import Data.List (sort)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.ByteString.Lazy as BL
 import GHC.Clock (getMonotonicTimeNSec)
 import Data.Word (Word64)
+import System.Directory (createDirectoryIfMissing, doesFileExist)
+import System.FilePath ((</>))
 
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
@@ -46,25 +49,28 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 descriptor :: ToolDescriptor
 descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcPerf
     , tdDescription =
-        "Phase 1 wall-clock perf harness. Evaluates a Haskell "
-          <> "expression N times in-process and returns aggregate "
-          <> "wall-clock statistics (mean/median/min/max ns). "
-          <> "Phase 2 (planned) will add criterion warmup, Core "
-          <> "dump parsing + hotspot heuristics, allocation "
-          <> "tracking, baseline persistence, and the agent-driven "
-          <> "narration protocol described in the issue."
+        "Wall-clock perf harness. Evaluates a Haskell expression N "
+          <> "times in-process and returns aggregate statistics "
+          <> "(mean/median/min/max ns). Phase 2: set save_baseline=true "
+          <> "to persist the mean to .haskell-flows/perf.json, or "
+          <> "compare_baseline=true to detect regressions (>10% slower). "
+          <> "Criterion warmup, Core dump, and allocation tracking remain "
+          <> "deferred."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
           , "properties" .= object
-              [ "expression" .= obj "string"
-              , "runs"       .= obj "integer"
+              [ "expression"       .= obj "string"
+              , "runs"             .= obj "integer"
+              , "save_baseline"    .= obj "boolean"
+              , "compare_baseline" .= obj "boolean"
               ]
           , "required"             .= (["expression"] :: [Text])
           , "additionalProperties" .= False
@@ -75,38 +81,52 @@ descriptor =
     obj t = object [ "type" .= t ]
 
 data PerfArgs = PerfArgs
-  { paExpression :: !Text
-  , paRuns       :: !Int
+  { paExpression      :: !Text
+  , paRuns            :: !Int
+  , paSaveBaseline    :: !Bool
+    -- ^ Phase 2: when True, persist the measured mean_ns to the
+    -- project's @.haskell-flows\/perf.json@ baseline store.
+  , paCompareBaseline :: !Bool
+    -- ^ Phase 2: when True, compare the current mean_ns against the
+    -- stored baseline and surface a regression warning if the
+    -- current measurement is >10 % slower.
   }
   deriving stock (Show)
 
 instance FromJSON PerfArgs where
   parseJSON = withObject "PerfArgs" $ \o -> do
-    e <- o .:  "expression"
-    r <- o .:? "runs" .!= 30
-    pure PerfArgs { paExpression = e, paRuns = clampRuns r }
+    e  <- o .:  "expression"
+    r  <- o .:? "runs"             .!= 30
+    sb <- o .:? "save_baseline"    .!= False
+    cb <- o .:? "compare_baseline" .!= False
+    pure PerfArgs
+      { paExpression      = e
+      , paRuns            = clampRuns r
+      , paSaveBaseline    = sb
+      , paCompareBaseline = cb
+      }
     where
       -- Bound the runs so a typo of "1000000" doesn't tie up the
       -- session for hours. Floor at 1 (one sample is technically
       -- valid; the agent decides whether it's enough signal).
       clampRuns n = max 1 (min 1000 n)
 
-handle :: GhcSession -> Value -> IO ToolResult
-handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> case sanitizeExpression (paExpression args) of
     Left e ->
       pure (Env.toolResponseToResult
               (Env.mkRefused (Env.sanitizeRejection "expression" e)))
-    Right safe -> runPerf ghcSess args safe
+    Right safe -> runPerf ghcSess pd args safe
 
 
 --------------------------------------------------------------------------------
 -- timing harness
 --------------------------------------------------------------------------------
 
-runPerf :: GhcSession -> PerfArgs -> Text -> IO ToolResult
-runPerf ghcSess args safe = do
+runPerf :: GhcSession -> ProjectDir -> PerfArgs -> Text -> IO ToolResult
+runPerf ghcSess pd args safe = do
   -- 'evalIOString' unsafeCoerce's the compiled expression to
   -- 'IO String'. Wrap the user expression so it becomes a pure
   -- 'IO' action that returns the @show@-rendered value — that
@@ -117,7 +137,14 @@ runPerf ghcSess args safe = do
   let nss   = map fst samples
       errs  = [e | (_, Left e) <- map fst' samples]
       stats = aggregate nss
-  pure (renderResult args nss stats errs)
+  -- Phase 2: baseline persistence and regression detection.
+  let baselinePath = perfBaselinePath pd
+  mBaseline <- if paCompareBaseline args
+                 then readBaseline baselinePath (paExpression args)
+                 else pure Nothing
+  when (paSaveBaseline args) $
+    saveBaseline baselinePath (paExpression args) stats
+  pure (renderResult args nss stats errs mBaseline)
   where
     fst' (n, Right _) = (n, Right ())
     fst' (n, Left e)  = (n, Left e)
@@ -171,17 +198,107 @@ aggregate ns =
        }
 
 --------------------------------------------------------------------------------
+-- Phase 2 — baseline persistence
+--------------------------------------------------------------------------------
+
+-- | Path to the JSON baseline store inside the project.
+perfBaselinePath :: ProjectDir -> FilePath
+perfBaselinePath pd = unProjectDir pd </> ".haskell-flows" </> "perf.json"
+
+-- | Stored baseline entry (single expression record).
+newtype BaselineEntry = BaselineEntry
+  { beMeanNs :: Double
+  }
+  deriving stock (Show)
+
+instance FromJSON BaselineEntry where
+  parseJSON = withObject "BaselineEntry" $ \o ->
+    BaselineEntry <$> o .: "mean_ns"
+
+instance ToJSON BaselineEntry where
+  toJSON e = object [ "mean_ns" .= beMeanNs e ]
+
+-- | Read the stored baseline for @expr@ from the perf store.
+-- Returns 'Nothing' when the file doesn't exist or the expression
+-- has no recorded baseline.
+readBaseline :: FilePath -> Text -> IO (Maybe BaselineEntry)
+readBaseline path expr = do
+  exists <- doesFileExist path
+  if not exists
+    then pure Nothing
+    else do
+      raw <- try @SomeException (BL.readFile path)
+      case raw of
+        Left  _    -> pure Nothing
+        Right bytes ->
+          case decode bytes of
+            Just (Object km) ->
+              case KeyMap.lookup (keyFromText expr) km of
+                Just v  -> pure $ case fromJSON v of
+                  Success e -> Just e
+                  _         -> Nothing
+                Nothing -> pure Nothing
+            _ -> pure Nothing
+
+-- | Write/update the baseline for @expr@ in the perf store.
+-- Creates @.haskell-flows\/@ if it doesn't exist.
+saveBaseline :: FilePath -> Text -> Stats -> IO ()
+saveBaseline path expr stats = do
+  let dir = reverse (dropWhile (/= '/') (reverse path))
+  createDirectoryIfMissing True dir
+  current <- do
+    exists <- doesFileExist path
+    if not exists then pure (Object KeyMap.empty)
+    else do
+      raw <- try @SomeException (BL.readFile path)
+      case raw of
+        Left  _     -> pure (Object KeyMap.empty)
+        Right bytes -> pure (fromMaybe (Object KeyMap.empty) (decode bytes))
+  let entry = toJSON (BaselineEntry { beMeanNs = sMean stats })
+      updated = case current of
+        Object km -> Object (KeyMap.insert (keyFromText expr) entry km)
+        _         -> Object (KeyMap.fromList [(keyFromText expr, entry)])
+  BL.writeFile path (encode updated)
+
+-- | Compute the regression percentage: positive means slower,
+-- negative means faster. @Nothing@ when baseline mean is zero.
+regressionPct :: Double -> Double -> Maybe Double
+regressionPct baselineMean currentMean
+  | baselineMean <= 0 = Nothing
+  | otherwise         = Just ((currentMean - baselineMean) / baselineMean * 100)
+
+-- | Internal helper: convert a Text key to an Aeson KeyMap key.
+keyFromText :: Text -> AesonKey.Key
+keyFromText = AesonKey.fromText
+
+--------------------------------------------------------------------------------
 -- response shaping
 --------------------------------------------------------------------------------
 
--- | Issue #90 Phase C: status='ok' carries the measurement
+-- | Issue #90 Phase C + Phase 2: status='ok' carries the measurement
 -- table. Per-run errors stay under 'result.errors' so the agent
--- can drill in; 'measurements' has the aggregate stats. Phase 1
--- is informational; Phase 2 will fail with kind='validation' if
--- the run regressed against a stored baseline.
-renderResult :: PerfArgs -> [Word64] -> Stats -> [Text] -> ToolResult
-renderResult args nss stats errs =
-  let payload = object
+-- can drill in; 'measurements' has the aggregate stats.
+-- Phase 2: when 'mBaseline' is provided and the current mean is
+-- >10 % slower, the response carries a 'regression' field with
+-- 'kind="validation"' signalling so the agent can act on it.
+renderResult :: PerfArgs -> [Word64] -> Stats -> [Text] -> Maybe BaselineEntry -> ToolResult
+renderResult args nss stats errs mBaseline =
+  let mRegression = do
+        be  <- mBaseline
+        pct <- regressionPct (beMeanNs be) (sMean stats)
+        pure (pct, beMeanNs be)
+      isRegression = maybe False (\(pct, _) -> pct > 10.0) mRegression
+      baselineFields = case mRegression of
+        Nothing -> []
+        Just (pct, baseMean) ->
+          [ "baseline" .= object
+              [ "baseline_mean_ns" .= baseMean
+              , "current_mean_ns"  .= sMean stats
+              , "regression_pct"   .= pct
+              , "regressed"        .= isRegression
+              ]
+          ]
+      payload = object $
         [ "expression"    .= paExpression args
         , "runs_request"  .= paRuns args
         , "runs_executed" .= sCount stats
@@ -193,11 +310,10 @@ renderResult args nss stats errs =
             , "max_ns"    .= sMax stats
             , "samples"   .= nss
             ]
-        , "phase"         .= ("1-mvp" :: Text)
+        , "phase"         .= ("2-baseline" :: Text)
         , "deferred"      .= ([ "criterion-warmup"
                               , "core-dump-hotspots"
                               , "allocation-tracking"
-                              , "baseline-persistence"
                               , "narration-endpoint"
                               ] :: [Text])
         , "narration_context" .= object
@@ -208,10 +324,20 @@ renderResult args nss stats errs =
                 ]
             ]
         , "instructions_for_agent" .=
-            ( "Phase 1 only measures wall-clock time. To investigate \
-              \regressions, hand 'narration_context' to your LLM for \
-              \plain-English analysis. Phase 2 will provide a verify \
-              \endpoint that checks proposed micro-optimisations \
-              \against the regression store before committing." :: Text )
-        ]
-  in Env.toolResponseToResult (Env.mkOk payload)
+            ( "Phase 2: set save_baseline=true to persist a mean_ns baseline, \
+              \compare_baseline=true to detect regressions (>10% slower). \
+              \For deeper analysis hand 'narration_context' to an LLM." :: Text )
+        ] <> baselineFields
+      -- Regression: refuse with a Validation error so the caller knows the
+      -- baseline was exceeded. The payload is still embedded in 'cause' for
+      -- the agent to inspect the raw numbers.
+      regressionMsg = case mRegression of
+        Just (pct, _) -> "Regression: " <> T.pack (show (round pct :: Int))
+                           <> "% slower than stored baseline (threshold 10%)"
+        Nothing       -> "Regression detected"
+  in if isRegression
+       then Env.toolResponseToResult
+              (Env.mkRefused
+                (Env.mkErrorEnvelope Env.Validation regressionMsg)
+                  { Env.eeCause = Just (T.pack (show (encode payload))) })
+       else Env.toolResponseToResult (Env.mkOk payload)

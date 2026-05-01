@@ -60,6 +60,7 @@ import HaskellFlows.Suggest.Rules
   , Suggestion (..)
   , applyRules
   )
+import qualified HaskellFlows.Tool.Determinism as DeterminismTool
 import qualified HaskellFlows.Tool.QuickCheck as Qc
 import HaskellFlows.Types
   ( ProjectDir
@@ -77,15 +78,16 @@ descriptor =
           <> "QuickCheck laws via the same engine 'ghc_suggest' uses, "
           <> "filter by min_confidence, and run each via "
           <> "'ghc_quickcheck'. Passing properties auto-persist to "
-          <> "the regression store. Phase 1 returns a per-function "
-          <> "report; arbitrary-template generation and determinism "
-          <> "integration are deferred to Phase 2."
+          <> "the regression store. Set determinism_runs>0 to re-run "
+          <> "each passing property N times and flag unstable ones. "
+          <> "Arbitrary-template generation is still deferred."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
           , "properties" .= object
-              [ "module_path"    .= obj "string"
-              , "min_confidence" .= obj "string"
+              [ "module_path"       .= obj "string"
+              , "min_confidence"    .= obj "string"
+              , "determinism_runs"  .= obj "integer"
               ]
           , "required"             .= (["module_path"] :: [Text])
           , "additionalProperties" .= False
@@ -96,18 +98,25 @@ descriptor =
     obj t = object [ "type" .= t ]
 
 data LabArgs = LabArgs
-  { laModulePath    :: !Text
-  , laMinConfidence :: !Confidence
+  { laModulePath      :: !Text
+  , laMinConfidence   :: !Confidence
+  , laDeterminismRuns :: !Int
+    -- ^ Phase 2: when > 0, each passing property is re-run this many
+    -- times via 'ghc_determinism' to detect flakiness. Default 0
+    -- (disabled) keeps Phase-1 behaviour and avoids the extra cabal-
+    -- repl overhead for quick audits.
   }
   deriving stock (Show)
 
 instance FromJSON LabArgs where
   parseJSON = withObject "LabArgs" $ \o -> do
     mp <- o .:  "module_path"
-    mc <- o .:? "min_confidence" .!= "medium"
+    mc <- o .:? "min_confidence"   .!= "medium"
+    dr <- o .:? "determinism_runs" .!= (0 :: Int)
     pure LabArgs
-      { laModulePath    = mp
-      , laMinConfidence = parseConfidence mc
+      { laModulePath      = mp
+      , laMinConfidence   = parseConfidence mc
+      , laDeterminismRuns = max 0 (min 10 dr)
       }
 
 parseConfidence :: Text -> Confidence
@@ -161,7 +170,7 @@ runLab ghcSess store pd args modulePath body = do
   let bindings = listTopLevelBindings body
   perFn <- mapM (auditOne ghcSess store pd args modulePath) bindings
   t1 <- realToFrac <$> getPOSIXTime :: IO Double
-  pure (renderReport modulePath perFn (truncate ((t1 - t0) * 1000)))
+  pure (renderReport args modulePath perFn (truncate ((t1 - t0) * 1000)))
 
 --------------------------------------------------------------------------------
 -- top-level binding extraction
@@ -281,8 +290,12 @@ data PropertyOutcome = PropertyOutcome
   , poCategory   :: !Text
   , poConfidence :: !Confidence
   , poExpression :: !Text
-  , poStatus     :: !Text   -- "passed" | "failed" | "skipped"
-  , poDetail     :: !Text   -- extra info from quickcheck
+  , poStatus     :: !Text        -- "passed" | "failed" | "skipped"
+  , poDetail     :: !Text        -- extra info from quickcheck
+  , poStability  :: !(Maybe Text)
+    -- ^ Phase 2: @Nothing@ = not checked (determinism_runs=0 or status≠passed).
+    --   @Just "stable"@ = all determinism runs passed.
+    --   @Just "unstable"@ = at least one rerun failed.
   }
   deriving stock (Show)
 
@@ -317,7 +330,7 @@ auditOne ghcSess store pd args modulePath bind =
              , frReason     = "no-laws-matched"
              }
            else do
-             outs <- mapM (runProperty ghcSess store pd modulePath) suggestions
+             outs <- mapM (runProperty ghcSess store pd args modulePath) suggestions
              pure FunctionReport
                { frName       = bName bind
                , frSignature  = bSignature bind
@@ -326,13 +339,15 @@ auditOne ghcSess store pd args modulePath bind =
                }
 
 -- | Drive 'Tool.QuickCheck.handle' once and translate its JSON
--- payload into our compact 'PropertyOutcome'. Phase 1 keys on the
--- @success@ + @state@ fields the existing tool emits — no need
--- to reach into the QC parser internals.
+-- payload into our compact 'PropertyOutcome'.
+--
+-- Phase 2: when 'laDeterminismRuns' > 0 and the property passes,
+-- also runs it N more times via 'DeterminismTool.handle' and sets
+-- 'poStability' to @"stable"@ or @"unstable"@.
 runProperty
-  :: GhcSession -> Store -> ProjectDir -> Text -> Suggestion
+  :: GhcSession -> Store -> ProjectDir -> LabArgs -> Text -> Suggestion
   -> IO PropertyOutcome
-runProperty ghcSess store pd modulePath sug = do
+runProperty ghcSess store pd args modulePath sug = do
   let qcArgs = object
         [ "property" .= sProperty sug
         , "module"   .= modulePath
@@ -341,6 +356,10 @@ runProperty ghcSess store pd modulePath sug = do
   let payload = decodeFirst (trContent res)
       status  = decideStatus payload
       detail  = fromMaybe "" (lookupString "raw" payload)
+  -- Phase 2: determinism check on passing properties when enabled.
+  stability <- if status == "passed" && laDeterminismRuns args > 0
+                 then checkDeterminism ghcSess args modulePath (sProperty sug)
+                 else pure Nothing
   pure PropertyOutcome
     { poLaw        = sLaw sug
     , poCategory   = sCategory sug
@@ -348,12 +367,38 @@ runProperty ghcSess store pd modulePath sug = do
     , poExpression = sProperty sug
     , poStatus     = status
     , poDetail     = T.take 400 detail
+    , poStability  = stability
     }
   where
     _ = pd  -- pd kept in signature for cohesion; unused in Phase 1
     decodeFirst (TextContent t : _) =
       fromMaybe Null (decode (TLE.encodeUtf8 (TL.fromStrict t)))
     decodeFirst _ = Null
+
+-- | Phase 2: run a passing property via 'DeterminismTool' to check
+-- for flakiness. Returns @Just "stable"@ when all reruns pass,
+-- @Just "unstable"@ when any rerun fails, or @Nothing@ on error.
+checkDeterminism
+  :: GhcSession -> LabArgs -> Text -> Text -> IO (Maybe Text)
+checkDeterminism ghcSess args modulePath expr = do
+  let detArgs = object
+        [ "property" .= expr
+        , "module"   .= modulePath
+        , "runs"     .= laDeterminismRuns args
+        ]
+  res <- DeterminismTool.handle ghcSess detArgs
+  let payload = decodeToolJson (trContent res)
+  pure $ case lookupString "status" payload of
+    Just "ok" -> Just "stable"
+    _         ->
+      -- 'failed' status or parse failure both map to "unstable" so
+      -- the agent sees a signal even if the determinism tool itself
+      -- hit an unexpected error.
+      Just "unstable"
+  where
+    decodeToolJson (TextContent t : _) =
+      fromMaybe Null (decode (TLE.encodeUtf8 (TL.fromStrict t)))
+    decodeToolJson _ = Null
 
 decideStatus :: Value -> Text
 decideStatus payload = case lookupString "state" payload of
@@ -367,19 +412,24 @@ decideStatus payload = case lookupString "state" payload of
 -- response shaping
 --------------------------------------------------------------------------------
 
--- | Issue #90 Phase C: the lab report is informational — it
--- doesn't fail when uncovered functions exist; it surfaces them.
--- status='ok' always; consumers branch on the structured
--- 'covered'/'uncovered' fields under 'result'.
-renderReport :: Text -> [FunctionReport] -> Int -> ToolResult
-renderReport modulePath fns wallMs =
+-- | The lab report is informational — status='ok' always;
+-- consumers branch on the structured 'covered'/'uncovered' fields.
+--
+-- Phase 2: when 'laDeterminismRuns' > 0 the report includes a
+-- 'determinism_runs' field and each property object gains a
+-- 'stability' key (@"stable"@ / @"unstable"@).
+renderReport :: LabArgs -> Text -> [FunctionReport] -> Int -> ToolResult
+renderReport args modulePath fns wallMs =
   let totalProps = sum (map (length . frProperties) fns)
       passedProps = sum
         [ 1 | f <- fns, p <- frProperties f, poStatus p == "passed" ]
       coveredFns = length
         [ () | f <- fns, any ((== "passed") . poStatus) (frProperties f) ]
+      unstableProps = length
+        [ () | f <- fns, p <- frProperties f, poStability p == Just "unstable" ]
       uncovered  = length fns - coveredFns
-      payload = object
+      detRuns    = laDeterminismRuns args
+      payload = object $
         [ "module_path"        .= modulePath
         , "audited_bindings"   .= length fns
         , "covered"            .= coveredFns
@@ -388,10 +438,15 @@ renderReport modulePath fns wallMs =
         , "properties_passed"  .= passedProps
         , "wall_time_ms"       .= wallMs
         , "functions"          .= map renderFn fns
-        , "arbitrary_suggestions" .= ([] :: [Value])  -- Phase 2
+        , "arbitrary_suggestions" .= ([] :: [Value])  -- still deferred
         , "summary"            .= summarise totalProps passedProps
                                             (length fns) coveredFns
-        ]
+        ] <>
+        if detRuns > 0
+          then [ "determinism_runs"    .= detRuns
+               , "unstable_properties" .= unstableProps
+               ]
+          else []
   in Env.toolResponseToResult (Env.mkOk payload)
 
 renderFn :: FunctionReport -> Value
@@ -405,14 +460,16 @@ renderFn f = object $
                ]
 
 renderProp :: PropertyOutcome -> Value
-renderProp p = object
+renderProp p = object $
   [ "law"        .= poLaw p
   , "category"   .= poCategory p
   , "confidence" .= confidenceText (poConfidence p)
   , "expression" .= poExpression p
   , "status"     .= poStatus p
   , "detail"     .= poDetail p
-  ]
+  ] <> case poStability p of
+         Nothing  -> []
+         Just stb -> [ "stability" .= stb ]
 
 confidenceText :: Confidence -> Text
 confidenceText Low    = "low"

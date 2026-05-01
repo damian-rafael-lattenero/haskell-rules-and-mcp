@@ -876,6 +876,10 @@ main = do
       , test "perf: aggregate single sample (#61)" testPerfAggregateSingle
       , test "perf: aggregate odd count median (#61)" testPerfAggregateOdd
       , test "perf: aggregate even count median average (#61)" testPerfAggregateEven
+      , test "perf: regressionPct positive when slower (#61 Phase2)" testPerfRegressionPctPositive
+      , test "perf: regressionPct negative when faster (#61 Phase2)" testPerfRegressionPctNegative
+      , test "perf: regressionPct Nothing when zero baseline (#61 Phase2)" testPerfRegressionPctZeroBaseline
+      , test "perf: BaselineEntry JSON roundtrip (#61 Phase2)" testPerfBaselineEntryRoundtrip
       , test "property_audit: pairCombinations 0 elements (#64)" testPACombinationsEmpty
       , test "property_audit: pairCombinations 5 elements (#64)" testPACombinations5
       , test "property_audit: pairCombinations distinct pairs (#64)" testPACombinationsDistinct
@@ -1076,13 +1080,13 @@ main = do
                                                                  testNextStepCleanLoad
       -- Issue #98 Phase B · structured logging
       , test "#98B: Logging · redaction truncates strings > 40 chars"
-                                                                 testLogging_RedactionPolicy
+                                                                 testLoggingRedactionPolicy
       , test "#98B: Logging · trace_id is 6 lowercase hex chars"
-                                                                 testLogging_TraceIdGeneration
+                                                                 testLoggingTraceIdGeneration
       , test "#98D: Logging · audit path absent when HASKELL_FLOWS_AUDIT unset"
-                                                                 testLogging_AuditPathAbsentByDefault
+                                                                 testLoggingAuditPathAbsentByDefault
       , test "#98D: Logging · audit path present when HASKELL_FLOWS_AUDIT=1"
-                                                                 testLogging_AuditPathPresentWhenEnabled
+                                                                 testLoggingAuditPathPresentWhenEnabled
       ]
   if and results then exitSuccess else exitFailure
 
@@ -7691,6 +7695,32 @@ testPerfAggregateEven =
         && PerfTool.sMedian s == 25
         && PerfTool.sMean s == 25)
 
+-- Phase 2 baseline tests (#61) ------------------------------------------------
+
+-- | regressionPct: current 110, baseline 100 → +10% (positive = slower).
+testPerfRegressionPctPositive :: IO Bool
+testPerfRegressionPctPositive =
+  pure (PerfTool.regressionPct 100.0 110.0 == Just 10.0)
+
+-- | regressionPct: current 90, baseline 100 → -10% (negative = faster).
+testPerfRegressionPctNegative :: IO Bool
+testPerfRegressionPctNegative =
+  pure (PerfTool.regressionPct 100.0 90.0 == Just (-10.0))
+
+-- | regressionPct: baseline = 0 → Nothing (avoid divide-by-zero).
+testPerfRegressionPctZeroBaseline :: IO Bool
+testPerfRegressionPctZeroBaseline =
+  pure (isNothing (PerfTool.regressionPct 0.0 100.0))
+
+-- | BaselineEntry ToJSON → FromJSON roundtrip: mean_ns preserved.
+testPerfBaselineEntryRoundtrip :: IO Bool
+testPerfBaselineEntryRoundtrip =
+  let entry   = PerfTool.BaselineEntry { PerfTool.beMeanNs = 12345.6 }
+      encoded = A.encode entry
+  in case A.decode encoded of
+       Just decoded -> pure (PerfTool.beMeanNs decoded == 12345.6)
+       Nothing      -> pure False
+
 -- | Issue #64: 'pairCombinations' on an empty list returns no
 -- pairs. Edge case the auditor relies on so a property store
 -- with 0 entries doesn't try to run a probe.
@@ -10326,8 +10356,8 @@ testRefactorRejectsTraversal = do
 -- | 'redactArgs' must truncate string values longer than 'maxArgStringLen'
 -- (40 chars) to exactly 40 chars + the Unicode ellipsis "…", while leaving
 -- short strings, numbers, and bools verbatim.
-testLogging_RedactionPolicy :: IO Bool
-testLogging_RedactionPolicy = do
+testLoggingRedactionPolicy :: IO Bool
+testLoggingRedactionPolicy = do
   let longStr  = T.replicate 50 "x"   -- 50 chars, will be truncated
       shortStr = T.replicate 20 "y"   -- 20 chars, kept verbatim
       args = A.object
@@ -10358,8 +10388,8 @@ testLogging_RedactionPolicy = do
 
 -- | 'newLogContext' must produce a 'LogContext' whose 'lcTraceId' is
 -- exactly 6 characters long and consists solely of lowercase hex digits.
-testLogging_TraceIdGeneration :: IO Bool
-testLogging_TraceIdGeneration = do
+testLoggingTraceIdGeneration :: IO Bool
+testLoggingTraceIdGeneration = do
   ctx <- Logging.newLogContext "ghc_test"
   let tid = Logging.lcTraceId ctx
   pure ( T.length tid == 6
@@ -10367,17 +10397,17 @@ testLogging_TraceIdGeneration = do
       )
 
 -- | When 'HASKELL_FLOWS_AUDIT' is not set, 'lcAuditPath' must be 'Nothing'.
-testLogging_AuditPathAbsentByDefault :: IO Bool
-testLogging_AuditPathAbsentByDefault = do
+testLoggingAuditPathAbsentByDefault :: IO Bool
+testLoggingAuditPathAbsentByDefault = do
   -- Ensure the env var is absent for this test.
   unsetEnv "HASKELL_FLOWS_AUDIT"
   ctx <- Logging.newLogContext "ghc_test"
-  pure (Logging.lcAuditPath ctx == Nothing)
+  pure (isNothing (Logging.lcAuditPath ctx))
 
 -- | When 'HASKELL_FLOWS_AUDIT=1' is set, 'lcAuditPath' must be 'Just _'
 -- pointing to a path ending in @".haskell-flows/audit.jsonl"@.
-testLogging_AuditPathPresentWhenEnabled :: IO Bool
-testLogging_AuditPathPresentWhenEnabled = do
+testLoggingAuditPathPresentWhenEnabled :: IO Bool
+testLoggingAuditPathPresentWhenEnabled = do
   tmp <- getTemporaryDirectory
   let dir = tmp </> "hf-audit-test"
   removePathForcibly dir
@@ -10390,4 +10420,4 @@ testLogging_AuditPathPresentWhenEnabled = do
   removePathForcibly dir
   pure $ case Logging.lcAuditPath ctx of
     Nothing   -> False
-    Just path -> List.isSuffixOf ".haskell-flows/audit.jsonl" path
+    Just path -> ".haskell-flows/audit.jsonl" `List.isSuffixOf` path
