@@ -5328,7 +5328,7 @@ testBajaRegistered = pure $
   all (`elem` allToolNameTexts)
     [ "ghc_browse"
     , "ghc_quickcheck"  -- #94 Phase C: ghc_determinism merged in (runs>=N)
-    , "ghc_property_lifecycle"
+    , "ghc_property_store"  -- #94 Phase C step 6: subsumes ghc_property_lifecycle
     , "ghc_toolchain"  -- #94 Phase C: subsumes ghc_toolchain_warmup
     ]
 
@@ -5898,16 +5898,24 @@ testNextStepGateFail =
 
 testNextStepQcExport :: IO Bool
 testNextStepQcExport =
-  let payload = A.object [ "success" .= True, "properties_written" .= (3 :: Int) ]
-  in pure (assertNext GhcQuickCheckExport payload GhcGate)
+  -- #94 Phase C step 6: ghc_quickcheck_export merged into
+  -- ghc_property_store(action=export). The export branch's
+  -- discriminator in the response is 'files_written'.
+  let payload = A.object
+        [ "success" .= True
+        , "properties_written" .= (3 :: Int)
+        , "files_written" .= (["test/Spec.hs"] :: [Text])
+        ]
+  in pure (assertNext GhcPropertyStore payload GhcGate)
 
 testNextStepDeterminismPass :: IO Bool
 testNextStepDeterminismPass =
   -- #94 Phase C: ghc_determinism merged into ghc_quickcheck (runs>=2).
   -- The 'runs' field in the payload is the discriminator that tells
   -- the dispatcher this was a multi-run call.
+  -- #94 Phase C step 6: regression-replay is now ghc_property_store(run).
   let payload = A.object [ "success" .= True, "runs" .= (3 :: Int) ]
-  in pure (assertNext GhcQuickCheck payload GhcRegression)
+  in pure (assertNext GhcQuickCheck payload GhcPropertyStore)
 
 testNextStepDeterminismFail :: IO Bool
 testNextStepDeterminismFail =
@@ -5968,8 +5976,11 @@ testNextStepToolchainWarmup =
 
 testNextStepPropertyLifecycleList :: IO Bool
 testNextStepPropertyLifecycleList =
+  -- #94 Phase C step 6: ghc_property_lifecycle + ghc_regression
+  -- merged into ghc_property_store. action=list now recommends
+  -- action=run on the same consolidated tool.
   let payload = A.object [ "success" .= True, "action" .= ("list" :: Text) ]
-  in pure (assertNext GhcPropertyLifecycle payload GhcRegression)
+  in pure (assertNext GhcPropertyStore payload GhcPropertyStore)
 
 -- | BUG-22: create_project emits the canonical project-bootstrap
 -- chain (deps + add_modules + load). Pin that all three steps are
@@ -6437,8 +6448,10 @@ testNextStepFullCoverage = pure $
         , "ghc_imports"     -- pure diagnostic aid
         -- (b) action-conditional — per-branch tests cover each action
         , "ghc_deps"                 -- add/remove/list
-        , "ghc_regression"           -- list/run
-        , "ghc_property_lifecycle"   -- list/drop
+        , "ghc_property_store"       -- list / run / export / audit;
+                                     -- #94 Phase C step 6 successor to
+                                     -- ghc_property_lifecycle / ghc_regression
+                                     -- / ghc_quickcheck_export / ghc_property_audit
         , "ghc_project"              -- create / switch / validate /
                                      -- bootstrap; per-action shape
                                      -- distinguishers test each branch
@@ -8277,7 +8290,10 @@ testWarningBucketize =
 -- | Phase 11h: ghc_quickcheck_export must be in the canonical
 -- tool list.
 testQcExportRegistered :: IO Bool
-testQcExportRegistered = pure $ "ghc_quickcheck_export" `elem` allToolNameTexts
+testQcExportRegistered = pure $ "ghc_property_store" `elem` allToolNameTexts
+  -- #94 Phase C step 6: ghc_quickcheck_export merged into
+  -- ghc_property_store(action="export"). The legacy wire surface
+  -- is gone; the action lives on inside the consolidated tool.
 
 -- | Phase 11h: renderTestFile emits a valid-looking Main module
 -- with the expected structural pieces (main, imports, a prop_N
@@ -8510,12 +8526,15 @@ testNextStepQcFailed =
        Just ns -> nsTool ns == GhcEval
        Nothing -> False
 
--- | ghc_regression(list) → ghc_regression(run).
+-- | ghc_property_store(list) → ghc_property_store(run).
+-- #94 Phase C step 6: ghc_regression merged into
+-- ghc_property_store(action=list|run); the list-then-run hint is
+-- emitted on the consolidated tool.
 testNextStepRegressionList :: IO Bool
 testNextStepRegressionList =
   let payload = A.object [ "success" .= True, "action" .= ("list" :: Text) ]
-  in pure $ case suggestNext GhcRegression True payload of
-       Just ns -> nsTool ns == GhcRegression
+  in pure $ case suggestNext GhcPropertyStore True payload of
+       Just ns -> nsTool ns == GhcPropertyStore
        Nothing -> False
 
 -- | Refactor landed → verify compile.
@@ -10654,9 +10673,10 @@ allDispatchedHints = catMaybes $
   [ suggestNext GhcGate         True (object ["status" .= ("ok"     :: Text)])
   -- #94 Phase C: determinism (runs>=2) merged into quickcheck.
   , suggestNext GhcQuickCheck   True (object ["runs"   .= (3 :: Int), "status" .= ("ok" :: Text)])
-  , suggestNext GhcRegression   True (object ["action" .= ("run"    :: Text)])
-  , suggestNext GhcRegression   True (object ["action" .= ("list"   :: Text)])
-  , suggestNext GhcPropertyLifecycle True (object ["action" .= ("list" :: Text)])
+  , suggestNext GhcPropertyStore True (object ["action" .= ("run"    :: Text)])
+  , suggestNext GhcPropertyStore True (object ["action" .= ("list"   :: Text)])
+  , suggestNext GhcPropertyStore True (object ["files_written" .= (["test/Spec.hs"] :: [Text])])
+  , suggestNext GhcPropertyStore True (object ["findings" .= ([] :: [Value])])
   , suggestNext GhcDeps         True (object ["action" .= ("add"    :: Text)])
   , suggestNext GhcDeps         True (object ["action" .= ("remove" :: Text)])
   , suggestNext GhcAddImport    True (object ["count"  .= (3 :: Int)])
@@ -10718,7 +10738,7 @@ goldenDispatchTable =
   , ("arbitrary → load",                 GhcArbitrary,          object [],    Just GhcLoad)
   , ("suggest → quickcheck",             GhcSuggest,            object [],    Just GhcQuickCheck)
   , ("quickcheck(no-state) → suppress",  GhcQuickCheck,         object [],    Nothing)
-  , ("regression(no-action) → suppress", GhcRegression,         object [],    Nothing)
+  , ("property_store(no-action) → suppress", GhcPropertyStore,  object [],    Nothing)
   , ("refactor → load",                  GhcRefactor,           object [],    Just GhcLoad)
   , ("check_module → check_project",     GhcCheckModule,        object [],    Just GhcCheckProject)
   , ("check_project → gate chain",       GhcCheckProject,       object [],    Just GhcGate)
@@ -10728,9 +10748,9 @@ goldenDispatchTable =
   , ("format → load",                    GhcFormat,             object [],    Just GhcLoad)
   , ("batch → suppress",                 GhcBatch,              object [],    Nothing)
   , ("gate(fail) → check_project",       GhcGate,               object [],    Just GhcCheckProject)
-  , ("qcexport → gate",                  GhcQuickCheckExport,   object [],    Just GhcGate)
+  , ("property_store(export) → gate",   GhcPropertyStore,      object [ "files_written" .= (["test/Spec.hs"] :: [Text]) ], Just GhcGate)
   , ("quickcheck(runs=3,fail) → quickcheck",  GhcQuickCheck,    object [ "runs" .= (3 :: Int), "success" .= False ],  Just GhcQuickCheck)
-  , ("property_audit → lifecycle",       GhcPropertyAudit,      object [],    Just GhcPropertyLifecycle)
+  , ("property_store(audit) → list",    GhcPropertyStore,      object [ "findings" .= ([] :: [Value]) ],   Just GhcPropertyStore)
   , ("perf → perf",                      GhcPerf,               object [],    Just GhcPerf)
   , ("explain_error → explain_error",    GhcExplainError,       object [],    Just GhcExplainError)
   , ("lab → check_project",             GhcLab,                object [],    Just GhcCheckProject)
@@ -10744,7 +10764,8 @@ goldenDispatchTable =
   , ("fix_warning → load",              GhcFixWarning,         object [],    Just GhcLoad)
   , ("browse → suggest",                GhcBrowse,             object [],    Just GhcSuggest)
   , ("imports → suppress",              GhcImports,            object [],    Nothing)
-  , ("property_lifecycle(default) → suppress", GhcPropertyLifecycle, object [], Nothing)
+  -- #94 Phase C step 6: property_lifecycle merged into property_store. The
+  -- "(no-action) → suppress" row above already covers the default-payload path.
   , ("toolchain warmup → workflow",     GhcToolchain,          object [ "action" .= ("warmup" :: T.Text) ], Just GhcWorkflow)
   , ("project(bootstrap) → workflow",   GhcProject,            object [ "host" .= ("claude-code" :: T.Text) ], Just GhcWorkflow)
   , ("workflow → suppress",             GhcWorkflow,           object [],    Nothing)
@@ -10786,26 +10807,25 @@ goldenDispatchTable =
         GhcQuickCheck,
         object ["state" .= ("failed" :: Text)],
         Just GhcEval)
-  , ("regression(list) → regression",
-        GhcRegression,
+  , ("property_store(list) → property_store(run)",
+        GhcPropertyStore,
         object ["action" .= ("list" :: Text)],
-        Just GhcRegression)
-  , ("regression(run) → check_project",
-        GhcRegression,
+        Just GhcPropertyStore)
+  , ("property_store(run) → check_project",
+        GhcPropertyStore,
         object ["action" .= ("run" :: Text)],
         Just GhcCheckProject)
   , ("gate(pass) → coverage",
         GhcGate,
         object ["status" .= ("ok" :: Text)],
         Just GhcCoverage)
-  , ("quickcheck(runs=3,pass) → regression",
+  , ("quickcheck(runs=3,pass) → property_store",
         GhcQuickCheck,
         object ["runs" .= (3 :: Int), "status" .= ("ok" :: Text)],
-        Just GhcRegression)
-  , ("property_lifecycle(list) → regression",
-        GhcPropertyLifecycle,
-        object ["action" .= ("list" :: Text)],
-        Just GhcRegression)
+        Just GhcPropertyStore)
+  -- #94 Phase C step 6: ghc_property_lifecycle merged into
+  -- ghc_property_store(action=list); covered by the
+  -- "property_store(list) → property_store(run)" row above.
   , ("add_import(count>0) → load",
         GhcAddImport,
         object ["count" .= (3 :: Int)],
@@ -10864,7 +10884,7 @@ testEveryToolHasCategory = pure $
 -- Current breakdown: 36 primitives, 4 composites, 3 gates, 3 control-plane.
 testCategoryCountsMatchTaxonomy :: IO Bool
 testCategoryCountsMatchTaxonomy = pure $
-  countCat CatPrimitive    == 29
+  countCat CatPrimitive    == 26
   -- ^ #94 Phase B retrofit: GhcModules replaces GhcAddModules +
   -- GhcRemoveModules (36 → 35).
   -- #94 Phase C step 1: GhcDeps action="explain" replaces
@@ -10878,6 +10898,10 @@ testCategoryCountsMatchTaxonomy = pure $
   -- GhcValidateCabal + GhcBootstrap outright (32 → 29 — four
   -- removed, one added).  No deprecation period because the
   -- project has a single internal consumer.
+  -- #94 Phase C step 6: GhcPropertyStore (action=list|run|export
+  -- |audit) replaces GhcPropertyLifecycle + GhcRegression +
+  -- GhcQuickCheckExport + GhcPropertyAudit outright (29 → 26 —
+  -- four removed, one added).
   && countCat CatComposite    ==  4
   && countCat CatGate         ==  3
   && countCat CatControlPlane ==  2

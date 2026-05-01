@@ -3,34 +3,24 @@
 -- count and last-updated timestamp, so an agent can reason about
 -- staleness or prune properties tied to removed functions.
 module HaskellFlows.Tool.PropertyLifecycle
-  ( descriptor
-  , handle
+  ( handle
   ) where
 
 import Data.Aeson
-import Data.Text (Text)
 
 import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcPropertyLifecycle
-    , tdDescription =
-        "Inspect the persisted property store. Returns one entry per "
-          <> "stored property with its expression, module, cumulative "
-          <> "pass count, and last-updated POSIX time. Use to identify "
-          <> "properties worth pruning."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object []
-          , "additionalProperties" .= False
-          ]
-    }
+-- | #94 Phase C step 6: this module's @descriptor@ was retired
+-- when the four legacy property-store tools were merged into
+-- 'HaskellFlows.Tool.PropertyStore'. 'handle' is no longer
+-- reachable through the wire — the consolidated
+-- @ghc_property_store(action=\"list\")@ branch dispatches to
+-- 'Regression.handle' instead (its @list@ path emits the @action@
+-- field that downstream NextStep payload-probes expect). 'handle'
+-- below is kept exported because some existing unit tests
+-- exercise the introspection helper directly.
 
 -- | Issue #90 Phase C: pure introspection of the property store.
 -- Always status='ok' (the operation has no failure modes — an

@@ -53,13 +53,11 @@ data ToolName
   | GhcArbitrary
   | HoogleSearch
   | GhcWorkflow
-  | GhcRegression
   | GhcCheckModule
   | GhcCoverage
   | GhcComplete
   | GhcFormat
   | GhcGate
-  | GhcQuickCheckExport
   | GhcDeps
   | GhcDoc
   | GhcGoto
@@ -73,21 +71,25 @@ data ToolName
   | GhcFixWarning
   | GhcImports
   | GhcBrowse
-  | GhcPropertyLifecycle
   | GhcLab
   | GhcExplainError
   | GhcPerf
-  | GhcPropertyAudit
   | GhcWitness
   | GhcModules
   | GhcToolchain
   | GhcProject
+  | GhcPropertyStore
     -- ^ #94 Phase C step 5: action-discriminated 'project'
     -- primitive (action: "create" \| "switch" \| "validate" \|
     -- "bootstrap"). Replaced the per-verb 'GhcCreateProject' +
     -- 'GhcSwitchProject' + 'GhcValidateCabal' + 'GhcBootstrap'
     -- constructors outright (no deprecation period — single
     -- internal consumer).
+    -- ^ #94 Phase C step 6: action-discriminated 'property_store'
+    -- primitive (action: "list" \| "run" \| "export" \| "audit").
+    -- Replaced the per-verb 'GhcPropertyLifecycle' + 'GhcRegression'
+    -- + 'GhcQuickCheckExport' + 'GhcPropertyAudit' constructors
+    -- outright.
     -- ^ #94 Phase C: action-discriminated 'toolchain' primitive
     -- (action: "status" \| "warmup"). Replaced the per-verb
     -- 'GhcToolchainStatus' + 'GhcToolchainWarmup' constructors
@@ -115,13 +117,11 @@ toolNameText = \case
   GhcArbitrary         -> "ghc_arbitrary"
   HoogleSearch         -> "hoogle_search"
   GhcWorkflow          -> "ghc_workflow"
-  GhcRegression        -> "ghc_regression"
   GhcCheckModule       -> "ghc_check_module"
   GhcCoverage          -> "ghc_coverage"
   GhcComplete          -> "ghc_complete"
   GhcFormat            -> "ghc_format"
   GhcGate              -> "ghc_gate"
-  GhcQuickCheckExport  -> "ghc_quickcheck_export"
   GhcDeps              -> "ghc_deps"
   GhcDoc               -> "ghc_doc"
   GhcGoto              -> "ghc_goto"
@@ -135,13 +135,12 @@ toolNameText = \case
   GhcFixWarning        -> "ghc_fix_warning"
   GhcImports           -> "ghc_imports"
   GhcBrowse            -> "ghc_browse"
-  GhcPropertyLifecycle -> "ghc_property_lifecycle"
   GhcToolchain         -> "ghc_toolchain"
   GhcProject           -> "ghc_project"
+  GhcPropertyStore     -> "ghc_property_store"
   GhcLab               -> "ghc_lab"
   GhcExplainError      -> "ghc_explain_error"
   GhcPerf              -> "ghc_perf"
-  GhcPropertyAudit     -> "ghc_property_audit"
   GhcWitness           -> "ghc_witness"
   GhcModules           -> "ghc_modules"
 
@@ -232,10 +231,9 @@ toolCategory = \case
   -- Property-first testing
   GhcQuickCheck        -> CatPrimitive
   GhcSuggest           -> CatPrimitive
-  GhcPropertyLifecycle -> CatPrimitive   -- future: property_store action=list|drop
-  GhcRegression        -> CatPrimitive   -- future: property_store action=run
-  GhcQuickCheckExport  -> CatPrimitive   -- future: property_store action=export
-  GhcPropertyAudit     -> CatPrimitive   -- future: property_store action=audit
+  GhcPropertyStore     -> CatPrimitive   -- #94 Phase C step 6: action-discriminated successor
+                                         -- to ghc_property_lifecycle / ghc_regression /
+                                         -- ghc_quickcheck_export / ghc_property_audit
   -- Phase-2 advanced
   GhcPerf              -> CatPrimitive
   GhcWitness           -> CatPrimitive
@@ -304,10 +302,7 @@ toolVersion = \case
   -- ── Property-first testing ──────────────────────────────────────
   GhcQuickCheck        -> "1.0.0"
   GhcSuggest           -> "1.0.0"
-  GhcPropertyLifecycle -> "1.0.0"
-  GhcRegression        -> "1.0.0"
-  GhcQuickCheckExport  -> "1.0.0"
-  GhcPropertyAudit     -> "1.0.0"
+  GhcPropertyStore     -> "1.0.0"   -- #94 Phase C step 6: action-discriminated successor
   -- ── Phase-2 advanced ────────────────────────────────────────────
   GhcPerf              -> "1.0.0"
   GhcWitness           -> "1.0.0"

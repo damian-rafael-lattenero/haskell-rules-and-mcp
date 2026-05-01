@@ -105,9 +105,12 @@ runFlow c projectDir = do
           "after successful loads + quickchecks, phase must advance"
   c4 <- liveCheck $ checkJsonFieldMatches
           "help surfaces 'stateHints' once thresholds trip (BUG-08)"
-          rN "stateHints" (hintsMention "regression")
+          rN "stateHints" (hintsMention "property_store")
+          -- #94 Phase C step 6: ghc_regression merged into
+          -- ghc_property_store(action=run); the nudge text now
+          -- mentions 'property_store' instead of 'regression'.
           "with 3+ passing properties, WorkflowState.renderHelp emits a \
-          \'consider ghc_regression(action=\"run\")' nudge"
+          \'consider ghc_property_store(action=\"run\")' nudge"
   stepFooter 3 t2
 
   ----------------------------------------------------------------

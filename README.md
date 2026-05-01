@@ -23,17 +23,16 @@
 
 ## ⚡ The 30-second story
 
-Plug into Claude Code, Cursor, or any MCP host. Your agent gets **46 tools** that share **one in-process GHC session** and **one normative response envelope** — every call answers with the same structured shape, every gate is honest, every refactor verifies-or-rolls-back.
+Plug into Claude Code, Cursor, or any MCP host. Your agent gets **31 tools** that share **one in-process GHC session** and **one normative response envelope** — every call answers with the same structured shape, every gate is honest, every refactor verifies-or-rolls-back.
 
 ```text
 ghc_project(create) ─▶ ghc_modules ─▶ ghc_load
        │
-       ├─▶ ghc_suggest        ← multi-engine law proposer w/ confidence + sibling-aware
-       ├─▶ ghc_quickcheck     ← runs + auto-persists on pass
-       ├─▶ ghc_determinism    ← N runs to catch the flake QC alone misses ⚠️
-       ├─▶ ghc_regression     ← replays the whole persisted set
-       ├─▶ ghc_refactor       ← snapshot + compile-verify + rollback on red
-       └─▶ ghc_gate           ← regression + cabal test + cabal build, one call
+       ├─▶ ghc_suggest             ← multi-engine law proposer w/ confidence + sibling-aware
+       ├─▶ ghc_quickcheck          ← runs + auto-persists on pass; runs>=2 catches flakes
+       ├─▶ ghc_property_store(run) ← replays the whole persisted set
+       ├─▶ ghc_refactor            ← snapshot + compile-verify + rollback on red
+       └─▶ ghc_gate                ← regression + cabal test + cabal build, one call
 ```
 
 📘 **Full flows** → [`docs/flows.md`](docs/flows.md) · 🚀 **Install** → [`docs/install.md`](docs/install.md) · 🛡 **Trust model** → [SECURITY.md](SECURITY.md)
@@ -98,7 +97,7 @@ The rewrite **swallowed an error**. Without `ghc_determinism`, that broken simpl
 | 🏗 **Scaffold** | 5 | `ghc_project(action=create)` — atomic cabal scaffold + `chain` hint |
 | 🔍 **Inspect** | 10 | `ghc_browse` · `ghc_info` · `ghc_eval` · `ghc_hole` |
 | 📚 **Deps** | 3 | `ghc_deps` — verb-checked, post-edit re-parse, refuses incoherent writes |
-| 🧪 **Property-first** | 7 | `ghc_suggest` · `ghc_quickcheck` · `ghc_determinism` · `ghc_regression` |
+| 🧪 **Property-first** | 4 | `ghc_suggest` · `ghc_quickcheck` (with `runs>=2` flakiness check) · `ghc_property_store` (list/run/export/audit) |
 | 🛡 **Gates** | 5 | `ghc_check_module` · `ghc_gate` — collapsed pre-push finalizer |
 | ✏️ **Refactor** | 5 | `ghc_refactor` — snapshot + compile-verify + rollback |
 | 🧠 **Advanced** | 11 | `ghc_lab` · `ghc_witness` · `ghc_explain_error` · `ghc_perf` · `ghc_batch` |

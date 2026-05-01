@@ -97,7 +97,12 @@ import qualified HaskellFlows.Tool.Bootstrap       as BootstrapTool
   -- ^ #94 Phase C step 5: invoked indirectly via ProjectTool dispatch.
 import qualified HaskellFlows.Tool.Browse          as BrowseTool
 import qualified HaskellFlows.Tool.Determinism     as DeterminismTool
-import qualified HaskellFlows.Tool.PropertyLifecycle as PropertyLifecycleTool
+-- HaskellFlows.Tool.PropertyLifecycle is no longer registered:
+-- #94 Phase C step 6 dropped its descriptor and the
+-- 'ghc_property_store(action="list")' branch routes through
+-- 'RegressionTool.handle' instead (the bytes are equivalent and
+-- the @action@ field downstream NextStep probes expect is preserved).
+-- The module's 'handle' is still exported for direct unit-test use.
 import qualified HaskellFlows.Tool.Toolchain       as ToolchainTool
 import qualified HaskellFlows.Tool.CheckModule     as CheckModuleTool
 import qualified HaskellFlows.Tool.CheckProject    as CheckProjectTool
@@ -136,6 +141,7 @@ import qualified HaskellFlows.Tool.ValidateCabal   as ValidateCabalTool
   -- ^ #94 Phase C step 5: invoked indirectly via ProjectTool dispatch.
 import qualified HaskellFlows.Tool.Workflow        as WorkflowTool
 import qualified HaskellFlows.Tool.Project         as ProjectTool
+import qualified HaskellFlows.Tool.PropertyStore   as PropertyStoreTool
 
 -- | All mutable server state.
 --
@@ -435,11 +441,6 @@ dispatchByName srv args = \case
       ws
       staleness
       args
-  GhcRegression -> do
-    -- Wave-3 full in-process replay via evalIOString.
-    ghcSess <- getOrStartGhcSession srv
-    store   <- readIORef (srvStore srv)
-    RegressionTool.handle store ghcSess args
   GhcCheckModule -> do
     -- Wave-5 full GhcSession: compile/warnings/holes + in-process
     -- property replay via Regression.runOne.
@@ -499,13 +500,6 @@ dispatchByName srv args = \case
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
     PerfTool.handle ghcSess pd args
-  GhcPropertyAudit -> do
-    -- Issue #64 Phase 1: pairwise contradiction detector over the
-    -- persisted property store. Re-uses the QuickCheck cabal-repl
-    -- vehicle for each pair-probe.
-    ghcSess <- getOrStartGhcSession srv
-    store   <- readIORef (srvStore srv)
-    PropertyAuditTool.handle store ghcSess args
   GhcWitness -> do
     -- Issue #65 Phase 1: property-witness explorer. Wraps the
     -- property with size-bucket instrumentation and runs it via
@@ -553,10 +547,6 @@ dispatchByName srv args = \case
     pd      <- readIORef (srvProjectDir srv)
     store   <- readIORef (srvStore srv)
     GateTool.handle store ghcSess pd args
-  GhcQuickCheckExport -> do
-    pd    <- readIORef (srvProjectDir srv)
-    store <- readIORef (srvStore srv)
-    QcExportTool.handle store pd args
   GhcAddImport -> do
     r <- AddImportTool.handle args
     invalidateGhcSessionIfPresent srv
@@ -588,9 +578,14 @@ dispatchByName srv args = \case
     -- Phase-2 migrated: in-process getModuleInfo + modInfoExports.
     ghcSess <- getOrStartGhcSession srv
     BrowseTool.handle ghcSess args
-  GhcPropertyLifecycle -> do
-    store <- readIORef (srvStore srv)
-    PropertyLifecycleTool.handle store args
+  GhcPropertyStore ->
+    -- #94 Phase C step 6: action-discriminated successor to
+    -- GhcPropertyLifecycle + GhcRegression + GhcQuickCheckExport +
+    -- GhcPropertyAudit. Dispatch lives here (not inside
+    -- Tool.PropertyStore) because each underlying handler has a
+    -- different signature with respect to server state ('Store',
+    -- 'GhcSession', 'ProjectDir').
+    dispatchPropertyStore srv args
   GhcBatch ->
     -- Reachable only via 'dispatchTool' (e.g. when 'BatchTool.handle'
     -- ever recursed into the dispatcher). 'BatchTool' itself rejects
@@ -703,6 +698,55 @@ stripProjectAction :: Value -> Value
 stripProjectAction (Object o) = Object (KeyMap.delete "action" o)
 stripProjectAction v          = v
 
+-- | #94 Phase C step 6: dispatch a 'ghc_property_store' call to the
+-- right legacy handler based on the @action@ discriminator.
+--
+-- Routing:
+--
+--   * @list@   — 'Regression.handle' with @action=list@ (chosen over
+--     the legacy 'PropertyLifecycle.handle' so the response shape
+--     keeps the @action@ field that downstream NextStep / payload
+--     probes expect; bytes are equivalent — both emit @{count,
+--     properties}@ over the same store).
+--   * @run@    — 'Regression.handle' with @action=run@.
+--   * @export@ — 'QuickCheckExport.handle'.
+--   * @audit@  — 'PropertyAudit.handle'.
+--
+-- The @action@ field is preserved (not stripped) for @list@\/@run@
+-- because 'Regression.handle' parses it; for @export@\/@audit@ it
+-- gets stripped because those handlers reject unknown fields.
+dispatchPropertyStore :: Server -> Value -> IO ToolResult
+dispatchPropertyStore srv rawArgs = case projectActionField rawArgs of
+  Nothing ->
+    pure (Env.toolResponseToResult
+      (Env.mkRefused
+        (Env.mkErrorEnvelope Env.MissingArg
+          "ghc_property_store requires an 'action' field \
+          \(one of 'list', 'run', 'export', 'audit').")))
+  Just action -> case action of
+    "list" -> do
+      ghcSess <- getOrStartGhcSession srv
+      store   <- readIORef (srvStore srv)
+      RegressionTool.handle store ghcSess rawArgs
+    "run" -> do
+      ghcSess <- getOrStartGhcSession srv
+      store   <- readIORef (srvStore srv)
+      RegressionTool.handle store ghcSess rawArgs
+    "export" -> do
+      pd    <- readIORef (srvProjectDir srv)
+      store <- readIORef (srvStore srv)
+      QcExportTool.handle store pd (stripProjectAction rawArgs)
+    "audit" -> do
+      ghcSess <- getOrStartGhcSession srv
+      store   <- readIORef (srvStore srv)
+      PropertyAuditTool.handle store ghcSess (stripProjectAction rawArgs)
+    other ->
+      pure (Env.toolResponseToResult
+        (Env.mkRefused
+          (Env.mkErrorEnvelope Env.Validation
+            ("Unknown ghc_property_store action: '" <> other
+             <> "' (expected 'list', 'run', 'export', or 'audit')."))))
+
 extractResponseStatus :: Response -> Text
 extractResponseStatus resp = fromMaybe "ok" $ do
   v <- either (const Nothing) Just (respPayload resp)
@@ -794,13 +838,11 @@ allToolDescriptors =
   , ArbitraryTool.descriptor
   , HoogleTool.descriptor
   , WorkflowTool.descriptor
-  , RegressionTool.descriptor
   , CheckModuleTool.descriptor
   , CoverageTool.descriptor
   , CompleteTool.descriptor
   , FormatTool.descriptor
   , GateTool.descriptor
-  , QcExportTool.descriptor
   , DepsTool.descriptor
   , DocTool.descriptor
   , GotoTool.descriptor
@@ -808,7 +850,6 @@ allToolDescriptors =
   , LabTool.descriptor
   , ExplainErrorTool.descriptor
   , PerfTool.descriptor
-  , PropertyAuditTool.descriptor
   , WitnessTool.descriptor
   , BatchTool.descriptor
   , LintTool.descriptor
@@ -822,7 +863,7 @@ allToolDescriptors =
   , BrowseTool.descriptor
   , ModulesTool.descriptor       -- #94 Phase B: action-discriminated 'modules' primitive
   , ProjectTool.descriptor       -- #94 Phase C step 5: action-discriminated 'project' primitive
-  , PropertyLifecycleTool.descriptor
+  , PropertyStoreTool.descriptor -- #94 Phase C step 6: action-discriminated 'property_store' primitive
   ]
 
 -- 'allToolNames :: [ToolName]' / 'allToolNameTexts :: [Text]' both

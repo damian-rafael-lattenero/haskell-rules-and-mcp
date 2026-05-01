@@ -24,8 +24,7 @@
 -- * Generated code is a plain `module Main where`; it never
 --   injects cabal / ghc flags the user didn't opt in to.
 module HaskellFlows.Tool.QuickCheckExport
-  ( descriptor
-  , handle
+  ( handle
   , ExportArgs (..)
   , renderTestFile
   , renderTestFileWith
@@ -49,39 +48,16 @@ import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.QuickCheck as Qc
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath, unProjectDir)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcQuickCheckExport
-    , tdDescription =
-        "Emit a runnable test/Spec.hs materialising every property "
-          <> "persisted to .haskell-flows/properties.json. After a commit "
-          <> "'cabal test' replays the set the same way ghc_regression "
-          <> "does from inside GHCi, but from CI with no MCP in the loop."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "output_path" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Relative path where the test file is written. "
-                       <> "Default: \"test/Spec.hs\"." :: Text)
-                  ]
-              , "module" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Optional filter: export only properties whose "
-                       <> "stored module matches this value." :: Text)
-                  ]
-              ]
-          , "additionalProperties" .= False
-          ]
-    }
+-- | #94 Phase C step 6: this module's @descriptor@ was retired
+-- when the four legacy property-store tools were merged into
+-- 'HaskellFlows.Tool.PropertyStore'. The 'handle' function below
+-- is now invoked indirectly via 'Server.dispatchPropertyStore'
+-- when the agent calls @ghc_property_store(action=\"export\")@.
+-- Behaviour is byte-identical to the legacy @ghc_quickcheck_export@
+-- surface.
 
 data ExportArgs = ExportArgs
   { eaOutputPath :: !(Maybe Text)

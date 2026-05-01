@@ -438,9 +438,12 @@ step11_determinism c = do
     ])
   pure
     [ checkJsonField "step 11 · determinism success" r "success" (Bool True)
-    , mkCheck "step 11 · nextStep points at regression(run)"
-        (fetchNextStepTool r == Just "ghc_regression")
-        "stable property should push the agent toward regression(run)"
+    , mkCheck "step 11 · nextStep points at property_store(run)"
+        (fetchNextStepTool r == Just "ghc_property_store")
+        -- #94 Phase C step 6: ghc_regression merged into
+        -- ghc_property_store; the determinism nextStep now points
+        -- at the consolidated tool.
+        "stable property should push the agent toward property_store(run)"
     ]
 
 --------------------------------------------------------------------------------
@@ -449,7 +452,7 @@ step11_determinism c = do
 
 step12_regressionList :: Client.McpClient -> IO [Check]
 step12_regressionList c = do
-  r <- Client.callTool c GhcRegression
+  r <- Client.callTool c GhcPropertyStore
          (object [ "action" .= ("list" :: Text) ])
   pure
     [ checkJsonField "step 12 · regression list success" r "success" (Bool True)
@@ -467,8 +470,8 @@ step12_regressionList c = do
 
 step13_regressionRun :: Client.McpClient -> IO [Check]
 step13_regressionRun c = do
-  r <- Client.callTool c GhcRegression
-         (object [ "action" .= ("run" :: Text) ])
+  r <- Client.callTool c GhcPropertyStore
+         (object [ "action" .= ("run" :: Text), "action" .= ("run" :: Text) ])
   -- Dropped: "step 13 · regression run success" — 'no regressions' is
   -- strictly stronger and catches the real failure shape.
   pure
@@ -484,7 +487,7 @@ step13_regressionRun c = do
 
 step14_export :: Client.McpClient -> FilePath -> IO [Check]
 step14_export c projectDir = do
-  r <- Client.callTool c GhcQuickCheckExport (object [])
+  r <- Client.callTool c GhcPropertyStore (object [ "action" .= ("export" :: Text) ])
   let success = statusOk r == Just True
       specPath = projectDir </> "test" </> "Spec.hs"
   specExists <- doesFileExist specPath

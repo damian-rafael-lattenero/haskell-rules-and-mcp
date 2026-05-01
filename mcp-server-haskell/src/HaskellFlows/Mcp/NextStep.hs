@@ -290,17 +290,14 @@ dispatch name payload = case name of
           Nothing)
         _ -> Nothing
 
-  -- Regression list → run the set.
-  GhcRegression -> case regressionAction payload of
-    Just "list" -> Just (simple GhcRegression
-      "You now know the persisted set. Run it to confirm every \
-      \property still holds after recent edits."
-      (Just (object [ "action" .= ("run" :: Text) ])))
-    Just "run"  -> Just (simple GhcCheckProject
-      "All persisted properties re-played. Roll into the project-wide \
-      \gate for pre-push readiness."
-      Nothing)
-    _ -> Nothing
+  -- #94 Phase C step 6: ghc_property_store. The next-step depends
+  -- on which action ran. We use 'regressionAction' which reads the
+  -- 'action' field — the consolidated tool's 'list'/'run' branches
+  -- preserve that field. The 'export'/'audit' branches don't carry
+  -- the field; we discriminate them from the @list@/@run@ pair via
+  -- characteristic payload fields ('files_written' for export,
+  -- 'pairs' / 'contradictions' for audit) before falling through.
+  GhcPropertyStore -> propertyStoreNext payload
 
   -- Refactor landed → verify compile + rerun regressions.
   -- #94 Phase C: 'move_symbol' (the merged ghc_move) is multi-file
@@ -366,27 +363,6 @@ dispatch name payload = case name of
 
   -- Gate passed → green to push. On fail, drill in per module.
   GhcGate -> Just (gateNext payload)
-
-  -- test/Spec.hs materialised → run ghc_gate to exercise it through
-  -- cabal test (same semantics as CI without the MCP in the loop).
-  GhcQuickCheckExport -> Just (simple GhcGate
-    "test/Spec.hs is now materialised. Run ghc_gate to replay the \
-    \persisted properties the same way cabal test will in CI — this \
-    \is the regression check that catches a property breaking between \
-    \export + push."
-    Nothing)
-
-
-  -- Issue #64: the auditor flagged contradictory pairs (or
-  -- nothing). When findings exist, the canonical follow-up is
-  -- ghc_property_lifecycle drop on the wrong property; when
-  -- empty, the next step is the regular gate.
-  GhcPropertyAudit -> Just (simple GhcPropertyLifecycle
-    "Audit completed. If 'findings' is non-empty, decide which \
-    \property reflects real intent and drop the other via \
-    \ghc_property_lifecycle. If empty, the store is consistent — \
-    \run ghc_check_project."
-    Nothing)
 
   -- Issue #61 Phase 2: baseline persistence is live.
   -- If the caller set save_baseline=true the mean is now persisted;
@@ -502,16 +478,6 @@ dispatch name payload = case name of
   -- Imports list is a diagnostic aid — no forced next step.
   GhcImports -> Nothing
 
-  -- Lifecycle mgmt of the property store — if action=list the
-  -- next natural step is to prune or run; leave the choice open.
-  GhcPropertyLifecycle -> case regressionAction payload of
-    Just "list" -> Just (simple GhcRegression
-      "Now that you can see the store, run the regression to \
-      \confirm every entry still passes — flaky / broken properties \
-      \should be pruned before the next push."
-      (Just (object [ "action" .= ("run" :: Text) ])))
-    _ -> Nothing
-
   -- Workflow meta — would loop if we suggested itself.
   GhcWorkflow -> Nothing
 
@@ -623,11 +589,15 @@ isDeterminismPayload payload = case envField "runs" payload of
 
 -- | 'ghc_determinism' payload has a top-level @success@ bool.
 -- Stable → trust for regression; flaky → show the counter-example.
+--
+-- #94 Phase C step 6: the regression-replay tool is now
+-- 'ghc_property_store(action=run)' — the recommendation example
+-- carries the 'action' field as before.
 determinismNext :: Value -> NextStep
 determinismNext payload
-  | determinismPassed payload = simple GhcRegression
+  | determinismPassed payload = simple GhcPropertyStore
       "Property passed every run — safe to add to the regression \
-      \set. 'ghc_regression(action=\"run\")' confirms none of \
+      \set. 'ghc_property_store(action=\"run\")' confirms none of \
       \the stored set regressed after your recent changes."
       (Just (object [ "action" .= ("run" :: Text) ]))
   | otherwise = simple GhcQuickCheck
@@ -635,6 +605,48 @@ determinismNext payload
       \ghc_quickcheck to get a counter-example you can evaluate \
       \with ghc_eval, then fix the underlying code."
       Nothing
+
+-- | #94 Phase C step 6: pick the right next-step based on which
+-- 'ghc_property_store' action ran. Routing:
+--
+--   * @action=list@      → run the persisted set
+--   * @action=run@       → roll into the project-wide gate
+--   * (looks like export — @files_written@ is non-empty) → run gate
+--   * (looks like audit  — @findings@ field exists)      → list,
+--                          so the agent can decide which entry to drop
+--   * otherwise → Nothing (nothing actionable)
+propertyStoreNext :: Value -> Maybe NextStep
+propertyStoreNext payload = case regressionAction payload of
+  Just "list" -> Just (simple GhcPropertyStore
+    "You now know the persisted set. Run it to confirm every \
+    \property still holds after recent edits."
+    (Just (object [ "action" .= ("run" :: Text) ])))
+  Just "run"  -> Just (simple GhcCheckProject
+    "All persisted properties re-played. Roll into the project-wide \
+    \gate for pre-push readiness."
+    Nothing)
+  _ ->
+    -- export branch: 'files_written' carries the path on success.
+    if hasField "files_written" payload
+      then Just (simple GhcGate
+        "test/Spec.hs is now materialised. Run ghc_gate to replay \
+        \the persisted properties the same way cabal test will in \
+        \CI — this is the regression check that catches a property \
+        \breaking between export + push."
+        Nothing)
+    -- audit branch: 'findings' is the contradictions array.
+    else if hasField "findings" payload
+      then Just (simple GhcPropertyStore
+        "Audit completed. If 'findings' is non-empty, decide which \
+        \property reflects real intent and run \
+        \ghc_property_store(action=\"list\") to pick the entry. If \
+        \empty, the store is consistent — run ghc_check_project."
+        (Just (object [ "action" .= ("list" :: Text) ])))
+    else Nothing
+  where
+    hasField k v = case envField k v of
+      Just _  -> True
+      Nothing -> False
 
 --------------------------------------------------------------------------------
 -- payload probes (small, hand-written, no lens-aeson dep)

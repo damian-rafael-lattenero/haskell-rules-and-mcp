@@ -23,8 +23,7 @@
 --   * LLM-friendly conclusion-text generation — hand the
 --     counterexample to the agent for narration.
 module HaskellFlows.Tool.PropertyAudit
-  ( descriptor
-  , handle
+  ( handle
   , PropertyAuditArgs (..)
     -- * Pure helpers (exported for unit tests)
   , pairCombinations
@@ -52,42 +51,19 @@ import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.QuickCheck
   ( QuickCheckResult (..)
   , parseQuickCheckOutput
   )
 import qualified HaskellFlows.Tool.QuickCheck as Qc
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcPropertyAudit
-    , tdDescription =
-        "Cross-property contradiction detector + vacuous-property check. "
-          <> "Phase 1: for every pair of persisted properties (optionally "
-          <> "filtered by module_path), build the probe "
-          <> "'\\args -> P1 args && not (P2 args)' and run it via QuickCheck. "
-          <> "A passing probe means the two properties disagree somewhere — "
-          <> "the pair is logically inconsistent. "
-          <> "Phase 2: set check_vacuous=true to also run each property "
-          <> "individually; properties QuickCheck gives up on (too many "
-          <> "discards) are flagged as potentially vacuous (precondition "
-          <> "is never satisfied)."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "module_path"    .= obj "string"
-              , "runs_per_pair"  .= obj "integer"
-              , "check_vacuous"  .= obj "boolean"
-              ]
-          , "additionalProperties" .= False
-          ]
-    }
-  where
-    obj :: Text -> Value
-    obj t = object [ "type" .= t ]
+-- | #94 Phase C step 6: this module's @descriptor@ was retired
+-- when the four legacy property-store tools were merged into
+-- 'HaskellFlows.Tool.PropertyStore'. The 'handle' function below
+-- is now invoked indirectly via 'Server.dispatchPropertyStore'
+-- when the agent calls @ghc_property_store(action=\"audit\")@.
+-- Behaviour is byte-identical to the legacy @ghc_property_audit@
+-- surface.
 
 data PropertyAuditArgs = PropertyAuditArgs
   { paModulePath   :: !(Maybe Text)

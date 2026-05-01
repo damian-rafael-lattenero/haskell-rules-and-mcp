@@ -106,6 +106,7 @@ library
                       HaskellFlows.Tool.Perf
                       HaskellFlows.Tool.Project
                       HaskellFlows.Tool.PropertyAudit
+                      HaskellFlows.Tool.PropertyStore
                       HaskellFlows.Tool.QuickCheck
                       HaskellFlows.Tool.QuickCheckExport
                       HaskellFlows.Tool.Refactor

@@ -73,7 +73,7 @@ runFlow c projectDir = do
   -- Step 2 — confirm the planted property is visible via
   -- ghc_regression(list) BEFORE the switch.
   t0 <- stepHeader 1 "baseline · list sees A's property"
-  baseline <- Client.callTool c GhcRegression
+  baseline <- Client.callTool c GhcPropertyStore
                 (object [ "action" .= ("list" :: Text) ])
   let baseN  = countN "count" baseline
   cBaseline <- liveCheck $ checkPure
@@ -100,7 +100,7 @@ runFlow c projectDir = do
   -- Step 4 — pre-#39 this returned count=1 (A's property
   -- leaking through). Post-#39 the store was reopened against
   -- B, which has no .haskell-flows/ → count=0.
-  inB <- Client.callTool c GhcRegression
+  inB <- Client.callTool c GhcPropertyStore
            (object [ "action" .= ("list" :: Text) ])
   let bN = countN "count" inB
   cIsolated <- liveCheck $ checkPure
@@ -121,7 +121,7 @@ runFlow c projectDir = do
     \\"module\":\"src/Bar.hs\",\"passed\":1,\"updated\":0}]"
 
   -- B sees its own property.
-  bAgain <- Client.callTool c GhcRegression
+  bAgain <- Client.callTool c GhcPropertyStore
               (object [ "action" .= ("list" :: Text) ])
   let bAgainN = countN "count" bAgain
   cBSeesItsOwn <- liveCheck $ checkPure
@@ -139,7 +139,7 @@ runFlow c projectDir = do
     backOk
     ("switch back must succeed; got: " <> truncRender switchBA)
 
-  inA <- Client.callTool c GhcRegression
+  inA <- Client.callTool c GhcPropertyStore
            (object [ "action" .= ("list" :: Text) ])
   let aN = countN "count" inA
   cAUnchanged <- liveCheck $ checkPure

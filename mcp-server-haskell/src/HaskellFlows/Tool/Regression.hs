@@ -8,8 +8,7 @@
 -- Compared to the legacy subprocess path, no more @:load@ / @:show
 -- modules@ dance — 'loadForTarget' owns scope selection.
 module HaskellFlows.Tool.Regression
-  ( descriptor
-  , handle
+  ( handle
   , RegressionArgs (..)
   , Action (..)
   , Replay (..)
@@ -38,35 +37,18 @@ import HaskellFlows.Data.PropertyStore
 import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.QuickCheck
   ( QuickCheckResult (..)
   , parseQuickCheckOutput
   )
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcRegression
-    , tdDescription =
-        "Replay every persisted QuickCheck property as a regression "
-          <> "suite. Actions: 'list' (inspect the store without running), "
-          <> "'run' (execute all). Properties are auto-persisted by "
-          <> "ghc_quickcheck on first pass."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "action" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "enum"        .= (["list", "run"] :: [Text])
-                  , "description" .= ("Default: 'run'." :: Text)
-                  ]
-              ]
-          , "additionalProperties" .= False
-          ]
-    }
+-- | #94 Phase C step 6: this module's @descriptor@ was retired
+-- when the four legacy property-store tools were merged into
+-- 'HaskellFlows.Tool.PropertyStore'. The 'handle' function below
+-- is now invoked indirectly via 'Server.dispatchPropertyStore'
+-- when the agent calls @ghc_property_store(action=\"list\"|"run")@.
+-- Behaviour is byte-identical to the legacy @ghc_regression@ surface.
 
 data Action = ActList | ActRun
   deriving stock (Eq, Show)

@@ -169,8 +169,8 @@ runFlow c projectDir = do
   --     broken commutativity law and MUST NOT flag double2x.
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "ghc_regression(run): must detect the mutated commutativity"
-  rReg <- Client.callTool c GhcRegression
-            (object [ "action" .= ("run" :: Text) ])
+  rReg <- Client.callTool c GhcPropertyStore
+            (object [ "action" .= ("run" :: Text), "action" .= ("run" :: Text) ])
 
   let regs              = regressionExprs rReg
       sawCommutativity  = any (T.isInfixOf "add x y == add y x") regs

@@ -193,8 +193,8 @@ runFlow c projectDir = do
   -- end-to-end when the persisted module path is correct
   ----------------------------------------------------------------
   t5 <- stepHeader 6 "regression · store has 3 props, all replay green"
-  regR <- Client.callTool c GhcRegression
-            (object [ "action" .= ("run" :: Text) ])
+  regR <- Client.callTool c GhcPropertyStore
+            (object [ "action" .= ("run" :: Text), "action" .= ("run" :: Text) ])
   let regPassed = fieldInt "passed" regR == Just 3
       regTotal  = fieldInt "total"  regR == Just 3
       regRegressions = fieldArrayLen "regressions" regR == Just 0

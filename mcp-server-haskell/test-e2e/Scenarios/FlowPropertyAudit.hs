@@ -45,7 +45,7 @@ runFlow c projectDir = do
   -- Step 2 — empty-store call. The auditor reports zero pairs
   -- without trying to run any probe.
   t0 <- stepHeader 1 "ghc_property_audit on empty store (#64)"
-  rEmpty <- Client.callTool c GhcPropertyAudit (object [])
+  rEmpty <- Client.callTool c GhcPropertyStore (object [ "action" .= ("audit" :: Text) ])
   let okEmpty = statusOk rEmpty == Just True
               && fieldInt "properties_checked" rEmpty == Just 0
               && fieldInt "pairs_checked" rEmpty == Just 0
@@ -63,7 +63,7 @@ runFlow c projectDir = do
   TIO.writeFile (storeDir </> "properties.json")
     "[{\"expression\":\"\\\\x -> x == (x :: Int)\",\
     \\"module\":\"src/Foo.hs\",\"passed\":1,\"updated\":0}]"
-  rOne <- Client.callTool c GhcPropertyAudit (object [])
+  rOne <- Client.callTool c GhcPropertyStore (object [ "action" .= ("audit" :: Text) ])
   let okOne = statusOk rOne == Just True
             && fieldInt "properties_checked" rOne == Just 1
             && fieldInt "pairs_checked" rOne == Just 0
@@ -83,7 +83,7 @@ runFlow c projectDir = do
     \\"module\":\"Foo\",\"passed\":1,\"updated\":0},\
     \{\"expression\":\"\\\\x -> x == (x :: Int)\",\
     \\"module\":\"src/Foo.hs\",\"passed\":1,\"updated\":0}]"
-  rDup <- Client.callTool c GhcPropertyAudit (object [])
+  rDup <- Client.callTool c GhcPropertyStore (object [ "action" .= ("audit" :: Text) ])
   let okDup = statusOk rDup == Just True
             && fieldInt "properties_checked" rDup == Just 1
             && fieldInt "pairs_checked" rDup == Just 0

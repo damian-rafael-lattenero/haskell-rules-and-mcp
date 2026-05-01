@@ -72,7 +72,7 @@ runFlow c projectDir = do
   -- Step 4 — invoke the export. Defaults the output to
   -- 'test/Spec.hs', mirroring the bug's exact reproduction.
   t0 <- stepHeader 1 "ghc_quickcheck_export defaults to test/Spec.hs (#40)"
-  r <- Client.callTool c GhcQuickCheckExport (object [])
+  r <- Client.callTool c GhcPropertyStore (object [ "action" .= ("export" :: Text) ])
   let exportSucceeded = statusOk r == Just True
   cExport <- liveCheck $ checkPure
     "export tool returns success=true"

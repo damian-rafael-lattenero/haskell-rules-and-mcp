@@ -61,10 +61,7 @@
 |---|---|---|
 | `GhcQuickCheck` | `ghc_quickcheck` | Run a QC property; auto-persist on pass. Pass `runs >= 2` to repeat the property for flakiness detection (#94 Phase C: subsumes the retired `ghc_determinism`) |
 | `GhcSuggest` | `ghc_suggest` | Propose QuickCheck laws for a function signature |
-| `GhcPropertyLifecycle` | `ghc_property_lifecycle` | `list` / `drop` the property store (future: `property_store action=list|drop`) |
-| `GhcRegression` | `ghc_regression` | Replay all persisted properties (future: `property_store action=run`) |
-| `GhcQuickCheckExport` | `ghc_quickcheck_export` | Materialise `test/Spec.hs` (future: `property_store action=export`) |
-| `GhcPropertyAudit` | `ghc_property_audit` | Audit store for contradictions (future: `property_store action=audit`) |
+| `GhcPropertyStore` | `ghc_property_store` | Property-store lifecycle: `action=list` (introspect), `action=run` (replay every persisted property), `action=export` (materialise `test/Spec.hs`), `action=audit` (pairwise contradiction probe) (#94 Phase C step 6: subsumes the retired `ghc_property_lifecycle` + `ghc_regression` + `ghc_quickcheck_export` + `ghc_property_audit`) |
 
 ### Phase-2 advanced
 
@@ -110,11 +107,11 @@
 
 | Category | Count |
 |---|---|
-| Primitive | 29 |
+| Primitive | 26 |
 | Composite | 4 |
 | Gate | 3 |
 | Control-plane | 2 |
-| **Total** | **38** |
+| **Total** | **35** |
 
 * Phase B retrofit: `GhcModules` replaced `GhcAddModules` +
   `GhcRemoveModules` outright (47 → 45 — two less, one new).
@@ -130,6 +127,9 @@
 * Phase C step 5: `GhcProject action="create"|"switch"|"validate"|"bootstrap"`
   replaced `GhcCreateProject` + `GhcSwitchProject` + `GhcValidateCabal` +
   `GhcBootstrap` outright (41 → 38 — four less, one new).
+* Phase C step 6: `GhcPropertyStore action="list"|"run"|"export"|"audit"`
+  replaced `GhcPropertyLifecycle` + `GhcRegression` + `GhcQuickCheckExport` +
+  `GhcPropertyAudit` outright (38 → 35 — four less, one new).
 
 With a single internal consumer there was no deprecation cost to
 honour, so the legacy wire surface was removed in the same commit as
@@ -150,9 +150,9 @@ action-discriminated primitives in later phases:
 | ~~`ghc_add_modules` + `ghc_remove_modules`~~ | ✅ landed: `modules { action: "add" \| "remove" }` (#94 Phase B) |
 | ~~`ghc_deps_explain`~~ | ✅ landed: `deps { action: "explain" }` (#94 Phase C) |
 | ~~`ghc_create_project` + `ghc_switch_project` + `ghc_validate_cabal` + `ghc_bootstrap`~~ | ✅ landed: `project { action: "create" \| "switch" \| "validate" \| "bootstrap" }` (#94 Phase C step 5) |
-| `ghc_property_lifecycle` + `ghc_regression` + `ghc_quickcheck_export` + `ghc_property_audit` | `property_store { action: "list" \| "drop" \| "run" \| "export" \| "audit" }` |
+| ~~`ghc_property_lifecycle` + `ghc_regression` + `ghc_quickcheck_export` + `ghc_property_audit`~~ | ✅ landed: `property_store { action: "list" \| "run" \| "export" \| "audit" }` (#94 Phase C step 6) |
 | ~~`ghc_toolchain_warmup` + `ghc_toolchain_status`~~ | ✅ landed: `ghc_toolchain { action: "status" \| "warmup" }` (#94 Phase C) |
 | ~~`ghc_move`~~ | ✅ landed: `refactor { action: "move_symbol" }` (#94 Phase C) |
 | ~~`ghc_determinism`~~ | ✅ landed: `quickcheck { runs: N }` (#94 Phase C) |
 
-Post-consolidation: **35 tools**, ~**26 distinct concepts**.
+Post-consolidation: **31 tools**, ~**22 distinct concepts**.

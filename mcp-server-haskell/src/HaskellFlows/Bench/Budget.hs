@@ -76,9 +76,6 @@ allBudgets = Map.fromList
   , ( GhcWorkflow
     , ToolBudget  50  200   Nothing
         "inventory scan; no GHCi interaction")
-  , ( GhcRegression
-    , ToolBudget 300 1000   Nothing
-        "replay stored property set; size-dependent on store")
   , ( GhcCheckModule
     , ToolBudget 500 1500   Nothing
         "strict load + warning gate + property replay")
@@ -94,9 +91,6 @@ allBudgets = Map.fromList
   , ( GhcGate
     , ToolBudget 8000 15000 Nothing
         "cabal test + cabal build; scales with project size")
-  , ( GhcQuickCheckExport
-    , ToolBudget 200  500   Nothing
-        "materialise test/Spec.hs from property store; I/O only")
   , ( GhcDeps
     , ToolBudget 1500 3000  Nothing
         "cabal solver invocation; version-constraint resolution")
@@ -154,9 +148,15 @@ allBudgets = Map.fromList
         \bootstrap was 50/200) — all four share a 'no GHCi, light \
         \subprocess' profile so we keep the worst-case bound rather \
         \than per-action thresholds.")
-  , ( GhcPropertyLifecycle
-    , ToolBudget 100  300   Nothing
-        "property store list/drop; file I/O only")
+  , ( GhcPropertyStore
+    , ToolBudget 1000 3000  Nothing
+        "#94 Phase C step 6: action-discriminated successor to \
+        \ghc_property_lifecycle + ghc_regression + \
+        \ghc_quickcheck_export + ghc_property_audit. Budget covers \
+        \the worst-case branch — 'audit' (300/1000) and 'run' \
+        \(300/1000 with cabal-repl per-property cost) dominate; \
+        \'list'/'export' are pure I/O. We pick 1000/3000 as the \
+        \action-agnostic upper bound to avoid per-action thresholds.")
   , ( GhcLab
     , ToolBudget 5000 15000 Nothing
         "per-binding suggest + QC across whole module; scales with module size")
@@ -166,9 +166,6 @@ allBudgets = Map.fromList
   , ( GhcPerf
     , ToolBudget 3000 8000  Nothing
         "expression eval x30 samples via cabal-repl harness")
-  , ( GhcPropertyAudit
-    , ToolBudget 300 1000   Nothing
-        "pair-wise contradiction probe over property store")
   , ( GhcWitness
     , ToolBudget 4000 10000 Nothing
         "property eval x1000 with distribution labelling; cabal-repl harness")

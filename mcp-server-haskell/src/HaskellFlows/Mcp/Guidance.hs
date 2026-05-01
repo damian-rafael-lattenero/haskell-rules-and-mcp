@@ -72,14 +72,17 @@ situationTable =
                  GhcQuickCheck
                  "property=\"...\", runs=5"
   , SituationRow "replay persisted properties"
-                 GhcRegression
+                 GhcPropertyStore
                  "action=\"run\""
   , SituationRow "materialize test/Spec.hs"
-                 GhcQuickCheckExport
-                 "(no args)"
-  , SituationRow "property store lifecycle (list/drop)"
-                 GhcPropertyLifecycle
+                 GhcPropertyStore
+                 "action=\"export\""
+  , SituationRow "list persisted property store"
+                 GhcPropertyStore
                  "action=\"list\""
+  , SituationRow "audit property store for contradictions"
+                 GhcPropertyStore
+                 "action=\"audit\""
   , SituationRow "rename a local binding"
                  GhcRefactor
                  "action=\"rename_local\", scope_line_start=, scope_line_end="

@@ -172,9 +172,9 @@ renderHelp s = concat
     ]
   , [ "You've persisted " <> tshow (wsPassedProperties s) <> " \
       \passing properties in this session. Consider \
-      \ghc_regression(action=\"run\") to confirm none regressed, \
-      \then ghc_quickcheck_export to materialise them as a \
-      \test/Spec.hs."
+      \ghc_property_store(action=\"run\") to confirm none regressed, \
+      \then ghc_property_store(action=\"export\") to materialise \
+      \them as a test/Spec.hs."
     | wsPassedProperties s >= 3
     ]
     -- BUG-08: history-pattern nudges.
@@ -275,7 +275,7 @@ renderPhaseHint p = case p of
     \ghc_quickcheck for flakiness check before adding to the \
     \regression suite."
   PhaseReadyToPush ->
-    "Phase: ready to push. ghc_regression(action=\"run\") replays \
-    \the full set; ghc_quickcheck_export materialises them as \
-    \test/Spec.hs; ghc_gate runs regression + cabal test + cabal \
-    \build in one call — if green, push is safe."
+    "Phase: ready to push. ghc_property_store(action=\"run\") \
+    \replays the full set; ghc_property_store(action=\"export\") \
+    \materialises them as test/Spec.hs; ghc_gate runs regression + \
+    \cabal test + cabal build in one call — if green, push is safe."

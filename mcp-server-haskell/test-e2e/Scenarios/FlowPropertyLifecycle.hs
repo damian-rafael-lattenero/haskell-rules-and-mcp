@@ -73,7 +73,7 @@ runFlow c projectDir = do
   -- ghc_property_lifecycle — inspect the store.
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "ghc_property_lifecycle (inspect store)"
-  r <- Client.callTool c GhcPropertyLifecycle (object [])
+  r <- Client.callTool c GhcPropertyStore (object [ "action" .= ("list" :: Text) ])
   c1 <- liveCheck $ checkJsonField "success" r "success" (Bool True)
   c2 <- liveCheck $ checkJsonFieldMatches
           "store has ≥ 1 property"

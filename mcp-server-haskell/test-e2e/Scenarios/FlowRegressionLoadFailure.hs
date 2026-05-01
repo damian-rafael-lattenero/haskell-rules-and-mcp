@@ -68,8 +68,8 @@ runFlow c projectDir = do
   -- Step 3 — run the regression. The property must NOT be
   -- counted as a regression; it must surface under load_failed.
   t0 <- stepHeader 1 "ghc_regression(run) classifies load failure (#51)"
-  r <- Client.callTool c GhcRegression
-         (object [ "action" .= ("run" :: Text) ])
+  r <- Client.callTool c GhcPropertyStore
+         (object [ "action" .= ("run" :: Text), "action" .= ("run" :: Text) ])
   let regressions     = arrayLen "regressions" r
       loadFailed      = arrayLen "load_failed" r
       noRegressions   = regressions == 0

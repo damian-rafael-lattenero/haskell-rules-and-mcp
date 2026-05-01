@@ -65,7 +65,7 @@ That writes `.claude/rules/haskell-flows-mcp.md` from content baked
 into the running binary — always in sync with the tool surface you
 actually have.
 
-## Tool surface (35 tools)
+## Tool surface (31 tools)
 
 Grouped by workflow phase. Every one of these is dispatchable through
 `tools/call`; `tools/list` returns the authoritative registry.
@@ -122,11 +122,8 @@ Grouped by workflow phase. Every one of these is dispatchable through
 | Tool                       | Purpose |
 |----------------------------|---------|
 | `ghc_suggest`             | QuickCheck laws a function's signature implies (incl. sibling-aware evaluator preservation + constant-folding soundness) |
-| `ghc_quickcheck`          | Run a property; auto-persist on pass |
-| `ghc_determinism`         | Re-run N times to catch flakiness before adopting a property |
-| `ghc_regression`          | `list` / `run` the persisted property set |
-| `ghc_quickcheck_export`   | Materialise `test/Spec.hs` from the regression store |
-| `ghc_property_lifecycle`  | Inspect / drop entries in the property store |
+| `ghc_quickcheck`          | Run a property; auto-persist on pass. Pass `runs >= 2` to repeat the property for flakiness detection. |
+| `ghc_property_store`      | Property-store lifecycle: `action=list` (introspect), `action=run` (replay every persisted property), `action=export` (materialise `test/Spec.hs`), `action=audit` (pairwise contradiction probe) |
 
 ### Composition
 

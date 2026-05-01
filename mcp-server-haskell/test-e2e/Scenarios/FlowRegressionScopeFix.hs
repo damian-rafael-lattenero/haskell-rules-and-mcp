@@ -131,7 +131,7 @@ runFlow c projectDir = do
   --     path (test/Spec.hs), not the wrong hint the caller passed
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "fix #1 · ghc_regression list reports resolved module"
-  listR <- Client.callTool c GhcRegression
+  listR <- Client.callTool c GhcPropertyStore
              (object [ "action" .= ("list" :: Text) ])
   -- 'ghc_quickcheck' auto-resolves via ':info prop_trivial', which
   -- returns the ABSOLUTE path to test/Spec.hs. Both the relative
@@ -175,8 +175,8 @@ runFlow c projectDir = do
   --     the stored module before each property
   ----------------------------------------------------------------
   t4 <- stepHeader 5 "fix #2a · ghc_regression run passes 1/1 despite scope shift"
-  runR <- Client.callTool c GhcRegression
-            (object [ "action" .= ("run" :: Text) ])
+  runR <- Client.callTool c GhcPropertyStore
+            (object [ "action" .= ("run" :: Text), "action" .= ("run" :: Text) ])
   let runPassed      = fieldInt "passed" runR == Just 1
       runTotal       = fieldInt "total"  runR == Just 1
       runRegressions = fieldArrayLen "regressions" runR == Just 0
