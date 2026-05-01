@@ -1,0 +1,203 @@
+mcp-server-haskell/test-e2e/Scenarios/FlowTypeAfterLoadDeps.hs
+  b9182aefd71cfb20 68-69
+mcp-server-haskell/test-e2e/Scenarios/FlowRemoveModulesDownstream.hs
+  b9182aefd71cfb20 52-53
+mcp-server-haskell/test-e2e/Scenarios/FlowBrowseInteractive.hs
+  b9182aefd71cfb20 42-43
+mcp-server-haskell/test-e2e/Scenarios/FlowCreateProjectGreen.hs
+  b9182aefd71cfb20 38-39,42
+mcp-server-haskell/test-e2e/Scenarios/FlowSwitchProjectStore.hs
+  b9182aefd71cfb20 65-66,93-94,134-135
+mcp-server-haskell/test-e2e/Scenarios/FlowRegressionScopeFix.hs
+  b9182aefd71cfb20 92-93
+mcp-server-haskell/src/HaskellFlows/Tool/Project.hs
+  033795528ddcaec0 3,8,15,30-33,35-45,53-60,64,74-79,87-88,91-96,101-106,115,117,121,123-124
+  b9182aefd71cfb20 1-2,4-7,9-14,16-29,34,46-52,61-63,65-73,80-86,89-90,97-100,107-114,116,118-120,122,125-131
+mcp-server-haskell/src/HaskellFlows/Mcp/ToolName.hs
+  b9182aefd71cfb20 84-90,140,229-231,303
+mcp-server-haskell/test-e2e/Scenarios/FlowCreateProjectNameValidation.hs
+  b9182aefd71cfb20 44-45,67-68,81-82,95-96
+mcp-server-haskell/test-e2e/Scenarios/FlowTimeoutEnforcement.hs
+  b9182aefd71cfb20 55-56
+mcp-server-haskell/test-e2e/Scenarios/FlowScopeMgmt.hs
+  b9182aefd71cfb20 81-82
+mcp-server-haskell/test-e2e/Scenarios/FlowGateNoCrash.hs
+  b9182aefd71cfb20 45-46
+mcp-server-haskell/test-e2e/Scenarios/FlowANSIEscape.hs
+  b9182aefd71cfb20 83-84
+mcp-server-haskell/test-e2e/Scenarios/FlowBootstrapDocs.hs
+  b9182aefd71cfb20 46-47
+mcp-server-haskell/benchmarks/Main.hs
+  b9182aefd71cfb20 105
+mcp-server-haskell/test-e2e/Scenarios/FlowCrossClientStringification.hs
+  b9182aefd71cfb20 76-77
+mcp-server-haskell/test-e2e/Scenarios/FlowWitness.hs
+  b9182aefd71cfb20 42-43
+mcp-server-haskell/test-e2e/Scenarios/FlowBootstrap.hs
+  b9182aefd71cfb20 39-40,62-63,81-82,99-100
+mcp-server-haskell/src/HaskellFlows/Tool/SwitchProject.hs
+  b9182aefd71cfb20 42,74-79
+mcp-server-haskell/test-e2e/Scenarios/FlowRefactorOutOfScope.hs
+  b9182aefd71cfb20 66-67
+mcp-server-haskell/test-e2e/Scenarios/FlowHoleFitsBoundary.hs
+  b9182aefd71cfb20 58-59
+mcp-server-haskell/test-e2e/Scenarios/FlowPropertyStoreRace.hs
+  b9182aefd71cfb20 61-62
+mcp-server-haskell/src/HaskellFlows/Mcp/WorkflowState.hs
+  b9182aefd71cfb20 257-259
+mcp-server-haskell/src/HaskellFlows/Tool/Bootstrap.hs
+  b9182aefd71cfb20 24,53-58
+mcp-server-haskell/test-e2e/Scenarios/FlowSuggestSelfInverseDampening.hs
+  b9182aefd71cfb20 66-67
+mcp-server-haskell/README.md
+  b9182aefd71cfb20 61,68,78-79
+mcp-server-haskell/test-e2e/Scenarios/FlowExplainError.hs
+  b9182aefd71cfb20 48-49
+mcp-server-haskell/test-e2e/Scenarios/FlowDogfoodReplay.hs
+  b9182aefd71cfb20 226-227,242,244-245,282
+mcp-server-haskell/test-e2e/Scenarios/FlowBatch.hs
+  b9182aefd71cfb20 54-55
+mcp-server-haskell/test-e2e/Scenarios/FlowLoadHoleDiagnostics.hs
+  b9182aefd71cfb20 60-61
+mcp-server-haskell/test-e2e/Scenarios/FlowRefactor.hs
+  b9182aefd71cfb20 82-83
+mcp-server-haskell/test-e2e/Scenarios/FlowSuggestAssocOuter.hs
+  b9182aefd71cfb20 61-62
+mcp-server-haskell/test-e2e/Scenarios/FlowQuickCheckExportImports.hs
+  b9182aefd71cfb20 54-55
+mcp-server-haskell/src/HaskellFlows/Bench/Budget.hs
+  b9182aefd71cfb20 147-156
+mcp-server-haskell/test-e2e/Scenarios/FlowLabAudit.hs
+  b9182aefd71cfb20 54-55
+README.md
+  b9182aefd71cfb20 29,98,130
+mcp-server-haskell/test-e2e/Scenarios/FlowTypedHoles.hs
+  b9182aefd71cfb20 85-86
+mcp-server-haskell/test-e2e/Scenarios/FlowInfoClass.hs
+  b9182aefd71cfb20 49-50
+mcp-server-haskell/test-e2e/Scenarios/ExprEvaluator.hs
+  b9182aefd71cfb20 171-172
+mcp-server-haskell/src/HaskellFlows/Mcp/NextStep.hs
+  b9182aefd71cfb20 180-191,528-597
+mcp-server-haskell/test/Spec.hs
+  b9182aefd71cfb20 5980,6298-6301,6371-6374,6386-6389,6442-6444,8432,8833-8837,10673-10676,10714,10726,10749,10759,10813-10814,10816-10818,10867,10875-10879
+mcp-server-haskell/src/HaskellFlows/Tool/CreateProject.hs
+  b9182aefd71cfb20 25,50-55
+docs/TOOL_TAXONOMY.md
+  b9182aefd71cfb20 56,113,117,130-132,148,150,152,158
+mcp-server-haskell/test-e2e/Scenarios/FlowArbitrary.hs
+  b9182aefd71cfb20 87-88
+mcp-server-haskell/test-e2e/Scenarios/FlowRegressionLoadFailure.hs
+  b9182aefd71cfb20 54-55
+mcp-server-haskell/test-e2e/Scenarios/FlowConcurrentClients.hs
+  b9182aefd71cfb20 67-68
+mcp-server-haskell/test-e2e/Scenarios/FlowDogfoodUxFixes.hs
+  b9182aefd71cfb20 60-62,64-66,73-75
+mcp-server-haskell/test-e2e/Scenarios/FlowModuleNameGuard.hs
+  b9182aefd71cfb20 60,62-63
+mcp-server-haskell/test-e2e/Scenarios/FlowDiskFull.hs
+  b9182aefd71cfb20 71-72
+mcp-server-haskell/test-e2e/Scenarios/FlowDependencyConflict.hs
+  b9182aefd71cfb20 81-82
+mcp-server-haskell/test-e2e/Scenarios/FlowGatesProperties.hs
+  b9182aefd71cfb20 60-61
+mcp-server-haskell/test-e2e/Scenarios/FlowMoveSymbol.hs
+  b9182aefd71cfb20 77-78
+mcp-server-haskell/test-e2e/Scenarios/FlowNonUTF8.hs
+  b9182aefd71cfb20 69-70
+mcp-server-haskell/src/HaskellFlows/Mcp/Guidance.hs
+  b9182aefd71cfb20 129-130,132-133,144-148
+mcp-server-haskell/test-e2e/Scenarios/FlowFixWarning.hs
+  b9182aefd71cfb20 48-49
+mcp-server-haskell/test-e2e/Scenarios/FlowGracefulMiss.hs
+  b9182aefd71cfb20 71-72
+mcp-server-haskell/test-e2e/Scenarios/FlowCheckModuleProperties.hs
+  b9182aefd71cfb20 45-46
+mcp-server-haskell/test-e2e/Scenarios/FlowOversizedInput.hs
+  b9182aefd71cfb20 87-88
+mcp-server-haskell/test-e2e/Scenarios/FlowCoverage.hs
+  b9182aefd71cfb20 87-88
+mcp-server-haskell/test-e2e/Scenarios/FlowPropertyAudit.hs
+  b9182aefd71cfb20 42-43
+mcp-server-haskell/test-e2e/Scenarios/FlowSwitchProject.hs
+  b9182aefd71cfb20 86-87,96-97,107,109-110,124-125,150-151,192-193
+mcp-server-haskell/test-e2e/Scenarios/FlowWorkflowHelp.hs
+  b9182aefd71cfb20 69-70
+mcp-server-haskell/test-e2e/Scenarios/FlowExploratory.hs
+  b9182aefd71cfb20 76-77
+mcp-server-haskell/test-e2e/Scenarios/FlowLoadNonexistent.hs
+  b9182aefd71cfb20 44-45
+mcp-server-haskell/src/HaskellFlows/Mcp/Server.hs
+  b9182aefd71cfb20 97,107,133,136,138,525-540,634-705,824
+mcp-server-haskell/test-e2e/Scenarios/FlowRefactorPreExistingError.hs
+  b9182aefd71cfb20 72-73
+mcp-server-haskell/test-e2e/Scenarios/FlowCrossValidation.hs
+  b9182aefd71cfb20 173-174
+mcp-server-haskell/test-e2e/Scenarios/FlowRefactorAdversarial.hs
+  b9182aefd71cfb20 117-118
+mcp-server-haskell/test-e2e/Scenarios/FlowFixWarningUnusedBinding.hs
+  b9182aefd71cfb20 60-61
+mcp-server-haskell/test-e2e/Scenarios/FlowMutation.hs
+  b9182aefd71cfb20 99-100
+mcp-server-haskell/test-e2e/Scenarios/FlowValidateCabal.hs
+  b9182aefd71cfb20 37-38,45,69
+mcp-server-haskell/test-e2e/Scenarios/FlowEvalContextDedup.hs
+  b9182aefd71cfb20 74-75
+mcp-server-haskell/src/HaskellFlows/Tool/ValidateCabal.hs
+  b9182aefd71cfb20 17,51-56
+mcp-server-haskell/test-e2e/Scenarios/FlowCabalRecovery.hs
+  b9182aefd71cfb20 49-50
+mcp-server-haskell/test-e2e/Scenarios/FlowPropertyLifecycle.hs
+  b9182aefd71cfb20 46-47
+mcp-server-haskell/test-e2e/Scenarios/FlowPerfBasic.hs
+  b9182aefd71cfb20 43-44
+mcp-server-haskell/test-e2e/Scenarios/FlowSandboxEscape.hs
+  b9182aefd71cfb20 70-71
+mcp-server-haskell/test-e2e/Scenarios/FlowTypeBreakage.hs
+  b9182aefd71cfb20 72-73
+mcp-server-haskell/test-e2e/Scenarios/FlowSessionRobustness.hs
+  b9182aefd71cfb20 60-61
+mcp-server-haskell/test-e2e/Scenarios/FlowInjectionGuard.hs
+  b9182aefd71cfb20 47-48
+mcp-server-haskell/test-e2e/Scenarios/FlowInfoConstructors.hs
+  b9182aefd71cfb20 52-53
+mcp-server-haskell/test-e2e/Scenarios/FlowExprEvaluatorDogfood.hs
+  b9182aefd71cfb20 76,78-79
+mcp-server-haskell/test-e2e/Scenarios/FlowQualityGates.hs
+  b9182aefd71cfb20 88-89
+mcp-server-haskell/haskell-flows-mcp.cabal
+  b9182aefd71cfb20 107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "41e713aaf5101e07de538e21e8033aea422db568",
+  "prompts": {
+    "033795528ddcaec0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c2325b8-3973-461e-9af9-e12d8c594bf0",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 119,
+      "total_deletions": 7,
+      "accepted_lines": 52,
+      "overriden_lines": 0
+    },
+    "b9182aefd71cfb20": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3348794-a74f-41bc-8f83-210435252065",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 38793,
+      "total_deletions": 542,
+      "accepted_lines": 12195,
+      "overriden_lines": 3
+    }
+  }
+}
