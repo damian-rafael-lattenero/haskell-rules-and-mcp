@@ -74,8 +74,8 @@ runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
   -- Step 1 — scaffold + register Source / Dest / Consumer +
   -- write all sources.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("move-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("move-demo" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["Source", "Dest", "Consumer"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")

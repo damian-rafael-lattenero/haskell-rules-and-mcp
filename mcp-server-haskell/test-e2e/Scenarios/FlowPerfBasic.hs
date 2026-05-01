@@ -40,8 +40,8 @@ import HaskellFlows.Mcp.ToolName (ToolName (..))
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
   -- Step 1 — scaffold + simple library module.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("perf-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("perf-demo" :: Text) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Demo.hs") $ T.unlines
     [ "module Demo where"

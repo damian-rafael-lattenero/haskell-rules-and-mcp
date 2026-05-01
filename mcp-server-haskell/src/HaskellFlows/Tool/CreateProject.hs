@@ -22,8 +22,7 @@
 -- * @overwrite=false@ is the safe default; an existing file in the
 --   way makes the tool fail loudly rather than clobber work.
 module HaskellFlows.Tool.CreateProject
-  ( descriptor
-  , handle
+  ( handle
   , CreateArgs (..)
     -- * Issue #58 — Hackage-conformant package-name validation
   , validateName
@@ -46,46 +45,14 @@ import System.FilePath ((</>), takeDirectory)
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcCreateProject
-    , tdDescription =
-        "Scaffold a minimal cabal project (library + test-suite) in the "
-          <> "current project directory. Creates <name>.cabal, "
-          <> "cabal.project, src/<Module>.hs, and test/Spec.hs."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "name" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Package name (Hackage shape: letters + digits \
-                       \+ hyphen, must start with a letter)." :: Text)
-                  ]
-              , "module" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Top-level module name. Default: derived from the \
-                       \package name by PascalCase-ing the segments."
-                       :: Text)
-                  ]
-              , "overwrite" .= object
-                  [ "type"        .= ("boolean" :: Text)
-                  , "description" .=
-                      ("If true, overwrite existing scaffolded files. \
-                       \Default: false — fails if any target already exists."
-                       :: Text)
-                  ]
-              ]
-          , "required"             .= ["name" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
+-- | #94 Phase C step 5: this module's @descriptor@ was retired
+-- when the four legacy project-lifecycle tools were merged into
+-- 'HaskellFlows.Tool.Project'. The 'handle' function below is now
+-- invoked indirectly via 'Server.dispatchProject' when the agent
+-- calls @ghc_project(action=\"create\", …)@. Behaviour is
+-- byte-identical to the legacy @ghc_create_project@ surface.
 
 data CreateArgs = CreateArgs
   { caName      :: !Text

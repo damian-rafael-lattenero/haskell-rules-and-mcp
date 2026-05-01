@@ -63,8 +63,8 @@ runFlow c projectDir = do
   -- (1) scaffold + write a module with a known binding
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Foo.hs (fooBar is the only local)"
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("oos-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("oos-demo" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["Foo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")

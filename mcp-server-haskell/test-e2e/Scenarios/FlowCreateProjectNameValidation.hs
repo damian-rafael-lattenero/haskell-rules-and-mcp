@@ -41,8 +41,8 @@ runFlow c projectDir = do
   -- Step 1 — uppercase name must be rejected; .cabal must NOT be
   -- written.
   t0 <- stepHeader 1 "ghc_create_project rejects uppercase name (#58)"
-  rUpper <- Client.callTool c GhcCreateProject
-              (object [ "name" .= ("Bad-Name" :: Text) ])
+  rUpper <- Client.callTool c GhcProject
+              (object [ "action" .= ("create" :: Text), "name" .= ("Bad-Name" :: Text) ])
   let okShape = statusOk rUpper == Just False
       errMsg  = lookupString "error" rUpper
       msgOK   = case errMsg of
@@ -64,8 +64,8 @@ runFlow c projectDir = do
 
   -- Step 2 — consecutive hyphens.
   t1 <- stepHeader 2 "ghc_create_project rejects double hyphen (#58)"
-  rDouble <- Client.callTool c GhcCreateProject
-               (object [ "name" .= ("foo--bar" :: Text) ])
+  rDouble <- Client.callTool c GhcProject
+               (object [ "action" .= ("create" :: Text), "name" .= ("foo--bar" :: Text) ])
   let dblOK = statusOk rDouble == Just False
             && case lookupString "error" rDouble of
                  Just m -> T.isInfixOf "consecutive hyphens" m
@@ -78,8 +78,8 @@ runFlow c projectDir = do
 
   -- Step 3 — leading digit.
   t2 <- stepHeader 3 "ghc_create_project rejects leading digit (#58)"
-  rDigit <- Client.callTool c GhcCreateProject
-              (object [ "name" .= ("9pkg" :: Text) ])
+  rDigit <- Client.callTool c GhcProject
+              (object [ "action" .= ("create" :: Text), "name" .= ("9pkg" :: Text) ])
   let digitOK = statusOk rDigit == Just False
               && case lookupString "error" rDigit of
                    Just m -> T.isInfixOf "lowercase letter" m
@@ -92,8 +92,8 @@ runFlow c projectDir = do
 
   -- Step 4 — happy path: a canonical name still works.
   t3 <- stepHeader 4 "ghc_create_project accepts lowercase-hyphen name (#58)"
-  rOk <- Client.callTool c GhcCreateProject
-           (object [ "name" .= ("good-pkg" :: Text) ])
+  rOk <- Client.callTool c GhcProject
+           (object [ "action" .= ("create" :: Text), "name" .= ("good-pkg" :: Text) ])
   let okFlag = statusOk rOk == Just True
   cabalLanded <- doesFileExist (projectDir <> "/good-pkg.cabal")
   cOk <- liveCheck $ checkPure

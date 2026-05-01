@@ -177,33 +177,18 @@ suggestNext toolName ok payload
 dispatch :: ToolName -> Value -> Maybe NextStep
 dispatch name payload = case name of
 
-  -- New scaffold → project-bootstrap chain: add the most common
-  -- test-suite dep, register the first module, load to confirm.
-  -- The agent can execute the three steps one by one OR hand the
-  -- chain to ghc_batch for a single round-trip.
-  GhcCreateProject -> Just (chained
-    GhcDeps
-    "Your scaffold has only `base`. Add the deps you need (QuickCheck \
-    \for tests, runtime libraries for the library stanza) before \
-    \wiring up modules. The attached chain is the canonical \
-    \project-bootstrap plan — you can batch it via ghc_batch."
-    (Just (object
-        [ "action"  .= ("add" :: Text)
-        , "package" .= ("QuickCheck" :: Text)
-        , "version" .= (">= 2.14" :: Text)
-        , "stanza"  .= ("test-suite" :: Text)
-        ]))
-    [ step GhcDeps (object
-        [ "action"  .= ("add" :: Text)
-        , "package" .= ("QuickCheck" :: Text)
-        , "version" .= (">= 2.14" :: Text)
-        , "stanza"  .= ("test-suite" :: Text) ])
-    , step GhcModules (object
-        [ "action"  .= ("add" :: Text)
-        , "modules" .= (["<Module.Name>"] :: [Text]) ])
-    , step GhcLoad (object
-        [ "module_path" .= ("<path to your entry module>" :: Text) ])
-    ])
+  -- #94 Phase C step 5: ghc_project — action-discriminated, so the
+  -- nextStep depends on which action just ran. We discriminate by
+  -- payload shape because the args aren't in scope here:
+  --   * 'scaffolded' field present → switch
+  --   * 'host' field present       → bootstrap
+  --   * 'errors'/'warnings' fields → validate
+  --   * otherwise (cabal_path/...) → create
+  --
+  -- The hints below are byte-for-byte ports of the per-tool nextStep
+  -- arms that lived here pre-consolidation; only the dispatch
+  -- discriminator changed.
+  GhcProject -> projectNext payload
 
   -- After editing deps, reload to pick up the new package graph.
   GhcDeps -> case depsAction payload of
@@ -359,15 +344,6 @@ dispatch name payload = case name of
     \gives you the next action tailored to the session's current \
     \state (alive GHCi, loaded modules, etc)."
     (Just (object [ "action" .= ("help" :: Text) ])))
-
-  -- Cabal validated → if clean, proceed with deps / build.
-  GhcValidateCabal -> case cabalErrors payload of
-    Just n | n > 0 -> Just (simple GhcDeps
-      "The .cabal file has errors. Fix them via 'ghc_deps' rather \
-      \than editing by hand — the post-edit invariant check catches \
-      \shape bugs before they land."
-      (Just (object [ "action" .= ("list" :: Text) ])))
-    _ -> Nothing
 
   -- Lint surface → interpret yourself; no one-shot fix.
   GhcLint -> Nothing
@@ -536,13 +512,6 @@ dispatch name payload = case name of
       (Just (object [ "action" .= ("run" :: Text) ])))
     _ -> Nothing
 
-  -- Bootstrap — previewed content; suggest writing or moving on.
-  GhcBootstrap -> Just (simple GhcWorkflow
-    "Host rules preview emitted. Re-run with write=true to persist \
-    \them under .claude/ or .cursor/, then 'ghc_workflow(help)' for \
-    \the next project-level step."
-    (Just (object [ "action" .= ("help" :: Text) ])))
-
   -- Workflow meta — would loop if we suggested itself.
   GhcWorkflow -> Nothing
 
@@ -556,27 +525,76 @@ dispatch name payload = case name of
   HoogleSearch -> Nothing
   GhcCoverage -> Nothing
 
-  -- Just switched projects. Branch on the payload's 'scaffolded'
-  -- flag (set by 'Tool.SwitchProject.successResult'):
-  --   * Scaffolded → 'ghc_workflow(status)' is the
-  --     orient-yourself step.
-  --   * Empty dir → 'ghc_create_project' is the canonical next
-  --     action; pointing at status would surface a PhasePreScaffold
-  --     with no actionable hint.
-  GhcSwitchProject
-    | envField "scaffolded" payload == Just (Bool False) ->
-        Just (simple GhcCreateProject
-          "Switched to an empty directory. Scaffold a fresh cabal \
-          \package here with 'ghc_create_project' (library + \
-          \test-suite stub) before any other tool has something \
-          \to load."
-          (Just (object [ "name" .= ("<pkg-name>" :: Text) ])))
-    | otherwise ->
-        Just (simple GhcWorkflow
-          "Project root swapped. Ask 'ghc_workflow(status)' to \
-          \orient yourself in the new project: phase classifier, \
-          \tools active, and staleness check against the new .cabal."
-          (Just (object [ "action" .= ("status" :: Text) ])))
+-- | #94 Phase C step 5: pick the right next-step based on which
+-- 'ghc_project' action ran. We discriminate by payload shape:
+--
+--   * @scaffolded@ field present → @action=switch@ ran.
+--   * @host@ field present       → @action=bootstrap@ ran.
+--   * @errors@ field is an Int   → @action=validate@ ran.
+--   * otherwise                  → @action=create@ ran (the response
+--                                   has @cabal_path@ etc but no
+--                                   single field is reliably
+--                                   discriminative; we treat 'create'
+--                                   as the catch-all).
+projectNext :: Value -> Maybe NextStep
+projectNext payload
+  -- switch
+  | Just (Bool False) <- envField "scaffolded" payload =
+      Just (simple GhcProject
+        "Switched to an empty directory. Scaffold a fresh cabal \
+        \package here with 'ghc_project(action=create)' (library + \
+        \test-suite stub) before any other tool has something \
+        \to load."
+        (Just (object
+            [ "action" .= ("create" :: Text)
+            , "name"   .= ("<pkg-name>" :: Text)
+            ])))
+  | Just _ <- envField "scaffolded" payload =
+      Just (simple GhcWorkflow
+        "Project root swapped. Ask 'ghc_workflow(status)' to \
+        \orient yourself in the new project: phase classifier, \
+        \tools active, and staleness check against the new .cabal."
+        (Just (object [ "action" .= ("status" :: Text) ])))
+  -- bootstrap
+  | Just _ <- envField "host" payload =
+      Just (simple GhcWorkflow
+        "Host rules preview emitted. Re-run with write=true to persist \
+        \them under .claude/ or .cursor/, then 'ghc_workflow(help)' for \
+        \the next project-level step."
+        (Just (object [ "action" .= ("help" :: Text) ])))
+  -- validate (errors > 0)
+  | Just n <- cabalErrors payload, n > 0 =
+      Just (simple GhcDeps
+        "The .cabal file has errors. Fix them via 'ghc_deps' rather \
+        \than editing by hand — the post-edit invariant check catches \
+        \shape bugs before they land."
+        (Just (object [ "action" .= ("list" :: Text) ])))
+  -- validate (clean) — suppress
+  | Just _ <- envField "errors" payload = Nothing
+  -- create — everything else
+  | otherwise = Just (chained
+      GhcDeps
+      "Your scaffold has only `base`. Add the deps you need (QuickCheck \
+      \for tests, runtime libraries for the library stanza) before \
+      \wiring up modules. The attached chain is the canonical \
+      \project-bootstrap plan — you can batch it via ghc_batch."
+      (Just (object
+          [ "action"  .= ("add" :: Text)
+          , "package" .= ("QuickCheck" :: Text)
+          , "version" .= (">= 2.14" :: Text)
+          , "stanza"  .= ("test-suite" :: Text)
+          ]))
+      [ step GhcDeps (object
+          [ "action"  .= ("add" :: Text)
+          , "package" .= ("QuickCheck" :: Text)
+          , "version" .= (">= 2.14" :: Text)
+          , "stanza"  .= ("test-suite" :: Text) ])
+      , step GhcModules (object
+          [ "action"  .= ("add" :: Text)
+          , "modules" .= (["<Module.Name>"] :: [Text]) ])
+      , step GhcLoad (object
+          [ "module_path" .= ("<path to your entry module>" :: Text) ])
+      ])
 
 -- | 'ghc_gate' payload carries per-step status. On green, push is
 -- unblocked; on red, the agent should narrow down per module.

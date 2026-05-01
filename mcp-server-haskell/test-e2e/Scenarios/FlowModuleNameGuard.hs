@@ -57,9 +57,10 @@ runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
   -- Fresh scaffolded project — gives us a real .cabal we can
   -- snapshot before/after each adversarial call.
-  _ <- Client.callTool c GhcCreateProject
+  _ <- Client.callTool c GhcProject
          (object
-           [ "name"   .= ("modname-guard-demo" :: Text)
+                    [ "action" .= ("create" :: Text)
+           , "name"   .= ("modname-guard-demo" :: Text)
            , "module" .= ("Foo" :: Text)
            ])
   let cabalFile = projectDir </> "modname-guard-demo.cabal"

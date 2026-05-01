@@ -80,8 +80,8 @@ runFlow c projectDir = do
   oldTerm <- lookupEnv "TERM"
   setEnv "TERM" "xterm-256color"
 
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("ansi-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("ansi-demo" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["Broken"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")

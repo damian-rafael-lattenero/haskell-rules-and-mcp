@@ -94,6 +94,7 @@ import qualified HaskellFlows.Tool.ApplyExports    as ApplyExportsTool
 import qualified HaskellFlows.Tool.Arbitrary       as ArbitraryTool
 import qualified HaskellFlows.Tool.Batch           as BatchTool
 import qualified HaskellFlows.Tool.Bootstrap       as BootstrapTool
+  -- ^ #94 Phase C step 5: invoked indirectly via ProjectTool dispatch.
 import qualified HaskellFlows.Tool.Browse          as BrowseTool
 import qualified HaskellFlows.Tool.Determinism     as DeterminismTool
 import qualified HaskellFlows.Tool.PropertyLifecycle as PropertyLifecycleTool
@@ -103,6 +104,7 @@ import qualified HaskellFlows.Tool.CheckProject    as CheckProjectTool
 import qualified HaskellFlows.Tool.Complete        as CompleteTool
 import qualified HaskellFlows.Tool.Coverage        as CoverageTool
 import qualified HaskellFlows.Tool.CreateProject   as CreateProjectTool
+  -- ^ #94 Phase C step 5: invoked indirectly via ProjectTool dispatch.
 import qualified HaskellFlows.Tool.Deps            as DepsTool
 import qualified HaskellFlows.Tool.Doc             as DocTool
 import qualified HaskellFlows.Tool.Eval            as EvalTool
@@ -128,9 +130,12 @@ import qualified HaskellFlows.Tool.Regression      as RegressionTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
 import qualified HaskellFlows.Mcp.PathBootstrap    as PathBootstrap
 import qualified HaskellFlows.Tool.SwitchProject   as SwitchProjectTool
+  -- ^ #94 Phase C step 5: invoked indirectly via ProjectTool dispatch.
 import qualified HaskellFlows.Tool.Type            as TypeTool
 import qualified HaskellFlows.Tool.ValidateCabal   as ValidateCabalTool
+  -- ^ #94 Phase C step 5: invoked indirectly via ProjectTool dispatch.
 import qualified HaskellFlows.Tool.Workflow        as WorkflowTool
+import qualified HaskellFlows.Tool.Project         as ProjectTool
 
 -- | All mutable server state.
 --
@@ -461,12 +466,6 @@ dispatchByName srv args = \case
     -- changed it, so re-bootstrap on next session use.
     invalidateStanzaFlagsIfPresent srv
     pure r
-  GhcCreateProject -> do
-    pd <- readIORef (srvProjectDir srv)
-    r  <- CreateProjectTool.handle pd args
-    -- New project = completely different stanza set.
-    invalidateStanzaFlagsIfPresent srv
-    pure r
   GhcDoc -> do
     -- Phase-2 migrated: GHC.getDocs on the resolved Name.
     ghcSess <- getOrStartGhcSession srv
@@ -523,9 +522,22 @@ dispatchByName srv args = \case
     -- defaults action to "status" so an empty payload behaves the
     -- same as the old ghc_toolchain_status no-arg call.
     ToolchainTool.handle args
-  GhcValidateCabal -> do
-    pd <- readIORef (srvProjectDir srv)
-    ValidateCabalTool.handle pd args
+  GhcProject ->
+    -- #94 Phase C step 5: action-discriminated successor to
+    -- GhcCreateProject + GhcSwitchProject + GhcValidateCabal +
+    -- GhcBootstrap. The dispatch lives here (not inside Tool.Project)
+    -- because each underlying handler has a different signature with
+    -- respect to server state ('IORef ProjectDir', 'MVar GhcSession',
+    -- 'IORef Store', '[ToolDescriptor]'); bundling them into a
+    -- 'ProjectDir -> Value -> IO ToolResult' wrapper would have been
+    -- a cleaner-looking layering violation than this explicit per-arm
+    -- routing. Each branch preserves the original side-effect
+    -- semantics: 'create' invalidates stanza flags; 'switch' mutates
+    -- the project-dir / session / store refs directly inside its own
+    -- handler (we do NOT pre-read the project dir for it because the
+    -- handler tears the session down against the OLD path before
+    -- repointing).
+    dispatchProject srv args
   GhcCheckProject -> do
     -- Wave-5 full GhcSession (delegates to check_module per file).
     ghcSess <- getOrStartGhcSession srv
@@ -579,20 +591,6 @@ dispatchByName srv args = \case
   GhcPropertyLifecycle -> do
     store <- readIORef (srvStore srv)
     PropertyLifecycleTool.handle store args
-  GhcBootstrap -> do
-    pd <- readIORef (srvProjectDir srv)
-    BootstrapTool.handle pd allToolDescriptors args
-  GhcSwitchProject ->
-    -- SwitchProject is the one tool that mutates the project-dir
-    -- ref, the session MVar, AND (issue #39) the property store
-    -- ref — it takes those handles directly instead of going
-    -- through getOrStartGhcSession, which would boot a fresh
-    -- session against the OLD path right before we tear it down.
-    SwitchProjectTool.handle
-      (srvProjectDir srv)
-      (srvGhcSession srv)
-      (srvStore srv)
-      args
   GhcBatch ->
     -- Reachable only via 'dispatchTool' (e.g. when 'BatchTool.handle'
     -- ever recursed into the dispatcher). 'BatchTool' itself rejects
@@ -632,6 +630,78 @@ quickCheckRuns v = case v of
     Just (Number n) -> Just (round n)
     _               -> Nothing
   _ -> Nothing
+
+-- | #94 Phase C step 5: dispatch a 'ghc_project' call to the
+-- right legacy handler based on the @action@ discriminator.
+--
+-- We strip the @action@ field before delegating because each
+-- legacy handler enforces @additionalProperties: false@ via its
+-- own schema; leaving the field in place would surface as
+-- "unknown field" at parse time.
+--
+-- Side-effects per branch:
+--
+--   * @create@    — invalidates stanza flags (new project = new
+--     stanza set).
+--   * @switch@    — handler mutates the project-dir / session /
+--     store refs directly; we do NOT pre-read the project dir
+--     because the handler tears the session down against the OLD
+--     path before repointing.
+--   * @validate@  — read-only; no invalidation.
+--   * @bootstrap@ — read-only writes to a sidecar rules file; no
+--     invalidation.
+dispatchProject :: Server -> Value -> IO ToolResult
+dispatchProject srv rawArgs = case projectActionField rawArgs of
+  Nothing ->
+    pure (Env.toolResponseToResult
+      (Env.mkRefused
+        (Env.mkErrorEnvelope Env.MissingArg
+          "ghc_project requires an 'action' field \
+          \(one of 'create', 'switch', 'validate', 'bootstrap').")))
+  Just action ->
+    let inner = stripProjectAction rawArgs
+    in case action of
+         "create" -> do
+           pd <- readIORef (srvProjectDir srv)
+           r  <- CreateProjectTool.handle pd inner
+           invalidateStanzaFlagsIfPresent srv
+           pure r
+         "switch" ->
+           SwitchProjectTool.handle
+             (srvProjectDir srv)
+             (srvGhcSession srv)
+             (srvStore srv)
+             inner
+         "validate" -> do
+           pd <- readIORef (srvProjectDir srv)
+           ValidateCabalTool.handle pd inner
+         "bootstrap" -> do
+           pd <- readIORef (srvProjectDir srv)
+           BootstrapTool.handle pd allToolDescriptors inner
+         other ->
+           pure (Env.toolResponseToResult
+             (Env.mkRefused
+               (Env.mkErrorEnvelope Env.Validation
+                 ("Unknown ghc_project action: '" <> other
+                  <> "' (expected 'create', 'switch', 'validate', \
+                     \or 'bootstrap')."))))
+
+-- | Peek at the @action@ string of a 'ghc_project' payload without
+-- committing to a FromJSON parser. Returns 'Nothing' if the payload
+-- is not an object, the field is missing, or its value is not a
+-- string.
+projectActionField :: Value -> Maybe Text
+projectActionField (Object o) = case KeyMap.lookup "action" o of
+  Just (String s) -> Just s
+  _               -> Nothing
+projectActionField _ = Nothing
+
+-- | Drop the 'action' key from a 'ghc_project' payload before
+-- delegating to the legacy handler. Non-objects pass through so the
+-- delegate's own parser produces the canonical error.
+stripProjectAction :: Value -> Value
+stripProjectAction (Object o) = Object (KeyMap.delete "action" o)
+stripProjectAction v          = v
 
 extractResponseStatus :: Response -> Text
 extractResponseStatus resp = fromMaybe "ok" $ do
@@ -732,7 +802,6 @@ allToolDescriptors =
   , GateTool.descriptor
   , QcExportTool.descriptor
   , DepsTool.descriptor
-  , CreateProjectTool.descriptor
   , DocTool.descriptor
   , GotoTool.descriptor
   , RefactorTool.descriptor
@@ -744,17 +813,15 @@ allToolDescriptors =
   , BatchTool.descriptor
   , LintTool.descriptor
   , ToolchainTool.descriptor       -- #94 Phase C: action-discriminated successor
-  , ValidateCabalTool.descriptor
   , CheckProjectTool.descriptor
   , SuggestTool.descriptor
-  , SwitchProjectTool.descriptor
   , AddImportTool.descriptor
   , ApplyExportsTool.descriptor
   , FixWarningTool.descriptor
   , ImportsTool.descriptor
   , BrowseTool.descriptor
   , ModulesTool.descriptor       -- #94 Phase B: action-discriminated 'modules' primitive
-  , BootstrapTool.descriptor
+  , ProjectTool.descriptor       -- #94 Phase C step 5: action-discriminated 'project' primitive
   , PropertyLifecycleTool.descriptor
   ]
 

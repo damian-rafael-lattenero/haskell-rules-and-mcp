@@ -63,8 +63,8 @@ moduleSrc = T.unlines
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
   -- Step 1 — scaffold + plant the normalize function.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("damp-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("damp-demo" :: Text) ])
   TIO.writeFile (projectDir </> "src" </> "DampDemo.hs") moduleSrc
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["DampDemo"] :: [Text]) ])

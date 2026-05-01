@@ -65,8 +65,8 @@ runFlow c projectDir = do
   -- setup — scaffold + add aeson dep + register UsesAeson + load.
   --------------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + add aeson + register UsesAeson + load"
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("type-after-load" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("type-after-load" :: Text) ])
   _ <- Client.callTool c GhcDeps
          (object
            [ "action"  .= ("add" :: Text)

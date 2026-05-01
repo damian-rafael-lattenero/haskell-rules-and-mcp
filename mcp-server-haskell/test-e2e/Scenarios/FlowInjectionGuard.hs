@@ -44,8 +44,8 @@ import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _projectDir = do
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("injguard-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("injguard-demo" :: Text) ])
 
   ----------------------------------------------------------------
   -- (1) Newline injection via ghc_eval.

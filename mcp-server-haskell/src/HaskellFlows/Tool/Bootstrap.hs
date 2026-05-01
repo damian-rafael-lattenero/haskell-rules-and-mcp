@@ -21,8 +21,7 @@
 -- of target paths cannot be influenced by agent input beyond
 -- picking one of the enumerated values.
 module HaskellFlows.Tool.Bootstrap
-  ( descriptor
-  , handle
+  ( handle
   , BootstrapArgs (..)
   , Host (..)
   , pathForHost
@@ -40,7 +39,6 @@ import System.FilePath (takeDirectory)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Guidance (workflowRulesMarkdown)
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
 
 -- | Supported host targets. The enum is closed — adding a new
@@ -52,42 +50,12 @@ data Host
   | HostGeneric
   deriving stock (Eq, Show)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcBootstrap
-    , tdDescription =
-        "Self-install host-specific guidance files from content baked "
-          <> "into the MCP binary. Hosts: \"claude-code\" (writes "
-          <> ".claude/rules/haskell-flows-mcp.md), \"cursor\" "
-          <> "(.cursor/rules/haskell-flows-mcp.md), or \"generic\" "
-          <> "(returns the text without writing). Dry-run by default; "
-          <> "pass write=true to actually write the file. Content is "
-          <> "dynamically derived from the live tool registry — never "
-          <> "stale vs the running binary."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "host" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "enum"        .=
-                      (["claude-code", "cursor", "generic"] :: [Text])
-                  , "description" .= ("Target host convention." :: Text)
-                  ]
-              , "write" .= object
-                  [ "type"        .= ("boolean" :: Text)
-                  , "description" .=
-                      ("If true, write the file to disk under the \
-                       \project dir. If false (default), return the \
-                       \content so the agent can preview before \
-                       \committing." :: Text)
-                  ]
-              ]
-          , "required"             .= ["host" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
+-- | #94 Phase C step 5: this module's @descriptor@ was retired
+-- when the four legacy project-lifecycle tools were merged into
+-- 'HaskellFlows.Tool.Project'. The 'handle' function below is now
+-- invoked indirectly via 'Server.dispatchProject' when the agent
+-- calls @ghc_project(action=\"bootstrap\", …)@. Behaviour is
+-- byte-identical to the legacy @ghc_bootstrap@ surface.
 
 data BootstrapArgs = BootstrapArgs
   { baHost  :: !Host

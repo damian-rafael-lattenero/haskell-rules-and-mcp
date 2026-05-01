@@ -64,8 +64,8 @@ import HaskellFlows.Mcp.ToolName (ToolName (..))
 -- the concurrent leg.
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("concurrency-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("concurrency-demo" :: Text) ])
 
   -- Build a second client pointed at the same project dir. This
   -- models two real clients (e.g. two Claude Code windows, or a

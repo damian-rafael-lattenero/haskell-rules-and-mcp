@@ -39,8 +39,8 @@ import HaskellFlows.Mcp.ToolName (ToolName (..))
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
   -- Step 1 — scaffold so the property store has a home.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("audit-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("audit-demo" :: Text) ])
 
   -- Step 2 — empty-store call. The auditor reports zero pairs
   -- without trying to run any probe.

@@ -42,8 +42,8 @@ import HaskellFlows.Mcp.ToolName (ToolName (..))
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
   -- Step 1 — scaffold so we have a module to gate.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("check-prop-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("check-prop-demo" :: Text) ])
 
   -- Step 2 — plant a single passing property under the
   -- canonical module-name shape ("CheckPropDemo"). This is

@@ -58,8 +58,8 @@ import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("propstore-race-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("propstore-race-demo" :: Text) ])
 
   -- Second client pointed at the same project dir. Each client
   -- wraps an independent in-process Server, each with its own

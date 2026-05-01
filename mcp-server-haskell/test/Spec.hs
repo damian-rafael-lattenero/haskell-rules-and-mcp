@@ -5977,7 +5977,7 @@ testNextStepPropertyLifecycleList =
 testNextStepCreateProjectChain :: IO Bool
 testNextStepCreateProjectChain =
   let payload = A.object [ "success" .= True, "files_written" .= ([] :: [Text]) ]
-  in case suggestNext GhcCreateProject True payload of
+  in case suggestNext GhcProject True payload of
        Just ns ->
          pure $ nsTool ns == GhcDeps
              && case nsChain ns of
@@ -6295,7 +6295,10 @@ testNextStepRemoveModules =
 
 -- | Tool is in the registry.
 testBootstrapRegistered :: IO Bool
-testBootstrapRegistered = pure ("ghc_bootstrap" `elem` allToolNameTexts)
+testBootstrapRegistered = pure ("ghc_project" `elem` allToolNameTexts)
+  -- #94 Phase C step 5: ghc_bootstrap merged into
+  -- ghc_project(action="bootstrap"). The legacy wire surface is
+  -- gone; the action lives on inside the consolidated tool.
 
 -- | 'ghc_bootstrap(host="claude-code")' preview mode returns
 -- the live workflow markdown body (dynamically derived) and
@@ -6365,7 +6368,10 @@ testDocsMainReadme = do
   readme <- TIO.readFile "../README.md"
   pure $ T.isInfixOf "haskell-flows-mcp"          readme
       && T.isInfixOf "cabal install"              readme
-      && T.isInfixOf "ghc_bootstrap"             readme
+      && T.isInfixOf "ghc_project"                readme
+      -- ^ #94 Phase C step 5: ghc_bootstrap merged into
+      -- ghc_project(action=bootstrap); the README lists the new
+      -- name. The legacy 'ghc_bootstrap' string is gone.
       && not ("ghc_suggest(analyze)"             `T.isInfixOf` readme)
       && not ("ghc_workflow(action=\"gate\")"    `T.isInfixOf` readme)
       && not ("npm install"                       `T.isInfixOf` readme)
@@ -6377,7 +6383,10 @@ testDocsHaskellReadme :: IO Bool
 testDocsHaskellReadme = do
   readme <- TIO.readFile "README.md"
   pure $ T.isInfixOf "haskell-flows-mcp" readme
-      && T.isInfixOf "`ghc_bootstrap`"  readme
+      && T.isInfixOf "`ghc_project`"    readme
+      -- ^ #94 Phase C step 5: ghc_bootstrap merged into
+      -- ghc_project(action=bootstrap). README documents the new
+      -- consolidated tool name.
       && T.isInfixOf "`ghc_gate`"       readme
       && T.isInfixOf "`ghc_suggest`"    readme
       && T.isInfixOf "`ghc_modules`" readme
@@ -6430,7 +6439,9 @@ testNextStepFullCoverage = pure $
         , "ghc_deps"                 -- add/remove/list
         , "ghc_regression"           -- list/run
         , "ghc_property_lifecycle"   -- list/drop
-        , "ghc_validate_cabal"       -- errors > 0 vs clean
+        , "ghc_project"              -- create / switch / validate /
+                                     -- bootstrap; per-action shape
+                                     -- distinguishers test each branch
         , "ghc_quickcheck"           -- state = passed/failed
         ]
       -- A wholly-generic success payload. Intentionally omits
@@ -8418,7 +8429,7 @@ testSuggestEvaluatorNoSibling =
 testNextStepCreateProject :: IO Bool
 testNextStepCreateProject =
   let payload = A.object [ "success" .= True, "files_written" .= ([] :: [Text]) ]
-  in pure $ case suggestNext GhcCreateProject True payload of
+  in pure $ case suggestNext GhcProject True payload of
        Just ns -> nsTool ns == GhcDeps
        Nothing -> False
 
@@ -8819,7 +8830,11 @@ testSwitchProjectEmptyDir = do
   sp <- TIO.readFile "src/HaskellFlows/Tool/SwitchProject.hs"
   let nsCode = T.unlines (filter (not . isDocLine) (T.lines ns))
       spCode = T.unlines (filter (not . isDocLine) (T.lines sp))
-  pure $ T.isInfixOf "ghc_create_project" nsCode
+  -- #94 Phase C step 5: SwitchProject was merged into
+  -- ghc_project; the empty-dir → scaffold hint now points at
+  -- ghc_project(action=create) rather than the legacy
+  -- ghc_create_project tool.
+  pure $ T.isInfixOf "ghc_project(action=create)" nsCode
       && T.isInfixOf "\"scaffolded\"" nsCode
       && T.isInfixOf "\"scaffolded\"" spCode
   where
@@ -10655,10 +10670,10 @@ allDispatchedHints = catMaybes $
   , suggestNext GhcLoad True
       (object ["warnings" .=
         [object ["message" .= ("unused import" :: Text)]]])
-  -- GhcSwitchProject: empty directory (no cabal file → scaffold)
-  , suggestNext GhcSwitchProject True (object ["scaffolded" .= False])
-  -- GhcValidateCabal: cabal errors present
-  , suggestNext GhcValidateCabal True (object ["errors" .= (3 :: Int)])
+  -- GhcProject(action=switch): empty directory (no cabal file → scaffold)
+  , suggestNext GhcProject True (object ["scaffolded" .= False])
+  -- GhcProject(action=validate): cabal errors present
+  , suggestNext GhcProject True (object ["errors" .= (3 :: Int)])
   ]
 
 -- | Gate D: every 'nsWhy' string must be at least 10 characters long
@@ -10696,7 +10711,7 @@ type GoldenRow = (String, ToolName, Value, Maybe ToolName)
 goldenDispatchTable :: [GoldenRow]
 goldenDispatchTable =
   -- ── Default payload (object []) ──────────────────────────────────
-  [ ("create_project → deps chain",      GhcCreateProject,      object [],    Just GhcDeps)
+  [ ("project(create default) → deps chain", GhcProject,         object [],    Just GhcDeps)
   , ("deps(no-action) → suppressed",     GhcDeps,               object [],    Nothing)
   , ("load(clean) → suggest",            GhcLoad,               object [],    Just GhcSuggest)
   , ("hole → load",                      GhcHole,               object [],    Just GhcLoad)
@@ -10708,7 +10723,7 @@ goldenDispatchTable =
   , ("check_module → check_project",     GhcCheckModule,        object [],    Just GhcCheckProject)
   , ("check_project → gate chain",       GhcCheckProject,       object [],    Just GhcGate)
   , ("toolchain status → workflow",     GhcToolchain,          object [ "action" .= ("status" :: T.Text) ], Just GhcWorkflow)
-  , ("validate_cabal(clean) → suppress", GhcValidateCabal,      object [],    Nothing)
+  , ("project(validate clean) → suppress", GhcProject,          object [ "errors" .= (0 :: Int) ], Nothing)
   , ("lint → suppress",                  GhcLint,               object [],    Nothing)
   , ("format → load",                    GhcFormat,             object [],    Just GhcLoad)
   , ("batch → suppress",                 GhcBatch,              object [],    Nothing)
@@ -10731,7 +10746,7 @@ goldenDispatchTable =
   , ("imports → suppress",              GhcImports,            object [],    Nothing)
   , ("property_lifecycle(default) → suppress", GhcPropertyLifecycle, object [], Nothing)
   , ("toolchain warmup → workflow",     GhcToolchain,          object [ "action" .= ("warmup" :: T.Text) ], Just GhcWorkflow)
-  , ("bootstrap → workflow",            GhcBootstrap,          object [],    Just GhcWorkflow)
+  , ("project(bootstrap) → workflow",   GhcProject,            object [ "host" .= ("claude-code" :: T.Text) ], Just GhcWorkflow)
   , ("workflow → suppress",             GhcWorkflow,           object [],    Nothing)
   , ("type → suppress",                 GhcType,               object [],    Nothing)
   , ("info → suppress",                 GhcInfo,               object [],    Nothing)
@@ -10741,7 +10756,7 @@ goldenDispatchTable =
   , ("complete → suppress",             GhcComplete,           object [],    Nothing)
   , ("hoogle_search → suppress",        HoogleSearch,          object [],    Nothing)
   , ("coverage → suppress",             GhcCoverage,           object [],    Nothing)
-  , ("switch_project(default) → workflow", GhcSwitchProject,  object [],    Just GhcWorkflow)
+  , ("project(switch scaffolded) → workflow", GhcProject,    object [ "scaffolded" .= True ], Just GhcWorkflow)
   -- ── Variant payloads ─────────────────────────────────────────────
   , ("deps(add) → load",
         GhcDeps,
@@ -10795,12 +10810,12 @@ goldenDispatchTable =
         GhcAddImport,
         object ["count" .= (3 :: Int)],
         Just GhcLoad)
-  , ("switch_project(scaffolded=false) → create_project",
-        GhcSwitchProject,
+  , ("project(switch empty) → project(create)",
+        GhcProject,
         object ["scaffolded" .= False],
-        Just GhcCreateProject)
-  , ("validate_cabal(errors>0) → deps",
-        GhcValidateCabal,
+        Just GhcProject)
+  , ("project(validate errors>0) → deps",
+        GhcProject,
         object ["errors" .= (5 :: Int)],
         Just GhcDeps)
   ]
@@ -10849,7 +10864,7 @@ testEveryToolHasCategory = pure $
 -- Current breakdown: 36 primitives, 4 composites, 3 gates, 3 control-plane.
 testCategoryCountsMatchTaxonomy :: IO Bool
 testCategoryCountsMatchTaxonomy = pure $
-  countCat CatPrimitive    == 32
+  countCat CatPrimitive    == 29
   -- ^ #94 Phase B retrofit: GhcModules replaces GhcAddModules +
   -- GhcRemoveModules (36 → 35).
   -- #94 Phase C step 1: GhcDeps action="explain" replaces
@@ -10857,7 +10872,11 @@ testCategoryCountsMatchTaxonomy = pure $
   -- #94 Phase C step 3: ghc_quickcheck runs>=2 replaces
   -- GhcDeterminism outright (34 → 33).
   -- #94 Phase C step 4: ghc_refactor action="move_symbol" replaces
-  -- GhcMove outright (33 → 32). No deprecation period because the
+  -- GhcMove outright (33 → 32).
+  -- #94 Phase C step 5: GhcProject (action=create|switch|validate
+  -- |bootstrap) replaces GhcCreateProject + GhcSwitchProject +
+  -- GhcValidateCabal + GhcBootstrap outright (32 → 29 — four
+  -- removed, one added).  No deprecation period because the
   -- project has a single internal consumer.
   && countCat CatComposite    ==  4
   && countCat CatGate         ==  3

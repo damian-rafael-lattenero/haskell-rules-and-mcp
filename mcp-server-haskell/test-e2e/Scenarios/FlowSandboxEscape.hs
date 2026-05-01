@@ -67,8 +67,8 @@ import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("sandbox-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("sandbox-demo" :: Text) ])
 
   let canary = projectDir </> "sandbox-canary.txt"
       -- Put the value literally in the expression; ghc_eval is

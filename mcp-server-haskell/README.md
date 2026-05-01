@@ -58,14 +58,14 @@ You do **not** need to clone the repo to get rules. If your host
 (Claude Code, Cursor) also wants a project-level rules file, use:
 
 ```
-ghc_bootstrap(host="claude-code", write=true)
+ghc_project(action="bootstrap", host="claude-code", write=true)
 ```
 
 That writes `.claude/rules/haskell-flows-mcp.md` from content baked
 into the running binary — always in sync with the tool surface you
 actually have.
 
-## Tool surface (38 tools)
+## Tool surface (35 tools)
 
 Grouped by workflow phase. Every one of these is dispatchable through
 `tools/call`; `tools/list` returns the authoritative registry.
@@ -75,10 +75,8 @@ Grouped by workflow phase. Every one of these is dispatchable through
 | Tool                    | Purpose |
 |-------------------------|---------|
 | `ghc_workflow`         | `status` (inventory + liveness + staleness + phase), `help` (state-aware nudges + phase hint), `next` (single tool) |
-| `ghc_toolchain_status` | Availability + version of cabal / ghc / hlint / optional binaries |
-| `ghc_toolchain_warmup` | Probe every optional binary up-front so later calls don't pay the lookup |
-| `ghc_validate_cabal`   | `cabal check` + duplicate-dep / missing-field heuristics |
-| `ghc_bootstrap`        | Emit host-specific rules file from the binary (no repo clone needed) |
+| `ghc_toolchain`        | `action=status` (cabal/ghc/hlint/optional binaries), `action=warmup` (probe ahead of time) |
+| `ghc_project`          | Project lifecycle: `action=create` scaffolds, `action=switch` repoints, `action=validate` runs `cabal check`, `action=bootstrap` emits host-rules |
 
 ### Read / inspect
 
@@ -100,7 +98,6 @@ Grouped by workflow phase. Every one of these is dispatchable through
 
 | Tool                  | Purpose |
 |-----------------------|---------|
-| `ghc_create_project` | Scaffold `<name>.cabal`, `cabal.project`, `src/<Module>.hs`, `test/Spec.hs` |
 | `ghc_modules`        | `action=add` registers + scaffolds; `action=remove` de-registers (opt-in `delete_files`). |
 | `ghc_deps`           | `list` / `add` / `remove` build-depends, stanza-aware |
 | `ghc_add_import`     | Insert a missing `import X` to resolve a scope error |

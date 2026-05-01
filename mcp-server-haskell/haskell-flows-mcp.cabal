@@ -104,6 +104,7 @@ library
                       HaskellFlows.Tool.Lab
                       HaskellFlows.Tool.ExplainError
                       HaskellFlows.Tool.Perf
+                      HaskellFlows.Tool.Project
                       HaskellFlows.Tool.PropertyAudit
                       HaskellFlows.Tool.QuickCheck
                       HaskellFlows.Tool.QuickCheckExport

@@ -66,8 +66,8 @@ runFlow c projectDir = do
   -- advance state: scaffold + load + add 3 passing properties
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "advance state: scaffold + load + 3 passing props"
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("workflow-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("workflow-demo" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["Calc"] :: [Text]) ])
   _ <- Client.callTool c GhcDeps (object

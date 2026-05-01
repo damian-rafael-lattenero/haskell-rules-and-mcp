@@ -254,9 +254,9 @@ renderPhaseHint :: SessionPhase -> Text
 renderPhaseHint p = case p of
   PhasePreScaffold ->
     "Phase: pre-scaffold. If this is a new project, start with \
-    \ghc_create_project(name=...); if you already have one, \
-    \ghc_load(module_path=\"src/<Entry>.hs\") boots GHCi and \
-    \gives you the cleanest error surface."
+    \ghc_project(action=create, name=...); if you already have \
+    \one, ghc_load(module_path=\"src/<Entry>.hs\") boots GHCi \
+    \and gives you the cleanest error surface."
   PhaseBootstrap ->
     "Phase: bootstrap. The last load failed — likely a missing \
     \dependency or an unregistered module. Chain ghc_deps(add,...) \

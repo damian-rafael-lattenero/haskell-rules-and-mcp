@@ -100,9 +100,6 @@ allBudgets = Map.fromList
   , ( GhcDeps
     , ToolBudget 1500 3000  Nothing
         "cabal solver invocation; version-constraint resolution")
-  , ( GhcCreateProject
-    , ToolBudget 200  500   Nothing
-        "scaffold cabal + modules + test stub; no GHCi")
   , ( GhcDoc
     , ToolBudget 100  300   Nothing
         ":doc lookup; cached env + optional haddock data")
@@ -126,18 +123,12 @@ allBudgets = Map.fromList
         \ghc_toolchain_status + ghc_toolchain_warmup; budget covers \
         \binary-probe (status) and PATH warm-up (warmup) — both are \
         \subprocess-bound but cheap")
-  , ( GhcValidateCabal
-    , ToolBudget 200  500   Nothing
-        "cabal check + duplicate-dep heuristic scan")
   , ( GhcCheckProject
     , ToolBudget 1500 4000  Nothing
         "check_module over every exposed + other-module in .cabal")
   , ( GhcSuggest
     , ToolBudget 100  400   Nothing
         "signature-driven property proposal; pure computation")
-  , ( GhcSwitchProject
-    , ToolBudget 100  300   Nothing
-        "project dir swap; no recompile triggered")
   , ( GhcAddImport
     , ToolBudget 200  800   Nothing
         "AST-free import line injection; optional hoogle subprocess")
@@ -153,9 +144,16 @@ allBudgets = Map.fromList
   , ( GhcBrowse
     , ToolBudget 100  300   Nothing
         "module member listing; cached env query")
-  , ( GhcBootstrap
-    , ToolBudget  50  200   Nothing
-        "preview/apply cabal.project bootstrap; no GHCi")
+  , ( GhcProject
+    , ToolBudget 200  500   Nothing
+        "#94 Phase C step 5: action-discriminated successor to \
+        \ghc_create_project + ghc_switch_project + \
+        \ghc_validate_cabal + ghc_bootstrap. The 200 ms / 500 ms \
+        \budget is the upper envelope of the four legacy budgets \
+        \(create / validate were 200/500; switch was 100/300; \
+        \bootstrap was 50/200) — all four share a 'no GHCi, light \
+        \subprocess' profile so we keep the worst-case bound rather \
+        \than per-action thresholds.")
   , ( GhcPropertyLifecycle
     , ToolBudget 100  300   Nothing
         "property store list/drop; file I/O only")

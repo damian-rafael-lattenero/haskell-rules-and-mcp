@@ -66,8 +66,8 @@ evilSourceBytes = BS.concat
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("nonutf8-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("nonutf8-demo" :: Text) ])
 
   -- Plant the evil file directly on disk — we explicitly do not go
   -- through ghc_add_modules because that scaffolds with a clean

@@ -61,22 +61,18 @@ data ToolName
   | GhcGate
   | GhcQuickCheckExport
   | GhcDeps
-  | GhcCreateProject
   | GhcDoc
   | GhcGoto
   | GhcRefactor
   | GhcBatch
   | GhcLint
-  | GhcValidateCabal
   | GhcCheckProject
   | GhcSuggest
-  | GhcSwitchProject
   | GhcAddImport
   | GhcApplyExports
   | GhcFixWarning
   | GhcImports
   | GhcBrowse
-  | GhcBootstrap
   | GhcPropertyLifecycle
   | GhcLab
   | GhcExplainError
@@ -85,6 +81,13 @@ data ToolName
   | GhcWitness
   | GhcModules
   | GhcToolchain
+  | GhcProject
+    -- ^ #94 Phase C step 5: action-discriminated 'project'
+    -- primitive (action: "create" \| "switch" \| "validate" \|
+    -- "bootstrap"). Replaced the per-verb 'GhcCreateProject' +
+    -- 'GhcSwitchProject' + 'GhcValidateCabal' + 'GhcBootstrap'
+    -- constructors outright (no deprecation period — single
+    -- internal consumer).
     -- ^ #94 Phase C: action-discriminated 'toolchain' primitive
     -- (action: "status" \| "warmup"). Replaced the per-verb
     -- 'GhcToolchainStatus' + 'GhcToolchainWarmup' constructors
@@ -120,24 +123,21 @@ toolNameText = \case
   GhcGate              -> "ghc_gate"
   GhcQuickCheckExport  -> "ghc_quickcheck_export"
   GhcDeps              -> "ghc_deps"
-  GhcCreateProject     -> "ghc_create_project"
   GhcDoc               -> "ghc_doc"
   GhcGoto              -> "ghc_goto"
   GhcRefactor          -> "ghc_refactor"
   GhcBatch             -> "ghc_batch"
   GhcLint              -> "ghc_lint"
-  GhcValidateCabal     -> "ghc_validate_cabal"
   GhcCheckProject      -> "ghc_check_project"
   GhcSuggest           -> "ghc_suggest"
-  GhcSwitchProject     -> "ghc_switch_project"
   GhcAddImport         -> "ghc_add_import"
   GhcApplyExports      -> "ghc_apply_exports"
   GhcFixWarning        -> "ghc_fix_warning"
   GhcImports           -> "ghc_imports"
   GhcBrowse            -> "ghc_browse"
-  GhcBootstrap         -> "ghc_bootstrap"
   GhcPropertyLifecycle -> "ghc_property_lifecycle"
   GhcToolchain         -> "ghc_toolchain"
+  GhcProject           -> "ghc_project"
   GhcLab               -> "ghc_lab"
   GhcExplainError      -> "ghc_explain_error"
   GhcPerf              -> "ghc_perf"
@@ -226,10 +226,9 @@ toolCategory = \case
   -- Dependency + project management
   GhcDeps              -> CatPrimitive
   GhcModules           -> CatPrimitive   -- #94 Phase B: action-discriminated successor
-  GhcCreateProject     -> CatPrimitive   -- future: project action=create
-  GhcSwitchProject     -> CatPrimitive   -- future: project action=switch
-  GhcValidateCabal     -> CatPrimitive   -- future: project action=validate
-  GhcBootstrap         -> CatPrimitive   -- future: project action=bootstrap
+  GhcProject           -> CatPrimitive   -- #94 Phase C step 5: action-discriminated successor
+                                         -- to ghc_create_project / ghc_switch_project /
+                                         -- ghc_validate_cabal / ghc_bootstrap
   -- Property-first testing
   GhcQuickCheck        -> CatPrimitive
   GhcSuggest           -> CatPrimitive
@@ -301,10 +300,7 @@ toolVersion = \case
   GhcArbitrary         -> "1.0.0"
   -- ── Dependency + project management ─────────────────────────────
   GhcDeps              -> "1.0.0"
-  GhcCreateProject     -> "1.0.0"
-  GhcSwitchProject     -> "1.0.0"
-  GhcValidateCabal     -> "1.0.0"
-  GhcBootstrap         -> "1.0.0"
+  GhcProject           -> "1.0.0"   -- #94 Phase C step 5: action-discriminated successor
   -- ── Property-first testing ──────────────────────────────────────
   GhcQuickCheck        -> "1.0.0"
   GhcSuggest           -> "1.0.0"

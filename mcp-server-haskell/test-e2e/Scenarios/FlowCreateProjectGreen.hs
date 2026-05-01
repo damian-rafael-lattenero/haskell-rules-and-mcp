@@ -35,11 +35,11 @@ runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _projectDir = do
   -- Step 1 — scaffold a fresh project. Nothing else, no edits;
   -- the gate must come back green from the very first call.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("green-scaffold-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("green-scaffold-demo" :: Text) ])
 
   t0 <- stepHeader 1 "ghc_validate_cabal on fresh scaffold returns 0 warnings (#69)"
-  rVal <- Client.callTool c GhcValidateCabal (object [])
+  rVal <- Client.callTool c GhcProject (object [ "action" .= ("validate" :: Text) ])
   let warnings = fieldInt "warnings" rVal
       errors   = fieldInt "errors"   rVal
       ok =  statusOk rVal == Just True

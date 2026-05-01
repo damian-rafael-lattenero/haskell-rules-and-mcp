@@ -52,8 +52,8 @@ import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _pd = do
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("timeout-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("timeout-demo" :: Text) ])
 
   -- 1. Pre-flight: the session must be responsive before we poke it.
   t0 <- stepHeader 1 "pre-flight · ghc_eval(1+1) on a fresh session"

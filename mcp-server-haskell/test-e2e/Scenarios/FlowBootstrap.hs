@@ -36,8 +36,8 @@ runFlow c projectDir = do
   -- (1) claude-code preview — returns markdown, no file written
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "bootstrap(claude-code) preview"
-  r1 <- Client.callTool c GhcBootstrap
-          (object [ "host" .= ("claude-code" :: Text) ])
+  r1 <- Client.callTool c GhcProject
+          (object [ "action" .= ("bootstrap" :: Text), "host" .= ("claude-code" :: Text) ])
   -- Dropped: "claude-code preview success" — redundant with 'mode=preview'
   -- which is the stronger semantic assertion (tool cannot return
   -- mode=preview with success=false).
@@ -59,8 +59,8 @@ runFlow c projectDir = do
   -- (2) claude-code write=true — persists the file
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "bootstrap(claude-code) write=true"
-  r2 <- Client.callTool c GhcBootstrap (object
-    [ "host"  .= ("claude-code" :: Text)
+  r2 <- Client.callTool c GhcProject (object     [ "action" .= ("bootstrap" :: Text)
+    , "host"  .= ("claude-code" :: Text)
     , "write" .= True
     ])
   -- Dropped: "claude-code write success" — subsumed by 'mode=written'
@@ -78,8 +78,8 @@ runFlow c projectDir = do
   -- (3) cursor write=true — different canonical path
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "bootstrap(cursor) write=true"
-  r3 <- Client.callTool c GhcBootstrap (object
-    [ "host"  .= ("cursor" :: Text)
+  r3 <- Client.callTool c GhcProject (object     [ "action" .= ("bootstrap" :: Text)
+    , "host"  .= ("cursor" :: Text)
     , "write" .= True
     ])
   -- Dropped: "cursor write success" — the file-landed assertion below
@@ -96,8 +96,8 @@ runFlow c projectDir = do
   -- (4) generic — never writes, always returns content
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "bootstrap(generic) (never writes)"
-  r4 <- Client.callTool c GhcBootstrap (object
-    [ "host"  .= ("generic" :: Text)
+  r4 <- Client.callTool c GhcProject (object     [ "action" .= ("bootstrap" :: Text)
+    , "host"  .= ("generic" :: Text)
     , "write" .= True   -- even with write=true, generic never writes
     ])
   -- Dropped: "generic success" — redundant with content assertion below.

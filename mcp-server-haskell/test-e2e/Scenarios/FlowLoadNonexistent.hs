@@ -41,8 +41,8 @@ runFlow c _projectDir = do
   -- same as a session-boot failure.
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold project"
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("loadnonexistent-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("loadnonexistent-demo" :: Text) ])
   stepFooter 1 t0
 
   ----------------------------------------------------------------

@@ -39,8 +39,7 @@
 -- Error paths return @success: false@ with a human-readable @error@
 -- field — no exceptions leak out to the JSON-RPC envelope.
 module HaskellFlows.Tool.SwitchProject
-  ( descriptor
-  , handle
+  ( handle
   , SwitchProjectArgs (..)
   , validateSwitchTarget
   , ValidationError (..)
@@ -65,7 +64,6 @@ import HaskellFlows.Ghc.ApiSession (GhcSession, killGhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types
   ( PathError (..)
   , ProjectDir
@@ -73,32 +71,12 @@ import HaskellFlows.Types
   , unProjectDir
   )
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcSwitchProject
-    , tdDescription =
-        "Repoint the MCP at a different cabal project without "
-          <> "restarting the host. The new path must be absolute, "
-          <> "must exist, and must contain at least one .cabal file. "
-          <> "Tears down the current in-process GhcSession (if any) "
-          <> "so the next tool call boots fresh against the new path."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "path" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Absolute path to the target cabal project \
-                       \directory. Example: \
-                       \\"/Users/me/projects/new-app\"." :: Text)
-                  ]
-              ]
-          , "required"             .= ["path" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
+-- | #94 Phase C step 5: this module's @descriptor@ was retired
+-- when the four legacy project-lifecycle tools were merged into
+-- 'HaskellFlows.Tool.Project'. The 'handle' function below is now
+-- invoked indirectly via 'Server.dispatchProject' when the agent
+-- calls @ghc_project(action=\"switch\", …)@. Behaviour is
+-- byte-identical to the legacy @ghc_switch_project@ surface.
 
 newtype SwitchProjectArgs = SwitchProjectArgs
   { spaPath :: Text

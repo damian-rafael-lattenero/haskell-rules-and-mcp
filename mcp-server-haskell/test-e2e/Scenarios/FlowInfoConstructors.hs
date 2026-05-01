@@ -49,8 +49,8 @@ runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _projectDir = do
   -- Step 0 — scaffold so the in-process GHC API can resolve
   -- 'Maybe' / 'Either' against the standard Prelude.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("info-ctor-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("info-ctor-demo" :: Text) ])
 
   -- Step 1 — Maybe is the canonical 2-constructor algebraic type
   -- (one nullary, one unary).

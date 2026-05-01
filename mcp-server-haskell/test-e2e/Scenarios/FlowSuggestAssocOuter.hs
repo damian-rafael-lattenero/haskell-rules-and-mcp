@@ -58,8 +58,8 @@ runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
   -- Step 1 — scaffold + write the source so 'ghc_suggest' has a
   -- real type signature to read.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("assoc-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("assoc-demo" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["AssocDemo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")

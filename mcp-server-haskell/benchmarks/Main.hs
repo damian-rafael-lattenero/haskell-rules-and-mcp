@@ -102,7 +102,7 @@ benchSubset =
   -- (tool, JSON args)
   [ (GhcWorkflow,         object [ "action" .= ("status" :: T.Text) ])
   , (GhcToolchain,        object [ "action" .= ("status" :: T.Text) ])
-  , (GhcValidateCabal,    object [])
+  , (GhcProject,          object [ "action" .= ("validate" :: T.Text) ])
   , (GhcLoad,             object [ "module_path" .= ("src/Ref/Stats.hs" :: T.Text) ])
   , (GhcType,             object [ "expression" .= ("mean" :: T.Text) ])
   , (GhcInfo,             object [ "name"       .= ("Item" :: T.Text) ])

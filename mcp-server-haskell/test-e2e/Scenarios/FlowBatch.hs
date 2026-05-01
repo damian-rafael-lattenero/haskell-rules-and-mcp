@@ -51,8 +51,8 @@ runFlow c _projectDir = do
   -- operate on.
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold"
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("batch-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("batch-demo" :: Text) ])
   stepFooter 1 t0
 
   ----------------------------------------------------------------

@@ -57,8 +57,8 @@ hostileEvals =
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _pd = do
   -- Minimal scaffold so the GHCi session comes up with a package.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("sessrob-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("sessrob-demo" :: Text) ])
 
   -- Pre-flight: session must answer a trivial eval before we start
   -- throwing things at it. Catches unrelated setup failures.

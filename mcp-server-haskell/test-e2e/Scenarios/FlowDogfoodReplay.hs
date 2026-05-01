@@ -223,8 +223,8 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "switch_project accepts an empty sibling dir"
   let emptySibling = projectDir </> "dogfood-v3"
   createDirectoryIfMissing True emptySibling
-  switchR <- Client.callTool c GhcSwitchProject
-               (object [ "path" .= T.pack emptySibling ])
+  switchR <- Client.callTool c GhcProject
+               (object [ "action" .= ("switch" :: Text), "path" .= T.pack emptySibling ])
   cSwitchOk <- liveCheck $ checkJsonField
     "switch_project · empty dir accepted"
     switchR "success" (Bool True)
@@ -239,9 +239,10 @@ runFlow c projectDir = do
   -- comma-separated string form. BUG-PLUS-01 fix.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "create_project + add_modules accepts string fallback"
-  _ <- Client.callTool c GhcCreateProject
+  _ <- Client.callTool c GhcProject
          (object
-           [ "name"   .= ("dogfood-v3" :: Text)
+                    [ "action" .= ("create" :: Text)
+           , "name"   .= ("dogfood-v3" :: Text)
            , "module" .= ("Expr.Syntax" :: Text)
            ])
 
@@ -278,7 +279,7 @@ runFlow c projectDir = do
   -- BUG-PLUS-05 fix.
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "validate_cabal · stanza-aware, no false duplicates"
-  valR <- Client.callTool c GhcValidateCabal (object [])
+  valR <- Client.callTool c GhcProject (object [ "action" .= ("validate" :: Text) ])
   cNoFalseDup <- liveCheck $ checkPure
     "validate_cabal · no 'duplicate-dep' warnings for a clean scaffold"
     (countIssuesOfKind "duplicate-dep" valR == 0)

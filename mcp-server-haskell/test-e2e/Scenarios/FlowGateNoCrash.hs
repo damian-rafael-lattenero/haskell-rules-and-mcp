@@ -42,8 +42,8 @@ runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
   -- Step 1 — scaffold a fresh project. The default test/Spec.hs
   -- compiles cleanly; we'll deliberately break it next.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("gate-crash-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("gate-crash-demo" :: Text) ])
 
   -- Step 2 — overwrite test/Spec.hs with a body that fails to
   -- compile. cabal will emit a tall error stream which is

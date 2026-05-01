@@ -85,8 +85,8 @@ runFlow c projectDir = do
   -- (so the happy-path check_project is genuinely green).
   --------------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Calc (clean) + Hinty (hint-worthy)"
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("gates-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("gates-demo" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["Calc", "Hinty"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")

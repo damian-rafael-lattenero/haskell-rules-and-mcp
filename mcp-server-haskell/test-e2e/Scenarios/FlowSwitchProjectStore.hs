@@ -62,8 +62,8 @@ runFlow c projectDir = do
   -- a single property in its store. We bypass ghc_quickcheck
   -- (no source code to compile) and write the JSON directly
   -- with the same shape PropertyStore.save would produce.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("store-iso-a" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("store-iso-a" :: Text) ])
   let storeA = projectDir </> ".haskell-flows" </> "properties.json"
   createDirectoryIfMissing True (projectDir </> ".haskell-flows")
   TIO.writeFile storeA
@@ -90,8 +90,8 @@ runFlow c projectDir = do
   TIO.writeFile (projB </> "cabal.project") "packages: .\n"
 
   t1 <- stepHeader 2 "switch · A → B reopens store at B"
-  switchAB <- Client.callTool c GhcSwitchProject
-                (object [ "path" .= T.pack projB ])
+  switchAB <- Client.callTool c GhcProject
+                (object [ "action" .= ("switch" :: Text), "path" .= T.pack projB ])
   cSwitch <- liveCheck $ checkPure
     "switch A→B succeeds"
     (statusOk switchAB == Just True)
@@ -131,8 +131,8 @@ runFlow c projectDir = do
        <> T.pack (show bAgainN))
 
   -- Switch back to A — must see A's original property, NOT B's.
-  switchBA <- Client.callTool c GhcSwitchProject
-                (object [ "path" .= T.pack projectDir ])
+  switchBA <- Client.callTool c GhcProject
+                (object [ "action" .= ("switch" :: Text), "path" .= T.pack projectDir ])
   let backOk = statusOk switchBA == Just True
   cSwitchBack <- liveCheck $ checkPure
     "switch B→A succeeds"

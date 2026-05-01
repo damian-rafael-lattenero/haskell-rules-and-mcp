@@ -39,8 +39,8 @@ import HaskellFlows.Mcp.ToolName (ToolName (..))
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _projectDir = do
   -- Step 1 — scaffold a project so cabal-repl has something to load.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("witness-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("witness-demo" :: Text) ])
 
   -- Step 2 — drive a tiny tautology that only depends on `length`,
   -- which exists in Prelude. The harness needs to come back with

@@ -49,8 +49,8 @@ runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
   -- Step 1 — scaffold + register Expr + plant a downstream
   -- importer in test/Spec.hs.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("rm-down-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("rm-down-demo" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["Expr"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")

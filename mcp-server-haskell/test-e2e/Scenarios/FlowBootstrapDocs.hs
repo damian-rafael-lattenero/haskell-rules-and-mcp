@@ -43,8 +43,8 @@ runFlow c _projectDir = do
   -- The 'generic' host returns the markdown WITHOUT writing
   -- anything to disk — perfect for a content assertion.
   t0 <- stepHeader 1 "ghc_bootstrap(generic) drops retired vocab (#56)"
-  r <- Client.callTool c GhcBootstrap
-         (object [ "host" .= ("generic" :: Text), "write" .= True ])
+  r <- Client.callTool c GhcProject
+         (object [ "action" .= ("bootstrap" :: Text), "host" .= ("generic" :: Text), "write" .= True ])
   let body = case lookupField "content" r of
         Just (String s) -> s
         _               -> ""

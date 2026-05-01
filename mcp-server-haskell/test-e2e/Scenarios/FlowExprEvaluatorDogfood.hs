@@ -73,9 +73,10 @@ runFlow c projectDir = do
   -- step 1 · scaffold (create_project + deps + add_modules)
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold · ghc_create_project + 2 deps + 4 modules"
-  _ <- Client.callTool c GhcCreateProject
+  _ <- Client.callTool c GhcProject
          (object
-            [ "name"   .= ("expr-dogfood" :: Text)
+                     [ "action" .= ("create" :: Text)
+            , "name"   .= ("expr-dogfood" :: Text)
             , "module" .= ("Expr"         :: Text)
             ])
   _ <- Client.callTool c GhcDeps (object

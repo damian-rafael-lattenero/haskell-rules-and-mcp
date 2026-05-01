@@ -57,19 +57,22 @@ runFlow c projectDir = do
   createDirectoryIfMissing True emptyDir
 
   -- Step 1 — Fix 6: switch to empty dir.
+  -- #94 Phase C step 5: post-merger the next-step points at the
+  -- consolidated 'ghc_project' tool with 'action=create' in the
+  -- example payload, not the legacy 'ghc_create_project' wire name.
   t1 <- stepHeader 1
-          "Fix 6 · switch to empty dir → nextStep points at ghc_create_project"
-  r1 <- Client.callTool c GhcSwitchProject
-          (object [ "path" .= T.pack emptyDir ])
+          "Fix 6 · switch to empty dir → nextStep points at ghc_project (create)"
+  r1 <- Client.callTool c GhcProject
+          (object [ "action" .= ("switch" :: Text), "path" .= T.pack emptyDir ])
   let c1a = checkPure
         "scaffolded=false in payload"
         (fieldBool "scaffolded" r1 == Just False)
         ("Expected 'scaffolded' false for an empty dir. Raw: "
           <> truncRender r1)
       c1b = checkPure
-        "nextStep.tool == ghc_create_project"
-        (fetchNextStepTool r1 == Just "ghc_create_project")
-        ("Expected nextStep.tool to be 'ghc_create_project' \
+        "nextStep.tool == ghc_project"
+        (fetchNextStepTool r1 == Just "ghc_project")
+        ("Expected nextStep.tool to be 'ghc_project' \
          \when switching to an empty directory. Got: "
           <> T.pack (show (fetchNextStepTool r1))
           <> ". Raw: " <> truncRender r1)
@@ -80,8 +83,8 @@ runFlow c projectDir = do
   -- Scaffold the empty slot into a real project. 'ghc_create_project'
   -- writes to whatever the server's projectDir is, which the
   -- previous switch already repointed at 'emptyDir'.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("ux-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("ux-demo" :: Text) ])
 
   -- Step 2 — Fix 2: adding an already-present dep is idempotent.
   -- 'base' is baked into every scaffolded library stanza by

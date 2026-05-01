@@ -84,8 +84,8 @@ runFlow c projectDir = do
   -- setup
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + write Shapes + load"
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("arbitrary-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("arbitrary-demo" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["Shapes"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")

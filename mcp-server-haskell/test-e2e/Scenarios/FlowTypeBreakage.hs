@@ -69,8 +69,8 @@ runFlow c projectDir = do
   -- (1) scaffold + module that type-checks
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Arith.hs (typechecks)"
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("typebreak-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("typebreak-demo" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["Arith"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")

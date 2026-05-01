@@ -46,8 +46,8 @@ runFlow c _projectDir = do
   -- The class info we need (Functor / Eq) lives in base, so the
   -- project doesn't need any custom modules; we only need a
   -- live session.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("info-class-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("info-class-demo" :: Text) ])
   _ <- Client.callTool c GhcLoad
          (object [ "module_path" .= ("src/InfoClassDemo.hs" :: Text) ])
 

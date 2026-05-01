@@ -126,11 +126,11 @@ situationTable =
                  GhcGate
                  "(regression + cabal test + cabal build)"
   , SituationRow "scaffold a new project"
-                 GhcCreateProject
-                 "name=\"my-pkg\""
+                 GhcProject
+                 "action=\"create\", name=\"my-pkg\""
   , SituationRow "validate .cabal"
-                 GhcValidateCabal
-                 "(no args)"
+                 GhcProject
+                 "action=\"validate\""
   , SituationRow "toolchain gates (cabal/ghc/hlint)"
                  GhcToolchain
                  "action=\"status\""
@@ -141,8 +141,11 @@ situationTable =
                  GhcBatch
                  "actions=[{tool,args},...]"
   , SituationRow "install host rules (no repo clone)"
-                 GhcBootstrap
-                 "host=\"claude-code\"|\"cursor\"|\"generic\", write=false"
+                 GhcProject
+                 "action=\"bootstrap\", host=\"claude-code\"|\"cursor\"|\"generic\", write=false"
+  , SituationRow "switch active project root"
+                 GhcProject
+                 "action=\"switch\", path=\"/abs/path/to/project\""
   , SituationRow "what should I do next"
                  GhcWorkflow
                  "action=\"help\""

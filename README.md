@@ -26,7 +26,7 @@
 Plug into Claude Code, Cursor, or any MCP host. Your agent gets **46 tools** that share **one in-process GHC session** and **one normative response envelope** — every call answers with the same structured shape, every gate is honest, every refactor verifies-or-rolls-back.
 
 ```text
-ghc_create_project ─▶ ghc_modules ─▶ ghc_load
+ghc_project(create) ─▶ ghc_modules ─▶ ghc_load
        │
        ├─▶ ghc_suggest        ← multi-engine law proposer w/ confidence + sibling-aware
        ├─▶ ghc_quickcheck     ← runs + auto-persists on pass
@@ -95,7 +95,7 @@ The rewrite **swallowed an error**. Without `ghc_determinism`, that broken simpl
 
 | Phase | Tools | Marquee |
 |---|---|---|
-| 🏗 **Scaffold** | 5 | `ghc_create_project` — atomic cabal scaffold + `chain` hint |
+| 🏗 **Scaffold** | 5 | `ghc_project(action=create)` — atomic cabal scaffold + `chain` hint |
 | 🔍 **Inspect** | 10 | `ghc_browse` · `ghc_info` · `ghc_eval` · `ghc_hole` |
 | 📚 **Deps** | 3 | `ghc_deps` — verb-checked, post-edit re-parse, refuses incoherent writes |
 | 🧪 **Property-first** | 7 | `ghc_suggest` · `ghc_quickcheck` · `ghc_determinism` · `ghc_regression` |
@@ -127,7 +127,7 @@ cabal install exe:haskell-flows-mcp --installdir="$HOME/.local/bin" \
   --install-method=copy --overwrite-policy=always
 ```
 
-Point your MCP host at `~/.local/bin/haskell-flows-mcp`. **No rules file needed** — the `initialize.instructions` handshake ships a situation→tool table dynamically derived from the live registry. If your host insists on a project-level rules file, run `ghc_bootstrap(host="claude-code", write=true)`.
+Point your MCP host at `~/.local/bin/haskell-flows-mcp`. **No rules file needed** — the `initialize.instructions` handshake ships a situation→tool table dynamically derived from the live registry. If your host insists on a project-level rules file, run `ghc_project(action="bootstrap", host="claude-code", write=true)`.
 
 ---
 

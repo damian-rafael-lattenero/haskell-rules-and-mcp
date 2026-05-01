@@ -39,8 +39,8 @@ import HaskellFlows.Mcp.ToolName (ToolName (..))
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _projectDir = do
   -- Step 1 — bootstrap a project so the GhcSession is alive.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("browse-interactive-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("browse-interactive-demo" :: Text) ])
   _ <- Client.callTool c GhcLoad
          (object [ "module_path" .= ("src/BrowseInteractiveDemo.hs" :: Text) ])
 

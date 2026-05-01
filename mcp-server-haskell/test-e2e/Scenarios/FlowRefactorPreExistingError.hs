@@ -69,8 +69,8 @@ runFlow c projectDir = do
   -- Step 1 — scaffold + register Refactor + write the source
   -- file with both a clean binding to rename and the unrelated
   -- typed hole that used to block the refactor.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("ref-prerr" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("ref-prerr" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["Refactor"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")

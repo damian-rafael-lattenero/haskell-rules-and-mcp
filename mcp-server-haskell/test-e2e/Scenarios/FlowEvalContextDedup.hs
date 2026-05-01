@@ -71,8 +71,8 @@ runFlow c projectDir = do
   -- setup — minimal scaffold + one source module
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Foo + load"
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("eval-ctx-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("eval-ctx-demo" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["Foo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")

@@ -45,8 +45,8 @@ runFlow c projectDir = do
   -- add 'containers' dep so Data.Map is reachable.
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Warn module (unused import)"
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("fixwarn-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("fixwarn-demo" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["Warn"] :: [Text]) ])
   _ <- Client.callTool c GhcDeps (object

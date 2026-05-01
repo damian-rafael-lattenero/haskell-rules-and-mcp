@@ -51,8 +51,8 @@ runFlow c projectDir = do
   -- build the test-suite end-to-end here (cabal test has its own
   -- coverage in 'ExprEvaluator'); we only need a .cabal whose
   -- library stanza exposes a module the renderer can pick up.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("qcexp-imports" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("qcexp-imports" :: Text) ])
 
   -- Step 2 — register a library module so 'libraryExposedModules'
   -- has something non-empty to return. The renderer should union

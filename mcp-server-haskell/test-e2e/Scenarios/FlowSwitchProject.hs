@@ -83,8 +83,8 @@ runFlow c projectDir = do
   -- (1) scaffold project A in the scenario's own tempdir, add Foo
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold · project A (the scenario's own dir) + Foo"
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("switch-a" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("switch-a" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["Foo"] :: [Text]) ])
   stepFooter 1 t0
@@ -93,8 +93,8 @@ runFlow c projectDir = do
   -- (2) switch errors — relative path, missing dir, no .cabal
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "errors · relative path / missing / no .cabal"
-  relErr <- Client.callTool c GhcSwitchProject
-              (object [ "path" .= ("relative/path" :: Text) ])
+  relErr <- Client.callTool c GhcProject
+              (object [ "action" .= ("switch" :: Text), "path" .= ("relative/path" :: Text) ])
   cErr1 <- liveCheck $ checkJsonField
     "relative path → success=false"
     relErr "success" (Bool False)
@@ -104,9 +104,10 @@ runFlow c projectDir = do
     "The error payload should name the failure mode so a caller \
     \knows to send an absolute path on retry."
 
-  missErr <- Client.callTool c GhcSwitchProject
+  missErr <- Client.callTool c GhcProject
                (object
-                 [ "path" .= ("/tmp/definitely-does-not-exist-xxxyyy" :: Text)
+                                [ "action" .= ("switch" :: Text)
+                 , "path" .= ("/tmp/definitely-does-not-exist-xxxyyy" :: Text)
                  ])
   cErr2 <- liveCheck $ checkJsonField
     "missing dir → success=false"
@@ -120,8 +121,8 @@ runFlow c projectDir = do
   let bareDir = projectDir </> "bare-no-cabal"
   createDirectoryIfMissing True bareDir
   TIO.writeFile (bareDir </> "README.md") "not a cabal project\n"
-  bareErr <- Client.callTool c GhcSwitchProject
-               (object [ "path" .= T.pack bareDir ])
+  bareErr <- Client.callTool c GhcProject
+               (object [ "action" .= ("switch" :: Text), "path" .= T.pack bareDir ])
   cErr3 <- liveCheck $ checkJsonField
     "dir without .cabal → success=false"
     bareErr "success" (Bool False)
@@ -146,8 +147,8 @@ runFlow c projectDir = do
   -- (4) switch TO B — verify previous/current + workflow status
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "switch · A → B"
-  switchAB <- Client.callTool c GhcSwitchProject
-                (object [ "path" .= T.pack projB ])
+  switchAB <- Client.callTool c GhcProject
+                (object [ "action" .= ("switch" :: Text), "path" .= T.pack projB ])
   cSwitchOk <- liveCheck $ checkJsonField
     "switch A→B · success=true"
     switchAB "success" (Bool True)
@@ -188,8 +189,8 @@ runFlow c projectDir = do
   -- (6) switch BACK to A — original state survives
   ----------------------------------------------------------------
   t5 <- stepHeader 6 "switch · B → A and verify Foo still registered"
-  switchBA <- Client.callTool c GhcSwitchProject
-                (object [ "path" .= T.pack projectDir ])
+  switchBA <- Client.callTool c GhcProject
+                (object [ "action" .= ("switch" :: Text), "path" .= T.pack projectDir ])
   cSwitchBackOk <- liveCheck $ checkJsonField
     "switch B→A · success=true"
     switchBA "success" (Bool True)

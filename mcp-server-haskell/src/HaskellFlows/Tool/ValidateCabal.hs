@@ -14,8 +14,7 @@
 -- @severity@ tag so an agent can decide which issues merit fixing
 -- before push vs which are nits.
 module HaskellFlows.Tool.ValidateCabal
-  ( descriptor
-  , handle
+  ( handle
   , Issue (..)
   , Severity (..)
   , scanCabalText
@@ -47,25 +46,14 @@ import System.Timeout (timeout)
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcValidateCabal
-    , tdDescription =
-        "Validate the project's .cabal file. Runs `cabal check` + "
-          <> "common-issue heuristics (duplicate deps, missing "
-          <> "default-language, phantom exposed-modules). Returns "
-          <> "structured per-issue output with severity tags."
-    , tdInputSchema =
-        object
-          [ "type"                 .= ("object" :: Text)
-          , "properties"           .= object []
-          , "additionalProperties" .= False
-          ]
-    }
+-- | #94 Phase C step 5: this module's @descriptor@ was retired
+-- when the four legacy project-lifecycle tools were merged into
+-- 'HaskellFlows.Tool.Project'. The 'handle' function below is now
+-- invoked indirectly via 'Server.dispatchProject' when the agent
+-- calls @ghc_project(action=\"validate\")@. Behaviour is
+-- byte-identical to the legacy @ghc_validate_cabal@ surface.
 
 -- | Constructor names are prefixed @CabalSev@ to avoid colliding with
 -- 'HaskellFlows.Parser.Error.Severity' when both are imported in the

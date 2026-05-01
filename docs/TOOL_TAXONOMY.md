@@ -53,10 +53,7 @@
 |---|---|---|
 | `GhcDeps` | `ghc_deps` | `list` / `add` / `remove` / `explain` build-depends (#94 Phase C: `explain` subsumes the retired `ghc_deps_explain`) |
 | `GhcModules` | `ghc_modules` | Action-discriminated module registry: `action=add` registers + scaffolds; `action=remove` de-registers (#94 Phase B) |
-| `GhcCreateProject` | `ghc_create_project` | Scaffold a new cabal package (future: `project action=create`) |
-| `GhcSwitchProject` | `ghc_switch_project` | Switch the active project root (future: `project action=switch`) |
-| `GhcValidateCabal` | `ghc_validate_cabal` | `cabal check` + heuristics (future: `project action=validate`) |
-| `GhcBootstrap` | `ghc_bootstrap` | Emit or write host-rules doc (future: `project action=bootstrap`) |
+| `GhcProject` | `ghc_project` | Project lifecycle: `action=create` scaffolds a cabal package; `action=switch` repoints the active root; `action=validate` runs `cabal check` + heuristics; `action=bootstrap` emits or writes host-rules (#94 Phase C step 5: subsumes the retired `ghc_create_project` + `ghc_switch_project` + `ghc_validate_cabal` + `ghc_bootstrap`) |
 
 ### Property-first testing
 
@@ -113,11 +110,11 @@
 
 | Category | Count |
 |---|---|
-| Primitive | 32 |
+| Primitive | 29 |
 | Composite | 4 |
 | Gate | 3 |
 | Control-plane | 2 |
-| **Total** | **41** |
+| **Total** | **38** |
 
 * Phase B retrofit: `GhcModules` replaced `GhcAddModules` +
   `GhcRemoveModules` outright (47 → 45 — two less, one new).
@@ -130,6 +127,9 @@
   outright (43 → 42 — one less).
 * Phase C step 4: `GhcRefactor action="move_symbol"` replaced
   `GhcMove` outright (42 → 41 — one less).
+* Phase C step 5: `GhcProject action="create"|"switch"|"validate"|"bootstrap"`
+  replaced `GhcCreateProject` + `GhcSwitchProject` + `GhcValidateCabal` +
+  `GhcBootstrap` outright (41 → 38 — four less, one new).
 
 With a single internal consumer there was no deprecation cost to
 honour, so the legacy wire surface was removed in the same commit as
@@ -145,14 +145,14 @@ Bumping the cap requires an explicit PR with rationale.
 The "future:" notes above indicate tools that will be merged into
 action-discriminated primitives in later phases:
 
-| Today (14 tools) | Replacement |
+| Today (4 tools) | Replacement |
 |---|---|
-| `ghc_add_modules` + `ghc_remove_modules` | `modules { action: "add" \| "remove" }` |
+| ~~`ghc_add_modules` + `ghc_remove_modules`~~ | ✅ landed: `modules { action: "add" \| "remove" }` (#94 Phase B) |
 | ~~`ghc_deps_explain`~~ | ✅ landed: `deps { action: "explain" }` (#94 Phase C) |
-| `ghc_create_project` + `ghc_switch_project` + `ghc_validate_cabal` + `ghc_bootstrap` | `project { action: "create" \| "switch" \| "validate" \| "bootstrap" }` |
+| ~~`ghc_create_project` + `ghc_switch_project` + `ghc_validate_cabal` + `ghc_bootstrap`~~ | ✅ landed: `project { action: "create" \| "switch" \| "validate" \| "bootstrap" }` (#94 Phase C step 5) |
 | `ghc_property_lifecycle` + `ghc_regression` + `ghc_quickcheck_export` + `ghc_property_audit` | `property_store { action: "list" \| "drop" \| "run" \| "export" \| "audit" }` |
 | ~~`ghc_toolchain_warmup` + `ghc_toolchain_status`~~ | ✅ landed: `ghc_toolchain { action: "status" \| "warmup" }` (#94 Phase C) |
 | ~~`ghc_move`~~ | ✅ landed: `refactor { action: "move_symbol" }` (#94 Phase C) |
 | ~~`ghc_determinism`~~ | ✅ landed: `quickcheck { runs: N }` (#94 Phase C) |
 
-Post-consolidation: **31 tools**, ~**22 distinct concepts**.
+Post-consolidation: **35 tools**, ~**26 distinct concepts**.

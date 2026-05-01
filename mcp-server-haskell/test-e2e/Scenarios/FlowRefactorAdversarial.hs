@@ -114,8 +114,8 @@ runFlow c projectDir = do
   -- setup
   --------------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + Refactor module (greet, double, buildMessage)"
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("refactor-adv-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("refactor-adv-demo" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["Refactor"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")

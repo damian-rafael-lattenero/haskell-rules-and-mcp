@@ -51,8 +51,8 @@ runFlow c projectDir = do
   -- Step 1 — scaffold a tiny project. We don't need a working
   -- test-suite; we just need somewhere for ghc_regression to
   -- replay properties from.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("regload-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("regload-demo" :: Text) ])
 
   -- Step 2 — write a property to the on-disk store whose lambda
   -- references a name that doesn't exist anywhere in the

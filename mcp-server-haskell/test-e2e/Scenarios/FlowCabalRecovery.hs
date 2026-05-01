@@ -46,8 +46,8 @@ runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
   -- Step 1 — scaffold a real cabal project so we have a
   -- well-formed .cabal to corrupt + restore.
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("cabal-recover" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("cabal-recover" :: Text) ])
 
   -- Step 2 — exercise a non-load tool (ghc_eval) BEFORE the
   -- corruption so we know the boot-time bootstrap finished.

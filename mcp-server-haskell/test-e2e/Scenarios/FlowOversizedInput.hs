@@ -84,8 +84,8 @@ oversizedExpression =
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _pd = do
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("oversize-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("oversize-demo" :: Text) ])
 
   -- 1. Pre-flight so an unrelated session-up error doesn't look
   -- like an oversize-reject failure.

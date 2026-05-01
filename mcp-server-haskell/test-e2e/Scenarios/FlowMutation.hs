@@ -96,8 +96,8 @@ runFlow c projectDir = do
   -- (1) scaffold + QuickCheck dep + module + write CLEAN source
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "scaffold + deps + Calc.hs (clean)"
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("mutation-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("mutation-demo" :: Text) ])
   _ <- Client.callTool c GhcModules
          (object [ "action" .= ("add" :: Text), "modules" .= (["Calc"] :: [Text]) ])
   _ <- Client.callTool c GhcDeps (object

@@ -170,8 +170,8 @@ runOneProject binary rootDir tp = do
     (Client.newClient binary [("HASKELL_PROJECT_DIR", subdir)])
     Client.close
     $ \c -> do
-      _ <- Client.callTool c GhcCreateProject
-             (object [ "name" .= ("xv-demo" :: Text) ])
+      _ <- Client.callTool c GhcProject
+             (object [ "action" .= ("create" :: Text), "name" .= ("xv-demo" :: Text) ])
       _ <- Client.callTool c GhcModules
              (object [ "action" .= ("add" :: Text), "modules" .= tpModules tp ])
 

@@ -168,8 +168,8 @@ objMap _          = KeyMap.empty
 
 step2_scaffold :: Client.McpClient -> IO [Check]
 step2_scaffold c = do
-  r <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("expr-evaluator" :: Text) ])
+  r <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("expr-evaluator" :: Text) ])
   let ok = statusOk r == Just True
       chain = fetchChain r
       chainTools = map csToolField chain

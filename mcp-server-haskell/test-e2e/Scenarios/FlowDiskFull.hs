@@ -68,8 +68,8 @@ import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
-  _ <- Client.callTool c GhcCreateProject
-         (object [ "name" .= ("diskfull-demo" :: Text) ])
+  _ <- Client.callTool c GhcProject
+         (object [ "action" .= ("create" :: Text), "name" .= ("diskfull-demo" :: Text) ])
 
   let storeDir = projectDir </> ".haskell-flows"
 
