@@ -1,0 +1,39 @@
+mcp-server-haskell/src/HaskellFlows/Tool/ValidateCabal.hs
+  566709e688c741b3 101
+mcp-server-haskell/src/HaskellFlows/Ghc/ApiSession.hs
+  566709e688c741b3 611-615,618,640-641,647,655
+mcp-server-haskell/src/HaskellFlows/Tool/Load.hs
+  566709e688c741b3 227-228
+mcp-server-haskell/src/HaskellFlows/Tool/AddModules.hs
+  566709e688c741b3 151
+mcp-server-haskell/test/Spec.hs
+  566709e688c741b3 1150-1153,11122-11174
+mcp-server-haskell/src/HaskellFlows/Tool/Deps.hs
+  566709e688c741b3 254
+mcp-server-haskell/src/HaskellFlows/Tool/FixWarning.hs
+  566709e688c741b3 20-21,26,269-278
+mcp-server-haskell/src/HaskellFlows/Tool/CreateProject.hs
+  566709e688c741b3 31,300
+mcp-server-haskell/src/HaskellFlows/Tool/RemoveModules.hs
+  566709e688c741b3 110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "c5c8713866923e2fe167664b919e6f68c5cc20b1",
+  "prompts": {
+    "566709e688c741b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78173d44-cc05-4e0d-b758-291cd8e35e65",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 2631,
+      "total_deletions": 32,
+      "accepted_lines": 4814,
+      "overriden_lines": 0
+    }
+  }
+}
