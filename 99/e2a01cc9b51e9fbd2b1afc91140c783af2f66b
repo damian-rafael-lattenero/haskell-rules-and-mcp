@@ -1,0 +1,27 @@
+docs/PERFORMANCE.md
+  033795528ddcaec0 1-219
+mcp-server-haskell/benchmarks/Main.hs
+  033795528ddcaec0 1,3-4,6-21,24-25,28-29,32-44,47-51,55-58,60-218,220,222-258
+mcp-server-haskell/haskell-flows-mcp.cabal
+  033795528ddcaec0 314,316-318,320
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "99e2a01cc9b51e9fbd2b1afc91140c783af2f66b",
+  "prompts": {
+    "033795528ddcaec0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c2325b8-3973-461e-9af9-e12d8c594bf0",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 717,
+      "total_deletions": 105,
+      "accepted_lines": 31842,
+      "overriden_lines": 0
+    }
+  }
+}
