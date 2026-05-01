@@ -318,13 +318,24 @@ dispatch name payload = case name of
     _ -> Nothing
 
   -- Refactor landed → verify compile + rerun regressions.
-  GhcRefactor -> Just (simple GhcLoad
-    "Refactor was snapshot-and-compile-verified, but a reload with \
-    \diagnostics=true surfaces new holes or warnings in one shot."
-    (Just (object
-        [ "module_path" .= ("<same module>" :: Text)
-        , "diagnostics" .= True
-        ])))
+  -- #94 Phase C: 'move_symbol' (the merged ghc_move) is multi-file
+  -- and benefits from a project-wide gate; 'rename_local' /
+  -- 'extract_binding' are single-file and the per-module reload is
+  -- the natural follow-up.
+  GhcRefactor -> case envField "action" payload of
+    Just (String "move_symbol") -> Just (simple GhcCheckProject
+      "Move was applied AND the source target loaded clean. Run \
+      \ghc_check_project for the whole-project gate so any unrewritten \
+      \consumer (qualified import, hiding clause, Haddock ref) surfaces \
+      \with file + line."
+      Nothing)
+    _ -> Just (simple GhcLoad
+      "Refactor was snapshot-and-compile-verified, but a reload with \
+      \diagnostics=true surfaces new holes or warnings in one shot."
+      (Just (object
+          [ "module_path" .= ("<same module>" :: Text)
+          , "diagnostics" .= True
+          ])))
 
   -- Per-module gate passed → project-wide gate.
   GhcCheckModule -> Just (simple GhcCheckProject
@@ -460,12 +471,6 @@ dispatch name payload = case name of
   -- internal loadForTarget; the agent's next reasonable check is
   -- the project-level gate so any consumer the heuristic missed
   -- surfaces immediately.
-  GhcMove -> Just (simple GhcCheckProject
-    "Move was applied AND the source target loaded clean. Run \
-    \ghc_check_project for the whole-project gate so any unrewritten \
-    \consumer (qualified import, hiding clause, Haddock ref) surfaces \
-    \with file + line."
-    Nothing)
 
   -- Issue #53: only nudge towards 'ghc_load' when ghc_add_import
   -- actually returned candidate imports. The legacy nextStep ran

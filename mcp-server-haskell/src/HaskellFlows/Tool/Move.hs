@@ -1,8 +1,9 @@
--- | @ghc_move@ — atomic cross-module symbol move with consumer
--- import-line rewrites and project-level verify (#62).
+-- | Internal handler for the @move_symbol@ branch of @ghc_refactor@.
 --
--- Phase 1 scope (the issue itself estimates 1.5–2 weeks split
--- across iterations; this commit lands the structural core):
+-- Atomic cross-module symbol move with consumer import-line
+-- rewrites and project-level verify (#62).
+--
+-- Phase 1 scope:
 --
 --   * Move a single TOP-LEVEL binding from a source module to a
 --     destination module that ALREADY EXISTS.
@@ -18,15 +19,19 @@
 -- Phase 1 deferred (rejected with a remediation hint):
 --
 --   * Creating the destination module on the fly (call
---     @ghc_add_modules@ first).
+--     @ghc_modules action="add"@ first).
 --   * @import From hiding (…)@, @import qualified From as F@
 --     rewrites — the rewriter leaves them untouched and verify
 --     surfaces the real failure.
 --   * Haddock cross-reference rewrites.
 --   * Re-export modules (@module Foo (module Bar) where@).
+--
+-- Issue #94 Phase C retired the @ghc_move@ wire surface;
+-- @ghc_refactor@ is the single externally-advertised tool. This
+-- module's 'handle' is the implementation 'Refactor.handle'
+-- forwards to when @action="move_symbol"@.
 module HaskellFlows.Tool.Move
-  ( descriptor
-  , handle
+  ( handle
   , MoveArgs (..)
     -- * Pure slicing helpers (exported for unit tests)
   , SliceResult (..)
@@ -69,35 +74,6 @@ import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcMove
-    , tdDescription =
-        "Atomic cross-module move of a top-level binding. Slices the "
-          <> "type signature + Haddock + body out of the source module, "
-          <> "appends to the destination, rewrites consumer 'import' "
-          <> "lines, then verifies the project still loads. Any failure "
-          <> "rolls back ALL touched files. Phase 1: destination module "
-          <> "must already exist; 'import qualified' / 'import hiding' / "
-          <> "Haddock refs are left untouched (verify will surface "
-          <> "anything that breaks)."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "symbol"  .= obj "string"
-              , "from"    .= obj "string"
-              , "to"      .= obj "string"
-              , "dry_run" .= obj "boolean"
-              ]
-          , "required"             .= (["symbol", "from", "to"] :: [Text])
-          , "additionalProperties" .= False
-          ]
-    }
-  where
-    obj :: Text -> Value
-    obj t = object [ "type" .= t ]
 
 data MoveArgs = MoveArgs
   { maSymbol :: !Text

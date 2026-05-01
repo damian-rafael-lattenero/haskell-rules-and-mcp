@@ -131,9 +131,8 @@ runFlow c projectDir = do
   --   (d) leave the project loading green (Cnsmr's import works
   --       because alpha is now exported from Dst).
   t0 <- stepHeader 1 "ghc_move (alpha → Dst) with explicit export lists (#76)"
-  rMove <- Client.callTool c GhcMove
-             (object
-                [ "symbol" .= ("alpha" :: Text)
+  rMove <- Client.callTool c GhcRefactor
+             (object [ "action" .= ("move_symbol" :: Text), "symbol" .= ("alpha" :: Text)
                 , "from"   .= ("Src"   :: Text)
                 , "to"     .= ("Dst"   :: Text)
                 ])

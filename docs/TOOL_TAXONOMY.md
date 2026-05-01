@@ -40,8 +40,7 @@
 
 | Tool | Wire name | Notes |
 |---|---|---|
-| `GhcRefactor` | `ghc_refactor` | `rename_local` + `extract_binding` |
-| `GhcMove` | `ghc_move` | Move a symbol across modules (future: `refactor action=move_symbol`) |
+| `GhcRefactor` | `ghc_refactor` | `rename_local` + `extract_binding` + `move_symbol` (#94 Phase C: subsumes the retired `ghc_move`) |
 | `GhcFormat` | `ghc_format` | fourmolu / ormolu formatter |
 | `GhcApplyExports` | `ghc_apply_exports` | Rewrite module export list |
 | `GhcFixWarning` | `ghc_fix_warning` | Auto-patch a GHC warning |
@@ -114,11 +113,11 @@
 
 | Category | Count |
 |---|---|
-| Primitive | 33 |
+| Primitive | 32 |
 | Composite | 4 |
 | Gate | 3 |
 | Control-plane | 2 |
-| **Total** | **42** |
+| **Total** | **41** |
 
 * Phase B retrofit: `GhcModules` replaced `GhcAddModules` +
   `GhcRemoveModules` outright (47 → 45 — two less, one new).
@@ -129,6 +128,8 @@
   two less, one new).
 * Phase C step 3: `GhcQuickCheck runs>=2` replaced `GhcDeterminism`
   outright (43 → 42 — one less).
+* Phase C step 4: `GhcRefactor action="move_symbol"` replaced
+  `GhcMove` outright (42 → 41 — one less).
 
 With a single internal consumer there was no deprecation cost to
 honour, so the legacy wire surface was removed in the same commit as
@@ -151,7 +152,7 @@ action-discriminated primitives in later phases:
 | `ghc_create_project` + `ghc_switch_project` + `ghc_validate_cabal` + `ghc_bootstrap` | `project { action: "create" \| "switch" \| "validate" \| "bootstrap" }` |
 | `ghc_property_lifecycle` + `ghc_regression` + `ghc_quickcheck_export` + `ghc_property_audit` | `property_store { action: "list" \| "drop" \| "run" \| "export" \| "audit" }` |
 | ~~`ghc_toolchain_warmup` + `ghc_toolchain_status`~~ | ✅ landed: `ghc_toolchain { action: "status" \| "warmup" }` (#94 Phase C) |
-| `ghc_move` | `refactor { action: "move_symbol" }` |
+| ~~`ghc_move`~~ | ✅ landed: `refactor { action: "move_symbol" }` (#94 Phase C) |
 | ~~`ghc_determinism`~~ | ✅ landed: `quickcheck { runs: N }` (#94 Phase C) |
 
 Post-consolidation: **31 tools**, ~**22 distinct concepts**.

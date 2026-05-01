@@ -58,6 +58,7 @@ import HaskellFlows.Mcp.PermissiveJSON
   )
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import qualified HaskellFlows.Tool.Move as Move
 import HaskellFlows.Parser.Error
   ( GhcError (..)
   , Severity (..)
@@ -84,12 +85,17 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcRefactor
     , tdDescription =
-        "Small-scope refactors with snapshot-and-compile safety. "
-          <> "Actions: 'rename_local' (scoped identifier rename), "
-          <> "'extract_binding' (lift a line range to a named top-level "
-          <> "binding). If GHCi reports a compile error on the rewrite, "
-          <> "the file is restored from snapshot — the refactor is "
-          <> "atomic from the agent's perspective."
+        "Refactors with snapshot-and-compile safety. Actions: "
+          <> "'rename_local' (scoped identifier rename), "
+          <> "'extract_binding' (lift a line range to a named "
+          <> "top-level binding), 'move_symbol' (atomic cross-module "
+          <> "move of a top-level binding — slices signature + "
+          <> "Haddock + body, rewrites consumer imports, verifies, "
+          <> "rolls back on failure). If GHCi reports a compile "
+          <> "error on the rewrite, the file is restored from "
+          <> "snapshot — the refactor is atomic from the agent's "
+          <> "perspective. (#94 Phase C: 'move_symbol' subsumes the "
+          <> "retired ghc_move.)"
     , tdInputSchema = schema
     }
 
@@ -142,6 +148,30 @@ schema = Schema.discriminatedSchema "action"
           = [ "module_path", "new_name"
             , "scope_line_start", "scope_line_end"
             ]
+      }
+  , Schema.SchemaBranch
+      { Schema.sbDiscriminantValue = "move_symbol"
+      , Schema.sbDescription       =
+          "Atomic cross-module move of a top-level binding. \
+          \Slices signature + Haddock + body out of 'from', \
+          \appends to 'to', rewrites consumer 'import' lines, \
+          \verifies the project still loads. Any failure rolls \
+          \back ALL touched files. Phase 1: destination module \
+          \must already exist. (#94 Phase C: subsumes the retired \
+          \ghc_move.)"
+      , Schema.sbProperties        =
+          [ ("symbol",  Schema.stringField
+              "Name of the top-level binding to move.")
+          , ("from",    Schema.stringField
+              "Source module path (relative).")
+          , ("to",      Schema.stringField
+              "Destination module path (relative). Must exist.")
+          , ("dry_run", Schema.booleanField
+              "If true, compute the moved layout and return without \
+              \touching disk.")
+          ]
+      , Schema.sbRequired
+          = [ "symbol", "from", "to" ]
       }
   ]
 
@@ -209,15 +239,29 @@ instance FromJSON RefactorArgs where
           }
 
 handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
-  Left parseError ->
-    pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
-  Right args -> case mkModulePath pd (T.unpack (raModulePath args)) of
-    Left e   -> pure (pathTraversalResult (formatPathError e))
-    Right mp -> do
-      r <- handleAction ghcSess mp args
-      invalidateLoadCache ghcSess
-      pure r
+handle ghcSess pd rawArgs
+  -- #94 Phase C: 'move_symbol' is a passthrough to Move.handle.
+  -- Intercepted before the rename/extract parser because its payload
+  -- shape (symbol/from/to) doesn't match RefactorArgs.
+  | actionTextOf rawArgs == Just "move_symbol" = Move.handle ghcSess pd rawArgs
+  | otherwise = case parseEither parseJSON rawArgs of
+      Left parseError ->
+        pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
+      Right args -> case mkModulePath pd (T.unpack (raModulePath args)) of
+        Left e   -> pure (pathTraversalResult (formatPathError e))
+        Right mp -> do
+          r <- handleAction ghcSess mp args
+          invalidateLoadCache ghcSess
+          pure r
+  where
+    -- Peek at the 'action' field without committing to RefactorArgs's
+    -- parser; cheap helper used only for the move_symbol dispatch above.
+    actionTextOf :: Value -> Maybe Text
+    actionTextOf v = case v of
+      Object o -> case KeyMap.lookup "action" o of
+        Just (String s) -> Just s
+        _               -> Nothing
+      _ -> Nothing
 
 handleAction :: GhcSession -> ModulePath -> RefactorArgs -> IO ToolResult
 handleAction sess mp args = case raAction args of

@@ -2276,10 +2276,13 @@ testRefactorExtractBindingMissingScope = do
 -- Anchor: a future drift back to the flat schema would fail this.
 testRefactorSchemaIsDiscriminated :: IO Bool
 testRefactorSchemaIsDiscriminated =
+  -- #94 Phase C: schema now has THREE branches —
+  -- rename_local / extract_binding / move_symbol (the latter
+  -- subsumed the retired ghc_move).
   let s = tdInputSchema RefactorTool.descriptor
   in pure $ case s of
        A.Object km -> case AKM.lookup "oneOf" km of
-         Just (A.Array xs) -> length xs == 2
+         Just (A.Array xs) -> length xs == 3
          _                 -> False
        _ -> False
 
@@ -10718,7 +10721,7 @@ goldenDispatchTable =
   , ("lab → check_project",             GhcLab,                object [],    Just GhcCheckProject)
   , ("deps explain → deps add",         GhcDeps,               object [ "action" .= ("explain" :: T.Text) ], Just GhcDeps)
   , ("witness → quickcheck",            GhcWitness,            object [],    Just GhcQuickCheck)
-  , ("move → check_project",            GhcMove,               object [],    Just GhcCheckProject)
+  , ("refactor move_symbol → check_project", GhcRefactor,        object [ "action" .= ("move_symbol" :: T.Text) ], Just GhcCheckProject)
   , ("add_import(0) → suppress",        GhcAddImport,          object [],    Nothing)
   , ("modules add → check_project",     GhcModules,            object [ "action" .= ("add" :: T.Text) ],    Just GhcCheckProject)
   , ("modules remove → check_project",  GhcModules,            object [ "action" .= ("remove" :: T.Text) ], Just GhcCheckProject)
@@ -10846,14 +10849,16 @@ testEveryToolHasCategory = pure $
 -- Current breakdown: 36 primitives, 4 composites, 3 gates, 3 control-plane.
 testCategoryCountsMatchTaxonomy :: IO Bool
 testCategoryCountsMatchTaxonomy = pure $
-  countCat CatPrimitive    == 33
+  countCat CatPrimitive    == 32
   -- ^ #94 Phase B retrofit: GhcModules replaces GhcAddModules +
   -- GhcRemoveModules (36 → 35).
   -- #94 Phase C step 1: GhcDeps action="explain" replaces
   -- GhcDepsExplain outright (35 → 34).
   -- #94 Phase C step 3: ghc_quickcheck runs>=2 replaces
-  -- GhcDeterminism outright (34 → 33). No deprecation period
-  -- because the project has a single internal consumer.
+  -- GhcDeterminism outright (34 → 33).
+  -- #94 Phase C step 4: ghc_refactor action="move_symbol" replaces
+  -- GhcMove outright (33 → 32). No deprecation period because the
+  -- project has a single internal consumer.
   && countCat CatComposite    ==  4
   && countCat CatGate         ==  3
   && countCat CatControlPlane ==  2

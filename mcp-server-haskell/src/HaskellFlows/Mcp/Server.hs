@@ -119,7 +119,6 @@ import qualified HaskellFlows.Tool.Load            as Load
 import qualified HaskellFlows.Tool.QuickCheck      as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExportTool
 import qualified HaskellFlows.Tool.Refactor        as RefactorTool
-import qualified HaskellFlows.Tool.Move             as MoveTool
 import qualified HaskellFlows.Tool.Lab              as LabTool
 import qualified HaskellFlows.Tool.ExplainError     as ExplainErrorTool
 import qualified HaskellFlows.Tool.Perf             as PerfTool
@@ -481,12 +480,6 @@ dispatchByName srv args = \case
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
     RefactorTool.handle ghcSess pd args
-  GhcMove -> do
-    -- Issue #62 Phase 1: cross-module top-level symbol move with
-    -- multi-file snapshot + verify-via-loadForTarget rollback.
-    ghcSess <- getOrStartGhcSession srv
-    pd      <- readIORef (srvProjectDir srv)
-    MoveTool.handle ghcSess pd args
   GhcLab -> do
     -- Issue #60 Phase 1: module-wide property audit. Composes
     -- Suggest.applyRules + Tool.QuickCheck per top-level binding.
@@ -743,7 +736,6 @@ allToolDescriptors =
   , DocTool.descriptor
   , GotoTool.descriptor
   , RefactorTool.descriptor
-  , MoveTool.descriptor
   , LabTool.descriptor
   , ExplainErrorTool.descriptor
   , PerfTool.descriptor

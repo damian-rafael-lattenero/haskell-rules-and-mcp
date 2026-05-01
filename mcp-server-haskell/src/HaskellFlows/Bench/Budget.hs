@@ -110,8 +110,10 @@ allBudgets = Map.fromList
     , ToolBudget  50  200   Nothing
         "parse Defined-at marker; pure text scan")
   , ( GhcRefactor
-    , ToolBudget 800 2000   Nothing
-        "rename/extract + snapshot-and-compile-verify roundtrip")
+    , ToolBudget 1500 4000  Nothing
+        "rename/extract/move_symbol + snapshot-and-compile-verify \
+        \roundtrip; #94 Phase C bumped the budget when ghc_move was \
+        \merged in (multi-file moves dominate the upper bound)")
   , ( GhcBatch
     , ToolBudget 500 2000   Nothing
         "per-child average; actual budget = sum of included tools")
@@ -157,9 +159,6 @@ allBudgets = Map.fromList
   , ( GhcPropertyLifecycle
     , ToolBudget 100  300   Nothing
         "property store list/drop; file I/O only")
-  , ( GhcMove
-    , ToolBudget 1500 4000  Nothing
-        "multi-file rename + export fixup + compile-verify roundtrip")
   , ( GhcLab
     , ToolBudget 5000 15000 Nothing
         "per-binding suggest + QC across whole module; scales with module size")

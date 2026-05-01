@@ -78,7 +78,6 @@ data ToolName
   | GhcBrowse
   | GhcBootstrap
   | GhcPropertyLifecycle
-  | GhcMove
   | GhcLab
   | GhcExplainError
   | GhcPerf
@@ -139,7 +138,6 @@ toolNameText = \case
   GhcBootstrap         -> "ghc_bootstrap"
   GhcPropertyLifecycle -> "ghc_property_lifecycle"
   GhcToolchain         -> "ghc_toolchain"
-  GhcMove              -> "ghc_move"
   GhcLab               -> "ghc_lab"
   GhcExplainError      -> "ghc_explain_error"
   GhcPerf              -> "ghc_perf"
@@ -220,7 +218,6 @@ toolCategory = \case
   HoogleSearch         -> CatPrimitive
   -- Write / refactor
   GhcRefactor          -> CatPrimitive
-  GhcMove              -> CatPrimitive   -- future: refactor action=move_symbol
   GhcFormat            -> CatPrimitive
   GhcApplyExports      -> CatPrimitive
   GhcFixWarning        -> CatPrimitive
@@ -297,7 +294,6 @@ toolVersion = \case
   HoogleSearch         -> "1.0.0"
   -- ── Write / refactor ────────────────────────────────────────────
   GhcRefactor          -> "1.0.0"
-  GhcMove              -> "1.0.0"
   GhcFormat            -> "1.0.0"
   GhcApplyExports      -> "1.0.0"
   GhcFixWarning        -> "1.0.0"

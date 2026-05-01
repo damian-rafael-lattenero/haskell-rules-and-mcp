@@ -86,8 +86,7 @@ runFlow c projectDir = do
   -- Step 2 — dry_run preview, no FS writes.
   t0 <- stepHeader 1 "ghc_move dry_run lists files (#62)"
   consumerBefore <- TIO.readFile (projectDir </> "src" </> "Consumer.hs")
-  rDry <- Client.callTool c GhcMove (object
-    [ "symbol"  .= ("double" :: Text)
+  rDry <- Client.callTool c GhcRefactor (object [ "action" .= ("move_symbol" :: Text), "symbol"  .= ("double" :: Text)
     , "from"    .= ("Source" :: Text)
     , "to"      .= ("Dest"   :: Text)
     , "dry_run" .= True
@@ -106,8 +105,7 @@ runFlow c projectDir = do
   -- Step 3 — real move. Source loses 'double', Dest gains it,
   -- Consumer's selective import splits.
   t1 <- stepHeader 2 "ghc_move applies + verifies (#62)"
-  rApply <- Client.callTool c GhcMove (object
-    [ "symbol" .= ("double" :: Text)
+  rApply <- Client.callTool c GhcRefactor (object [ "action" .= ("move_symbol" :: Text), "symbol" .= ("double" :: Text)
     , "from"   .= ("Source" :: Text)
     , "to"     .= ("Dest"   :: Text)
     ])
@@ -144,8 +142,7 @@ runFlow c projectDir = do
 
   -- Step 5 — negative: missing destination is refused.
   t3 <- stepHeader 4 "ghc_move refuses missing destination (#62)"
-  rMissing <- Client.callTool c GhcMove (object
-    [ "symbol" .= ("greet"             :: Text)
+  rMissing <- Client.callTool c GhcRefactor (object [ "action" .= ("move_symbol" :: Text), "symbol" .= ("greet"             :: Text)
     , "from"   .= ("Source"            :: Text)
     , "to"     .= ("Definitely.Missing" :: Text)
     ])
