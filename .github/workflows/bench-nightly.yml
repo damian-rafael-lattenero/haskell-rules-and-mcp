@@ -1,0 +1,79 @@
+name: Bench (nightly)
+
+# ---------------------------------------------------------------------------
+#  Issue #96 Phase D — nightly latency-budget run.
+#
+#  Why a separate workflow instead of adding `schedule:` to
+#  `haskell-ci.yml`:
+#
+#    * Adding cron to the main CI workflow would also re-run the
+#      build-and-test matrix + hlint nightly. That's ~40 minutes of
+#      Action minutes for a signal we already have on every push.
+#      A dedicated bench workflow keeps the cron payload to just
+#      what's measuring drift.
+#
+#    * Branch-protection requires the `Haskell CI required` aggregator
+#      from `haskell-ci.yml`. A separate workflow's job names cannot
+#      be confused with that — its red is a real bench regression,
+#      not a CI infrastructure flake.
+#
+#  Cadence: 02:00 UTC daily. Picked to stay outside the typical
+#  push window (Latin America / EU / US east-coast development hours)
+#  so a midnight-UTC commit and the cron don't fight for free-tier
+#  runner slots.
+# ---------------------------------------------------------------------------
+
+on:
+  schedule:
+    # POSIX cron — `m h dom mon dow`. 02:00 UTC every day.
+    - cron: "0 2 * * *"
+
+  # Manual trigger — useful when iterating on Bench/Budget.hs values
+  # without waiting for the cron.
+  workflow_dispatch: {}
+
+# Concurrency: only one nightly run at a time.  If a manual
+# `workflow_dispatch` lands while a cron run is in flight, queue
+# the new one rather than racing it (the bench expects a quiet
+# host so the timing samples aren't poisoned by parallel cabal
+# builds in the same runner cache).
+concurrency:
+  group: bench-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: mcp-server-haskell
+
+jobs:
+  bench:
+    name: Bench (nightly, gated)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: setup
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.12.2"
+          cabal-version: "3.12.1.0"
+          cabal-update: true
+
+      # The bench harness reads every tool's `(p50, p95)` budget from
+      # `src/HaskellFlows/Bench/Budget.hs` and exits non-zero on a
+      # sustained p95 breach.  Unlike the advisory job in
+      # `haskell-ci.yml` (per-step `continue-on-error: true`), this
+      # workflow's badge IS the signal: a red run means a real
+      # regression worth reading.
+      - name: Run bench gate
+        env:
+          HFLOWS_BENCH_GATE: "1"
+        run: cabal run haskell-flows-mcp-bench --offline -- --gate
+
+      # Phase D backlog: emit a JSON summary of measured (p50, p95)
+      # per tool, upload as an artifact, and (eventually) open a PR
+      # that proposes updating the initial-proposal values in
+      # Bench/Budget.hs with measured numbers.  Tracked in #96 Phase D.
