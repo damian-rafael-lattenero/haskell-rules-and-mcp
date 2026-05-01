@@ -98,7 +98,7 @@ handle pd rawArgs = case parseEither parseJSON rawArgs :: Either String Value of
           ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
               "No .cabal file found in project root")
                 { Env.eeRemediation =
-                    Just "Run ghc_create_project to scaffold one, or check that the project root is correct." })))
+                    Just "Run ghc_project(action=\"create\") to scaffold one, or check that the project root is correct." })))
       Just file -> do
         readRes <- try (TIO.readFile file) :: IO (Either SomeException Text)
         case readRes of

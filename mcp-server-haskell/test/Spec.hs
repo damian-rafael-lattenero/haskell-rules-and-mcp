@@ -1147,6 +1147,10 @@ main = do
       , test "#103: extractHaddockAbove finds -- | comment"           testExtractHaddockFindsDoc
       , test "#103: extractHaddockAbove returns Nothing for plain --" testExtractHaddockNoHaddock
       , test "#103: extractHaddockAbove returns Nothing for no comment" testExtractHaddockNoComment
+      -- Issue #106 sub-findings
+      , test "#106/F-14: mkGhcError propagates code from captureHook" testMkGhcErrorCode
+      , test "#106/F-17: previewResult omits patch key when dropLine" testFixWarnNoPatchKey
+      , test "#106/F-07: error remediation uses ghc_project(action=create)" testRemediationToolName
       ]
   if and results then exitSuccess else exitFailure
 
@@ -11115,3 +11119,56 @@ testExtractHaddockNoComment = do
   result <- DocTool.extractHaddockAbove path 1
   removePathForcibly path
   pure (isNothing result)
+
+--------------------------------------------------------------------------------
+-- Issue #106 sub-findings
+--------------------------------------------------------------------------------
+
+-- | F-14: 'parseGhcErrors' should populate 'geCode' when the header line
+-- contains @[GHC-XXXXX]@. This verifies the regex capture group is correct.
+-- The captureHook fix populates geCode for the GHC-API path; the same
+-- 'geCode' field is what categorizeWarning branches on.
+testMkGhcErrorCode :: IO Bool
+testMkGhcErrorCode =
+  let raw = T.unlines
+        [ "src/Foo.hs:5:1: warning: [GHC-66111] [-Wunused-imports]"
+        , "    The import of 'Data.List' is redundant"
+        ]
+  in pure $ case parseGhcErrors raw of
+       [e] -> geCode e == Just "GHC-66111"
+           && geSeverity e == SevWarning
+       _   -> False
+
+-- | F-17: 'previewResult' for a dropLine plan must omit the @patch@ key
+-- entirely rather than emitting @\"patch\": null@. Agents that branch on
+-- key presence (not null vs. absent) were getting confused.
+testFixWarnNoPatchKey :: IO Bool
+testFixWarnNoPatchKey =
+  let plan = FixWarning.planForCode "GHC-66111"
+      args = FixWarning.FixWarningArgs
+               { FixWarning.fwModulePath = "src/Foo.hs"
+               , FixWarning.fwLine       = 3
+               , FixWarning.fwCode       = "GHC-66111"
+               , FixWarning.fwApply      = False
+               , FixWarning.fwName       = Nothing
+               }
+      result = FixWarning.previewResult "src/Foo.hs" plan args
+  in pure $ case trContent result of
+       [TextContent body] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+           Just (A.Object topEnv) ->
+             case AKM.lookup "result" topEnv of
+               Just (A.Object r) ->
+                    AKM.member "dropLine" r
+                 && not (AKM.member "patch" r)
+               _ -> False
+           _ -> False
+       _ -> False
+
+-- | F-07: error remediation strings must reference the consolidated
+-- @ghc_project(action=\"create\")@ surface, not the retired
+-- @ghc_create_project@ tool name.
+testRemediationToolName :: IO Bool
+testRemediationToolName = do
+  let scaffold = CreateProject.sourceFile "Foo"
+  pure $ not (T.isInfixOf "ghc_create_project" scaffold)

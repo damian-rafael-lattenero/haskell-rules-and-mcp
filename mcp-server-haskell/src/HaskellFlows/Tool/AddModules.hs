@@ -148,7 +148,7 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
                   ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
                       "No .cabal file found in project root")
                         { Env.eeRemediation =
-                            Just "Run ghc_create_project to scaffold a cabal package first." })))
+                            Just "Run ghc_project(action=\"create\") to scaffold a cabal package first." })))
               Just file -> do
                 (createdFiles, existingFiles) <- scaffoldFiles pd tgt validated
                 eCabal <- tryRewriteCabal file tgt validated

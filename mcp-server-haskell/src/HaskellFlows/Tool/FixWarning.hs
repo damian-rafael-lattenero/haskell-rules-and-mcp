@@ -17,10 +17,13 @@ module HaskellFlows.Tool.FixWarning
     -- * Issue #55 — concrete-patch helpers
   , planForCodeWithName
   , underscorePrefix
+    -- * Test-only
+  , previewResult
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.Maybe (catMaybes)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -263,16 +266,16 @@ writePatched full plan args body = do
 -- 'applied=False' is the explicit signal callers branch on.
 previewResult :: FilePath -> FixPlan -> FixWarningArgs -> ToolResult
 previewResult path plan args =
-  Env.toolResponseToResult (Env.mkOk (object
-    [ "applied"   .= False
-    , "fixable"   .= fpFixable plan
-    , "path"      .= T.pack path
-    , "code"      .= fwCode args
-    , "line"      .= fwLine args
-    , "hint"      .= fpHint plan
-    , "dropLine"  .= fpDrop plan
-    , "patch"     .= fpPatch plan
-    ]))
+  Env.toolResponseToResult (Env.mkOk (object (catMaybes
+    [ Just ("applied"   .= False)
+    , Just ("fixable"   .= fpFixable plan)
+    , Just ("path"      .= T.pack path)
+    , Just ("code"      .= fwCode args)
+    , Just ("line"      .= fwLine args)
+    , Just ("hint"      .= fpHint plan)
+    , Just ("dropLine"  .= fpDrop plan)
+    , ("patch" .=) <$> fpPatch plan
+    ])))
 
 -- | Issue #90 Phase C: in-place patch → status='ok' with
 -- 'applied=True'. Same shape as preview minus 'dropLine' (the

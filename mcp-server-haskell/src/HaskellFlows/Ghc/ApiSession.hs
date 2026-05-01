@@ -608,13 +608,14 @@ installCaptureHook ref = do
 captureHook :: IORef [GhcError] -> LogAction -> LogAction
 captureHook ref _orig _lflags msgClass ss sdoc = do
   let body = T.pack (renderWithContext sdocContextPlain sdoc)
-      codePrefix = case msgClass of
-        MCDiagnostic _ _ (Just dc) -> "[" <> T.pack (show dc) <> "] "
-        _                          -> ""
-      txt = codePrefix <> body
+      (mCode, txt) = case msgClass of
+        MCDiagnostic _ _ (Just dc) ->
+          let codeText = T.pack (show dc)
+          in (Just codeText, "[" <> codeText <> "] " <> body)
+        _ -> (Nothing, body)
   case msgClassToSeverity msgClass of
     Nothing -> pure ()
-    Just sev -> modifyIORef' ref (mkGhcError sev ss txt :)
+    Just sev -> modifyIORef' ref (mkGhcError sev ss mCode txt :)
 
 -- | Render SDoc without ANSI colour escapes — the MCP wire format
 -- is plain JSON, not a terminal.
@@ -636,14 +637,14 @@ msgClassToSeverity = \case
 -- come from 'RealSrcSpan'; unhelpful spans report sentinel values
 -- (@file=""@, line/col 0) matching the legacy parser's behaviour for
 -- location-less messages.
-mkGhcError :: Severity -> SrcSpan -> Text -> GhcError
-mkGhcError sev ss msg = case ss of
+mkGhcError :: Severity -> SrcSpan -> Maybe Text -> Text -> GhcError
+mkGhcError sev ss mCode msg = case ss of
   RealSrcSpan rspan _ -> GhcError
     { geFile     = T.pack (unpackFS (srcSpanFile rspan))
     , geLine     = srcSpanStartLine rspan
     , geColumn   = srcSpanStartCol rspan
     , geSeverity = sev
-    , geCode     = Nothing
+    , geCode     = mCode
     , geMessage  = msg
     }
   _ -> GhcError
@@ -651,7 +652,7 @@ mkGhcError sev ss msg = case ss of
     , geLine     = 0
     , geColumn   = 0
     , geSeverity = sev
-    , geCode     = Nothing
+    , geCode     = mCode
     , geMessage  = msg
     }
 

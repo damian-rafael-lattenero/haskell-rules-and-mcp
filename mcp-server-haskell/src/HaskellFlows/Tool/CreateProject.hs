@@ -28,6 +28,7 @@ module HaskellFlows.Tool.CreateProject
   , validateName
     -- * Issue #69 — exported for unit tests
   , cabalFile
+  , sourceFile
   ) where
 
 import Control.Exception (SomeException, try)
@@ -296,7 +297,7 @@ cabalProject = "packages: .\n"
 
 sourceFile :: Text -> Text
 sourceFile modName = T.unlines
-  [ "-- | Stub module scaffolded by ghc_create_project."
+  [ "-- | Stub module scaffolded by ghc_project(action=\"create\")."
   , "module " <> modName <> " (greet) where"
   , ""
   , "-- | Example function — replace with your own."

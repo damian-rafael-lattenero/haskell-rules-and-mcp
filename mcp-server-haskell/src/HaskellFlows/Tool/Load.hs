@@ -224,8 +224,8 @@ emptyProjectResult =
         [ "loaded"      .= (0 :: Int)
         , "summary"     .= ( "No Haskell sources found under \
                             \src/ or app/." :: Text )
-        , "remediation" .= ( "Create the project with ghc_create_project \
-                            \or add modules with ghc_add_modules before \
+        , "remediation" .= ( "Create the project with ghc_project(action=\"create\") \
+                            \or add modules with ghc_modules(action=\"add\") before \
                             \calling ghc_load." :: Text )
         ]
       envErr   = Env.mkErrorEnvelope Env.ModuleNotInGraph
