@@ -499,6 +499,22 @@ dispatch name payload = case name of
         [ "module_path" .= ("<your entry module>" :: Text) ])
     ])
 
+  -- #94 Phase B: action-discriminated successor.  Reuse the same
+  -- nextStep contract as the legacy tools — the dispatcher cares
+  -- about the post-condition (modules just changed), not which
+  -- surface point produced it.  Always recommend a project-wide
+  -- gate; both add and remove can dangle imports or break loaders.
+  GhcModules -> Just (chained GhcCheckProject
+    "Modules registry changed in the .cabal (add or remove). Run \
+    \ghc_check_project to surface any compile errors the change \
+    \introduced; chained ghc_load follows so the entry module is \
+    \live in the GHCi session afterwards."
+    Nothing
+    [ step GhcCheckProject (object [])
+    , step GhcLoad (object
+        [ "module_path" .= ("<your entry module>" :: Text) ])
+    ])
+
   -- Applied an export list — reload confirms nothing external broke.
   GhcApplyExports -> Just (simple GhcLoad
     "Module export list was rewritten. Reload to confirm the new \

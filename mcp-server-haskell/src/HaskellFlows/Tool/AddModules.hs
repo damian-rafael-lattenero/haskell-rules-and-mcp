@@ -40,7 +40,10 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcAddModules
     , tdDescription =
-        "Register new modules in the project's .cabal and scaffold \
+        "[DEPRECATED — use ghc_modules { action: \"add\", ... } \
+        \instead; this tool will be removed one minor release after \
+        \#94 Phase B lands.] \
+        \Register new modules in the project's .cabal and scaffold \
         \their empty .hs stubs. Default target is the library's \
         \'exposed-modules' under 'src/'. Pass 'stanza' to target \
         \another stanza: 'test-suite' / 'test-suite:NAME' / \

@@ -90,6 +90,7 @@ import HaskellFlows.Mcp.WorkflowState
 import HaskellFlows.Types (ProjectDir, mkProjectDir, unProjectDir)
 import qualified HaskellFlows.Tool.AddImport       as AddImportTool
 import qualified HaskellFlows.Tool.AddModules      as AddModulesTool
+import qualified HaskellFlows.Tool.Modules         as ModulesTool
 import qualified HaskellFlows.Tool.ApplyExports    as ApplyExportsTool
 import qualified HaskellFlows.Tool.Arbitrary       as ArbitraryTool
 import qualified HaskellFlows.Tool.Batch           as BatchTool
@@ -566,6 +567,16 @@ dispatchByName srv args = \case
     r  <- RemoveModulesTool.handle pd args
     invalidateStanzaFlagsIfPresent srv
     pure r
+  GhcModules -> do
+    -- #94 Phase B: action-discriminated successor to GhcAddModules /
+    -- GhcRemoveModules. ModulesTool.handle dispatches on
+    -- args.action ∈ {"add","remove"} and forwards to the legacy
+    -- handlers, so behaviour + side-effects (stanza-flag
+    -- invalidation) match the legacy path exactly.
+    pd <- readIORef (srvProjectDir srv)
+    r  <- ModulesTool.handle pd args
+    invalidateStanzaFlagsIfPresent srv
+    pure r
   GhcApplyExports -> do
     pd <- readIORef (srvProjectDir srv)
     r  <- ApplyExportsTool.handle pd args
@@ -760,6 +771,7 @@ allToolDescriptors =
   , BrowseTool.descriptor
   , DeterminismTool.descriptor
   , RemoveModulesTool.descriptor
+  , ModulesTool.descriptor       -- #94 Phase B: action-discriminated successor
   , BootstrapTool.descriptor
   , PropertyLifecycleTool.descriptor
   , ToolchainWarmupTool.descriptor

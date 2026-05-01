@@ -138,6 +138,7 @@ import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import qualified HaskellFlows.Tool.Regression as RegTool
 import qualified HaskellFlows.Tool.Bootstrap as Bootstrap
 import qualified HaskellFlows.Tool.RemoveModules as RM
+import qualified HaskellFlows.Tool.Modules as Modules
 import qualified HaskellFlows.Tool.Suggest as SuggestTool
 import qualified HaskellFlows.Tool.AddImport as AddImport
 import qualified HaskellFlows.Tool.AddModules as AddModules
@@ -1127,6 +1128,9 @@ main = do
       -- Issue #99 Phase B · per-tool version surface
       , test "#99B: every ToolName has a non-empty version"           testEveryToolHasVersion
       , test "#99B: every tool version is valid semver triple"        testToolVersionIsSemverTriple
+      -- Issue #94 Phase B · action-discriminated 'modules' primitive
+      , test "#94B: ghc_modules registered with category=primitive"   testModulesRegistered
+      , test "#94B: ghc_modules rejects unknown action"               testModulesRejectsBadAction
       ]
   if and results then exitSuccess else exitFailure
 
@@ -10831,7 +10835,10 @@ testEveryToolHasCategory = pure $
 -- Current breakdown: 36 primitives, 4 composites, 3 gates, 3 control-plane.
 testCategoryCountsMatchTaxonomy :: IO Bool
 testCategoryCountsMatchTaxonomy = pure $
-  countCat CatPrimitive    == 36
+  countCat CatPrimitive    == 37
+  -- ^ #94 Phase B added GhcModules (action-discriminated successor
+  -- to GhcAddModules + GhcRemoveModules). 36 → 37; the legacy tools
+  -- remain registered for one minor release (deprecation lifecycle).
   && countCat CatComposite    ==  4
   && countCat CatGate         ==  3
   && countCat CatControlPlane ==  3
@@ -10872,3 +10879,40 @@ testToolVersionIsSemverTriple = pure $
           (x : xs) | not (p c) -> (c : x) : xs
           _        | not (p c) -> [c] : acc
           _                    -> [] : acc
+
+------------------------------------------------------------------------
+-- Issue #94 Phase B · action-discriminated 'modules' primitive
+------------------------------------------------------------------------
+
+-- | The new 'GhcModules' constructor must round-trip through
+-- 'parseToolName . toolNameText' AND be classified as a primitive
+-- (not gate, not composite, not control-plane).  Sanity check that
+-- adding the constructor without the corresponding 'toolCategory'
+-- arm doesn't slip past the type system (it can't — 'toolCategory'
+-- is exhaustive — but the *category* could still be wrong).
+testModulesRegistered :: IO Bool
+testModulesRegistered = pure $
+  parseToolName "ghc_modules" == Just GhcModules
+  && toolCategory GhcModules    == CatPrimitive
+
+-- | The dispatcher must refuse an action it does not recognise with
+-- a structured response (status=refused), not crash and not silently
+-- delegate to the wrong handler.  Mirrors the contract every other
+-- action-discriminated primitive (e.g. 'ghc_deps') already honours.
+testModulesRejectsBadAction :: IO Bool
+testModulesRejectsBadAction =
+  case HaskellFlows.Types.mkProjectDir "/tmp" of
+    Left _   -> pure False  -- mkProjectDir failed; cannot run the test
+    Right pd -> do
+      -- Direct handler call (no JSON-RPC envelope needed): we only
+      -- verify that the dispatcher returns isError=true with content
+      -- present, which is how 'ToolResult' renders a refused response.
+      -- The ProjectDir argument is never read because the action
+      -- check fires first.
+      ToolResult content isErr <-
+        Modules.handle pd
+          (object
+            [ "action"  .= ("nuke_everything" :: T.Text)
+            , "modules" .= (["Foo"] :: [T.Text])
+            ])
+      pure (isErr && not (null content))

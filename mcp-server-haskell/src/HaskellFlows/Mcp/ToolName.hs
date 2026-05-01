@@ -90,6 +90,11 @@ data ToolName
   | GhcPerf
   | GhcPropertyAudit
   | GhcWitness
+  | GhcModules
+    -- ^ #94 Phase B: action-discriminated 'modules' primitive that
+    -- subsumes 'GhcAddModules' + 'GhcRemoveModules'. New surface
+    -- point; the legacy tools remain for one minor release while
+    -- callers migrate (deprecation lifecycle per #99 Phase C).
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 -- | Render a 'ToolName' as the wire-format string the MCP clients
@@ -143,6 +148,7 @@ toolNameText = \case
   GhcPerf              -> "ghc_perf"
   GhcPropertyAudit     -> "ghc_property_audit"
   GhcWitness           -> "ghc_witness"
+  GhcModules           -> "ghc_modules"
 
 -- | Parse a wire-format tool name back to its constructor. Returns
 -- 'Nothing' for any unknown string — used by the dispatcher to emit
@@ -226,8 +232,9 @@ toolCategory = \case
   -- Dependency + project management
   GhcDeps              -> CatPrimitive
   GhcDepsExplain       -> CatPrimitive   -- future: deps action=explain
-  GhcAddModules        -> CatPrimitive   -- future: modules action=add
-  GhcRemoveModules     -> CatPrimitive   -- future: modules action=remove
+  GhcAddModules        -> CatPrimitive   -- deprecated: use modules action=add (#94 Phase B)
+  GhcRemoveModules     -> CatPrimitive   -- deprecated: use modules action=remove (#94 Phase B)
+  GhcModules           -> CatPrimitive   -- #94 Phase B: action-discriminated successor
   GhcCreateProject     -> CatPrimitive   -- future: project action=create
   GhcSwitchProject     -> CatPrimitive   -- future: project action=switch
   GhcValidateCabal     -> CatPrimitive   -- future: project action=validate
@@ -338,3 +345,5 @@ toolVersion = \case
   GhcWorkflow          -> "1.0.0"
   GhcToolchainStatus   -> "1.0.0"
   GhcToolchainWarmup   -> "1.0.0"
+  -- ── #94 Phase B: action-discriminated successors ────────────────
+  GhcModules           -> "1.0.0"

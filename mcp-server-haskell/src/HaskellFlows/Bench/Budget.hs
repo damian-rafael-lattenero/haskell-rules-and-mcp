@@ -187,6 +187,10 @@ allBudgets = Map.fromList
   , ( GhcWitness
     , ToolBudget 4000 10000 Nothing
         "property eval x1000 with distribution labelling; cabal-repl harness")
+  , ( GhcModules
+    , ToolBudget 100  300   Nothing
+        "#94 Phase B: action-discriminated successor to ghc_add_modules / \
+        \ghc_remove_modules; budgets match the underlying handlers")
   ]
 
 -- | Look up the budget for a specific tool.

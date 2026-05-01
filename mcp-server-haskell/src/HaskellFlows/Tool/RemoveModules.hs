@@ -52,7 +52,10 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcRemoveModules
     , tdDescription =
-        "De-register modules from the project's .cabal exposed-modules "
+        "[DEPRECATED — use ghc_modules { action: \"remove\", ... } "
+          <> "instead; this tool will be removed one minor release "
+          <> "after #94 Phase B lands.] "
+          <> "De-register modules from the project's .cabal exposed-modules "
           <> "list. Source files are NOT deleted by default — pass "
           <> "delete_files=true to also remove the .hs files. Symmetric "
           <> "to ghc_add_modules; idempotent (no-op for modules that "

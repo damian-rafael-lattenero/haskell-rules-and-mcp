@@ -73,6 +73,7 @@ library
                       HaskellFlows.Suggest.Rules
                       HaskellFlows.Tool.AddImport
                       HaskellFlows.Tool.AddModules
+                      HaskellFlows.Tool.Modules
                       HaskellFlows.Tool.ApplyExports
                       HaskellFlows.Tool.Arbitrary
                       HaskellFlows.Tool.Batch
