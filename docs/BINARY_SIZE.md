@@ -88,12 +88,21 @@ Re-reading [#101](https://github.com/damian-rafael-lattenero/haskell-rules-and-m
 
 The Phase A measurement materially changes the proposed phases:
 
-- **Phase B (cheap optimisations) is still worth doing.**  64 MB off
-  every developer's `~/.local/bin` for free is good hygiene.  The
-  delivery is a one-liner in `scripts/install-mcp.sh` (`strip` after
-  `cabal install`) plus `-split-sections` / `--gc-sections` in the
-  executable's `ghc-options`.  No risk to functionality (verified:
-  stripped binary answers `--version` and `--help` identically).
+- **Phase B (cheap optimisations) — ✅ LANDED.**  Delivered in two
+  pieces:
+
+  * `cabal.project`: `package haskell-flows-mcp { split-sections: True }`.
+    Tells GHC to emit one section per top-level definition so the
+    linker can drop unreferenced symbols.  Cross-platform: the right
+    linker invocation is chosen automatically per OS.
+  * `scripts/install-mcp.sh`: a `[3/3]` step strips the copied binary.
+    `--no-strip` is available for the rare case where a developer
+    wants the symbol table for `lldb` / `gdb`.
+
+  Both layers preserve binary functionality (`--version` and `--help`
+  both work post-strip; the unit + e2e suites still pass).  Combined
+  saving: **~64 MB off the 199 MB on-disk** for every developer's
+  `~/.local/bin`.
 
 - **Phase C (thin-client / fat-worker split) is no longer well-motivated
   by *cold-start*.**  Binary boot is already 30–80 ms.  The split would

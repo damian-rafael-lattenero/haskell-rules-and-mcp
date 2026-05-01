@@ -1,1 +1,9 @@
 packages: .
+
+-- #101 Phase B: emit one section per top-level definition so the
+-- linker can drop unreferenced symbols. Pairs with `strip` in
+-- scripts/install-mcp.sh to take the binary from 199 MB → ~135 MB
+-- without changing functionality (verified in docs/BINARY_SIZE.md §3).
+-- Cross-platform: GHC emits the right linker invocation per platform.
+package haskell-flows-mcp
+  split-sections: True

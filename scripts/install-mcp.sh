@@ -13,15 +13,22 @@
 # Steps:
 #   1. cabal install exe:haskell-flows-mcp --overwrite-policy=always
 #   2. cp  ~/.cabal/bin/haskell-flows-mcp  ~/.local/bin/haskell-flows-mcp
-#   3. print a reminder to restart Claude Code so the next invocation
+#   3. strip the copied binary (#101 Phase B: ~30% size reduction;
+#      symbol table + debug info are not used at runtime by the
+#      MCP — verified in docs/BINARY_SIZE.md §3).
+#      Pass --no-strip to skip if the user wants debug symbols.
+#   4. print a reminder to restart Claude Code so the next invocation
 #      picks up the fresh build.
 #
 # Usage:
-#   scripts/install-mcp.sh            # rebuild + install
+#   scripts/install-mcp.sh            # rebuild + install (stripped)
+#   scripts/install-mcp.sh --no-strip # rebuild + install, keep symbols
 #   scripts/install-mcp.sh --check    # just print whether the on-disk
 #                                     # binary is older than the source
 #   scripts/install-mcp.sh -h         # this help block
 set -euo pipefail
+
+STRIP=1   # default: strip the copied binary (Phase B savings).
 
 # Same PATH dance as ci-local.sh — non-login shells on macOS don't
 # source .zprofile, so cabal/ghc/hlint/fourmolu need to be made
@@ -39,8 +46,11 @@ warn() { printf '\033[1;33m!\033[0m %s\n' "$*"; }
 
 case "${1:-}" in
   -h|--help)
-    sed -n '1,28p' "$0"
+    sed -n '1,30p' "$0"
     exit 0
+    ;;
+  --no-strip)
+    STRIP=0
     ;;
   --check)
     if [[ ! -x "$LOCAL_BIN" ]]; then
@@ -75,14 +85,31 @@ esac
 
 pushd mcp-server-haskell > /dev/null
 
-step "[1/2] cabal install exe:haskell-flows-mcp"
+step "[1/3] cabal install exe:haskell-flows-mcp"
 cabal install exe:haskell-flows-mcp --overwrite-policy=always
 
 popd > /dev/null
 
-step "[2/2] copy → $LOCAL_BIN"
+step "[2/3] copy → $LOCAL_BIN"
 mkdir -p "$(dirname "$LOCAL_BIN")"
 cp "$CABAL_BIN" "$LOCAL_BIN"
+ok "copied: $(stat -f '%z bytes' "$LOCAL_BIN" 2>/dev/null \
+                 || stat -c '%s bytes' "$LOCAL_BIN")"
+
+if [[ "$STRIP" -eq 1 ]]; then
+  step "[3/3] strip $LOCAL_BIN (#101 Phase B)"
+  before=$(stat -f %z "$LOCAL_BIN" 2>/dev/null || stat -c %s "$LOCAL_BIN")
+  # `strip` is in /usr/bin on macOS + every Linux distro; no need to
+  # probe PATH. -x on macOS = strip non-global symbols (what we want);
+  # -S on Linux strips debug-info-only. Use the lowest-common-denominator
+  # invocation: bare `strip` defaults are conservative on both.
+  strip "$LOCAL_BIN"
+  after=$(stat -f %z "$LOCAL_BIN" 2>/dev/null || stat -c %s "$LOCAL_BIN")
+  saved=$(( before - after ))
+  ok "stripped: $after bytes (saved $saved bytes / $((saved * 100 / before))%)"
+else
+  step "[3/3] strip skipped (--no-strip)"
+fi
 
 ok "installed: $(stat -f '%Sm  %z bytes' "$LOCAL_BIN" 2>/dev/null \
                  || stat -c '%y  %s bytes' "$LOCAL_BIN")"

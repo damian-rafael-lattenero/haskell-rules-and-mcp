@@ -134,9 +134,11 @@ table and the live registry is a compile-error.
   interpret `(p50, p95)` budgets.
 - **`docs/concurrency.md`** (#97 Phase A) — explicit contract for
   the property store + GHCi session under concurrent calls.
-- **`docs/binary-size.md`** (#101 Phase A) — baseline measurement;
-  Phase B will add `strip` + `-split-sections` to reduce
-  the 199 MB → ~135 MB.
+- **`docs/BINARY_SIZE.md`** (#101 Phase A) — baseline measurement.
+- **Binary size: 199 MB → ~135 MB** (#101 Phase B) — `split-sections`
+  in `cabal.project` lets the linker drop unreferenced symbols;
+  `scripts/install-mcp.sh` adds a `strip` step (skip with
+  `--no-strip` if symbol table is needed for `lldb`).
 
 ### Known limitations
 
@@ -154,9 +156,12 @@ table and the live registry is a compile-error.
 - Phase D — upstream-first tool resolution (mirror becomes fallback).
 - Phase E — Nix flake for declarative dev shell.
 - Phase F — Discourse Haskell announcement.
-- #97 Phase B — file-locking the property store.
-- #101 Phase B — `strip` + `-split-sections` in `install-mcp.sh`.
 - #96 Phase C — wire bench into CI gate.
+
+(Note: #97 Phase B was already implemented at 0.1.0 — the
+property store has had cross-process flock + in-process MVar
+locking via `withGlobalStoreLock` since the original release.
+The `FlowPropertyStoreRace` e2e scenario covers it.)
 
 ## [0.1.0] - 2026-04-19
 
