@@ -1,0 +1,23 @@
+.github/workflows/bench-nightly.yml
+  b9182aefd71cfb20 1-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "7643dafce89684497d72587f27f844b43ff7f7ee",
+  "prompts": {
+    "b9182aefd71cfb20": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3348794-a74f-41bc-8f83-210435252065",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 79,
+      "total_deletions": 0,
+      "accepted_lines": 11736,
+      "overriden_lines": 0
+    }
+  }
+}
