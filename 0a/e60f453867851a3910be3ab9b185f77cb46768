@@ -1,0 +1,33 @@
+mcp-server-haskell/src/HaskellFlows/Tool/Lab.hs
+  566709e688c741b3 374-381,383-389
+mcp-server-haskell/src/HaskellFlows/Suggest/Rules.hs
+  566709e688c741b3 24,106-135,173,177,236,240-264,279-285,288-289,305-310,312,406-408,410,429-431,434
+mcp-server-haskell/test/Spec.hs
+  566709e688c741b3 1134-1149,10984-11117
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheckExport.hs
+  566709e688c741b3 33,39,194,197-238
+mcp-server-haskell/src/HaskellFlows/Tool/AddImport.hs
+  566709e688c741b3 9,153-160,165-175
+mcp-server-haskell/src/HaskellFlows/Tool/Doc.hs
+  566709e688c741b3 14,22,24,26-27,29,84,86-90,93-95,97-111,149-204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "0ae60f453867851a3910be3ab9b185f77cb46768",
+  "prompts": {
+    "566709e688c741b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78173d44-cc05-4e0d-b758-291cd8e35e65",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 2617,
+      "total_deletions": 150,
+      "accepted_lines": 2589,
+      "overriden_lines": 0
+    }
+  }
+}
