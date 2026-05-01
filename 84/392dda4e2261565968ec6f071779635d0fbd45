@@ -1,0 +1,33 @@
+mcp-server-haskell/test/Spec.hs
+  033795528ddcaec0 2342-2343,2347,10712,10842-10847
+mcp-server-haskell/test-e2e/Scenarios/FlowDepsExplain.hs
+  033795528ddcaec0 56-57,77-78
+mcp-server-haskell/src/HaskellFlows/Tool/Deps.hs
+  033795528ddcaec0 56-57,62,111-114,158-172,235-241,243-264
+mcp-server-haskell/src/HaskellFlows/Mcp/NextStep.hs
+  033795528ddcaec0 210-225
+mcp-server-haskell/src/HaskellFlows/Tool/DepsExplain.hs
+  033795528ddcaec0 1,7,17-21,23
+docs/TOOL_TAXONOMY.md
+  033795528ddcaec0 55,119,123,125-132,147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "84392dda4e2261565968ec6f071779635d0fbd45",
+  "prompts": {
+    "033795528ddcaec0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c2325b8-3973-461e-9af9-e12d8c594bf0",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 304,
+      "total_deletions": 14642,
+      "accepted_lines": 31794,
+      "overriden_lines": 0
+    }
+  }
+}
