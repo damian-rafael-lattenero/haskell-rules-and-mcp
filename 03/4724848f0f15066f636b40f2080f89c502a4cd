@@ -1,0 +1,59 @@
+mcp-server-haskell/benchmarks/Reference/src/Ref/Types.hs
+  033795528ddcaec0 1-43
+mcp-server-haskell/benchmarks/Reference/src/Ref/Parse.hs
+  033795528ddcaec0 1-42
+mcp-server-haskell/benchmarks/Reference/reference-project.cabal
+  033795528ddcaec0 1-53
+mcp-server-haskell/benchmarks/Reference/src/Ref/Stats.hs
+  033795528ddcaec0 1-48
+mcp-server-haskell/benchmarks/Reference/src/Ref/Transform.hs
+  033795528ddcaec0 1-53
+mcp-server-haskell/src/HaskellFlows/Bench/Budget.hs
+  033795528ddcaec0 1-196
+mcp-server-haskell/benchmarks/Reference/src/Ref/Core.hs
+  033795528ddcaec0 1-39
+mcp-server-haskell/benchmarks/Reference/src/Ref/Codec.hs
+  033795528ddcaec0 1-92
+mcp-server-haskell/benchmarks/Reference/src/Ref/Validate.hs
+  033795528ddcaec0 1-53
+mcp-server-haskell/haskell-flows-mcp.cabal
+  033795528ddcaec0 120-122,297-316
+mcp-server-haskell/benchmarks/Reference/src/Ref.hs
+  033795528ddcaec0 1-58
+scripts/bench-mcp.sh
+  033795528ddcaec0 1-22
+mcp-server-haskell/test/Spec.hs
+  033795528ddcaec0 89-90,1110-1113,10552-10590
+mcp-server-haskell/benchmarks/Reference/src/Ref/Filter.hs
+  033795528ddcaec0 1-35
+mcp-server-haskell/src/HaskellFlows/Bench/Runner.hs
+  033795528ddcaec0 1-103
+mcp-server-haskell/benchmarks/Reference/cabal.project
+  033795528ddcaec0 1
+mcp-server-haskell/benchmarks/Reference/src/Ref/Util.hs
+  033795528ddcaec0 1-36
+mcp-server-haskell/benchmarks/Main.hs
+  033795528ddcaec0 1-64
+mcp-server-haskell/benchmarks/Reference/test/Spec.hs
+  033795528ddcaec0 1-63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "034724848f0f15066f636b40f2080f89c502a4cd",
+  "prompts": {
+    "033795528ddcaec0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c2325b8-3973-461e-9af9-e12d8c594bf0",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 12698,
+      "total_deletions": 15,
+      "accepted_lines": 31596,
+      "overriden_lines": 0
+    }
+  }
+}
