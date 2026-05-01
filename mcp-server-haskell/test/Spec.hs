@@ -23,7 +23,7 @@ import qualified Data.List as List
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (exitFailure, exitSuccess)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
@@ -1111,6 +1111,9 @@ main = do
       , test "#96A: Budget · every ToolName has an entry"         testBudgetParsesCleanly
       , test "#96A: Budget · no budget is 0 ms"                   testBudgetNoZeroValues
       , test "#96A: Runner · discardFirst drops cold-start sample" testRunnerDiscardFirstSample
+      -- Issue #95 Phase D · nextStep quality gates
+      , test "#95D: nextStep Gate D — why ≥ 10 chars + ends in period" testNextStepGateDWhyQuality
+      , test "#95D: nextStep Gate E — chain ≤ 4 steps"               testNextStepGateEChainLength
       ]
   if and results then exitSuccess else exitFailure
 
@@ -10588,3 +10591,63 @@ testRunnerDiscardFirstSample = pure $
      in Runner.prSamples r == [100, 200, 300]
         && Runner.prP50 r == 200
         && Runner.prP95 r == 300
+
+------------------------------------------------------------------------
+-- Issue #95 Phase D — nextStep quality gate: why string + chain length
+------------------------------------------------------------------------
+
+-- | Collect every 'NextStep' hint the dispatch table can emit, across
+-- all tools and the meaningful payload shapes that select alternate
+-- dispatch branches.  Used by Gate D and Gate E property tests.
+allDispatchedHints :: [NextStep]
+allDispatchedHints = catMaybes $
+  -- Default payload — covers the bulk of tools (most have a single
+  -- dispatch branch that ignores payload content).
+  [ suggestNext t True (object []) | t <- allToolNames ]
+  ++
+  -- Per-tool payload variants that select alternate branches:
+  [ suggestNext GhcGate         True (object ["status" .= ("ok"     :: Text)])
+  , suggestNext GhcDeterminism  True (object ["status" .= ("ok"     :: Text)])
+  , suggestNext GhcRegression   True (object ["action" .= ("run"    :: Text)])
+  , suggestNext GhcRegression   True (object ["action" .= ("list"   :: Text)])
+  , suggestNext GhcPropertyLifecycle True (object ["action" .= ("list" :: Text)])
+  , suggestNext GhcDeps         True (object ["action" .= ("add"    :: Text)])
+  , suggestNext GhcDeps         True (object ["action" .= ("remove" :: Text)])
+  , suggestNext GhcAddImport    True (object ["count"  .= (3 :: Int)])
+  , suggestNext GhcQuickCheck   True (object ["state"  .= ("passed" :: Text)])
+  , suggestNext GhcQuickCheck   True (object ["state"  .= ("failed" :: Text)])
+  -- GhcLoad: typed-hole path
+  , suggestNext GhcLoad True
+      (object ["warnings" .=
+        [object ["message" .= ("typed hole: _ :: Int" :: Text)]]])
+  -- GhcLoad: fixable-warning path (non-hole warning)
+  , suggestNext GhcLoad True
+      (object ["warnings" .=
+        [object ["message" .= ("unused import" :: Text)]]])
+  -- GhcSwitchProject: empty directory (no cabal file → scaffold)
+  , suggestNext GhcSwitchProject True (object ["scaffolded" .= False])
+  -- GhcValidateCabal: cabal errors present
+  , suggestNext GhcValidateCabal True (object ["errors" .= (3 :: Int)])
+  ]
+
+-- | Gate D: every 'nsWhy' string must be at least 10 characters long
+-- and must end with a period ".".  A short or unpunctuated 'why' string
+-- is not actionable — it gives the agent too little context to act on.
+testNextStepGateDWhyQuality :: IO Bool
+testNextStepGateDWhyQuality = pure $
+  all checkWhy allDispatchedHints
+  where
+    checkWhy ns =
+      T.length (nsWhy ns) >= 10
+      && T.isSuffixOf "." (T.strip (nsWhy ns))
+
+-- | Gate E: every 'nsChain' list (when present) must contain at most 4
+-- steps.  Chains longer than 4 steps are overwhelming — the agent should
+-- batch large workflows rather than prescribe them up front.
+testNextStepGateEChainLength :: IO Bool
+testNextStepGateEChainLength = pure $
+  all checkChain allDispatchedHints
+  where
+    checkChain ns = case nsChain ns of
+      Nothing -> True
+      Just c  -> length c <= 4
