@@ -27,6 +27,7 @@ module Main where
 
 import Control.Monad (replicateM, when)
 import Data.Aeson (Value (..), object, (.=))
+import qualified Data.Aeson as Aeson
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -99,6 +100,16 @@ main = do
     rows <- mapM (runBench srv 10) benchSubset
     putStrLn (replicate 78 '-')
     putStrLn ""
+
+    -- #96 Phase D: write the per-tool measurements to a JSON file so
+    -- the nightly workflow (.github/workflows/bench-nightly.yml) can
+    -- upload it as an artifact, and a follow-up sub-task can diff
+    -- measured numbers against the initial-proposal values in
+    -- Bench/Budget.hs.  Path is relative to the package root (the
+    -- working directory cabal run starts in) so it lands at
+    -- mcp-server-haskell/bench-results.json — exactly where the
+    -- workflow's upload-artifact step expects it.
+    writeResultsJson "bench-results.json" rows
 
     let breaches = [ r | r <- rows, brBreach r ]
     if null breaches
@@ -209,6 +220,59 @@ padR n s = s <> replicate (max 0 (n - length s)) ' '
 
 padL :: Int -> String -> String
 padL n s = replicate (max 0 (n - length s)) ' ' <> s
+
+--------------------------------------------------------------------------------
+-- JSON artifact (#96 Phase D)
+--------------------------------------------------------------------------------
+
+-- | Encode the measured per-tool table as a JSON array of objects
+-- and write it to the given path.  Shape (one row per tool):
+--
+-- @
+--   [ { "tool": "ghc_type"
+--     , "p50_ms": 42, "p95_ms": 180, "mean_ms": 60, "stddev_ms": 25.3
+--     , "samples": [40,42,41,38,55,...]
+--     , "budget_p50_ms": 50, "budget_p95_ms": 200
+--     , "budget_notes": "cached GHCi env; near-zero marginal cost"
+--     , "breach": false
+--     }
+--   , ...
+--   ]
+-- @
+--
+-- A tool without a budget entry (shouldn't happen — every 'ToolName'
+-- has one — but defensive in case the budget table grows out of sync
+-- with 'benchSubset') emits @null@ for the budget fields.  Sub-task 2
+-- of #96 Phase D will diff this artifact against
+-- 'Bench/Budget.hs' and propose updates.
+writeResultsJson :: FilePath -> [BenchRow] -> IO ()
+writeResultsJson path rows = do
+  Aeson.encodeFile path (map rowToJson rows)
+  putStrLn ("Wrote bench-results.json (" <> show (length rows) <> " rows): " <> path)
+  putStrLn ""
+
+rowToJson :: BenchRow -> Value
+rowToJson r =
+  let stats = brStats r
+      base =
+        [ "tool"      .= brName r
+        , "p50_ms"    .= prP50 stats
+        , "p95_ms"    .= prP95 stats
+        , "mean_ms"   .= prMean stats
+        , "stddev_ms" .= prStdDev stats
+        , "samples"   .= prSamples stats
+        , "breach"    .= brBreach r
+        ]
+      budget = case brBudget r of
+        Nothing -> [ "budget_p50_ms" .= Null
+                   , "budget_p95_ms" .= Null
+                   , "budget_notes"  .= Null
+                   ]
+        Just b  -> [ "budget_p50_ms" .= tbP50Ms b
+                   , "budget_p95_ms" .= tbP95Ms b
+                   , "budget_notes"  .= tbNotes b
+                   ]
+  in object (base <> budget)
 
 --------------------------------------------------------------------------------
 -- Timing harness

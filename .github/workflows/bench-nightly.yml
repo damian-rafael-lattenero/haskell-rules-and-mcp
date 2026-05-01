@@ -73,7 +73,28 @@ jobs:
           HFLOWS_BENCH_GATE: "1"
         run: cabal run haskell-flows-mcp-bench --offline -- --gate
 
-      # Phase D backlog: emit a JSON summary of measured (p50, p95)
-      # per tool, upload as an artifact, and (eventually) open a PR
-      # that proposes updating the initial-proposal values in
-      # Bench/Budget.hs with measured numbers.  Tracked in #96 Phase D.
+      # Upload the per-tool measurement table (#96 Phase D).  The
+      # bench harness emits `bench-results.json` next to the cabal
+      # workdir; the artifact is the source of truth for the
+      # follow-up sub-task that proposes measured budgets in
+      # `Bench/Budget.hs`.
+      #
+      # `if: always()` so the artifact lands even on a red gate run —
+      # a breach is exactly when the JSON is most worth inspecting.
+      - name: Upload bench-results.json
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: mcp-server-haskell/bench-results.json
+          # 30 days is enough for a weekly cadence of follow-up sweeps;
+          # GitHub's default is 90 which we don't need.
+          retention-days: 30
+          # If the bench crashed before writing the file, do not fail
+          # the upload step (the bench step itself already exited red).
+          if-no-files-found: warn
+
+      # Phase D backlog (still pending — see #96 follow-up comment):
+      #   * auto-open a PR proposing updated budgets when measured
+      #     values diverge from the initial-proposal numbers by > 30%.
+      #   * expand `benchSubset` from 13 → all 41 primitives.

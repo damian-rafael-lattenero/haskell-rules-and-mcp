@@ -39,3 +39,9 @@ playground/*/
 # ghc_deps writes a per-machine cabal.lock during dependency edits;
 # the file is empty/transient and not part of the project's version graph.
 *.cabal.lock
+
+# #96 Phase D bench artifact — written by haskell-flows-mcp-bench
+# next to the cabal workdir. The file is per-run + machine-specific
+# (samples vary with hardware); the nightly CI workflow uploads it
+# as an artifact, but we never commit it.
+**/bench-results.json
