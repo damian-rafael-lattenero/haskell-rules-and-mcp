@@ -10,7 +10,7 @@
 module Main where
 
 import qualified Data.Aeson as A
-import Data.Aeson (object, (.=))
+import Data.Aeson (Value, object, (.=))
 import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.ByteString.Lazy as BL
@@ -1114,6 +1114,8 @@ main = do
       -- Issue #95 Phase D · nextStep quality gates
       , test "#95D: nextStep Gate D — why ≥ 10 chars + ends in period" testNextStepGateDWhyQuality
       , test "#95D: nextStep Gate E — chain ≤ 4 steps"               testNextStepGateEChainLength
+      -- Issue #95 Phase C · golden dispatch snapshot
+      , test "#95C: nextStep golden dispatch table"                    testNextStepGoldenDispatch
       ]
   if and results then exitSuccess else exitFailure
 
@@ -10651,3 +10653,139 @@ testNextStepGateEChainLength = pure $
     checkChain ns = case nsChain ns of
       Nothing -> True
       Just c  -> length c <= 4
+
+------------------------------------------------------------------------
+-- Issue #95 Phase C — golden dispatch snapshot
+------------------------------------------------------------------------
+
+-- | Golden table: @(description, source tool, payload, expected next tool)@.
+-- Captures the dispatch table's behaviour for every meaningful (tool, payload)
+-- combination.  A diff against this table signals a deliberate suppression-rule
+-- change and must be reviewed before landing.
+type GoldenRow = (String, ToolName, Value, Maybe ToolName)
+
+goldenDispatchTable :: [GoldenRow]
+goldenDispatchTable =
+  -- ── Default payload (object []) ──────────────────────────────────
+  [ ("create_project → deps chain",      GhcCreateProject,      object [],    Just GhcDeps)
+  , ("deps(no-action) → suppressed",     GhcDeps,               object [],    Nothing)
+  , ("load(clean) → suggest",            GhcLoad,               object [],    Just GhcSuggest)
+  , ("hole → load",                      GhcHole,               object [],    Just GhcLoad)
+  , ("arbitrary → load",                 GhcArbitrary,          object [],    Just GhcLoad)
+  , ("suggest → quickcheck",             GhcSuggest,            object [],    Just GhcQuickCheck)
+  , ("quickcheck(no-state) → suppress",  GhcQuickCheck,         object [],    Nothing)
+  , ("regression(no-action) → suppress", GhcRegression,         object [],    Nothing)
+  , ("refactor → load",                  GhcRefactor,           object [],    Just GhcLoad)
+  , ("check_module → check_project",     GhcCheckModule,        object [],    Just GhcCheckProject)
+  , ("check_project → gate chain",       GhcCheckProject,       object [],    Just GhcGate)
+  , ("toolchain_status → workflow",      GhcToolchainStatus,    object [],    Just GhcWorkflow)
+  , ("validate_cabal(clean) → suppress", GhcValidateCabal,      object [],    Nothing)
+  , ("lint → suppress",                  GhcLint,               object [],    Nothing)
+  , ("format → load",                    GhcFormat,             object [],    Just GhcLoad)
+  , ("batch → suppress",                 GhcBatch,              object [],    Nothing)
+  , ("gate(fail) → check_project",       GhcGate,               object [],    Just GhcCheckProject)
+  , ("qcexport → gate",                  GhcQuickCheckExport,   object [],    Just GhcGate)
+  , ("determinism(fail) → quickcheck",   GhcDeterminism,        object [],    Just GhcQuickCheck)
+  , ("property_audit → lifecycle",       GhcPropertyAudit,      object [],    Just GhcPropertyLifecycle)
+  , ("perf → perf",                      GhcPerf,               object [],    Just GhcPerf)
+  , ("explain_error → explain_error",    GhcExplainError,       object [],    Just GhcExplainError)
+  , ("lab → check_project",             GhcLab,                object [],    Just GhcCheckProject)
+  , ("deps_explain → deps",             GhcDepsExplain,        object [],    Just GhcDeps)
+  , ("witness → quickcheck",            GhcWitness,            object [],    Just GhcQuickCheck)
+  , ("move → check_project",            GhcMove,               object [],    Just GhcCheckProject)
+  , ("add_import(0) → suppress",        GhcAddImport,          object [],    Nothing)
+  , ("add_modules → load chain",        GhcAddModules,         object [],    Just GhcLoad)
+  , ("remove_modules → check_project",  GhcRemoveModules,      object [],    Just GhcCheckProject)
+  , ("apply_exports → load",            GhcApplyExports,       object [],    Just GhcLoad)
+  , ("fix_warning → load",              GhcFixWarning,         object [],    Just GhcLoad)
+  , ("browse → suggest",                GhcBrowse,             object [],    Just GhcSuggest)
+  , ("imports → suppress",              GhcImports,            object [],    Nothing)
+  , ("property_lifecycle(default) → suppress", GhcPropertyLifecycle, object [], Nothing)
+  , ("toolchain_warmup → workflow",     GhcToolchainWarmup,    object [],    Just GhcWorkflow)
+  , ("bootstrap → workflow",            GhcBootstrap,          object [],    Just GhcWorkflow)
+  , ("workflow → suppress",             GhcWorkflow,           object [],    Nothing)
+  , ("type → suppress",                 GhcType,               object [],    Nothing)
+  , ("info → suppress",                 GhcInfo,               object [],    Nothing)
+  , ("eval → suppress",                 GhcEval,               object [],    Nothing)
+  , ("goto → suppress",                 GhcGoto,               object [],    Nothing)
+  , ("doc → suppress",                  GhcDoc,                object [],    Nothing)
+  , ("complete → suppress",             GhcComplete,           object [],    Nothing)
+  , ("hoogle_search → suppress",        HoogleSearch,          object [],    Nothing)
+  , ("coverage → suppress",             GhcCoverage,           object [],    Nothing)
+  , ("switch_project(default) → workflow", GhcSwitchProject,  object [],    Just GhcWorkflow)
+  -- ── Variant payloads ─────────────────────────────────────────────
+  , ("deps(add) → load",
+        GhcDeps,
+        object ["action" .= ("add" :: Text)],
+        Just GhcLoad)
+  , ("deps(remove) → load",
+        GhcDeps,
+        object ["action" .= ("remove" :: Text)],
+        Just GhcLoad)
+  , ("load(errors) → suppress",
+        GhcLoad,
+        object ["errors" .= [object [] :: Value]],
+        Nothing)
+  , ("load(typed-holes) → hole",
+        GhcLoad,
+        object ["warnings" .= [object ["message" .= ("typed hole: _ :: Int" :: Text)] :: Value]],
+        Just GhcHole)
+  , ("load(fixable-warning) → fix_warning",
+        GhcLoad,
+        object ["warnings" .= [object ["message" .= ("unused import" :: Text)] :: Value]],
+        Just GhcFixWarning)
+  , ("quickcheck(passed) → check_module",
+        GhcQuickCheck,
+        object ["state" .= ("passed" :: Text)],
+        Just GhcCheckModule)
+  , ("quickcheck(failed) → eval",
+        GhcQuickCheck,
+        object ["state" .= ("failed" :: Text)],
+        Just GhcEval)
+  , ("regression(list) → regression",
+        GhcRegression,
+        object ["action" .= ("list" :: Text)],
+        Just GhcRegression)
+  , ("regression(run) → check_project",
+        GhcRegression,
+        object ["action" .= ("run" :: Text)],
+        Just GhcCheckProject)
+  , ("gate(pass) → coverage",
+        GhcGate,
+        object ["status" .= ("ok" :: Text)],
+        Just GhcCoverage)
+  , ("determinism(pass) → regression",
+        GhcDeterminism,
+        object ["status" .= ("ok" :: Text)],
+        Just GhcRegression)
+  , ("property_lifecycle(list) → regression",
+        GhcPropertyLifecycle,
+        object ["action" .= ("list" :: Text)],
+        Just GhcRegression)
+  , ("add_import(count>0) → load",
+        GhcAddImport,
+        object ["count" .= (3 :: Int)],
+        Just GhcLoad)
+  , ("switch_project(scaffolded=false) → create_project",
+        GhcSwitchProject,
+        object ["scaffolded" .= False],
+        Just GhcCreateProject)
+  , ("validate_cabal(errors>0) → deps",
+        GhcValidateCabal,
+        object ["errors" .= (5 :: Int)],
+        Just GhcDeps)
+  ]
+
+-- | Golden snapshot test: verify the dispatch table emits the expected
+-- next-tool for every @(tool, payload)@ pair in 'goldenDispatchTable'.
+-- A failure here means a dispatch-table change altered the recommendation
+-- for a named case — review the diff before merging.
+testNextStepGoldenDispatch :: IO Bool
+testNextStepGoldenDispatch = do
+  let failures = [ desc
+                 | (desc, t, payload, expected) <- goldenDispatchTable
+                 , let actual = fmap nsTool (suggestNext t True payload)
+                 , actual /= expected
+                 ]
+  mapM_ (\d -> putStrLn ("  GOLDEN MISMATCH: " ++ d)) failures
+  pure (null failures)
