@@ -33,6 +33,8 @@ module HaskellFlows.Mcp.ToolName
   , ToolCategory (..)
   , toolCategoryText
   , toolCategory
+    -- * Tool versioning (issue #99 Phase B)
+  , toolVersion
   ) where
 
 import qualified Data.Map.Strict as Map
@@ -255,3 +257,84 @@ toolCategory = \case
   GhcWorkflow          -> CatControlPlane
   GhcToolchainStatus   -> CatControlPlane
   GhcToolchainWarmup   -> CatControlPlane
+
+------------------------------------------------------------------------
+-- Tool versioning (issue #99 Phase B)
+------------------------------------------------------------------------
+
+-- | Per-tool semver string surfaced in @tools/list@ and in every
+-- tool response's @meta.tool_version@. Independent of the binary
+-- and protocol versions: a tool can bump its own version when its
+-- input or output shape changes incompatibly, even within the same
+-- binary release.
+--
+-- Bump rules (per issue #99):
+--
+-- * MAJOR — tool's input or output shape changes incompatibly.
+-- * MINOR — new args or output fields added (additive).
+-- * PATCH — bug fix within the existing shape.
+--
+-- All tools start at \"1.0.0\" at this issue's landing; phase-2
+-- features that *expanded* a response (\#93's @ghc_perf@ /
+-- @ghc_witness@) were additive, so they remain at MAJOR=1. The
+-- next bump will be tied to a real shape change and recorded in
+-- @CHANGELOG.md@ at issue #99 Phase D landing.
+--
+-- Adding a constructor to 'ToolName' without an arm here is a
+-- compile error — exhaustive case is the regression net.
+toolVersion :: ToolName -> Text
+toolVersion = \case
+  -- ── Read / inspect ──────────────────────────────────────────────
+  GhcLoad              -> "1.0.0"
+  GhcType              -> "1.0.0"
+  GhcInfo              -> "1.0.0"
+  GhcEval              -> "1.0.0"
+  GhcHole              -> "1.0.0"
+  GhcComplete          -> "1.0.0"
+  GhcGoto              -> "1.0.0"
+  GhcBrowse            -> "1.0.0"
+  GhcImports           -> "1.0.0"
+  GhcDoc               -> "1.0.0"
+  HoogleSearch         -> "1.0.0"
+  -- ── Write / refactor ────────────────────────────────────────────
+  GhcRefactor          -> "1.0.0"
+  GhcMove              -> "1.0.0"
+  GhcFormat            -> "1.0.0"
+  GhcApplyExports      -> "1.0.0"
+  GhcFixWarning        -> "1.0.0"
+  GhcAddImport         -> "1.0.0"
+  GhcArbitrary         -> "1.0.0"
+  -- ── Dependency + project management ─────────────────────────────
+  GhcDeps              -> "1.0.0"
+  GhcDepsExplain       -> "1.0.0"
+  GhcAddModules        -> "1.0.0"
+  GhcRemoveModules     -> "1.0.0"
+  GhcCreateProject     -> "1.0.0"
+  GhcSwitchProject     -> "1.0.0"
+  GhcValidateCabal     -> "1.0.0"
+  GhcBootstrap         -> "1.0.0"
+  -- ── Property-first testing ──────────────────────────────────────
+  GhcQuickCheck        -> "1.0.0"
+  GhcDeterminism       -> "1.0.0"
+  GhcSuggest           -> "1.0.0"
+  GhcPropertyLifecycle -> "1.0.0"
+  GhcRegression        -> "1.0.0"
+  GhcQuickCheckExport  -> "1.0.0"
+  GhcPropertyAudit     -> "1.0.0"
+  -- ── Phase-2 advanced ────────────────────────────────────────────
+  GhcPerf              -> "1.0.0"
+  GhcWitness           -> "1.0.0"
+  GhcExplainError      -> "1.0.0"
+  -- ── Composites ──────────────────────────────────────────────────
+  GhcGate              -> "1.0.0"
+  GhcLab               -> "1.0.0"
+  GhcCoverage          -> "1.0.0"
+  GhcBatch             -> "1.0.0"
+  -- ── Gates ───────────────────────────────────────────────────────
+  GhcCheckModule       -> "1.0.0"
+  GhcCheckProject      -> "1.0.0"
+  GhcLint              -> "1.0.0"
+  -- ── Control-plane ───────────────────────────────────────────────
+  GhcWorkflow          -> "1.0.0"
+  GhcToolchainStatus   -> "1.0.0"
+  GhcToolchainWarmup   -> "1.0.0"

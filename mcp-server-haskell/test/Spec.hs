@@ -95,6 +95,7 @@ import HaskellFlows.Mcp.ToolName
   , parseToolName
   , toolCategory
   , toolCategoryText
+  , toolVersion
   , toolNameText
   )
 import HaskellFlows.Mcp.ErrorKind
@@ -1123,6 +1124,9 @@ main = do
       , test "#94A: tool count ≤ 50 (surface-bloat cap)"              testToolCountWithinCap
       , test "#94A: every ToolName has a category"                     testEveryToolHasCategory
       , test "#94A: category counts match taxonomy"                    testCategoryCountsMatchTaxonomy
+      -- Issue #99 Phase B · per-tool version surface
+      , test "#99B: every ToolName has a non-empty version"           testEveryToolHasVersion
+      , test "#99B: every tool version is valid semver triple"        testToolVersionIsSemverTriple
       ]
   if and results then exitSuccess else exitFailure
 
@@ -10833,3 +10837,38 @@ testCategoryCountsMatchTaxonomy = pure $
   && countCat CatControlPlane ==  3
   where
     countCat c = length [ t | t <- allToolNames, toolCategory t == c ]
+
+------------------------------------------------------------------------
+-- Issue #99 Phase B · per-tool version surface
+------------------------------------------------------------------------
+
+-- | Invariant: 'toolVersion' returns a non-empty Text for every
+-- 'ToolName'. Adding a constructor without an arm in
+-- 'HaskellFlows.Mcp.ToolName.toolVersion' is a compile error; this
+-- test additionally rejects an empty-string entry sneaking in.
+testEveryToolHasVersion :: IO Bool
+testEveryToolHasVersion = pure $
+  not (any (T.null . toolVersion) allToolNames)
+
+-- | Invariant: every per-tool version parses as a 'MAJOR.MINOR.PATCH'
+-- semver triple of non-negative integers. Catches typos like "1.0" or
+-- "1.0.0-rc1" creeping into the table without a deliberate decision.
+-- Stage A of #99 mandates simple triples; later phases can extend the
+-- grammar (pre-release, build metadata) when an actual use case shows up.
+testToolVersionIsSemverTriple :: IO Bool
+testToolVersionIsSemverTriple = pure $
+  all (validSemverTriple . T.unpack . toolVersion) allToolNames
+  where
+    validSemverTriple s = case wordsBy (== '.') s of
+      [a, b, c] -> all isPositiveOrZero [a, b, c]
+      _         -> False
+    isPositiveOrZero t =
+      not (null t)
+      && all isDigit t
+    -- Local re-impl to avoid pulling in Data.List.Split.
+    wordsBy p = foldr step []
+      where
+        step c acc = case acc of
+          (x : xs) | not (p c) -> (c : x) : xs
+          _        | not (p c) -> [c] : acc
+          _                    -> [] : acc

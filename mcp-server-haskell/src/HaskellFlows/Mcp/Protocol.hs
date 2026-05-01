@@ -30,6 +30,8 @@ import Data.Aeson
 import Data.Text (Text)
 import GHC.Generics (Generic)
 
+import HaskellFlows.Mcp.ToolName (parseToolName, toolVersion)
+
 -- | JSON-RPC permits numeric or string ids; null is reserved for notifications.
 type RequestId = Value
 
@@ -131,6 +133,12 @@ instance ToJSON ToolDescriptor where
       [ "name"        .= tdName td
       , "description" .= tdDescription td
       , "inputSchema" .= tdInputSchema td
+        -- Issue #99 Phase B: surface the per-tool semver in @tools/list@.
+        -- Derived from 'toolNameText' so the version table lives in
+        -- one place (@HaskellFlows.Mcp.ToolName.toolVersion@). Tools
+        -- whose name doesn't parse fall back to "1.0.0" — same as the
+        -- initial default — to avoid an empty 'version' field.
+      , "version"     .= maybe ("1.0.0" :: Text) toolVersion (parseToolName (tdName td))
       ]
 
 -- | A decoded @tools/call@ params body.

@@ -79,6 +79,7 @@ import HaskellFlows.Mcp.ToolName
   , allToolNameTexts
   , parseToolName
   , toolNameText
+  , toolVersion
   )
 import HaskellFlows.Mcp.WorkflowState
   ( WorkflowStateRef
@@ -344,10 +345,12 @@ handleToolCall srv call rid = case parseToolName (tcName call) of
     t1   <- getPOSIXTime
     logToolEnd ctx (extractResponseStatus resp)
                (round ((t1 - t0) * 1000) :: Int)
-    pure (injectTraceId (lcTraceId ctx) resp)
+    pure (injectTraceId GhcBatch (lcTraceId ctx) resp)
   Just tn -> do
     -- Issue #98 Phase B: emit tool_call_start / tool_call_end log
     -- events and splice trace_id into the ToolResponse meta.
+    -- Issue #99 Phase B: also splice meta.tool_version (the per-tool
+    -- semver from 'toolVersion').
     ctx  <- newLogContext (toolNameText tn)
     logToolStart ctx (redactArgs (tcArguments call))
     t0   <- getPOSIXTime
@@ -355,7 +358,7 @@ handleToolCall srv call rid = case parseToolName (tcName call) of
     t1   <- getPOSIXTime
     logToolEnd ctx (extractResponseStatus resp)
                (round ((t1 - t0) * 1000) :: Int)
-    pure (injectTraceId (lcTraceId ctx) resp)
+    pure (injectTraceId tn (lcTraceId ctx) resp)
 
 -- | Pure (non-response-wrapping) tool dispatcher. Exposed so
 -- 'HaskellFlows.Tool.Batch' can recurse without pulling Server's
@@ -650,17 +653,23 @@ extractResponseStatus resp = fromMaybe "ok" $ do
       _ -> Nothing
     _ -> Nothing
 
--- | Splice @trace_id@ into the @meta@ object of the 'ToolResponse' that
--- is encoded as the first 'TextContent' block inside an MCP 'Response'.
+-- | Splice @trace_id@ and @tool_version@ into the @meta@ object of the
+-- 'ToolResponse' that is encoded as the first 'TextContent' block
+-- inside an MCP 'Response'.
 --
--- * If the ToolResponse already has a @meta@ object, the @trace_id@ key is
+-- * If the ToolResponse already has a @meta@ object, the keys are
 --   inserted (or replaced) there without disturbing any other meta fields.
 -- * If there is no @meta@ object yet, a minimal one is created containing
---   only the @trace_id@.
+--   only the spliced keys.
 -- * The 'Response' is returned unchanged if any step of the JSON path fails
 --   (e.g. an error response at the RPC level, or a non-JSON text block).
-injectTraceId :: Text -> Response -> Response
-injectTraceId tid resp = case respPayload resp of
+--
+-- Issue #99 Phase B: every tool response now carries
+-- @meta.tool_version@ alongside @meta.trace_id@, so consumers can
+-- detect which tool semver produced the payload (independently of
+-- the binary-level @--version@ surface).
+injectTraceId :: ToolName -> Text -> Response -> Response
+injectTraceId tn tid resp = case respPayload resp of
   Left _  -> resp
   Right v ->
     let v' = case v of
@@ -673,6 +682,8 @@ injectTraceId tid resp = case respPayload resp of
                _ -> v
     in resp { respPayload = Right v' }
   where
+    ver = toolVersion tn
+
     patchItem item = case item of
       Object c ->
         case KeyMap.lookup "text" c of
@@ -681,15 +692,19 @@ injectTraceId tid resp = case respPayload resp of
           _ -> item
       _ -> item
 
-    -- Re-encode the ToolResponse JSON with trace_id spliced into meta.
+    -- Re-encode the ToolResponse JSON with trace_id + tool_version
+    -- spliced into meta.
     patchText txt =
       case decode (BL.fromStrict (TE.encodeUtf8 txt)) of
         Just (Object inner) ->
           let meta = case KeyMap.lookup "meta" inner of
                 Just (Object m) ->
-                  Object (KeyMap.insert "trace_id" (String tid) m)
+                  Object (KeyMap.insert "tool_version" (String ver)
+                          (KeyMap.insert "trace_id"    (String tid) m))
                 _ ->
-                  object ["trace_id" .= tid]
+                  object [ "trace_id"     .= tid
+                         , "tool_version" .= ver
+                         ]
               inner' = KeyMap.insert "meta" meta inner
           in TL.toStrict (TLE.decodeUtf8 (encode (Object inner')))
         _ -> txt
