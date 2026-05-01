@@ -180,10 +180,10 @@ step2_scaffold c = do
         (fetchNextStepTool r == Just "ghc_deps")
         "nextStep.tool should be ghc_deps (BUG-06)"
     , mkCheck "step 2 · nextStep chain carries bootstrap plan (BUG-22)"
-        (  "ghc_deps"        `elem` chainTools
-        && "ghc_add_modules" `elem` chainTools
-        && "ghc_load"        `elem` chainTools )
-        "chain must include deps + add_modules + load"
+        (  "ghc_deps"    `elem` chainTools
+        && "ghc_modules" `elem` chainTools
+        && "ghc_load"    `elem` chainTools )
+        "chain must include deps + modules + load (#94 Phase B)"
     ]
 
 fetchNextStepTool :: Value -> Maybe Text
@@ -237,8 +237,7 @@ step3_addQuickCheck c = do
 
 step4_addModules :: Client.McpClient -> IO [Check]
 step4_addModules c = do
-  r <- Client.callTool c GhcAddModules (object
-    [ "modules" .= (["Expr.Syntax", "Expr.Eval", "Expr.Simplify", "Expr.Pretty"] :: [Text])
+  r <- Client.callTool c GhcModules (object [ "action" .= ("add" :: Text), "modules" .= (["Expr.Syntax", "Expr.Eval", "Expr.Simplify", "Expr.Pretty"] :: [Text])
     ])
   pure
     [ checkJsonField "step 4 · add_modules success" r "success" (Bool True)
@@ -262,8 +261,7 @@ step5_removeStub c = do
   -- the use-case 'force=true' is for. The follow-up step 7 then
   -- rewrites Spec.hs to import the real test modules, so the
   -- post-step state is consistent.
-  r <- Client.callTool c GhcRemoveModules (object
-    [ "modules"      .= (["ExprEvaluator"] :: [Text])
+  r <- Client.callTool c GhcModules (object [ "action" .= ("remove" :: Text), "modules"      .= (["ExprEvaluator"] :: [Text])
     , "delete_files" .= True
     , "force"        .= True
     ])

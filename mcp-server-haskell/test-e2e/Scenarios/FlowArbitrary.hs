@@ -86,8 +86,8 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + write Shapes + load"
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("arbitrary-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Shapes"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Shapes"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Shapes.hs") shapesSrc
   _ <- Client.callTool c GhcLoad
@@ -207,8 +207,8 @@ runFlow c projectDir = do
         ]
   TIO.writeFile (projectDir </> "src" </> "ShapesGen.hs") genSrc
 
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["ShapesGen"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["ShapesGen"] :: [Text]) ])
   -- The session needs QuickCheck in scope to resolve 'Arbitrary',
   -- 'arbitrary', 'oneof', 'sized', 'frequency'. It's already a
   -- build-depends in the library stanza (cabal repl injects it),

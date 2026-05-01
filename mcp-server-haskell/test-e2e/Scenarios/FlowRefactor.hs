@@ -81,8 +81,8 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + add Refactor module"
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("refactor-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Refactor"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Refactor"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   let srcPath = projectDir </> "src" </> "Refactor.hs"
   TIO.writeFile srcPath initialSrc

@@ -71,8 +71,8 @@ runFlow c projectDir = do
   -- typed hole that used to block the refactor.
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("ref-prerr" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Refactor"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Refactor"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Refactor.hs")
                 preExistingErrorSrc

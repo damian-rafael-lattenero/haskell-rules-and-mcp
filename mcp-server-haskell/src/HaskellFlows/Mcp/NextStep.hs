@@ -198,8 +198,9 @@ dispatch name payload = case name of
         , "package" .= ("QuickCheck" :: Text)
         , "version" .= (">= 2.14" :: Text)
         , "stanza"  .= ("test-suite" :: Text) ])
-    , step GhcAddModules (object
-        [ "modules" .= (["<Module.Name>"] :: [Text]) ])
+    , step GhcModules (object
+        [ "action"  .= ("add" :: Text)
+        , "modules" .= (["<Module.Name>"] :: [Text]) ])
     , step GhcLoad (object
         [ "module_path" .= ("<path to your entry module>" :: Text) ])
     ])
@@ -473,37 +474,10 @@ dispatch name payload = case name of
       (Just (object [ "module_path" .= ("<same module>" :: Text) ])))
     _              -> Nothing
 
-  -- New modules registered + scaffolded — fill them in, add deps if
-  -- they need any new libraries, then load.
-  GhcAddModules -> Just (chained GhcLoad
-    "New modules are registered in the .cabal and scaffolded as empty \
-    \stubs under src/. Implement them, then reload an entry module \
-    \to pick the new layout up. The chain is the canonical \
-    \\"scaffolded → loaded\" sequence."
-    (Just (object [ "module_path" .= ("<pick an entry module>" :: Text) ]))
-    [ step GhcLoad (object
-        [ "module_path" .= ("<your entry module>" :: Text) ])
-    , step GhcCheckProject (object [])
-    ])
-
-  -- Modules de-registered — reload + project-wide gate so any
-  -- downstream import left dangling surfaces immediately.
-  GhcRemoveModules -> Just (chained GhcCheckProject
-    "Modules were de-registered from exposed-modules. Run \
-    \ghc_check_project to surface any remaining import of the \
-    \removed surface; chained ghc_load follows to reload the \
-    \resulting layout."
-    Nothing
-    [ step GhcCheckProject (object [])
-    , step GhcLoad (object
-        [ "module_path" .= ("<your entry module>" :: Text) ])
-    ])
-
-  -- #94 Phase B: action-discriminated successor.  Reuse the same
-  -- nextStep contract as the legacy tools — the dispatcher cares
-  -- about the post-condition (modules just changed), not which
-  -- surface point produced it.  Always recommend a project-wide
-  -- gate; both add and remove can dangle imports or break loaders.
+  -- #94 Phase B: action-discriminated successor.  The dispatcher
+  -- cares about the post-condition (modules just changed), not which
+  -- surface point produced it.  Always recommend a project-wide gate;
+  -- both add and remove can dangle imports or break loaders.
   GhcModules -> Just (chained GhcCheckProject
     "Modules registry changed in the .cabal (add or remove). Run \
     \ghc_check_project to surface any compile errors the change \

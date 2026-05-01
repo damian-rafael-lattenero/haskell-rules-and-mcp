@@ -70,8 +70,8 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + Whole (a module with NO holes)"
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("gracefulmiss-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Whole"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Whole"] :: [Text]) ])
   _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("QuickCheck" :: Text)

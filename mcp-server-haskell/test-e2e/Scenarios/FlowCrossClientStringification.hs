@@ -75,8 +75,8 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + Foo + ghc_load (warm cache)"
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("xclient-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Foo"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Foo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Foo.hs") fooSrc
   _ <- Client.callTool c GhcLoad
@@ -118,9 +118,8 @@ runFlow c projectDir = do
   --     module is actually removed is downstream.
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "ghc_remove_modules · delete_files/force as strings (#91/#88)"
-  r2 <- Client.callTool c GhcRemoveModules
-          (object
-             [ "modules"      .= (["NonExistent"] :: [Text])
+  r2 <- Client.callTool c GhcModules
+          (object [ "action" .= ("remove" :: Text), "modules"      .= (["NonExistent"] :: [Text])
              , "delete_files" .= ("false" :: Text)  -- stringified Bool
              , "force"        .= ("false" :: Text)  -- stringified Bool
              ])

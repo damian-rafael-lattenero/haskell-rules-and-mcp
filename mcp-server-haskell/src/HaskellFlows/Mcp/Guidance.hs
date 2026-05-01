@@ -87,11 +87,11 @@ situationTable =
                  GhcDeps
                  "action=\"add\", package=\"X\", stanza=\"library\"|\"test-suite\""
   , SituationRow "register new modules"
-                 GhcAddModules
-                 "modules=[\"Foo.Bar\"]"
+                 GhcModules
+                 "action=\"add\", modules=[\"Foo.Bar\"]"
   , SituationRow "de-register modules"
-                 GhcRemoveModules
-                 "modules=[\"Foo.Old\"], delete_files=false"
+                 GhcModules
+                 "action=\"remove\", modules=[\"Foo.Old\"], delete_files=false"
   , SituationRow "add a missing import"
                  GhcAddImport
                  "name=\"Data.Map\""

@@ -89,7 +89,6 @@ import HaskellFlows.Mcp.WorkflowState
   )
 import HaskellFlows.Types (ProjectDir, mkProjectDir, unProjectDir)
 import qualified HaskellFlows.Tool.AddImport       as AddImportTool
-import qualified HaskellFlows.Tool.AddModules      as AddModulesTool
 import qualified HaskellFlows.Tool.Modules         as ModulesTool
 import qualified HaskellFlows.Tool.ApplyExports    as ApplyExportsTool
 import qualified HaskellFlows.Tool.Arbitrary       as ArbitraryTool
@@ -128,7 +127,6 @@ import qualified HaskellFlows.Tool.Perf             as PerfTool
 import qualified HaskellFlows.Tool.PropertyAudit    as PropertyAuditTool
 import qualified HaskellFlows.Tool.Witness          as WitnessTool
 import qualified HaskellFlows.Tool.Regression      as RegressionTool
-import qualified HaskellFlows.Tool.RemoveModules   as RemoveModulesTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
 import qualified HaskellFlows.Mcp.PathBootstrap    as PathBootstrap
 import qualified HaskellFlows.Tool.SwitchProject   as SwitchProjectTool
@@ -555,24 +553,11 @@ dispatchByName srv args = \case
     r <- AddImportTool.handle args
     invalidateGhcSessionIfPresent srv
     pure r
-  GhcAddModules -> do
-    pd <- readIORef (srvProjectDir srv)
-    r  <- AddModulesTool.handle pd args
-    -- Changes exposed-modules in .cabal, so stanza flags need
-    -- re-bootstrap to capture the new unit-id / include path set.
-    invalidateStanzaFlagsIfPresent srv
-    pure r
-  GhcRemoveModules -> do
-    pd <- readIORef (srvProjectDir srv)
-    r  <- RemoveModulesTool.handle pd args
-    invalidateStanzaFlagsIfPresent srv
-    pure r
   GhcModules -> do
-    -- #94 Phase B: action-discriminated successor to GhcAddModules /
-    -- GhcRemoveModules. ModulesTool.handle dispatches on
-    -- args.action ∈ {"add","remove"} and forwards to the legacy
-    -- handlers, so behaviour + side-effects (stanza-flag
-    -- invalidation) match the legacy path exactly.
+    -- #94 Phase B: action-discriminated 'modules' primitive.
+    -- ModulesTool.handle dispatches on args.action ∈ {"add","remove"}
+    -- and forwards to the underlying AddModules / RemoveModules
+    -- handlers; .cabal writes there require stanza-flag re-bootstrap.
     pd <- readIORef (srvProjectDir srv)
     r  <- ModulesTool.handle pd args
     invalidateStanzaFlagsIfPresent srv
@@ -764,14 +749,12 @@ allToolDescriptors =
   , SuggestTool.descriptor
   , SwitchProjectTool.descriptor
   , AddImportTool.descriptor
-  , AddModulesTool.descriptor
   , ApplyExportsTool.descriptor
   , FixWarningTool.descriptor
   , ImportsTool.descriptor
   , BrowseTool.descriptor
   , DeterminismTool.descriptor
-  , RemoveModulesTool.descriptor
-  , ModulesTool.descriptor       -- #94 Phase B: action-discriminated successor
+  , ModulesTool.descriptor       -- #94 Phase B: action-discriminated 'modules' primitive
   , BootstrapTool.descriptor
   , PropertyLifecycleTool.descriptor
   , ToolchainWarmupTool.descriptor

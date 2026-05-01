@@ -85,8 +85,8 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold · project A (the scenario's own dir) + Foo"
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("switch-a" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Foo"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Foo"] :: [Text]) ])
   stepFooter 1 t0
 
   ----------------------------------------------------------------
@@ -167,8 +167,8 @@ runFlow c projectDir = do
   -- (5) after switch: operations hit project B, not A
   ----------------------------------------------------------------
   t4 <- stepHeader 5 "post-switch · ghc_add_modules targets project-b"
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Bar"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Bar"] :: [Text]) ])
   bCabal <- TIO.readFile (projB </> "switch-b.cabal")
   cBHasBar <- liveCheck $ checkPure
     "project-b's .cabal now lists Bar in exposed-modules"
@@ -193,8 +193,8 @@ runFlow c projectDir = do
   cSwitchBackOk <- liveCheck $ checkJsonField
     "switch B→A · success=true"
     switchBA "success" (Bool True)
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Baz"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Baz"] :: [Text]) ])
   aCabal2 <- TIO.readFile (projectDir </> "switch-a.cabal")
   cAHasBaz <- liveCheck $ checkPure
     "project-a is writable again · Baz lands here, not in B"

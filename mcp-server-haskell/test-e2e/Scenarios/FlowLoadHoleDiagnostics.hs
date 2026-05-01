@@ -59,8 +59,8 @@ runFlow c projectDir = do
   -- bootstrap finds it under the library stanza.
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("hole-artifact-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["HoleArtifact"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["HoleArtifact"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "HoleArtifact.hs") holeSrc
 

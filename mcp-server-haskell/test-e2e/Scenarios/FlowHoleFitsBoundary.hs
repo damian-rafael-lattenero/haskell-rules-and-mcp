@@ -58,8 +58,8 @@ runFlow c projectDir = do
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("hole-fits-demo" :: Text) ])
   TIO.writeFile (projectDir </> "src" </> "HoleDemo.hs") moduleSrc
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["HoleDemo"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["HoleDemo"] :: [Text]) ])
 
   -- Step 2 — query the hole. The response's validFits array
   -- must contain a row whose name is "(+)" — the canonical

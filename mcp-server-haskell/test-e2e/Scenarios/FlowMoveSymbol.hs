@@ -76,9 +76,8 @@ runFlow c projectDir = do
   -- write all sources.
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("move-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object
-           [ "modules" .= (["Source", "Dest", "Consumer"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Source", "Dest", "Consumer"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Source.hs")   sourceSrc
   TIO.writeFile (projectDir </> "src" </> "Dest.hs")     destSrc

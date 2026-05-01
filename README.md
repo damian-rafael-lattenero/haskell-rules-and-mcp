@@ -26,7 +26,7 @@
 Plug into Claude Code, Cursor, or any MCP host. Your agent gets **46 tools** that share **one in-process GHC session** and **one normative response envelope** — every call answers with the same structured shape, every gate is honest, every refactor verifies-or-rolls-back.
 
 ```text
-ghc_create_project ─▶ ghc_add_modules ─▶ ghc_load
+ghc_create_project ─▶ ghc_modules ─▶ ghc_load
        │
        ├─▶ ghc_suggest        ← multi-engine law proposer w/ confidence + sibling-aware
        ├─▶ ghc_quickcheck     ← runs + auto-persists on pass
@@ -171,7 +171,7 @@ Point your MCP host at `~/.local/bin/haskell-flows-mcp`. **No rules file needed*
 | **DoS caps** | 64 KiB output cap on `ghc_eval` · 30 s inner per-eval timeout · 10-min outer per-tool ceiling. |
 | **Session liveness** | Any uncaught exception evicts the `HscEnv`. Next call boots fresh. No poison carried forward. |
 | **Refactor atomicity** | `ghc_refactor` snapshots + compile-verifies + rolls back on type-check failure. No broken intermediates on disk. |
-| **`.cabal` integrity** | `ghc_deps` / `ghc_add_modules` re-parse after every write; refuse to persist a shape that disagrees with the verb. |
+| **`.cabal` integrity** | `ghc_deps` / `ghc_modules` re-parse after every write; refuse to persist a shape that disagrees with the verb. |
 | **Concurrent saves serialised** | `PropertyStore` writes go through MVar lock — no torn JSON under parallel callers. |
 
 > **One deliberate non-invariant**: `ghc_eval` is **arbitrary code execution by design**. Anything that can send `tools/call` already has ambient authority equivalent to a shell run by the user that launched the MCP. If your threat model needs a sandbox, run the MCP in one (container / VM / jail).

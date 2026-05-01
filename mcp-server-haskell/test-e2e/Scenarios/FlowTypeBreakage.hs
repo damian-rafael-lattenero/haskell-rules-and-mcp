@@ -71,8 +71,8 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + Arith.hs (typechecks)"
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("typebreak-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Arith"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Arith"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Arith.hs") clean
   _ <- Client.callTool c GhcLoad

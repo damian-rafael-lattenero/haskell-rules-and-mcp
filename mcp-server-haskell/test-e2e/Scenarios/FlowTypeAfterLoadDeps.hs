@@ -73,8 +73,8 @@ runFlow c projectDir = do
            , "package" .= ("aeson" :: Text)
            , "stanza"  .= ("library" :: Text)
            ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["UsesAeson"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["UsesAeson"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "UsesAeson.hs") usesAesonSrc
   loadR <- Client.callTool c GhcLoad

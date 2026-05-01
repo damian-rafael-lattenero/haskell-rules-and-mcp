@@ -60,8 +60,8 @@ runFlow c projectDir = do
   -- real type signature to read.
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("assoc-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["AssocDemo"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["AssocDemo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "AssocDemo.hs") assocSrc
   _ <- Client.callTool c GhcLoad

@@ -136,9 +136,6 @@ allBudgets = Map.fromList
   , ( GhcAddImport
     , ToolBudget 200  800   Nothing
         "AST-free import line injection; optional hoogle subprocess")
-  , ( GhcAddModules
-    , ToolBudget 100  300   Nothing
-        "cabal module registration; .cabal edit only")
   , ( GhcApplyExports
     , ToolBudget 300  800   Nothing
         "export list insertion + compile-verify roundtrip")
@@ -154,9 +151,6 @@ allBudgets = Map.fromList
   , ( GhcDeterminism
     , ToolBudget 1000 3000  Nothing
         "3 QC re-runs comparing output stability")
-  , ( GhcRemoveModules
-    , ToolBudget 100  300   Nothing
-        "cabal module de-registration; .cabal edit only")
   , ( GhcBootstrap
     , ToolBudget  50  200   Nothing
         "preview/apply cabal.project bootstrap; no GHCi")

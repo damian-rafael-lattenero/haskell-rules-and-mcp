@@ -73,13 +73,11 @@ data ToolName
   | GhcSuggest
   | GhcSwitchProject
   | GhcAddImport
-  | GhcAddModules
   | GhcApplyExports
   | GhcFixWarning
   | GhcImports
   | GhcBrowse
   | GhcDeterminism
-  | GhcRemoveModules
   | GhcBootstrap
   | GhcPropertyLifecycle
   | GhcToolchainWarmup
@@ -91,10 +89,13 @@ data ToolName
   | GhcPropertyAudit
   | GhcWitness
   | GhcModules
-    -- ^ #94 Phase B: action-discriminated 'modules' primitive that
-    -- subsumes 'GhcAddModules' + 'GhcRemoveModules'. New surface
-    -- point; the legacy tools remain for one minor release while
-    -- callers migrate (deprecation lifecycle per #99 Phase C).
+    -- ^ #94 Phase B: action-discriminated 'modules' primitive
+    -- (action: "add" \| "remove"). Replaced the per-verb
+    -- 'GhcAddModules' + 'GhcRemoveModules' constructors outright —
+    -- the project has a single internal consumer, so deprecation
+    -- was unnecessary. The dispatcher in 'Tool.Modules' delegates
+    -- to the same handlers the per-verb tools used; only the wire
+    -- surface changed.
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 -- | Render a 'ToolName' as the wire-format string the MCP clients
@@ -131,13 +132,11 @@ toolNameText = \case
   GhcSuggest           -> "ghc_suggest"
   GhcSwitchProject     -> "ghc_switch_project"
   GhcAddImport         -> "ghc_add_import"
-  GhcAddModules        -> "ghc_add_modules"
   GhcApplyExports      -> "ghc_apply_exports"
   GhcFixWarning        -> "ghc_fix_warning"
   GhcImports           -> "ghc_imports"
   GhcBrowse            -> "ghc_browse"
   GhcDeterminism       -> "ghc_determinism"
-  GhcRemoveModules     -> "ghc_remove_modules"
   GhcBootstrap         -> "ghc_bootstrap"
   GhcPropertyLifecycle -> "ghc_property_lifecycle"
   GhcToolchainWarmup   -> "ghc_toolchain_warmup"
@@ -232,8 +231,6 @@ toolCategory = \case
   -- Dependency + project management
   GhcDeps              -> CatPrimitive
   GhcDepsExplain       -> CatPrimitive   -- future: deps action=explain
-  GhcAddModules        -> CatPrimitive   -- deprecated: use modules action=add (#94 Phase B)
-  GhcRemoveModules     -> CatPrimitive   -- deprecated: use modules action=remove (#94 Phase B)
   GhcModules           -> CatPrimitive   -- #94 Phase B: action-discriminated successor
   GhcCreateProject     -> CatPrimitive   -- future: project action=create
   GhcSwitchProject     -> CatPrimitive   -- future: project action=switch
@@ -314,8 +311,6 @@ toolVersion = \case
   -- ── Dependency + project management ─────────────────────────────
   GhcDeps              -> "1.0.0"
   GhcDepsExplain       -> "1.0.0"
-  GhcAddModules        -> "1.0.0"
-  GhcRemoveModules     -> "1.0.0"
   GhcCreateProject     -> "1.0.0"
   GhcSwitchProject     -> "1.0.0"
   GhcValidateCabal     -> "1.0.0"

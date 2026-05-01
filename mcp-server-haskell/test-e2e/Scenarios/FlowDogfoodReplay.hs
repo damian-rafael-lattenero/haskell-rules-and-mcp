@@ -246,15 +246,15 @@ runFlow c projectDir = do
            ])
 
   -- Canonical array form.
-  addR1 <- Client.callTool c GhcAddModules
-             (object [ "modules" .= (["Expr.Eval"] :: [Text]) ])
+  addR1 <- Client.callTool c GhcModules
+             (object [ "action" .= ("add" :: Text), "modules" .= (["Expr.Eval"] :: [Text]) ])
   cArrayForm <- liveCheck $ checkJsonField
     "add_modules · JSON array form succeeds"
     addR1 "success" (Bool True)
 
   -- Comma-separated string fallback.
-  addR2 <- Client.callTool c GhcAddModules
-             (object [ "modules" .= ("Expr.Simplify" :: Text) ])
+  addR2 <- Client.callTool c GhcModules
+             (object [ "action" .= ("add" :: Text), "modules" .= ("Expr.Simplify" :: Text) ])
   cStringForm <- liveCheck $ checkJsonField
     "add_modules · comma-separated string form succeeds"
     addR2 "success" (Bool True)
@@ -265,8 +265,8 @@ runFlow c projectDir = do
   -- the array into a string before dispatch. The handler must
   -- unwrap and land a proper @Expr.Pretty@ module (not
   -- @[\"Expr.Pretty\"]@).
-  addR3 <- Client.callTool c GhcAddModules
-             (object [ "modules" .= ("[\"Expr.Pretty\"]" :: Text) ])
+  addR3 <- Client.callTool c GhcModules
+             (object [ "action" .= ("add" :: Text), "modules" .= ("[\"Expr.Pretty\"]" :: Text) ])
   cJsonStringForm <- liveCheck $ checkJsonField
     "add_modules · stringified JSON-array unwraps cleanly (BUG-PLUS-08)"
     addR3 "success" (Bool True)

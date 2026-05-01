@@ -57,8 +57,8 @@ runFlow c projectDir = do
   -- Step 2 — register a library module so 'libraryExposedModules'
   -- has something non-empty to return. The renderer should union
   -- this into the import set.
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= ["Lib.Foo" :: Text] ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= ["Lib.Foo" :: Text] ])
 
   -- Step 3 — write a property to the on-disk store with
   -- 'module="test/Spec.hs"'. Pre-fix this triggered the broken

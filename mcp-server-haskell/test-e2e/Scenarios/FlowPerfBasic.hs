@@ -49,8 +49,8 @@ runFlow c projectDir = do
     , "double :: Int -> Int"
     , "double x = x + x"
     ]
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Demo"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Demo"] :: [Text]) ])
 
   -- Step 2 — drive ghc_perf. The expression evaluates to a
   -- pure Int — small enough that wall-clock dominates GC.

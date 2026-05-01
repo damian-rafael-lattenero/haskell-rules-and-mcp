@@ -75,8 +75,8 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + add Calc + load"
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("exploratory" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Calc"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Calc"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs") calcSrc
   loadR <- Client.callTool c GhcLoad

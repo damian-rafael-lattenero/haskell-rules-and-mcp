@@ -120,8 +120,8 @@ runFlow c projectDir = do
   -- Step 3 — Fix 1: register a module into the test-suite stanza.
   t3 <- stepHeader 3
           "Fix 1 · ghc_add_modules stanza=test-suite → other-modules + test/"
-  r3 <- Client.callTool c GhcAddModules
-          (object [ "modules" .= ["Gen" :: Text]
+  r3 <- Client.callTool c GhcModules
+          (object [ "action" .= ("add" :: Text), "modules" .= ["Gen" :: Text]
                   , "stanza" .= ("test-suite" :: Text)
                   ])
   let c3a = checkPure
@@ -169,8 +169,8 @@ runFlow c projectDir = do
   -- Scaffold a NEW library module and an adjacent broken one. The
   -- good module's check must not inherit the broken module's
   -- warnings.
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["UxDemo.Good", "UxDemo.Noisy"] :: [Text])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["UxDemo.Good", "UxDemo.Noisy"] :: [Text])
                  , "stanza" .= ("library" :: Text)
                  ])
   -- Good: compiles clean, no warnings.

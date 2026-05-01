@@ -87,8 +87,8 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + Calc (clean) + Hinty (hint-worthy)"
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("gates-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Calc", "Hinty"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Calc", "Hinty"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs")  calcSrc
   TIO.writeFile (projectDir </> "src" </> "Hinty.hs") hintySrc
@@ -144,8 +144,8 @@ runFlow c projectDir = do
   -- next check_project is meaningfully distinct from the first.
   --------------------------------------------------------------------
   t3 <- stepHeader 4 "inject Broken.hs (type error)"
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Broken"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Broken"] :: [Text]) ])
   TIO.writeFile (projectDir </> "src" </> "Broken.hs") brokenSrc
   stepFooter 3 t3
 

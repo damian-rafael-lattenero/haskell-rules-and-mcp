@@ -59,8 +59,8 @@ runFlow c projectDir = do
   -- Step 1 — scaffold + write GateDemo.
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("gate-props-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["GateDemo"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["GateDemo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "GateDemo.hs") demoSrc
 

@@ -90,8 +90,7 @@ runFlow c projectDir = do
          , "stanza"  .= ("test-suite" :: Text)
          , "version" .= (">= 2.14" :: Text)
          ])
-  _ <- Client.callTool c GhcAddModules (object
-    [ "modules" .= (["Expr.Syntax", "Expr.Eval", "Expr.Simplify", "Expr.Pretty"]
+  _ <- Client.callTool c GhcModules (object [ "action" .= ("add" :: Text), "modules" .= (["Expr.Syntax", "Expr.Eval", "Expr.Simplify", "Expr.Pretty"]
                       :: [Text])
     ])
   stepFooter 1 t0

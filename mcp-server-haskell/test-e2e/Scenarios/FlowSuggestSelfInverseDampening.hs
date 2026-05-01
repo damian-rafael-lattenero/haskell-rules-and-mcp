@@ -66,8 +66,8 @@ runFlow c projectDir = do
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("damp-demo" :: Text) ])
   TIO.writeFile (projectDir </> "src" </> "DampDemo.hs") moduleSrc
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["DampDemo"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["DampDemo"] :: [Text]) ])
   _ <- Client.callTool c GhcLoad
          (object [ "module_path" .= ("src/DampDemo.hs" :: Text) ])
 

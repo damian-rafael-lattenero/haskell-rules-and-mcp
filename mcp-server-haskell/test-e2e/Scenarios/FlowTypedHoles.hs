@@ -84,8 +84,8 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + add Holes (with typed hole)"
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("holes-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Holes"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Holes"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Holes.hs") withHoleSrc
   stepFooter 1 t0

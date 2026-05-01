@@ -1,11 +1,17 @@
--- | @ghc_add_modules@ — register new modules in the project's
--- @.cabal@ (library's @exposed-modules@ by default; test-suite,
--- executable, or benchmark @other-modules@ when 'stanza' is
--- supplied) AND scaffold empty @.hs@ stubs under the matching
--- @hs-source-dirs@. Idempotent (skips names already present).
+-- | Internal handler for the @add@ branch of @ghc_modules@.
+--
+-- Registers new modules in the project's @.cabal@ (library's
+-- @exposed-modules@ by default; test-suite, executable, or benchmark
+-- @other-modules@ when 'stanza' is supplied) AND scaffolds empty
+-- @.hs@ stubs under the matching @hs-source-dirs@. Idempotent
+-- (skips names already present).
+--
+-- Issue #94 Phase B retired the @ghc_add_modules@ wire surface;
+-- 'HaskellFlows.Tool.Modules' is the single externally-advertised
+-- tool. This module's 'handle' is the implementation 'Modules.handle'
+-- forwards to when @action="add"@.
 module HaskellFlows.Tool.AddModules
-  ( descriptor
-  , handle
+  ( handle
   , AddModulesArgs (..)
   , moduleToPath
   , moduleToPathForStanza
@@ -35,61 +41,6 @@ import HaskellFlows.Parser.ModuleName
 import qualified HaskellFlows.Tool.Deps as Deps
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath, unProjectDir)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcAddModules
-    , tdDescription =
-        "[DEPRECATED — use ghc_modules { action: \"add\", ... } \
-        \instead; this tool will be removed one minor release after \
-        \#94 Phase B lands.] \
-        \Register new modules in the project's .cabal and scaffold \
-        \their empty .hs stubs. Default target is the library's \
-        \'exposed-modules' under 'src/'. Pass 'stanza' to target \
-        \another stanza: 'test-suite' / 'test-suite:NAME' / \
-        \'executable[:NAME]' / 'benchmark[:NAME]'. Non-library \
-        \stanzas route to 'other-modules' and scaffold under the \
-        \stanza's conventional source dir (test/, app/, bench/). \
-        \Idempotent."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "modules" .= object
-                  [ "oneOf" .= (
-                      [ object
-                          [ "type"  .= ("array" :: Text)
-                          , "items" .= object [ "type" .= ("string" :: Text) ]
-                          ]
-                      , object
-                          [ "type" .= ("string" :: Text) ]
-                      ] :: [Value])
-                  , "description" .=
-                      ("Module names. Accepts either a JSON array \
-                       \(e.g. [\"Expr.Syntax\", \"Expr.Eval\"]) or \
-                       \a single string with comma- or whitespace-\
-                       \separated names (e.g. \"Expr.Syntax, \
-                       \Expr.Eval\"). The string form is a fallback \
-                       \for MCP clients whose deferred-tool wrapper \
-                       \stringifies array arguments before dispatch." :: Text)
-                  ]
-              , "stanza" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Optional stanza selector. Omit or pass \
-                       \'library' to target the main library \
-                       \(exposed-modules + src/). Other valid \
-                       \values: 'test-suite', 'test-suite:NAME', \
-                       \'executable', 'executable:NAME', \
-                       \'benchmark', 'benchmark:NAME'. Non-library \
-                       \stanzas route to 'other-modules' and scaffold \
-                       \stubs under test/, app/, or bench/." :: Text)
-                  ]
-              ]
-          , "required"             .= ["modules" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data AddModulesArgs = AddModulesArgs
   { amModules :: ![Text]

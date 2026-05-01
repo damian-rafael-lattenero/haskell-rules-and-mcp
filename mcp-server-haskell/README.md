@@ -101,8 +101,7 @@ Grouped by workflow phase. Every one of these is dispatchable through
 | Tool                  | Purpose |
 |-----------------------|---------|
 | `ghc_create_project` | Scaffold `<name>.cabal`, `cabal.project`, `src/<Module>.hs`, `test/Spec.hs` |
-| `ghc_add_modules`    | Register new modules in `.cabal` exposed-modules + scaffold empty stubs |
-| `ghc_remove_modules` | Symmetric de-registration; opt-in `delete_files` |
+| `ghc_modules`        | `action=add` registers + scaffolds; `action=remove` de-registers (opt-in `delete_files`). |
 | `ghc_deps`           | `list` / `add` / `remove` build-depends, stanza-aware |
 | `ghc_add_import`     | Insert a missing `import X` to resolve a scope error |
 | `ghc_apply_exports`  | Rewrite a module's export list idempotently |
@@ -160,9 +159,9 @@ Every tool call is bounded and sandboxed:
   so no call can poison subsequent ones.
 - **Refactor atomicity** — `ghc_refactor` snapshots before every edit
   and compile-verifies after; rollback on any type-check failure.
-- **`.cabal` integrity** — `ghc_deps` / `ghc_add_modules` /
-  `ghc_remove_modules` re-parse after every write and refuse to
-  persist a shape that disagrees with the verb.
+- **`.cabal` integrity** — `ghc_deps` / `ghc_modules` re-parse after
+  every write and refuse to persist a shape that disagrees with the
+  verb.
 - **Property store durability** — `createDirectoryIfMissing` before
   every write; MVar-lock serialises concurrent saves.
 

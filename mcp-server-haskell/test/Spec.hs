@@ -5918,15 +5918,16 @@ testNextStepAddImport =
         ]
   in pure (assertNext GhcAddImport payload GhcLoad)
 
--- | BUG-22 — add_modules now emits a multi-step chain. The
--- primary next tool must be 'ghc_load' AND the chain must
--- include at least 'ghc_load' + 'ghc_check_project'.
+-- | #94 Phase B — 'ghc_modules' (the action-discriminated successor
+-- to add_modules + remove_modules) emits a multi-step chain. The
+-- primary next tool is 'ghc_check_project' AND the chain must
+-- include at least 'ghc_check_project' + 'ghc_load'.
 testNextStepAddModulesChain :: IO Bool
 testNextStepAddModulesChain =
   let payload = A.object [ "success" .= True, "cabal_added" .= (["Foo.Bar"] :: [Text]) ]
-  in case suggestNext GhcAddModules True payload of
+  in case suggestNext GhcModules True payload of
        Just ns ->
-         pure $ nsTool ns == GhcLoad
+         pure $ nsTool ns == GhcCheckProject
              && case nsChain ns of
                   Just steps ->
                        any ((== GhcLoad)         . csTool) steps
@@ -5971,9 +5972,9 @@ testNextStepCreateProjectChain =
              && case nsChain ns of
                   Just steps ->
                     let tools = map csTool steps
-                    in GhcDeps       `elem` tools
-                    && GhcAddModules `elem` tools
-                    && GhcLoad       `elem` tools
+                    in GhcDeps    `elem` tools
+                    && GhcModules `elem` tools
+                    && GhcLoad    `elem` tools
                   Nothing -> False
        Nothing -> pure False
 
@@ -6167,7 +6168,7 @@ testArbitraryRecursionTokens = pure $
 -- fails, the tool exists as dead code (not dispatchable).
 testRemoveModulesRegistered :: IO Bool
 testRemoveModulesRegistered = pure $
-  "ghc_remove_modules" `elem` allToolNameTexts
+  "ghc_modules" `elem` allToolNameTexts
 
 -- | Core behaviour: the exposed-modules entry for the named
 -- module disappears; the rest of the block survives.
@@ -6257,16 +6258,17 @@ testGateCabalStepBracket = do
       && not (T.isInfixOf "forkIO (hGetContents" src)
       && not (T.isInfixOf "(_, Just hOut, Just hErr, ph) <- createProcess" src)
 
--- | BUG-06 nextStep coverage for the new tool: 'ghc_remove_modules'
--- on success suggests project-wide check + reload chain so any
--- dangling import surfaces immediately.
+-- | #94 Phase B nextStep coverage: 'ghc_modules' on a remove-shaped
+-- success suggests the project-wide check + reload chain so any
+-- dangling import surfaces immediately.  Both add and remove route
+-- through the same chain (the post-condition is the same).
 testNextStepRemoveModules :: IO Bool
 testNextStepRemoveModules =
   let payload = A.object
         [ "success"      .= True
         , "cabal_removed".= (["Foo.Old"] :: [Text])
         ]
-  in case suggestNext GhcRemoveModules True payload of
+  in case suggestNext GhcModules True payload of
        Just ns ->
          pure $ nsTool ns == GhcCheckProject
              && case nsChain ns of
@@ -6367,7 +6369,7 @@ testDocsHaskellReadme = do
       && T.isInfixOf "`ghc_bootstrap`"  readme
       && T.isInfixOf "`ghc_gate`"       readme
       && T.isInfixOf "`ghc_suggest`"    readme
-      && T.isInfixOf "`ghc_remove_modules`" readme
+      && T.isInfixOf "`ghc_modules`" readme
       && not ("Phase 1" `T.isInfixOf` readme)
 
 -- | BUG-14 — the release workflow must exist and wire up the
@@ -6478,7 +6480,7 @@ testCodeToolsRegistered :: IO Bool
 testCodeToolsRegistered = pure $
   all (`elem` allToolNameTexts)
     [ "ghc_add_import"
-    , "ghc_add_modules"
+    , "ghc_modules"
     , "ghc_apply_exports"
     , "ghc_fix_warning"
     , "ghc_imports"
@@ -10709,8 +10711,8 @@ goldenDispatchTable =
   , ("witness → quickcheck",            GhcWitness,            object [],    Just GhcQuickCheck)
   , ("move → check_project",            GhcMove,               object [],    Just GhcCheckProject)
   , ("add_import(0) → suppress",        GhcAddImport,          object [],    Nothing)
-  , ("add_modules → load chain",        GhcAddModules,         object [],    Just GhcLoad)
-  , ("remove_modules → check_project",  GhcRemoveModules,      object [],    Just GhcCheckProject)
+  , ("modules add → check_project",     GhcModules,            object [ "action" .= ("add" :: T.Text) ],    Just GhcCheckProject)
+  , ("modules remove → check_project",  GhcModules,            object [ "action" .= ("remove" :: T.Text) ], Just GhcCheckProject)
   , ("apply_exports → load",            GhcApplyExports,       object [],    Just GhcLoad)
   , ("fix_warning → load",              GhcFixWarning,         object [],    Just GhcLoad)
   , ("browse → suggest",                GhcBrowse,             object [],    Just GhcSuggest)
@@ -10835,10 +10837,11 @@ testEveryToolHasCategory = pure $
 -- Current breakdown: 36 primitives, 4 composites, 3 gates, 3 control-plane.
 testCategoryCountsMatchTaxonomy :: IO Bool
 testCategoryCountsMatchTaxonomy = pure $
-  countCat CatPrimitive    == 37
-  -- ^ #94 Phase B added GhcModules (action-discriminated successor
-  -- to GhcAddModules + GhcRemoveModules). 36 → 37; the legacy tools
-  -- remain registered for one minor release (deprecation lifecycle).
+  countCat CatPrimitive    == 35
+  -- ^ #94 Phase B (retrofit): GhcModules replaces GhcAddModules +
+  -- GhcRemoveModules outright (no deprecation period — single
+  -- internal consumer). Net delta: 36 → 35 primitives (two removed,
+  -- one added since the prior cycle).
   && countCat CatComposite    ==  4
   && countCat CatGate         ==  3
   && countCat CatControlPlane ==  3

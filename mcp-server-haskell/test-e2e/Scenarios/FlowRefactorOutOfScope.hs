@@ -65,8 +65,8 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + Foo.hs (fooBar is the only local)"
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("oos-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Foo"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Foo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   let srcPath = projectDir </> "src" </> "Foo.hs"
   TIO.writeFile srcPath srcModule

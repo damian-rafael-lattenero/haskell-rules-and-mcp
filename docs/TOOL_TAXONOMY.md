@@ -54,9 +54,7 @@
 |---|---|---|
 | `GhcDeps` | `ghc_deps` | `list` / `add` / `remove` build-depends |
 | `GhcDepsExplain` | `ghc_deps_explain` | Explain a dependency conflict (future: `deps action=explain`) |
-| `GhcModules` | `ghc_modules` | **(#94 Phase B)** Action-discriminated `add` / `remove`; successor to `GhcAddModules` + `GhcRemoveModules` |
-| `GhcAddModules` | `ghc_add_modules` | _Deprecated_ — use `ghc_modules action=add` |
-| `GhcRemoveModules` | `ghc_remove_modules` | _Deprecated_ — use `ghc_modules action=remove` |
+| `GhcModules` | `ghc_modules` | Action-discriminated module registry: `action=add` registers + scaffolds; `action=remove` de-registers (#94 Phase B) |
 | `GhcCreateProject` | `ghc_create_project` | Scaffold a new cabal package (future: `project action=create`) |
 | `GhcSwitchProject` | `ghc_switch_project` | Switch the active project root (future: `project action=switch`) |
 | `GhcValidateCabal` | `ghc_validate_cabal` | `cabal check` + heuristics (future: `project action=validate`) |
@@ -119,18 +117,17 @@
 
 | Category | Count |
 |---|---|
-| Primitive | 37 |
+| Primitive | 35 |
 | Composite | 4 |
 | Gate | 3 |
 | Control-plane | 3 |
-| **Total** | **47** |
+| **Total** | **45** |
 
-Phase B added `GhcModules` as the action-discriminated successor to
-`GhcAddModules` + `GhcRemoveModules`. The legacy tools remain
-registered for one minor release (deprecation lifecycle per [#99](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/issues/99)
-Phase C); they are tagged `[DEPRECATED]` in their `tdDescription`.
-Net surface change after the deprecation window completes: 47 → 46
-tools (one less primitive than today).
+Phase B (retrofit): `GhcModules` replaces `GhcAddModules` +
+`GhcRemoveModules` outright. With a single internal consumer there
+was no deprecation cost to honour, so the legacy wire surface was
+removed in the same commit as the new tool's introduction.
+Net surface change: 46 → 45 tools (one less primitive concept).
 
 Cap: **50** tools (enforced by `testToolCountWithinCap` in `test/Spec.hs`).
 Bumping the cap requires an explicit PR with rationale.

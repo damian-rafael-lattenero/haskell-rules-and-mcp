@@ -47,8 +47,8 @@ runFlow c projectDir = do
   -- Step 1 — scaffold + plant the broken module.
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("explain-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Broken"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Broken"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Broken.hs") brokenSrc
 

@@ -51,8 +51,8 @@ runFlow c projectDir = do
   -- importer in test/Spec.hs.
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("rm-down-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Expr"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Expr"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Expr.hs") $ T.unlines
     [ "module Expr where"
@@ -74,8 +74,8 @@ runFlow c projectDir = do
   -- downstream_imports array. .cabal stays untouched.
   t0 <- stepHeader 1 "ghc_remove_modules refuses on importers (#41)"
   cabalBefore <- TIO.readFile =<< findCabal projectDir
-  rRefused <- Client.callTool c GhcRemoveModules
-                (object [ "modules" .= (["Expr"] :: [Text]) ])
+  rRefused <- Client.callTool c GhcModules
+                (object [ "action" .= ("remove" :: Text), "modules" .= (["Expr"] :: [Text]) ])
   cabalAfter <- TIO.readFile =<< findCabal projectDir
   let success    = statusOk rRefused
       -- Issue #90: post-envelope, error.kind is the closed enum
@@ -107,9 +107,8 @@ runFlow c projectDir = do
 
   -- Step 3 — force=true proceeds AND surfaces warnings.
   t1 <- stepHeader 2 "ghc_remove_modules force=true → warning (#41)"
-  rForced <- Client.callTool c GhcRemoveModules
-               (object
-                 [ "modules" .= (["Expr"] :: [Text])
+  rForced <- Client.callTool c GhcModules
+               (object [ "action" .= ("remove" :: Text), "modules" .= (["Expr"] :: [Text])
                  , "force"   .= True
                  ])
   let forcedOk    = statusOk rForced == Just True

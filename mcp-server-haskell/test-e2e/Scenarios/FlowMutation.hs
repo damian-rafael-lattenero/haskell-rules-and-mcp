@@ -98,8 +98,8 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + deps + Calc.hs (clean)"
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("mutation-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Calc"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Calc"] :: [Text]) ])
   _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("QuickCheck" :: Text)

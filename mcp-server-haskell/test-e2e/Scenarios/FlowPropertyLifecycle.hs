@@ -45,8 +45,8 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + add QuickCheck + load Calc"
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("proplife-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Calc"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Calc"] :: [Text]) ])
   _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
          , "package" .= ("QuickCheck" :: Text)

@@ -73,8 +73,8 @@ runFlow c projectDir = do
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "add_modules · refuses 'lowercase.module' (the original bug)"
   beforeBug <- TIO.readFile cabalFile
-  bugR <- Client.callTool c GhcAddModules
-            (object [ "modules" .= (["lowercase.module"] :: [Text]) ])
+  bugR <- Client.callTool c GhcModules
+            (object [ "action" .= ("add" :: Text), "modules" .= (["lowercase.module"] :: [Text]) ])
   afterBug <- TIO.readFile cabalFile
   cBugStructural <- liveCheck $ checkPure
     "add_modules · success=false + 'rejected' field present"
@@ -107,9 +107,8 @@ runFlow c projectDir = do
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "add_modules · atomic refusal of a mixed batch"
   beforeMix <- TIO.readFile cabalFile
-  _ <- Client.callTool c GhcAddModules
-         (object
-           [ "modules" .= (["GoodOne", "lowercase.module", "GoodTwo"]
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["GoodOne", "lowercase.module", "GoodTwo"]
                             :: [Text]) ])
   afterMix <- TIO.readFile cabalFile
   cMixIntact <- liveCheck $ checkPure
@@ -134,8 +133,8 @@ runFlow c projectDir = do
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "add_modules · refuses reserved keyword segment"
   beforeKw <- TIO.readFile cabalFile
-  kwR <- Client.callTool c GhcAddModules
-           (object [ "modules" .= (["Foo.module"] :: [Text]) ])
+  kwR <- Client.callTool c GhcModules
+           (object [ "action" .= ("add" :: Text), "modules" .= (["Foo.module"] :: [Text]) ])
   afterKw <- TIO.readFile cabalFile
   cKwStructural <- liveCheck $ checkPure
     "add_modules · refuses reserved keyword + .cabal intact"
@@ -157,9 +156,8 @@ runFlow c projectDir = do
   -- tokens and walltime.
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "add_modules · rejection lists every offender"
-  multiR <- Client.callTool c GhcAddModules
-              (object
-                [ "modules" .= (["1Foo", "lowercase", "Foo.module"]
+  multiR <- Client.callTool c GhcModules
+              (object [ "action" .= ("add" :: Text), "modules" .= (["1Foo", "lowercase", "Foo.module"]
                                 :: [Text]) ])
   cMultiAll <- liveCheck $ checkPure
     "add_modules · '1Foo', 'lowercase', AND 'Foo.module' all listed"
@@ -178,8 +176,8 @@ runFlow c projectDir = do
   ----------------------------------------------------------------
   t4 <- stepHeader 5 "remove_modules · symmetric refusal"
   beforeRm <- TIO.readFile cabalFile
-  rmR <- Client.callTool c GhcRemoveModules
-           (object [ "modules" .= (["lowercase.module"] :: [Text]) ])
+  rmR <- Client.callTool c GhcModules
+           (object [ "action" .= ("remove" :: Text), "modules" .= (["lowercase.module"] :: [Text]) ])
   afterRm <- TIO.readFile cabalFile
   cRmStructural <- liveCheck $ checkPure
     "remove_modules · success=false + .cabal intact"
@@ -249,8 +247,8 @@ runFlow c projectDir = do
   -- adversarial call and the project is now stuck.
   ----------------------------------------------------------------
   t7 <- stepHeader 8 "add_modules · happy path still works"
-  goodR <- Client.callTool c GhcAddModules
-             (object [ "modules" .= (["NewMod"] :: [Text]) ])
+  goodR <- Client.callTool c GhcModules
+             (object [ "action" .= ("add" :: Text), "modules" .= (["NewMod"] :: [Text]) ])
   cabalAfterGood <- TIO.readFile cabalFile
   cGoodSucceeded <- liveCheck $ checkPure
     "add_modules · success=true for 'NewMod'"

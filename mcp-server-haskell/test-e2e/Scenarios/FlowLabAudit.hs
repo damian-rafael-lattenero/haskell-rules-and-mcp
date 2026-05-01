@@ -53,8 +53,8 @@ runFlow c projectDir = do
   -- Step 1 — scaffold + write the source.
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("lab-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Demo"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Demo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Demo.hs") src
 

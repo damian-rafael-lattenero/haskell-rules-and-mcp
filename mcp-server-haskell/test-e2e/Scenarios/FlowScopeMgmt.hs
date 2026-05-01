@@ -80,8 +80,8 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + write Widget + load"
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("scope-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["Widget"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["Widget"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   let srcPath = projectDir </> "src" </> "Widget.hs"
   TIO.writeFile srcPath widgetSrc

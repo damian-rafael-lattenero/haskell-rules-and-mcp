@@ -59,8 +59,8 @@ runFlow c projectDir = do
   -- line 6 (1-indexed) of FixDemo.hs.
   _ <- Client.callTool c GhcCreateProject
          (object [ "name" .= ("fix-warning-demo" :: Text) ])
-  _ <- Client.callTool c GhcAddModules
-         (object [ "modules" .= (["FixDemo"] :: [Text]) ])
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["FixDemo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "FixDemo.hs") unusedBindingSrc
 

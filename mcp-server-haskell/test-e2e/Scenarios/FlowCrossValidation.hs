@@ -172,8 +172,8 @@ runOneProject binary rootDir tp = do
     $ \c -> do
       _ <- Client.callTool c GhcCreateProject
              (object [ "name" .= ("xv-demo" :: Text) ])
-      _ <- Client.callTool c GhcAddModules
-             (object [ "modules" .= tpModules tp ])
+      _ <- Client.callTool c GhcModules
+             (object [ "action" .= ("add" :: Text), "modules" .= tpModules tp ])
 
       createDirectoryIfMissing True (subdir </> "src")
       mapM_ (\(rel, body) -> TIO.writeFile (subdir </> rel) body)

@@ -1,6 +1,7 @@
--- | @ghc_remove_modules@ — de-register modules from the project's
--- @.cabal@ exposed-modules list. Symmetric to
--- 'HaskellFlows.Tool.AddModules' (BUG-16).
+-- | Internal handler for the @remove@ branch of @ghc_modules@.
+--
+-- De-registers modules from the project's @.cabal@ exposed-modules
+-- list. Symmetric to 'HaskellFlows.Tool.AddModules' (BUG-16).
 --
 -- The source files are left on disk by default. Deletion is opt-in
 -- via @delete_files: true@; safer to have the caller be explicit
@@ -12,9 +13,13 @@
 -- present in @exposed-modules@. If the post-parse disagrees with
 -- the verb ("removed"), the write is rolled back — the same
 -- post-edit invariant discipline 'ghc_deps' uses.
+--
+-- Issue #94 Phase B retired the @ghc_remove_modules@ wire surface;
+-- 'HaskellFlows.Tool.Modules' is the single externally-advertised
+-- tool. This module's 'handle' is the implementation
+-- 'Modules.handle' forwards to when @action="remove"@.
 module HaskellFlows.Tool.RemoveModules
-  ( descriptor
-  , handle
+  ( handle
   , RemoveModulesArgs (..)
   , removeModulesFromBody
   , moduleToPath
@@ -47,64 +52,6 @@ import HaskellFlows.Parser.ModuleName
 import HaskellFlows.Tool.AddModules (moduleToPath, parseModuleList)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath, unProjectDir)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcRemoveModules
-    , tdDescription =
-        "[DEPRECATED — use ghc_modules { action: \"remove\", ... } "
-          <> "instead; this tool will be removed one minor release "
-          <> "after #94 Phase B lands.] "
-          <> "De-register modules from the project's .cabal exposed-modules "
-          <> "list. Source files are NOT deleted by default — pass "
-          <> "delete_files=true to also remove the .hs files. Symmetric "
-          <> "to ghc_add_modules; idempotent (no-op for modules that "
-          <> "were not present)."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "modules" .= object
-                  [ "oneOf" .= (
-                      [ object
-                          [ "type"  .= ("array" :: Text)
-                          , "items" .= object [ "type" .= ("string" :: Text) ]
-                          ]
-                      , object
-                          [ "type" .= ("string" :: Text) ]
-                      ] :: [Value])
-                  , "description" .=
-                      ("Module names to de-register. Accepts either a \
-                       \JSON array (e.g. [\"Expr.Old\"]) or a single \
-                       \comma-/whitespace-separated string \
-                       \(e.g. \"Expr.Old, Expr.Unused\"). Same lenient \
-                       \parsing as ghc_add_modules." :: Text)
-                  ]
-              , "delete_files" .= object
-                  [ "type"        .= ("boolean" :: Text)
-                  , "description" .=
-                      ("If true, also delete the backing .hs files under "
-                       <> "src/. Default: false — source is preserved so "
-                       <> "the agent can review / rename before destroying."
-                       :: Text)
-                  ]
-              , "force" .= object
-                  [ "type"        .= ("boolean" :: Text)
-                  , "description" .=
-                      ("Issue #41: bypass the downstream-importer check. \
-                       \Default false — if any remaining .hs file under \
-                       \src/, test/, app/, or bench/ still has \
-                       \'import <Mod>' for a removed module, the tool \
-                       \refuses without force=true. With force=true, the \
-                       \remove proceeds and the response carries a \
-                       \'warnings.downstream_imports' array so the agent \
-                       \knows what to repair next." :: Text)
-                  ]
-              ]
-          , "required"             .= ["modules" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data RemoveModulesArgs = RemoveModulesArgs
   { rmaModules     :: ![Text]
