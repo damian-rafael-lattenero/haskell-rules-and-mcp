@@ -39,6 +39,8 @@ import System.Directory
   , listDirectory
   , removeDirectoryRecursive
   )
+import System.Environment (getArgs, lookupEnv)
+import System.Exit (exitFailure, exitSuccess)
 import System.FilePath ((</>))
 import System.IO (hFlush, stdout)
 import System.IO.Temp (withSystemTempDirectory)
@@ -52,9 +54,29 @@ import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 main :: IO ()
 main = do
+  -- #96 Phase C: opt-in gate — exit non-zero when any tool's measured
+  -- p95 exceeds its budget. Two opt-in surfaces:
+  --
+  --   * @--gate@ (CLI flag, used by scripts/bench-mcp.sh --gate).
+  --   * @HFLOWS_BENCH_GATE=1@ (env var, used by the advisory CI job
+  --     so the workflow YAML stays declarative — no flag-plumbing
+  --     through cabal run -- --gate).
+  --
+  -- Default stays informational so the local @cabal run
+  -- haskell-flows-mcp-bench@ from a developer's repo prints the
+  -- table and exits 0.  Phase D's full-matrix nightly will use
+  -- the env-var form.
+  args   <- getArgs
+  envVar <- lookupEnv "HFLOWS_BENCH_GATE"
+  let gateOn = "--gate" `elem` args
+            || envVar == Just "1"
+            || envVar == Just "true"
+
   putStrLn "=================================================================="
   putStrLn "haskell-flows-mcp-bench — Phase B (#96)"
   putStrLn "Per-tool latency measurement against benchmarks/Reference/"
+  when gateOn $
+    putStrLn "Mode: GATE (#96 Phase C — non-zero exit on p95 breach)"
   putStrLn "=================================================================="
   putStrLn ""
   withSystemTempDirectory "hflows-bench" $ \tmp -> do
@@ -80,12 +102,26 @@ main = do
 
     let breaches = [ r | r <- rows, brBreach r ]
     if null breaches
-      then putStrLn "All measured tools within budget."
+      then do
+        putStrLn "All measured tools within budget."
+        putStrLn ""
+        when gateOn $
+          putStrLn "Gate: GREEN — every measured p95 ≤ budget."
+        exitSuccess
       else do
         putStrLn ("WARN: " <> show (length breaches) <> " tool(s) exceeded their p95 budget:")
         mapM_ (\r -> putStrLn ("  - " <> brName r)) breaches
-    putStrLn ""
-    putStrLn "Phase B is informational; the gate (Phase C) is not yet wired into CI."
+        putStrLn ""
+        if gateOn
+          then do
+            putStrLn ( "Gate: RED — exiting with status 1.  "
+                    <> "If a budget needs to grow, edit "
+                    <> "src/HaskellFlows/Bench/Budget.hs with a "
+                    <> "rationale comment and re-run.  Local "
+                    <> "exec: scripts/bench-mcp.sh --gate" )
+            exitFailure
+          else
+            putStrLn "Gate is opt-in (--gate or HFLOWS_BENCH_GATE=1) — exiting 0."
 
 --------------------------------------------------------------------------------
 -- Bench subset: representative tools across all four categories.

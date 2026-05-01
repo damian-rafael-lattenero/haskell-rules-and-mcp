@@ -406,6 +406,60 @@ jobs:
           echo "::warning title=Toolchain install flaked::haskell-actions/setup@v2 failed with no actionable message — typical ghcup CDN flake. The advisory scan was skipped for this run; re-run the workflow if you want a fresh drift report."
 
   # -------------------------------------------------------------------------
+  #  Latency-budget bench (#96 Phase C).
+  #
+  #  Runs the in-process measurement harness from `benchmarks/Main.hs`
+  #  with the gate enabled (`HFLOWS_BENCH_GATE=1`); the binary exits
+  #  non-zero when any tool's measured p95 exceeds its
+  #  `Bench/Budget.hs` budget. Per-step `continue-on-error: true` so
+  #  the job badge stays advisory while the gate is bedding in — once
+  #  Phase D's nightly run produces a measured-budget table from the
+  #  reference project, this step can be promoted to required.
+  #
+  #  Why ubuntu-only:
+  #
+  #    * The budgets in `Bench/Budget.hs` are *initial-proposal*
+  #      values (issue #96 §1) tuned against the dogfood pass, which
+  #      ran on macOS arm64. Linux runners are typically a touch
+  #      faster on the cheap tools and a touch slower on cabal-heavy
+  #      tools; the variance is well inside the (p95 - p50) headroom
+  #      so a single-OS gate is informative without false positives.
+  #    * Adding macOS to the matrix doubles CI minute spend for a
+  #      signal that hasn't yet earned a hard gate.
+  # -------------------------------------------------------------------------
+  bench:
+    name: Bench (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: haskell-actions/setup@v2
+        id: setup
+        continue-on-error: true
+        with:
+          ghc-version: "9.12.2"
+          cabal-version: "3.12.1.0"
+          cabal-update: true
+
+      - name: Run bench gate
+        if: steps.setup.outcome == 'success'
+        continue-on-error: true
+        env:
+          # Phase C: opt-in gate. Bench Main.hs reads this env var
+          # (or the --gate flag) and exits non-zero on sustained
+          # p95 breach.
+          HFLOWS_BENCH_GATE: "1"
+        run: |
+          # Match the local script's invocation so a developer can
+          # reproduce the result with `scripts/bench-mcp.sh --gate`.
+          cabal run haskell-flows-mcp-bench --offline -- --gate
+
+      - name: Note setup flake
+        if: steps.setup.outcome == 'failure'
+        run: |
+          echo "::warning title=Toolchain install flaked::haskell-actions/setup@v2 failed during the bench job — typical ghcup CDN flake. The bench gate was skipped for this run; re-run the workflow if you want a fresh latency report."
+
+  # -------------------------------------------------------------------------
   #  Single aggregation job. Branch protection should require *only* this
   #  check — the matrix jobs change shape as we add GHC versions, and this
   #  keeps the branch-protection config stable.

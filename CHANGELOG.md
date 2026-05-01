@@ -55,10 +55,14 @@ table and the live registry is a compile-error.
   + `SchemaBranch` + the field-shape helpers
   (`stringField` / `integerField` / `booleanField` / `arrayField` /
   `constString`) are the canonical way to declare a tool's input shape.
-- **Latency-budget scaffold** (#96 Phases A+B) — every tool has a
-  `(p50, p95)` budget in `Bench/Budget.hs`; an in-process bench harness
-  measures the reference project; CI gate (Phase C, pending) will refuse
-  sustained p95 violations.
+- **Latency-budget scaffold + advisory CI gate** (#96 Phases A+B+C) —
+  every tool has a `(p50, p95)` budget in `Bench/Budget.hs`; an
+  in-process bench harness measures the reference project; a new
+  `bench` job in the CI workflow runs the harness with
+  `HFLOWS_BENCH_GATE=1` and surfaces budget breaches as warnings.
+  Local repro: `scripts/bench-mcp.sh --gate`. Job is advisory until
+  Phase D produces a measured-budget table from the reference
+  project; promotion to required is one YAML edit away.
 - **Bench `benchmark` stanza** in the cabal file — `cabal bench` runs
   the suite locally; the methodology lives in `docs/Bench.md`.
 - **Tool taxonomy** (#94 Phase A) — `ToolCategory` ADT + `toolCategory`
@@ -156,7 +160,9 @@ table and the live registry is a compile-error.
 - Phase D — upstream-first tool resolution (mirror becomes fallback).
 - Phase E — Nix flake for declarative dev shell.
 - Phase F — Discourse Haskell announcement.
-- #96 Phase C — wire bench into CI gate.
+- #96 Phase D — nightly full-matrix bench; promote the advisory
+  `bench` CI job to a required gate once a measured-budget table
+  exists.
 
 (Note: #97 Phase B was already implemented at 0.1.0 — the
 property store has had cross-process flock + in-process MVar
