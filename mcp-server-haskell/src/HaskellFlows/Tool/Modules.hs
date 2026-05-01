@@ -68,18 +68,12 @@ descriptor =
                        \removes the .hs)." :: Text)
                   ]
               , "modules" .= object
-                  [ "oneOf" .= (
-                      [ object
-                          [ "type"  .= ("array" :: Text)
-                          , "items" .= object [ "type" .= ("string" :: Text) ]
-                          ]
-                      , object
-                          [ "type" .= ("string" :: Text) ]
-                      ] :: [Value])
+                  [ "type"        .= ("string" :: Text)
                   , "description" .=
-                      ("Module names. Accepts a JSON array or a single \
-                       \string with comma-/whitespace-separated names. \
-                       \Same parser as ghc_add_modules / \
+                      ("Module names. Accepts a JSON array \
+                       \[\"Foo.Bar\",\"Foo.Baz\"] (passed as a JSON \
+                       \string) or a single string with comma-/whitespace-\
+                       \separated names. Same parser as ghc_add_modules / \
                        \ghc_remove_modules." :: Text)
                   ]
               , "stanza" .= object

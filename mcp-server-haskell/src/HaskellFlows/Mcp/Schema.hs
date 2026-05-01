@@ -5,19 +5,17 @@
 -- arguments does this tool accept?\"/, but pre-#92 tools whose
 -- per-action required fields differ (e.g. 'ghc_refactor''s
 -- @rename_local@ vs @extract_binding@) hand-wrote a single flat
--- @required@ list that lied about the runtime contract. A host that
--- followed the schema sent /plausible-by-spec/ requests the runtime
--- rejected — the dogfood pass surfaced this on the very first
--- 'ghc_refactor' attempt.
+-- @required@ list that lied about the runtime contract.
 --
--- This module exposes a small builder API so the schema mirrors the
--- runtime: one 'SchemaBranch' per discriminant variant, each with
--- its own self-contained @properties@ + @required@ set, all wrapped
--- in a top-level @oneOf@ that hosts can render as a tabbed UI.
---
--- Phase A scope (this file): the helper module + unit tests.
--- Phases B–E (issue #92 §5) cover migrating individual tools, the
--- CI lint gate, and the contributor docs.
+-- The original Phase A design wrapped each variant in a top-level
+-- Draft-7 @oneOf@. That shape is valid JSON Schema but the Claude
+-- API rejects @input_schema@ objects that carry @oneOf@ / @allOf@
+-- / @anyOf@ at the top level — registering the MCP fails the whole
+-- session with HTTP 400. We therefore emit a /flat/ schema: every
+-- branch's properties are merged into a single @properties@ map,
+-- and the discriminant becomes a plain @enum@ field. Per-action
+-- required-field enforcement lives entirely in the runtime
+-- 'FromJSON' parsers (which already enforce it).
 module HaskellFlows.Mcp.Schema
   ( -- * Field-shape builders
     stringField
@@ -92,70 +90,85 @@ typedField ty desc =
 -- (e.g. @\"rename_local\"@, @\"extract_binding\"@) and carries the
 -- properties + required set that arm specifically demands.
 --
--- Invariant maintained by 'discriminatedSchema': the discriminant
--- field is always present in 'sbProperties' (with @const = sbDiscriminantValue@)
--- AND always in 'sbRequired'. Callers don't need to repeat it in
--- either list — the helper splices it in. This is the single
--- guard against the bug class the issue describes ('I forgot to
--- list the discriminant in the branch's required set').
+-- Note on what gets published vs. what stays informative:
+-- 'discriminatedSchema' merges every branch's 'sbProperties' into
+-- the published flat schema and emits the union of
+-- 'sbDiscriminantValue' as the discriminant @enum@. 'sbDescription'
+-- and 'sbRequired' are NOT serialised to the schema (the Claude
+-- API forbids the top-level @oneOf@ shape that would have carried
+-- them). They remain in the data type for documentation purposes
+-- and as the source of truth the runtime 'FromJSON' parsers cross-
+-- reference when enforcing per-action required-field semantics.
 data SchemaBranch = SchemaBranch
   { sbDiscriminantValue :: !Text
     -- ^ The literal string the discriminant field must equal in
-    --   this branch (e.g. @\"rename_local\"@).
+    --   this branch (e.g. @\"rename_local\"@). Published as one
+    --   element of the discriminant's @enum@.
   , sbDescription       :: !Text
-    -- ^ One-line description shown in the host's UI.
+    -- ^ One-line description for the branch. Informational;
+    --   not serialised to the published schema.
   , sbProperties        :: ![(Text, Value)]
     -- ^ Field name → JSON-Schema fragment. The discriminant field
     --   itself MUST NOT appear here — 'discriminatedSchema' adds it.
+    --   Merged across all branches into the flat published schema.
   , sbRequired          :: ![Text]
-    -- ^ Required field names. The discriminant field MUST NOT
-    --   appear here — 'discriminatedSchema' adds it.
+    -- ^ Required field names for this branch. Informational;
+    --   not serialised to the published schema (the runtime
+    --   'FromJSON' parser is the source of truth for per-action
+    --   required-field enforcement).
   }
   deriving stock (Eq, Show)
 
--- | Build a top-level @oneOf@-discriminated schema for an
--- action-style tool.
+-- | Build a flat schema for an action-discriminated tool.
 --
 -- The published shape is:
 --
 -- > { "type": "object",
--- >   "oneOf": [
--- >     { "type": "object",
--- >       "description": "<branch desc>",
--- >       "properties": { "<discrim>": { "const": "<value>" }, ... },
--- >       "required":   ["<discrim>", ...],
--- >       "additionalProperties": false }
--- >   , ...
--- >   ]
+-- >   "properties": {
+-- >     "<discrim>": { "type": "string", "enum": ["v1","v2",...],
+-- >                    "description": "..." },
+-- >     "<field-from-any-branch>": { ... },
+-- >     ...
+-- >   },
+-- >   "required": ["<discrim>"],
+-- >   "additionalProperties": false
 -- > }
 --
--- The @additionalProperties: false@ makes branch-mismatch surface
--- with a clean validator error in hosts that respect Draft-7;
--- well-behaved clients render only the fields the chosen branch
--- declares.
+-- All properties from every branch are merged into a single map
+-- (left-biased: the first occurrence of a name wins). Only the
+-- discriminant is advertised as required at the schema level;
+-- per-action required-field enforcement is handled by the
+-- runtime 'FromJSON' parsers (so the schema and runtime stay in
+-- sync without needing top-level @oneOf@, which the Claude API
+-- rejects).
 discriminatedSchema
   :: Text             -- ^ Discriminant field name (\"action\" / \"host\" / ...)
   -> [SchemaBranch]
   -> Value
 discriminatedSchema discrim branches =
-  object
-    [ "type"  .= ("object" :: Text)
-    , "oneOf" .= map (renderBranch discrim) branches
-    ]
-
-renderBranch :: Text -> SchemaBranch -> Value
-renderBranch discrim sb =
-  let allProperties =
-        (discrim, constString (sbDiscriminantValue sb)) : sbProperties sb
-      allRequired =
-        discrim : sbRequired sb
+  let mergedProps    = nubByKey (concatMap sbProperties branches)
+      enumValues     = map sbDiscriminantValue branches
+      discrimField   = object
+        [ "type"        .= ("string" :: Text)
+        , "enum"        .= enumValues
+        , "description" .= ("Action to perform — exactly one of the listed values." :: Text)
+        ]
+      allProperties  = (discrim, discrimField) : mergedProps
   in object
        [ "type"                 .= ("object" :: Text)
-       , "description"          .= sbDescription sb
        , "properties"           .= object [ Key.fromText k .= v | (k, v) <- allProperties ]
-       , "required"             .= allRequired
+       , "required"             .= ([discrim] :: [Text])
        , "additionalProperties" .= False
        ]
+
+-- | Left-biased dedup of an association list by key.
+nubByKey :: Eq k => [(k, v)] -> [(k, v)]
+nubByKey = go []
+  where
+    go acc [] = reverse acc
+    go acc ((k, v) : rest)
+      | any ((== k) . fst) acc = go acc rest
+      | otherwise              = go ((k, v) : acc) rest
 
 -- | A flat object schema for tools without action discrimination.
 -- Equivalent to the inline pattern most tools use today; offered

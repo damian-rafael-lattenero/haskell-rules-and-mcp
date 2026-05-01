@@ -23,7 +23,7 @@ import qualified Data.List as List
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (exitFailure, exitSuccess)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
@@ -426,15 +426,15 @@ main = do
       , test "#100C: ghc_refactor rejects traversal path"
                                                    testRefactorRejectsTraversal
       -- Issue #92 Phase A · discriminated schema helpers
-      , test "Schema · top-level oneOf shape (#92)"
+      , test "Schema · flat top-level shape (no oneOf/allOf/anyOf) — Claude API"
                                                    testSchemaTopLevelOneOf
-      , test "Schema · discriminant in every branch's properties + required (#92)"
+      , test "Schema · discriminant published as enum field"
                                                    testSchemaDiscriminantInEveryBranch
-      , test "Schema · discriminant const matches branch value (#92)"
+      , test "Schema · discriminant enum lists every branch value"
                                                    testSchemaDiscriminantConstMatchesValue
-      , test "Schema · per-branch required sets correct (#92)"
+      , test "Schema · top-level required = [discriminant]"
                                                    testSchemaRequiredSetsAreCorrect
-      , test "Schema · additionalProperties:false on every branch (#92)"
+      , test "Schema · additionalProperties:false at top level"
                                                    testSchemaAdditionalPropertiesFalse
       , test "Schema · flatObjectSchema for non-discriminated tools (#92)"
                                                    testSchemaFlatObject
@@ -2059,98 +2059,78 @@ sampleRefactorSchema = Schema.discriminatedSchema "action"
       }
   ]
 
--- | The top-level shape: an object with a `oneOf` array. Pinning
--- the structure lets a future migration check by-eye that
--- branch-aware hosts will see what they expect.
+-- | The published top-level shape MUST be a flat object — no
+-- 'oneOf' / 'allOf' / 'anyOf' at the root. The Claude API rejects
+-- those keywords there with HTTP 400, which would fail the whole
+-- session at MCP register time.
 testSchemaTopLevelOneOf :: IO Bool
 testSchemaTopLevelOneOf = pure $ case sampleRefactorSchema of
   A.Object km ->
        AKM.lookup "type" km == Just (A.String "object")
-    && case AKM.lookup "oneOf" km of
-         Just (A.Array xs) -> length xs == 2
-         _               -> False
+    && isNothing (AKM.lookup "oneOf" km)
+    && isNothing (AKM.lookup "allOf" km)
+    && isNothing (AKM.lookup "anyOf" km)
+    && case AKM.lookup "properties" km of
+         Just (A.Object _) -> True
+         _                 -> False
   _ -> False
 
--- | Each branch must list the discriminant in BOTH `properties`
--- AND `required`. This was the bug from #92 — flat schemas
--- lied because the discriminant slot wasn't pinned.
+-- | The discriminant must be present in the top-level 'properties'
+-- as an 'enum' field listing every branch's value. Replaces the
+-- pre-fix invariant that pinned a per-branch 'const' discriminant.
 testSchemaDiscriminantInEveryBranch :: IO Bool
 testSchemaDiscriminantInEveryBranch = pure $
   case sampleRefactorSchema of
-    A.Object km -> case AKM.lookup "oneOf" km of
-      Just (A.Array xs) -> all branchHasDiscriminant (Vector.toList xs)
-      _               -> False
+    A.Object km -> case AKM.lookup "properties" km of
+      Just (A.Object props) -> case AKM.lookup "action" props of
+        Just (A.Object actObj) ->
+             AKM.lookup "type" actObj == Just (A.String "string")
+          && case AKM.lookup "enum" actObj of
+               Just (A.Array _) -> True
+               _                -> False
+        _ -> False
+      _ -> False
     _ -> False
-  where
-    branchHasDiscriminant (A.Object km) =
-      let inProps = case AKM.lookup "properties" km of
-            Just (A.Object p) -> AKey.fromText "action" `AKM.member` p
-            _               -> False
-          inRequired = case AKM.lookup "required" km of
-            Just (A.Array reqs) -> A.String "action" `Vector.elem` reqs
-            _                 -> False
-      in inProps && inRequired
-    branchHasDiscriminant _ = False
 
--- | The discriminant property in each branch must be a `const`
--- string equal to that branch's `sbDiscriminantValue`. Pinning
--- this makes the JSON Schema branch-discriminate cleanly: a
--- well-behaved client picking @action: rename_local@ knows
--- exactly which branch's required-set to enforce.
+-- | The discriminant's 'enum' must list every branch's
+-- 'sbDiscriminantValue' in declaration order. Replaces the
+-- per-branch 'const' check.
 testSchemaDiscriminantConstMatchesValue :: IO Bool
 testSchemaDiscriminantConstMatchesValue = pure $
   case sampleRefactorSchema of
-    A.Object km -> case AKM.lookup "oneOf" km of
-      Just (A.Array xs) ->
-        let consts = mapMaybe extractActionConst (Vector.toList xs)
-        in consts == ["rename_local", "extract_binding"]
+    A.Object km -> case AKM.lookup "properties" km of
+      Just (A.Object props) -> case AKM.lookup "action" props of
+        Just (A.Object actObj) -> case AKM.lookup "enum" actObj of
+          Just (A.Array xs) ->
+            [ s | A.String s <- Vector.toList xs ]
+              == ["rename_local", "extract_binding"]
+          _ -> False
+        _ -> False
       _ -> False
     _ -> False
-  where
-    extractActionConst (A.Object km) = do
-      A.Object props <- AKM.lookup "properties" km
-      A.Object actObj <- AKM.lookup "action" props
-      A.String c <- AKM.lookup "const" actObj
-      pure c
-    extractActionConst _ = Nothing
 
--- | The required set of each branch must include the discriminant
--- AND every field listed in `sbRequired`. Pre-helper, callers
--- forgetting to repeat the discriminant in `required` was the
--- bug; the helper splices it in automatically and this test
--- pins that.
+-- | At the top-level the only required field is the discriminant;
+-- per-action required-field enforcement now lives in the runtime
+-- 'FromJSON' parser (the schema can no longer carry it without a
+-- top-level 'oneOf', which the Claude API forbids).
 testSchemaRequiredSetsAreCorrect :: IO Bool
 testSchemaRequiredSetsAreCorrect = pure $
   case sampleRefactorSchema of
-    A.Object km -> case AKM.lookup "oneOf" km of
-      Just (A.Array xs) ->
-        let reqs = mapMaybe extractRequired (Vector.toList xs)
-            renameSet  = ["action", "module_path", "new_name", "old_name"
-                         , "scope_line_start", "scope_line_end"]
-            extractSet = ["action", "module_path", "new_name"
-                         , "scope_line_start", "scope_line_end"]
-        in reqs == [renameSet, extractSet]
+    A.Object km -> case AKM.lookup "required" km of
+      Just (A.Array reqs) ->
+        [ s | A.String s <- Vector.toList reqs ] == ["action"]
       _ -> False
     _ -> False
-  where
-    extractRequired (A.Object km) = do
-      A.Array reqs <- AKM.lookup "required" km
-      pure [ s | A.String s <- Vector.toList reqs ]
-    extractRequired _ = Nothing
 
--- | additionalProperties: false is essential so a host doesn't
--- silently accept fields meant for the other branch.
+-- | additionalProperties: false at the top level keeps unknown
+-- fields out — the schema lists every branch's properties, so a
+-- valid request never needs anything beyond what's declared.
 testSchemaAdditionalPropertiesFalse :: IO Bool
 testSchemaAdditionalPropertiesFalse = pure $
   case sampleRefactorSchema of
-    A.Object km -> case AKM.lookup "oneOf" km of
-      Just (A.Array xs) -> all checkBranch (Vector.toList xs)
-      _               -> False
-    _ -> False
-  where
-    checkBranch (A.Object km) =
+    A.Object km ->
       AKM.lookup "additionalProperties" km == Just (A.Bool False)
-    checkBranch _ = False
+    _ -> False
 
 -- | Anchor: 'flatObjectSchema' for non-discriminated tools matches
 -- the inline shape every Tool/*.hs already uses today (pre-migration).
@@ -2271,19 +2251,26 @@ testRefactorExtractBindingMissingScope = do
       _         -> False
     _      -> False
 
--- | The published 'tdInputSchema' for ghc_refactor must use the
--- discriminatedSchema shape — top-level 'oneOf' with two branches.
--- Anchor: a future drift back to the flat schema would fail this.
+-- | The published 'tdInputSchema' for ghc_refactor must publish
+-- the action discriminant as an 'enum' over every branch.
+-- Anchor: a future drift back to top-level 'oneOf' (which Claude
+-- rejects) would fail this.
 testRefactorSchemaIsDiscriminated :: IO Bool
 testRefactorSchemaIsDiscriminated =
   -- #94 Phase C: schema now has THREE branches —
   -- rename_local / extract_binding / move_symbol (the latter
-  -- subsumed the retired ghc_move).
+  -- subsumed the retired ghc_move). Post-flat-schema fix
+  -- (Claude API top-level oneOf rejection): we anchor on the
+  -- discriminant 'enum' instead of a per-branch 'oneOf' array.
   let s = tdInputSchema RefactorTool.descriptor
   in pure $ case s of
-       A.Object km -> case AKM.lookup "oneOf" km of
-         Just (A.Array xs) -> length xs == 3
-         _                 -> False
+       A.Object km -> case AKM.lookup "properties" km of
+         Just (A.Object props) -> case AKM.lookup "action" props of
+           Just (A.Object actObj) -> case AKM.lookup "enum" actObj of
+             Just (A.Array xs) -> length xs == 3
+             _                 -> False
+           _ -> False
+         _ -> False
        _ -> False
 
 --------------------------------------------------------------------------------
@@ -2338,37 +2325,41 @@ testDepsAddCompleteParses = do
       _           -> False
     _      -> False
 
--- | The published 'tdInputSchema' for ghc_deps must use
--- discriminatedSchema with 3 branches (list / add / remove).
+-- | The published 'tdInputSchema' for ghc_deps must publish the
+-- discriminant as an 'enum' over every action — list / add /
+-- remove / explain.
 testDepsSchemaIsDiscriminated :: IO Bool
 testDepsSchemaIsDiscriminated =
   -- #94 Phase C: schema now has FOUR branches — list / add / remove
   -- / explain (the latter subsumed the retired ghc_deps_explain).
+  -- Post-flat-schema fix: anchor on the 'action' enum instead of a
+  -- top-level 'oneOf' array (Claude API rejects 'oneOf' at root).
   let s = tdInputSchema DepsTool.descriptor
   in pure $ case s of
-       A.Object km -> case AKM.lookup "oneOf" km of
-         Just (A.Array xs) -> length xs == 4
-         _                 -> False
+       A.Object km -> case AKM.lookup "properties" km of
+         Just (A.Object props) -> case AKM.lookup "action" props of
+           Just (A.Object actObj) -> case AKM.lookup "enum" actObj of
+             Just (A.Array xs) -> length xs == 4
+             _                 -> False
+           _ -> False
+         _ -> False
        _ -> False
 
 --------------------------------------------------------------------------------
 -- Issue #92 Phase D (lite): every registered tool's input schema is
--- well-formed JSON-Schema-shaped (Object with either the flat or the
--- oneOf-discriminated layout).
+-- well-formed AND Claude-API-compatible.
 --
--- This is the CI lint rule the meta-issue called out as Phase D —
--- catches a contributor who hand-writes a malformed 'tdInputSchema'
--- that 'tools/list' would publish to every host. We don't yet do the
--- "if oneOf, runtime FromJSON must be sum-typed" inverse check
--- (that requires runtime introspection of the parser); the
--- structural anchor here covers the common drift modes:
+-- The Claude API rejects 'input_schema' objects that carry 'oneOf' /
+-- 'allOf' / 'anyOf' at the top level (HTTP 400 at MCP registration
+-- time, taking down the whole session). This test pins the
+-- structural rule:
 --
 --   * 'tdInputSchema' must be a JSON Object (not an Array, not a
 --     primitive — Aeson's 'object' helper guarantees this, but a
 --     refactor that swaps in a hand-built Value could regress).
 --   * The Object must declare 'type: "object"'.
---   * Either 'properties' is present (flat) OR 'oneOf' is a
---     non-empty array of well-formed branches (discriminated).
+--   * The Object must NOT carry top-level 'oneOf' / 'allOf' / 'anyOf'.
+--   * 'properties' must be present (flat schema).
 --   * No tool ships a Null/empty schema.
 --------------------------------------------------------------------------------
 
@@ -2383,26 +2374,18 @@ testEveryToolPublishesValidSchema = do
     putStrLn ("Tools with malformed schemas: " <> show invalid)
   pure (null invalid)
   where
+    -- Post-flat-schema fix (Claude API top-level oneOf rejection):
+    -- every tool must publish a flat object schema. Top-level
+    -- 'oneOf' / 'allOf' / 'anyOf' fail HTTP registration with 400.
     isValidSchema (A.Object km) =
-      AKM.lookup "type" km == Just (A.String "object")
-        && (isFlat km || isDiscriminated km)
+         AKM.lookup "type" km == Just (A.String "object")
+      && isNothing (AKM.lookup "oneOf" km)
+      && isNothing (AKM.lookup "allOf" km)
+      && isNothing (AKM.lookup "anyOf" km)
+      && case AKM.lookup "properties" km of
+           Just (A.Object _) -> True
+           _                 -> False
     isValidSchema _ = False
-
-    isFlat km = case AKM.lookup "properties" km of
-      Just (A.Object _) -> True
-      _                 -> False
-
-    isDiscriminated km = case AKM.lookup "oneOf" km of
-      Just (A.Array xs) ->
-        not (Vector.null xs) && all isValidBranch (Vector.toList xs)
-      _ -> False
-
-    isValidBranch (A.Object km) =
-      AKM.lookup "type" km == Just (A.String "object")
-        && case AKM.lookup "properties" km of
-             Just (A.Object _) -> True
-             _                 -> False
-    isValidBranch _ = False
 
 --------------------------------------------------------------------------------
 -- Issue #95 Phase A (lite): nextStep dangling-reference detector
