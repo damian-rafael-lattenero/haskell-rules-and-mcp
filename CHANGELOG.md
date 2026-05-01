@@ -40,6 +40,14 @@ table and the live registry is a compile-error.
 
 ### Added
 
+- **Optional-binary install nudge** — `ghc_workflow(action="status")`
+  now emits an `optionalBinaries` field (only when present) listing
+  every missing optional binary (`fourmolu`, `ormolu`, `hoogle`,
+  `hls`) with copy-pasteable install commands. The session-start
+  handshake surfaces the gap automatically; the agent doesn't have
+  to call `ghc_toolchain status` separately to discover it.
+  `ghc_toolchain status` warnings now also carry an `install_hint`
+  field with the same command for consistency.
 - **Per-tool versioning** (#99 Phases A+B) — every `tools/list` entry
   now publishes a `version` field, and every tool response carries a
   `meta.tool_version`. Bump rules: MAJOR on input/output shape change,

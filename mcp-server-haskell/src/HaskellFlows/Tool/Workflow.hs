@@ -21,10 +21,13 @@ module HaskellFlows.Tool.Workflow
 
 import Control.Concurrent.MVar (MVar, readMVar)
 import Data.Aeson
+import qualified Data.Aeson.Key as Key
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, readIORef)
+import Data.Maybe (isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
+import System.Directory (findExecutable)
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession)
@@ -38,6 +41,7 @@ import HaskellFlows.Mcp.WorkflowState
   , renderHelp
   , renderPhaseHint
   )
+import qualified HaskellFlows.Tool.ToolchainStatus as TC
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 descriptor :: ToolDescriptor
@@ -115,7 +119,22 @@ handle pdRef sessMVar toolNames ws staleness rawArgs =
     Right (WorkflowArgs a) -> do
       pd        <- readIORef pdRef
       sessAlive <- isAlive sessMVar
-      pure (render a pd sessAlive toolNames ws staleness)
+      -- One @findExecutable@ per optional binary — cheap (PATH stat,
+      -- microseconds per name) and gives the boolean availability the
+      -- nudge needs without paying for the @--version@ probe that
+      -- 'ghc_toolchain status' does. See 'TC.optionalBinaryNames' for
+      -- the canonical input list.
+      render a pd sessAlive toolNames ws staleness <$> probeMissingOptionals
+
+probeMissingOptionals :: IO [Text]
+probeMissingOptionals =
+  map fst . filter (isNothing . snd)
+    <$> mapM probe TC.optionalBinaryNames
+  where
+    probe :: Text -> IO (Text, Maybe FilePath)
+    probe name = do
+      mp <- findExecutable (T.unpack name)
+      pure (name, mp)
 
 -- | Discriminate the FromJSON failure shape so the envelope's
 -- error.kind reflects what actually went wrong: an unknown
@@ -161,19 +180,22 @@ render
   -> [Text]
   -> WorkflowState
   -> StalenessReport
+  -> [Text]
   -> ToolResult
-render a pd alive toolNames ws staleness =
+render a pd alive toolNames ws staleness missingOpt =
   let phase      = classifyPhase ws
       stateHints = renderHelp ws
       payload    = case a of
-        ActStatus -> statusPayload pd alive toolNames staleness phase
+        ActStatus -> statusPayload pd alive toolNames staleness phase missingOpt
         ActHelp   -> helpPayload pd alive stateHints staleness phase
         ActNext   -> nextPayload pd alive
   in Env.toolResponseToResult (Env.mkOk payload)
 
-statusPayload :: ProjectDir -> Bool -> [Text] -> StalenessReport -> SessionPhase -> Value
-statusPayload pd alive toolNames staleness phase =
-  object
+statusPayload
+  :: ProjectDir -> Bool -> [Text] -> StalenessReport -> SessionPhase
+  -> [Text] -> Value
+statusPayload pd alive toolNames staleness phase missingOpt =
+  object $
     [ "view"        .= ("status" :: Text)
     , "projectDir"  .= T.pack (unProjectDir pd)
     , "ghciAlive"   .= alive
@@ -183,6 +205,37 @@ statusPayload pd alive toolNames staleness phase =
       -- about "is my binary stale?" get the @stale@ bool + a
       -- human-readable @message@ without a second tool call.
     , "staleness"   .= staleness
+    ]
+    -- Only emit the 'optionalBinaries' field when something is
+    -- missing.  Happy path stays clean — the nudge only appears
+    -- when there's something to nudge about.
+    <> [ "optionalBinaries" .= optionalBinariesPayload missingOpt
+       | not (null missingOpt)
+       ]
+
+-- | Render the missing-optional-binaries payload — used by the agent
+-- (and by the user, via chat) to decide whether to install the
+-- skipped binaries before going further.  Shape:
+--
+-- @
+--   { "missing":       ["fourmolu", "ormolu", ...]
+--   , "install_hints": { "fourmolu": "cabal install fourmolu", ... }
+--   , "summary":       "4 optional binaries missing — your MCP works
+--                       but ghc_format / hoogle_search will return
+--                       status='unavailable'."
+--   }
+-- @
+optionalBinariesPayload :: [Text] -> Value
+optionalBinariesPayload missing =
+  object
+    [ "missing"       .= missing
+    , "install_hints" .= object
+        [ Key.fromText name .= TC.installHintFor name | name <- missing ]
+    , "summary"       .=
+        ( T.pack (show (length missing))
+       <> " optional binaries missing — your MCP works but tools that"
+       <> " delegate to them will return status='unavailable'. Run:\n  "
+       <> T.intercalate "\n  " (map TC.installHintFor missing) )
     ]
 
 helpPayload

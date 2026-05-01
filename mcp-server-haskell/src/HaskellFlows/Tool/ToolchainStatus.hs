@@ -18,6 +18,13 @@
 -- 'Toolchain.handle' forwards to when @action="status"@.
 module HaskellFlows.Tool.ToolchainStatus
   ( handle
+    -- * Install-hint table (re-used by tools that report
+    -- @status="unavailable"@ to populate their @remediation@ field)
+  , installHintFor
+    -- * Canonical list of optional (non-blocking) binaries — re-used
+    -- by 'HaskellFlows.Tool.Workflow' to surface a session-start nudge
+    -- without re-doing the per-binary version probe.
+  , optionalBinaryNames
   ) where
 
 import Control.Concurrent (forkIO)
@@ -63,6 +70,19 @@ probeTargets =
   , ("hls",      "--numeric-version", "workflow")
   , ("haskell-language-server", "--numeric-version", "workflow")
   ]
+
+-- | Names of the optional (non-gate) binaries.  Single source of
+-- truth — derived from 'probeTargets' so dropping a binary from the
+-- probe set automatically updates every consumer.
+--
+-- Used by 'HaskellFlows.Tool.Workflow.statusPayload' to surface a
+-- one-shot session-start nudge listing what is missing + the
+-- copy-pasteable install commands, without paying for the per-binary
+-- @--version@ probe (a single 'findExecutable' per name is enough
+-- for the boolean answer the nudge needs).
+optionalBinaryNames :: [Text]
+optionalBinaryNames =
+  [ name | (name, _, category) <- probeTargets, category /= "gate" ]
 
 versionTimeoutMicros :: Int
 versionTimeoutMicros = 3_000_000  -- 3s per binary
@@ -184,12 +204,38 @@ missingOptionalWarning :: Entry -> Env.Warning
 missingOptionalWarning e = Env.Warning
   { Env.wKind    = Env.SlowPath
   , Env.wMessage = "optional binary '" <> eName e
-                <> "' is unavailable; tools that delegate to it will return status='unavailable'"
+                <> "' is unavailable; tools that delegate to it will "
+                <> "return status='unavailable'. Install: "
+                <> installHintFor (eName e)
   , Env.wExtra   = Just (object
-      [ "binary"   .= eName e
-      , "category" .= eCategory e
+      [ "binary"       .= eName e
+      , "category"     .= eCategory e
+      , "install_hint" .= installHintFor (eName e)
       ])
   }
+
+-- | Closed mapping: optional-binary name → copy-pasteable install
+-- command.  Hardcoded by design — the canonical install path for each
+-- binary is well-known and stable, and a closed lookup means agents
+-- never see a wrong-package or curl|sh suggestion injected from the
+-- environment.
+--
+-- Both 'hls' and 'haskell-language-server' route to the same
+-- @ghcup install hls --set@ because that is the only supported HLS
+-- distribution path — Hackage @cabal install haskell-language-server@
+-- exists but breaks against bleeding-edge GHC and is documented as
+-- not recommended.
+installHintFor :: Text -> Text
+installHintFor name = case name of
+  "fourmolu"                -> "cabal install fourmolu"
+  "ormolu"                  -> "cabal install ormolu"
+  "hoogle"                  -> "cabal install hoogle && hoogle generate"
+  "hls"                     -> "ghcup install hls --set"
+  "haskell-language-server" -> "ghcup install hls --set"
+  -- Defensive fallback — shouldn't fire while the closed enum in
+  -- 'probeTargets' is the input set, but a tracking note for the
+  -- agent is still better than a silent empty hint.
+  other                     -> "(no install hint for '" <> other <> "')"
 
 renderEntry :: Entry -> Value
 renderEntry e =
