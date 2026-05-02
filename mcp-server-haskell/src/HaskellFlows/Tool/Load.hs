@@ -17,15 +17,20 @@ module HaskellFlows.Tool.Load
   , checkPathExists
     -- * Exposed for unit tests
   , mergeDiags
+  , parseHsSourceDirs
+  , isUnderAnySourceDir
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Data.Char (isSpace)
+import Data.List (isPrefixOf, nub)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import qualified System.Directory as Dir
-import System.FilePath ((</>))
+import System.FilePath (takeExtension, (</>))
 
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
@@ -122,11 +127,21 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
           existsCheck <- checkPathExists pd p
           case existsCheck of
             Left missingMsg -> pure (Left (PathMissing missingMsg))
-            Right ()        -> Right <$> targetForPath ghcSess (T.unpack p)
+            Right () -> do
+              -- Issue #110: reject files outside declared hs-source-dirs.
+              -- A file that exists on disk but is not under any declared
+              -- source directory will never be found by GHCi's module
+              -- search — the load would succeed with misleading "OK" output
+              -- while actually loading an unrelated target.
+              mBadDirs <- checkNotInSourceDirs pd (T.unpack p)
+              case mBadDirs of
+                Just dirs -> pure (Left (OutsideSourceDirs p dirs))
+                Nothing   -> Right <$> targetForPath ghcSess (T.unpack p)
     case eTgt of
-      Left EmptyProject       -> pure emptyProjectResult
-      Left (PathRefused m)    -> pure (pathTraversalResult m)
-      Left (PathMissing m)    -> pure (pathMissingResult m)
+      Left EmptyProject                     -> pure emptyProjectResult
+      Left (PathRefused m)                  -> pure (pathTraversalResult m)
+      Left (PathMissing m)                  -> pure (pathMissingResult m)
+      Left (OutsideSourceDirs modPath dirs) -> pure (outsideSourceDirsResult modPath dirs)
       Right tgt -> do
         -- Strict first gives agents the canonical error set.
         -- diagnostics=true merges a Deferred pass so typed holes
@@ -150,10 +165,14 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
 -- | Issue #84: pre-flight signal for the no-args target path.
 -- 'EmptyProject' is the case the issue closes; the path-error
 -- variants exist so we keep them distinct on the wire.
+-- 'OutsideSourceDirs' (#110) carries the module_path and the
+-- list of declared source dirs — both are needed to build the
+-- error message outside the 'Just p' branch scope.
 data PreflightFailure
   = EmptyProject
   | PathRefused !Text
   | PathMissing !Text
+  | OutsideSourceDirs !Text ![FilePath]
 
 -- | Issue #84: count Haskell sources under @<project>/src@ and
 -- @<project>/app@. Mirrors the discovery logic inside
@@ -243,6 +262,33 @@ subprocessResult msg =
   Env.toolResponseToResult
     (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
 
+-- | Issue #110: file exists but is outside every declared
+-- @hs-source-dirs@ → status='failed', kind='outside_source_dirs'.
+-- The @result@ payload gives the agent exactly what it needs to
+-- locate the right stanza and fix the path.
+outsideSourceDirsResult :: Text -> [FilePath] -> ToolResult
+outsideSourceDirsResult modPath sourceDirs =
+  let dirsText = T.intercalate ", " (map T.pack sourceDirs)
+      msg = modPath
+              <> " is not under any declared hs-source-dirs ("
+              <> dirsText <> ")"
+      payload =
+        object
+          [ "module_path"    .= modPath
+          , "hs_source_dirs" .= map T.pack sourceDirs
+          , "remediation"    .=
+              ( "Move the file under an existing hs-source-dirs \
+                \(e.g. src/), or add its parent directory to the \
+                \relevant stanza in the .cabal file." :: Text )
+          ]
+      envErr = (Env.mkErrorEnvelope Env.OutsideSourceDirs msg)
+                 { Env.eeRemediation =
+                     Just "Move the file under a declared hs-source-dirs \
+                          \or extend the relevant .cabal stanza."
+                 }
+      response = (Env.mkFailed envErr) { Env.reResult = Just payload }
+  in Env.toolResponseToResult response
+
 -- | Merge strict and deferred diagnostic passes.  When both passes
 -- report a diagnostic at the same (file, line, col), prefer the
 -- deferred version: it carries the full warning text (e.g. a typed-
@@ -286,3 +332,104 @@ checkPathExists pd rel = do
   pure $ if exists
     then Right ()
     else Left ("module_path does not exist: " <> rel)
+
+--------------------------------------------------------------------------------
+-- Issue #110: hs-source-dirs validation
+--------------------------------------------------------------------------------
+
+-- | Issue #110: return 'Just sourceDirs' when @relPath@ is not under
+-- any declared @hs-source-dirs@ in the project's .cabal file.
+-- Returns 'Nothing' — check passes or is skipped — when:
+--   * no .cabal is found (no project layout yet),
+--   * the .cabal cannot be read (I/O error, permission),
+--   * or the file IS under a declared source directory.
+--
+-- When the .cabal exists but declares no @hs-source-dirs@ field at
+-- all, the Cabal-spec default of @.@ (project root) applies and every
+-- relative path passes by definition.
+checkNotInSourceDirs :: ProjectDir -> FilePath -> IO (Maybe [FilePath])
+checkNotInSourceDirs pd relPath = do
+  mCabal <- findCabalFile' pd
+  case mCabal of
+    Nothing -> pure Nothing    -- no .cabal: skip check gracefully
+    Just cf -> do
+      mBody <- try (TIO.readFile cf) :: IO (Either SomeException Text)
+      case mBody of
+        Left _     -> pure Nothing  -- can't read: skip gracefully
+        Right body ->
+          let dirs      = parseHsSourceDirs body
+              effective = if null dirs then ["."] else nub dirs
+          in if isUnderAnySourceDir effective relPath
+               then pure Nothing
+               else pure (Just effective)
+
+-- | Locate the unique @.cabal@ file directly under the project root.
+-- Returns 'Nothing' when the directory doesn't exist, there is no
+-- @.cabal@, or there is more than one (ambiguous).
+--
+-- Private to this module — 'CheckProject' carries its own copy to
+-- avoid a coupling between two tools that should stay independent.
+findCabalFile' :: ProjectDir -> IO (Maybe FilePath)
+findCabalFile' pd = do
+  let root = unProjectDir pd
+  exists <- Dir.doesDirectoryExist root
+  if not exists then pure Nothing else do
+    entries <- Dir.listDirectory root
+    let cabals = [ root </> e | e <- entries, takeExtension e == ".cabal" ]
+    case cabals of
+      [one] -> pure (Just one)
+      _     -> pure Nothing
+
+-- | Parse every @hs-source-dirs:@ field from a .cabal file body and
+-- return the union of all declared directories (across all stanzas).
+-- Exported for unit tests.
+--
+-- * Handles inline content (@hs-source-dirs: src lib@) and
+--   continuation lines.
+-- * Strips inline @-- comment@ fragments before tokenising.
+-- * Returns an empty list when no @hs-source-dirs@ field is found;
+--   callers must treat the empty list as the Cabal default of @.@.
+parseHsSourceDirs :: Text -> [FilePath]
+parseHsSourceDirs body = go (T.lines body) []
+  where
+    go []        acc = reverse acc
+    go (ln:rest) acc
+      | Just inlineTail <- stripHsSourceDirsHeader ln =
+          let (contLines, after) = span isContinuation rest
+              payload = inlineTail : map T.strip contLines
+              dirs    = concatMap dirsIn payload
+          in go after (dirs <> acc)
+      | otherwise = go rest acc
+
+    stripHsSourceDirsHeader ln =
+      let lower = T.toLower (T.stripStart ln)
+      in if "hs-source-dirs:" `T.isPrefixOf` lower
+           then Just (inlineAfter ln)
+           else Nothing
+
+    inlineAfter ln =
+      let r = T.dropWhile (/= ':') (T.stripStart ln)
+      in T.strip (T.drop 1 r)
+
+    -- A continuation line is one that starts with whitespace and
+    -- whose first non-space token does not contain a colon (which
+    -- would signal a new field).
+    isContinuation ln =
+      let stripped = T.stripStart ln
+      in not (T.null stripped)
+         && not (T.null (T.takeWhile isSpace ln))
+         && not (T.any (== ':') (T.takeWhile (not . isSpace) stripped))
+
+    dirsIn t =
+      let noComment = T.strip (fst (T.breakOn "--" t))
+      in [ T.unpack tok
+         | tok <- T.words (T.replace "," " " noComment)
+         , not (T.null tok)
+         ]
+
+-- | Return 'True' when @filePath@ is directly under at least one of
+-- the given source directories. The special directory @"."@ matches
+-- every path (project-root default). Exported for unit tests.
+isUnderAnySourceDir :: [FilePath] -> FilePath -> Bool
+isUnderAnySourceDir dirs filePath =
+  any (\d -> d == "." || (d ++ "/") `isPrefixOf` filePath) dirs

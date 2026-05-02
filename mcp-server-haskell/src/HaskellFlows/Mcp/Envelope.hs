@@ -204,6 +204,11 @@ data ErrorKind
   | ModuleNotInGraph
     -- Runtime failure (status = failed) --------------------------------
   | ModulePathDoesNotExist
+    -- Issue #110: file exists on disk but is outside every declared
+    -- hs-source-dirs in the .cabal file. Distinct from
+    -- 'ModulePathDoesNotExist' (file missing) and 'PathTraversal'
+    -- (policy refusal) — the file is real but GHC won't find it.
+  | OutsideSourceDirs
   | UnresolvableDep
   | VerifyFailed
   | SolverConflict
@@ -241,6 +246,7 @@ errorKindToText = \case
   NotInScope              -> "not_in_scope"
   ModuleNotInGraph        -> "module_not_in_graph"
   ModulePathDoesNotExist  -> "module_path_does_not_exist"
+  OutsideSourceDirs       -> "outside_source_dirs"
   UnresolvableDep         -> "unresolvable_dep"
   VerifyFailed            -> "verify_failed"
   SolverConflict          -> "solver_conflict"

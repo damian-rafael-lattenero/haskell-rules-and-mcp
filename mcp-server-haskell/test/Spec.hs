@@ -1211,6 +1211,13 @@ main = do
       , test "#119: removeDep unchangedResult has no verb field"           testUnchangedResultNoVerb
       , test "#119: formatIso8601 produces ISO-8601 timestamp"             testFormatIso8601
       , test "#119: ValidateCabal warnings-only returns ok not partial"    testValidateCabalWarningsOk
+      -- Issue #110 — ghc_load outside hs-source-dirs validation
+      , test "#110: parseHsSourceDirs single stanza"                      testParseHsSourceDirsSingle
+      , test "#110: parseHsSourceDirs multiple stanzas union"             testParseHsSourceDirsMultipleStanzas
+      , test "#110: parseHsSourceDirs empty → no field found"             testParseHsSourceDirsEmpty
+      , test "#110: isUnderAnySourceDir positive and negative"            testIsUnderAnySourceDir
+      , test "#110: isUnderAnySourceDir dot matches everything"           testIsUnderAnySourceDirDot
+      , test "#110: Env.OutsideSourceDirs exists in enum + wire form"     testOutsideSourceDirsKindExists
       ]
   if and results then exitSuccess else exitFailure
 
@@ -3563,6 +3570,7 @@ testEnvelopeErrorKindRoundTrip =
         , (Env.NotInScope,             "not_in_scope")
         , (Env.ModuleNotInGraph,       "module_not_in_graph")
         , (Env.ModulePathDoesNotExist, "module_path_does_not_exist")
+        , (Env.OutsideSourceDirs,      "outside_source_dirs")
         , (Env.UnresolvableDep,        "unresolvable_dep")
         , (Env.VerifyFailed,           "verify_failed")
         , (Env.InnerTimeout,           "inner_timeout")
@@ -3573,7 +3581,7 @@ testEnvelopeErrorKindRoundTrip =
       pinnedOk = all (\(k, t) -> Env.errorKindToText k == t) pinned
       reverseTotal = all (\k -> Env.textToErrorKind (Env.errorKindToText k) == Just k)
                          allKinds
-      countOk = length allKinds == 25  -- §4: 24 + GateFailure (#119)
+      countOk = length allKinds == 26  -- §4: 24 + GateFailure (#119) + OutsideSourceDirs (#110)
   in pure (pinnedOk && reverseTotal && countOk)
 
 -- | Companion round-trip for 'WarningKind'.
@@ -11917,3 +11925,78 @@ testValidateCabalWarningsOk =
              AKM.lookup "status" top == Just (A.String "ok")
            _ -> False
        _ -> False
+
+--------------------------------------------------------------------------------
+-- Issue #110 — ghc_load hs-source-dirs validation
+--------------------------------------------------------------------------------
+
+-- | #110: a single @hs-source-dirs:@ line is parsed into one dir.
+testParseHsSourceDirsSingle :: IO Bool
+testParseHsSourceDirsSingle =
+  let cabal = T.unlines
+        [ "library"
+        , "  hs-source-dirs: src"
+        , "  exposed-modules: Foo"
+        ]
+  in pure (LoadTool.parseHsSourceDirs cabal == ["src"])
+
+-- | #110: multiple stanzas each declaring different source dirs
+-- produce the union of all dirs (order: last stanza first, then dedup
+-- is the caller's responsibility).
+testParseHsSourceDirsMultipleStanzas :: IO Bool
+testParseHsSourceDirsMultipleStanzas =
+  let cabal = T.unlines
+        [ "library"
+        , "  hs-source-dirs: src"
+        , ""
+        , "test-suite spec"
+        , "  type:             exitcode-stdio-1.0"
+        , "  hs-source-dirs:   test"
+        , "  main-is:          Spec.hs"
+        , ""
+        , "executable my-exe"
+        , "  hs-source-dirs:   app"
+        ]
+      dirs = LoadTool.parseHsSourceDirs cabal
+  in pure (Set.fromList dirs == Set.fromList ["src", "test", "app"])
+
+-- | #110: a cabal body with NO @hs-source-dirs:@ field at all
+-- produces an empty list. Callers treat empty as the Cabal default
+-- of @"."@ (project root allows everything).
+testParseHsSourceDirsEmpty :: IO Bool
+testParseHsSourceDirsEmpty =
+  let cabal = T.unlines
+        [ "library"
+        , "  exposed-modules: Foo"
+        , "  build-depends:   base"
+        ]
+  in pure (null (LoadTool.parseHsSourceDirs cabal))
+
+-- | #110: 'isUnderAnySourceDir' returns True when the path is directly
+-- under a declared dir and False when it isn't.
+testIsUnderAnySourceDir :: IO Bool
+testIsUnderAnySourceDir =
+  pure $
+       LoadTool.isUnderAnySourceDir ["src"] "src/Foo.hs"
+    && LoadTool.isUnderAnySourceDir ["src", "test"] "test/Spec.hs"
+    && not (LoadTool.isUnderAnySourceDir ["src"] "dogfood-sandbox/X.hs")
+    && not (LoadTool.isUnderAnySourceDir ["src"] "Foo.hs")
+    && not (LoadTool.isUnderAnySourceDir ["src"] "src-extra/Bar.hs")
+
+-- | #110: the special dir @"."@ matches every relative path — it
+-- represents the Cabal default of the project root.
+testIsUnderAnySourceDirDot :: IO Bool
+testIsUnderAnySourceDirDot =
+  pure $
+       LoadTool.isUnderAnySourceDir ["."] "src/Foo.hs"
+    && LoadTool.isUnderAnySourceDir ["."] "dogfood-sandbox/X.hs"
+    && LoadTool.isUnderAnySourceDir ["."] "Foo.hs"
+
+-- | #110: 'Env.OutsideSourceDirs' must be a member of 'ErrorKind'
+-- with wire text @"outside_source_dirs"@.
+testOutsideSourceDirsKindExists :: IO Bool
+testOutsideSourceDirsKindExists =
+  pure $
+    Env.errorKindToText Env.OutsideSourceDirs == "outside_source_dirs"
+    && Env.textToErrorKind "outside_source_dirs" == Just Env.OutsideSourceDirs
+    && Env.OutsideSourceDirs `elem` ([minBound .. maxBound] :: [Env.ErrorKind])
