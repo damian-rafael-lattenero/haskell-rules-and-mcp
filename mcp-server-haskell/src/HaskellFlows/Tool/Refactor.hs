@@ -490,8 +490,14 @@ loadAndDiagnose ghcSess mp = do
 -- \"all green\".
 commitResultWithDiff :: Value -> [GhcError] -> [GhcError] -> ToolResult
 commitResultWithDiff base preDiags postDiags =
-  let preErrs  = filter ((== SevError) . geSeverity) preDiags
-      postErrs = filter ((== SevError) . geSeverity) postDiags
+  let -- Issue #108: exclude typed holes (GHC-88464) from pre_existing_errors.
+      -- Typed holes are not compile errors; they should flow through
+      -- ghc_check_module's holes gate, not the refactor's error-diff
+      -- display. Including them caused "ok-with-pre-existing-errors"
+      -- even on a module that was otherwise clean.
+      isHoleErr d = geSeverity d == SevError && geCode d == Just "GHC-88464"
+      preErrs  = filter (\d -> geSeverity d == SevError && not (isHoleErr d)) preDiags
+      postErrs = filter (\d -> geSeverity d == SevError && not (isHoleErr d)) postDiags
       compileTag :: Text
       compileTag
         | null postErrs && null preErrs = "ok"

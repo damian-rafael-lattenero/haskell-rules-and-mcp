@@ -128,7 +128,29 @@ runOne ghcSess sp = do
           pure (QcException expr (T.pack (show ex)), Nothing)
         Just (Right (out, err)) ->
           let parsed = parseQuickCheckOutput expr out
-          in pure (parsed, classifyLoadFailure parsed err)
+              mFail  = classifyLoadFailure parsed err
+          -- Issue #113: cross-stanza replay failure.
+          -- When the primary attempt detects a module-load failure
+          -- (e.g. a test-stanza module that isn't visible under the
+          -- library's cabal-repl target), retry with Nothing so the
+          -- repl gets ':m + <all exposed modules>' instead. Self-
+          -- contained lambda properties (no project-specific imports)
+          -- will pass on the fallback; properties that genuinely need
+          -- a project module will remain load-failed — honest signal.
+          in case mFail of
+               Nothing -> pure (parsed, Nothing)
+               Just _  -> do
+                 mRetry <- timeout replayTimeoutMicros $
+                   try $ QcTool.runQuickCheckViaCabalRepl
+                           (gsProject ghcSess) Nothing safe
+                 case mRetry of
+                   -- timeout / exception on retry → keep original failure
+                   Nothing  -> pure (parsed, mFail)
+                   Just (Left (_ :: SomeException)) -> pure (parsed, mFail)
+                   Just (Right (out2, err2)) ->
+                     let parsed2 = parseQuickCheckOutput expr out2
+                         mFail2  = classifyLoadFailure parsed2 err2
+                     in pure (parsed2, mFail2)
   pure Replay { rpStored = sp, rpResult = qr, rpLoadFailure = mLoadFail }
 
 -- | Issue #51: when @parseQuickCheckOutput@ returns 'QcUnparsed'

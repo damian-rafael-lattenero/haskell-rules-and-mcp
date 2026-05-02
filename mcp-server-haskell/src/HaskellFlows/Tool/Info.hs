@@ -188,7 +188,17 @@ queryInfo nm = do
               let methods   = classMethodPairs cls
                   classLine = renderClassDefinition nm tc methods
               in (classLine, [], methods)
-            -- Functions / type-synonyms / unknowns: legacy shape.
+            -- Issue #107: functions / operators (AnId).
+            -- The legacy path called 'showPprUnsafe thing' on the whole
+            -- TyThing, which routes through GHC's 'pprShortTyThing' and
+            -- produces "Identifier 'foo'" (just the category + quoted
+            -- name, no type). For value bindings we extract the type
+            -- via 'idType' directly, giving "foo :: <type>".
+            AnId i ->
+              let typeText = T.pack (showPprUnsafe (idType i))
+                  defText  = nm <> " :: " <> typeText
+              in (defText, [], [])
+            -- Type synonyms and other TyThings: legacy shape.
             _ ->
               (renderDefinition kind nm renderedThing, [], [])
           parsed = ParsedInfo

@@ -155,12 +155,17 @@ runPairProbe
   -> (StoredProperty, StoredProperty) -> IO PairFinding
 runPairProbe ghcSess _args (p1, p2) = do
   let probe = buildContradictionProbe (spExpression p1) (spExpression p2)
-  -- Re-use the cabal-repl harness ghc_quickcheck uses so the
-  -- audit benefits from every fix that path receives (load
-  -- failures classified as scope-broken, etc.).
+  -- Issue #112: the contradiction probe is a SYNTHETIC lambda, not a
+  -- named property. Loading P1's source module often fails when the
+  -- probe body doesn't reference project symbols at all, and using a
+  -- single module context is wrong when P1 and P2 come from different
+  -- stanzas. Pass Nothing → the repl gets `:m + <exposed modules>`
+  -- (all library modules) which covers self-contained lambdas and
+  -- standard-library terms. Probes that genuinely need a project module
+  -- will fall to QcUnparsed → "skipped" (honest signal).
   res <- try @SomeException $
     Qc.runQuickCheckViaCabalRepl (gsProject ghcSess)
-      (spModule p1) probe
+      Nothing probe
   pure $ case res of
     Left e ->
       PairFinding

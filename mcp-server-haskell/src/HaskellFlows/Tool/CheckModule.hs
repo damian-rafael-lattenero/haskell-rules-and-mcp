@@ -133,16 +133,24 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
           -- relative one when GHC is pointed at this project root.
           let ownDiag d = raw `T.isSuffixOf` geFile d
               ownDiags  = filter ownDiag strictDiags
-              errors    = filter ((== SevError)   . geSeverity) ownDiags
+              -- Issue #108 (F-23 propagation): GHC reports typed holes
+              -- (code GHC-88464) as SevError in the strict pass, which
+              -- caused compile.ok=false + holes.ok=true (vacuously) when
+              -- the only issues were holes. Reclassify holes out of the
+              -- errors bucket so they flow to the holes gate instead.
+              isHoleErr d = geSeverity d == SevError
+                         && geCode d == Just "GHC-88464"
+              errors    = filter (\d -> geSeverity d == SevError
+                                     && not (isHoleErr d)) ownDiags
               warnings  = filter ((== SevWarning) . geSeverity) ownDiags
-              -- 'compileOk' still takes the PROJECT-wide strictOk
-              -- flag: if any module failed to compile the whole
-              -- load reported Failed, and this module can't
-              -- legitimately be called green even if the specific
-              -- diag happens to have landed on a sibling. Errors
-              -- in OTHER modules still surface downstream via
-              -- their own check_module call.
-              compileOk = strictOk && null errors
+              -- compileOk: null real errors, and either the project-wide
+              -- strict flag says OK, or this module's only SevErrors were
+              -- holes (which means strictOk=False is caused by holes, not
+              -- a real compile failure in this module's own stanza).
+              ownHoleOnly = null errors
+                         && any isHoleErr ownDiags
+              compileOk = null errors
+                       && (strictOk || ownHoleOnly)
           holes <- if compileOk
                      then do
                        eDef <- try (loadForTarget ghcSess tgt Deferred)

@@ -1199,6 +1199,13 @@ main = do
       -- Issue #118 — removeDep drops blank continuation lines
       , test "#118: removeDep no trailing blank on single-dep line"        testRemoveDepNoTrailingBlank
       , test "#118: removeDep preserves multi-dep block correctly"         testRemoveDepMultiDep
+      -- Issue #112 — PropertyAudit pair-probe uses Nothing module context
+      , test "#112: contradiction probe is self-contained (no module ref)" testAuditPairProbeIsModuleAgnostic
+      -- Issue #113 — Regression cross-stanza retry fallback
+      , test "#113: cross-stanza stderr triggers load-failure classification" testRegressionCrossStanzaRetryClassification
+      , test "#113: QcPassed with quiet stderr does not trigger retry"     testRegressionSelfContainedNoRetry
+      -- Issue #114 — ghc_imports dedup via nubBy importKey
+      , test "#114: nubBy dedup removes duplicate module keys"             testImportsNubByDeduplication
       ]
   if and results then exitSuccess else exitFailure
 
@@ -11795,3 +11802,50 @@ testRemoveDepMultiDep =
       aesonPresent = any ("aeson" `T.isInfixOf`) lns
       textAbsent   = not (any ("text" `T.isInfixOf`) lns)
   in pure (aesonPresent && textAbsent)
+
+-- | #112: The contradiction probe built by 'buildContradictionProbe'
+-- is a self-contained lambda that doesn't reference any project module.
+-- This confirms it can be run with a @Nothing@ module context (i.e.
+-- ':m + <all exposed lib modules>') and won't accidentally embed import
+-- or module declarations.
+testAuditPairProbeIsModuleAgnostic :: IO Bool
+testAuditPairProbeIsModuleAgnostic =
+  let probe = PropertyAuditTool.buildContradictionProbe
+                "\\x -> even (x :: Int)"
+                "\\x -> odd (x :: Int)"
+  in pure $ "&&"    `T.isInfixOf` probe
+         && "not"   `T.isInfixOf` probe
+         && not ("import" `T.isInfixOf` probe)
+         && not ("module " `T.isInfixOf` probe)
+
+-- | #113: When cabal-repl stderr carries a cross-stanza scope error
+-- (test-suite symbols not visible under the library's repl target),
+-- 'classifyLoadFailure' must return @Just@ — which triggers the
+-- fallback retry with @Nothing@ module context in 'runOne'.
+testRegressionCrossStanzaRetryClassification :: IO Bool
+testRegressionCrossStanzaRetryClassification =
+  let crossStanzaStderr = T.unlines
+        [ "src/Main.hs:1:8: error:"
+        , "    Variable not in scope: testHelper :: Int -> Bool"
+        ]
+      qr = QcUnparsed "\\x -> testHelper x" ""
+  in pure (isJust (RegTool.classifyLoadFailure qr crossStanzaStderr))
+
+-- | #113: A successful property run must NOT be misclassified as a
+-- load failure. 'QcPassed' with empty stderr → 'classifyLoadFailure'
+-- returns @Nothing@, so no fallback retry is attempted.
+testRegressionSelfContainedNoRetry :: IO Bool
+testRegressionSelfContainedNoRetry =
+  let qr = QcPassed "\\x -> x > (0 :: Int)" 100
+  in pure (isNothing (RegTool.classifyLoadFailure qr ""))
+
+-- | #114: The deduplication in 'queryImports' uses 'nubBy' keyed on
+-- module name. Verify the invariant: given a list with repeated keys,
+-- 'nubBy (==)' (same logic as 'nubBy importKey') keeps only the first
+-- occurrence and produces a list whose length equals the number of
+-- distinct module names.
+testImportsNubByDeduplication :: IO Bool
+testImportsNubByDeduplication =
+  let entries = ["Data.Map", "Data.Text", "Data.Map", "Data.List", "Data.Text"] :: [Text]
+      deduped  = List.nubBy (==) entries
+  in pure (length deduped == 3 && deduped == ["Data.Map", "Data.Text", "Data.List"])

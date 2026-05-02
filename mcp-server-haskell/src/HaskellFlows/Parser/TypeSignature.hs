@@ -18,6 +18,8 @@ module HaskellFlows.Parser.TypeSignature
   , isSameTypeThroughout
   , argCount
   , returnType
+    -- * Issue #111 — exposed for unit tests
+  , stripForall
   ) where
 
 import Data.Char (isAlphaNum, isUpper, isLower)
@@ -48,10 +50,20 @@ data SigType
 -- | Parse @"Eq a => a -> a -> Bool"@ into a 'ParsedSig'. Returns
 -- 'Nothing' on malformed input — callers treat that as \"no rules
 -- match\" rather than propagating an error.
+--
+-- Issue #111: GHC's 'exprType' / 'showPprUnsafe' can include a leading
+-- @forall@-quantifier even after @TM_Inst@ on polymorphic functions like
+-- @reverse :: forall {a}. [a] -> [a]@. The old parser hit the @forall@
+-- as an unknown token and produced a mangled 'ParsedSig' in which the
+-- first argument type was @TyApp (TyVar "forall") [...]@ instead of
+-- @TyList (TyVar "a")@, which prevented all rules from firing.
+-- 'stripForall' peels off any leading @forall …\.@ quantifier before
+-- the rest of the pipeline runs.
 parseSignature :: Text -> Maybe ParsedSig
 parseSignature raw = do
   let trimmed = collapseWs (T.strip raw)
-  (constraints, body) <- splitConstraints trimmed
+      noForall = stripForall trimmed
+  (constraints, body) <- splitConstraints noForall
   let chain = splitTopArrow body
   case chain of
     []  -> Nothing
@@ -98,6 +110,45 @@ returnType = psReturn
 
 collapseWs :: Text -> Text
 collapseWs = T.unwords . T.words
+
+-- | Issue #111: strip a leading @forall@ quantifier from a GHC-rendered
+-- type string. GHC can include @forall@s in 'showPprUnsafe' output even
+-- after instantiation, e.g.:
+--
+-- @
+-- "forall {a}. [a] -> [a]"     -- inferred quantifier (GHC 9.2+)
+-- "forall a. [a] -> [a]"       -- explicit quantifier
+-- "forall a b. a -> b -> a"    -- multi-binder
+-- @
+--
+-- The strategy: if the text begins with @\"forall \"@ (lowercase), scan
+-- forward tracking paren/brace depth until the first top-level @'.'@
+-- (which in Haskell's @forall@ syntax always terminates the binders).
+-- Return everything after the dot, stripped.  If no forall is detected,
+-- return the text unchanged.
+--
+-- Only one level of forall is stripped; nested @forall@s (uncommon in
+-- practice) are handled by the parse-failure-returns-Nothing contract:
+-- the rules simply won't fire, which is safe.
+stripForall :: Text -> Text
+stripForall t
+  | "forall " `T.isPrefixOf` t || "forall{" `T.isPrefixOf` t =
+      let afterKw = T.drop (T.length "forall") t
+          rest    = scanToDot 0 0 (T.unpack afterKw)
+      in T.strip (T.pack rest)
+  | otherwise = t
+  where
+    -- Scan forward, tracking paren depth @pd@ and brace depth @bd@.
+    -- Return the tail after the first @.@ seen at depth 0 in BOTH.
+    scanToDot :: Int -> Int -> String -> String
+    scanToDot _  _  []       = []          -- no dot found, leave unchanged
+    scanToDot pd bd (c : cs)
+      | c == '('            = scanToDot (pd+1) bd cs
+      | c == ')'            = scanToDot (max 0 (pd-1)) bd cs
+      | c == '{'            = scanToDot pd (bd+1) cs
+      | c == '}'            = scanToDot pd (max 0 (bd-1)) cs
+      | c == '.' && pd == 0 && bd == 0 = cs   -- found the quantifier dot
+      | otherwise            = scanToDot pd bd cs
 
 -- | Split off a leading @(C1 a, C2 b) =>@ or @C a =>@ context.
 -- Returns @(constraintList, rest)@ with the constraint list empty

@@ -13,6 +13,7 @@ module HaskellFlows.Tool.Imports
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
+import Data.List (nubBy)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -60,17 +61,26 @@ handle ghcSess _rawArgs = do
               { Env.eeCause = Just (T.pack (show se)) })
     Right pair -> Env.mkOk (importsPayload pair)
 
--- | F-10: split interactive context into source imports and the MCP's
--- own session preloads (Prelude, System.IO, etc. injected by
+-- | F-10 / #114: split interactive context into source imports and the
+-- MCP's own session preloads (Prelude, System.IO, etc. injected by
 -- 'evalContextExtras'). Agents should see only the source imports;
 -- the preloads are reported separately so the distinction is clear.
+--
+-- Deduplication (#114): the context can accumulate duplicate entries
+-- when multiple 'ghc_eval' calls or 'loadForTarget' passes each append
+-- the same module under different 'InteractiveImport' representations.
+-- We deduplicate by module-name key BEFORE splitting so both buckets
+-- stay tidy.
 queryImports :: Ghc ([Text], [Text])
 queryImports = do
   ctx <- getContext
-  let extras = Set.fromList evalContextExtras
-      (preloads, source) = foldr (splitOne extras) ([], []) ctx
+  let deduped = nubBy (\a b -> importKey a == importKey b) ctx
+      extras = Set.fromList evalContextExtras
+      (preloads, source) = foldr (splitOne extras) ([], []) deduped
   pure (map renderImport source, map renderImport preloads)
   where
+    importKey (IIDecl decl) = moduleNameString (unLoc (ideclName decl))
+    importKey (IIModule mn) = moduleNameString mn
     splitOne extras ii (ps, ss) =
       if isExtra extras ii then (ii : ps, ss) else (ps, ii : ss)
     isExtra extras (IIDecl decl) =
