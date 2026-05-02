@@ -94,7 +94,8 @@ jobs:
           # the upload step (the bench step itself already exited red).
           if-no-files-found: warn
 
-      # Phase D backlog (still pending — see #96 follow-up comment):
-      #   * auto-open a PR proposing updated budgets when measured
-      #     values diverge from the initial-proposal numbers by > 30%.
-      #   * expand `benchSubset` from 13 → all 41 primitives.
+      # #96 Phase D complete: benchSubset covers all 35 tools (n=10 cheap,
+      # n=3 expensive).  The bench-results.json artifact from each nightly
+      # run is the source of truth for budget calibration — compare the
+      # uploaded artifact against src/HaskellFlows/Bench/Budget.hs after
+      # a week of nightly runs to tune the initial-proposal values.

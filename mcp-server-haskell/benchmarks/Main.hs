@@ -95,9 +95,9 @@ main = do
     _ <- timeOne srv GhcWorkflow (object [ "action" .= ("status" :: T.Text) ])
     putStrLn ""
 
-    putStrLn "Running benchmark subset (N=10 per tool, first sample discarded):"
+    putStrLn "Running full tool sweep (n per tool in parens, first sample discarded):"
     putStrLn (replicate 78 '-')
-    rows <- mapM (runBench srv 10) benchSubset
+    rows <- mapM (\(tool, tArgs, n) -> runBench srv n (tool, tArgs)) benchSubset
     putStrLn (replicate 78 '-')
     putStrLn ""
 
@@ -135,31 +135,77 @@ main = do
             putStrLn "Gate is opt-in (--gate or HFLOWS_BENCH_GATE=1) — exiting 0."
 
 --------------------------------------------------------------------------------
--- Bench subset: representative tools across all four categories.
---   * ALL the cheap ones (read/inspect, control-plane) so cold-start
---     can be observed if mis-ascribed.
---   * Selected expensive tools (refactor, gates) to confirm warm budgets.
---   * Tools that need a project-bootstrap (ghc_load, ghc_check_*) that
---     hammer the GhcSession path.
--- The full 46-tool sweep is Phase D's nightly job.
+-- Full tool sweep — all 35 tools benchmarked in one nightly run.
+--
+-- Tuple: (tool, JSON args, n)
+--   n = number of warm samples to collect (cold-start +1 is always discarded).
+--   Cheap tools (p95 budget ≤ 1500 ms) → n=10 for good statistics.
+--   Expensive tools (p95 budget > 1500 ms) → n=3 to keep nightly ≤ 5 min.
+--
+-- File-mutating tools (GhcRefactor, GhcApplyExports, GhcFixWarning) run
+-- against the hermetic temp copy so each run is independent.
 --------------------------------------------------------------------------------
 
-benchSubset :: [(ToolName, Value)]
+benchSubset :: [(ToolName, Value, Int)]
 benchSubset =
-  -- (tool, JSON args)
-  [ (GhcWorkflow,         object [ "action" .= ("status" :: T.Text) ])
-  , (GhcToolchain,        object [ "action" .= ("status" :: T.Text) ])
-  , (GhcProject,          object [ "action" .= ("validate" :: T.Text) ])
-  , (GhcLoad,             object [ "module_path" .= ("src/Ref/Stats.hs" :: T.Text) ])
-  , (GhcType,             object [ "expression" .= ("mean" :: T.Text) ])
-  , (GhcInfo,             object [ "name"       .= ("Item" :: T.Text) ])
-  , (GhcEval,             object [ "expression" .= ("1 + 1" :: T.Text) ])
-  , (GhcImports,          object [])
-  , (GhcBrowse,           object [ "module"     .= ("Ref.Stats" :: T.Text) ])
-  , (GhcComplete,         object [ "prefix"     .= ("med" :: T.Text) ])
-  , (GhcGoto,             object [ "name"       .= ("median" :: T.Text) ])
-  , (GhcSuggest,          object [ "function_name" .= ("mean" :: T.Text) ])
-  , (GhcCheckModule,      object [ "module_path" .= ("src/Ref/Stats.hs" :: T.Text) ])
+  -- (tool, JSON args, n)
+  -- ── control-plane (cheap) ──────────────────────────────────────────────
+  [ (GhcWorkflow,      object [ "action" .= ("status" :: T.Text) ],     10)
+  , (GhcToolchain,     object [ "action" .= ("status" :: T.Text) ],     10)
+  , (GhcProject,       object [ "action" .= ("validate" :: T.Text) ],   10)
+  , (GhcModules,       object [ "action" .= ("list" :: T.Text) ],       10)
+  , (GhcPropertyStore, object [ "action" .= ("list" :: T.Text) ],       10)
+  -- ── read / inspect (cheap) ────────────────────────────────────────────
+  , (GhcLoad,          object [ "module_path" .= ("src/Ref/Stats.hs" :: T.Text) ], 10)
+  , (GhcType,          object [ "expression"  .= ("mean" :: T.Text) ],   10)
+  , (GhcInfo,          object [ "name"        .= ("Item" :: T.Text) ],   10)
+  , (GhcEval,          object [ "expression"  .= ("1 + 1" :: T.Text) ], 10)
+  , (GhcImports,       object [],                                         10)
+  , (GhcBrowse,        object [ "module"      .= ("Ref.Stats" :: T.Text) ], 10)
+  , (GhcComplete,      object [ "prefix"      .= ("med" :: T.Text) ],   10)
+  , (GhcGoto,          object [ "name"        .= ("median" :: T.Text) ], 10)
+  , (GhcDoc,           object [ "name"        .= ("mean" :: T.Text) ],  10)
+  , (GhcHole,          object [ "module_path" .= ("src/Ref/Stats.hs" :: T.Text) ], 10)
+  , (GhcArbitrary,     object [ "type_name"   .= ("Category" :: T.Text) ], 10)
+  , (HoogleSearch,     object [ "query"       .= ("sortBy" :: T.Text) ], 10)
+  , (GhcExplainError,  object [ "module_path" .= ("src/Ref/Stats.hs" :: T.Text) ], 10)
+  -- ── suggest / test (moderate) ─────────────────────────────────────────
+  , (GhcSuggest,       object [ "function_name" .= ("mean" :: T.Text) ], 10)
+  , (GhcAddImport,     object [ "name"        .= ("Data.Char" :: T.Text) ], 10)
+  , (GhcCheckModule,   object [ "module_path" .= ("src/Ref/Stats.hs" :: T.Text) ], 10)
+  -- ── quality gates / static analysis ───────────────────────────────────
+  , (GhcFormat,        object [ "module_path" .= ("src/Ref/Stats.hs" :: T.Text) ], 10)
+  , (GhcLint,          object [ "module_path" .= ("src/Ref/Stats.hs" :: T.Text) ], 10)
+  , (GhcFixWarning,    object [ "module_path" .= ("src/Ref/Stats.hs" :: T.Text) ],  5)
+  , (GhcDeps,          object [ "action"      .= ("list" :: T.Text) ],              5)
+  -- ── rewrite / refactor ────────────────────────────────────────────────
+  -- GhcRefactor: deliberately use a non-existent binding so the tool
+  -- returns quickly with "name not found" without mutating any file.
+  , (GhcRefactor,      object [ "action"         .= ("rename_local" :: T.Text)
+                               , "module_path"    .= ("src/Ref/Stats.hs" :: T.Text)
+                               , "old_name"       .= ("_bench_probe_" :: T.Text)
+                               , "new_name"       .= ("_bench_probe2_" :: T.Text)
+                               , "scope_line_start" .= (1 :: Int)
+                               , "scope_line_end"   .= (100 :: Int) ],              5)
+  , (GhcApplyExports,  object [ "module_path" .= ("src/Ref/Stats.hs" :: T.Text)
+                               , "exports"     .= (["mean", "median", "stdDev"
+                                                   ,"scoreHistogram"] :: [T.Text]) ], 5)
+  -- ── property-first testing ────────────────────────────────────────────
+  , (GhcQuickCheck,    object [ "property"    .= ("\\xs -> length xs >= 0" :: T.Text)
+                               , "module_path" .= ("src/Ref/Stats.hs" :: T.Text) ],  3)
+  -- ── composite / batch ─────────────────────────────────────────────────
+  , (GhcBatch,         object [ "actions" .= [ object [ "name"      .= ("ghc_type" :: T.Text)
+                                                       , "arguments" .= object
+                                                           [ "expression" .= ("mean" :: T.Text) ] ] ] ], 10)
+  -- ── expensive: check, gate, coverage, perf ────────────────────────────
+  , (GhcCheckProject,  object [],                                          3)
+  , (GhcPerf,          object [ "expression" .= ("mean [1..10]" :: T.Text)
+                               , "runs"       .= (5 :: Int) ],              3)
+  , (GhcWitness,       object [ "property"    .= ("\\xs -> length xs >= 0" :: T.Text)
+                               , "module_path" .= ("src/Ref/Stats.hs" :: T.Text) ],  3)
+  , (GhcLab,           object [ "module_path" .= ("src/Ref/Stats.hs" :: T.Text) ],   3)
+  , (GhcGate,          object [],                                          3)
+  , (GhcCoverage,      object [],                                          3)
   ]
 
 --------------------------------------------------------------------------------
@@ -256,6 +302,7 @@ rowToJson r =
   let stats = brStats r
       base =
         [ "tool"      .= brName r
+        , "n_samples" .= length (prSamples stats)
         , "p50_ms"    .= prP50 stats
         , "p95_ms"    .= prP95 stats
         , "mean_ms"   .= prMean stats
