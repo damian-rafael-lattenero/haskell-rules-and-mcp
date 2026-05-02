@@ -12,6 +12,8 @@ module HaskellFlows.Tool.Doc
   , handle
   , DocArgs (..)
   , extractHaddockAbove
+    -- * Response shaping (exported for unit tests)
+  , hasDocPayload
   ) where
 
 import Control.Exception (SomeException, try)
@@ -213,8 +215,14 @@ hasDocPayload :: Text -> Text -> Value
 hasDocPayload nm doc = object
   [ "name"   .= nm
   , "hasDoc" .= True
-  , "doc"    .= T.strip doc
+  , "doc"    .= stripLatex (T.strip doc)
   ]
+
+-- | Strip LaTeX delimiters from Haddock strings (F-11). GHC's pretty-
+-- printer emits @\\(…\\)@ for math notation; agents receive raw escape
+-- sequences they cannot render. Replace with the inner expression.
+stripLatex :: Text -> Text
+stripLatex = T.replace "\\(" "" . T.replace "\\)" ""
 
 -- | No-doc payload (rides StatusNoMatch). result.{name, hasDoc=false,
 -- reason}. Two semantically-distinct cases share this shape — name

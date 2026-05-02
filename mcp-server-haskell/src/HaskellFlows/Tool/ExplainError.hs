@@ -28,6 +28,8 @@ module HaskellFlows.Tool.ExplainError
     -- * Phase 2 helpers (exported for unit tests)
   , PatchSpec (..)
   , applyLinePatch
+    -- * Response shaping (exported for unit tests)
+  , renderContext
   ) where
 
 import Control.Exception (SomeException, try)
@@ -300,8 +302,7 @@ renderContext modulePath body diag ownDiags mVerify =
         [ "module_path" .= modulePath
         , "diagnostic"  .= renderDiag diag
         , "context"     .= object
-            [ "module_source"   .= body
-            , "enclosing_slice" .= sliced
+            [ "enclosing_slice" .= sliced
             , "enclosing_range" .= object
                 [ "start" .= lo
                 , "end"   .= hi

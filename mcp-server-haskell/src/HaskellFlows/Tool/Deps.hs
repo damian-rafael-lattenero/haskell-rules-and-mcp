@@ -34,6 +34,8 @@ module HaskellFlows.Tool.Deps
     -- * #48 — post-edit verification of dep resolvability
   , verifyResolvable
   , extractErrorSummary
+    -- * F-08 — all-stanzas listing (exported for unit tests)
+  , allStanzaDeps
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
@@ -53,6 +55,7 @@ import System.IO (IOMode (..), openFile, hClose)
 import System.IO.Unsafe (unsafePerformIO)
 import qualified System.Process as Proc
 
+import qualified Data.Aeson.Key as AesonKey
 import qualified Data.Aeson.KeyMap as KeyMap
 
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -268,10 +271,13 @@ handleAction file args = case daAction args of
   ActList -> do
     res <- try (TIO.readFile file) :: IO (Either SomeException Text)
     case res of
-      Left e     -> pure (errorResult (T.pack ("Could not read cabal file: " <> show e)))
-      Right body -> case resolveStanza (daStanza args) body of
-        Left err    -> pure (errorResult err)
-        Right scope -> pure (listResult file (parseBuildDepends scope))
+      Left e -> pure (errorResult (T.pack ("Could not read cabal file: " <> show e)))
+      Right body -> case daStanza args of
+        -- F-08: no stanza selector → return all stanzas structured.
+        Nothing    -> pure (listResultAll file (allStanzaDeps body))
+        Just _     -> case resolveStanza (daStanza args) body of
+          Left err    -> pure (errorResult err)
+          Right scope -> pure (listResult file (parseBuildDepends scope))
   ActAdd -> case daPackage args of
     Nothing  -> pure (errorResult "'package' is required for add")
     Just pkg -> case validatePackageName pkg of
@@ -819,6 +825,43 @@ splitAtBuildDependsEnd ls =
 --------------------------------------------------------------------------------
 -- response shaping
 --------------------------------------------------------------------------------
+
+-- | F-08: enumerate all top-level stanzas and their deps. Returns
+-- one entry per stanza in cabal file order. The stanza key is
+-- @\"kind\"@ for name-less stanzas (e.g. @library@) and
+-- @\"kind:name\"@ for named ones (e.g. @test-suite:mytest@).
+allStanzaDeps :: Text -> [(Text, [Text])]
+allStanzaDeps body = go (T.lines body)
+  where
+    go [] = []
+    go (ln : rest)
+      | isTopLevelStanzaHeader ln =
+          let (bodyLns, after) = break isTopLevelStanzaHeader rest
+              key  = stanzaKey ln
+              deps = parseBuildDepends (T.unlines (ln : bodyLns))
+          in (key, deps) : go after
+      | otherwise = go rest
+
+    stanzaKey ln =
+      let s      = T.strip ln
+          firstW = T.takeWhile (not . isSpace) s
+          nm     = T.strip (T.drop (T.length firstW) s)
+      in if T.null nm then firstW else firstW <> ":" <> nm
+
+-- | F-08: list response that enumerates all stanzas. Shape is
+-- @{ stanzas: { library: [...], "test-suite:NAME": [...] } }@.
+listResultAll :: FilePath -> [(Text, [Text])] -> ToolResult
+listResultAll file stanzas =
+  let km = KeyMap.fromList
+             [ (AesonKey.fromText k, toJSON deps)
+             | (k, deps) <- stanzas
+             ]
+      payload = object
+        [ "action"     .= ("list" :: Text)
+        , "cabal_file" .= T.pack file
+        , "stanzas"    .= Object km
+        ]
+  in Env.toolResponseToResult (Env.mkOk payload)
 
 listResult :: FilePath -> [Text] -> ToolResult
 listResult file deps =

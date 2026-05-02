@@ -21,6 +21,8 @@ module HaskellFlows.Tool.Perf
     -- * Baseline helpers (exported for unit tests)
   , BaselineEntry (..)
   , regressionPct
+    -- * Response shaping (exported for unit tests)
+  , renderResult
   ) where
 
 import Control.Exception (SomeException, try)
@@ -71,6 +73,7 @@ descriptor =
               , "runs"             .= obj "integer"
               , "save_baseline"    .= obj "boolean"
               , "compare_baseline" .= obj "boolean"
+              , "verbose"          .= obj "boolean"
               ]
           , "required"             .= (["expression"] :: [Text])
           , "additionalProperties" .= False
@@ -90,6 +93,10 @@ data PerfArgs = PerfArgs
     -- ^ Phase 2: when True, compare the current mean_ns against the
     -- stored baseline and surface a regression warning if the
     -- current measurement is >10 % slower.
+  , paVerbose         :: !Bool
+    -- ^ F-26: when False (default), omit the per-sample 'samples'
+    -- array from the response. Avoids sending thousands of integers
+    -- for large 'runs' values.
   }
   deriving stock (Show)
 
@@ -99,11 +106,13 @@ instance FromJSON PerfArgs where
     r  <- o .:? "runs"             .!= 30
     sb <- o .:? "save_baseline"    .!= False
     cb <- o .:? "compare_baseline" .!= False
+    v  <- o .:? "verbose"          .!= False
     pure PerfArgs
       { paExpression      = e
       , paRuns            = clampRuns r
       , paSaveBaseline    = sb
       , paCompareBaseline = cb
+      , paVerbose         = v
       }
     where
       -- Bound the runs so a typo of "1000000" doesn't tie up the
@@ -283,6 +292,21 @@ keyFromText = AesonKey.fromText
 -- 'kind="validation"' signalling so the agent can act on it.
 renderResult :: PerfArgs -> [Word64] -> Stats -> [Text] -> Maybe BaselineEntry -> ToolResult
 renderResult args nss stats errs mBaseline =
+  -- F-31: when every sample errored the session has likely lost the
+  -- module. Surface this directly rather than computing a meaningless
+  -- regression percentage against a baseline.
+  let allErrored = not (null errs) && length errs == paRuns args
+  in if allErrored
+       then Env.toolResponseToResult
+              (Env.mkFailed
+                ((Env.mkErrorEnvelope Env.SubprocessError
+                    ("All " <> T.pack (show (paRuns args))
+                     <> " measurements errored. The GHC session may have lost "
+                     <> "the module — run ghc_load to reload before benchmarking."))
+                      { Env.eeCause     = Just (T.unlines (take 3 errs))
+                      , Env.eeRemediation = Just "Call ghc_load(module_path=…) to reload the module, then retry ghc_perf."
+                      }))
+       else
   let mRegression = do
         be  <- mBaseline
         pct <- regressionPct (beMeanNs be) (sMean stats)
@@ -298,18 +322,20 @@ renderResult args nss stats errs mBaseline =
               , "regressed"        .= isRegression
               ]
           ]
+      -- F-26: gate per-sample array behind verbose=true to avoid
+      -- sending thousands of integers for large 'runs' values.
+      samplesField = [ "samples" .= nss | paVerbose args ]
       payload = object $
         [ "expression"    .= paExpression args
         , "runs_request"  .= paRuns args
         , "runs_executed" .= sCount stats
         , "errors"        .= errs
         , "measurements"  .= object
-            [ "mean_ns"   .= sMean stats
-            , "median_ns" .= sMedian stats
-            , "min_ns"    .= sMin stats
-            , "max_ns"    .= sMax stats
-            , "samples"   .= nss
-            ]
+            ( [ "mean_ns"   .= sMean stats
+              , "median_ns" .= sMedian stats
+              , "min_ns"    .= sMin stats
+              , "max_ns"    .= sMax stats
+              ] <> samplesField )
         , "phase"         .= ("2-baseline" :: Text)
         , "deferred"      .= ([ "criterion-warmup"
                               , "core-dump-hotspots"
@@ -326,18 +352,22 @@ renderResult args nss stats errs mBaseline =
         , "instructions_for_agent" .=
             ( "Phase 2: set save_baseline=true to persist a mean_ns baseline, \
               \compare_baseline=true to detect regressions (>10% slower). \
-              \For deeper analysis hand 'narration_context' to an LLM." :: Text )
+              \Pass verbose=true to include per-sample timing array." :: Text )
         ] <> baselineFields
-      -- Regression: refuse with a Validation error so the caller knows the
-      -- baseline was exceeded. The payload is still embedded in 'cause' for
-      -- the agent to inspect the raw numbers.
+      -- F-32: cause is a human-readable summary, not a stringified JSON blob.
       regressionMsg = case mRegression of
         Just (pct, _) -> "Regression: " <> T.pack (show (round pct :: Int))
                            <> "% slower than stored baseline (threshold 10%)"
         Nothing       -> "Regression detected"
+      regressionCause = case mRegression of
+        Just (pct, baseMean) ->
+          "baseline_mean_ns=" <> T.pack (show (round baseMean :: Int))
+          <> ", current_mean_ns=" <> T.pack (show (round (sMean stats) :: Int))
+          <> ", regression_pct=" <> T.pack (show (round pct :: Int))
+        Nothing -> "baseline exceeded"
   in if isRegression
        then Env.toolResponseToResult
               (Env.mkRefused
-                (Env.mkErrorEnvelope Env.Validation regressionMsg)
-                  { Env.eeCause = Just (T.pack (show (encode payload))) })
+                ((Env.mkErrorEnvelope Env.Validation regressionMsg)
+                  { Env.eeCause = Just regressionCause }))
        else Env.toolResponseToResult (Env.mkOk payload)

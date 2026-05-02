@@ -11,6 +11,7 @@ module HaskellFlows.Tool.Imports
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -18,11 +19,15 @@ import GHC
   ( Ghc
   , InteractiveImport (IIDecl, IIModule)
   , getContext
+  , ideclName
+  , moduleNameString
+  , unLoc
   )
 import GHC.Utils.Outputable (showPprUnsafe)
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
+import HaskellFlows.Tool.Eval (evalContextExtras)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
@@ -51,24 +56,39 @@ handle ghcSess _rawArgs = do
         ((Env.mkErrorEnvelope Env.InternalError
             (T.pack ("GHC API error: " <> show se)))
               { Env.eeCause = Just (T.pack (show se)) })
-    Right imports -> Env.mkOk (importsPayload imports)
+    Right pair -> Env.mkOk (importsPayload pair)
 
-queryImports :: Ghc [Text]
-queryImports = map renderImport <$> getContext
+-- | F-10: split interactive context into source imports and the MCP's
+-- own session preloads (Prelude, System.IO, etc. injected by
+-- 'evalContextExtras'). Agents should see only the source imports;
+-- the preloads are reported separately so the distinction is clear.
+queryImports :: Ghc ([Text], [Text])
+queryImports = do
+  ctx <- getContext
+  let extras = Set.fromList evalContextExtras
+      (preloads, source) = foldr (splitOne extras) ([], []) ctx
+  pure (map renderImport source, map renderImport preloads)
+  where
+    splitOne extras ii (ps, ss) =
+      if isExtra extras ii then (ii : ps, ss) else (ps, ii : ss)
+    isExtra extras (IIDecl decl) =
+      moduleNameString (unLoc (ideclName decl)) `Set.member` extras
+    isExtra extras (IIModule mn) =
+      moduleNameString mn `Set.member` extras
 
 renderImport :: InteractiveImport -> Text
 renderImport = \case
   IIDecl decl  -> T.pack (showPprUnsafe decl)
   IIModule mn  -> "module " <> T.pack (showPprUnsafe mn)
 
--- | Result payload (pre-envelope shape preserved). Issue #90 Phase B
--- moves it under 'result' but keeps the field names so consumers
--- that read @count@ + @imports@ directly stay compatible during
--- the migration window.
-importsPayload :: [Text] -> Value
-importsPayload imports = object
-  [ "count"   .= length imports
-  , "imports" .= imports
+-- | Result payload. Issue #90 Phase B: 'result.{count, imports}'.
+-- F-10: 'session_preloads' lists the MCP's own injected modules so
+-- agents can distinguish them from the source file's own imports.
+importsPayload :: ([Text], [Text]) -> Value
+importsPayload (sourceImports, preloads) = object
+  [ "count"            .= length sourceImports
+  , "imports"          .= sourceImports
+  , "session_preloads" .= preloads
   ]
 
 -- | Pre-migration parser kept for the unit-test scaffolding. Retained

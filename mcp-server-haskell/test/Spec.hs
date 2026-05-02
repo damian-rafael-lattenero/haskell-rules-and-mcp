@@ -1153,6 +1153,11 @@ main = do
       , test "#106/F-07: error remediation uses ghc_project(action=create)" testRemediationToolName
       , test "#106/F-20: parseHoogleLine populates hhName field" testHoogleHitName
       , test "#106/F-19: hitsPayload deduplicates by module+signature" testHoogleDedup
+      , test "#106/F-25: ghc_explain_error drops redundant module_source" testExplainErrorNoModuleSource
+      , test "#106/F-11: ghc_doc strips LaTeX delimiters" testDocStripLatex
+      , test "#106/F-26: ghc_perf omits samples by default" testPerfSamplesGated
+      , test "#106/F-32: ghc_perf regression cause is plain text" testPerfRegressionCausePlain
+      , test "#106/F-08: ghc_deps list all stanzas returns stanzas map" testDepsListAllStanzas
       ]
   if and results then exitSuccess else exitFailure
 
@@ -11198,3 +11203,121 @@ testHoogleDedup =
       sameHit a b = hhModule a == hhModule b && hhSignature a == hhSignature b
       unique = List.nubBy sameHit [h1, h2, h3]
   in pure (length unique == 2)
+
+-- | F-25: 'ghc_explain_error' context must not include 'module_source'
+-- alongside 'enclosing_slice' — they were byte-identical for small
+-- files, doubling the payload size for no benefit. Verify the field
+-- is absent from the rendered JSON.
+testExplainErrorNoModuleSource :: IO Bool
+testExplainErrorNoModuleSource = do
+  let body = T.unlines ["module Foo where", "foo :: Int", "foo = _"]
+      diag  = GhcError
+        { geFile     = "src/Foo.hs"
+        , geLine     = 3
+        , geColumn   = 7
+        , geSeverity = SevError
+        , geCode     = Nothing
+        , geMessage  = "Found hole: _ :: Int"
+        }
+      result = ExplainError.renderContext "src/Foo.hs" body diag [diag] Nothing
+  pure $ case trContent result of
+    [TextContent body_] ->
+      case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+        Just (A.Object top) ->
+          case AKM.lookup "result" top of
+            Just (A.Object r) ->
+              case AKM.lookup "context" r of
+                Just (A.Object ctx) -> not (AKM.member "module_source" ctx)
+                _                   -> False
+            _ -> False
+        _ -> False
+    _ -> False
+
+-- | F-11: 'hasDocPayload' must strip LaTeX @\\(…\\)@ delimiters that
+-- GHC's pretty-printer emits for math notation in Haddock strings.
+testDocStripLatex :: IO Bool
+testDocStripLatex =
+  let raw     = "O(\\(n\\)) complexity"
+      payload = DocTool.hasDocPayload "foo" raw
+  in pure $ case payload of
+       A.Object km ->
+         case AKM.lookup "doc" km of
+           Just (A.String d) -> not (T.isInfixOf "\\(" d) && T.isInfixOf "O(" d
+           _                 -> False
+       _ -> False
+
+-- | F-26: when 'verbose=false' (default), the 'measurements' object
+-- must not contain a 'samples' key — sending thousands of integers
+-- for large 'runs' values is wasteful.
+testPerfSamplesGated :: IO Bool
+testPerfSamplesGated =
+  let args = PerfTool.PerfArgs
+               { PerfTool.paExpression      = "1 + 1"
+               , PerfTool.paRuns            = 5
+               , PerfTool.paSaveBaseline    = False
+               , PerfTool.paCompareBaseline = False
+               , PerfTool.paVerbose         = False
+               }
+      nss   = [100, 110, 90, 105, 95]
+      stats = PerfTool.aggregate nss
+      result = PerfTool.renderResult args nss stats [] Nothing
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "result" top of
+               Just (A.Object r) ->
+                 case AKM.lookup "measurements" r of
+                   Just (A.Object m) -> not (AKM.member "samples" m)
+                   _                 -> False
+               _ -> False
+           _ -> False
+       _ -> False
+
+-- | F-32: when a regression is detected, 'error.cause' must be a
+-- plain human-readable string, not a stringified JSON blob (no
+-- literal escaped braces or quotes in the cause field).
+testPerfRegressionCausePlain :: IO Bool
+testPerfRegressionCausePlain =
+  let args = PerfTool.PerfArgs
+               { PerfTool.paExpression      = "1 + 1"
+               , PerfTool.paRuns            = 5
+               , PerfTool.paSaveBaseline    = False
+               , PerfTool.paCompareBaseline = True
+               , PerfTool.paVerbose         = False
+               }
+      nss      = [1_000_000, 1_100_000, 900_000, 1_050_000, 950_000]
+      stats    = PerfTool.aggregate nss
+      baseline = Just (PerfTool.BaselineEntry { PerfTool.beMeanNs = 1000.0 })
+      result   = PerfTool.renderResult args nss stats [] baseline
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "error" top of
+               Just (A.Object err) ->
+                 case AKM.lookup "cause" err of
+                   Just (A.String cause) ->
+                     not (T.isInfixOf "{" cause) && T.isInfixOf "baseline_mean_ns" cause
+                   _ -> False
+               _ -> False
+           _ -> False
+       _ -> False
+
+-- | F-08: 'ghc_deps list' without a stanza selector must return all
+-- stanzas as a structured @{stanzas: {library: [...], ...}}@ map
+-- rather than only the first 'build-depends' block.
+testDepsListAllStanzas :: IO Bool
+testDepsListAllStanzas =
+  let cabal = T.unlines
+        [ "cabal-version: 3.0"
+        , "name:          mylib"
+        , "library"
+        , "    build-depends: base, text"
+        , "test-suite mylib-test"
+        , "    type:          exitcode-stdio-1.0"
+        , "    build-depends: base, QuickCheck"
+        ]
+      stanzas = DepsTool.allStanzaDeps cabal
+  in pure $  any (\(k, _) -> k == "library")        stanzas
+          && any (\(k, _) -> "test-suite" `T.isPrefixOf` k) stanzas
