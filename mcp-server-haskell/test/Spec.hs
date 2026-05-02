@@ -1168,6 +1168,9 @@ main = do
       , test "#106/F-06: gitRootOf walks up to .git directory" testBootstrapGitRoot
       , test "#106/F-02: pickModuleLine extracts exposed-modules" testWorkflowPickModuleLine
       , test "#106/F-03: nextPayload suggests quickcheck after suggest" testWorkflowNextHistoryAware
+      , test "#106/F-10: importsPayload has session_preloads field" testImportsHasSessionPreloads
+      , test "#106/F-21: compileFailResult has status=failed and dry_run=false" testRefactorCompileFailShape
+      , test "#106/F-31: perf renderResult with all errors returns failed" testPerfAllSamplesErrored
       ]
   if and results then exitSuccess else exitFailure
 
@@ -11473,3 +11476,66 @@ testWorkflowNextHistoryAware =
        _ -> False
   where
     dummyStaleness = StalenessReport { srStale = False, srBinaryOlderBySec = Nothing, srMessage = Nothing }
+
+-- | F-10: 'importsPayload' must include a 'session_preloads' field
+-- containing the MCP's own injected modules, separate from source
+-- imports. Agents use this to ignore MCP-injected noise.
+testImportsHasSessionPreloads :: IO Bool
+testImportsHasSessionPreloads =
+  let sourceImps = ["import Data.Map (Map)", "import Data.Text (Text)"]
+      preloads   = ["import Prelude", "import System.IO"]
+      payload    = ImportsTool.importsPayload (sourceImps, preloads)
+  in pure $ case payload of
+       A.Object obj ->
+         AKM.member "session_preloads" obj
+         && AKM.lookup "count" obj == Just (A.Number 2)
+         && AKM.lookup "session_preloads" obj == Just (A.Array (Vector.fromList (map A.String preloads)))
+       _ -> False
+
+-- | F-21: 'compileFailResult' must return status='failed' with
+-- dry_run=false and compile='failed' in the result object, so the
+-- agent knows the dry-run rewrite did NOT type-check.
+testRefactorCompileFailShape :: IO Bool
+testRefactorCompileFailShape =
+  let result = RefactorTool.compileFailResult [] "error text" " (file restored)"
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             AKM.lookup "status" top == Just (A.String "failed")
+             && case AKM.lookup "result" top of
+                  Just (A.Object r) ->
+                    AKM.lookup "dry_run" r == Just (A.Bool False)
+                    && AKM.lookup "compile" r == Just (A.String "failed")
+                  _ -> False
+           _ -> False
+       _ -> False
+
+-- | F-31: 'renderResult' when every sample errored must return
+-- status='failed' with a remediation hint, not a meaningless
+-- regression percentage.
+testPerfAllSamplesErrored :: IO Bool
+testPerfAllSamplesErrored =
+  let args = PerfTool.PerfArgs
+               { PerfTool.paExpression      = "1 + 1"
+               , PerfTool.paRuns            = 3
+               , PerfTool.paSaveBaseline    = False
+               , PerfTool.paCompareBaseline = False
+               , PerfTool.paVerbose         = False
+               }
+      errs   = ["err1", "err2", "err3"]
+      stats  = PerfTool.aggregate []
+      result = PerfTool.renderResult args [] stats errs Nothing
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             AKM.lookup "status" top == Just (A.String "failed")
+             && case AKM.lookup "error" top of
+                  Just (A.Object err) ->
+                    case AKM.lookup "remediation" err of
+                      Just (A.String r) -> T.isInfixOf "ghc_load" r
+                      _                 -> False
+                  _ -> False
+           _ -> False
+       _ -> False

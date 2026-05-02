@@ -7,6 +7,8 @@ module HaskellFlows.Tool.Imports
   ( descriptor
   , handle
   , parseImportsOutput
+    -- * Exposed for unit tests
+  , importsPayload
   ) where
 
 import Control.Exception (SomeException, try)

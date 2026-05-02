@@ -32,6 +32,8 @@ module HaskellFlows.Tool.Refactor
     -- * Diagnostic-diff helpers (#50)
   , errorKey
   , errorSignatures
+    -- * Exposed for unit tests
+  , compileFailResult
   ) where
 
 import Control.Exception (SomeException, try)
