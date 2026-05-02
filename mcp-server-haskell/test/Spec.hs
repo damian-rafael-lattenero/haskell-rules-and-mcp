@@ -68,6 +68,7 @@ import HaskellFlows.Parser.TypeSignature
   , SigType (..)
   , parseSignature
   , isSameTypeThroughout
+  , stripForall
   )
 import HaskellFlows.Suggest.Rules
   ( Confidence (..)
@@ -223,6 +224,7 @@ import qualified HaskellFlows.Tool.Info as InfoTool
 import HaskellFlows.Tool.Goto
   ( Location (..)
   , parseDefinedAt
+  , locationPayload
   )
 import HaskellFlows.Tool.Hoogle
   ( HoogleHit (..)
@@ -1171,6 +1173,32 @@ main = do
       , test "#106/F-10: importsPayload has session_preloads field" testImportsHasSessionPreloads
       , test "#106/F-21: compileFailResult has status=failed and dry_run=false" testRefactorCompileFailShape
       , test "#106/F-31: perf renderResult with all errors returns failed" testPerfAllSamplesErrored
+      -- Issue #108 — typed-hole reclassification in check_module + refactor
+      , test "#108: check_module compileOk true when only hole errors"   testCheckModuleHoleOnlyCompileOk
+      , test "#108: check_module realErrors excludes GHC-88464"          testCheckModuleRealErrorsExcludesHoles
+      , test "#108: refactor commitResultWithDiff excludes holes from pre_existing_errors"
+                                                                         testRefactorPreExistingHolesExcluded
+      -- Issue #109 — .cabal comment-stripping in check_project
+      , test "#109: parseExposedModules strips inline -- comments"        testParseExposedModulesStripsComments
+      , test "#109: parseExposedModules rejects tokens with punctuation"  testParseExposedModulesRejectsPunct
+      -- Issue #107 — ghc_info renderDefinition for functions
+      , test "#107: renderDefinition AnId produces name :: type"          testInfoAnIdDefinition
+      -- Issue #111 — forall stripping in parseSignature
+      , test "#111: stripForall handles forall {a}."                      testStripForallInferred
+      , test "#111: stripForall handles forall a."                        testStripForallExplicit
+      , test "#111: stripForall noop when no forall"                      testStripForallNoop
+      , test "#111: parseSignature handles forall {a}. [a] -> [a]"        testParseSigForallList
+      , test "#111: rules fire for forall-prefixed reverse signature"     testRulesFireForForallReverse
+      -- Issue #116 — GHC-66111 category correction in Error.hs
+      , test "#116: GHC-66111 routes to WcUnused, not WcDeferredError"    testGhc66111RoutesToUnused
+      -- Issue #115 — RuntimeException kind in Envelope.hs + Eval.hs
+      , test "#115: Env.RuntimeException exists in enum + wire form"       testRuntimeExceptionKindExists
+      -- Issue #117 — ghc_goto InModule returns no_match + has_location
+      , test "#117: goto InModule gives no_match + has_location=false"     testGotoLibraryNameNoMatch
+      , test "#117: goto InFile gives ok + has_location=true"              testGotoFileHasLocation
+      -- Issue #118 — removeDep drops blank continuation lines
+      , test "#118: removeDep no trailing blank on single-dep line"        testRemoveDepNoTrailingBlank
+      , test "#118: removeDep preserves multi-dep block correctly"         testRemoveDepMultiDep
       ]
   if and results then exitSuccess else exitFailure
 
@@ -3533,7 +3561,7 @@ testEnvelopeErrorKindRoundTrip =
       pinnedOk = all (\(k, t) -> Env.errorKindToText k == t) pinned
       reverseTotal = all (\k -> Env.textToErrorKind (Env.errorKindToText k) == Just k)
                          allKinds
-      countOk = length allKinds == 23  -- §4 promises 23 kinds
+      countOk = length allKinds == 24  -- §4: 23 + RuntimeException (#115)
   in pure (pinnedOk && reverseTotal && countOk)
 
 -- | Companion round-trip for 'WarningKind'.
@@ -11539,3 +11567,231 @@ testPerfAllSamplesErrored =
                   _ -> False
            _ -> False
        _ -> False
+
+--------------------------------------------------------------------------------
+-- Issue #108 — typed-hole reclassification in check_module + refactor
+--------------------------------------------------------------------------------
+
+-- | #108: the 'handle' body in CheckModule.hs must filter typed holes
+-- (GHC-88464) out of the 'errors' bucket and compute 'compileOk' from
+-- the remaining real errors.  Checked structurally by scanning the
+-- source file so we don't need a live GHCi session in unit tests.
+testCheckModuleHoleOnlyCompileOk :: IO Bool
+testCheckModuleHoleOnlyCompileOk = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/CheckModule.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  pure $ T.isInfixOf "isHoleErr" code
+      && T.isInfixOf "GHC-88464" code
+      && T.isInfixOf "ownHoleOnly" code
+      && T.isInfixOf "compileOk = null errors" code
+  where
+    isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
+
+-- | #108: 'errors' must exclude diagnostics where 'geCode == Just "GHC-88464"'.
+testCheckModuleRealErrorsExcludesHoles :: IO Bool
+testCheckModuleRealErrorsExcludesHoles = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/CheckModule.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  -- Must filter with 'not (isHoleErr d)' or equivalent.
+  pure $ T.isInfixOf "not (isHoleErr d)" code
+       || T.isInfixOf "not (isHoleErr" code
+  where
+    isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
+
+-- | #108: 'commitResultWithDiff' in Refactor.hs must exclude holes from
+-- pre_existing_errors by filtering on 'GHC-88464'.
+testRefactorPreExistingHolesExcluded :: IO Bool
+testRefactorPreExistingHolesExcluded = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Refactor.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  pure $ T.isInfixOf "isHoleErr" code
+      && T.isInfixOf "GHC-88464" code
+      && T.isInfixOf "not (isHoleErr d)" code
+  where
+    isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
+
+--------------------------------------------------------------------------------
+-- Issue #109 — .cabal comment stripping in check_project
+--------------------------------------------------------------------------------
+
+-- | #109: 'parseExposedModules' must not extract comment words like
+-- "Bench", "Phase", "A)" that follow a @--@ marker in the payload.
+testParseExposedModulesStripsComments :: IO Bool
+testParseExposedModulesStripsComments =
+  let body = T.unlines
+        [ "library"
+        , "  exposed-modules:"
+        , "    Core.Logic"
+        , "    -- Bench modules (#96 Phase A)"
+        , "    Core.Parser"
+        ]
+      mods = parseExposedModules body
+  in pure $ "Core.Logic"   `elem` mods
+         && "Core.Parser"  `elem` mods
+         && "Bench"    `notElem` mods
+         && "Phase"    `notElem` mods
+         && "A)"       `notElem` mods
+
+-- | #109: tokens with non-module characters (e.g. trailing ')') must
+-- be rejected by the strengthened 'isModuleName' predicate.
+testParseExposedModulesRejectsPunct :: IO Bool
+testParseExposedModulesRejectsPunct =
+  let body = T.unlines
+        [ "library"
+        , "  exposed-modules: Good.Module, Bad)"
+        ]
+      mods = parseExposedModules body
+  in pure $ "Good.Module" `elem`    mods
+         && "Bad)"        `notElem` mods
+         && "Bad"         `notElem` mods
+
+--------------------------------------------------------------------------------
+-- Issue #107 — ghc_info renderDefinition for functions
+--------------------------------------------------------------------------------
+
+-- | #107: the 'AnId' branch in 'queryInfo' must use 'idType' to produce
+-- "name :: <type>" instead of "Identifier 'name'" (pprShortTyThing).
+-- Checked structurally by scanning Info.hs source.
+testInfoAnIdDefinition :: IO Bool
+testInfoAnIdDefinition = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Info.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  pure $ T.isInfixOf "AnId i ->" code
+      && T.isInfixOf "idType i" code
+      && T.isInfixOf "nm <> \" :: \"" code
+  where
+    isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
+
+--------------------------------------------------------------------------------
+-- Issue #111 — forall stripping in parseSignature
+--------------------------------------------------------------------------------
+
+-- | #111: 'stripForall' handles the inferred-variable form @forall {a}.@
+-- produced by GHC 9.2+ for non-specified variables.
+testStripForallInferred :: IO Bool
+testStripForallInferred =
+  pure $ stripForall "forall {a}. [a] -> [a]" == "[a] -> [a]"
+
+-- | #111: 'stripForall' handles the explicit @forall a.@ form.
+testStripForallExplicit :: IO Bool
+testStripForallExplicit =
+  pure $ stripForall "forall a. [a] -> [a]" == "[a] -> [a]"
+
+-- | #111: 'stripForall' is a no-op when there is no leading @forall@.
+testStripForallNoop :: IO Bool
+testStripForallNoop =
+  pure $ stripForall "[a] -> [a]" == "[a] -> [a]"
+      && stripForall "a -> a"     == "a -> a"
+
+-- | #111: 'parseSignature' handles a full @forall {a}.@ prefix and
+-- produces a valid 'ParsedSig' where arg == return (required for
+-- the involutive + list-roundtrip rules to fire on @reverse@).
+testParseSigForallList :: IO Bool
+testParseSigForallList =
+  case parseSignature "forall {a}. [a] -> [a]" of
+    Nothing  -> pure False
+    Just sig -> pure $ isSameTypeThroughout sig && length (psArgs sig) == 1
+
+-- | #111: the involutive rule must fire for a @reverse@-shaped signature
+-- even when the string carries a leading @forall {a}.@ (the form GHC
+-- 9.2+ emits from 'exprType TM_Inst').
+testRulesFireForForallReverse :: IO Bool
+testRulesFireForForallReverse =
+  case parseSignature "forall {a}. [a] -> [a]" of
+    Nothing  -> pure False
+    Just sig ->
+      let suggs = applyRules "reverse" sig
+      in pure $ any ((== "Involutive")           . sLaw) suggs
+             && any ((== "Self-inverse on lists") . sLaw) suggs
+
+-- | #116: GHC-66111 (redundant import) must route to 'WcUnused', not
+-- 'WcDeferredError'. Before the fix it was listed in @deferredCodes@
+-- which made the code-based branch fire first and return the wrong category.
+testGhc66111RoutesToUnused :: IO Bool
+testGhc66111RoutesToUnused =
+  let e = GhcError
+            { geFile     = "Foo.hs"
+            , geLine     = 5
+            , geColumn   = 1
+            , geSeverity = SevWarning
+            , geCode     = Just "GHC-66111"
+            , geMessage  = "The import of 'Data.List' is redundant"
+            }
+  in pure (categorizeWarning e == WcUnused)
+
+-- | #115: 'Env.RuntimeException' must be a member of the 'ErrorKind'
+-- enum and have the wire text @"runtime_exception"@.
+testRuntimeExceptionKindExists :: IO Bool
+testRuntimeExceptionKindExists =
+  pure $
+    Env.errorKindToText Env.RuntimeException == "runtime_exception"
+    && Env.textToErrorKind "runtime_exception" == Just Env.RuntimeException
+    && Env.RuntimeException `elem` ([minBound .. maxBound] :: [Env.ErrorKind])
+
+-- | #117: when 'queryLocation' resolves a name to an 'InModule' location
+-- (library name with no local source file), 'locationPayload' must include
+-- @has_location: false@ and a remediation hint.
+testGotoLibraryNameNoMatch :: IO Bool
+testGotoLibraryNameNoMatch =
+  let loc = GotoTool.InModule "GHC.Base"
+      payload = GotoTool.locationPayload "fmap" loc
+  in case payload of
+       A.Object o ->
+         let hasLoc  = AKM.lookup "has_location" o == Just (A.Bool False)
+             hasRem  = case AKM.lookup "remediation" o of
+                         Just (A.String t) -> not (T.null t)
+                         _                 -> False
+             hasKind = AKM.lookup "kind" o == Just (A.String "module")
+         in pure (hasLoc && hasRem && hasKind)
+       _ -> pure False
+
+-- | #117: an 'InFile' location must carry @has_location: true@.
+testGotoFileHasLocation :: IO Bool
+testGotoFileHasLocation =
+  let loc = GotoTool.InFile "src/Foo.hs" 10 5
+      payload = GotoTool.locationPayload "myFn" loc
+  in case payload of
+       A.Object o ->
+         pure (AKM.lookup "has_location" o == Just (A.Bool True))
+       _ -> pure False
+
+-- | #118: 'removeDep' must not leave a blank continuation line when
+-- the only dep on that line is the one being removed.
+--
+-- Input shape:
+-- > build-depends:    base
+-- >                 , text
+--
+-- After removing @text@, the second line must vanish entirely (no blank
+-- line in output).
+testRemoveDepNoTrailingBlank :: IO Bool
+testRemoveDepNoTrailingBlank =
+  let body = T.unlines
+        [ "library"
+        , "  build-depends:    base"
+        , "                  , text"
+        ]
+      result = DepsTool.removeDep "text" body
+      lns = T.lines result
+      -- The blank (empty) continuation line must not appear.
+      noBlankAfterBuildDepends =
+        not (any (\l -> T.null (T.strip l) && T.any (== 'b') l) lns)
+          && not (any T.null lns)
+  in pure noBlankAfterBuildDepends
+
+-- | #118: removing one dep from a two-dep block must leave the other dep
+-- intact with no blank lines introduced.
+testRemoveDepMultiDep :: IO Bool
+testRemoveDepMultiDep =
+  let body = T.unlines
+        [ "library"
+        , "  build-depends:    base"
+        , "                  , text"
+        , "                  , aeson"
+        ]
+      result = DepsTool.removeDep "text" body
+      lns = filter (not . T.null) (T.lines result)
+      -- "aeson" must still be present; "text" must not.
+      aesonPresent = any ("aeson" `T.isInfixOf`) lns
+      textAbsent   = not (any ("text" `T.isInfixOf`) lns)
+  in pure (aesonPresent && textAbsent)

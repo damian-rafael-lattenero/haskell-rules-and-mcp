@@ -621,19 +621,24 @@ addDep mVer pkg body
 -- | Remove the dep by deleting its comma-prefixed entry from every
 -- continuation line and the header line. If the dep isn't present,
 -- returns the original body unchanged.
+--
+-- Issue #118: when a continuation line carries *only* the package being
+-- removed, rebuilding it produces an empty string. The old @map
+-- dropFromLine@ path kept these empty strings and @T.unlines@ rendered
+-- them as blank lines in the @.cabal@ file. The new @concatMap@ path
+-- drops the line entirely instead, keeping the dep block tidy.
 removeDep :: Text -> Text -> Text
 removeDep pkg body
   | pkg `notElem` parseBuildDepends body = body
-  | otherwise = T.unlines (map dropFromLine (T.lines body))
+  | otherwise = T.unlines (concatMap dropFromLine (T.lines body))
   where
     dropFromLine ln =
       let toks     = map T.strip (splitOnCommas ln)
           filtered = filter (not . depMatches) toks
-          rebuilt  = T.intercalate ", " filtered
-          -- Preserve leading "," or "build-depends:" framing when
-          -- there's no dep on the line. Conservative: if nothing was
-          -- left, drop the line wholesale by returning empty.
-      in if filtered == toks then ln else rebuilt
+      in if filtered == toks
+           then [ln]           -- nothing removed on this line — keep as-is
+           else let rebuilt = T.intercalate ", " filtered
+                in [rebuilt | not (T.null (T.strip rebuilt))]
 
     depMatches tok =
       let (name, _) = T.break (\c -> isSpace c || c == '<' || c == '>' || c == '=' || c == '^' || c == '&') tok

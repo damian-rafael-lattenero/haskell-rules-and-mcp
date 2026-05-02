@@ -23,7 +23,7 @@ module HaskellFlows.Tool.CheckProject
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import Data.Char (isAsciiUpper, isSpace)
+import Data.Char (isAlphaNum, isAsciiUpper, isSpace)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -169,6 +169,12 @@ parseExposedModules body = go (T.lines body) []
 
     -- | A continuation of a field is an indented line; a column-0
     -- token with a colon starts a new field.
+    -- Issue #109 note: whole-line @-- comment@ lines ARE continuations
+    -- (they belong to the block) but their content is neutralised by
+    -- 'modulesIn' via @T.breakOn "--"@.  Do NOT filter them here —
+    -- stopping the continuation scan at a comment line would drop
+    -- every module that follows the comment (regression observed in
+    -- 'testParseExposedModulesStripsComments').
     isContinuation ln =
       let stripped = T.stripStart ln
       in not (T.null stripped)
@@ -177,16 +183,25 @@ parseExposedModules body = go (T.lines body) []
 
     -- | Pull every module-shaped token from a payload line. Accepts
     -- commas, whitespace, or mixed separators.
+    -- Issue #109: strip inline @-- comment@ before tokenising so that
+    -- words like @Bench@ or @Phase@ after a comment marker are not
+    -- mistaken for module names. The previous approach only filtered
+    -- @"--"@ itself (the marker token), leaving the comment words through.
     modulesIn :: Text -> [Text]
     modulesIn t =
-      [ tok
-      | tok <- T.words (T.replace "," " " t)
-      , isModuleName tok
-      , not ("--" `T.isPrefixOf` tok)
-      ]
+      let noComment = T.strip (fst (T.breakOn "--" t))
+      in [ tok
+         | tok <- T.words (T.replace "," " " noComment)
+         , isModuleName tok
+         ]
 
+    -- | Issue #109: require ALL characters to be alphanumeric or @.@
+    -- (not just the first character). This rejects tokens like @"A)"@
+    -- or @"Phase#1"@ that start with a capital but contain punctuation.
     isModuleName t =
-      not (T.null t) && isAsciiUpper (T.head t)
+      not (T.null t)
+      && isAsciiUpper (T.head t)
+      && T.all (\c -> isAlphaNum c || c == '.') t
 
 findCabalFile :: ProjectDir -> IO (Maybe FilePath)
 findCabalFile pd = do

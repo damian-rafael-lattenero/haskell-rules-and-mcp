@@ -108,10 +108,13 @@ categorizeWarning e =
          | otherwise -> WcOther
   where
     -- GHC codes for deferred type errors / typed holes.
+    -- Issue #116: GHC-66111 (redundant import) is NOT a deferred type
+    -- error — it routes to WcUnused via the message-text "redundant"
+    -- check above. Keeping it here was a misclassification that
+    -- silently overrode the message-text path.
     deferredCodes =
       [ "GHC-88464"  -- variable not in scope (deferred)
       , "GHC-83865"  -- couldn't match expected type (deferred)
-      , "GHC-66111"  -- unused-imports warning family
       ]
 
 -- | Render a list of 'GhcError' as GHCi-style terminal output so

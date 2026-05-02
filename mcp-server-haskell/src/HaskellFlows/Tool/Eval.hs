@@ -219,12 +219,14 @@ runEvalBody ghcSess safe = do
             Right out ->
               pure (renderOk (truncateOutput (T.pack out)))
             Left ex ->
-              -- Issue #90 §4: a compileExpr / evalIOString failure
-              -- maps to status='failed' with kind='internal_error'.
-              -- The user-facing 'message' stays terse; the full
-              -- exception text lives in error.cause.
+              -- Issue #90 §4 / #115: a runtime exception from
+              -- compileExpr / evalIOString maps to status='failed' with
+              -- kind='runtime_exception' (not 'internal_error') so an
+              -- agent can tell "the expression raised an exception" from
+              -- an MCP-internal crash. The user-facing 'message' stays
+              -- terse; the full exception text lives in error.cause.
               pure (Env.toolResponseToResult (Env.mkFailed
-                ((Env.mkErrorEnvelope Env.InternalError
+                ((Env.mkErrorEnvelope Env.RuntimeException
                     ("ghc_eval failed: " <> T.take 200 (T.pack (show ex))))
                       { Env.eeCause = Just (T.pack (show ex)) })))
 

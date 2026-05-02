@@ -204,6 +204,11 @@ data ErrorKind
   | SolverConflict
   | SubprocessError
   | InternalError
+    -- Runtime exception (status = failed) — user code threw at runtime
+    -- (#115). Distinct from 'InternalError' (MCP bug) so an agent can
+    -- tell "the expression raised an exception" from "the MCP itself
+    -- crashed". Maps to status='failed' like InternalError.
+  | RuntimeException
     -- Environment (status = unavailable) -------------------------------
   | HpcUnavailable
   | BinaryUnavailable
@@ -235,6 +240,7 @@ errorKindToText = \case
   SolverConflict          -> "solver_conflict"
   SubprocessError         -> "subprocess_error"
   InternalError           -> "internal_error"
+  RuntimeException        -> "runtime_exception"
   HpcUnavailable          -> "hpc_unavailable"
   BinaryUnavailable       -> "binary_unavailable"
   InnerTimeout            -> "inner_timeout"

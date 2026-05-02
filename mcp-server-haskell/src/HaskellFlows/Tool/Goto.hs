@@ -13,6 +13,8 @@ module HaskellFlows.Tool.Goto
   , GotoArgs (..)
   , parseDefinedAt
   , Location (..)
+    -- * Issue #117 — exposed for unit tests
+  , locationPayload
   ) where
 
 import Control.Exception (SomeException, try)
@@ -111,7 +113,13 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
           -- empty set), NOT a 'failed'. The result echoes the
           -- name + the search context so the agent can pivot.
           Env.mkNoMatch (notInScopePayload safe)
-        Right (Just loc) -> Env.mkOk (locationPayload safe loc)
+        -- Issue #117: file locations → ok (can jump); library/unknown
+        -- module locations → no_match (name found but no source to
+        -- jump to). The payload still carries module + has_location so
+        -- the agent knows *why* there is no file path.
+        Right (Just loc) -> case loc of
+          InFile {} -> Env.mkOk (locationPayload safe loc)
+          InModule {} -> Env.mkNoMatch (locationPayload safe loc)
 
 -- | Discriminate the FromJSON failure shape — same heuristic as
 -- the other Phase-B migrations.
@@ -204,22 +212,38 @@ firstJust f (x:xs) = case f x of
 -- with module). Phase B keeps these field names; only the wrapping
 -- 'success: bool' moves out of the payload (auto-derived from
 -- 'status').
+-- | Issue #117: 'InFile' results carry @has_location: true@ (agent can
+-- jump to a source file); 'InModule' results carry @has_location: false@
+-- plus a remediation hint so the agent understands *why* no file is
+-- available (e.g. the name lives in a library with no local source).
 locationPayload :: Text -> Location -> Value
 locationPayload nm = \case
   InFile f l c ->
     object
-      [ "name"   .= nm
-      , "kind"   .= ("file" :: Text)
-      , "file"   .= f
-      , "line"   .= l
-      , "column" .= c
+      [ "name"         .= nm
+      , "kind"         .= ("file" :: Text)
+      , "file"         .= f
+      , "line"         .= l
+      , "column"       .= c
+      , "has_location" .= True
       ]
   InModule m ->
     object
-      [ "name"   .= nm
-      , "kind"   .= ("module" :: Text)
-      , "module" .= m
+      [ "name"         .= nm
+      , "kind"         .= ("module" :: Text)
+      , "module"       .= m
+      , "has_location" .= False
+      , "remediation"  .= remediationFor m
       ]
+  where
+    remediationFor m
+      | m == "<unknown>" =
+          "Name has no SrcSpan — it may be a built-in or auto-derived \
+          \binding. Use ghc_info for type information." :: Text
+      | otherwise =
+          "Name is defined in library module '" <> m <> "' which has \
+          \no local source file. Use ghc_info for its type or \
+          \ghc_doc for Haddock documentation."
 
 -- | Result payload for the no-match (name-not-in-scope) path.
 -- Carries the searched name + a remediation pointer so the agent
