@@ -356,7 +356,7 @@ withSnapshot sess mp dryRun cont = do
         Left reason -> pure (errorResult reason)
         Right (newContent, baseSuccess) ->
           if dryRun
-            then pure (dryRunResult baseSuccess newContent)
+            then dryRunWithVerify sess mp orig newContent baseSuccess
             else commitWithVerify sess mp orig newContent baseSuccess
 
 commitWithVerify
@@ -409,6 +409,47 @@ commitWithVerify ghcSess mp orig newContent baseSuccess = do
           pure (compileFailResult newErrs (renderDiags postDiags) restoreMsg)
         else
           pure (commitResultWithDiff baseSuccess preDiags postDiags)
+
+-- | F-21: compile-verify even on @dry_run=True@.  Before this fix,
+-- dry-run skipped compile-verify, so 'extractBinding' could produce
+-- syntactically invalid Haskell (e.g. a @let@-clause fragment) and
+-- still return @status: ok@.
+--
+-- 'dryRunWithVerify' writes the new content, runs the compile check,
+-- then ALWAYS restores the original — it is a read-only preview that
+-- also validates.  If compile fails, returns 'compileFailResult' so
+-- the agent knows the patch is invalid.  If compile passes, returns
+-- the usual 'dryRunResult' (no disk change visible to the user).
+dryRunWithVerify
+  :: GhcSession
+  -> ModulePath
+  -> Text           -- original file content (snapshot)
+  -> Text           -- rewritten content
+  -> Value          -- base success payload
+  -> IO ToolResult
+dryRunWithVerify ghcSess mp orig newContent baseSuccess = do
+  invalidateLoadCache ghcSess
+  preDiags <- loadAndDiagnose ghcSess mp
+  let preErrSigs = errorSignatures preDiags
+  writeRes <- try (TIO.writeFile (unModulePath mp) newContent)
+              :: IO (Either SomeException ())
+  case writeRes of
+    Left e -> pure (errorResult (T.pack ("Could not write for dry-run verify: " <> show e)))
+    Right _ -> do
+      invalidateLoadCache ghcSess
+      postDiags <- loadAndDiagnose ghcSess mp
+      -- Always restore — this is a read-only preview.
+      _ <- try (TIO.writeFile (unModulePath mp) orig) :: IO (Either SomeException ())
+      invalidateLoadCache ghcSess
+      let postErrs   = filter ((== SevError) . geSeverity) postDiags
+          newErrSigs = filter (`notElem` preErrSigs) (errorSignatures postDiags)
+          regressed  = not (null newErrSigs)
+      if regressed
+        then do
+          let newErrs = filter (\e -> errorKey e `elem` newErrSigs) postErrs
+          pure (compileFailResult newErrs (renderDiags postDiags)
+                  " — dry_run, original preserved; patch is invalid")
+        else pure (dryRunResult baseSuccess newContent)
 
 -- | Issue #50: structural key for an error diagnostic. Two
 -- diagnostics are \"the same\" if they refer to the same

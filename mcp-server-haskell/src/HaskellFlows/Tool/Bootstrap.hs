@@ -25,6 +25,8 @@ module HaskellFlows.Tool.Bootstrap
   , BootstrapArgs (..)
   , Host (..)
   , pathForHost
+    -- * Exposed for unit tests
+  , gitRootOf
   ) where
 
 import Control.Exception (SomeException, try)
@@ -33,13 +35,17 @@ import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import System.Directory (createDirectoryIfMissing)
-import System.FilePath (takeDirectory)
+import System.Directory
+  ( createDirectoryIfMissing
+  , doesDirectoryExist
+  , makeAbsolute
+  )
+import System.FilePath (takeDirectory, (</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Guidance (workflowRulesMarkdown)
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
+import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 -- | Supported host targets. The enum is closed — adding a new
 -- one requires an explicit code change + a test entry, so no
@@ -85,29 +91,44 @@ handle pd descriptors rawArgs = case parseEither parseJSON rawArgs of
     let body = workflowRulesMarkdown descriptors
     case host of
       HostGeneric -> pure (previewResult host body Nothing)
-      _ ->
-        let relPath = pathForHost host
-        in case mkModulePath pd relPath of
-             Left e ->
-               pure (Env.toolResponseToResult (Env.mkFailed
-                 ((Env.mkErrorEnvelope Env.PathTraversal
-                     (T.pack ("Invalid output path: " <> show e)))
-                       { Env.eeCause = Just (T.pack (show e)) })))
-             Right mp -> do
-               let full = unModulePath mp
-               if not write
-                 then pure (previewResult host body (Just (T.pack full)))
-                 else do
-                   w <- try (do
-                     createDirectoryIfMissing True (takeDirectory full)
-                     TIO.writeFile full body) :: IO (Either SomeException ())
-                   case w of
-                     Left e ->
-                       pure (Env.toolResponseToResult (Env.mkFailed
-                         ((Env.mkErrorEnvelope Env.SubprocessError
-                             (T.pack ("Could not write: " <> show e)))
-                               { Env.eeCause = Just (T.pack (show e)) })))
-                     Right _ -> pure (writeResult host full)
+      _ -> do
+        -- F-06: write to git-root/.claude/… rather than projectDir/.claude/…
+        -- Most repos keep .claude/ at the top of the worktree, not in a
+        -- sub-directory that 'projectDir' might point at.
+        base <- gitRootOf (unProjectDir pd)
+        let full = base </> pathForHost host
+        if not write
+          then pure (previewResult host body (Just (T.pack full)))
+          else do
+            w <- try (do
+              createDirectoryIfMissing True (takeDirectory full)
+              TIO.writeFile full body) :: IO (Either SomeException ())
+            case w of
+              Left e ->
+                pure (Env.toolResponseToResult (Env.mkFailed
+                  ((Env.mkErrorEnvelope Env.SubprocessError
+                      (T.pack ("Could not write: " <> show e)))
+                        { Env.eeCause = Just (T.pack (show e)) })))
+              Right _ -> pure (writeResult host full)
+
+-- | Walk up from @dir@ until a @.git@ entry is found, or we reach
+-- the filesystem root. Falls back to @dir@ itself when no git root
+-- is found so the write still lands somewhere sensible.
+gitRootOf :: FilePath -> IO FilePath
+gitRootOf dir = do
+  abs' <- makeAbsolute dir
+  go abs'
+  where
+    go d = do
+      let candidate = d </> ".git"
+      exists <- doesDirectoryExist candidate
+      if exists
+        then pure d
+        else do
+          let parent = takeDirectory d
+          if parent == d   -- reached filesystem root
+            then pure dir  -- fallback to original dir
+            else go parent
 
 -- | Discriminate the FromJSON failure shape — same heuristic as
 -- 'HaskellFlows.Tool.Workflow.parseErrorKind'. \"unknown host\"

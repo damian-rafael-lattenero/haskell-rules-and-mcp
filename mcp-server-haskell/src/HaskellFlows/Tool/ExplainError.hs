@@ -292,7 +292,10 @@ renderContext :: Text -> Text -> GhcError -> [GhcError] -> Maybe Value -> ToolRe
 renderContext modulePath body diag ownDiags mVerify =
   let lns      = T.lines body
       total    = length lns
-      (lo, hi) = enclosingLineRange total 50 (geLine diag)
+      -- F-24: padding reduced from 50 to 15. With padding=50 the
+      -- entire file was included for any module under 100 lines,
+      -- defeating the purpose of the slice.
+      (lo, hi) = enclosingLineRange total 15 (geLine diag)
       sliced   = T.unlines
         [ ln | (i, ln) <- zip [1 :: Int ..] lns, i >= lo, i <= hi ]
       verifyFields = case mVerify of

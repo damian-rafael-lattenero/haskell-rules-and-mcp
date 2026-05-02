@@ -17,17 +17,24 @@ module HaskellFlows.Tool.Workflow
   , handle
   , WorkflowArgs (..)
   , Action (..)
+    -- * Exposed for unit tests
+  , pickModuleLine
+  , render
   ) where
 
 import Control.Concurrent.MVar (MVar, readMVar)
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import qualified Data.Aeson.Key as Key
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, readIORef)
-import Data.Maybe (isNothing)
+import Data.Maybe (isNothing, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
+import qualified System.Directory
 import System.Directory (findExecutable)
+import System.FilePath ((</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession)
@@ -36,7 +43,7 @@ import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Mcp.Staleness (StalenessReport (..))
 import HaskellFlows.Mcp.WorkflowState
   ( SessionPhase
-  , WorkflowState
+  , WorkflowState (..)
   , classifyPhase
   , renderHelp
   , renderPhaseHint
@@ -124,7 +131,13 @@ handle pdRef sessMVar toolNames ws staleness rawArgs =
       -- nudge needs without paying for the @--version@ probe that
       -- 'ghc_toolchain status' does. See 'TC.optionalBinaryNames' for
       -- the canonical input list.
-      render a pd sessAlive toolNames ws staleness <$> probeMissingOptionals
+      missing   <- probeMissingOptionals
+      -- F-02: for the help view, resolve the entry module so step 1
+      -- carries a concrete suggestion rather than "your entry module".
+      entryMod  <- case a of
+        ActHelp -> suggestEntryModule pd
+        _       -> pure Nothing
+      pure (render a pd sessAlive toolNames ws staleness missing entryMod)
 
 probeMissingOptionals :: IO [Text]
 probeMissingOptionals =
@@ -181,14 +194,15 @@ render
   -> WorkflowState
   -> StalenessReport
   -> [Text]
+  -> Maybe Text       -- ^ F-02: suggested entry module (help view only)
   -> ToolResult
-render a pd alive toolNames ws staleness missingOpt =
+render a pd alive toolNames ws staleness missingOpt mEntry =
   let phase      = classifyPhase ws
       stateHints = renderHelp ws
       payload    = case a of
         ActStatus -> statusPayload pd alive toolNames staleness phase missingOpt
-        ActHelp   -> helpPayload pd alive stateHints staleness phase
-        ActNext   -> nextPayload pd alive
+        ActHelp   -> helpPayload pd alive stateHints staleness phase mEntry
+        ActNext   -> nextPayload pd alive ws
   in Env.toolResponseToResult (Env.mkOk payload)
 
 statusPayload
@@ -239,8 +253,9 @@ optionalBinariesPayload missing =
     ]
 
 helpPayload
-  :: ProjectDir -> Bool -> [Text] -> StalenessReport -> SessionPhase -> Value
-helpPayload _pd alive stateHints staleness phase =
+  :: ProjectDir -> Bool -> [Text] -> StalenessReport -> SessionPhase
+  -> Maybe Text -> Value
+helpPayload _pd alive stateHints staleness phase mEntry =
   object $
     [ "view"       .= ("help" :: Text)
     , "ghciAlive"  .= alive
@@ -250,12 +265,21 @@ helpPayload _pd alive stateHints staleness phase =
     , "reasoning"  .= reasoning
     , "staleness"  .= staleness
     ]
-    <> [ "stateHints" .= stateHints | not (null stateHints) ]
+    <> [ "stateHints"    .= stateHints | not (null stateHints) ]
+    <> [ "entry_module"  .= m          | Just m <- [mEntry] ]
   where
+    -- F-02: step 1 includes the concrete module path when we could
+    -- find it in the cabal file, so the agent has an actionable hint
+    -- rather than a generic "your entry module" placeholder.
+    loadStep = case mEntry of
+      Nothing -> "1. Call ghc_load with your entry module to boot GHCi."
+      Just m  -> "1. Call ghc_load(module_path=\"" <> m
+                   <> "\") to boot GHCi."
+
     steps :: [Text]
     steps
       | not alive =
-          [ "1. Call ghc_load with your entry module to boot GHCi."
+          [ loadStep
           , "2. For data types you'll test: ghc_arbitrary (type_name=...)."
           , "3. For stubs with _ holes: ghc_hole (module_path=...)."
           , "4. For properties: ghc_quickcheck (property=...)."
@@ -279,20 +303,91 @@ helpPayload _pd alive stateHints staleness phase =
              \use anyway, but ghc_load gives you the cleanest error \
              \surface."
 
-nextPayload :: ProjectDir -> Bool -> Value
-nextPayload _pd alive =
+-- | F-03: 'nextPayload' is now history-aware. If the most recent
+-- tool call was already 'ghc_load', recommending 'ghc_load' again
+-- is a static no-op. Look at the sliding history and suggest a
+-- more useful next step.
+nextPayload :: ProjectDir -> Bool -> WorkflowState -> Value
+nextPayload _pd alive ws =
   object
     [ "view"   .= ("next" :: Text)
     , "tool"   .= tool
     , "why"    .= why
     ]
   where
+    hist = wsToolHistory ws
     (tool :: Text, why :: Text) =
-      if alive
-        then ( "ghc_load"
-             , "Re-check with diagnostics=true to surface any new holes \
-               \or warnings introduced by the last edit." )
-        else ( "ghc_load"
-             , "No active session. ghc_load boots GHCi and is the \
-               \cheapest way to learn the project's current compile state." )
+      case hist of
+        -- Just called ghc_load successfully → suggest diagnostics pass.
+        (GhcLoad : _) | alive ->
+          ( "ghc_load"
+          , "Run with diagnostics=true to surface typed holes and \
+            \deferred warnings alongside regular errors." )
+        -- Just called ghc_type / ghc_info → suggest a property.
+        (GhcType : _) | alive ->
+          ( "ghc_quickcheck"
+          , "You typed an expression — if it has a useful law, check \
+            \it now before moving on." )
+        -- Just called ghc_suggest → feed result to quickcheck.
+        (GhcSuggest : _) ->
+          ( "ghc_quickcheck"
+          , "You generated property candidates from ghc_suggest — pick \
+            \the highest-confidence one and check it." )
+        -- Already ran quickcheck → export to Spec.hs.
+        (GhcQuickCheck : _) | wsPassedProperties ws >= 3 ->
+          ( "ghc_property_store"
+          , "You have " <> T.pack (show (wsPassedProperties ws))
+            <> " passing properties — run action=\"export\" to materialise \
+               \them as test/Spec.hs." )
+        _ ->
+          if alive
+            then ( "ghc_load"
+                 , "Re-check with diagnostics=true to surface any new holes \
+                   \or warnings introduced by the last edit." )
+            else ( "ghc_load"
+                 , "No active session. ghc_load boots GHCi and is the \
+                   \cheapest way to learn the project's current compile state." )
 
+--------------------------------------------------------------------------------
+-- F-02: entry-module suggestion
+--------------------------------------------------------------------------------
+
+-- | Look for the first @.cabal@ file in @pd@ and return the first
+-- @exposed-modules@ or @main-is@ value as a @src/<module>.hs@ hint.
+-- Returns 'Nothing' on any failure; the caller degrades gracefully.
+suggestEntryModule :: ProjectDir -> IO (Maybe Text)
+suggestEntryModule pd = do
+  eFiles <- try (System.Directory.listDirectory (unProjectDir pd))
+              :: IO (Either SomeException [FilePath])
+  case eFiles of
+    Left  _     -> pure Nothing
+    Right files ->
+      case listToMaybe [ unProjectDir pd </> f
+                       | f <- files
+                       , ".cabal" `T.isSuffixOf` T.pack f ] of
+        Nothing   -> pure Nothing
+        Just path -> do
+          res <- try (TIO.readFile path) :: IO (Either SomeException Text)
+          case res of
+            Left _     -> pure Nothing
+            Right body -> pure (pickModuleLine body)
+
+-- | Extract the first useful module name from a cabal file body.
+-- Looks for @exposed-modules:@ or @main-is:@; maps module names to
+-- the canonical src/ path so the agent gets a copy-pasteable path.
+pickModuleLine :: Text -> Maybe Text
+pickModuleLine body =
+  listToMaybe (mapMaybe pick (T.lines body))
+  where
+    pick ln =
+      let s = T.stripStart ln
+      in if "exposed-modules:" `T.isPrefixOf` T.toLower s
+           then let rest = T.drop 1 (T.dropWhile (/= ':') s)
+                    m    = T.strip (T.takeWhile (/= ',') rest)
+                in if T.null m then Nothing
+                   else Just ("src/" <> T.replace "." "/" m <> ".hs")
+         else if "main-is:" `T.isPrefixOf` T.toLower s
+           then let rest = T.strip (T.drop 1 (T.dropWhile (/= ':') s))
+                in if T.null rest then Nothing
+                   else Just ("app/" <> rest)
+         else Nothing

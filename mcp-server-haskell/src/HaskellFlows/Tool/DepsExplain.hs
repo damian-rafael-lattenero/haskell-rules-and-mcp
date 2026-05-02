@@ -26,6 +26,7 @@ module HaskellFlows.Tool.DepsExplain
   , Conflict (..)
   , Rejection (..)
   , parseSolverOutput
+  , parseRejections
   , identifyRootCause
   , extractPackages
   ) where
@@ -42,7 +43,6 @@ import qualified System.Process as Proc
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 
@@ -122,7 +122,7 @@ data Conflict = Conflict
 -- output is from a different cabal subcommand).
 parseSolverOutput :: Text -> Maybe Conflict
 parseSolverOutput txt =
-  let rejections = mapMaybe' parseRejection (T.lines txt)
+  let rejections = concatMap parseRejections (T.lines txt)
   in case rejections of
        [] -> Nothing
        _  -> Just Conflict
@@ -132,15 +132,22 @@ parseSolverOutput txt =
                , cAll       = rejections
                }
 
--- | One line → maybe a rejection. Recognises the cabal-install
--- format @[__N] rejecting: pkg-version (conflict: …)@. Tolerant
--- of leading whitespace and the trailing ANSI colour codes some
--- terminals inject when run interactively.
-parseRejection :: Text -> Maybe Rejection
-parseRejection raw =
+-- | One line → zero or more rejections. The cabal-install solver can
+-- list multiple versions on a single line:
+--
+-- @[__1] rejecting: QuickCheck-2.14.2, QuickCheck-2.14.1 (conflict: …)@
+--
+-- F-09: the old parser returned at most one 'Rejection' per line,
+-- treating the comma-separated list as a single package name. This
+-- caused 'rejection_count' to under-count and 'rPackage' to carry
+-- garbage like @"QuickCheck-2.14.2, QuickCheck-2.14.1"@.  The fix
+-- splits by @", "@ after stripping the @(conflict: …)@ suffix,
+-- then emits one 'Rejection' per version with the shared reason.
+parseRejections :: Text -> [Rejection]
+parseRejections raw =
   let stripped = T.stripStart raw
   in case T.stripPrefix "[__" stripped of
-       Nothing -> Nothing
+       Nothing -> []
        Just afterMarker ->
          let (depthTxt, rest) = T.breakOn "]" afterMarker
          in case T.unpack (T.strip depthTxt) of
@@ -148,25 +155,24 @@ parseRejection raw =
                 let depth   = read ds
                     afterRb = T.stripStart (T.drop 1 rest)
                 in case T.stripPrefix "rejecting:" afterRb of
-                     Nothing -> Nothing
+                     Nothing -> []
                      Just rj ->
                        let trimmed = T.stripStart rj
-                           (pkg, parenAndAfter) =
+                           -- Strip the shared "(conflict: …)" suffix
+                           -- before splitting on ", " so we get clean
+                           -- package-version tokens.
+                           (pkgsRaw, parenAndAfter) =
                              T.breakOn " (conflict:" trimmed
-                       in if T.null pkg
-                            then Nothing
-                            else
-                              let reason = case T.stripPrefix " (conflict:"
-                                              parenAndAfter of
-                                    Just inside -> stripCloseParen
-                                                    (T.stripStart inside)
-                                    Nothing     -> ""
-                              in Just Rejection
-                                   { rDepth   = depth
-                                   , rPackage = T.strip pkg
-                                   , rReason  = reason
-                                   }
-              _  -> Nothing
+                           reason = case T.stripPrefix " (conflict:"
+                                           parenAndAfter of
+                             Just inside -> stripCloseParen (T.stripStart inside)
+                             Nothing     -> ""
+                           -- Split comma-separated package versions.
+                           pkgs = filter (not . T.null)
+                                    (map T.strip (T.splitOn "," pkgsRaw))
+                       in [ Rejection { rDepth = depth, rPackage = p, rReason = reason }
+                          | p <- pkgs ]
+              _  -> []
 
 stripCloseParen :: Text -> Text
 stripCloseParen t =

@@ -236,9 +236,15 @@ data SessionPhase
 -- | Classify the session based purely on the counters. Deliberately
 -- coarse; never throws.
 classifyPhase :: WorkflowState -> SessionPhase
+-- F-01: removed the `&& wsToolCalls s < 3` guard. That condition
+-- caused status and help to disagree: after 3+ read-only calls
+-- (workflow status, toolchain status, etc.) with no load ever
+-- attempted, classifyPhase fell through to PhaseDeveloping even
+-- though no GHCi session had ever been booted. The invariant is:
+-- if no load has ever succeeded, the session is PhasePreScaffold
+-- regardless of how many other tool calls were made.
 classifyPhase s
-  | isNothing (wsLastLoadSuccess s)
-      && wsToolCalls s < 3            = PhasePreScaffold
+  | isNothing (wsLastLoadSuccess s)   = PhasePreScaffold
   | wsLastLoadSuccess s == Just False = PhaseBootstrap
   | wsPassedProperties s >= 3         = PhaseReadyToPush
   | GhcQuickCheck `elem` recent3

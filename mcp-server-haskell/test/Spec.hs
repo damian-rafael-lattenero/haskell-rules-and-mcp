@@ -1161,6 +1161,13 @@ main = do
       , test "#106/F-34: moduleNameToPath accepts file paths without mangling" testMoveModuleNameToPath
       , test "#106/F-12: ioUnitResult has kind=io_unit_no_output" testEvalIoUnitResult
       , test "#106/F-23: mergeDiags prefers deferred version at same position" testLoadMergeDiagsPreferDeferred
+      , test "#106/F-04: toolchain warmup includes gates in response" testWarmupIncludesGates
+      , test "#106/F-01: classifyPhase stays PreScaffold beyond 3 calls w/o load" testClassifyPhaseNoLoad
+      , test "#106/F-24: enclosingLineRange padding 15 doesn't return whole file" testEnclosingRangePadding
+      , test "#106/F-09: parseRejections splits comma-separated versions" testDepsExplainRejectionSplit
+      , test "#106/F-06: gitRootOf walks up to .git directory" testBootstrapGitRoot
+      , test "#106/F-02: pickModuleLine extracts exposed-modules" testWorkflowPickModuleLine
+      , test "#106/F-03: nextPayload suggests quickcheck after suggest" testWorkflowNextHistoryAware
       ]
   if and results then exitSuccess else exitFailure
 
@@ -11365,3 +11372,104 @@ testLoadMergeDiagsPreferDeferred =
   in pure $
        length merged == 1
        && T.isInfixOf "Found hole" (geMessage (head merged))
+
+-- | F-04: 'ghc_toolchain(warmup)' must include a @gates@ field and
+-- a top-level @gates_warm@ boolean so agents can distinguish gate
+-- availability from optional-binary availability.
+testWarmupIncludesGates :: IO Bool
+testWarmupIncludesGates = do
+  decoded <- runToolEnvelope ToolchainWarmupTool.handle (A.object [])
+  pure $ case decoded of
+    Right env ->
+      case Env.reResult env of
+        Just (A.Object payload) ->
+          AKM.member (AKey.fromText "gates")      payload &&
+          AKM.member (AKey.fromText "gates_warm") payload
+        _ -> False
+    Left _ -> False
+
+-- | F-01: 'classifyPhase' must stay 'PhasePreScaffold' after many
+-- tool calls with no load ever attempted.  Before the fix the
+-- @wsToolCalls < 3@ guard caused it to fall through to
+-- 'PhaseDeveloping' after the 3rd call.
+testClassifyPhaseNoLoad :: IO Bool
+testClassifyPhaseNoLoad = do
+  ref <- WS.newWorkflowStateRef
+  let anyPayload = A.object [ "success" .= True ]
+  -- 5 read-only calls (workflow status, toolchain, etc.) — no load.
+  mapM_ (\_ -> WS.trackTool ref GhcWorkflow True anyPayload) [1..5 :: Int]
+  s <- WS.readState ref
+  pure (WS.classifyPhase s == WS.PhasePreScaffold)
+
+-- | F-24: with padding=15, 'enclosingLineRange' should not return
+-- the whole file for a 28-line module (error at line 10).
+testEnclosingRangePadding :: IO Bool
+testEnclosingRangePadding =
+  let (lo, hi) = ExplainError.enclosingLineRange 28 15 10
+  in pure $ (hi - lo) < 28  -- must be smaller than the whole file
+
+-- | F-09: 'parseRejections' must split comma-separated package
+-- versions into separate 'Rejection' entries so 'rejection_count'
+-- is accurate.
+testDepsExplainRejectionSplit :: IO Bool
+testDepsExplainRejectionSplit =
+  let line = "[__1] rejecting: QuickCheck-2.14.2, QuickCheck-2.14.1 (conflict: text)"
+      rs   = DepsExplain.parseRejections line
+  in pure $
+       length rs == 2
+       && DepsExplain.rPackage (head rs) == "QuickCheck-2.14.2"
+       && DepsExplain.rPackage (rs !! 1) == "QuickCheck-2.14.1"
+
+-- | F-06: 'gitRootOf' must walk up and find the .git directory
+-- rather than returning the subdirectory it was given.
+testBootstrapGitRoot :: IO Bool
+testBootstrapGitRoot = do
+  -- Create a temporary tree: tmpdir/.git + tmpdir/sub/
+  tmp <- getTemporaryDirectory
+  let root = tmp </> "haskell-flows-gitroot-test"
+      sub  = root </> "sub" </> "deep"
+  removePathForcibly root
+  createDirectoryIfMissing True (root </> ".git")
+  createDirectoryIfMissing True sub
+  found <- BootstrapTool.gitRootOf sub
+  removePathForcibly root
+  pure (found == root)
+
+-- | F-02: 'pickModuleLine' must extract the first exposed module
+-- from a cabal file body and convert it to a src/ path.
+testWorkflowPickModuleLine :: IO Bool
+testWorkflowPickModuleLine =
+  let cabal = T.unlines
+        [ "cabal-version: 3.0"
+        , "library"
+        , "  exposed-modules: MyLib.Core, MyLib.Util"
+        ]
+  in pure $ WorkflowTool.pickModuleLine cabal
+         == Just "src/MyLib/Core.hs"
+
+-- | F-03: 'render' with action=next must recommend 'ghc_quickcheck'
+-- (not ghc_load) when the last history entry is 'GhcSuggest'.
+testWorkflowNextHistoryAware :: IO Bool
+testWorkflowNextHistoryAware =
+  let ws = WS.WorkflowState
+             { WS.wsToolCalls          = 5
+             , WS.wsEditsSinceLastLoad  = 0
+             , WS.wsLastLoadSuccess     = Just True
+             , WS.wsLastLoadWarnings    = 0
+             , WS.wsPassedProperties    = 0
+             , WS.wsToolHistory         = [GhcSuggest]
+             }
+      pd     = case mkProjectDir "/tmp" of Right p -> p; Left _ -> error "bad pd"
+      result = WorkflowTool.render WorkflowTool.ActNext pd True [] ws dummyStaleness [] Nothing
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "result" top of
+               Just (A.Object r) ->
+                 AKM.lookup "tool" r == Just (A.String "ghc_quickcheck")
+               _ -> False
+           _ -> False
+       _ -> False
+  where
+    dummyStaleness = StalenessReport { srStale = False, srBinaryOlderBySec = Nothing, srMessage = Nothing }
