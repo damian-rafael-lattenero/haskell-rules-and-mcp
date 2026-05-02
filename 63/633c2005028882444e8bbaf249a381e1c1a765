@@ -1,0 +1,27 @@
+mcp-server-haskell/test/Spec.hs
+  566709e688c741b3 1214-1220,3573,3584,11928-12002
+mcp-server-haskell/src/HaskellFlows/Mcp/Envelope.hs
+  566709e688c741b3 207-211,249
+mcp-server-haskell/src/HaskellFlows/Tool/Load.hs
+  566709e688c741b3 20-21,27-28,31,33,130-139,141-144,168-170,175,265-291,335-435
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "63633c2005028882444e8bbaf249a381e1c1a765",
+  "prompts": {
+    "566709e688c741b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78173d44-cc05-4e0d-b758-291cd8e35e65",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 484,
+      "total_deletions": 13157,
+      "accepted_lines": 12418,
+      "overriden_lines": 0
+    }
+  }
+}
