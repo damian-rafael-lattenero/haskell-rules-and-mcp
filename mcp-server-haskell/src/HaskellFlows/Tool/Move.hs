@@ -583,9 +583,27 @@ scanRec p = do
 -- module-name → file-path
 --------------------------------------------------------------------------------
 
+-- | Convert a module name or file path to an absolute-from-project-root
+-- file path.  Accepts three input shapes:
+--   * @"Foo.Bar"@          → @"src/Foo/Bar.hs"@  (dot-separated module name)
+--   * @"src/Foo/Bar.hs"@   → @"src/Foo/Bar.hs"@  (already a rooted path)
+--   * @"Foo/Bar.hs"@       → @"src/Foo/Bar.hs"@  (slash path, no src/ prefix)
+--
+-- Before this fix (F-34) the function always ran T.replace "." "/"
+-- which mangled file paths: @"src/HaskellFlows/Util.hs"@ became
+-- @"src/src/HaskellFlows/Util/hs.hs"@.
 moduleNameToPath :: Text -> FilePath
-moduleNameToPath m =
-  "src" </> T.unpack (T.replace "." "/" m) <> ".hs"
+moduleNameToPath m
+  | hasPathPrefix m = T.unpack m
+  | ".hs" `T.isSuffixOf` m =
+      "src" </> T.unpack m
+  | "/" `T.isInfixOf` m =
+      "src" </> T.unpack m <> ".hs"
+  | otherwise =
+      "src" </> T.unpack (T.replace "." "/" m) <> ".hs"
+  where
+    hasPathPrefix t =
+      "src/" `T.isPrefixOf` t || "app/" `T.isPrefixOf` t
 
 --------------------------------------------------------------------------------
 -- response shaping

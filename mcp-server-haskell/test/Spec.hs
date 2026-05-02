@@ -1158,6 +1158,9 @@ main = do
       , test "#106/F-26: ghc_perf omits samples by default" testPerfSamplesGated
       , test "#106/F-32: ghc_perf regression cause is plain text" testPerfRegressionCausePlain
       , test "#106/F-08: ghc_deps list all stanzas returns stanzas map" testDepsListAllStanzas
+      , test "#106/F-34: moduleNameToPath accepts file paths without mangling" testMoveModuleNameToPath
+      , test "#106/F-12: ioUnitResult has kind=io_unit_no_output" testEvalIoUnitResult
+      , test "#106/F-23: mergeDiags prefers deferred version at same position" testLoadMergeDiagsPreferDeferred
       ]
   if and results then exitSuccess else exitFailure
 
@@ -11321,3 +11324,44 @@ testDepsListAllStanzas =
       stanzas = DepsTool.allStanzaDeps cabal
   in pure $  any (\(k, _) -> k == "library")        stanzas
           && any (\(k, _) -> "test-suite" `T.isPrefixOf` k) stanzas
+
+-- | F-34: 'moduleNameToPath' must not mangle file paths that already
+-- contain slashes or end with .hs.  Before the fix, passing
+-- @"src/HaskellFlows/Util.hs"@ produced @"src/src/HaskellFlows/Util/hs.hs"@.
+testMoveModuleNameToPath :: IO Bool
+testMoveModuleNameToPath = pure $
+     MoveTool.moduleNameToPath "Foo.Bar"           == "src/Foo/Bar.hs"
+  && MoveTool.moduleNameToPath "src/Foo/Bar.hs"    == "src/Foo/Bar.hs"
+  && MoveTool.moduleNameToPath "app/Main.hs"       == "app/Main.hs"
+  && MoveTool.moduleNameToPath "Foo/Bar.hs"        == "src/Foo/Bar.hs"
+  && MoveTool.moduleNameToPath "Foo/Bar"           == "src/Foo/Bar.hs"
+
+-- | F-12: 'ioUnitResult' must carry @kind = "io_unit_no_output"@ so
+-- agents know the expression was @IO ()@ and did execute (no silent
+-- empty-string confusion from the old unsafeCoerce path).
+testEvalIoUnitResult :: IO Bool
+testEvalIoUnitResult =
+  let result = EvalTool.ioUnitResult
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "result" top of
+               Just (A.Object r) ->
+                 AKM.lookup "kind" r == Just (A.String "io_unit_no_output")
+               _ -> False
+           _ -> False
+       _ -> False
+
+-- | F-23: 'mergeDiags' must prefer the deferred (warning-severity)
+-- version when both passes report a diagnostic at the same position.
+-- Before the fix it kept the strict error version, causing typed holes
+-- to show up as plain errors rather than informative hole-fit warnings.
+testLoadMergeDiagsPreferDeferred :: IO Bool
+testLoadMergeDiagsPreferDeferred =
+  let strictD   = [mkErr  "Foo.hs" 10 5 "error at hole"]
+      deferredD = [mkWarn "Foo.hs" 10 5 "Found hole: _ :: Int"]
+      merged    = LoadTool.mergeDiags strictD deferredD
+  in pure $
+       length merged == 1
+       && T.isInfixOf "Found hole" (geMessage (head merged))

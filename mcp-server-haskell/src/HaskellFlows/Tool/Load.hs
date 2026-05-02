@@ -15,6 +15,8 @@ module HaskellFlows.Tool.Load
   , handle
   , LoadArgs (..)
   , checkPathExists
+    -- * Exposed for unit tests
+  , mergeDiags
   ) where
 
 import Control.Exception (SomeException, try)
@@ -140,9 +142,9 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
                 eDef <- try (loadForTarget ghcSess tgt Deferred)
                 case eDef :: Either SomeException (Bool, [GhcError]) of
                   Left _  -> pure (okResult strictOk strictDiags)
-                  Right (_, deferredDiags) ->
+                  Right (deferredOk, deferredDiags) ->
                     let merged = mergeDiags strictDiags deferredDiags
-                    in pure (okResult strictOk merged)
+                    in pure (okResult deferredOk merged)
               else pure (okResult strictOk strictDiags)
 
 -- | Issue #84: pre-flight signal for the no-args target path.
@@ -241,13 +243,22 @@ subprocessResult msg =
   Env.toolResponseToResult
     (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
 
+-- | Merge strict and deferred diagnostic passes.  When both passes
+-- report a diagnostic at the same (file, line, col), prefer the
+-- deferred version: it carries the full warning text (e.g. a typed-
+-- hole 'Found hole: …' message) whereas the strict version only
+-- carries the abbreviated 'error' severity.  Deduplication by
+-- (file, line, col) alone — not by message — fixes F-23 where
+-- 'diagnostics=true' reported typed holes as errors because the
+-- strict "error" entry shadowed the deferred "warning" entry that
+-- contained the hole text.
 mergeDiags :: [GhcError] -> [GhcError] -> [GhcError]
 mergeDiags strictDiags deferredDiags =
-  strictDiags <> filter (not . alreadyReported) deferredDiags
+  filter (\d -> posKey d `notElem` deferredPosSet) strictDiags
+    <> deferredDiags
   where
-    seen = map posKey strictDiags
-    alreadyReported d = posKey d `elem` seen
-    posKey d = (geFile d, geLine d, geColumn d, geMessage d)
+    deferredPosSet = map posKey deferredDiags
+    posKey d = (geFile d, geLine d, geColumn d)
 
 summarise :: Bool -> [GhcError] -> [GhcError] -> Text
 summarise ok errs warns

@@ -16,6 +16,7 @@ module HaskellFlows.Tool.Eval
     -- * Internals — exposed for unit tests (Spec.hs)
   , evalContextExtras
   , selectMissingExtras
+  , ioUnitResult
   ) where
 
 import Control.Exception
@@ -50,6 +51,7 @@ import HaskellFlows.Ghc.ApiSession
   ( GhcSession
   , LoadFlavour (..)
   , evalIOString
+  , evalIOUnit
   , firstLibraryOrTestSuite
   , loadForTarget
   , resetHscEnvInPlace
@@ -197,22 +199,34 @@ runEvalBody ghcSess safe = do
   case eFast :: Either SomeException (Maybe Text) of
     Right (Just out) -> pure (renderOk (truncateOutput out))
     _ -> do
-      eIO <- trySyncOnly (withGhcSession ghcSess $
-                            withStanzaFlags ghcSess tgt $ do
-                              augmentEvalContext
-                              evalIOString (T.unpack safe))
-      case eIO :: Either SomeException String of
-        Right out ->
-          pure (renderOk (truncateOutput (T.pack out)))
-        Left ex ->
-          -- Issue #90 §4: a compileExpr / evalIOString failure
-          -- maps to status='failed' with kind='internal_error'.
-          -- The user-facing 'message' stays terse; the full
-          -- exception text lives in error.cause.
-          pure (Env.toolResponseToResult (Env.mkFailed
-            ((Env.mkErrorEnvelope Env.InternalError
-                ("ghc_eval failed: " <> T.take 200 (T.pack (show ex))))
-                  { Env.eeCause = Just (T.pack (show ex)) })))
+      -- F-12: try IO () first.  evalIOUnit compiles the expression
+      -- with an explicit (:: IO ()) annotation, so any expression
+      -- that is NOT IO () fails here and falls through to evalIOString.
+      -- Without this probe, evalIOString unsafeCoerces () to []
+      -- (same GHC RTS heap shape) and silently returns "".
+      eUnit <- trySyncOnly (withGhcSession ghcSess $
+                              withStanzaFlags ghcSess tgt $ do
+                                augmentEvalContext
+                                evalIOUnit (T.unpack safe))
+      case eUnit :: Either SomeException () of
+        Right () -> pure ioUnitResult
+        Left _ -> do
+          eIO <- trySyncOnly (withGhcSession ghcSess $
+                                withStanzaFlags ghcSess tgt $ do
+                                  augmentEvalContext
+                                  evalIOString (T.unpack safe))
+          case eIO :: Either SomeException String of
+            Right out ->
+              pure (renderOk (truncateOutput (T.pack out)))
+            Left ex ->
+              -- Issue #90 §4: a compileExpr / evalIOString failure
+              -- maps to status='failed' with kind='internal_error'.
+              -- The user-facing 'message' stays terse; the full
+              -- exception text lives in error.cause.
+              pure (Env.toolResponseToResult (Env.mkFailed
+                ((Env.mkErrorEnvelope Env.InternalError
+                    ("ghc_eval failed: " <> T.take 200 (T.pack (show ex))))
+                      { Env.eeCause = Just (T.pack (show ex)) })))
 
 -- | Issue #90 Phase B: timeout maps to status='timeout' with
 -- error.kind='inner_timeout'. The envelope's ToJSON also surfaces
@@ -221,6 +235,21 @@ runEvalBody ghcSess safe = do
 -- structured discriminator (@FlowTimeoutEnforcement@'s oracle was
 -- updated in this commit to accept it). Clients that key on the
 -- new 'status' field get the cleaner discriminator immediately.
+-- | F-12: result for an @IO ()@ expression — executed successfully,
+-- no string output to capture.  Surfaced as status='ok' with
+-- @output: ""@ and a hint so agents know the action ran.
+ioUnitResult :: ToolResult
+ioUnitResult =
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "output"     .= ("" :: Text)
+    , "truncated"  .= False
+    , "kind"       .= ("io_unit_no_output" :: Text)
+    , "hint"       .=
+        ( "Expression has type IO () — it was executed but produces no \
+          \string output. Use putStrLn / print for visible output, or \
+          \wrap in show to capture a value." :: Text )
+    ]))
+
 timeoutResult :: ToolResult
 timeoutResult =
   let timeoutMsg =

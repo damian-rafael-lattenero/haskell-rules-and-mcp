@@ -48,6 +48,7 @@ module HaskellFlows.Ghc.ApiSession
   , loadAndCaptureDiagnostics
     -- * Phase-7 in-process evaluation
   , evalIOString
+  , evalIOUnit
     -- * Wave-1 cabal-aware DynFlags
   , ensureStanzaFlags
   , withStanzaFlags
@@ -1121,6 +1122,21 @@ evalIOString stmt = do
   -- Force the whole String so runtime ⊥ surfaces as a catchable
   -- exception instead of a lazy payload that blows up downstream.
   length result `seq` pure result
+
+-- | Compile and run a statement that has type @IO ()@.  Used by
+-- 'Eval.runEvalBody' to detect @IO ()@ expressions before the
+-- 'evalIOString' path, which would otherwise unsafeCoerce @()@ to
+-- @[]@ (same RTS heap shape) and silently return the empty string
+-- (F-12).
+--
+-- The caller wraps the expression as @((<stmt>) :: IO ())@ so that
+-- any expression whose type is NOT @IO ()@ causes 'compileExpr' to
+-- throw a 'SourceError' rather than silently coercing.
+evalIOUnit :: String -> Ghc ()
+evalIOUnit stmt = do
+  hv <- compileExpr ("((" <> stmt <> ") :: IO ())")
+  let action = unsafeCoerce hv :: IO ()
+  liftIO action
 
 -- | Tweak the session 'DynFlags' for the requested load flavour.
 -- 'Strict' clears the defer flags; 'Deferred' enables them so
