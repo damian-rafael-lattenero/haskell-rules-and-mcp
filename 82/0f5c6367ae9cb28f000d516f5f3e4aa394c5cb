@@ -1,0 +1,35 @@
+mcp-server-haskell/test-e2e/Scenarios/FlowDependencyConflict.hs
+  566709e688c741b3 191-195,199-205
+mcp-server-haskell/test-e2e/Scenarios/FlowBrowseInteractive.hs
+  566709e688c741b3 70-76,79-85,89-90
+mcp-server-haskell/test-e2e/Scenarios/FlowConcurrentClients.hs
+  566709e688c741b3 155-159,163-169
+mcp-server-haskell/test-e2e/Scenarios/FlowLoadHoleDiagnostics.hs
+  566709e688c741b3 67-73,78-82,84-88,100-108
+mcp-server-haskell/test-e2e/Scenarios/FlowBatch.hs
+  566709e688c741b3 193-196,202-208
+mcp-server-haskell/test-e2e/Scenarios/FlowPerfBasic.hs
+  566709e688c741b3 56-57,62
+mcp-server-haskell/test-e2e/Scenarios/FlowExplainError.hs
+  566709e688c741b3 66-69,79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "820f5c6367ae9cb28f000d516f5f3e4aa394c5cb",
+  "prompts": {
+    "566709e688c741b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78173d44-cc05-4e0d-b758-291cd8e35e65",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 85,
+      "total_deletions": 32,
+      "accepted_lines": 7457,
+      "overriden_lines": 0
+    }
+  }
+}
