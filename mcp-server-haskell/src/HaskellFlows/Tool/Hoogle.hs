@@ -28,6 +28,7 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Data.List (nubBy)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -204,10 +205,11 @@ runHoogle q limit = do
 -- plain-text hoogle output parser
 --------------------------------------------------------------------------------
 
--- | One Hoogle hit. Module is optional because some hits (e.g. keyword
--- matches, packages) don't carry one.
+-- | One Hoogle hit. Module and name are optional because some hits
+-- (e.g. keyword matches, packages) don't carry a module path.
 data HoogleHit = HoogleHit
   { hhModule    :: !(Maybe Text)
+  , hhName      :: !(Maybe Text)   -- ^ function / type name (F-20)
   , hhSignature :: !Text
   }
   deriving stock (Eq, Show)
@@ -233,8 +235,9 @@ parseHoogleLine raw
         (_, rest) | T.null rest -> Nothing
         (lhs, rest) ->
           let sig = T.strip (T.drop 4 rest)  -- drop " :: "
-              (modTxt, _) = splitModule lhs
-          in Just HoogleHit { hhModule = modTxt, hhSignature = sig }
+              (modTxt, nm) = splitModule lhs
+              nameField = if T.null nm then Nothing else Just nm
+          in Just HoogleHit { hhModule = modTxt, hhName = nameField, hhSignature = sig }
   where
     stripped = T.strip raw
 
@@ -276,14 +279,19 @@ renderResult q outcome = Env.toolResponseToResult $ case outcome of
             { Env.eeCause = Just (T.strip err) })
 
 hitsPayload :: Text -> [HoogleHit] -> Value
-hitsPayload q hits = object
-  [ "query" .= q
-  , "count" .= length hits
-  , "hits"  .= map renderHit hits
-  ]
+hitsPayload q hits =
+  let unique = nubBy sameHit hits  -- F-19: dedup by (module, signature)
+  in object
+       [ "query" .= q
+       , "count" .= length unique
+       , "hits"  .= map renderHit unique
+       ]
+  where
+    sameHit a b = hhModule a == hhModule b && hhSignature a == hhSignature b
 
 renderHit :: HoogleHit -> Value
 renderHit h = object
   [ "module"    .= hhModule h
+  , "name"      .= hhName h       -- F-20: function/type name
   , "signature" .= hhSignature h
   ]
