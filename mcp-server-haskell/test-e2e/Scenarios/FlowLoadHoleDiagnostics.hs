@@ -64,26 +64,28 @@ runFlow c projectDir = do
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "HoleArtifact.hs") holeSrc
 
-  -- Step 2 — load with diagnostics=true; the response's 'errors'
-  -- array used to carry both the hole AND the GHC-58427
-  -- "is not loaded" artifact. Post-fix it should carry only the
-  -- hole.
-  t0 <- stepHeader 1 "ghc_load(diagnostics=true) returns one error per hole (#57)"
+  -- Step 2 — load with diagnostics=true.  The response used to put
+  -- the hole into 'errors' alongside the GHC-58427 'is not loaded'
+  -- artifact.  Post F-23, mergeDiags dedups by (file, line, col)
+  -- and prefers the deferred pass — typed holes correctly land in
+  -- 'warnings' (severity SevWarning under -fdefer-typed-holes), and
+  -- 'errors' should be empty (no GHC-58427 artifact, no shadow-error).
+  t0 <- stepHeader 1 "ghc_load(diagnostics=true) returns one warning per hole (#57, F-23)"
   r <- Client.callTool c GhcLoad (object
          [ "module_path" .= ("src/HoleArtifact.hs" :: Text)
          , "diagnostics" .= True
          ])
-  let errs = errorsArray r
-      n    = length errs
-      hasHole = any (T.isInfixOf "GHC-88464")  errs
-              || any (T.isInfixOf "Found hole") errs
-      hasArtifact = any (T.isInfixOf "GHC-58427") errs
+  let errs           = errorsArray r
+      warns          = warningsArray r
+      hasHoleWarn    = any (T.isInfixOf "GHC-88464")  warns
+                    || any (T.isInfixOf "Found hole") warns
+      hasErrArtifact = any (T.isInfixOf "GHC-58427") errs
   cFiltered <- liveCheck $ checkPure
-    "errors array has exactly 1 entry, the hole, NOT the GHC-58427 artifact"
-    (n == 1 && hasHole && not hasArtifact)
-    ( "Expected: errors=[hole]. Got: count=" <> T.pack (show n)
-      <> ", hasHole=" <> T.pack (show hasHole)
-      <> ", hasArtifact=" <> T.pack (show hasArtifact)
+    "warnings carry the hole; errors has no GHC-58427 artifact"
+    (hasHoleWarn && not hasErrArtifact)
+    ( "Expected: warnings=[hole], errors free of GHC-58427. Got: "
+      <> "errors=" <> T.pack (show errs)
+      <> ", warnings=" <> T.pack (show warns)
       <> ". Raw: " <> truncRender r )
   stepFooter 1 t0
 
@@ -95,7 +97,15 @@ runFlow c projectDir = do
 
 -- | Pull every @errors[].message@ string from the load response.
 errorsArray :: Value -> [Text]
-errorsArray v = case lookupField "errors" v of
+errorsArray = diagsArrayBy "errors"
+
+-- | Same shape extractor for the @warnings@ field. F-23 moved typed
+-- holes from @errors@ → @warnings@ when @diagnostics=true@.
+warningsArray :: Value -> [Text]
+warningsArray = diagsArrayBy "warnings"
+
+diagsArrayBy :: Text -> Value -> [Text]
+diagsArrayBy key v = case lookupField key v of
   Just (Array xs) ->
     [ msg | Object o <- V.toList xs
           , Just (String msg) <- [KeyMap.lookup (Key.fromText "message") o]

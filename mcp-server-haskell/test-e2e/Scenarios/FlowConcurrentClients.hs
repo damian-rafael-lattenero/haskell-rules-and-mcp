@@ -152,10 +152,21 @@ runFlow c projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
+-- | F-08: ghc_deps(action="list") without a stanza now returns
+-- @{stanzas: {library: [...], "test-suite:NAME": [...]}}@ instead of
+-- a flat @{build_depends: [...]}@. Read both shapes so this helper
+-- stays compatible if a future flip restores the legacy field, and
+-- so single-stanza calls (which still emit @build_depends@) pass.
 buildDeps :: Value -> [Text]
 buildDeps v = case lookupField "build_depends" v of
   Just (Array xs) -> [ p | String p <- V.toList xs ]
-  _               -> []
+  _ -> case lookupField "stanzas" v of
+    Just (Object o) ->
+      [ p
+      | (_, Array xs) <- KeyMap.toList o
+      , String p <- V.toList xs
+      ]
+    _ -> []
 
 truncRender :: Value -> Text
 truncRender v =

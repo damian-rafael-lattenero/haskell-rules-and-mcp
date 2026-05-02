@@ -18,7 +18,6 @@ module Scenarios.FlowPerfBasic
 
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson.Key as Key
-import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -54,10 +53,13 @@ runFlow c projectDir = do
 
   -- Step 2 — drive ghc_perf. The expression evaluates to a
   -- pure Int — small enough that wall-clock dominates GC.
+  -- F-26: 'verbose=true' is required to keep the per-run 'samples'
+  -- array in the response (default omits it for big runs values).
   t0 <- stepHeader 1 "ghc_perf returns wall-clock measurements (#61)"
   r <- Client.callTool c GhcPerf (object
     [ "expression" .= ("sum [1 .. 100]" :: Text)
     , "runs"       .= (5 :: Int)
+    , "verbose"    .= True
     ])
   let success     = statusOk r == Just True
       runsExec    = fieldInt "runs_executed" r

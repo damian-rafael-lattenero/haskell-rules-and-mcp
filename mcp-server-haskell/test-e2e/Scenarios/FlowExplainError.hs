@@ -63,7 +63,10 @@ runFlow c projectDir = do
       hasMessage  = case drillField "diagnostic" "message" r of
         Just (String m) -> not (T.null m)
         _               -> False
-      hasSource   = case drillPath ["context", "module_source"] r of
+      -- F-25: ghc_explain_error dropped the redundant 'module_source'
+      -- field; the same content is now under 'enclosing_slice'
+      -- (which carries the windowed view around the diagnostic line).
+      hasSource   = case drillPath ["context", "enclosing_slice"] r of
         Just (String s) -> "double" `T.isInfixOf` s
         _               -> False
       importsLen  = case drillPath ["context", "imports"] r of
@@ -73,7 +76,7 @@ runFlow c projectDir = do
         Just (String _) -> True
         _               -> False
   cContext <- liveCheck $ checkPure
-    "diagnostic + module_source + imports[≥1] + instructions present"
+    "diagnostic + enclosing_slice + imports[≥1] + instructions present"
     (success && diagOk && hasMessage && hasSource
        && importsLen >= 1 && hasInstructions)
     ( "Got: success=" <> T.pack (show success)

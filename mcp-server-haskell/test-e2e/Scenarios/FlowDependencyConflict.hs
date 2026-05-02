@@ -188,12 +188,21 @@ runFlow c _projectDir = do
 -- helpers
 --------------------------------------------------------------------------------
 
--- | Extract the build_depends array from a ghc_deps(list) response.
--- The field name the MCP returns is @build_depends@ (not @packages@).
+-- | Extract every dep mentioned in a ghc_deps(list) response.
+-- F-08 changed the no-stanza case to return a structured
+-- @{stanzas: {library: [...], …}}@ map.  The single-stanza case
+-- still uses the legacy @build_depends@ array, so we read both
+-- shapes and union them.
 buildDeps :: Value -> [Text]
 buildDeps v = case lookupField "build_depends" v of
   Just (Array xs) -> [ p | String p <- V.toList xs ]
-  _               -> []
+  _ -> case lookupField "stanzas" v of
+    Just (Object o) ->
+      [ p
+      | (_, Array xs) <- KeyMap.toList o
+      , String p <- V.toList xs
+      ]
+    _ -> []
 
 truncRender :: Value -> Text
 truncRender v =

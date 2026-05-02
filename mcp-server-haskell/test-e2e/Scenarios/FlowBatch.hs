@@ -190,12 +190,22 @@ runFlow c _projectDir = do
   stepFooter 3 t2
 
   -- The REAL oracle: what does the filesystem say?
+  -- F-08: ghc_deps(action="list") without a stanza now emits
+  -- @stanzas: {library: [...], "test-suite:NAME": [...]}@; the
+  -- legacy @build_depends@ array is only emitted when a stanza
+  -- selector is supplied.  Read both shapes for forward compat.
   t3 <- stepHeader 4 "filesystem oracle · ls build_depends after batch"
   ls <- Client.callTool c GhcDeps
           (object [ "action" .= ("list" :: Text) ])
   let deps = case lookupField "build_depends" ls of
         Just (Array xs) -> [ p | String p <- toListVec xs ]
-        _               -> []
+        _ -> case lookupField "stanzas" ls of
+          Just (Object o) ->
+            [ p
+            | (_, Array xs) <- KeyMap.toList o
+            , String p <- toListVec xs
+            ]
+          _ -> []
       hasAeson = any ("aeson" `textInfix`) deps
       hasBS    = any ("bytestring" `textInfix`) deps
   c11 <- liveCheck $ Check

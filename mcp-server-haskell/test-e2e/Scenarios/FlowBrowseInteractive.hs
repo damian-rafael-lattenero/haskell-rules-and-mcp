@@ -67,19 +67,27 @@ runFlow c _projectDir = do
     ("Got: " <> truncRender rBr)
   stepFooter 1 t0
 
-  -- Step 3 — sanity: 'ghc_imports' DOES list Prelude. The point
-  -- of the issue was that the two tools disagree silently.
+  -- Step 3 — sanity: 'ghc_imports' lists Prelude in 'session_preloads'.
+  -- F-10 split the interactive context: agent-injected modules
+  -- (Prelude, System.IO, Data.List, …) go into 'session_preloads' so
+  -- the source-import 'imports' field reflects only the file's own
+  -- imports.  The discrepancy with ghc_browse surface is preserved —
+  -- Prelude is still observable through ghc_imports, just under a
+  -- distinct key.
   t1 <- stepHeader 2 "ghc_imports lists Prelude (the inconsistency surface) (#72)"
   rImp <- Client.callTool c GhcImports (object [])
-  let imports = case lookupField "imports" rImp of
-        Just (Array a) ->
-          [ s | String s <- V.toList a ]
-        _ -> []
-      hasPrelude = any (T.isInfixOf "Prelude") imports
+  let imports  = case lookupField "imports" rImp of
+        Just (Array a) -> [ s | String s <- V.toList a ]
+        _              -> []
+      preloads = case lookupField "session_preloads" rImp of
+        Just (Array a) -> [ s | String s <- V.toList a ]
+        _              -> []
+      hasPrelude = any (T.isInfixOf "Prelude") (imports <> preloads)
   cImp <- liveCheck $ checkPure
     "ghc_imports advertises Prelude — discrepancy surface preserved"
     hasPrelude
-    ("Got imports: " <> T.intercalate ", " imports)
+    ( "Got imports: " <> T.intercalate ", " imports
+      <> " | session_preloads: " <> T.intercalate ", " preloads )
   stepFooter 2 t1
 
   pure [cShape, cImp]
