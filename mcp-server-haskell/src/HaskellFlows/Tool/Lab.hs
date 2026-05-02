@@ -452,7 +452,9 @@ renderReport args modulePath fns wallMs =
         , "properties_passed"  .= passedProps
         , "wall_time_ms"       .= wallMs
         , "functions"          .= map renderFn fns
-        , "arbitrary_suggestions" .= ([] :: [Value])  -- still deferred
+        -- #119: omit 'arbitrary_suggestions' when empty (still deferred).
+        -- Including an empty array suggests the feature exists and is broken
+        -- rather than being intentionally unimplemented.
         , "summary"            .= summarise totalProps passedProps
                                             (length fns) coveredFns
         ] <>

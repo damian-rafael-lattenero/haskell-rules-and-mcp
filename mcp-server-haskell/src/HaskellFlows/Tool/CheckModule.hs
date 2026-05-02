@@ -252,14 +252,15 @@ renderResult mp compileOk errs warns holes regressions totalProps loadFailed war
           ]
   -- Issue #90 Phase C: 'overall=true' → status='ok'. Any red gate
   -- → status='failed' with kind matching the dominant signal:
-  -- compile error → 'compile_error', otherwise 'validation' (the
-  -- compile passed but a higher-level invariant — warnings,
-  -- holes, property regression — failed).
+  -- compile error → 'compile_error', otherwise 'gate_failure' (the
+  -- compile passed but a quality gate — warnings, holes, property
+  -- regression — refused the module). #119: 'validation' implies the
+  -- caller's INPUT was malformed; use 'gate_failure' here.
   in if overall
        then Env.toolResponseToResult (Env.mkOk payload)
        else
          let kind | not compileOk = Env.CompileError
-                  | otherwise     = Env.Validation
+                  | otherwise     = Env.GateFailure
              envErr   = Env.mkErrorEnvelope kind
                           (summarise overall errs warns holes regressions)
              response = (Env.mkFailed envErr) { Env.reResult = Just payload }

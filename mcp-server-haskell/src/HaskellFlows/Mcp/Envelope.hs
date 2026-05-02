@@ -194,6 +194,11 @@ data ErrorKind
     -- Compile-time failure (status = failed) ---------------------------
   | CompileError
   | TypeError
+    -- Gate / quality failure (compile ok, but a gate refused it) ------
+    -- Use this instead of 'Validation' when the caller's INPUT was fine
+    -- but a quality gate (warnings-block, properties, coverage) failed.
+    -- (#119)
+  | GateFailure
     -- Lookup miss (status = no_match) ----------------------------------
   | NotInScope
   | ModuleNotInGraph
@@ -232,6 +237,7 @@ errorKindToText = \case
   EmptyInput              -> "empty_input"
   CompileError            -> "compile_error"
   TypeError               -> "type_error"
+  GateFailure             -> "gate_failure"
   NotInScope              -> "not_in_scope"
   ModuleNotInGraph        -> "module_not_in_graph"
   ModulePathDoesNotExist  -> "module_path_does_not_exist"

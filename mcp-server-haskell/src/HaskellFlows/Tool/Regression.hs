@@ -17,6 +17,8 @@ module HaskellFlows.Tool.Regression
     -- * Load-failure detection (#51)
   , classifyLoadFailure
   , summariseLoadError
+    -- * ISO-8601 helper (exported for unit tests, #119)
+  , formatIso8601
   ) where
 
 import Control.Exception (SomeException, try)
@@ -25,6 +27,8 @@ import Data.Aeson.Types (parseEither)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Time (defaultTimeLocale, formatTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import System.Timeout (timeout)
@@ -310,8 +314,18 @@ renderStored sp =
     [ "expression" .= spExpression sp
     , "module"     .= spModule sp
     , "passed"     .= spPassed sp
-    , "updated"    .= spUpdated sp
+    -- #119: render as ISO-8601 instead of a float POSIX timestamp.
+    -- Agents and humans can read "2026-04-15T14:55:27Z" directly;
+    -- 1.777046127140673e9 is opaque.
+    , "updated"    .= formatIso8601 (spUpdated sp)
     ]
+
+-- | Format a POSIX 'Double' (seconds since epoch) as ISO-8601 UTC.
+-- Used by 'renderStored' to make timestamps human-readable (#119).
+formatIso8601 :: Double -> Text
+formatIso8601 t =
+  T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"
+            (posixSecondsToUTCTime (realToFrac t)))
 
 renderRegression :: Replay -> Value
 renderRegression r =

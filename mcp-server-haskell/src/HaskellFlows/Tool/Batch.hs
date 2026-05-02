@@ -201,7 +201,10 @@ renderResult ff outcomes =
       envMsg = T.pack (show errCount) <> " of "
                  <> T.pack (show (length outcomes))
                  <> " action(s) failed"
-      envErr = Env.mkErrorEnvelope Env.Validation envMsg
+      -- #119: 'validation' implies the caller's input was malformed.
+      -- A partial batch means the input was valid but actions failed —
+      -- use 'gate_failure' so consumers can branch correctly.
+      envErr = Env.mkErrorEnvelope Env.GateFailure envMsg
   in case (errCount, okCount) of
        (0, _) ->
          Env.toolResponseToResult (Env.mkOk payload)

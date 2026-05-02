@@ -18,6 +18,8 @@ module HaskellFlows.Tool.ValidateCabal
   , Issue (..)
   , Severity (..)
   , scanCabalText
+    -- * Exported for unit tests (#119)
+  , renderResult
   ) where
 
 import Control.Concurrent (forkIO)
@@ -423,10 +425,15 @@ renderResult file issues =
           ]
       response = case (errs, warns) of
         (0, 0)     -> Env.mkOk payload
+        -- #119: 0 errors / N warnings → status='ok' with warnings[].
+        -- The old 'mkPartial' contradicted the "cabal file is shippable"
+        -- summary; the cabal file IS shippable, just has informational
+        -- nits — status='ok' with surfaced warnings is correct.
         (0, _)     -> Env.withWarnings (map issueToWarning warningIssues)
-                        (Env.mkPartial payload)
+                        (Env.mkOk payload)
+        -- #119: errors → 'gate_failure', not 'validation'.
         (_, _)     -> Env.mkFailed
-          ((Env.mkErrorEnvelope Env.Validation
+          ((Env.mkErrorEnvelope Env.GateFailure
               ("cabal validation found " <> T.pack (show errs) <> " error(s)"))
                 { Env.eeCause = Just summary })
       warningIssues = filter ((== CabalSevWarn) . iSeverity) issues

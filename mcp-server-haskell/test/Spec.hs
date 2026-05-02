@@ -1206,6 +1206,11 @@ main = do
       , test "#113: QcPassed with quiet stderr does not trigger retry"     testRegressionSelfContainedNoRetry
       -- Issue #114 — ghc_imports dedup via nubBy importKey
       , test "#114: nubBy dedup removes duplicate module keys"             testImportsNubByDeduplication
+      -- Issue #119 — DX paper-cuts batch
+      , test "#119: Env.GateFailure exists in enum + wire form"            testGateFailureKindExists
+      , test "#119: removeDep unchangedResult has no verb field"           testUnchangedResultNoVerb
+      , test "#119: formatIso8601 produces ISO-8601 timestamp"             testFormatIso8601
+      , test "#119: ValidateCabal warnings-only returns ok not partial"    testValidateCabalWarningsOk
       ]
   if and results then exitSuccess else exitFailure
 
@@ -3568,7 +3573,7 @@ testEnvelopeErrorKindRoundTrip =
       pinnedOk = all (\(k, t) -> Env.errorKindToText k == t) pinned
       reverseTotal = all (\k -> Env.textToErrorKind (Env.errorKindToText k) == Just k)
                          allKinds
-      countOk = length allKinds == 24  -- §4: 23 + RuntimeException (#115)
+      countOk = length allKinds == 25  -- §4: 24 + GateFailure (#119)
   in pure (pinnedOk && reverseTotal && countOk)
 
 -- | Companion round-trip for 'WarningKind'.
@@ -3894,8 +3899,9 @@ testValidateCabalClean = do
       Just (A.Object payload) ->
         case AKM.lookup (AKey.fromText "errors") payload of
           Just (A.Number 0) ->
-            -- 0 errors ⇒ status ∈ {ok, partial}
-            Env.reStatus env `elem` [Env.StatusOk, Env.StatusPartial]
+            -- 0 errors ⇒ status='ok' (#119: 'partial' was retired for
+            -- warnings-only results; all 0-error outcomes are now 'ok')
+            Env.reStatus env == Env.StatusOk
           Just (A.Number _) ->
             -- non-zero errors ⇒ status='failed' (the other branch)
             Env.reStatus env == Env.StatusFailed
@@ -3903,12 +3909,12 @@ testValidateCabalClean = do
       _ -> False
     Left _ -> False
 
--- | Phase B contract: a cabal fixture with the duplicate-dep
+-- | Phase B + #119 contract: a cabal fixture with the duplicate-dep
 -- heuristic warning *plus* zero cabal-check errors produces
--- status='partial' with at least one envelope-warning entry. If
--- cabal-check happens to also raise errors on this fixture, status
--- shifts to 'failed' — accept either, but assert the structured
--- 'warnings' array is populated whenever issues exist.
+-- status='ok' (not 'partial' — #119 fix) with envelope-warnings
+-- populated. If cabal-check happens to also raise errors on this
+-- fixture, status shifts to 'failed' — accept either, but assert
+-- the structured 'warnings' array is populated whenever issues exist.
 testValidateCabalWarnings :: IO Bool
 testValidateCabalWarnings = do
   decoded <- runValidateCabalIn duplicateDepCabalBody
@@ -3920,7 +3926,8 @@ testValidateCabalWarnings = do
              ) of
           (Just (A.Number 0), Just (A.Number w))
             | w > 0 ->
-                Env.reStatus env == Env.StatusPartial
+                -- #119: warnings-only → status='ok', not 'partial'.
+                Env.reStatus env == Env.StatusOk
                   && not (null (Env.reWarnings env))
             | otherwise -> Env.reStatus env == Env.StatusOk
           (Just (A.Number e), _)
@@ -11849,3 +11856,64 @@ testImportsNubByDeduplication =
   let entries = ["Data.Map", "Data.Text", "Data.Map", "Data.List", "Data.Text"] :: [Text]
       deduped  = List.nub entries
   in pure (length deduped == 3 && deduped == ["Data.Map", "Data.Text", "Data.List"])
+
+-- | #119: Env.GateFailure must be a member of ErrorKind with wire
+-- text @"gate_failure"@. Used by ghc_check_module (warnings-blocking)
+-- and ghc_batch (partial outcomes) instead of the misleading
+-- @"validation"@ kind.
+testGateFailureKindExists :: IO Bool
+testGateFailureKindExists =
+  pure $
+    Env.errorKindToText Env.GateFailure == "gate_failure"
+    && Env.textToErrorKind "gate_failure" == Just Env.GateFailure
+    && Env.GateFailure `elem` ([minBound .. maxBound] :: [Env.ErrorKind])
+
+-- | #119: 'unchangedResult' must NOT include a 'verb' field that
+-- contradicts @action: "unchanged"@. When a dep is already present,
+-- returning @verb: "added"@ alongside @action: "unchanged"@ confused
+-- callers into thinking a change was made.
+testUnchangedResultNoVerb :: IO Bool
+testUnchangedResultNoVerb =
+  let tr     = DepsTool.unchangedResult "/tmp/foo.cabal" "aeson" "added"
+  in pure $ case trContent tr of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "result" top of
+               Just (A.Object r) ->
+                 AKM.lookup "action" r == Just (A.String "unchanged")
+                 && not (AKM.member "verb" r)
+               _ -> False
+           _ -> False
+       _ -> False
+
+-- | #119: 'formatIso8601' must produce an ISO-8601 UTC timestamp
+-- that is human-readable. Specifically: it must contain "T" and "Z",
+-- and not be a plain float.
+testFormatIso8601 :: IO Bool
+testFormatIso8601 =
+  -- 2026-05-02 00:00:00 UTC = 1746144000 seconds since epoch
+  let ts  = RegTool.formatIso8601 1746144000.0
+  in pure $ "T" `T.isInfixOf` ts
+          && "Z" `T.isSuffixOf` ts
+          && not ("e" `T.isInfixOf` ts)  -- not scientific notation
+          && T.length ts == 20            -- "YYYY-MM-DDTHH:MM:SSZ"
+
+-- | #119: ValidateCabal with 0 cabal errors and N warnings must return
+-- status='ok' (not 'partial'). The cabal file IS shippable; the
+-- distinction mattered because 'partial' implies something needs fixing.
+testValidateCabalWarningsOk :: IO Bool
+testValidateCabalWarningsOk =
+  let warnIssue  = VC.Issue
+        { VC.iKind     = "duplicate-dep"
+        , VC.iMessage  = "duplicate dep"
+        , VC.iSeverity = VC.CabalSevWarn
+        }
+      tr = VC.renderResult "/tmp/foo.cabal" [warnIssue]
+  in pure $ case trContent tr of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             AKM.lookup "status" top == Just (A.String "ok")
+           _ -> False
+       _ -> False

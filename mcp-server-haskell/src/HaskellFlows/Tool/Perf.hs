@@ -353,6 +353,9 @@ renderResult args nss stats errs mBaseline =
             ( "Phase 2: set save_baseline=true to persist a mean_ns baseline, \
               \compare_baseline=true to detect regressions (>10% slower). \
               \Pass verbose=true to include per-sample timing array." :: Text )
+        -- #119: callers can't tell if the baseline was persisted without
+        -- this flag; the response shape is identical regardless.
+        , "baseline_saved" .= paSaveBaseline args
         ] <> baselineFields
       -- F-32: cause is a human-readable summary, not a stringified JSON blob.
       regressionMsg = case mRegression of

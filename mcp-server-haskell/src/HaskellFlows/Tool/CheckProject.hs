@@ -23,10 +23,13 @@ module HaskellFlows.Tool.CheckProject
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import qualified Data.Aeson.KeyMap as AKM
 import Data.Char (isAlphaNum, isAsciiUpper, isSpace)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
 
@@ -322,10 +325,16 @@ renderResult outcomes =
 
 renderOutcome :: ModuleOutcome -> Value
 renderOutcome (MoChecked nm tr) =
-  object
-    [ "module" .= nm
-    , "status" .= (if trIsError tr then "failed" :: Text else "ok")
-    , "result" .= toJSON tr
+  -- #119: avoid context-bombing the agent on large projects.
+  -- For passing modules emit only status + terse summary.
+  -- For failing modules include the summary + errors list so the
+  -- agent knows exactly what to fix, without the full tool result.
+  let moduleStatus = if trIsError tr then "failed" :: Text else "ok"
+      detail = extractModuleDetail tr
+  in object
+    [ "module"  .= nm
+    , "status"  .= moduleStatus
+    , "detail"  .= detail
     ]
 renderOutcome (MoNotFound nm) =
   object
@@ -339,6 +348,29 @@ renderOutcome (MoSkipped nm) =
     , "status" .= ("skipped" :: Text)
     , "reason" .= ("fail_fast tripped on an earlier module" :: Text)
     ]
+
+-- | #119: extract a terse summary from a per-module 'ToolResult'.
+-- Parse the first TextContent block as JSON and keep only the fields
+-- an agent needs to triage the outcome:
+--   * summary, errors, warnings  (omit holes + property-gate details)
+-- This prevents context-bombing the agent on large projects.
+extractModuleDetail :: ToolResult -> Value
+extractModuleDetail tr =
+  case trContent tr of
+    (TextContent t : _) ->
+      case decode (TLE.encodeUtf8 (TL.fromStrict t)) of
+        Just (Object top) ->
+          case AKM.lookup "result" top of
+            Just (Object r) ->
+              let wantedKeys = ["summary", "errors", "warnings"]
+                  found = [ (fieldK, fieldV)
+                          | fieldK <- wantedKeys
+                          , Just fieldV <- [AKM.lookup fieldK r]
+                          ]
+              in object [ fieldK .= fieldV | (fieldK, fieldV) <- found ]
+            _ -> object []
+        _ -> object []
+    _ -> object []
 
 summarise :: Int -> Int -> Int -> Text
 summarise total 0 0 =

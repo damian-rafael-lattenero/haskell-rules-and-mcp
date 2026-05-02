@@ -36,6 +36,8 @@ module HaskellFlows.Tool.Deps
   , extractErrorSummary
     -- * F-08 — all-stanzas listing (exported for unit tests)
   , allStanzaDeps
+    -- * #119 — idempotent-result helper (exported for unit tests)
+  , unchangedResult
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
@@ -918,9 +920,11 @@ unchangedResult file pkg verb =
         "added"   -> "'" <> pkg <> "' already present in target stanza — no change written."
         "removed" -> "'" <> pkg <> "' not listed in target stanza — no change written."
         _         -> "no change written"
+      -- #119: remove 'verb' — it contradicts 'action: "unchanged"' when
+      -- the verb is "added" (implying something was added when nothing
+      -- was written). The 'note' field already explains the outcome.
       payload = object
         [ "action"     .= ("unchanged" :: Text)
-        , "verb"       .= verb
         , "cabal_file" .= T.pack file
         , "package"    .= pkg
         , "note"       .= (note :: Text)

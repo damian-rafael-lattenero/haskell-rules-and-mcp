@@ -321,8 +321,8 @@ biasWarnings dist =
 -- distribution warnings are flagged as 'warnings' under 'result'
 -- but the run itself is always 'ok' (tool successfully measured).
 -- Consumers branch on the structured 'distribution' / 'warnings'
--- fields. The legacy in-payload 'nextStep' object is preserved
--- because the existing nextStep injection plumbing keys on it.
+-- fields. #119: the in-payload 'nextStep' has been removed; the
+-- top-level injection in 'enrichWithNextStep' is the sole source.
 renderReport
   :: WitnessArgs -> QuickCheckResult
   -> [(Text, Double)] -> [Text] -> Text -> Int -> ToolResult
@@ -363,16 +363,6 @@ renderReport args qc dist warnings rawForResponse wallMs =
                              , "smallest-witness"
                              ] :: [Text])
         , "qc_raw_output" .= T.take 1000 raw
-        , "nextStep"      .= object
-            [ "tool"    .= ("ghc_quickcheck" :: Text)
-            , "why"     .= ("Re-run the same property with ghc_quickcheck "
-                            <> "to verify the pass/fail signal "
-                            <> "without the extra instrumentation overhead." :: Text)
-            , "example" .= object
-                [ "property"    .= waProperty args
-                , "module_path" .= waModulePath args
-                ]
-            ]
         ]
   in Env.toolResponseToResult (Env.mkOk payload)
 

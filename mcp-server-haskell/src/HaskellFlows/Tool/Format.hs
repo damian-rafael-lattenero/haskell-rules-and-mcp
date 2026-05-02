@@ -199,9 +199,16 @@ runFormatter pd f mp write = do
 -- * 'FmtFailure' → status='failed' with kind='subprocess_error',
 --                  exit code under 'cause', stderr in the message.
 renderResult :: Formatter -> ModulePath -> Bool -> FmtOutcome -> ToolResult
-renderResult _ _ _ (FmtOk out) =
+renderResult _ _ write (FmtOk out) =
+  -- #119: surface whether we actually rewrote the file.
+  -- When write=true the file was rewritten in-place and 'formatted'
+  -- is ""; when write=false (check-only) 'formatted' holds the
+  -- reformatted text. Adding 'wrote' + 'check_only' lets callers
+  -- distinguish these without inspecting the empty-string.
   Env.toolResponseToResult (Env.mkOk (object
-    [ "formatted" .= out
+    [ "formatted"  .= out
+    , "wrote"      .= write
+    , "check_only" .= not write
     ]))
 renderResult _ _ _ FmtTimeout =
   let envErr = (Env.mkErrorEnvelope Env.InnerTimeout
