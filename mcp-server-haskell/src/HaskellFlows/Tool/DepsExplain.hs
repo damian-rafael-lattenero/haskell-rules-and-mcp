@@ -243,14 +243,6 @@ parseBackjumps txt =
                 _            -> Nothing
     _ -> Nothing
 
--- | Total replacement for 'Data.Maybe.mapMaybe' to keep the import
--- list narrow.
-mapMaybe' :: (a -> Maybe b) -> [a] -> [b]
-mapMaybe' _ [] = []
-mapMaybe' f (x : xs) = case f x of
-  Just y  -> y : mapMaybe' f xs
-  Nothing -> mapMaybe' f xs
-
 --------------------------------------------------------------------------------
 -- response shaping
 --------------------------------------------------------------------------------

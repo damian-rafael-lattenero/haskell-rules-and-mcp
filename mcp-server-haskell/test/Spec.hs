@@ -11847,5 +11847,5 @@ testRegressionSelfContainedNoRetry =
 testImportsNubByDeduplication :: IO Bool
 testImportsNubByDeduplication =
   let entries = ["Data.Map", "Data.Text", "Data.Map", "Data.List", "Data.Text"] :: [Text]
-      deduped  = List.nubBy (==) entries
+      deduped  = List.nub entries
   in pure (length deduped == 3 && deduped == ["Data.Map", "Data.Text", "Data.List"])

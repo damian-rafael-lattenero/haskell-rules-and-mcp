@@ -49,7 +49,6 @@ import System.Timeout (timeout)
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
 -- | (binary name, version-flag, category).
 --

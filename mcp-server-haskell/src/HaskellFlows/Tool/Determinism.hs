@@ -26,7 +26,6 @@ import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..), parseQuickCheckOutput)
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 

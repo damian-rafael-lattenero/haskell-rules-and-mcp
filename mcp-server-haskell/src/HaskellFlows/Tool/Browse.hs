@@ -56,7 +56,7 @@ descriptor =
           ]
     }
 
-newtype BrowseArgs = BrowseArgs { baModule :: Text }
+newtype BrowseArgs = BrowseArgs Text
 
 instance FromJSON BrowseArgs where
   parseJSON = withObject "BrowseArgs" $ \o -> BrowseArgs <$> o .: "module"

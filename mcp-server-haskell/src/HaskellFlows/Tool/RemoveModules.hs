@@ -43,7 +43,6 @@ import System.FilePath (takeExtension, (</>))
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.PermissiveJSON (BoolField (unBoolField))
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.ModuleName
   ( ModuleNameError
   , renderModuleNameError

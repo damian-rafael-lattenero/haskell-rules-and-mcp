@@ -32,7 +32,6 @@ import System.FilePath (takeDirectory, takeExtension, (</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.ModuleName
   ( ModuleNameError
   , renderModuleNameError
