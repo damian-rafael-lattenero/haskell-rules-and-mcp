@@ -1,0 +1,45 @@
+mcp-server-haskell/src/HaskellFlows/Tool/Format.hs
+  566709e688c741b3 202-207,209-211
+mcp-server-haskell/src/HaskellFlows/Tool/Perf.hs
+  566709e688c741b3 356-358
+mcp-server-haskell/src/HaskellFlows/Tool/Regression.hs
+  566709e688c741b3 20-21,30-31,317-320,323-328
+mcp-server-haskell/src/HaskellFlows/Tool/CheckProject.hs
+  566709e688c741b3 26,31-32,328-337,352-374
+mcp-server-haskell/src/HaskellFlows/Tool/Witness.hs
+  566709e688c741b3 324-325
+mcp-server-haskell/src/HaskellFlows/Tool/Batch.hs
+  566709e688c741b3 204-207
+mcp-server-haskell/src/HaskellFlows/Mcp/Envelope.hs
+  566709e688c741b3 197-201,240
+mcp-server-haskell/src/HaskellFlows/Tool/Deps.hs
+  566709e688c741b3 39-40,923-925
+mcp-server-haskell/test/Spec.hs
+  566709e688c741b3 1209-1213,3576,3902-3904,3912,3914-3917,3929-3930,11859-11919
+mcp-server-haskell/src/HaskellFlows/Tool/CheckModule.hs
+  566709e688c741b3 255-258,263
+mcp-server-haskell/src/HaskellFlows/Tool/Lab.hs
+  566709e688c741b3 455-457
+mcp-server-haskell/src/HaskellFlows/Tool/ValidateCabal.hs
+  566709e688c741b3 21-22,428-431,433-434,436
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "db70899a1ed442e982b50dfdb8b39997c7a21636",
+  "prompts": {
+    "566709e688c741b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78173d44-cc05-4e0d-b758-291cd8e35e65",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 196,
+      "total_deletions": 59,
+      "accepted_lines": 12020,
+      "overriden_lines": 8
+    }
+  }
+}
