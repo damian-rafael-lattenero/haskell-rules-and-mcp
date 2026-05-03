@@ -101,6 +101,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Cache the ghcup install (GHC + cabal binaries). Without this,
+      # `haskell-actions/setup@v2` re-downloads + re-installs GHC on
+      # every cache miss — fast on ubuntu (toolcache) but ~3m45s on
+      # macOS where there's no built-in GHC. Caching here drops the
+      # macOS Set-up-GHC step from ~3m45s to ~10s on cache hit.
+      - name: Cache ghcup (GHC + cabal binaries)
+        uses: actions/cache@v5
+        with:
+          path: ~/.ghcup
+          key: ${{ runner.os }}-ghcup-${{ matrix.ghc }}-${{ matrix.cabal }}
+
       - id: setup
         name: Set up GHC ${{ matrix.ghc }} / cabal ${{ matrix.cabal }}
         uses: haskell-actions/setup@v2
@@ -270,6 +281,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # macOS has NO built-in GHC toolcache, so without this cache
+      # `haskell-actions/setup@v2` downloads + installs GHC from
+      # scratch on every run (~3m45s observed on a typical run).
+      # Caching ~/.ghcup drops that to ~10 s on cache hit — saves
+      # ~3.5 min × 5 macOS cells = ~17.5 min of macOS compute per push.
+      - name: Cache ghcup (GHC + cabal binaries)
+        uses: actions/cache@v5
+        with:
+          path: ~/.ghcup
+          key: ${{ runner.os }}-ghcup-${{ matrix.ghc }}-${{ matrix.cabal }}
+
       - id: setup
         name: Set up GHC ${{ matrix.ghc }} / cabal ${{ matrix.cabal }}
         uses: haskell-actions/setup@v2
@@ -345,6 +367,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
+      - name: Cache ghcup (GHC + cabal binaries)
+        uses: actions/cache@v5
+        with:
+          path: ~/.ghcup
+          key: ${{ runner.os }}-ghcup-9.12.2-3.12.1.0
 
       - id: setup
         uses: haskell-actions/setup@v2
