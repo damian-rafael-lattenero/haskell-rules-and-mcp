@@ -1,0 +1,103 @@
+# syntax=docker/dockerfile:1.7
+#
+# CI base image for haskell-flows — GHC + cabal-store pre-warmed.
+#
+# Built by `.github/workflows/build-ci-image.yml`, published to
+# `ghcr.io/<owner>/haskell-flows-ci:<ghc>-<freeze-hash>`. The
+# Haskell CI workflow consumes this image via `container:` so each
+# matrix cell skips ghcup install + cabal-store rehydration.
+#
+# Layered for cache reuse across rebuilds:
+#   1. base OS + ghcup + GHC + cabal     (rarely changes)
+#   2. hlint                             (rarely changes)
+#   3. cabal.project.freeze + project source for dep resolution
+#   4. `cabal build all --only-dependencies` to populate ~/.cabal/store/
+#   5. `cabal build` of the Baseline fixture to warm the e2e dep closure
+#
+# Steps 3-5 invalidate when the freeze file changes — the CI workflow
+# tags the resulting image with the freeze hash so consumers pick up
+# the right baked closure automatically.
+
+ARG GHC_VERSION=9.12.2
+ARG CABAL_VERSION=3.12.1.0
+ARG HLINT_VERSION=3.10
+
+# ---------- stage 1: GHC + cabal via ghcup --------------------------------
+FROM ubuntu:24.04 AS toolchain
+
+ARG GHC_VERSION
+ARG CABAL_VERSION
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PATH=/root/.ghcup/bin:/root/.cabal/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates curl build-essential libgmp-dev libnuma-dev \
+      libffi-dev zlib1g-dev libtinfo-dev pkg-config git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install ghcup, then GHC + cabal at the requested versions.
+RUN curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org \
+      | BOOTSTRAP_HASKELL_NONINTERACTIVE=1 \
+        BOOTSTRAP_HASKELL_GHC_VERSION=${GHC_VERSION} \
+        BOOTSTRAP_HASKELL_CABAL_VERSION=${CABAL_VERSION} \
+        BOOTSTRAP_HASKELL_INSTALL_NO_STACK=1 \
+        BOOTSTRAP_HASKELL_INSTALL_NO_STACK_HOOK=1 \
+        BOOTSTRAP_HASKELL_ADJUST_BASHRC=N \
+        sh
+
+# ---------- stage 2: hlint --------------------------------------------------
+FROM toolchain AS hlint-installed
+
+ARG HLINT_VERSION
+
+# Standalone hlint binary (no source build = much faster image build).
+RUN curl -L "https://github.com/ndmitchell/hlint/releases/download/v${HLINT_VERSION}/hlint-${HLINT_VERSION}-x86_64-linux.tar.gz" \
+      | tar -xz -C /tmp \
+    && mv /tmp/hlint-${HLINT_VERSION}/hlint /usr/local/bin/hlint \
+    && chmod +x /usr/local/bin/hlint \
+    && hlint --version
+
+# ---------- stage 3: cabal store warmed via dep build ----------------------
+FROM hlint-installed AS dep-warm
+
+WORKDIR /build
+
+# Copy ONLY the cabal config + freeze first so layer caching works
+# when source code changes but deps don't.
+COPY mcp-server-haskell/haskell-flows-mcp.cabal \
+     mcp-server-haskell/cabal.project           \
+     mcp-server-haskell/cabal.project.freeze    \
+     ./
+
+# `cabal update` once so the package index is in the image.
+RUN cabal update
+
+# Build deps. We need the actual source tree to satisfy `packages: .`
+# in cabal.project, but only the cabal file matters for the dep solver.
+# A minimal stub directory tree is enough.
+RUN mkdir -p src test test-e2e benchmarks app && \
+    echo "module Main where\nmain = pure ()" > app/Main.hs && \
+    echo "module Main where\nmain = pure ()" > test/Spec.hs && \
+    echo "module Main where\nmain = pure ()" > test-e2e/Main.hs && \
+    echo "module Main where\nmain = pure ()" > benchmarks/Main.hs
+
+# This is the slow step. Building deps populates ~/.cabal/store/
+# with QuickCheck, aeson, ghc-paths, ghc-lib-parser, etc. Image
+# layer is reused on rebuilds whenever the freeze file is unchanged.
+RUN cabal build all --only-dependencies || true
+
+# ---------- stage 4: e2e fixture pre-warmed --------------------------------
+FROM dep-warm AS final
+
+# Copy the e2e baseline fixture and build it once so the QuickCheck
+# closure for E2E scenarios is also in ~/.cabal/store/.
+COPY mcp-server-haskell/test-e2e/Fixtures/Baseline /build/fixture/
+
+RUN cd /build/fixture && cabal build || true
+
+# Reset workdir so consumer workflows start clean.
+WORKDIR /workspace
+
+CMD ["/bin/bash"]
