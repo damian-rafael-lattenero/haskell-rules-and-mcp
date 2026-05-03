@@ -21,6 +21,9 @@ author:             Damián Rafael Lattenero
 maintainer:         damian.lattenero@mercadolibre.com
 build-type:         Simple
 extra-source-files: README.md
+                    test-e2e/Fixtures/Baseline/baseline.cabal
+                    test-e2e/Fixtures/Baseline/cabal.project
+                    test-e2e/Fixtures/Baseline/src/Placeholder.hs
 
 common shared
     default-language:   GHC2024
@@ -210,6 +213,7 @@ test-suite haskell-flows-mcp-e2e
     other-modules:    E2E.Client
                       E2E.Assert
                       E2E.Envelope
+                      E2E.Fixture
                       E2E.Sharding
                       E2E.Smoke
                       Scenarios.ExprEvaluator

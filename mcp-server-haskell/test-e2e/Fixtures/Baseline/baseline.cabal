@@ -1,0 +1,30 @@
+cabal-version: 2.4
+name:          baseline
+version:       0.1.0.0
+synopsis:      Pre-warmed E2E baseline fixture (lib + QuickCheck)
+description:
+  Minimal cabal layout that mirrors what most E2E scenarios scaffold
+  via `ghc_project create + ghc_deps add QuickCheck stanza=library`.
+  The CI step "Pre-warm fixtures" runs `cabal build` here once, which
+  populates ~/.cabal/store/ with the union of E2E scenarios' first-call
+  dependencies (QuickCheck, aeson, text, containers, vector). Scenarios
+  that opt into `E2E.Fixture.copyFixture "Baseline"` skip the cabal
+  solver + dep-build round-trip and start with a warm GHC API session.
+license:       BSD-3-Clause
+license-file:  ../../../LICENSE
+author:        Damián Rafael Lattenero
+maintainer:    damianlattenero@gmail.com
+build-type:    Simple
+
+library
+  hs-source-dirs:   src
+  exposed-modules:  Placeholder
+  build-depends:
+    , aeson       >= 2.0     && < 3
+    , base        >= 4.18    && < 5
+    , containers  >= 0.6     && < 0.8
+    , QuickCheck  >= 2.14    && < 3
+    , text        >= 2.0     && < 2.2
+    , vector      >= 0.13    && < 0.14
+  default-language: Haskell2010
+  ghc-options:      -Wall
