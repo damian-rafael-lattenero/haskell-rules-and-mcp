@@ -85,11 +85,10 @@ jobs:
   build-and-test:
     name: Build & test — ubuntu / GHC ${{ matrix.ghc }} / shard ${{ matrix.shard }}
     # Gate every shard cell on hlint. Hlint runs in ~30 s; the
-    # build-and-test cell costs ~6-13 min × 6 cells = up to ~80 min
+    # build-and-test cell costs ~3-13 min × 6 cells = up to ~80 min
     # of CI compute. A PR that fails hlint used to burn that whole
     # budget before surfacing the style break — now it stops at
-    # 30 s. Trade-off is +30 s wall-clock to green on clean PRs;
-    # the savings on style-broken PRs vastly outweigh that.
+    # 30 s.
     needs: [hlint]
     strategy:
       fail-fast: false
@@ -98,86 +97,42 @@ jobs:
         cabal: ["3.12.1.0"]
         shard: ["1/3", "2/3", "3/3"]
     runs-on: ubuntu-latest
+
+    # Pre-baked CI image (.docker/Dockerfile.ci, published by
+    # build-ci-image.yml to GHCR). The image already contains:
+    #   * GHC + cabal at the matrix versions  (replaces Set-up-GHC)
+    #   * hlint binary on PATH                (replaces Install HLint)
+    #   * ~/.cabal/store/ pre-populated with the freeze closure
+    #                                          (replaces Restore cabal-store)
+    #   * the Baseline e2e fixture pre-built  (replaces Pre-warm step)
+    #
+    # Net: matrix-cell cold-start drops from ~3 min of toolchain
+    # provisioning to ~10 s of image pull. macOS cells (separate job
+    # below) can't use `container:` and still go through ghcup.
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/haskell-flows-ci:${{ matrix.ghc }}-latest
+
     steps:
       - uses: actions/checkout@v6
 
-      # Cache the ghcup install (GHC + cabal binaries). Without this,
-      # `haskell-actions/setup@v2` re-downloads + re-installs GHC on
-      # every cache miss — fast on ubuntu (toolcache) but ~3m45s on
-      # macOS where there's no built-in GHC. Caching here drops the
-      # macOS Set-up-GHC step from ~3m45s to ~10s on cache hit.
-      - name: Cache ghcup (GHC + cabal binaries)
-        uses: actions/cache@v5
-        with:
-          path: ~/.ghcup
-          key: ${{ runner.os }}-ghcup-${{ matrix.ghc }}-${{ matrix.cabal }}
-
-      - id: setup
-        name: Set up GHC ${{ matrix.ghc }} / cabal ${{ matrix.cabal }}
-        uses: haskell-actions/setup@v2
-        with:
-          ghc-version: ${{ matrix.ghc }}
-          cabal-version: ${{ matrix.cabal }}
-          cabal-update: true
-
-      # Freeze BEFORE cache so the key reflects the exact dependency plan.
-      # This is what haskell/cabal and pandoc do — hashing cabal.project
-      # alone under-invalidates when Hackage index advances.
+      # Re-run cabal configure + freeze inside the container so the
+      # plan reflects the current Hackage index + source tree, not
+      # the snapshot baked into the image. Cheap (~5 s) and lets the
+      # next `cabal build` reuse whatever subset of the image's
+      # ~/.cabal/store is still version-compatible.
       - name: Configure + freeze
         run: |
           cabal configure --enable-tests --enable-benchmarks --disable-documentation
           cabal freeze
 
-      - name: Restore cabal store cache
-        uses: actions/cache@v5
-        with:
-          path: |
-            ${{ steps.setup.outputs.cabal-store }}
-            dist-newstyle
-          key: ${{ runner.os }}-ghc-${{ matrix.ghc }}-cabal-${{ matrix.cabal }}-${{ hashFiles('mcp-server-haskell/cabal.project.freeze') }}
-          restore-keys: |
-            ${{ runner.os }}-ghc-${{ matrix.ghc }}-cabal-${{ matrix.cabal }}-
-
       # Single `cabal build all` builds deps + project in one pass.
-      # The previous split (`--only-dependencies` then `all`) was a
-      # noop since `all` already builds the dep closure first; the
-      # split just doubled cabal's startup cost per cell. `--keep-going`
+      # On warm-image runs this is mostly a no-op for deps (already
+      # in the store) and ~30 s for the project itself. `--keep-going`
       # surfaces multiple errors per cell instead of stopping at the
       # first — saves rerun cycles when a refactor breaks several
       # downstream modules at once.
       - name: Build (deps + project)
         run: cabal build all --keep-going
-
-      # HLint must be on PATH before `cabal test all`. The MCP's own
-      # `ghc_toolchain_status` and `ghc_lint` tools probe for hlint
-      # at runtime via `findExecutable`; absent it they report
-      # `available=false` and `success=false`, which the FlowToolchain
-      # + FlowQualityGates e2e scenarios legitimately flag as a red
-      # toolchain. `haskell-actions/setup@v2` installs cabal + ghc but
-      # not hlint, so we stage hlint separately here. Keep this step
-      # right BEFORE `Run tests` so cache hits above don't skip it.
-      - name: Install HLint
-        uses: haskell-actions/hlint-setup@v2
-        with:
-          version: "latest"
-
-      # Pre-warm the cabal-store for the E2E common-deps closure
-      # (QuickCheck + transitive). Each scenario today calls
-      # `ghc_deps add QuickCheck stanza=library` which then triggers
-      # `cabal v2-repl` — cold, that pulls QuickCheck/random/splitmix
-      # through the solver and into ~/.cabal/store/. Building the
-      # 'baseline' fixture once here lands the same closure in the
-      # store BEFORE the e2e pool starts; per-scenario solver runs
-      # then hit a warm store and skip the compile. Saves ~2-4s per
-      # scenario × ~24 scenarios per shard = ~1 minute per cell.
-      #
-      # Cache-aware: when actions/cache restored ~/.cabal/store/ from
-      # the freeze-keyed entry above, this build is a near-no-op.
-      # Cache miss (e.g. after a freeze bump) does the real work
-      # once and primes the store for every subsequent scenario.
-      - name: Pre-warm E2E fixture deps
-        working-directory: mcp-server-haskell/test-e2e/Fixtures/Baseline
-        run: cabal build
 
       # Two stacked perf knobs:
       #
