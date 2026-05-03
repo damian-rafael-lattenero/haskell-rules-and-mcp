@@ -38,6 +38,7 @@ on:
       - "mcp-server-haskell/haskell-flows-mcp.cabal"
       - "mcp-server-haskell/test-e2e/Fixtures/**"
       - ".docker/Dockerfile.ci"
+      - ".dockerignore"
       - ".github/workflows/build-ci-image.yml"
   schedule:
     # Weekly Sunday 03:00 UTC — keeps the image fresh against Hackage
@@ -48,6 +49,13 @@ on:
 permissions:
   contents: read
   packages: write   # required to push to GHCR via GITHUB_TOKEN
+
+# Cancel in-flight builds when a newer push lands. Each image build
+# takes 15+ min cold; without this, a flurry of master commits queues
+# multiple long-running builds for the same final state.
+concurrency:
+  group: build-ci-image-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-image:
