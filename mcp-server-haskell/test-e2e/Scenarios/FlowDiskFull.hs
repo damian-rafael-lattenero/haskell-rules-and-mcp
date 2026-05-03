@@ -5,11 +5,18 @@
 --
 -- We don't try to produce real disk-full conditions (requires a
 -- fixed-size loop filesystem, too OS-specific for CI). Instead we
--- simulate the equivalent failure: remove write permission from the
--- '.haskell-flows/' directory via chmod 000. Every IO write into
--- that directory fails with EACCES, which is indistinguishable from
--- ENOSPC at the semantic layer we care about: the IO system call
--- returned an error.
+-- simulate the equivalent failure by replacing the '.haskell-flows/'
+-- directory with a regular file. Any subsequent write to
+-- '.haskell-flows/properties.json' fails with @ENOTDIR@ at the
+-- @createDirectoryIfMissing@ step inside @withGlobalStoreLock@,
+-- which is indistinguishable from @ENOSPC@/@EACCES@ at the semantic
+-- layer we care about: the IO system call returned an error.
+--
+-- Mechanism note: the previous version used @chmod 000@ on the dir.
+-- That works on a developer laptop but is a no-op inside a Docker
+-- container running as root (root bypasses DAC), which made this
+-- scenario flake red on every container-based CI run. The
+-- file-blocker approach works regardless of effective UID.
 --
 -- What ghc_quickcheck does on success:
 --
@@ -42,16 +49,13 @@ module Scenarios.FlowDiskFull
 
 import Control.Exception (try, SomeException)
 import Data.Aeson (Value (..), object, (.=))
-import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Text (Text)
 import qualified Data.Text as T
 import System.Directory
   ( createDirectoryIfMissing
   , doesDirectoryExist
-  , getPermissions
-  , setPermissions
-  , emptyPermissions
+  , removePathForcibly
   )
 import System.FilePath ((</>))
 
@@ -73,16 +77,17 @@ runFlow c projectDir = do
 
   let storeDir = projectDir </> ".haskell-flows"
 
-  -- Ensure the dir exists so we can drop its permissions; first
-  -- time around it's created lazily by the first persist.
-  createDirectoryIfMissing True storeDir
-  origPerms <- getPermissions storeDir
-
-  -- 1. Drop all permissions. Any IO into this dir now returns
-  -- EACCES (macOS/Linux) or similar. ensure the restore happens
-  -- even if one of our assertions throws.
-  t0 <- stepHeader 1 "setup · chmod 000 .haskell-flows/"
-  setPermissions storeDir emptyPermissions
+  -- 1. Replace .haskell-flows/ with a regular file. The store-write
+  -- path under @withGlobalStoreLock@ does
+  -- @createDirectoryIfMissing True (takeDirectory storeFile)@ which
+  -- fails with @ENOTDIR@ when the path component exists as a file.
+  -- This mechanism works regardless of effective UID — unlike
+  -- @chmod 000@ which root bypasses inside Docker containers.
+  -- Ensure parent (projectDir) exists; it does after ghc_project
+  -- create, but be defensive.
+  removePathForcibly storeDir
+  t0 <- stepHeader 1 "setup · replace .haskell-flows/ with blocking file"
+  writeFile storeDir "blocker — this path is a regular file, not a dir"
   stepFooter 1 t0
 
   -- 2. Fire a passing property. The eval is a pure Haskell evaluation,
@@ -93,9 +98,10 @@ runFlow c projectDir = do
                          .= ("\\(xs :: [Int]) -> reverse (reverse xs) == xs"
                              :: Text) ]))
            :: IO (Either SomeException Value)
-  -- Restore immediately — if any subsequent assertion throws we
-  -- still want the dir scrubbable by the tempdir cleanup.
-  setPermissions storeDir origPerms
+  -- Restore immediately — replace the blocker file with a real dir
+  -- so subsequent assertions and tempdir cleanup work normally.
+  removePathForcibly storeDir
+  createDirectoryIfMissing True storeDir
 
   r <- case eRes of
     Left ex -> pure (Object $ KeyMap.fromList
@@ -123,8 +129,8 @@ runFlow c projectDir = do
   cHonest <- liveCheck $ checkPure
     "persist failure surfaced · not silently swallowed"
     honestReport
-    ("With chmod 000 on .haskell-flows/, the persist step MUST fail. \
-     \Got success=" <> T.pack (show success)
+    ("With .haskell-flows/ replaced by a regular file, the persist \
+     \step MUST fail. Got success=" <> T.pack (show success)
      <> ", persisted=" <> T.pack (show persisted)
      <> ". If both True, the tool claimed a write that didn't happen. \
         \Raw: " <> truncRender r)
