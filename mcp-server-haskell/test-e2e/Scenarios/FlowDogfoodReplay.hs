@@ -558,9 +558,13 @@ truncRender v =
 -- | Walk a @ghc_check_project@ response and verify every
 -- per-module entry has @gates.compile.ok == true@. Warnings on
 -- other gates are ignored — we only care about real errors.
--- The per_module 'result' field is the MCP envelope
--- @{content: [{type: "text", text: "<JSON>"}]}@, so we decode
--- the inner JSON once before looking at @gates@.
+-- Issue #119 changed the per_module shape from the old
+-- @{module, result:{content:[{text:"<JSON>"}]}}@ to the compact
+-- @{module, status, detail:{summary,errors?,warnings?}}@.
+-- We now read 'status' directly; for 'failed' modules we also
+-- check that 'detail.errors' is absent/empty so a warnings-only
+-- gate failure (e.g. @-Wunused-packages@) does not count as a
+-- "real compile error".
 allModulesCompileOk :: Value -> Bool
 allModulesCompileOk v =
   -- 'per_module' lives under 'result.per_module' post-#90;
@@ -570,20 +574,19 @@ allModulesCompileOk v =
     _                -> False
   where
     moduleCompiles (Object mo) =
-      case KeyMap.lookup (Key.fromText "result") mo of
-        Just (Object ro) -> case KeyMap.lookup (Key.fromText "content") ro of
-          Just (Array items) -> any contentCompiles (foldr (:) [] items)
-          _                  -> False
+      case KeyMap.lookup (Key.fromText "status") mo of
+        Just (String "ok")        -> True   -- all gates green
+        Just (String "skipped")   -> True   -- fail_fast stopped run; not a compile error
+        Just (String "not_found") -> True   -- missing file; not our problem here
+        Just (String "failed")    ->
+          -- Could be a warnings-gate failure (no real GHC error).
+          -- Treat as "no compile error" iff detail.errors is absent/empty.
+          case KeyMap.lookup (Key.fromText "detail") mo of
+            Just (Object det) ->
+              case KeyMap.lookup (Key.fromText "errors") det of
+                Just (Array errs) -> null errs
+                _                 -> True  -- no errors field → clean compile
+            _                 -> True
         _ -> False
     moduleCompiles _ = False
-    contentCompiles (Object io) =
-      case KeyMap.lookup (Key.fromText "text") io of
-        Just (String txt) -> compileGateOk txt
-        _                 -> False
-    contentCompiles _ = False
-    -- Coarse text search is good enough for this assertion —
-    -- decoding the nested JSON here would pull in aeson
-    -- machinery the scenario doesn't otherwise need.
-    compileGateOk txt =
-         "\"compile\":{\"ok\":true" `T.isInfixOf` txt
 allModulesCompileOk _ = False

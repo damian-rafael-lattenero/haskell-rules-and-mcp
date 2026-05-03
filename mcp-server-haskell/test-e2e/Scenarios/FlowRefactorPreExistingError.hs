@@ -24,8 +24,6 @@ module Scenarios.FlowRefactorPreExistingError
   ) where
 
 import Data.Aeson (Value (..), object, (.=))
-import qualified Data.Aeson.Key as Key
-import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -120,17 +118,22 @@ runFlow c projectDir = do
     ("The unrelated hole was lost. Body:\n" <> body)
   stepFooter 3 t2
 
-  -- Step 5 — response shape: pre_existing_errors should be
-  -- present and non-empty (the hole), and the compile field
-  -- should reflect the diff state.
-  t3 <- stepHeader 4 "response surfaces pre_existing_errors (#50)"
-  let hasPreExisting = case lookupField "pre_existing_errors" r of
-        Just (Array xs) -> not (null xs)
+  -- Step 5 — response shape: compile="ok" and pre_existing_errors=[]
+  -- Issue #108 changed behaviour: typed holes (GHC-88464) are
+  -- excluded from pre_existing_errors because they are not compile
+  -- errors — they flow through ghc_check_module's holes gate instead.
+  -- So pre_existing_errors is now EMPTY (no non-hole errors) and
+  -- compile should be "ok" (the rename didn't introduce new errors).
+  t3 <- stepHeader 4 "response shape after #108 (holes excluded from pre_existing_errors)"
+  let compileOk = lookupField "compile" r == Just (String "ok")
+      preExistingEmpty = case lookupField "pre_existing_errors" r of
+        Just (Array xs) -> null xs
+        Nothing         -> True   -- absent also fine
         _               -> False
   cShape <- liveCheck $ checkPure
-    "response.pre_existing_errors non-empty (hole was carried over)"
-    hasPreExisting
-    ( "Expected 'pre_existing_errors' array with the hole. \
+    "response.compile=ok and pre_existing_errors=[] (holes excluded per #108)"
+    (compileOk && preExistingEmpty)
+    ( "Expected compile='ok' and pre_existing_errors=[]. \
       \Got: " <> truncRender r )
   stepFooter 4 t3
 
