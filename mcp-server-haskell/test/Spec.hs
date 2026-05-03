@@ -11815,7 +11815,7 @@ testWorkflowNextHistoryAware =
              , WS.wsToolHistory         = [GhcSuggest]
              }
       pd     = case mkProjectDir "/tmp" of Right p -> p; Left _ -> error "bad pd"
-      result = WorkflowTool.render WorkflowTool.ActNext pd True [] ws dummyStaleness [] Nothing
+      result = WorkflowTool.render WorkflowTool.ActNext pd True [] ws dummyStaleness [] Nothing False
   in pure $ case trContent result of
        [TextContent body_] ->
          case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
