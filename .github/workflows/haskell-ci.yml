@@ -127,11 +127,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ghc-${{ matrix.ghc }}-cabal-${{ matrix.cabal }}-
 
-      - name: Build dependencies
-        run: cabal build all --only-dependencies
-
-      - name: Build project
-        run: cabal build all
+      # Single `cabal build all` builds deps + project in one pass.
+      # The previous split (`--only-dependencies` then `all`) was a
+      # noop since `all` already builds the dep closure first; the
+      # split just doubled cabal's startup cost per cell. `--keep-going`
+      # surfaces multiple errors per cell instead of stopping at the
+      # first — saves rerun cycles when a refactor breaks several
+      # downstream modules at once.
+      - name: Build (deps + project)
+        run: cabal build all --keep-going
 
       # HLint must be on PATH before `cabal test all`. The MCP's own
       # `ghc_toolchain_status` and `ghc_lint` tools probe for hlint
@@ -201,22 +205,11 @@ jobs:
         env:
           HASKELL_FLOWS_E2E_PARALLEL: "8"
           HASKELL_FLOWS_E2E_SHARD: ${{ matrix.shard }}
-        run: cabal test all --test-show-details=direct --test-options="--color"
+        run: cabal test all --test-show-details=direct --test-options="--color" --keep-going
 
-      # Haddock with `--haddock-all` spots broken @<https://...>@ links,
-      # dangling @-refs, and modules missing from the package description.
-      - name: Build haddocks
-        run: cabal haddock all --haddock-all
-
-      - name: Cabal check (package metadata sanity)
-        run: cabal check
-
-      # Proves the package can be published to Hackage. Round-tripping the
-      # tarball catches missing extra-source-files and bad file globs.
-      - name: SDist round-trip
-        run: |
-          cabal sdist all --output-dir /tmp/haskell-flows-mcp-sdist
-          ls -la /tmp/haskell-flows-mcp-sdist
+      # haddock + cabal check + sdist round-trip moved to a separate
+      # `package-quality` job (run once, not 6x per matrix cell). See
+      # the bottom of this file. Saves ~30-60 s × 6 cells per push.
 
   # -------------------------------------------------------------------------
   #  macOS portability canary — advisory, sharded.
@@ -300,11 +293,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ghc-${{ matrix.ghc }}-cabal-${{ matrix.cabal }}-
 
-      - name: Build dependencies
-        run: cabal build all --only-dependencies
-
-      - name: Build project
-        run: cabal build all
+      # See ubuntu job for rationale on the combined build step.
+      - name: Build (deps + project)
+        run: cabal build all --keep-going
 
       # 'haskell-actions/hlint-setup@v2' ships only x86_64 prebuilt
       # binaries — it fails on macos-latest (now arm64) with
@@ -336,14 +327,57 @@ jobs:
         env:
           HASKELL_FLOWS_E2E_PARALLEL: "8"
           HASKELL_FLOWS_E2E_SHARD: ${{ matrix.shard }}
-        run: cabal test all --test-show-details=direct --test-options="--color"
+        run: cabal test all --test-show-details=direct --test-options="--color" --keep-going
 
+      # haddock / cabal check / sdist moved to the `package-quality`
+      # job. macOS doesn't need a redundant copy; ubuntu's run is the
+      # canonical one.
+
+  # -------------------------------------------------------------------------
+  #  Package-quality gates — haddock, cabal check, sdist round-trip.
+  #  These are OS+GHC-independent: running once on a canonical cell
+  #  catches the same issues as running 11x across the matrix did,
+  #  for ~1/11 the cost. Gated by hlint like build-and-test.
+  # -------------------------------------------------------------------------
+  package-quality:
+    name: Package quality (haddock + check + sdist)
+    needs: [hlint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: setup
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.12.2"
+          cabal-version: "3.12.1.0"
+          cabal-update: true
+
+      - name: Configure + freeze
+        run: |
+          cabal configure --enable-tests --enable-benchmarks --disable-documentation
+          cabal freeze
+
+      - name: Restore cabal store cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ steps.setup.outputs.cabal-store }}
+            dist-newstyle
+          key: ${{ runner.os }}-ghc-9.12.2-cabal-3.12.1.0-${{ hashFiles('mcp-server-haskell/cabal.project.freeze') }}
+          restore-keys: |
+            ${{ runner.os }}-ghc-9.12.2-cabal-3.12.1.0-
+
+      # Haddock with `--haddock-all` spots broken @<https://...>@ links,
+      # dangling @-refs, and modules missing from the package description.
       - name: Build haddocks
         run: cabal haddock all --haddock-all
 
       - name: Cabal check (package metadata sanity)
         run: cabal check
 
+      # Proves the package can be published to Hackage. Round-tripping the
+      # tarball catches missing extra-source-files and bad file globs.
       - name: SDist round-trip
         run: |
           cabal sdist all --output-dir /tmp/haskell-flows-mcp-sdist
@@ -510,7 +544,7 @@ jobs:
     # across the four trigger shapes (push to master / PR / dispatch /
     # tag push).
     if: always() && !startsWith(github.ref, 'refs/tags/')
-    needs: [build-and-test, hlint]
+    needs: [build-and-test, hlint, package-quality]
     permissions:
       contents: read
       # statuses:write so the final step below can post a commit
@@ -524,8 +558,9 @@ jobs:
       - name: Assert every required dependency succeeded
         id: assert
         run: |
-          if [[ "${{ needs.build-and-test.result }}" != "success" ]] \
-          || [[ "${{ needs.hlint.result }}"          != "success" ]]; then
+          if [[ "${{ needs.build-and-test.result }}"   != "success" ]] \
+          || [[ "${{ needs.hlint.result }}"            != "success" ]] \
+          || [[ "${{ needs.package-quality.result }}"  != "success" ]]; then
             echo "One or more required Haskell CI jobs failed."
             echo "agg_state=failure" >> "$GITHUB_OUTPUT"
             exit 1
@@ -552,10 +587,11 @@ jobs:
             const state = '${{ steps.assert.outputs.agg_state }}' || 'failure';
             const build = '${{ needs.build-and-test.result }}';
             const lint  = '${{ needs.hlint.result }}';
+            const pkg   = '${{ needs.package-quality.result }}';
             const description =
               state === 'success'
-                ? `Haskell CI green (build-and-test=${build}, hlint=${lint})`
-                : `Haskell CI red (build-and-test=${build}, hlint=${lint})`;
+                ? `Haskell CI green (build-and-test=${build}, hlint=${lint}, pkg=${pkg})`
+                : `Haskell CI red (build-and-test=${build}, hlint=${lint}, pkg=${pkg})`;
             const { owner, repo } = context.repo;
             const sha = context.sha;
             await github.rest.repos.createCommitStatus({
