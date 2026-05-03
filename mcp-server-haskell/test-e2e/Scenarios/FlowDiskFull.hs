@@ -31,7 +31,7 @@
 --      still passed in-session (that's a pure eval), but the persist
 --      step failed — the response MUST surface that failure, not
 --      claim "stored for replay".
---   2. After restoring permissions, the next ghc_quickcheck persists
+--   2. After restoring the directory, the next ghc_quickcheck persists
 --      correctly — the tool has no sticky failure state.
 --   3. The session survives the failed persist.
 --
@@ -146,9 +146,9 @@ runFlow c projectDir = do
     ("Raw: " <> truncRender alive)
   stepFooter 3 t2
 
-  -- 4. Second quickcheck with permissions restored should persist OK —
-  -- the tool must not be in a sticky-failed state.
-  t3 <- stepHeader 4 "recovery · second ghc_quickcheck after chmod restore"
+  -- 4. Second quickcheck after store dir is restored should persist OK
+  -- — the tool must not be in a sticky-failed state.
+  t3 <- stepHeader 4 "recovery · second ghc_quickcheck after dir restore"
   r2 <- Client.callTool c GhcQuickCheck
           (object [ "property"
                   .= ("\\(n :: Int) -> n + 0 == n" :: Text) ])
@@ -156,9 +156,9 @@ runFlow c projectDir = do
   cRecov <- liveCheck $ checkPure
     "post-restore quickcheck works · tool is not sticky-failed"
     (statusOk r2 == Just True && storeExists)
-    ("After restoring permissions, a fresh quickcheck should persist \
-     \normally. If it doesn't, the tool cached the earlier failure. \
-     \Raw: " <> truncRender r2)
+    ("After restoring the .haskell-flows/ directory, a fresh \
+     \quickcheck should persist normally. If it doesn't, the tool \
+     \cached the earlier failure. Raw: " <> truncRender r2)
   stepFooter 4 t3
 
   pure [cHonest, cAlive, cRecov]

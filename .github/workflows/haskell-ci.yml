@@ -242,21 +242,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Reduced from 5 cells to 2: keep 9.12.2 (the newer GHC,
-        # what ubuntu and the GHCR image both pin) and split scenarios
-        # 2-way. The previous 5-cell layout was over-coverage for an
-        # advisory job — every scenario was already running on macOS
-        # twice via the asymmetric 2+3 split. One GHC version × 2
-        # shards keeps the per-scenario macOS coverage at 1× while
-        # halving the macOS compute budget.
+        # Asymmetric 2+3 = 5 cells across both GHC versions:
+        #   * 9.12.2 → 2 shards (1/2, 2/2)        = 2 cells
+        #   * 9.10.1 → 3 shards (1/3, 2/3, 3/3)   = 3 cells
         #
-        # If a 9.10.1 macOS regression actually surfaces, that GHC
-        # version still runs in the ubuntu matrix; macOS-specific
-        # 9.10.1 issues would show up at release-build time and can
-        # be re-added to the matrix as a one-off.
+        # Each scenario runs on macOS at least once per GHC version.
+        # 5 cells fits the macOS free-tier 5-concurrent-runner cap
+        # exactly without spilling for a single in-flight run; queueing
+        # only kicks in when multiple master commits land back-to-back.
+        #
+        # macOS is advisory (continue-on-error: true) so a red cell
+        # never blocks the ubuntu-gated aggregator.
         include:
           - { ghc: "9.12.2", cabal: "3.12.1.0", shard: "1/2" }
           - { ghc: "9.12.2", cabal: "3.12.1.0", shard: "2/2" }
+          - { ghc: "9.10.1", cabal: "3.12.1.0", shard: "1/3" }
+          - { ghc: "9.10.1", cabal: "3.12.1.0", shard: "2/3" }
+          - { ghc: "9.10.1", cabal: "3.12.1.0", shard: "3/3" }
     runs-on: macos-latest
     continue-on-error: true
     steps:
