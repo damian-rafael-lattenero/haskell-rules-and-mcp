@@ -254,7 +254,7 @@ modulePathInSelf subdirs payload = case stringField "module_path" payload of
   Nothing   -> True   -- absent → don't gate, fire on tool-set match alone
   Just path ->
     let modPath = T.unpack path
-    in any (\dir -> isPrefixOfPath dir modPath) subdirs
+    in any (`isPrefixOfPath` modPath) subdirs
   where
     -- Path-prefix check that respects path separators: "src" is a
     -- prefix of "src/X.hs" but NOT of "srcExternal/X.hs".

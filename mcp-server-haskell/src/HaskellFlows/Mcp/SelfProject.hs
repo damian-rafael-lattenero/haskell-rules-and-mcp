@@ -83,7 +83,7 @@ detectSelfProject pd = do
         , unProjectDir pd </> "mcp-server-haskell" </> "haskell-flows-mcp.cabal"
         ]
   results <- traverse tryReadName candidates
-  pure (any (== Just selfCabalName) results)
+  pure (Just selfCabalName `elem` results)
   where
     tryReadName :: FilePath -> IO (Maybe Text)
     tryReadName p = do

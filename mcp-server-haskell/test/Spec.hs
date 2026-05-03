@@ -9811,10 +9811,8 @@ testParseCabalNameField = pure $ and
       == Just "foo"
   , SelfProject.parseCabalNameField "version: 0.1\nname: bar\nbuild-depends: base"
       == Just "bar"
-  , SelfProject.parseCabalNameField "no name here"
-      == Nothing
-  , SelfProject.parseCabalNameField ""
-      == Nothing
+  , isNothing (SelfProject.parseCabalNameField "no name here")
+  , isNothing (SelfProject.parseCabalNameField "")
   ]
 
 -- | Helper for SelfProject tests: write a cabal at the given path
@@ -9952,22 +9950,29 @@ testWithDogfoodHintNotFiresOnReadTool = pure $
 -- regression at PR-time.
 testDescriptionsMeetTemplate :: IO Bool
 testDescriptionsMeetTemplate = do
-  let bad = [ (tdName d, problem)
-            | d <- allToolDescriptors
-            , let desc = tdDescription d
-            , let lower = T.toLower desc
-            , let problems =
-                    [ "length < 200"   | T.length desc < 200 ]
-                 ++ [ "no 'when' word" | not (T.isInfixOf "when" lower) ]
-                 ++ [ "no sibling-tool ref"
-                    | not (T.isInfixOf "ghc_" desc)
-                      && not (T.isInfixOf "hoogle_" desc) ]
-            , problem <- problems
-            ]
+  let bad =
+        [ (tdName d, problem)
+        | d <- allToolDescriptors
+        , problem <- descriptionProblems d
+        ]
   unless (null bad) $ do
     putStrLn "description-shape lint hits:"
     mapM_ (\(name, prob) -> putStrLn ("  " <> T.unpack name <> ": " <> prob)) bad
   pure (null bad)
+  where
+    descriptionProblems :: ToolDescriptor -> [String]
+    descriptionProblems d =
+      let desc       = tdDescription d
+          lower      = T.toLower desc
+          tooShort   = T.length desc < 200
+          missingWhen = not (T.isInfixOf "when" lower)
+          missingRef = not (T.isInfixOf "ghc_" desc)
+                       && not (T.isInfixOf "hoogle_" desc)
+      in concat
+           [ [ "length < 200"        | tooShort    ]
+           , [ "no 'when' word"      | missingWhen ]
+           , [ "no sibling-tool ref" | missingRef  ]
+           ]
 
 --------------------------------------------------------------------------------
 -- BUG-PLUS-07: switch_project accepts empty dirs (scaffold-ready)
@@ -11117,7 +11122,9 @@ goldenDispatchTable =
   , ("property_store(audit) → list",    GhcPropertyStore,      object [ "findings" .= ([] :: [Value]) ],   Just GhcPropertyStore)
   , ("perf → perf",                      GhcPerf,               object [],    Just GhcPerf)
   , ("explain_error → explain_error",    GhcExplainError,       object [],    Just GhcExplainError)
-  , ("lab → check_project",             GhcLab,                object [],    Just GhcCheckProject)
+  -- PR-3: lab promoted to a chain whose primary is property_store(audit),
+  -- followed by check_project. Catches contradictions before replay.
+  , ("lab → property_store(audit) chain", GhcLab,               object [],    Just GhcPropertyStore)
   , ("deps explain → deps add",         GhcDeps,               object [ "action" .= ("explain" :: T.Text) ], Just GhcDeps)
   , ("witness → quickcheck",            GhcWitness,            object [],    Just GhcQuickCheck)
   , ("refactor move_symbol → check_project", GhcRefactor,        object [ "action" .= ("move_symbol" :: T.Text) ], Just GhcCheckProject)
@@ -11127,20 +11134,29 @@ goldenDispatchTable =
   , ("apply_exports → load",            GhcApplyExports,       object [],    Just GhcLoad)
   , ("fix_warning → load",              GhcFixWarning,         object [],    Just GhcLoad)
   , ("browse → suggest",                GhcBrowse,             object [],    Just GhcSuggest)
-  , ("imports → suppress",              GhcImports,            object [],    Nothing)
+  -- PR-3: imports listed → browse the most-used module to find a
+  -- candidate binding for laws.
+  , ("imports → browse",                GhcImports,            object [],    Just GhcBrowse)
   -- #94 Phase C step 6: property_lifecycle merged into property_store. The
   -- "(no-action) → suppress" row above already covers the default-payload path.
   , ("toolchain warmup → workflow",     GhcToolchain,          object [ "action" .= ("warmup" :: T.Text) ], Just GhcWorkflow)
   , ("project(bootstrap) → workflow",   GhcProject,            object [ "host" .= ("claude-code" :: T.Text) ], Just GhcWorkflow)
   , ("workflow → suppress",             GhcWorkflow,           object [],    Nothing)
-  , ("type → suppress",                 GhcType,               object [],    Nothing)
-  , ("info → suppress",                 GhcInfo,               object [],    Nothing)
-  , ("eval → suppress",                 GhcEval,               object [],    Nothing)
-  , ("goto → suppress",                 GhcGoto,               object [],    Nothing)
-  , ("doc → suppress",                  GhcDoc,                object [],    Nothing)
-  , ("complete → suppress",             GhcComplete,           object [],    Nothing)
-  , ("hoogle_search → suppress",        HoogleSearch,          object [],    Nothing)
-  , ("coverage → suppress",             GhcCoverage,           object [],    Nothing)
+  -- PR-3: type/info/goto/doc fire on bare success — exploratory tools
+  -- now carry forward-chaining hints. The new contract.
+  , ("type → suggest",                  GhcType,               object [],    Just GhcSuggest)
+  , ("info → doc",                      GhcInfo,               object [],    Just GhcDoc)
+  -- PR-3: eval suppresses on degraded status; bare success (no status)
+  -- counts as degraded via the statusOk_ fallback → suppressed.
+  , ("eval (no status) → suppress",     GhcEval,               object [],    Nothing)
+  , ("goto → browse",                   GhcGoto,               object [],    Just GhcBrowse)
+  , ("doc → browse",                    GhcDoc,                object [],    Just GhcBrowse)
+  -- PR-3: count-gated suggestions suppress when count is absent or zero
+  -- (no candidates to act on).
+  , ("complete (no count) → suppress",  GhcComplete,           object [],    Nothing)
+  , ("hoogle_search (no count) → suppress", HoogleSearch,      object [],    Nothing)
+  -- PR-3: coverage suppresses on degraded status (same shape as eval).
+  , ("coverage (no status) → suppress", GhcCoverage,           object [],    Nothing)
   , ("project(switch scaffolded) → workflow", GhcProject,    object [ "scaffolded" .= True ], Just GhcWorkflow)
   -- ── Variant payloads ─────────────────────────────────────────────
   , ("deps(add) → load",
