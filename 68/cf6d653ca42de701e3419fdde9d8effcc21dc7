@@ -1,0 +1,25 @@
+mcp-server-haskell/src/HaskellFlows/Mcp/NextStep.hs
+  c158702b1d5bd8f8 258-274,276-284,288-294,367-377,430-442,513-519,524-598
+mcp-server-haskell/test/Spec.hs
+  c158702b1d5bd8f8 743-744,8657-8671,8675-8690,8696-8768
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "68cf6d653ca42de701e3419fdde9d8effcc21dc7",
+  "prompts": {
+    "c158702b1d5bd8f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9f50a6b3-1c26-471c-9002-493bd342ee49",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 246,
+      "total_deletions": 43,
+      "accepted_lines": 246,
+      "overriden_lines": 0
+    }
+  }
+}
