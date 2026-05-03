@@ -1,0 +1,23 @@
+.claude/rules/use-haskell-flows-mcp.md
+  c158702b1d5bd8f8 4-6,9-11,13,16-19,23,25,27-38,40-41,45,47-48,50-62,64-65,69-113,117,129-130,135-152,154,156-176,180,182-196,199-222,224-225,227-230,232,234-236,238-240,242-279
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "4ef466806835037e19622b9ce910da18cf4dda52",
+  "prompts": {
+    "c158702b1d5bd8f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9f50a6b3-1c26-471c-9002-493bd342ee49",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 237,
+      "total_deletions": 186,
+      "accepted_lines": 237,
+      "overriden_lines": 0
+    }
+  }
+}
