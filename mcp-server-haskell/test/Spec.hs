@@ -740,6 +740,8 @@ main = do
       , test "nextStep: check_project -> coverage" testNextStepCheckProject
       , test "nextStep: errors -> no suggestion"   testNextStepErrorsSuppressed
       , test "nextStep: exploratory -> no suggestion" testNextStepExploratoryNothing
+      , test "nextStep: coverage exhaustive (PR-3)"   testNextStepCoverageExhaustive
+      , test "nextStep: action-discriminated coverage" testNextStepActionCoverage
       , test "nextStep: suppressIf suppresses when rule holds (#95)"  testNextStepSuppressIfTrue
       , test "nextStep: suppressIf passes when rule false (#95)"      testNextStepSuppressIfFalse
       , test "nextStep: suppressOnDegraded active for failed (#95)"   testNextStepSuppressOnDegraded
@@ -8652,23 +8654,118 @@ testNextStepErrorsSuppressed =
        Nothing -> True
        Just _  -> False
 
--- | Exploratory tools (type/info/eval/goto/doc/complete) don't get
--- a next-step hint — the user drives them.
+-- | Per PR-3 of the integrated MCP improvements: exploratory tools
+-- (type/info/goto/doc) now DO carry a forward-chaining hint — the
+-- agent can ignore it but it removes the "ok, what next?" round-trip.
+-- The genuine Nothing-arms are now:
+--
+--   * 'GhcWorkflow', 'GhcBatch' — anti-loop exemptions, always Nothing.
+--   * 'GhcComplete', 'HoogleSearch', 'GhcAddImport', 'GhcLint' —
+--     suppress when their 'count' field is zero or missing (no
+--     candidates to act on).
+--   * 'GhcEval', 'GhcCoverage' — suppress on degraded status (the
+--     error speaks for itself).
+--
+-- This test pins the suppression contract; the positive contract
+-- ("every other tool returns Just with a canonical payload") lives
+-- in 'testNextStepCoverageExhaustive'.
 testNextStepExploratoryNothing :: IO Bool
 testNextStepExploratoryNothing = pure $
   all nothing
-    [ suggestNext GhcType     True (A.object [])
-    , suggestNext GhcInfo     True (A.object [])
-    , suggestNext GhcEval     True (A.object [])
-    , suggestNext GhcGoto     True (A.object [])
-    , suggestNext GhcDoc      True (A.object [])
-    , suggestNext GhcComplete True (A.object [])
-    , suggestNext GhcCoverage True (A.object [])
-    , suggestNext GhcWorkflow True (A.object [])
+    -- anti-loop exemptions: never recommend regardless of payload.
+    [ suggestNext GhcWorkflow True (A.object [])
+    , suggestNext GhcBatch    True (A.object [])
+    -- count-based suppression: empty payload (no count) → Nothing.
+    , suggestNext GhcComplete    True (A.object [])
+    , suggestNext HoogleSearch   True (A.object [])
+    , suggestNext GhcAddImport   True (A.object [])
+    , suggestNext GhcLint        True (A.object [])
+    -- count-based suppression: explicit count=0 → Nothing.
+    , suggestNext GhcComplete    True (A.object [ "count" .= (0 :: Int) ])
+    , suggestNext HoogleSearch   True (A.object [ "count" .= (0 :: Int) ])
+    , suggestNext GhcAddImport   True (A.object [ "count" .= (0 :: Int) ])
+    , suggestNext GhcLint        True (A.object [ "count" .= (0 :: Int) ])
+    -- degraded-status suppression: failed status → Nothing.
+    , suggestNext GhcEval     True (A.object [ "status" .= ("failed" :: Text) ])
+    , suggestNext GhcCoverage True (A.object [ "status" .= ("failed" :: Text) ])
     ]
   where
     nothing Nothing = True
     nothing _       = False
+
+-- | PR-3 exhaustivity: every tool except the 2 anti-loop exemptions
+-- (GhcWorkflow, GhcBatch) returns 'Just' for a canonical success
+-- payload. Adding a new ToolName constructor without filling in a
+-- dispatch arm fails this test (as well as the -Wincomplete-patterns
+-- warning on 'dispatch').
+--
+-- The canonical payload per tool exercises the success path: tools
+-- that suppress on missing fields get rich payloads; everything else
+-- falls back to {status:"ok"}.
+testNextStepCoverageExhaustive :: IO Bool
+testNextStepCoverageExhaustive = do
+  let exempt :: Set.Set ToolName
+      exempt = Set.fromList [GhcWorkflow, GhcBatch]
+      missing =
+        [ n | n <- allToolNames
+            , n `Set.notMember` exempt
+            , isNothing (suggestNext n True (canonicalPayload n)) ]
+  unless (null missing) $
+    putStrLn ("nextStep coverage gap: " <> show missing)
+  pure (null missing)
+  where
+    -- Default success envelope; tools that need richer discriminators
+    -- override below.
+    defaultPayload :: Value
+    defaultPayload = A.object [ "status" .= ("ok" :: Text) ]
+
+    canonicalPayload :: ToolName -> Value
+    canonicalPayload = \case
+      -- count-gated suggestions: provide a non-zero count.
+      GhcLint        -> A.object [ "count" .= (3 :: Int) ]
+      GhcAddImport   -> A.object [ "count" .= (3 :: Int) ]
+      GhcComplete    -> A.object [ "count" .= (3 :: Int) ]
+      HoogleSearch   -> A.object [ "count" .= (3 :: Int) ]
+      -- shape-gated dispatchers: feed the right discriminator.
+      GhcLoad        -> A.object [ "warnings" .= ([] :: [Value])
+                                 , "errors"   .= ([] :: [Value]) ]
+      GhcDeps        -> A.object [ "action" .= ("add" :: Text) ]
+      GhcQuickCheck  -> A.object [ "state"  .= ("passed" :: Text) ]
+      GhcRefactor    -> A.object [ "action" .= ("rename_local" :: Text) ]
+      GhcPropertyStore -> A.object [ "action" .= ("list" :: Text) ]
+      GhcProject     -> A.object [ "scaffolded" .= True ]
+      GhcGate        -> A.object [ "status" .= ("ok" :: Text) ]
+      -- everything else: bare success envelope is enough.
+      _              -> defaultPayload
+
+-- | Action-discriminated coverage: ghc_property_store, ghc_modules,
+-- ghc_project, and ghc_deps each branch on 'action'. This test
+-- exercises every action and confirms a Just result, catching the
+-- "we forgot to wire one branch" regression.
+testNextStepActionCoverage :: IO Bool
+testNextStepActionCoverage = pure $
+  all justOf
+    [ suggestNext GhcPropertyStore True (A.object [ "action" .= ("list" :: Text) ])
+    , suggestNext GhcPropertyStore True (A.object [ "action" .= ("run"  :: Text) ])
+    -- export branch carries 'files_written' instead of 'action'
+    , suggestNext GhcPropertyStore True
+        (A.object [ "files_written" .= (["test/Spec.hs"] :: [Text]) ])
+    -- audit branch carries 'findings' instead of 'action'
+    , suggestNext GhcPropertyStore True
+        (A.object [ "findings" .= ([] :: [Value]) ])
+    -- ghc_deps every action.
+    , suggestNext GhcDeps True (A.object [ "action" .= ("add"     :: Text) ])
+    , suggestNext GhcDeps True (A.object [ "action" .= ("remove"  :: Text) ])
+    , suggestNext GhcDeps True (A.object [ "action" .= ("explain" :: Text) ])
+    -- ghc_project: each branch keys off a different shape field.
+    , suggestNext GhcProject True (A.object [ "scaffolded" .= True ])  -- switch
+    , suggestNext GhcProject True (A.object [ "host"       .= ("claude" :: Text) ])  -- bootstrap
+    , suggestNext GhcProject True (A.object [ "errors"     .= (1 :: Int) ])  -- validate w/ errors
+    , suggestNext GhcProject True (A.object [])  -- fallthrough = create
+    ]
+  where
+    justOf (Just _) = True
+    justOf Nothing  = False
 
 -- Issue #95 Phase A: suppression rule unit tests --------------------------------
 

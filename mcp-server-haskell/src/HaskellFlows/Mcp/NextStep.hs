@@ -255,21 +255,43 @@ dispatch name payload = case name of
         , "diagnostics" .= True
         ])))
 
-  -- Arbitrary template generated → paste + reload.
-  GhcArbitrary -> Just (simple GhcLoad
-    "Paste the instance into the module that declares the type, \
-    \then reload to confirm it compiles."
-    Nothing)
+  -- Arbitrary template generated → paste + import QC + reload + first
+  -- law in a single batchable plan. The instance is dead until imported,
+  -- reloaded, and exercised, so the chain captures all three follow-ups.
+  GhcArbitrary -> Just (chained GhcLoad
+    "Paste the instance into the module, add the QuickCheck import, \
+    \reload, and exercise the new instance with a roundtrip law. The \
+    \attached chain bundles the three follow-ups for ghc_batch."
+    Nothing
+    [ step GhcAddImport (object
+        [ "name" .= ("Test.QuickCheck" :: Text) ])
+    , step GhcLoad (object
+        [ "module_path" .= ("<module where you pasted the instance>" :: Text)
+        , "diagnostics" .= True ])
+    , step GhcQuickCheck (object
+        [ "property"    .= ("\\x -> roundtrip x === x" :: Text)
+        , "module_path" .= ("<same module>" :: Text) ])
+    ])
 
-  -- Suggestions → run them via quickcheck, pick highest confidence.
-  GhcSuggest -> Just (simple GhcQuickCheck
-    "Feed the highest-confidence suggestion into quickcheck. \
-    \Passing properties auto-persist to .haskell-flows/properties.json \
-    \for the next regression run."
+  -- Suggestions → run the highest-confidence one via quickcheck, then
+  -- immediately replay the full persisted store. The chain ensures a
+  -- pass + auto-persist is followed by a regression replay, catching
+  -- silent collisions with previously-stored laws.
+  GhcSuggest -> Just (chained GhcQuickCheck
+    "Feed the highest-confidence suggestion into ghc_quickcheck. \
+    \Passing properties auto-persist; the chained ghc_property_store \
+    \run replays the full set so collisions with prior laws surface \
+    \in the same round-trip."
     (Just (object
         [ "property"    .= ("<copy from suggestion.property>" :: Text)
         , "module_path" .= ("<module defining the function>" :: Text)
-        ])))
+        ]))
+    [ step GhcQuickCheck (object
+        [ "property"    .= ("<copy from suggestion.property>" :: Text)
+        , "module_path" .= ("<module defining the function>" :: Text) ])
+    , step GhcPropertyStore (object
+        [ "action" .= ("run" :: Text) ])
+    ])
 
   -- QuickCheck passed → keep chaining, or gate.
   -- #94 Phase C: ghc_quickcheck now also handles the determinism
@@ -342,8 +364,17 @@ dispatch name payload = case name of
     \state (alive GHCi, loaded modules, etc)."
     (Just (object [ "action" .= ("help" :: Text) ])))
 
-  -- Lint surface → interpret yourself; no one-shot fix.
-  GhcLint -> Nothing
+  -- Lint hits → ghc_fix_warning auto-patches the most common ones
+  -- (unused-imports, redundant-bracket, use-isJust, etc.). Suppressed
+  -- when 'count' is zero — a clean lint pass needs no follow-up.
+  GhcLint -> case intField "count" payload of
+    Just n | n > 0 -> Just (simple GhcFixWarning
+      "Lint surface listed. ghc_fix_warning auto-patches the common \
+      \HLint hits (unused-imports, redundant-bracket, use-isJust, \
+      \type-defaults). Feed the first hit's file+line+severity in \
+      \and inspect the patch before applying."
+      (Just (object [ "module_path" .= ("<first hit's module>" :: Text) ])))
+    _              -> Nothing
 
   -- Format → reload to confirm no behaviour change.
   GhcFormat -> Just (simple GhcLoad
@@ -396,15 +427,19 @@ dispatch name payload = case name of
             ]
         ])))
 
-  -- Issue #60: the audit just persisted a batch of properties;
-  -- the natural follow-up is the project-level gate that
-  -- replays the new + existing set under the post-audit
-  -- regression store.
-  GhcLab -> Just (simple GhcCheckProject
-    "Module audit completed. Run ghc_check_project to confirm \
-    \the regression-store delta replays cleanly under the whole \
-    \project, then ghc_gate before push."
-    Nothing)
+  -- Issue #60 + chain: the audit just persisted a new batch of
+  -- properties. A pairwise audit catches contradictions with the
+  -- prior set BEFORE the project gate replays them, then the
+  -- check_project replay confirms cross-module consistency.
+  GhcLab -> Just (chained GhcPropertyStore
+    "Module audit completed and persisted new properties. The chain \
+    \first audits the store for pairwise contradictions with prior \
+    \entries, then replays the full project gate so cross-module \
+    \regressions surface in the same round-trip."
+    (Just (object [ "action" .= ("audit" :: Text) ]))
+    [ step GhcPropertyStore (object [ "action" .= ("audit" :: Text) ])
+    , step GhcCheckProject  (object [])
+    ])
 
 
   -- Issue #65 Phase 1: witness already emitted its own nextStep
@@ -475,21 +510,92 @@ dispatch name payload = case name of
     \High confidence automatically."
     (Just (object [ "function_name" .= ("<one of the browsed names>" :: Text) ])))
 
-  -- Imports list is a diagnostic aid — no forced next step.
-  GhcImports -> Nothing
+  -- Imports listed → orient on the most-used module and pick a
+  -- candidate binding via ghc_browse for the next discovery step.
+  GhcImports -> Just (simple GhcBrowse
+    "Live imports listed. Browse one of them (typically the most-used \
+    \in your code) to discover bindings whose laws you can probe with \
+    \ghc_suggest + ghc_quickcheck."
+    (Just (object [ "module" .= ("<one of the imports above>" :: Text) ])))
 
   -- Workflow meta — would loop if we suggested itself.
   GhcWorkflow -> Nothing
 
-  -- Exploratory / terminal tools — no strong suggestion.
-  GhcType     -> Nothing
-  GhcInfo     -> Nothing
-  GhcEval     -> Nothing
-  GhcGoto     -> Nothing
-  GhcDoc      -> Nothing
-  GhcComplete -> Nothing
-  HoogleSearch -> Nothing
-  GhcCoverage -> Nothing
+  -- Type signature in hand → derive QuickCheck laws from it.
+  GhcType -> Just (simple GhcSuggest
+    "Type signature in hand. ghc_suggest derives candidate QuickCheck \
+    \laws from a function's signature; feed the High-confidence ones \
+    \into ghc_quickcheck."
+    (Just (object [ "function_name" .= ("<the symbol you just typed>" :: Text) ])))
+
+  -- Definition site located → surface the prose contract via Haddock.
+  GhcInfo -> Just (simple GhcDoc
+    "Definition + kind + instances are in. ghc_doc retrieves the \
+    \Haddock block (if any) for the contract / corner-cases the \
+    \author documented."
+    (Just (object [ "name" .= ("<same name you just inspected>" :: Text) ])))
+
+  -- Expression evaluated → if it was a property, lift to QC harness.
+  -- Suppressed on degraded status (a failed eval has its error, no
+  -- need for a generic next-step).
+  GhcEval
+    | not (statusOk_ payload) -> Nothing
+    | otherwise -> Just (simple GhcQuickCheck
+        "Expression evaluated. If you were testing a property by hand, \
+        \lift the same predicate into ghc_quickcheck so QC explores \
+        \the input space + auto-persists the law on pass."
+        (Just (object
+            [ "property"    .= ("<\\x -> ...>" :: Text)
+            , "module_path" .= ("<module providing the binding>" :: Text)
+            ])))
+
+  -- Source location returned → browse the module's surface to find
+  -- siblings related to the symbol you jumped to.
+  GhcGoto -> Just (simple GhcBrowse
+    "You located the definition. Browse the module to discover sibling \
+    \bindings — common patterns + alternative entry points."
+    (Just (object [ "module" .= ("<location.module from the result>" :: Text) ])))
+
+  -- Doc read → browse the module for siblings with similar contracts.
+  GhcDoc -> Just (simple GhcBrowse
+    "Doc read. Browse the same module's full export surface to spot \
+    \siblings whose contracts likely follow the same shape."
+    (Just (object [ "module" .= ("<module hosting the name>" :: Text) ])))
+
+  -- Complete → drill into a candidate via ghc_info. Suppressed when
+  -- the prefix matched zero in-scope identifiers.
+  GhcComplete -> case intField "count" payload of
+    Just n | n > 0 -> Just (simple GhcInfo
+      "You have candidate names. ghc_info on one returns its kind, \
+      \definition site, and instances in a single call."
+      (Just (object [ "name" .= ("<one of the candidates above>" :: Text) ])))
+    _              -> Nothing
+
+  -- Hoogle hits → chain into ghc_add_import to scaffold the import.
+  -- Suppressed on zero hits (no candidates to import).
+  HoogleSearch -> case intField "count" payload of
+    Just n | n > 0 -> Just (chained GhcAddImport
+      "Hoogle hits include the module each name lives in. \
+      \ghc_add_import scaffolds the import; reload to confirm \
+      \the missing-symbol error is gone."
+      (Just (object [ "name" .= ("<one of the hit names>" :: Text) ]))
+      [ step GhcAddImport
+          (object [ "name" .= ("<one of the hit names>" :: Text) ])
+      , step GhcLoad
+          (object [ "module_path" .= ("<your entry module>" :: Text) ])
+      ])
+    _              -> Nothing
+
+  -- Coverage report read → ghc_gate is the next pre-push step.
+  -- Suppressed on degraded status (failed coverage = surface the
+  -- error, not a generic forward-chain).
+  GhcCoverage
+    | not (statusOk_ payload) -> Nothing
+    | otherwise -> Just (simple GhcGate
+        "Coverage report read. ghc_gate is the next pre-push finalizer \
+        \(regression + cabal test + cabal build in one shot). On green, \
+        \you're clear to commit + push."
+        Nothing)
 
 -- | #94 Phase C step 5: pick the right next-step based on which
 -- 'ghc_project' action ran. We discriminate by payload shape:
