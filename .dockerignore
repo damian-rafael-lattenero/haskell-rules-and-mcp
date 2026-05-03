@@ -1,0 +1,53 @@
+# Build-context whitelist for `.docker/Dockerfile.ci`.
+#
+# The image build (.github/workflows/build-ci-image.yml) sends the
+# project root as Docker build context. Without this file, the
+# context includes `mcp-server-haskell/dist-newstyle/` (cabal's
+# build artefacts, often >1 GB), `.git/` (history, ~100 MB), and
+# the docs/ tree — none of which the Dockerfile's COPY needs.
+#
+# Effect: faster context upload to the Docker daemon and smaller
+# layer inputs. On a cold image build, this trims ~30-60 s off
+# the "transferring context" step.
+
+# Build artefacts — cabal v2 produces these at runtime; the image
+# builds its own from scratch.
+**/dist-newstyle/
+**/dist-newstyle-mcp/
+**/dist/
+
+# Git history is not needed inside the image. Unconditional
+# exclusion: even with --no-git below, having the .git tree in
+# the build context bloats the upload by tens of MB.
+.git/
+.gitignore
+.gitattributes
+
+# Docs are not needed in the CI image. Trim them out to keep the
+# context surface focused on what the Dockerfile actually copies.
+docs/
+*.pdf
+*.md
+
+# Local developer scratch + IDE state.
+.claude/
+.haskell-flows/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# CI configuration — referenced by the workflow but not consumed
+# inside the image build itself.
+.github/
+
+# Nix outputs.
+result
+result-*
+.direnv/
+
+# Releases + temporary tarballs.
+mcp-server-haskell/_release/
+mcp-server-haskell/_release_assets/
+*.tar.gz
+*.tar
