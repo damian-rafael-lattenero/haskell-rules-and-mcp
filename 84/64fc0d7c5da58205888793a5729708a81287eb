@@ -1,0 +1,25 @@
+mcp-server-haskell/test-e2e/Scenarios/FlowDiskFull.hs
+  566709e688c741b3 34,149-151,159-161
+.github/workflows/haskell-ci.yml
+  566709e688c741b3 245-247,249-255,259-261
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "8464fc0d7c5da58205888793a5729708a81287eb",
+  "prompts": {
+    "566709e688c741b3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78173d44-cc05-4e0d-b758-291cd8e35e65",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 20,
+      "total_deletions": 18,
+      "accepted_lines": 13145,
+      "overriden_lines": 0
+    }
+  }
+}
