@@ -54,9 +54,13 @@ descriptor =
     { tdName        = toolNameText GhcFormat
     , tdDescription =
         "Format a Haskell module with fourmolu (preferred) or ormolu "
-          <> "(fallback). Default is check-only — pass write=true to "
-          <> "rewrite the file in-place. Reports availability when "
-          <> "neither formatter is on PATH."
+          <> "(fallback). Default is check-only (write=false) — returns "
+          <> "the formatted diff without touching the file. Pass "
+          <> "write=true to rewrite in-place. Reports 'unavailable' "
+          <> "when neither formatter is on PATH. Use before committing "
+          <> "to keep style consistent. Not a substitute for ghc_lint "
+          <> "(which catches semantic issues, not style). "
+          <> "SEE ALSO: ghc_lint (HLint hints), ghc_check_module."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

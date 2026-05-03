@@ -40,9 +40,13 @@ descriptor =
     { tdName        = toolNameText GhcHole
     , tdDescription =
         "Load a module under -fdefer-typed-holes and return every typed "
-          <> "hole with its expected type and relevant bindings. Use this "
-          <> "before implementing a stub — the expected type tells you "
-          <> "exactly what fits."
+          <> "hole with its expected type, in-scope candidates that fit, "
+          <> "and relevant local bindings. Use when implementing a stub "
+          <> "whose type is known but the correct expression is not — "
+          <> "the fits list narrows the search space immediately. Not "
+          <> "for resolving type errors (use ghc_explain_error). "
+          <> "SEE ALSO: ghc_explain_error (type errors), ghc_check_module "
+          <> "(full module health)."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

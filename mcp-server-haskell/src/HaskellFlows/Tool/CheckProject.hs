@@ -47,9 +47,14 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcCheckProject
     , tdDescription =
-        "Run ghc_check_module on every module declared in the "
-          <> "project's .cabal exposed-modules + other-modules. "
-          <> "Returns per-module pass/fail + a single overall flag."
+        "Run ghc_check_module on every module in the project's "
+          <> ".cabal exposed-modules + other-modules. Returns "
+          <> "per-module pass/fail plus a single overall flag. Use "
+          <> "before pushing to ensure the whole project is clean, not "
+          <> "just the files you edited. For a single-module check use "
+          <> "ghc_check_module instead; for the full pre-push gate "
+          <> "(tests + build) use ghc_gate. SEE ALSO: ghc_check_module "
+          <> "(single module), ghc_gate (pre-push composite)."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
