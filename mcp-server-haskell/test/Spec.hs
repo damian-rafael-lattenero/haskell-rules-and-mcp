@@ -81,11 +81,6 @@ import HaskellFlows.Suggest.Rules
 import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNameTexts)
 import HaskellFlows.Mcp.NextStep
 import qualified HaskellFlows.Mcp.SelfProject as SelfProject
-  ( ChainStep (..)
-  , NextStep (..)
-  , injectNextStep
-  , suggestNext
-  )
 import qualified HaskellFlows.Mcp.NextStep as NextStep
 import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescriptor (..), ToolResult (..))
 import qualified HaskellFlows.Bench.Budget as Budget
