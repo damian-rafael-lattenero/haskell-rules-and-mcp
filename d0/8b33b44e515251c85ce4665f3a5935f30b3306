@@ -1,0 +1,27 @@
+scripts/check-rules-freshness.sh
+  c158702b1d5bd8f8 1-102
+scripts/ci-local.sh
+  c158702b1d5bd8f8 226-233
+mcp-server-haskell/test/Spec.hs
+  c158702b1d5bd8f8 1062-1063,9932-9971
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "d08b33b44e515251c85ce4665f3a5935f30b3306",
+  "prompts": {
+    "c158702b1d5bd8f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9f50a6b3-1c26-471c-9002-493bd342ee49",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 195,
+      "total_deletions": 1,
+      "accepted_lines": 447,
+      "overriden_lines": 0
+    }
+  }
+}
