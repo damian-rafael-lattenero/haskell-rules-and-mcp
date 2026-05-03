@@ -26,9 +26,20 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcApplyExports
     , tdDescription =
-        "Rewrite a module's header to declare an explicit export list. "
-          <> "Idempotent: if an export list is already present, "
-          <> "returns no_change=true."
+        "PURPOSE: Rewrite a module's header to declare an explicit "
+          <> "export list. "
+          <> "WHEN: tightening a module's surface after development; "
+          <> "responding to a downstream API audit that demands explicit "
+          <> "exports. "
+          <> "WHEN NOT: you want to know what is currently exported — "
+          <> "that is ghc_browse, not this tool; the export list already "
+          <> "matches your intent — re-running is a no-op anyway. "
+          <> "PREREQUISITES: decide the export list first via ghc_browse "
+          <> "(see what is exported now) or by reading the module. "
+          <> "OUTPUT: {applied, no_change?}; idempotent — if a list is "
+          <> "already present and equal, returns no_change=true. "
+          <> "Validates against reserved keywords before writing. "
+          <> "SEE ALSO: ghc_browse, ghc_modules."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

@@ -54,11 +54,20 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText HoogleSearch
     , tdDescription =
-        "Search the local Hoogle index for functions, types, and classes. "
-          <> "Accepts either a name (\"filter\") or a type signature "
-          <> "(\"(a -> Bool) -> [a] -> [a]\"). Requires the `hoogle` binary "
-          <> "to be installed and present on PATH; reports availability "
-          <> "explicitly when it isn't."
+        "PURPOSE: Search the local Hoogle index for functions, types, "
+          <> "and classes by name or by type signature. "
+          <> "WHEN: discovering an off-graph (external/upstream) symbol; "
+          <> "finding library functions whose type matches a hole's "
+          <> "signature; following up before ghc_add_import. "
+          <> "WHEN NOT: the symbol is in this project's compile graph — "
+          <> "ghc_browse / ghc_info / ghc_complete are faster; you only "
+          <> "need to import a known name — ghc_add_import goes direct. "
+          <> "PREREQUISITES: hoogle binary on PATH (ghc_toolchain "
+          <> "action='status' confirms availability). "
+          <> "OUTPUT: {query, count, hits:[{name, module, signature, "
+          <> "score}]}; reports availability=false cleanly when hoogle "
+          <> "is missing. "
+          <> "SEE ALSO: ghc_add_import, ghc_browse, ghc_info."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

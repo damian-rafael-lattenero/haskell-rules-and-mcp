@@ -40,9 +40,18 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcType
     , tdDescription =
-        "Get the type of a Haskell expression via the GHC API. "
-          <> "Use this to verify types of subexpressions before composing them, "
-          <> "or to understand what type a function expects/returns."
+        "PURPOSE: Get the type of a Haskell expression via :t / GHC API. "
+          <> "WHEN: verifying types of subexpressions before composing; "
+          <> "understanding what a function expects or returns; sanity-"
+          <> "checking before ghc_quickcheck. "
+          <> "WHEN NOT: you need the full kind/instances/definition site "
+          <> "— that is ghc_info; you want to evaluate the expression — "
+          <> "ghc_eval. "
+          <> "PREREQUISITES: imports for symbols in the expression must "
+          <> "be in scope (see ghc_imports). "
+          <> "OUTPUT: {expression, type}; type is the GHC-rendered "
+          <> "monomorphic or polymorphic signature. "
+          <> "SEE ALSO: ghc_info, ghc_eval, ghc_suggest."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

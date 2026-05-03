@@ -42,10 +42,18 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcDoc
     , tdDescription =
-        "Look up Haddock documentation for a name via the GHC API. "
-          <> "Returns the doc block as plain text. If the hosting "
-          <> "package was built without -haddock or the name has no "
-          <> "doc, reports that cleanly without failing."
+        "PURPOSE: Look up Haddock documentation for a name via :doc / "
+          <> "GHC API. "
+          <> "WHEN: you have a candidate name and want the prose contract "
+          <> "before using it; understanding pre-conditions / corner-"
+          <> "cases an upstream documented. "
+          <> "WHEN NOT: you want the type only — ghc_type; you want the "
+          <> "definition site / instances — ghc_info. "
+          <> "PREREQUISITES: name in scope; for non-empty docs, the "
+          <> "hosting package must have been built with -haddock. "
+          <> "OUTPUT: {name, hasDoc, doc?}; reports hasDoc=false cleanly "
+          <> "instead of failing when -haddock is absent. "
+          <> "SEE ALSO: ghc_info, ghc_type, ghc_browse."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

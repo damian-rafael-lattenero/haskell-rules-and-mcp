@@ -39,9 +39,17 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcImports
     , tdDescription =
-        "List the imports currently in the GHC session's interactive "
-          <> "context. Useful for confirming which modules are already "
-          <> "available before suggesting an ghc_add_import."
+        "PURPOSE: List imports currently in the GHC session's "
+          <> "interactive context. "
+          <> "WHEN: confirming whether a name is already in scope before "
+          <> "ghc_add_import; debugging \"Not in scope\" after recent loads. "
+          <> "WHEN NOT: you want a module's exports — that is ghc_browse; "
+          <> "you want to add an import — that is ghc_add_import. "
+          <> "PREREQUISITES: none — reads from the live session, no args. "
+          <> "OUTPUT: {count, imports, session_preloads}; preloads are "
+          <> "MCP-injected modules (Prelude, System.IO, etc.) reported "
+          <> "separately from source-file imports. "
+          <> "SEE ALSO: ghc_add_import, ghc_browse."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

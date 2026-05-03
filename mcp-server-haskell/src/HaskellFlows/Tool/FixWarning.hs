@@ -44,12 +44,17 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcFixWarning
     , tdDescription =
-        "Propose a patch for a common GHC warning. Read-only by "
-          <> "default; pass apply=true to write the file. Handles "
-          <> "unused imports (GHC-66111), unused bindings (GHC-40910 "
-          <> "when 'name' is supplied), missing top-level signatures. "
-          <> "Response carries 'fixable' so the agent knows whether "
-          <> "to expect a concrete patch or just a hint."
+        "PURPOSE: Propose (or apply) a patch for a common GHC warning. "
+          <> "WHEN: a ghc_load / ghc_check_module surfaced a fixable code "
+          <> "(GHC-66111 unused import, GHC-40910 unused binding when "
+          <> "'name' is supplied, missing top-level signature). "
+          <> "WHEN NOT: the diagnostic is a type error — that is "
+          <> "ghc_explain_error, not a warning. "
+          <> "PREREQUISITES: a previous compile pass produced the "
+          <> "diagnostic at the given (module_path, line, code). "
+          <> "OUTPUT: {fixable, patch?, hint?, applied?}; read-only by "
+          <> "default — pass apply=true to write the file. "
+          <> "SEE ALSO: ghc_explain_error, ghc_lint."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

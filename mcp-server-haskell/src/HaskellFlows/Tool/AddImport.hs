@@ -29,9 +29,19 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcAddImport
     , tdDescription =
-        "Suggest `import` lines for a name that is \"Not in scope\". "
-          <> "Queries Hoogle for the name; returns candidate import "
-          <> "lines ranked by Hoogle score. Does NOT modify files."
+        "PURPOSE: Suggest `import` lines for a name that is \"Not in "
+          <> "scope\". "
+          <> "WHEN: a compile error reports a missing identifier and you "
+          <> "need to know which module exports it; preparing an import "
+          <> "before ghc_apply_exports / ghc_load. "
+          <> "WHEN NOT: the name is already in scope — check via "
+          <> "ghc_imports first; you want to discover names by type "
+          <> "signature — use hoogle_search directly. "
+          <> "PREREQUISITES: hoogle binary on PATH (ghc_toolchain "
+          <> "action='status' confirms availability). "
+          <> "OUTPUT: ranked candidate import lines; does NOT modify "
+          <> "files — the agent picks one and applies it. "
+          <> "SEE ALSO: ghc_imports, hoogle_search."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

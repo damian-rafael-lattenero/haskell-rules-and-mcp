@@ -145,9 +145,11 @@ import qualified HaskellFlows.Tool.PropertyStore   as PropertyStoreTool
 
 -- | All mutable server state.
 --
--- 'srvProjectDir' is an 'IORef' because Phase-1 doesn't yet support
--- runtime project switching through a tool — we'll upgrade it to a TVar
--- the moment we port 'ghc_switch_project'.
+-- 'srvProjectDir' is an 'IORef' because runtime project switching
+-- (now @ghc_project(action="switch")@, retired @ghc_switch_project@'s
+-- successor in #94 Phase C step 5) is single-writer from the dispatch
+-- thread — there is no concurrent writer to coordinate against, so a
+-- TVar would buy nothing over the IORef.
 --
 -- 'srvGhcSession' is held behind an 'MVar' so concurrent handlers
 -- cannot race on startup: the first caller wins, everyone else waits
@@ -161,16 +163,19 @@ data Server = Server
   { srvProjectDir    :: !(IORef ProjectDir)
   , srvGhcSession    :: !(MVar (Maybe GhcSession))
     -- ^ In-process GHC-API session — the single source of compile
-    -- and execute state after Wave 5 landed. All 25 tools route
-    -- through this; the legacy subprocess ghci module is gone.
+    -- and execute state after Wave 5 landed. Every GHC-touching tool
+    -- routes through this; the legacy subprocess ghci module is gone.
+    -- Live inventory is in 'docs/TOOL_TAXONOMY.md', enforced by
+    -- 'testCategoryCountsMatchTaxonomy' in 'test/Spec.hs'.
   , srvStore         :: !(IORef Store)
     -- ^ Issue #39: 'IORef Store' (not bare 'Store') because
-    -- 'ghc_switch_project' must be able to reopen the property
-    -- store against the new project root. Without this, the
-    -- previous project's @.haskell-flows/properties.json@ would
-    -- still drive 'ghc_check_module' / 'ghc_regression' / gates
-    -- after a switch — surfacing ghost regressions for properties
-    -- that don't even live in the new project.
+    -- 'ghc_project(action="switch")' must be able to reopen the
+    -- property store against the new project root. Without this,
+    -- the previous project's @.haskell-flows/properties.json@
+    -- would still drive 'ghc_check_module' /
+    -- 'ghc_property_store(action="run")' / gates after a switch —
+    -- surfacing ghost regressions for properties that don't even
+    -- live in the new project.
   , srvWorkflowState :: !WorkflowStateRef
   , srvBootPosix     :: !Double
   , srvBinaryPath    :: !FilePath
@@ -208,8 +213,8 @@ serverForRaw raw = do
   -- touches the environment. Hosts launched from macOS Dock /
   -- Finder pass a minimal PATH that omits ~/.ghcup/bin and
   -- ~/.cabal/bin; without this, 'ghc_lint', 'ghc_quickcheck',
-  -- 'ghc_regression', 'ghc_gate', 'ghc_coverage',
-  -- 'ghc_validate_cabal' all fail with
+  -- 'ghc_property_store(action="run")', 'ghc_gate', 'ghc_coverage',
+  -- 'ghc_project(action="validate")' all fail with
   -- "posix_spawnp: does not exist".
   _ <- PathBootstrap.augmentPath
   case mkProjectDir raw of

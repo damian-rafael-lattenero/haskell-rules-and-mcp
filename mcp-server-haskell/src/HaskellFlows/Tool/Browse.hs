@@ -44,8 +44,17 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcBrowse
     , tdDescription =
-        "List names exported by a loaded module + their types. "
-          <> "Resolves against the auto-loaded project module graph."
+        "PURPOSE: List names exported by a loaded module + their types. "
+          <> "WHEN: orienting in an unfamiliar module before touching it; "
+          <> "confirming an export was added or surfaced. "
+          <> "WHEN NOT: the module is not in the project graph — use "
+          <> "hoogle_search for upstream/external modules, or ghc_info for "
+          <> "a single name's details. "
+          <> "PREREQUISITES: any prior ghc_load / ghc_check_module / "
+          <> "ghc_check_project pulls the target into the compile graph. "
+          <> "OUTPUT: {module, count, entries:[\"name :: type\"]}; "
+          <> "status='no_match' when the module is not in this project. "
+          <> "SEE ALSO: ghc_info, hoogle_search."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

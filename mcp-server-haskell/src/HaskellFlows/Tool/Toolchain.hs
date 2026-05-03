@@ -38,13 +38,20 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcToolchain
     , tdDescription =
-        "Probe or warm up the external toolchain (cabal, ghc, hlint, \
-        \fourmolu, ormolu, hoogle, hls). action='status' (default) \
-        \reports availability + version of every binary; \
-        \action='warmup' pre-resolves them on PATH so the first \
-        \tool call that needs them does not pay the lookup cost. \
-        \Phase C successor to ghc_toolchain_status + \
-        \ghc_toolchain_warmup (issue #94)."
+        "PURPOSE: Probe or warm up the external toolchain (cabal, ghc, \
+        \hlint, fourmolu, ormolu, hoogle, hls). \
+        \WHEN: session start (paired with ghc_workflow handshake); \
+        \action='warmup' pre-resolves binaries on PATH ahead of the \
+        \first tool that needs them. \
+        \WHEN NOT: you want MCP server / GHCi state — that is \
+        \ghc_workflow(action='status'). \
+        \PREREQUISITES: none. \
+        \OUTPUT: {tools:[{name, available, path, version, category}], \
+        \summary, blocking_gates}; cabal/ghc/hlint are blocking gates, \
+        \fourmolu/ormolu/hoogle/hls degrade gracefully. \
+        \SEE ALSO: ghc_workflow. \
+        \#94 Phase C successor to ghc_toolchain_status + \
+        \ghc_toolchain_warmup."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

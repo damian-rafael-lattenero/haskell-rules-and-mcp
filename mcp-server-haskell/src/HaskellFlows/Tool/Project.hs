@@ -43,13 +43,24 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcProject
     , tdDescription =
-        "Project lifecycle: scaffold (action='create'), switch the \
-        \active root (action='switch'), validate the .cabal \
-        \(action='validate'), or self-install host rules \
-        \(action='bootstrap'). #94 Phase C step 5 successor to \
-        \ghc_create_project + ghc_switch_project + \
-        \ghc_validate_cabal + ghc_bootstrap; the four legacy tools \
-        \have been removed in the same commit."
+        "PURPOSE: Project lifecycle — scaffold / switch root / validate \
+        \cabal / bootstrap host rules, all under one action-discriminated \
+        \tool. \
+        \WHEN: action='create' new package from scratch; action='switch' \
+        \repoint MCP at a different project without restarting; \
+        \action='validate' run cabal check + heuristics on .cabal; \
+        \action='bootstrap' install or refresh host rules. \
+        \WHEN NOT: register/de-register exposed-modules — that is \
+        \ghc_modules; add/remove dependencies — that is ghc_deps. \
+        \PREREQUISITES: action='switch' requires the target dir to \
+        \exist; action='validate' requires a .cabal in the active \
+        \project. \
+        \OUTPUT: per-action shapes detailed in the per-branch JSON \
+        \schema (oneOf-discriminated). \
+        \SEE ALSO: ghc_modules, ghc_deps, ghc_toolchain. \
+        \#94 Phase C step 5 successor to ghc_create_project + \
+        \ghc_switch_project + ghc_validate_cabal + ghc_bootstrap; \
+        \the four legacy tools were retired in the same commit."
     , tdInputSchema = schema
     }
 

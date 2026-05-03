@@ -35,9 +35,19 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcComplete
     , tdDescription =
-        "Return in-scope identifiers that start with the given prefix, "
-          <> "via the GHC API. Useful before calling :info or :type on a "
-          <> "candidate."
+        "PURPOSE: Return in-scope identifiers that start with the given "
+          <> "prefix, via :complete / GHC API. "
+          <> "WHEN: discovering names that match a prefix before drilling "
+          <> "in with ghc_info or ghc_type; auto-completion-style lookup "
+          <> "during exploration. "
+          <> "WHEN NOT: you want a specific module's exports — use "
+          <> "ghc_browse; the symbol is off-graph (external lib) — use "
+          <> "hoogle_search. "
+          <> "PREREQUISITES: a session is loaded (preloads always make "
+          <> "Prelude visible). "
+          <> "OUTPUT: {prefix, count, candidates:[name]}; default limit "
+          <> "25, hard-capped at 200. "
+          <> "SEE ALSO: ghc_info, ghc_type, ghc_browse."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

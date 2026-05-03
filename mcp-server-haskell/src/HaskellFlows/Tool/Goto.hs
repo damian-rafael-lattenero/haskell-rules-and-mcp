@@ -53,9 +53,16 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcGoto
     , tdDescription =
-        "Return the source location where a name is defined, via the "
-          <> "GHC API's SrcSpan. For cross-module precision you'll want "
-          <> "HLS (future ghc_hls tool)."
+        "PURPOSE: Return the source location where a name is defined, "
+          <> "via the GHC API's SrcSpan. "
+          <> "WHEN: jumping from a usage to its definition; locating a "
+          <> "binding before ghc_refactor scopes a rename. "
+          <> "WHEN NOT: you also want the type/kind/instances — that is "
+          <> "ghc_info (which already includes 'defined_at'); cross-"
+          <> "module re-exports / macro names — future ghc_hls. "
+          <> "PREREQUISITES: name must be in scope. "
+          <> "OUTPUT: {name, location:{file, line, column, module?}}. "
+          <> "SEE ALSO: ghc_info, ghc_browse."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
