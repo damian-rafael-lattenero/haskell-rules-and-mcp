@@ -64,7 +64,7 @@ import HaskellFlows.Ghc.ApiSession
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ErrorKind (ErrorKind (..))
 import HaskellFlows.Mcp.Guidance (sessionInstructionsText, workflowRulesMarkdown)
-import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext)
+import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext, withDogfoodHint)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ResourceUri (ResourceUri (..), parseResourceUri)
 import HaskellFlows.Mcp.Resources (allResources)
@@ -73,6 +73,7 @@ import HaskellFlows.Mcp.RpcMethod
   , isNotification
   , parseRpcMethod
   )
+import HaskellFlows.Mcp.SelfProject (detectSelfProject, selfMutableSubdirs)
 import HaskellFlows.Mcp.Staleness (checkStaleness)
 import HaskellFlows.Mcp.ToolName
   ( ToolName (..)
@@ -179,6 +180,15 @@ data Server = Server
   , srvWorkflowState :: !WorkflowStateRef
   , srvBootPosix     :: !Double
   , srvBinaryPath    :: !FilePath
+  , srvIsSelfProject :: !(IORef Bool)
+    -- ^ PR-4 Phase 1: cabal-name heuristic — true when the active
+    -- 'projectDir' is a haskell-flows MCP source tree. Computed in
+    -- 'serverForRaw' and recomputed inside 'SwitchProject.handle'
+    -- after a project switch. Drives the dogfood-hint injection in
+    -- 'enrichWithNextStep' (PR-4 Phase 2). 'IORef Bool' instead of
+    -- a plain @Bool@ because the flag must be writeable from the
+    -- 'ghc_project(action="switch")' handler — same single-writer
+    -- shape as 'srvProjectDir'.
   }
 
 -- | Build a server whose project directory is sourced from
@@ -227,6 +237,12 @@ serverForRaw raw = do
       ws       <- newWorkflowStateRef
       bootPos  <- realToFrac <$> getPOSIXTime
       binPath  <- getExecutablePath
+      -- PR-4 Phase 1: cabal-name heuristic. All exceptions inside
+      -- 'detectSelfProject' collapse to 'False' so a missing or
+      -- malformed cabal can never break server boot — when in doubt,
+      -- assume not-self.
+      isSelf   <- detectSelfProject pd
+      isSelfR  <- newIORef isSelf
       pure Server
         { srvProjectDir    = pdRef
         , srvGhcSession    = ghcSess
@@ -234,6 +250,7 @@ serverForRaw raw = do
         , srvWorkflowState = ws
         , srvBootPosix     = bootPos
         , srvBinaryPath    = binPath
+        , srvIsSelfProject = isSelfR
         }
 
 -- | Dispatch a single parsed request. 'Nothing' means the input was a
@@ -439,12 +456,14 @@ dispatchByName srv args = \case
   GhcWorkflow -> do
     ws        <- readState (srvWorkflowState srv)
     staleness <- checkStaleness (srvBinaryPath srv) (srvBootPosix srv)
+    isSelf    <- readIORef (srvIsSelfProject srv)
     WorkflowTool.handle
       (srvProjectDir srv)
       (srvGhcSession srv)
       allToolNameTexts
       ws
       staleness
+      isSelf
       args
   GhcCheckModule -> do
     -- Wave-5 full GhcSession: compile/warnings/holes + in-process
@@ -671,6 +690,7 @@ dispatchProject srv rawArgs = case projectActionField rawArgs of
              (srvProjectDir srv)
              (srvGhcSession srv)
              (srvStore srv)
+             (srvIsSelfProject srv)
              inner
          "validate" -> do
            pd <- readIORef (srvProjectDir srv)
@@ -934,7 +954,8 @@ runTool srv toolName rid action = do
     Right (Just tr) -> do
       let payload = firstJsonContent tr
       trackTool (srvWorkflowState srv) toolName (not (trIsError tr)) payload
-      pure (ok rid (toJSON (enrichWithNextStep toolName tr)))
+      isSelf <- readIORef (srvIsSelfProject srv)
+      pure (ok rid (toJSON (enrichWithNextStep isSelf toolName tr)))
 
 -- | Attempt to inject a 'NextStep' hint into the tool's payload.
 -- The decision is read-only: we peek at the top text-content block
@@ -942,12 +963,20 @@ runTool srv toolName rid action = do
 -- 'suggestNext', and — if it returns 'Just' — splice the
 -- @nextStep@ object in. On any shape mismatch (non-JSON payload,
 -- missing success flag, etc.) the result is returned unchanged.
-enrichWithNextStep :: ToolName -> ToolResult -> ToolResult
-enrichWithNextStep toolName tr =
+enrichWithNextStep :: Bool -> ToolName -> ToolResult -> ToolResult
+enrichWithNextStep isSelfProject toolName tr =
   let payload = firstJsonContent tr
       isOk    = not (trIsError tr)
   in case suggestNext toolName isOk payload of
-       Just ns -> injectNextStep ns tr
+       Just ns ->
+         -- PR-4 Phase 2: thread the self-project flag through. When
+         -- the active 'projectDir' is the MCP itself AND a write-tool
+         -- just touched a self-mutable file, 'withDogfoodHint' adds
+         -- a sidebar 'dogfood' field. Otherwise the 'NextStep' is
+         -- returned unchanged — non-self projects see no behaviour
+         -- change.
+         let ns' = withDogfoodHint isSelfProject selfMutableSubdirs toolName payload ns
+         in injectNextStep ns' tr
        Nothing -> tr
 
 -- | Peek at the first TextContent block and decode it as JSON. If

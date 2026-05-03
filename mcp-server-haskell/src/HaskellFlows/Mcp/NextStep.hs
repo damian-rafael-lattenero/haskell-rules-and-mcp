@@ -40,6 +40,11 @@ module HaskellFlows.Mcp.NextStep
   , suppressIf
   , suppressOnZero
   , suppressOnDegraded
+    -- * PR-4 Phase 2: dogfood nudge for the MCP itself
+  , DogfoodHint (..)
+  , withDogfoodHint
+  , isWriteTool
+  , modulePathInSelf
   ) where
 
 import Data.Aeson
@@ -72,8 +77,34 @@ data NextStep = NextStep
   , nsWhy     :: !Text
   , nsExample :: !(Maybe Value)
   , nsChain   :: !(Maybe [ChainStep])
+  , nsDogfood :: !(Maybe DogfoodHint)
+    -- ^ PR-4 Phase 2: optional sidebar field surfaced when the active
+    -- 'projectDir' is a haskell-flows MCP source tree AND the tool
+    -- just edited a self-mutable file. Carries an orthogonal nudge
+    -- ("after green, run ci-local + commit+push direct to master")
+    -- without overriding 'nsTool' / 'nsWhy'. Agents that ignore the
+    -- field see no behaviour change.
   }
   deriving stock (Eq, Show)
+
+-- | Sidebar nudge for the dogfood-fix-in-place flow (PR-4 Phase 2).
+-- Same shape as a single-step 'NextStep' but namespaced under
+-- @dogfood@ in the wire output to make the orthogonality explicit:
+-- @nsTool@ is "what work tool comes next?" while 'DogfoodHint' is
+-- "what META workflow applies because you're touching the MCP itself?"
+data DogfoodHint = DogfoodHint
+  { dhTool :: !ToolName
+  , dhArgs :: !Value
+  , dhWhy  :: !Text
+  }
+  deriving stock (Eq, Show)
+
+instance ToJSON DogfoodHint where
+  toJSON dh = object
+    [ "tool" .= toolNameText (dhTool dh)
+    , "args" .= dhArgs dh
+    , "why"  .= dhWhy dh
+    ]
 
 -- | One step in a multi-step plan. The fields mirror the shape
 -- @ghc_batch@ accepts (@{tool, args}@) so the agent can pass
@@ -98,6 +129,7 @@ instance ToJSON NextStep where
       ]
       <> maybe [] (\e -> ["example" .= e]) (nsExample ns)
       <> maybe [] (\c -> ["chain"   .= c]) (nsChain ns)
+      <> maybe [] (\d -> ["dogfood" .= d]) (nsDogfood ns)
 
 --------------------------------------------------------------------------------
 -- Issue #95 Phase A: suppression rule API
@@ -144,6 +176,7 @@ simple tool why ex = NextStep
   , nsWhy     = why
   , nsExample = ex
   , nsChain   = Nothing
+  , nsDogfood = Nothing
   }
 
 -- | Multi-step hint: the first step is the primary suggestion;
@@ -151,6 +184,87 @@ simple tool why ex = NextStep
 -- @ghc_batch(actions=chain)@.
 chained :: ToolName -> Text -> Maybe Value -> [ChainStep] -> NextStep
 chained tool why ex chain = (simple tool why ex) { nsChain = Just chain }
+
+-- | PR-4 Phase 2: attach the dogfood-flow hint to an existing
+-- 'NextStep' when ALL three conditions hold:
+--
+--   1. @isSelfProject@ — the MCP detected its own source tree as
+--      the active 'projectDir' (cabal-name heuristic in
+--      'HaskellFlows.Mcp.SelfProject').
+--   2. The tool that just succeeded is in the write-tool set
+--      (see 'isWriteTool').
+--   3. The payload's @module_path@ (when present) is under one of
+--      the self-mutable subdirs ('modulePathInSelf'), or absent
+--      (some write-tools don't carry one — the heuristic still
+--      fires because the agent is in a self-project doing write
+--      work).
+--
+-- When the conditions don't all hold, the original 'NextStep' is
+-- returned untouched. This keeps the dogfood nudge OFF for any
+-- non-self project — read-only safe.
+withDogfoodHint
+  :: Bool          -- ^ isSelfProject
+  -> [FilePath]    -- ^ selfMutableSubdirs (passed in to keep this
+                   --   module decoupled from SelfProject's path list)
+  -> ToolName
+  -> Value         -- ^ tool's success payload
+  -> NextStep
+  -> NextStep
+withDogfoodHint isSelf subdirs toolName payload ns
+  | not isSelf            = ns
+  | not (isWriteTool toolName) = ns
+  | not (modulePathInSelf subdirs payload) = ns
+  | otherwise = ns { nsDogfood = Just dogfoodHint }
+  where
+    dogfoodHint = DogfoodHint
+      { dhTool = GhcWorkflow
+      , dhArgs = object [ "action" .= ("help" :: Text) ]
+      , dhWhy  = "this is the haskell-flows MCP itself; after green, \
+                 \run scripts/ci-local.sh on demand and commit+push \
+                 \direct to master per the dogfood-fix-in-place flow \
+                 \(no reinstall mid-session)."
+      }
+
+-- | PR-4 Phase 2: tools that mutate the source tree. Used by
+-- 'withDogfoodHint' to gate the dogfood nudge — the prompt doesn't
+-- make sense after a read-only inspection (ghc_type, ghc_browse, …).
+isWriteTool :: ToolName -> Bool
+isWriteTool t = t `elem`
+  [ GhcLoad           -- triggers compile + tracks edits implicitly
+  , GhcCheckModule
+  , GhcCheckProject
+  , GhcLint
+  , GhcQuickCheck
+  , GhcFormat
+  , GhcRefactor
+  , GhcFixWarning
+  , GhcApplyExports
+  , GhcAddImport
+  , GhcArbitrary
+  , GhcModules
+  ]
+
+-- | PR-4 Phase 2: check whether the payload's @module_path@ field
+-- (when present) lives under one of the self-mutable subdirs.
+-- Returns 'True' when the path is absent — some write-tools emit
+-- payloads without the field, and the agent IS still doing self-
+-- project work, so we err on the side of nudging.
+modulePathInSelf :: [FilePath] -> Value -> Bool
+modulePathInSelf subdirs payload = case stringField "module_path" payload of
+  Nothing   -> True   -- absent → don't gate, fire on tool-set match alone
+  Just path ->
+    let modPath = T.unpack path
+    in any (\dir -> isPrefixOfPath dir modPath) subdirs
+  where
+    -- Path-prefix check that respects path separators: "src" is a
+    -- prefix of "src/X.hs" but NOT of "srcExternal/X.hs".
+    isPrefixOfPath :: FilePath -> FilePath -> Bool
+    isPrefixOfPath dir target =
+      dir == target
+      || isPathPrefix (dir <> "/")  target
+      || isPathPrefix (dir <> "\\") target   -- Windows separator
+    isPathPrefix :: FilePath -> FilePath -> Bool
+    isPathPrefix prefix s = take (length prefix) s == prefix
 
 -- | Build a chain step from (tool, args object).
 step :: ToolName -> Value -> ChainStep

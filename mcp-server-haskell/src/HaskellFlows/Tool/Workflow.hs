@@ -114,9 +114,10 @@ handle
   -> [Text]
   -> WorkflowState
   -> StalenessReport
+  -> Bool                  -- ^ PR-4 Phase 1: is the active project the MCP itself?
   -> Value
   -> IO ToolResult
-handle pdRef sessMVar toolNames ws staleness rawArgs =
+handle pdRef sessMVar toolNames ws staleness isSelfProject rawArgs =
   case parseEither parseJSON rawArgs of
     Left err ->
       pure (Env.toolResponseToResult (Env.mkFailed
@@ -137,7 +138,7 @@ handle pdRef sessMVar toolNames ws staleness rawArgs =
       entryMod  <- case a of
         ActHelp -> suggestEntryModule pd
         _       -> pure Nothing
-      pure (render a pd sessAlive toolNames ws staleness missing entryMod)
+      pure (render a pd sessAlive toolNames ws staleness missing entryMod isSelfProject)
 
 probeMissingOptionals :: IO [Text]
 probeMissingOptionals =
@@ -195,20 +196,21 @@ render
   -> StalenessReport
   -> [Text]
   -> Maybe Text       -- ^ F-02: suggested entry module (help view only)
+  -> Bool             -- ^ PR-4 Phase 1: is the active project the MCP itself?
   -> ToolResult
-render a pd alive toolNames ws staleness missingOpt mEntry =
+render a pd alive toolNames ws staleness missingOpt mEntry isSelfProject =
   let phase      = classifyPhase ws
       stateHints = renderHelp ws
       payload    = case a of
-        ActStatus -> statusPayload pd alive toolNames staleness phase missingOpt
+        ActStatus -> statusPayload pd alive toolNames staleness phase missingOpt isSelfProject
         ActHelp   -> helpPayload pd alive stateHints staleness phase mEntry
         ActNext   -> nextPayload pd alive ws
   in Env.toolResponseToResult (Env.mkOk payload)
 
 statusPayload
   :: ProjectDir -> Bool -> [Text] -> StalenessReport -> SessionPhase
-  -> [Text] -> Value
-statusPayload pd alive toolNames staleness phase missingOpt =
+  -> [Text] -> Bool -> Value
+statusPayload pd alive toolNames staleness phase missingOpt isSelfProject =
   object $
     [ "view"        .= ("status" :: Text)
     , "projectDir"  .= T.pack (unProjectDir pd)
@@ -219,6 +221,12 @@ statusPayload pd alive toolNames staleness phase missingOpt =
       -- about "is my binary stale?" get the @stale@ bool + a
       -- human-readable @message@ without a second tool call.
     , "staleness"   .= staleness
+      -- PR-4 Phase 1: cabal-name heuristic. True iff 'projectDir'
+      -- points at a haskell-flows MCP source tree. Agents working
+      -- on the MCP itself (`/Users/.../mcp-server-haskell` or the
+      -- repo root) can use this to switch into the dogfood-fix
+      -- flow without checking paths themselves.
+    , "selfProject" .= isSelfProject
     ]
     -- Only emit the 'optionalBinaries' field when something is
     -- missing.  Happy path stays clean — the nudge only appears

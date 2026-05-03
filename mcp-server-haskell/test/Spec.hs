@@ -80,6 +80,7 @@ import HaskellFlows.Suggest.Rules
   )
 import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNameTexts)
 import HaskellFlows.Mcp.NextStep
+import qualified HaskellFlows.Mcp.SelfProject as SelfProject
   ( ChainStep (..)
   , NextStep (..)
   , injectNextStep
@@ -1051,6 +1052,13 @@ main = do
                                                                  testSwitchHandleReopensStore
       , test "switch_project: empty dir accepted (scaffold-ready)"
                                                                  testSwitchAcceptsEmpty
+      , test "PR-4: parseCabalNameField handles canonical input" testParseCabalNameField
+      , test "PR-4: detectSelfProject positive (real cabal name)" testDetectSelfProjectPositive
+      , test "PR-4: detectSelfProject negative (other name)"     testDetectSelfProjectNegative
+      , test "PR-4: detectSelfProject missing cabal → False"     testDetectSelfProjectMissing
+      , test "PR-4: withDogfoodHint fires when self+write+path"  testWithDogfoodHintFiresWhenSelf
+      , test "PR-4: withDogfoodHint suppressed when not self"    testWithDogfoodHintNotFiresWhenNotSelf
+      , test "PR-4: withDogfoodHint suppressed on read-only tool" testWithDogfoodHintNotFiresOnReadTool
       , test "path-bootstrap: hard-coded candidates are absolute"
                                                                  testPathBootstrapAbsolute
       , test "path-bootstrap: augmentPath only keeps existing dirs"
@@ -4014,7 +4022,9 @@ runWorkflow args = do
         , srMessage          = Nothing
         }
       toolNames = ["ghc_load", "ghc_type", "ghc_workflow"]
-  result <- WorkflowTool.handle pdRef sessRef toolNames ws staleness args
+  -- PR-4: workflow handler gained an isSelfProject arg. Tests run
+  -- against /tmp, never the MCP source tree, so the flag is False.
+  result <- WorkflowTool.handle pdRef sessRef toolNames ws staleness False args
   case trContent result of
     [TextContent body] ->
       pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
@@ -8772,7 +8782,7 @@ testNextStepActionCoverage = pure $
 -- | suppressIf suppresses when the predicate returns True.
 testNextStepSuppressIfTrue :: IO Bool
 testNextStepSuppressIfTrue =
-  let ns   = NextStep { nsTool = GhcLoad, nsWhy = "w", nsExample = Nothing, nsChain = Nothing }
+  let ns   = NextStep { nsTool = GhcLoad, nsWhy = "w", nsExample = Nothing, nsChain = Nothing, nsDogfood = Nothing }
       ctx  = NextStep.RecommendCtx { NextStep.rcTool = GhcLoad, NextStep.rcStatus = "ok", NextStep.rcPayload = A.object [] }
       rule = const True
   in pure (isNothing (NextStep.suppressIf rule ctx (Just ns)))
@@ -8780,7 +8790,7 @@ testNextStepSuppressIfTrue =
 -- | suppressIf passes through when the predicate returns False.
 testNextStepSuppressIfFalse :: IO Bool
 testNextStepSuppressIfFalse =
-  let ns   = NextStep { nsTool = GhcLoad, nsWhy = "w", nsExample = Nothing, nsChain = Nothing }
+  let ns   = NextStep { nsTool = GhcLoad, nsWhy = "w", nsExample = Nothing, nsChain = Nothing, nsDogfood = Nothing }
       ctx  = NextStep.RecommendCtx { NextStep.rcTool = GhcLoad, NextStep.rcStatus = "ok", NextStep.rcPayload = A.object [] }
       rule = const False
   in pure (isJust (NextStep.suppressIf rule ctx (Just ns)))
@@ -8820,7 +8830,8 @@ testInjectSplices =
       txt  = TL.toStrict (TLE.decodeUtf8 (A.encode body))
       tr   = ToolResult { trContent = [ TextContent txt ], trIsError = False }
       ns   = NextStep { nsTool = GhcLoad, nsWhy = "because"
-                      , nsExample = Nothing, nsChain = Nothing }
+                      , nsExample = Nothing, nsChain = Nothing
+                      , nsDogfood = Nothing }
       tr'  = injectNextStep ns tr
   in case trContent tr' of
        [TextContent t] -> pure $
@@ -8836,7 +8847,8 @@ testInjectSkipsNonJson =
   let raw = "this is not json"
       tr  = ToolResult { trContent = [ TextContent raw ], trIsError = False }
       ns  = NextStep { nsTool = GhcLoad, nsWhy = "x"
-                     , nsExample = Nothing, nsChain = Nothing }
+                     , nsExample = Nothing, nsChain = Nothing
+                     , nsDogfood = Nothing }
       tr' = injectNextStep ns tr
   in case trContent tr' of
        [TextContent t] -> pure (t == raw)  -- unchanged
@@ -9710,8 +9722,11 @@ testSwitchHandleSwaps = do
       primed   <- startGhcSession pdA
       _        <- readMVar sessRef
       sessRef' <- newMVar (Just primed)
+      -- PR-4: SwitchProject.handle gained an IORef Bool for the
+      -- self-project flag. Synthetic /tmp targets are never self.
+      selfRef  <- newIORef False
       let args = A.object [ "path" A..= T.pack dirB ]
-      result  <- SwitchProject.handle pdRef sessRef' storeRef args
+      result  <- SwitchProject.handle pdRef sessRef' storeRef selfRef args
       newPd   <- readIORef pdRef
       mSess   <- readMVar sessRef'
       removePathForcibly dirA
@@ -9755,8 +9770,11 @@ testSwitchHandleReopensStore = do
       save storeA "\\x -> x == (x :: Int)" (Just "src/Foo.hs")
       preProps <- loadAll storeA
       storeRef <- newIORef storeA
+      -- PR-4: SwitchProject.handle gained an IORef Bool for the
+      -- self-project flag. Synthetic /tmp targets are never self.
+      selfRef  <- newIORef False
       let args = A.object [ "path" A..= T.pack dirB ]
-      _ <- SwitchProject.handle pdRef sessRef storeRef args
+      _ <- SwitchProject.handle pdRef sessRef storeRef selfRef args
       storeAfter  <- readIORef storeRef
       postProps   <- loadAll storeAfter
       -- After the swap, the OLD Store handle should still point
@@ -9774,6 +9792,140 @@ testSwitchHandleReopensStore = do
       removePathForcibly dirA
       removePathForcibly dirB
       pure False
+
+--------------------------------------------------------------------------------
+-- PR-4: SelfProject + dogfood-hint tests
+--------------------------------------------------------------------------------
+
+-- | Pure parser test: 'parseCabalNameField' handles canonical input,
+-- whitespace, case-insensitive 'name', and ignores other fields.
+testParseCabalNameField :: IO Bool
+testParseCabalNameField = pure $ and
+  [ SelfProject.parseCabalNameField "name: haskell-flows-mcp"
+      == Just "haskell-flows-mcp"
+  , SelfProject.parseCabalNameField "  name:   haskell-flows-mcp  "
+      == Just "haskell-flows-mcp"
+  , SelfProject.parseCabalNameField "Name: foo"
+      == Just "foo"
+  , SelfProject.parseCabalNameField "version: 0.1\nname: bar\nbuild-depends: base"
+      == Just "bar"
+  , SelfProject.parseCabalNameField "no name here"
+      == Nothing
+  , SelfProject.parseCabalNameField ""
+      == Nothing
+  ]
+
+-- | Helper for SelfProject tests: write a cabal at the given path
+-- with the given 'name:' value plus minimal valid metadata.
+writeCabalNamed :: FilePath -> Text -> IO ()
+writeCabalNamed path n = TIO.writeFile path $ T.unlines
+  [ "cabal-version: 2.4"
+  , "name: " <> n
+  , "version: 0.1.0.0"
+  , ""
+  , "library"
+  , "  build-depends: base"
+  , "  default-language: Haskell2010"
+  ]
+
+-- | Positive: a tmp dir whose cabal file is named haskell-flows-mcp.cabal
+-- AND declares 'name: haskell-flows-mcp' is recognised as self.
+testDetectSelfProjectPositive :: IO Bool
+testDetectSelfProjectPositive = do
+  base <- getTemporaryDirectory
+  ts   <- getPOSIXTime
+  let dir = base </> ("sp-self-pos-"
+                       <> show (floor (ts * 1000000) :: Int))
+  createDirectoryIfMissing True dir
+  writeCabalNamed (dir </> "haskell-flows-mcp.cabal") SelfProject.selfCabalName
+  result <- case mkProjectDir dir of
+    Right pd -> SelfProject.detectSelfProject pd
+    Left _   -> pure False
+  removePathForcibly dir
+  pure result
+
+-- | Negative: a tmp dir whose cabal declares a different name returns
+-- False — alt-named forks are "not self" by design.
+testDetectSelfProjectNegative :: IO Bool
+testDetectSelfProjectNegative = do
+  base <- getTemporaryDirectory
+  ts   <- getPOSIXTime
+  let dir = base </> ("sp-self-neg-"
+                       <> show (floor (ts * 1000000) :: Int))
+  createDirectoryIfMissing True dir
+  writeCabalNamed (dir </> "haskell-flows-mcp.cabal") "other-package"
+  result <- case mkProjectDir dir of
+    Right pd -> SelfProject.detectSelfProject pd
+    Left _   -> pure True   -- treat as failed setup
+  removePathForcibly dir
+  pure (not result)
+
+-- | Missing cabal file collapses to False — the detector must err on
+-- the side of "not self" so the dogfood prompt doesn't fire on a
+-- random / empty / unrelated project.
+testDetectSelfProjectMissing :: IO Bool
+testDetectSelfProjectMissing = do
+  base <- getTemporaryDirectory
+  ts   <- getPOSIXTime
+  let dir = base </> ("sp-self-missing-"
+                       <> show (floor (ts * 1000000) :: Int))
+  createDirectoryIfMissing True dir
+  -- no cabal file written — empty dir
+  result <- case mkProjectDir dir of
+    Right pd -> SelfProject.detectSelfProject pd
+    Left _   -> pure True
+  removePathForcibly dir
+  pure (not result)
+
+-- | 'withDogfoodHint' must populate 'nsDogfood' when ALL three
+-- conditions hold: isSelf=True, write-tool, module_path under
+-- a self-mutable subdir.
+testWithDogfoodHintFiresWhenSelf :: IO Bool
+testWithDogfoodHintFiresWhenSelf = pure $
+  let baseNs = NextStep
+        { nsTool    = GhcLoad
+        , nsWhy     = "compile clean"
+        , nsExample = Nothing
+        , nsChain   = Nothing
+        , nsDogfood = Nothing
+        }
+      payload = A.object
+        [ "module_path" .= ("src/HaskellFlows/Mcp/Server.hs" :: Text) ]
+      ns = withDogfoodHint True SelfProject.selfMutableSubdirs GhcLoad payload baseNs
+  in case nsDogfood ns of
+       Just _  -> True
+       Nothing -> False
+
+-- | Suppression: 'isSelf=False' → dogfood stays Nothing regardless of
+-- tool or module_path.
+testWithDogfoodHintNotFiresWhenNotSelf :: IO Bool
+testWithDogfoodHintNotFiresWhenNotSelf = pure $
+  let baseNs = NextStep
+        { nsTool    = GhcLoad
+        , nsWhy     = "x"
+        , nsExample = Nothing
+        , nsChain   = Nothing
+        , nsDogfood = Nothing
+        }
+      payload = A.object
+        [ "module_path" .= ("src/HaskellFlows/Mcp/Server.hs" :: Text) ]
+      ns = withDogfoodHint False SelfProject.selfMutableSubdirs GhcLoad payload baseNs
+  in isNothing (nsDogfood ns)
+
+-- | Suppression: read-only tools (ghc_type) don't trigger the dogfood
+-- nudge even on a self-project — the prompt is for write-tools only.
+testWithDogfoodHintNotFiresOnReadTool :: IO Bool
+testWithDogfoodHintNotFiresOnReadTool = pure $
+  let baseNs = NextStep
+        { nsTool    = GhcSuggest
+        , nsWhy     = "y"
+        , nsExample = Nothing
+        , nsChain   = Nothing
+        , nsDogfood = Nothing
+        }
+      payload = A.object [] -- ghc_type doesn't carry module_path
+      ns = withDogfoodHint True SelfProject.selfMutableSubdirs GhcType payload baseNs
+  in isNothing (nsDogfood ns)
 
 --------------------------------------------------------------------------------
 -- BUG-PLUS-07: switch_project accepts empty dirs (scaffold-ready)

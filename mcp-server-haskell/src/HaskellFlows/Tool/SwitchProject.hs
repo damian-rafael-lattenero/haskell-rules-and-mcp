@@ -64,6 +64,7 @@ import HaskellFlows.Ghc.ApiSession (GhcSession, killGhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.SelfProject (detectSelfProject)
 import HaskellFlows.Types
   ( PathError (..)
   , ProjectDir
@@ -163,9 +164,11 @@ handle
   :: IORef ProjectDir
   -> MVar (Maybe GhcSession)
   -> IORef Store
+  -> IORef Bool        -- ^ PR-4 Phase 1: srvIsSelfProject — recomputed
+                       --   against the new root after a successful switch.
   -> Value
   -> IO ToolResult
-handle pdRef sessRef storeRef rawArgs = case parseEither parseJSON rawArgs of
+handle pdRef sessRef storeRef selfRef rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right (SwitchProjectArgs raw) -> do
     res <- validateSwitchTarget raw
@@ -188,10 +191,15 @@ handle pdRef sessRef storeRef rawArgs = case parseEither parseJSON rawArgs of
         -- session MVar so concurrent tool handlers either see the
         -- complete old triple or the complete new one.
         newStore <- openStore newPd
+        -- PR-4 Phase 1: recompute the self-project flag against the
+        -- new root. 'detectSelfProject' is read-only IO that swallows
+        -- exceptions — it can't fail the swap.
+        newSelf <- detectSelfProject newPd
         modifyMVar_ sessRef $ \mSess -> do
           mapM_ killGhcSession mSess
           atomicWriteIORef pdRef    newPd
           atomicWriteIORef storeRef newStore
+          atomicWriteIORef selfRef  newSelf
           pure Nothing
         pure (successResult oldPd newPd scaffolded)
 
