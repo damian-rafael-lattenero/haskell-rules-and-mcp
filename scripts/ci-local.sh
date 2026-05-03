@@ -223,6 +223,14 @@ step "0/0" "ci-local.sh — mode=$MODE  parallel=$PARALLEL  keep-going=$KEEP_GOI
 say "PATH includes: \$HOME/.ghcup/bin, \$HOME/.cabal/bin"
 say "(use --help for full flag list)"
 
+# PR-5: rules-freshness gate runs FIRST. It's a fast (<1s) grep over a
+# single markdown file — failing here is a markdown drift bug, not a
+# Haskell regression, so we want to surface it before paying the build
+# cost. Calls scripts/check-rules-freshness.sh which is also safe to
+# invoke standalone.
+step "0/N" "rules-freshness check (.claude/rules/use-haskell-flows-mcp.md)"
+timed "rules-freshness" bash scripts/check-rules-freshness.sh
+
 if [ "$PARALLEL" = true ] && [ "$RUN_HLINT" = true ]; then
   step "1/N" "hlint + cabal build (parallel)"
   hlint_step_bg_start

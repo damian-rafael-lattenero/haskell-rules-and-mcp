@@ -1059,6 +1059,8 @@ main = do
       , test "PR-4: withDogfoodHint fires when self+write+path"  testWithDogfoodHintFiresWhenSelf
       , test "PR-4: withDogfoodHint suppressed when not self"    testWithDogfoodHintNotFiresWhenNotSelf
       , test "PR-4: withDogfoodHint suppressed on read-only tool" testWithDogfoodHintNotFiresOnReadTool
+      , test "PR-5: every tool description meets the 6-field template"
+                                                                 testDescriptionsMeetTemplate
       , test "path-bootstrap: hard-coded candidates are absolute"
                                                                  testPathBootstrapAbsolute
       , test "path-bootstrap: augmentPath only keeps existing dirs"
@@ -9926,6 +9928,46 @@ testWithDogfoodHintNotFiresOnReadTool = pure $
       payload = A.object [] -- ghc_type doesn't carry module_path
       ns = withDogfoodHint True SelfProject.selfMutableSubdirs GhcType payload baseNs
   in isNothing (nsDogfood ns)
+
+--------------------------------------------------------------------------------
+-- PR-5: description-shape lint
+--------------------------------------------------------------------------------
+
+-- | PR-5: every registered tool descriptor must meet the 6-field
+-- template documented in @docs/TOOL_DESCRIPTION_TEMPLATE.md@. The
+-- check is intentionally LENIENT — it doesn't parse the literal
+-- PURPOSE/WHEN/WHEN NOT/PREREQUISITES/OUTPUT/SEE ALSO labels (some
+-- pre-existing HIGH-tier descriptors phrase the same content as
+-- prose). It checks the cheap signals:
+--
+--   * length >= 200 characters — under that, the description is
+--     too thin to carry the 6 fields.
+--   * contains case-insensitive "when" somewhere — proxy for the
+--     WHEN / WHEN NOT bullets being present.
+--   * contains @ghc_@ or @hoogle_@ — proxy for SEE ALSO (or any
+--     sibling-tool routing).
+--
+-- Failures are reported by tool name so the offender is obvious.
+-- This test catches the "added a new tool with a one-line stub"
+-- regression at PR-time.
+testDescriptionsMeetTemplate :: IO Bool
+testDescriptionsMeetTemplate = do
+  let bad = [ (tdName d, problem)
+            | d <- allToolDescriptors
+            , let desc = tdDescription d
+            , let lower = T.toLower desc
+            , let problems =
+                    [ "length < 200"   | T.length desc < 200 ]
+                 ++ [ "no 'when' word" | not (T.isInfixOf "when" lower) ]
+                 ++ [ "no sibling-tool ref"
+                    | not (T.isInfixOf "ghc_" desc)
+                      && not (T.isInfixOf "hoogle_" desc) ]
+            , problem <- problems
+            ]
+  unless (null bad) $ do
+    putStrLn "description-shape lint hits:"
+    mapM_ (\(name, prob) -> putStrLn ("  " <> T.unpack name <> ": " <> prob)) bad
+  pure (null bad)
 
 --------------------------------------------------------------------------------
 -- BUG-PLUS-07: switch_project accepts empty dirs (scaffold-ready)
