@@ -1,0 +1,23 @@
+mcp-server-haskell/test/Spec.hs
+  c158702b1d5bd8f8 11818
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "474745691078226e41b32dad495de4dda82b799e",
+  "prompts": {
+    "c158702b1d5bd8f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9f50a6b3-1c26-471c-9002-493bd342ee49",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 312,
+      "overriden_lines": 0
+    }
+  }
+}
