@@ -10,8 +10,8 @@
 [![Nix flake](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/nix-flake.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/nix-flake.yml)
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
 
-[![MCP tools](https://img.shields.io/badge/MCP%20tools-46-blue?logo=anthropic)](mcp-server-haskell/src/HaskellFlows/Tool)
-[![Unit tests](https://img.shields.io/badge/unit%20tests-514%20passing-brightgreen)](mcp-server-haskell/test/Spec.hs)
+[![MCP tools](https://img.shields.io/badge/MCP%20tools-35-blue?logo=anthropic)](mcp-server-haskell/src/HaskellFlows/Tool)
+[![Unit tests](https://img.shields.io/badge/unit%20tests-680%20passing-brightgreen)](mcp-server-haskell/test/Spec.hs)
 [![E2E scenarios](https://img.shields.io/badge/e2e%20scenarios-72-brightgreen)](mcp-server-haskell/test-e2e/Scenarios)
 [![GHC](https://img.shields.io/badge/GHC-9.10%20%7C%209.12-8a5aa0?logo=haskell)](https://www.haskell.org/ghc/)
 [![Runtime](https://img.shields.io/badge/runtime-in--process%20GHC%20API-orange)](mcp-server-haskell/src/HaskellFlows/Ghc/ApiSession.hs)
@@ -23,7 +23,7 @@
 
 ## ⚡ The 30-second story
 
-Plug into Claude Code, Cursor, or any MCP host. Your agent gets **31 tools** that share **one in-process GHC session** and **one normative response envelope** — every call answers with the same structured shape, every gate is honest, every refactor verifies-or-rolls-back.
+Plug into Claude Code, Cursor, or any MCP host. Your agent gets **35 tools** that share **one in-process GHC session** and **one normative response envelope** — every call answers with the same structured shape, every gate is honest, every refactor verifies-or-rolls-back.
 
 ```text
 ghc_project(create) ─▶ ghc_modules ─▶ ghc_load
@@ -41,66 +41,41 @@ ghc_project(create) ─▶ ghc_modules ─▶ ghc_load
 
 ## 🎯 What makes it different
 
-<table>
-<tr>
-<td width="33%" valign="top">
-
-### 🧪 Property-first
-Your agent doesn't write tests after the fact. It calls `ghc_suggest(function_name="simplify")`, gets **8 engines** worth of laws — endomorphism, binary-op, list, roundtrip, evaluator-preservation, constant-folding, functor, sibling-aware — each with **confidence + rationale**.
-
-> Low-confidence laws come with *"this probably fails because…"* The engine pushes back when the name hints at a normaliser and the caller asked for "involutive."
-
-</td>
-<td width="33%" valign="top">
-
-### ⚙️ In-process GHC
-No subprocess GHCi. No pipe framing. No prompt parsing. Every tool calls `runGhc` / `compileExpr` / `exprType` against the **server's own HscEnv**. Diagnostics arrive structured via `LogAction` hook — never parsed from output.
-
-> A single MVar guards the HscEnv (GHC API isn't thread-safe inside one env). Any uncaught exception **evicts the session**; the next call boots a fresh one. No poisoned state, no indefinite hangs.
-
-</td>
-<td width="33%" valign="top">
-
-### 📦 Unified envelope
-Every response is the same shape: `{status, result?, error?, warnings?, nextStep?}`. Status is one of 7 closed values. Errors carry one of **33 closed `ErrorKind`** constructors — `path_traversal`, `compile_error`, `inner_timeout`, etc.
-
-> Just landed: issue #90 closed end-to-end. Every one of the 46 tools routes through `Mcp.Envelope`. The legacy boolean `success`/`error_kind` is gone from the wire — `status` is the discriminator.
-
-</td>
-</tr>
-</table>
+| | |
+|---|---|
+| 🧪 **Property-first** | `ghc_suggest` proposes laws from the function name — 8 engines (endomorphism, binary-op, list, roundtrip, evaluator-preservation, constant-folding, functor, sibling-aware) each with confidence + rationale. Low-confidence suggestions come with *"this probably fails because…"*. |
+| ⚙️ **In-process GHC** | No subprocess GHCi, no pipe framing, no prompt parsing. Every tool calls `runGhc`/`compileExpr`/`exprType` against the server's own `HscEnv`. Diagnostics arrive structured via `LogAction` hook. Any uncaught exception evicts the session; next call boots fresh. |
+| 📦 **Unified envelope** | Every response: `{status, result?, error?, warnings?, nextStep?}`. Status is one of 7 closed values. Errors carry one of **26 closed `ErrorKind`** constructors. The legacy `success`/`error_kind` booleans are gone — `status` is the discriminator. |
 
 ---
 
 ## 💡 The "aha" moment
 
-Building a 5-module arithmetic-expression evaluator, the first draft of `simplify` had an annihilation rewrite (`Mul 0 x ⇒ Lit 0`). `ghc_quickcheck` passed it **100/100**. `ghc_determinism` at 5 runs caught the bug:
+Building a 5-module arithmetic-expression evaluator, a `simplify` annihilation rewrite (`Mul 0 x ⇒ Lit 0`) passed `ghc_quickcheck` 100/100 — but `ghc_quickcheck(runs=5)` caught the bug:
 
 ```haskell
 Mul (Lit 0) (Var unbound)
-  -- in eval . simplify  →  Right 0
-  -- in eval             →  Left (UnboundVar …)
+  -- eval . simplify  →  Right 0   (error swallowed)
+  -- eval             →  Left (UnboundVar …)
 ```
 
-The rewrite **swallowed an error**. Without `ghc_determinism`, that broken simplifier ships marked green.
-
-> **That 5-second extra gate is the difference between "passed the tests" and "the property really holds."**
+**5 extra seconds of determinism checking is the difference between "passed the tests" and "the property really holds."**
 
 ---
 
-## 🛠 The tool surface — 46 in 7 phases
+## 🛠 The tool surface — 35 in 7 phases
 
 <div align="center">
 
 | Phase | Tools | Marquee |
 |---|---|---|
-| 🏗 **Scaffold** | 5 | `ghc_project(action=create)` — atomic cabal scaffold + `chain` hint |
-| 🔍 **Inspect** | 10 | `ghc_browse` · `ghc_info` · `ghc_eval` · `ghc_hole` |
-| 📚 **Deps** | 3 | `ghc_deps` — verb-checked, post-edit re-parse, refuses incoherent writes |
-| 🧪 **Property-first** | 4 | `ghc_suggest` · `ghc_quickcheck` (with `runs>=2` flakiness check) · `ghc_property_store` (list/run/export/audit) |
-| 🛡 **Gates** | 5 | `ghc_check_module` · `ghc_gate` — collapsed pre-push finalizer |
-| ✏️ **Refactor** | 5 | `ghc_refactor` — snapshot + compile-verify + rollback |
-| 🧠 **Advanced** | 11 | `ghc_lab` · `ghc_witness` · `ghc_explain_error` · `ghc_perf` · `ghc_batch` |
+| 🏗 **Scaffold** | 4 | `ghc_project(action=create)` · `ghc_modules` · `ghc_workflow` · `ghc_toolchain` |
+| 🔍 **Inspect** | 9 | `ghc_load` · `ghc_browse` · `ghc_eval` · `ghc_hole` · `ghc_type` · `ghc_info` · `ghc_complete` · `ghc_goto` · `ghc_doc` |
+| 📚 **Deps & scope** | 5 | `ghc_deps` · `ghc_add_import` · `ghc_apply_exports` · `ghc_imports` · `hoogle_search` |
+| 🧪 **Property-first** | 4 | `ghc_suggest` · `ghc_quickcheck` · `ghc_property_store` (list/run/export/audit) · `ghc_arbitrary` |
+| 🛡 **Gates** | 7 | `ghc_check_module` · `ghc_check_project` · `ghc_gate` · `ghc_lint` · `ghc_fix_warning` · `ghc_format` · `ghc_coverage` |
+| ✏️ **Refactor** | 1 | `ghc_refactor` — snapshot + compile-verify + rollback |
+| 🧠 **Advanced** | 5 | `ghc_lab` · `ghc_witness` · `ghc_explain_error` · `ghc_perf` · `ghc_batch` |
 
 </div>
 
@@ -130,7 +105,7 @@ Point your MCP host at `~/.local/bin/haskell-flows-mcp`. **No rules file needed*
 
 ---
 
-## 🏛 Architecture at a glance
+## 🏛 Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -138,17 +113,16 @@ Point your MCP host at `~/.local/bin/haskell-flows-mcp`. **No rules file needed*
 └──────────────────────────────┬───────────────────────────────────────┘
                                │  newline-delimited JSON-RPC 2.0
 ┌──────────────────────────────┴───────────────────────────────────────┐
-│  Mcp.Server  ·  46-tool dispatch  ·  10-min outer timeout            │
+│  Mcp.Server  ·  35-tool dispatch  ·  10-min outer timeout            │
 │  Mcp.Envelope  ·  status × result × error × warnings × nextStep      │
 │  Mcp.NextStep  ·  per-tool routing (envelope-aware)                  │
-│  Mcp.WorkflowState  ·  history-aware help (BUG-08)                   │
+│  Mcp.WorkflowState  ·  history-aware help                            │
 ├──────────────────────────────────────────────────────────────────────┤
-│  Tool handlers  (46 modules, one per tool, all envelope-emitting)    │
+│  Tool handlers  (35 modules, one per tool, all envelope-emitting)    │
 ├──────────────────────────────────────────────────────────────────────┤
 │  Ghc.ApiSession  ·  MVar-guarded HscEnv  ·  evict-on-exception       │
 │   · runGhc · compileExpr · exprType · getInfo                        │
 │   · LogAction hook → structured diagnostics                          │
-│   · stanza-flag cache from `cabal v2-repl --with-compiler=<shim>`    │
 ├──────────────────────────────────────────────────────────────────────┤
 │  PropertyStore  ·  MVar-locked JSON · per-project regression set     │
 │  Refactor       ·  snapshot + compile-verify + rollback primitives   │
@@ -156,7 +130,7 @@ Point your MCP host at `~/.local/bin/haskell-flows-mcp`. **No rules file needed*
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-**~22,700 lines of Haskell**. Single binary. No daemon, no IPC, no external state — just `stdin`/`stdout` + your project tree + `~/.haskell-flows/`.
+**~25,700 lines of Haskell** (source). Single binary. No daemon, no IPC, no external state — just `stdin`/`stdout` + your project tree + `~/.haskell-flows/`.
 
 ---
 
@@ -184,9 +158,9 @@ Point your MCP host at `~/.local/bin/haskell-flows-mcp`. **No rules file needed*
 | | |
 |---|---|
 | 🏷 **Release** | `v0.1.0` — first tagged release, experimental but heavily test-covered |
-| 🧪 **Test coverage** | **514** unit-test functions · **72** E2E scenarios driving the full JSON-RPC surface in-process |
+| 🧪 **Test coverage** | **680** unit-test functions · **72** E2E scenarios driving the full JSON-RPC surface in-process |
 | ✅ **CI matrix** | 4 cells: `{ubuntu-latest, macos-latest} × {GHC 9.10.1, 9.12.2}` |
-| 🛡 **Closed enum** | `ErrorKind` is **33 constructors** — every error path on the wire is enumerable |
+| 🛡 **Closed enum** | `ErrorKind` is **26 constructors** — every error path on the wire is enumerable |
 | 📜 **Wire contract** | **#90 closed end-to-end** — single envelope, no dual-shape, structured `status` + nested `error.kind` |
 | 🏗 **Platforms** | `darwin-arm64` ✅ · `linux-x64` ✅ · `darwin-x64` ⚠️ build-from-source · others ❌ untested |
 
@@ -197,7 +171,7 @@ Point your MCP host at `~/.local/bin/haskell-flows-mcp`. **No rules file needed*
 ### Known limitations
 
 - **`ghc_eval` is RCE-by-design** — see security section. Layer your sandbox below the MCP.
-- **Suggestion engines use regex on type strings** — higher-rank, type-families, GADTs return zero suggestions. Future: `parseType` via GHC API.
+- **Suggestion engines use regex on type strings** — higher-rank, type-families, GADTs return zero suggestions.
 - **Not an HLS replacement.** `ghc_goto` / `ghc_doc` are thin; keep your LSP for cross-module jump.
 - **Bus factor of 1.** Single maintainer, no SLA. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -208,12 +182,12 @@ Point your MCP host at `~/.local/bin/haskell-flows-mcp`. **No rules file needed*
 | | |
 |---|---|
 | 📘 **Tool reference (PDF)** | [`docs/haskell-flows-mcp.pdf`](docs/haskell-flows-mcp.pdf) |
-| 🧭 **Flow diagrams** | [`docs/flows.md`](docs/flows.md) — property loop · bootstrap · refactor · session lifecycle |
-| 🚀 **Install guide** | [`docs/install.md`](docs/install.md) — three methods + per-host MCP wiring |
+| 🧭 **Flow diagrams** | [`docs/flows.md`](docs/flows.md) |
+| 🚀 **Install guide** | [`docs/install.md`](docs/install.md) |
 | 📝 **Changelog** | [CHANGELOG.md](CHANGELOG.md) |
 | 🤝 **Contributing** | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | 🛡 **Security** | [SECURITY.md](SECURITY.md) |
-| 🗂 **Dogfood logs** | [`docs/dogfood-2026-04-19.md`](docs/dogfood-2026-04-19.md) · [`-rle`](docs/dogfood-2026-04-19-rle.md) |
+| 🗂 **Dogfood logs** | [`docs/dogfood-2026-04-19.md`](docs/dogfood-2026-04-19.md) |
 
 ---
 
