@@ -122,6 +122,11 @@ jobs:
     env:
       CABAL_DIR: /root/.cabal
       XDG_CONFIG_HOME: /root/.config
+      # Ubuntu Docker containers ship with POSIX locale by default;
+      # test output contains Unicode arrows / dashes that crash
+      # `commitBuffer` without a UTF-8 locale.
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
 
     steps:
       - uses: actions/checkout@v6

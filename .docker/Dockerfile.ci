@@ -29,6 +29,8 @@ ARG GHC_VERSION
 ARG CABAL_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
     PATH=/root/.ghcup/bin:/root/.cabal/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN apt-get update && \
