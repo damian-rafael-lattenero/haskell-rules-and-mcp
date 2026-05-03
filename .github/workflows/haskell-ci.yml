@@ -112,6 +112,17 @@ jobs:
     container:
       image: ghcr.io/${{ github.repository_owner }}/haskell-flows-ci:${{ matrix.ghc }}-latest
 
+    # GitHub Actions sets HOME=/github/home for `container:` jobs so
+    # the runner has a writable home, but the image's cabal config
+    # + ~/.cabal/store/ + Hackage index were populated under /root.
+    # Without these env vars cabal looks at /github/home (empty) and
+    # fails Configure with "The package list for 'hackage.haskell.org'
+    # does not exist." Pointing CABAL_DIR + XDG_CONFIG_HOME at /root
+    # makes cabal see the image's pre-baked state.
+    env:
+      CABAL_DIR: /root/.cabal
+      XDG_CONFIG_HOME: /root/.config
+
     steps:
       - uses: actions/checkout@v6
 
