@@ -83,7 +83,7 @@ jobs:
       # a breach is exactly when the JSON is most worth inspecting.
       - name: Upload bench-results.json
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-results
           path: mcp-server-haskell/bench-results.json
