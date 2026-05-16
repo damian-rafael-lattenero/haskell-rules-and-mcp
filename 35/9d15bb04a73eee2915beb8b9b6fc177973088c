@@ -1,0 +1,47 @@
+mcp-server-haskell/src/HaskellFlows/Mcp/Envelope.hs
+  s_54dbf5675ec5ae::t_8bd50b59103a4a 246
+  s_54dbf5675ec5ae::t_b8655fe5874912 194-196
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheckExport.hs
+  s_54dbf5675ec5ae::t_6fc062b91f5290 34-36
+  s_54dbf5675ec5ae::t_fc3b5f0ee5d719 66-71,75-78,87
+  s_54dbf5675ec5ae::t_5b6f224b1029ad 118-131,135-161
+  s_54dbf5675ec5ae::t_33516d7d5471a8 44,48
+  s_54dbf5675ec5ae::t_284ce7680d86ce 390-406
+mcp-server-haskell/test/Spec.hs
+  s_54dbf5675ec5ae::t_a7496f446d773d 5699-5703,5710-5712,5719,5721,5728-5730,5737-5742,5747-5748,5754
+  s_54dbf5675ec5ae::t_c353f14ad35c7d 3593,3598
+  s_54dbf5675ec5ae::t_5ea45c28474ab2 960-965
+  s_54dbf5675ec5ae::t_85bab32cf1bd5b 5704-5709,5713-5718,5720,5722-5727,5731-5736,5743-5746,5749-5753
+mcp-server-haskell/src/HaskellFlows/Tool/PropertyStore.hs
+  s_54dbf5675ec5ae::t_669270287c6eeb 84-99
+  s_54dbf5675ec5ae::t_502c7a325f505b 36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "359d15bb04a73eee2915beb8b9b6fc177973088c",
+  "prompts": {
+    "c158702b1d5bd8f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9f50a6b3-1c26-471c-9002-493bd342ee49",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>",
+      "total_additions": 13863,
+      "total_deletions": 0,
+      "accepted_lines": 13870,
+      "overriden_lines": 1
+    }
+  },
+  "sessions": {
+    "s_54dbf5675ec5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d704d61f-ca86-414c-85d1-e75c1df02293",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
