@@ -1,0 +1,25 @@
+mcp-server-haskell/src/HaskellFlows/Parser/TypeSignature.hs
+  s_54dbf5675ec5ae::t_92f6b9dbd5ff04 66-74
+  s_54dbf5675ec5ae::t_dd33e0df4a792a 124-147
+  s_54dbf5675ec5ae::t_04ff421ceadfe3 23-24
+mcp-server-haskell/test/Spec.hs
+  s_54dbf5675ec5ae::t_d68896ae72d8d9 1258-1262
+  s_54dbf5675ec5ae::t_e73c21d33134ab 72
+  s_54dbf5675ec5ae::t_6ff211df02bcc9 12586-12621
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "2dab7b27e6cdd418f588edf5a7f5a8c809541126",
+  "prompts": {},
+  "sessions": {
+    "s_54dbf5675ec5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d704d61f-ca86-414c-85d1-e75c1df02293",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
