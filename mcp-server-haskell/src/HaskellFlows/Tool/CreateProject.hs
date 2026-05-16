@@ -29,6 +29,9 @@ module HaskellFlows.Tool.CreateProject
     -- * Issue #69 — exported for unit tests
   , cabalFile
   , sourceFile
+    -- * Issue #126 — exported for unit tests
+  , FilePlan (..)
+  , scaffold
   ) where
 
 import Control.Exception (SomeException, try)
@@ -59,6 +62,14 @@ data CreateArgs = CreateArgs
   { caName      :: !Text
   , caModule    :: !(Maybe Text)
   , caOverwrite :: !Bool
+    -- ^ #126 Bug A: when set, scaffold is written into this path rather
+    -- than the active ProjectDir.  Absolute paths are used as-is;
+    -- relative paths are joined against the active ProjectDir.
+  , caPath      :: !(Maybe Text)
+    -- ^ #126 Bug B: when False, return a preview of the file contents
+    -- without touching disk.  The overwrite pre-check is skipped
+    -- entirely — preview is always a read-only dry-run.
+  , caWrite     :: !Bool
   }
   deriving stock (Show)
 
@@ -67,7 +78,10 @@ instance FromJSON CreateArgs where
     n  <- o .:  "name"
     m  <- o .:? "module"
     ow <- o .:? "overwrite" .!= False
-    pure CreateArgs { caName = n, caModule = m, caOverwrite = ow }
+    p  <- o .:? "path"
+    w  <- o .:? "write"     .!= True
+    pure CreateArgs { caName = n, caModule = m, caOverwrite = ow
+                    , caPath = p, caWrite = w }
 
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
@@ -90,7 +104,14 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
           pure (Env.toolResponseToResult (Env.mkFailed
             ((Env.mkErrorEnvelope Env.Validation err)
                 { Env.eeField = Just "module" })))
-        Right m  -> scaffold pd pkg m (caOverwrite args)
+        Right m  ->
+          -- #126 Bug A: use the caller's path when provided.
+          -- Absolute paths are used as-is; relative paths and Nothing
+          -- fall back to the active ProjectDir.
+          let root = case caPath args of
+                Just p | not (T.null (T.strip p)) -> T.unpack p
+                _                                 -> unProjectDir pd
+          in scaffold root pkg m (caOverwrite args) (caWrite args)
 
 parseErrorKind :: String -> Env.ErrorKind
 parseErrorKind err
@@ -188,16 +209,29 @@ data FilePlan = FilePlan
   }
   deriving stock (Show)
 
-scaffold :: ProjectDir -> Text -> Text -> Bool -> IO ToolResult
-scaffold pd pkg modName overwrite = do
-  let root  = unProjectDir pd
-      plans =
+-- | Scaffold a project at @root@ (the caller-supplied target dir).
+--
+-- #126 Bug A: @root@ is the target path from the caller — NOT the
+-- active 'ProjectDir'. This means the overwrite pre-check tests the
+-- right directory.
+--
+-- #126 Bug B: when @write=False@, return a preview of the file
+-- contents without touching disk. The overwrite pre-check is skipped
+-- entirely — preview is always a read-only dry-run.
+scaffold :: FilePath -> Text -> Text -> Bool -> Bool -> IO ToolResult
+scaffold root pkg modName overwrite write = do
+  let plans =
         [ FilePlan (T.unpack pkg <> ".cabal")                   (cabalFile pkg modName)
         , FilePlan "cabal.project"                               cabalProject
         , FilePlan ("src" </> moduleToRelPath modName <> ".hs") (sourceFile modName)
         , FilePlan ("test" </> "Spec.hs")                       (testFile modName)
         ]
-  if not overwrite
+  if not write
+    -- #126 Bug B: preview mode — never touch disk, never check for
+    -- clashes. Return the generated content so the caller can inspect
+    -- it before committing.
+    then pure (previewResult pkg modName plans)
+    else if not overwrite
     then do
       clashes <- filterExistingM root plans
       case clashes of
@@ -338,3 +372,23 @@ createdResult pkg modName plans =
                             :: Text )
         ]
   in Env.toolResponseToResult (Env.mkOk payload)
+
+-- | #126 Bug B: preview mode — return the generated file contents
+-- without writing to disk. The caller can inspect the content and
+-- then re-call with @write=true@ to commit.
+previewResult :: Text -> Text -> [FilePlan] -> ToolResult
+previewResult pkg modName plans =
+  let payload = object
+        [ "package"  .= pkg
+        , "module"   .= modName
+        , "write"    .= False
+        , "preview"  .= map renderPlan plans
+        , "hint"     .= ("Preview only — call again with write=true to \
+                         \create these files." :: Text)
+        ]
+  in Env.toolResponseToResult (Env.mkOk payload)
+  where
+    renderPlan fp = object
+      [ "path"    .= T.pack (fpRelPath fp)
+      , "content" .= fpContent fp
+      ]

@@ -82,6 +82,16 @@ schema = Schema.discriminatedSchema "action"
           , ("overwrite", Schema.booleanField
               "If true, overwrite existing scaffolded files. Default: \
               \false — fails if any target already exists.")
+          -- #126 Bug A: caller supplies the target directory.
+          , ("path", Schema.stringField
+              "Absolute path to the target directory. Default: the \
+              \active project directory. The overwrite pre-check tests \
+              \THIS path — not the active project directory.")
+          -- #126 Bug B: write=false returns preview without writing.
+          , ("write", Schema.booleanField
+              "If true (default), write files to disk. If false, return \
+              \a preview of the generated content without touching the \
+              \filesystem. Preview mode never fails due to existing files.")
           ]
       , Schema.sbRequired          = ["name"]
       }

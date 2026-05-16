@@ -805,6 +805,10 @@ main = do
       , test "create_project: scaffold cabal file is shippable green-by-default (#69)"
                                                                  testCreateProjectScaffoldGreenCabal
       , test "create_project: validateName error names violation (#58)" testCreateValidateErrorMsg
+      -- Issue #126 — path + write fixes
+      , test "#126A: scaffold write=false never fails (preview mode)"  testCreateWriteFalseIsPreview
+      , test "#126A: scaffold write=false returns preview content"      testCreateWriteFalseContent
+      , test "#126B: scaffold targets supplied path not projectDir"    testCreateUsesSuppliedPath
       , test "nextStep: add_import count=0 suppresses load (#53)"     testNextStepAddImportZero
       , test "nextStep: add_import count>0 nudges load (#53)"         testNextStepAddImportNonZero
       , test "add_modules: moduleToPath mapping"   testAddModulesPath
@@ -7125,6 +7129,47 @@ testCreateValidateErrorMsg = pure $
       && ("lowercase" `T.isInfixOf` msg
             || "Hackage" `T.isInfixOf` msg)
     Right _ -> False
+
+--------------------------------------------------------------------------------
+-- Issue #126 — ghc_project(create): path + write fixes
+--------------------------------------------------------------------------------
+
+-- | #126 Bug B: write=false is preview mode — it must never fail due
+-- to existing files. Here we run scaffold against a root that DOES
+-- have the scaffold files (the test directory itself), but since
+-- write=false the overwrite check is skipped and we get ok.
+testCreateWriteFalseIsPreview :: IO Bool
+testCreateWriteFalseIsPreview = do
+  -- "." has cabal.project, src/, test/Spec.hs — exactly the clash
+  -- scenario that was failing before the fix.
+  result <- CreateProject.scaffold "." "my-pkg" "MyPkg" False False
+  pure (not (trIsError result))
+
+-- | #126 Bug B: write=false response carries "preview" key with
+-- generated file contents and write=false discriminator.
+testCreateWriteFalseContent :: IO Bool
+testCreateWriteFalseContent = do
+  result <- CreateProject.scaffold "/nonexistent-dir" "my-pkg" "MyPkg" False False
+  case extractPayload result of
+    A.Object o ->
+      let hasPreview = AKM.member (AKey.fromText "preview") o
+          writeFalse = case AKM.lookup (AKey.fromText "write") o of
+                         Just (A.Bool False) -> True
+                         _                  -> False
+      in pure (hasPreview && writeFalse && not (trIsError result))
+    _ -> pure False
+
+-- | #126 Bug A: scaffold uses the supplied root path, not the
+-- active projectDir. We supply a temp dir that has no scaffold
+-- files. The call with write=true and overwrite=false should
+-- succeed (no clashes at the target path).
+testCreateUsesSuppliedPath :: IO Bool
+testCreateUsesSuppliedPath = withTempProject $ \pd -> do
+  -- The temp dir is freshly created — no cabal.project or Spec.hs.
+  -- Before the fix, the clash check looked in the *active* projectDir
+  -- (mcp-server-haskell/) which DOES have those files.
+  result <- CreateProject.scaffold (unProjectDir pd) "fresh-pkg" "FreshPkg" False True
+  pure (not (trIsError result))
 
 testCheckGateReasonMatchesOk :: IO Bool
 testCheckGateReasonMatchesOk =
