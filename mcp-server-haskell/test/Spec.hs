@@ -684,6 +684,14 @@ main = do
                                                    testLintResolveRejectsAbsoluteOutside
       , test "ghc_lint #81: resolveTarget accepts in-tree path/module_path"
                                                    testLintResolveAcceptsInTree
+      , test "#128: stripProjectDirPrefix no-ops on safe path"
+                                                   testStripProjectDirPrefixNoOp
+      , test "#128: stripProjectDirPrefix strips matching basename"
+                                                   testStripProjectDirPrefixStrips
+      , test "#128: stripProjectDirPrefix leaves absolute paths unchanged"
+                                                   testStripProjectDirPrefixAbsolute
+      , test "#128: resolveTarget avoids path doubling (dogfood case)"
+                                                   testLintResolveNoDuplication
       , test "validateCabal flags duplicate deps"  testDuplicateDeps
       , test "validateCabal flags missing synopsis" testMissingSynopsis
       , test "parseExposedModules reads modules"   testParseModules
@@ -5035,6 +5043,48 @@ testLintResolveAcceptsInTree =
           isInTree (Right p) = "/tmp/project" `List.isPrefixOf` p
           isInTree _         = False
       in pure $ isInTree asPath && isInTree asModulePath && isInTree asEmpty
+
+-- #128: stripProjectDirPrefix must not change a path that doesn't start
+-- with the project basename.
+testStripProjectDirPrefixNoOp :: IO Bool
+testStripProjectDirPrefixNoOp =
+  let root   = "/home/user/my-project"
+      result = LintTool.stripProjectDirPrefix root "src/"
+  in pure (result == "src/")
+
+-- #128: when the raw path starts with the project's own basename,
+-- strip that segment so path-joining doesn't double it.
+testStripProjectDirPrefixStrips :: IO Bool
+testStripProjectDirPrefixStrips =
+  let root   = "/home/user/my-project"
+      -- "my-project/" is the basename of root — stripping leaves ""
+      result = LintTool.stripProjectDirPrefix root "my-project/"
+      -- also test "my-project/src" → "src"
+      result2 = LintTool.stripProjectDirPrefix root "my-project/src"
+  in pure (null result && result2 == "src")
+
+-- #128: absolute paths must be returned unchanged regardless of basename.
+testStripProjectDirPrefixAbsolute :: IO Bool
+testStripProjectDirPrefixAbsolute =
+  let root   = "/home/user/my-project"
+      absP   = "/home/user/my-project/src"
+      result = LintTool.stripProjectDirPrefix root absP
+  in pure (result == absP)
+
+-- #128: resolveTarget with path="<basename>/" must resolve to projectDir,
+-- not projectDir/<basename>. This is the exact dogfood repro case.
+testLintResolveNoDuplication :: IO Bool
+testLintResolveNoDuplication =
+  case mkProjectDir "/tmp/my-project" of
+    Left _   -> pure False
+    Right pd ->
+      -- Pass the project's own basename as the lint path — the old code
+      -- would produce /tmp/my-project/my-project (doubled, doesn't exist).
+      let args   = LintTool.LintArgs (Just "my-project") Nothing "warning"
+          result = LintTool.resolveTarget pd args
+      in pure $ case result of
+           Right resolved -> resolved == "/tmp/my-project"
+           Left _         -> False
 
 testDuplicateDeps :: IO Bool
 testDuplicateDeps =

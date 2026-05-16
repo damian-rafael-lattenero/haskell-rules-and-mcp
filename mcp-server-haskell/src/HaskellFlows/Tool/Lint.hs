@@ -24,6 +24,7 @@ module HaskellFlows.Tool.Lint
   , Suggestion (..)
   , parseHlintJson
   , resolveTarget
+  , stripProjectDirPrefix
   ) where
 
 import Control.Concurrent (forkIO)
@@ -41,6 +42,7 @@ import System.Directory (doesDirectoryExist, doesFileExist, findExecutable)
 import System.FilePath
   ( equalFilePath
   , isAbsolute
+  , joinPath
   , normalise
   , pathSeparator
   , splitDirectories
@@ -79,7 +81,8 @@ descriptor =
                   [ "type"        .= ("string" :: Text)
                   , "description" .=
                       ("Directory to lint (recursive). Example: "
-                       <> "\"mcp-server-haskell/\" or \"src/\"." :: Text)
+                       <> "\".\" (whole project) or \"src/\" (sources only). "
+                       <> "Omit to lint the project root." :: Text)
                   ]
               , "module_path" .= object
                   [ "type"        .= ("string" :: Text)
@@ -140,8 +143,8 @@ pathTraversalResult msg =
   Env.toolResponseToResult
     (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
 
--- | Resolve which path hlint should lint. Prefer `module_path`
--- (single file, fastest inner loop), fall back to `path` (directory
+-- | Resolve which path hlint should lint. Prefer @module_path@
+-- (single file, fastest inner loop), fall back to @path@ (directory
 -- — matches CI). If neither, default to the project root itself.
 --
 -- Path-traversal guard mirrors 'HaskellFlows.Types.mkModulePath':
@@ -151,14 +154,22 @@ pathTraversalResult msg =
 -- (issue #81 / CWE-22) accepted @"<root>/../.."@ because the
 -- literal prefix matched, leaving hlint to run wherever the path
 -- actually pointed (e.g. the parent directory of the project).
+--
+-- #128: before joining, strip the project root's own basename from
+-- the start of the raw path. Without this, a user passing
+-- @"mcp-server-haskell/"@ when the projectDir already ends with
+-- @"mcp-server-haskell"@ produces a doubled @projectDir/mcp-server-haskell@
+-- path that doesn't exist.
 resolveTarget :: ProjectDir -> LintArgs -> Either Text FilePath
 resolveTarget pd args =
-  let raw = case (laPath args, laModulePath args) of
+  let raw0 = case (laPath args, laModulePath args) of
         (_, Just mp)        -> T.unpack mp
         (Just p,  Nothing)  -> T.unpack p
         (Nothing, Nothing)  -> ""
       root      = unProjectDir pd
       rootN     = normalise root
+      -- Strip the project basename prefix before joining (#128).
+      raw       = stripProjectDirPrefix rootN raw0
       joined
         | null raw       = rootN
         | isAbsolute raw = normalise raw
@@ -170,8 +181,32 @@ resolveTarget pd args =
         joined `equalFilePath` rootN
           || take (length prefix) joined == prefix
   in if hasDotDot || not insidePrefix
-       then Left ("target path escapes project directory: " <> T.pack raw)
+       then Left ("target path escapes project directory: " <> T.pack raw0)
        else Right joined
+
+-- | #128: Strip the project root's own basename from the leading
+-- component of a relative path, preventing path-doubling.
+--
+-- Example: @stripProjectDirPrefix "\/proj\/my-app" "my-app\/"@
+-- returns @""@, which 'resolveTarget' maps to the project root.
+--
+-- The strip only fires when the leading segment of the raw path
+-- exactly matches the last segment of the project root. Absolute
+-- paths are left untouched so callers can still supply literal targets.
+stripProjectDirPrefix :: FilePath -> FilePath -> FilePath
+stripProjectDirPrefix rootN raw
+  | isAbsolute raw = raw
+  | otherwise =
+      let rootSegs = splitDirectories rootN
+          baseName  = case rootSegs of
+            [] -> ""
+            _  -> last rootSegs
+          rawSegs  = splitDirectories raw
+      in case rawSegs of
+           (first : rest)
+             | not (null baseName)
+             , equalFilePath first baseName -> joinPath rest
+           _ -> raw
 
 --------------------------------------------------------------------------------
 -- subprocess
