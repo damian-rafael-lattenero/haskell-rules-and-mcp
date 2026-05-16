@@ -659,11 +659,19 @@ toolResponseToResult r =
        }
 
 -- | A status that should set the 'trIsError' flag at the MCP
--- transport layer. 'StatusOk' and 'StatusPartial' are
--- non-failing (the call produced usable output); everything else
--- — refused / failed / no_match / timeout / unavailable — flips
+-- transport layer. 'StatusOk', 'StatusPartial', and 'StatusNoMatch'
+-- are non-failing (the call produced a usable, well-formed response);
+-- everything else — refused / failed / timeout / unavailable — flips
 -- the MCP @isError@ flag so JSON-RPC clients see the call as an
 -- error response.
+--
+-- #139: 'StatusNoMatch' is now treated as non-failing. An empty search
+-- result (zero hits) is an expected, non-exceptional outcome — the
+-- query was valid, hoogle ran, and simply found nothing.  Setting
+-- @isError=true@ was causing 'ghc_batch(fail_fast=true)' to abort
+-- subsequent actions whenever a lookup probed for a name that didn't
+-- exist. Callers that need to detect the miss can still branch on the
+-- @status == "no_match"@ field or check @result.count == 0@.
 --
 -- This was previously called 'isLegacySuccess' and lived behind
 -- the dual-shape window; it's now a private helper for the
@@ -672,6 +680,7 @@ toolResponseToResult r =
 isFailingStatus :: ToolStatus -> Bool
 isFailingStatus StatusOk      = False
 isFailingStatus StatusPartial = False
+isFailingStatus StatusNoMatch = False   -- #139: miss is not an error
 isFailingStatus _             = True
 
 --------------------------------------------------------------------------------

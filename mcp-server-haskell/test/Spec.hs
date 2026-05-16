@@ -1196,6 +1196,9 @@ main = do
       , test "#106/F-07: error remediation uses ghc_project(action=create)" testRemediationToolName
       , test "#106/F-20: parseHoogleLine populates hhName field" testHoogleHitName
       , test "#106/F-19: hitsPayload deduplicates by module+signature" testHoogleDedup
+      -- Issue #139 — no_match must not set isError
+      , test "#139: StatusNoMatch is not a failing status (isError=false)" testNoMatchIsNotFailing
+      , test "#139: hoogle_search no-results renderResult has isError=false" testHoogleNoMatchIsError
       , test "#106/F-25: ghc_explain_error drops redundant module_source" testExplainErrorNoModuleSource
       , test "#106/F-11: ghc_doc strips LaTeX delimiters" testDocStripLatex
       , test "#106/F-26: ghc_perf omits samples by default" testPerfSamplesGated
@@ -11894,6 +11897,24 @@ testHoogleDedup =
       sameHit a b = hhModule a == hhModule b && hhSignature a == hhSignature b
       unique = List.nubBy sameHit [h1, h2, h3]
   in pure (length unique == 2)
+
+--------------------------------------------------------------------------------
+-- Issue #139 — StatusNoMatch must not set isError
+--------------------------------------------------------------------------------
+
+-- | #139: 'isFailingStatus StatusNoMatch' must return False so that
+-- 'toolResponseToResult' sets @isError=false@ on no-result hoogle responses.
+testNoMatchIsNotFailing :: IO Bool
+testNoMatchIsNotFailing = do
+  let result = Env.toolResponseToResult (Env.mkNoMatch (A.object []))
+  pure (not (trIsError result))
+
+-- | #139: the full hoogle renderResult path for an empty hit list must
+-- produce a ToolResult with isError=false.
+testHoogleNoMatchIsError :: IO Bool
+testHoogleNoMatchIsError = do
+  let result = HoogleTool.renderResult "NoSuchSymbolXYZ" (HoogleTool.HoSuccess [])
+  pure (not (trIsError result))
 
 -- | F-25: 'ghc_explain_error' context must not include 'module_source'
 -- alongside 'enclosing_slice' — they were byte-identical for small

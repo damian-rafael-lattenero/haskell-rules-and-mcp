@@ -22,6 +22,9 @@ module HaskellFlows.Tool.Hoogle
   , HoogleArgs (..)
   , parseHoogleLine
   , HoogleHit (..)
+    -- * Exported for unit tests (#139)
+  , HoogleOutcome (..)
+  , renderResult
   ) where
 
 import Control.Concurrent (forkIO)
