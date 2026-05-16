@@ -306,6 +306,12 @@ main = do
       , test "sanitizeExpression rejects newline" testSanitizeRejectsNewline
       , test "sanitizeExpression rejects sentinel" testSanitizeRejectsSentinel
       , test "sanitizeExpression rejects empty"   testSanitizeRejectsEmpty
+      , test "sanitizeExpression rejects large literal (#127)" testSanitizeRejectsLargeLiteral
+      , test "sanitizeExpression rejects big exponent (#127)"  testSanitizeRejectsBigExponent
+      , test "sanitizeExpression accepts 19-digit literal (#127)" testSanitizeAccepts19Digits
+      , test "sanitizeExpression accepts small exponent (#127)"   testSanitizeAcceptsSmallExp
+      , test "sanitizeRejection OversizedIntegerLiteral -> oversized_input (#127)"
+             testSanitizeRejectionOversizedInteger
       , test "parseTypeOutput single line"        testParseTypeSingleLine
       , test "parseTypeOutput multi line"         testParseTypeMultiLine
       , test "parseTypeOutput rejects malformed"  testParseTypeMalformed
@@ -647,6 +653,10 @@ main = do
                                                    testEvalRefusesNewline
       , test "Envelope #90 Phase B: ghc_eval refuses sentinel string"
                                                    testEvalRefusesSentinel
+      , test "#127: ghc_eval refuses 2^64 (oversized integer literal)"
+                                                   testEvalRefusesOversizedInteger
+      , test "#127: ghc_eval refuses 18446744073709551616 (20-digit literal)"
+                                                   testEvalRefusesLargeLiteral
       , test "Envelope #90 Phase B: ghc_hole on module with hole → status=ok"
                                                    testHoleWithHoleOk
       , test "Envelope #90 Phase B: ghc_hole on hole-free module → status=no_match"
@@ -1390,6 +1400,46 @@ testSanitizeRejectsEmpty = pure $ case sanitizeExpression "   " of
   Left EmptyInput -> True
   _               -> False
 
+-- #127: 20-digit decimal literal (>= 10^19) must be refused.
+-- 18446744073709551616 is 2^64 — the prototypical crash trigger.
+testSanitizeRejectsLargeLiteral :: IO Bool
+testSanitizeRejectsLargeLiteral =
+  pure $ case sanitizeExpression "18446744073709551616" of
+    Left OversizedIntegerLiteral -> True
+    _                            -> False
+
+-- #127: exponent >= 64 in a power expression must be refused.
+-- "2^64" would constant-fold to a two-limb Integer and segfault the RTS.
+testSanitizeRejectsBigExponent :: IO Bool
+testSanitizeRejectsBigExponent =
+  pure $ case sanitizeExpression "2^64" of
+    Left OversizedIntegerLiteral -> True
+    _                            -> False
+
+-- #127: 19-digit literal (< 10^19) must NOT be refused — single GMP limb.
+-- 9999999999999999999 is 10^19 - 1, safely within Word64.
+testSanitizeAccepts19Digits :: IO Bool
+testSanitizeAccepts19Digits =
+  pure $ case sanitizeExpression "9999999999999999999" of
+    Right _ -> True
+    _       -> False
+
+-- #127: exponent 63 must NOT be refused — 2^63 is still a single-limb value
+-- on 64-bit (it is maxBound :: Int64, not Int64+1).
+testSanitizeAcceptsSmallExp :: IO Bool
+testSanitizeAcceptsSmallExp =
+  pure $ case sanitizeExpression "2^63" of
+    Right _ -> True
+    Left OversizedIntegerLiteral -> False
+    Left _  -> True   -- other rejections (e.g. future rules) still pass
+
+-- #127: integration — 'sanitizeRejection' maps OversizedIntegerLiteral to
+-- the OversizedInput ErrorKind so the wire response uses "oversized_input".
+testSanitizeRejectionOversizedInteger :: IO Bool
+testSanitizeRejectionOversizedInteger =
+  let ee = Env.sanitizeRejection "expr" OversizedIntegerLiteral
+  in pure (Env.eeKind ee == Env.OversizedInput)
+
 testParseTypeSingleLine :: IO Bool
 testParseTypeSingleLine =
   pure $ case parseTypeOutput "map (+1) :: Num b => [b] -> [b]" of
@@ -1469,6 +1519,9 @@ prop_sanitize_rejects_sentinel pre suf =
 
 -- | Strings that are non-empty, single-line, and sentinel-free round-trip
 -- through 'sanitizeExpression' modulo the outer whitespace trim.
+-- #127: OversizedIntegerLiteral and InputTooLarge are also valid policy
+-- rejections — the property's claim is "never silently accepted", not
+-- "always accepted".
 prop_sanitize_clean_roundtrip :: String -> Property
 prop_sanitize_clean_roundtrip rawS =
   let raw = T.pack rawS
@@ -1477,8 +1530,10 @@ prop_sanitize_clean_roundtrip rawS =
         && not ("<<<GHCi-DONE-7f3a2b>>>" `T.isInfixOf` raw)
   in ok ==>
      case sanitizeExpression raw of
-       Right cleaned -> cleaned === T.strip raw
-       _             -> counterexample "expected Right" (property False)
+       Right cleaned                -> cleaned === T.strip raw
+       Left OversizedIntegerLiteral -> property True  -- #127: large-int guard
+       Left (InputTooLarge _ _)     -> property True  -- size cap
+       _                            -> counterexample "expected Right" (property False)
 
 -- | For any project dir and any relative path containing a ".." segment,
 -- 'mkModulePath' must refuse to produce a ModulePath.
@@ -4641,6 +4696,34 @@ testEvalRefusesSentinel = do
       | Env.reStatus env == Env.StatusRefused
       , Just err <- Env.reError env ->
           Env.eeKind err == Env.SentinelPoisoning
+            && Env.eeField err == Just "expression"
+    _ -> False
+
+-- | #127: power-expression with exponent >= 64 → status='refused' with
+-- kind='oversized_input'. Guards against the two-limb GMP Integer that
+-- crashes the in-process GHC evaluator via an RTS segfault.
+testEvalRefusesOversizedInteger :: IO Bool
+testEvalRefusesOversizedInteger = do
+  decoded <- runEval (A.object [ "expression" A..= ("2^64" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusRefused
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.OversizedInput
+            && Env.eeField err == Just "expression"
+    _ -> False
+
+-- | #127: 20-digit decimal literal → status='refused' with
+-- kind='oversized_input'. 18446744073709551616 is 2^64.
+testEvalRefusesLargeLiteral :: IO Bool
+testEvalRefusesLargeLiteral = do
+  decoded <- runEval
+    (A.object [ "expression" A..= ("18446744073709551616" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusRefused
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.OversizedInput
             && Env.eeField err == Just "expression"
     _ -> False
 

@@ -13,6 +13,7 @@ module HaskellFlows.Ghc.Sanitize
   , maxExpressionBytes
   ) where
 
+import Data.Char (isDigit)
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -40,6 +41,14 @@ data CommandError
   | InputTooLarge !Int !Int
     -- ^ @InputTooLarge observed cap@. Input exceeded
     -- 'maxExpressionBytes'.
+  | OversizedIntegerLiteral
+    -- ^ #127: expression contains a decimal literal with 20+ digits
+    -- (i.e. ≥ 10^19 ≈ 2^63), or a power expression @N ^ E@ with
+    -- E ≥ 64. Either form can produce a two-limb GMP 'Integer' that
+    -- crashes the in-process GHC evaluator via an RTS segfault.
+    --
+    -- This is a policy boundary — the caller must simplify the
+    -- expression to avoid the large 'Integer' literal.
   deriving stock (Eq, Show)
 
 -- | Upper bound on an incoming expression. Symmetric with
@@ -61,6 +70,47 @@ sanitizeExpression raw
   | sentinel `T.isInfixOf` raw               = Left ContainsSentinel
   | T.length raw > maxExpressionBytes        =
       Left (InputTooLarge (T.length raw) maxExpressionBytes)
+  | hasLargeIntLiteral raw                   = Left OversizedIntegerLiteral
+  | hasBigPowExponent raw                    = Left OversizedIntegerLiteral
   | otherwise                                = Right stripped
   where
     stripped = T.strip raw
+
+-- | #127: 'True' when the text contains a run of 20 or more
+-- consecutive decimal digits.
+--
+-- A 20-digit decimal number is ≥ 10^19 > 2^63, placing it in GMP's
+-- two-limb representation on 64-bit systems. Two-limb integers trigger
+-- an RTS segfault in the in-process GHC evaluator (GHC 9.12 / 9.10).
+--
+-- @maxBound :: Word64@ = 18446744073709551615 (20 digits) and
+-- @2^64@ = 18446744073709551616 (20 digits) both hit this path.
+hasLargeIntLiteral :: Text -> Bool
+hasLargeIntLiteral = any (\run -> isDigit (T.head run) && T.length run >= 20)
+                   . T.groupBy (\a b -> isDigit a == isDigit b)
+
+-- | #127: 'True' when the text contains @^ N@ (with optional
+-- surrounding whitespace) where N ≥ 64.
+--
+-- The expression @2^64@ computes an 'Integer' >= 2^64 at GHC's
+-- constant-folding stage, which triggers the same two-limb GMP crash
+-- as a bare large literal, even though neither @2@ nor @64@ alone is
+-- a large literal.
+hasBigPowExponent :: Text -> Bool
+hasBigPowExponent t = go t
+  where
+    go txt = case T.breakOn "^" txt of
+      (_, "")   -> False
+      (_, rest) ->
+        let after      = T.dropWhile (\c -> c == ' ' || c == '\t') (T.tail rest)
+            (numPart, remainder) = T.span isDigit after
+        in bigEnough numPart || go remainder
+
+    bigEnough numTxt
+      | T.null numTxt     = False
+      | T.length numTxt > 2 = True   -- exponent >= 100 is definitely big
+      | T.length numTxt == 2 =        -- two-digit: compare numerically
+          case reads (T.unpack numTxt) :: [(Int, String)] of
+            [(n, "")] -> n >= 64
+            _         -> False
+      | otherwise         = False

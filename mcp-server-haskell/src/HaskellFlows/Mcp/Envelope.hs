@@ -710,3 +710,12 @@ sanitizeRejection fieldName = \case
       { eeField = Just fieldName
       , eeCause = Just (T.pack (show sz) <> "/" <> T.pack (show cap))
       }
+  San.OversizedIntegerLiteral ->
+    (mkErrorEnvelope OversizedInput
+       (fieldName <> " contains an integer literal >= 2^64 or a power \
+       \expression with exponent >= 64. These crash the in-process GHC \
+       \evaluator via an RTS segfault. Use smaller values or evaluate \
+       \via Data.Bits or a subprocess."))
+      { eeField = Just fieldName
+      , eeHint  = Just "Split into smaller sub-expressions or use modular arithmetic"
+      }
