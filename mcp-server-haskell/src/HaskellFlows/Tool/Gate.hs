@@ -116,22 +116,42 @@ cabalBuildTimeoutMicros  = 3 * 60 * 1_000_000     -- 3 min
 handle :: Store -> GhcSession -> ProjectDir -> Value -> IO ToolResult
 handle store sess pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
-  Right args -> do
-    t0  <- now
-    reg <- if gaSkipRegression args
-             then pure Skipped
-             else runStep regressionTimeoutMicros (regressionStep store sess)
-    tst <- if gaSkipCabalTest args
-             then pure Skipped
-             else runStep cabalTestTimeoutMicros  (cabalStep pd ["test"])
-    bld <- if gaSkipCabalBuild args
-             then pure Skipped
-             else runStep cabalBuildTimeoutMicros (cabalStep pd ["build"])
-    t1  <- now
-    let allPassed =
-          stepPassed reg && stepPassed tst && stepPassed bld
-        total = t1 - t0
-    pure (renderReport allPassed total reg tst bld)
+  Right args
+    -- #138: reject vacuous all-skip calls up front so callers never
+    -- receive a misleading "Safe to push" on a zero-gate run.
+    | gaSkipRegression args && gaSkipCabalTest args && gaSkipCabalBuild args ->
+        pure allGatesSkippedResult
+    | otherwise -> do
+        t0  <- now
+        reg <- if gaSkipRegression args
+                 then pure Skipped
+                 else runStep regressionTimeoutMicros (regressionStep store sess)
+        tst <- if gaSkipCabalTest args
+                 then pure Skipped
+                 else runStep cabalTestTimeoutMicros  (cabalStep pd ["test"])
+        bld <- if gaSkipCabalBuild args
+                 then pure Skipped
+                 else runStep cabalBuildTimeoutMicros (cabalStep pd ["build"])
+        t1  <- now
+        let allPassed =
+              stepPassed reg && stepPassed tst && stepPassed bld
+            total = t1 - t0
+        pure (renderReport allPassed total reg tst bld)
+
+-- | #138: returned when the caller skips every gate. Status is
+-- 'refused' (policy) so agents see it as a configuration error
+-- they can fix — not a "push is blocked" failure.
+allGatesSkippedResult :: ToolResult
+allGatesSkippedResult =
+  Env.toolResponseToResult
+    (Env.mkRefused
+       ((Env.mkErrorEnvelope Env.Validation
+          "All gates skipped — at least one of regression / cabal_test / \
+          \cabal_build must be enabled. Skipping everything provides no \
+          \safety guarantee and is not a valid pre-push check.")
+          { Env.eeHint = Just
+              "Remove at least one skip_* flag, or call without any flags \
+              \to run the full suite." }))
 
 --------------------------------------------------------------------------------
 -- step machinery
@@ -350,9 +370,12 @@ renderStep s = case s of
 summary :: Bool -> Step -> Step -> Step -> Text
 summary allPassed reg tst bld
   | allPassed =
-      "All requested gates passed: "
-      <> passedVerbs reg tst bld
-      <> ". Safe to push."
+      let verbs = passedVerbs reg tst bld
+      -- #138: guard against an empty verb list producing a malformed
+      -- "All requested gates passed: . Safe to push." string.
+      in if T.null verbs
+           then "All gates were skipped — nothing was verified."
+           else "All requested gates passed: " <> verbs <> ". Safe to push."
   | otherwise =
       "At least one gate failed or timed out. "
       <> "See steps.* for per-step details."

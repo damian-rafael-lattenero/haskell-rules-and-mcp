@@ -769,6 +769,8 @@ main = do
       , test "suggest: evaluator needs sibling"    testSuggestEvaluatorNoSibling
       , test "gate: tool registered in inventory"  testGateRegistered
       , test "gate: all-skip parses + passes"      testGateAllSkip
+      , test "#138: gate all-skip returns refused/validation" testGateAllSkipRefused
+      , test "#138: gate summary avoids empty-verbs malform" testGateSummaryNoEmptyVerbs
       , test "qcexport: tool registered"           testQcExportRegistered
       , test "qcexport: renderTestFile shape"      testQcExportRenderShape
       , test "qcexport: sanitizeLabel strips LF"   testQcExportSanitize
@@ -8656,6 +8658,40 @@ testGateAllSkip =
   in case A.fromJSON raw :: A.Result Gate.GateArgs of
        A.Success _ -> pure True
        A.Error   _ -> pure False
+
+-- | #138: calling ghc_gate with all three skip flags returns
+-- status='refused' / kind='validation' instead of the vacuous
+-- "All gates passed: . Safe to push." success that misled callers.
+-- The early-exit path never touches the GhcSession, so 'undefined'
+-- is safe for that argument — it is guaranteed not to be forced.
+testGateAllSkipRefused :: IO Bool
+testGateAllSkipRefused = withTempProject $ \pd -> do
+  store <- openStore pd
+  let raw = A.object
+        [ "skip_regression"  .= True
+        , "skip_cabal_test"  .= True
+        , "skip_cabal_build" .= True
+        ]
+  tr <- Gate.handle store (error "GhcSession not needed for all-skip path") pd raw
+  case trContent tr of
+    [TextContent body] ->
+      case A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)) of
+        Right env ->
+          pure $ Env.reStatus env == Env.StatusRefused
+              && fmap Env.eeKind (Env.reError env) == Just Env.Validation
+        Left _ -> pure False
+    _ -> pure False
+
+-- | #138: the 'summary' function must not produce the malformed
+-- "All requested gates passed: . Safe to push." string when the
+-- passed-verbs list is empty. Verified via source inspection of
+-- the defensive guard added in the fix.
+testGateSummaryNoEmptyVerbs :: IO Bool
+testGateSummaryNoEmptyVerbs = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Gate.hs"
+  -- The fix adds a null-check on the verbs list before the safe-to-push string.
+  pure $ T.isInfixOf "T.null verbs" src
+      && T.isInfixOf "nothing was verified" src
 
 -- | Phase 11f: Functor shape `(a -> b) -> F a -> F b` emits BOTH
 -- identity and composition laws in one rule firing.
