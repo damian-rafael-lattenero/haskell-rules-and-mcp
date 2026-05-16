@@ -1208,6 +1208,8 @@ main = do
       , test "#106/F-10: importsPayload has session_preloads field" testImportsHasSessionPreloads
       , test "#106/F-21: compileFailResult has status=failed and dry_run=false" testRefactorCompileFailShape
       , test "#106/F-31: perf renderResult with all errors returns failed" testPerfAllSamplesErrored
+      , test "#136: readBaseline uses strict I/O (no lazy file handle)"    testPerfReadBaselineStrict
+      , test "#136: save+compare both flags work sequentially (no lock)"   testPerfSaveAndCompareNoLock
       -- Issue #108 — typed-hole reclassification in check_module + refactor
       , test "#108: check_module compileOk true when only hole errors"   testCheckModuleHoleOnlyCompileOk
       , test "#108: check_module realErrors excludes GHC-88464"          testCheckModuleRealErrorsExcludesHoles
@@ -12125,6 +12127,39 @@ testPerfAllSamplesErrored =
                   _ -> False
            _ -> False
        _ -> False
+
+-- | #136: readBaseline must use strict ByteString I/O so the file handle
+-- is closed before saveBaseline opens it for writing. Verified by source
+-- inspection — the lazy BL.readFile call must be replaced by BS.readFile
+-- + decodeStrict.
+testPerfReadBaselineStrict :: IO Bool
+testPerfReadBaselineStrict = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Perf.hs"
+  pure $ T.isInfixOf "BS.readFile" src
+      && T.isInfixOf "decodeStrict" src
+      -- Confirm the old lazy readFile is no longer used in readBaseline.
+      && not (T.isInfixOf "BL.readFile path" src)
+
+-- | #136: save_baseline=true AND compare_baseline=true in a single call
+-- must not crash with "resource busy (file is locked)". The fix reads the
+-- file strictly (closing the handle) before writing.
+-- This test exercises the actual file I/O round-trip in a temp directory.
+testPerfSaveAndCompareNoLock :: IO Bool
+testPerfSaveAndCompareNoLock = withTempProject $ \pd -> do
+  let path  = unProjectDir pd </> ".haskell-flows" </> "perf.json"
+      expr  = "sum [1..10]" :: T.Text
+      stats = PerfTool.aggregate [1000, 1100, 900, 1050, 1000]
+  -- Save a baseline first so compare has something to read.
+  PerfTool.saveBaseline path expr stats
+  -- Now exercise: readBaseline (strict read), then saveBaseline (write).
+  -- Without the fix this would fail with "resource busy".
+  mEntry <- PerfTool.readBaseline path expr
+  PerfTool.saveBaseline path expr stats
+  -- Verify the baseline was readable and re-written without error.
+  mEntry2 <- PerfTool.readBaseline path expr
+  pure $ case (mEntry, mEntry2) of
+    (Just e1, Just e2) -> PerfTool.beMeanNs e1 > 0 && PerfTool.beMeanNs e2 > 0
+    _                  -> False
 
 --------------------------------------------------------------------------------
 -- Issue #108 — typed-hole reclassification in check_module + refactor

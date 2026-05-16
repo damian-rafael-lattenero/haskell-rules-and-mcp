@@ -21,6 +21,8 @@ module HaskellFlows.Tool.Perf
     -- * Baseline helpers (exported for unit tests)
   , BaselineEntry (..)
   , regressionPct
+  , readBaseline
+  , saveBaseline
     -- * Response shaping (exported for unit tests)
   , renderResult
   ) where
@@ -35,6 +37,7 @@ import Data.List (sort)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import GHC.Clock (getMonotonicTimeNSec)
 import Data.Word (Word64)
@@ -63,6 +66,8 @@ descriptor =
           <> "(mean/median/min/max ns). Phase 2: set save_baseline=true "
           <> "to persist the mean to .haskell-flows/perf.json, or "
           <> "compare_baseline=true to detect regressions (>10% slower). "
+          <> "Both flags may be combined: comparison runs first, then the "
+          <> "new measurement is saved as the updated baseline. "
           <> "Criterion warmup, Core dump, and allocation tracking remain "
           <> "deferred."
     , tdInputSchema =
@@ -230,17 +235,23 @@ instance ToJSON BaselineEntry where
 -- | Read the stored baseline for @expr@ from the perf store.
 -- Returns 'Nothing' when the file doesn't exist or the expression
 -- has no recorded baseline.
+--
+-- #136: use strict 'BS.readFile' so the OS file handle is closed
+-- immediately after the read. The lazy 'BL.readFile' alternative
+-- defers handle closure to GC, which races with a subsequent
+-- 'saveBaseline' call on the same path and produces
+-- @withBinaryFile: resource busy (file is locked)@.
 readBaseline :: FilePath -> Text -> IO (Maybe BaselineEntry)
 readBaseline path expr = do
   exists <- doesFileExist path
   if not exists
     then pure Nothing
     else do
-      raw <- try @SomeException (BL.readFile path)
+      raw <- try @SomeException (BS.readFile path)
       case raw of
         Left  _    -> pure Nothing
         Right bytes ->
-          case decode bytes of
+          case decodeStrict bytes of
             Just (Object km) ->
               case KeyMap.lookup (keyFromText expr) km of
                 Just v  -> pure $ case fromJSON v of
