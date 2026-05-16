@@ -19,13 +19,15 @@ module HaskellFlows.Tool.Info
   , renderClassDefinition
   , classMethodPairs
   , renderClassMethodsBlock
+    -- * Issue #130 — eponymous record TyCon selection (exported for tests)
+  , preferTyCon
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAsciiLower, isAsciiUpper)
-import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.List.NonEmpty (toList)
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -176,9 +178,19 @@ queryInfo nm = do
   -- don't live in getNamesInScope, so the old scan missed 'data'
   -- declarations like Tree). If parseName throws, the outer 'try'
   -- in handle catches it and returns an errorResult.
-  n :| _ <- parseName (T.unpack nm)
-  info <- getInfo True n
-  pure $ case info of
+  --
+  -- #130: parseName can return MULTIPLE names for eponymous records
+  -- (data Foo = Foo { ... }) — both the TyCon and the DataCon are
+  -- named 'Foo'. Taking only the first name (n :| _) often yielded
+  -- the DataCon, whose showPprUnsafe rendering is "Data constructor
+  -- 'Foo'" — this got concatenated with the kind prefix, producing
+  -- the garbled "data Foo Data constructor 'Foo'" definition.
+  -- Fix: query getInfo for every name returned, then pick the ATyCon
+  -- result via 'preferTyCon'.
+  names <- parseName (T.unpack nm)
+  infos <- mapM (getInfo True) (toList names)
+  let mInfo = preferTyCon infos
+  pure $ case mInfo of
     Nothing -> Nothing
     Just (thing, _fixity, clsInsts, famInsts, _doc) ->
       let kind         = kindFromTyThing thing
@@ -218,6 +230,29 @@ queryInfo nm = do
                           <> map (T.pack . showPprUnsafe) famInsts
             }
       in Just (parsed, ctorPairs, methodPairs)
+
+-- | #130: Given the list of 'getInfo' results for every 'Name' that
+-- 'parseName' returned, pick the best one to display.
+--
+-- For eponymous records (@data Foo = Foo { … }@), parseName returns
+-- BOTH the TyCon name and the DataCon name. We prefer the 'ATyCon'
+-- entry because it carries the full constructor list; the 'AConLike'
+-- entry only gives \"Data constructor \'Foo\'\" via 'showPprUnsafe',
+-- which used to get garbled into the definition string.
+--
+-- When no 'ATyCon' is present (e.g. a plain function), we fall back
+-- to the first available result. 'Nothing' entries (name not in the
+-- current scope) are skipped.
+preferTyCon
+  :: [Maybe (TyThing, a, b, c, d)]
+  -> Maybe (TyThing, a, b, c, d)
+preferTyCon results =
+  let alive = [r | Just r <- results]
+  in case [r | r@(ATyCon {}, _, _, _, _) <- alive] of
+       (x:_) -> Just x           -- prefer TyCon when available
+       []    -> case alive of
+                  []    -> Nothing
+                  (x:_) -> Just x -- fall back to first result
 
 -- | Issue #54: render the canonical \"@data X = A | B a@\" /
 -- \"@newtype X = X a@\" header from the constructor list. Mirrors

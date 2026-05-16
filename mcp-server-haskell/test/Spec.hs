@@ -1245,6 +1245,9 @@ main = do
       , test "#109: parseExposedModules rejects tokens with punctuation"  testParseExposedModulesRejectsPunct
       -- Issue #107 — ghc_info renderDefinition for functions
       , test "#107: renderDefinition AnId produces name :: type"          testInfoAnIdDefinition
+      -- Issue #130 — eponymous record TyCon selection
+      , test "#130: preferTyCon present in Info.hs source"                testInfoPreferTyConInSource
+      , test "#130: queryInfo uses preferTyCon not first-name shortcut"   testInfoQueryUsesPreferTyCon
       -- Issue #111 — forall stripping in parseSignature
       , test "#111: stripForall handles forall {a}."                      testStripForallInferred
       , test "#111: stripForall handles forall a."                        testStripForallExplicit
@@ -12504,6 +12507,31 @@ testInfoAnIdDefinition = do
   pure $ T.isInfixOf "AnId i ->" code
       && T.isInfixOf "idType i" code
       && T.isInfixOf "nm <> \" :: \"" code
+  where
+    isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
+
+--------------------------------------------------------------------------------
+-- Issue #130 — ghc_info eponymous record TyCon selection
+--------------------------------------------------------------------------------
+
+-- | #130: the Info.hs source must define 'preferTyCon' with the
+-- ATyCon-preference logic.
+testInfoPreferTyConInSource :: IO Bool
+testInfoPreferTyConInSource = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Info.hs"
+  pure $ T.isInfixOf "preferTyCon" src
+      && T.isInfixOf "ATyCon {}" src
+      && T.isInfixOf "toList names" src
+
+-- | #130: 'queryInfo' must use 'preferTyCon' and NOT take only the
+-- first name via the old @n :| _@ pattern.
+testInfoQueryUsesPreferTyCon :: IO Bool
+testInfoQueryUsesPreferTyCon = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Info.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  pure $ T.isInfixOf "preferTyCon infos" code
+      -- The old first-name shortcut must be gone
+      && not (T.isInfixOf "n :| _" code)
   where
     isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
 
