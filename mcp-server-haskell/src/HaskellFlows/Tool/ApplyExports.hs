@@ -141,20 +141,26 @@ injectExports exports headerLine =
 
 -- | Issue #90 Phase C: applied rewrite → status='ok', payload
 -- carries the (path, exports) tuple so callers know what landed.
+-- #133: include @applied=true@ so callers can distinguish a successful
+-- write from the idempotent no-op path ('noChangeResult').
 successResult :: FilePath -> [Text] -> ToolResult
 successResult path exports =
   Env.toolResponseToResult (Env.mkOk (object
     [ "path"    .= T.pack path
     , "exports" .= exports
+    , "applied" .= True
     ]))
 
 -- | Issue #90 Phase C: idempotent no-op → status='ok' with
 -- 'no_change=True' under 'result'. Same predicate as before
 -- (callers branched on @no_change@), unchanged.
+-- #133: also include @applied=false@ so callers have a consistent
+-- boolean discriminator alongside @no_change@.
 noChangeResult :: FilePath -> ToolResult
 noChangeResult path =
   Env.toolResponseToResult (Env.mkOk (object
     [ "path"      .= T.pack path
+    , "applied"   .= False
     , "no_change" .= True
     , "reason"    .= ("The module header already has an export list, \
                       \or no `module Foo where` line was found." :: Text)

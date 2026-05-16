@@ -808,6 +808,10 @@ main = do
       , test "add_modules: moduleToPath mapping"   testAddModulesPath
       , test "apply_exports: rewriteHeader idempotent" testApplyExportsIdempotent
       , test "apply_exports: injects exports"      testApplyExportsInjects
+      , test "#133: successResult includes applied=true"    testApplyExportsSuccessHasApplied
+      , test "#133: noChangeResult includes applied=false"  testApplyExportsNoChangeHasApplied
+      , test "#133: handle write path returns applied=true" testApplyExportsHandleAppliedTrue
+      , test "#133: handle no-op path returns applied=false" testApplyExportsHandleAppliedFalse
       -- ISSUE-47: module-name validator unit tests
       , test "modname: valid single segment"        testValidModuleNameSingle
       , test "modname: valid dotted name"           testValidModuleNameDotted
@@ -7213,6 +7217,74 @@ testApplyExportsInjects =
   in case ApplyExports.rewriteHeader ["a", "b"] body of
        Just newBody -> pure (T.isInfixOf "module Foo (a, b) where" newBody)
        Nothing      -> pure False
+
+-- | #133: successResult (file written) must include applied=true in
+-- the result payload so callers can distinguish write from no-op.
+testApplyExportsSuccessHasApplied :: IO Bool
+testApplyExportsSuccessHasApplied = withFixture $ \pd _ -> do
+  let projectDir = HaskellFlows.Types.unProjectDir pd
+      modulePath = projectDir </> "src" </> "TestMod.hs"
+  createDirectoryIfMissing True (projectDir </> "src")
+  TIO.writeFile modulePath (T.unlines ["module TestMod where", "x = 1"])
+  let args = A.object
+        [ "module_path" A..= ("src/TestMod.hs" :: Text)
+        , "exports"     A..= (["x"] :: [Text])
+        ]
+  tr <- ApplyExports.handle pd args
+  let payload = resultPayload tr
+  pure $ fieldEquals "applied" (A.Bool True) payload
+
+-- | #133: noChangeResult (header already has exports) must include
+-- applied=false in the result payload.
+testApplyExportsNoChangeHasApplied :: IO Bool
+testApplyExportsNoChangeHasApplied = withFixture $ \pd _ -> do
+  let projectDir = HaskellFlows.Types.unProjectDir pd
+      modulePath = projectDir </> "src" </> "TestMod2.hs"
+  createDirectoryIfMissing True (projectDir </> "src")
+  -- Write a module that already has an export list → triggers noChangeResult.
+  TIO.writeFile modulePath (T.unlines ["module TestMod2 (x) where", "x = 1"])
+  let args = A.object
+        [ "module_path" A..= ("src/TestMod2.hs" :: Text)
+        , "exports"     A..= (["x"] :: [Text])
+        ]
+  tr <- ApplyExports.handle pd args
+  let payload = resultPayload tr
+  pure $ fieldEquals "no_change" (A.Bool True) payload
+      && fieldEquals "applied"   (A.Bool False) payload
+
+-- | #133: handle write path (new export list inserted) returns applied=true.
+-- Exercises the full handler integration.
+testApplyExportsHandleAppliedTrue :: IO Bool
+testApplyExportsHandleAppliedTrue = withFixture $ \pd _ -> do
+  let projectDir = HaskellFlows.Types.unProjectDir pd
+      modulePath = projectDir </> "src" </> "AppliedTrue.hs"
+  createDirectoryIfMissing True (projectDir </> "src")
+  TIO.writeFile modulePath (T.unlines ["module AppliedTrue where", "foo = 42"])
+  let args = A.object
+        [ "module_path" A..= ("src/AppliedTrue.hs" :: Text)
+        , "exports"     A..= (["foo"] :: [Text])
+        ]
+  tr <- ApplyExports.handle pd args
+  bodyAfter <- TIO.readFile modulePath
+  let payload = resultPayload tr
+  pure $ fieldEquals "applied" (A.Bool True) payload
+      && "foo" `T.isInfixOf` bodyAfter
+
+-- | #133: handle no-op path (header already has exports) returns applied=false.
+testApplyExportsHandleAppliedFalse :: IO Bool
+testApplyExportsHandleAppliedFalse = withFixture $ \pd _ -> do
+  let projectDir = HaskellFlows.Types.unProjectDir pd
+      modulePath = projectDir </> "src" </> "AppliedFalse.hs"
+  createDirectoryIfMissing True (projectDir </> "src")
+  TIO.writeFile modulePath (T.unlines ["module AppliedFalse (bar) where", "bar = 0"])
+  let args = A.object
+        [ "module_path" A..= ("src/AppliedFalse.hs" :: Text)
+        , "exports"     A..= (["bar"] :: [Text])
+        ]
+  tr <- ApplyExports.handle pd args
+  let payload = resultPayload tr
+  pure $ fieldEquals "applied"   (A.Bool False) payload
+      && fieldEquals "no_change" (A.Bool True)  payload
 
 --------------------------------------------------------------------------------
 -- ISSUE-47 — Module-name validator (Parser.ModuleName)
