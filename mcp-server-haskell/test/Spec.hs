@@ -1216,6 +1216,8 @@ main = do
       -- Issue #139 — no_match must not set isError
       , test "#139: StatusNoMatch is not a failing status (isError=false)" testNoMatchIsNotFailing
       , test "#139: hoogle_search no-results renderResult has isError=false" testHoogleNoMatchIsError
+      -- Issue #158 — 'count' alias for 'limit' must not be silently dropped
+      , test "#158: hoogle_search FromJSON accepts 'count' as alias for 'limit'" testHoogleCountAlias
       , test "#106/F-25: ghc_explain_error drops redundant module_source" testExplainErrorNoModuleSource
       , test "#106/F-11: ghc_doc strips LaTeX delimiters" testDocStripLatex
       , test "#106/F-26: ghc_perf omits samples by default" testPerfSamplesGated
@@ -12037,6 +12039,18 @@ testHoogleNoMatchIsError :: IO Bool
 testHoogleNoMatchIsError = do
   let result = HoogleTool.renderResult "NoSuchSymbolXYZ" (HoogleTool.HoSuccess [])
   pure (not (trIsError result))
+
+-- | #158: 'FromJSON HoogleArgs' must accept "count" as a synonym for
+-- "limit" — both field names are in common LLM use. The schema declares
+-- additionalProperties=false but the 'FromJSON' instance must honour
+-- both aliases rather than silently dropping the unknown "count" key.
+testHoogleCountAlias :: IO Bool
+testHoogleCountAlias =
+  -- Parse args with "count" key instead of "limit"
+  case A.fromJSON (A.object ["query" A..= ("map" :: Text), "count" A..= (3 :: Int)]) of
+    A.Error _   -> pure False  -- must parse successfully
+    A.Success (HoogleTool.HoogleArgs { HoogleTool.haQuery = q, HoogleTool.haLimit = lim }) ->
+      pure (q == "map" && lim == 3)
 
 -- | F-25: 'ghc_explain_error' context must not include 'module_source'
 -- alongside 'enclosing_slice' — they were byte-identical for small
