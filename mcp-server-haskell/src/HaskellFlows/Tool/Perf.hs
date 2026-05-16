@@ -25,6 +25,7 @@ module HaskellFlows.Tool.Perf
   , saveBaseline
     -- * Response shaping (exported for unit tests)
   , renderResult
+  , summariseMeasurementErrors
   ) where
 
 import Control.Exception (SomeException, try)
@@ -295,6 +296,42 @@ keyFromText = AesonKey.fromText
 -- response shaping
 --------------------------------------------------------------------------------
 
+-- | #135: Collapse a (possibly huge, repetitive) list of per-run
+-- measurement errors into a single human-readable cause string that
+-- stays under ~600 characters.
+--
+-- When a stale GHC session fails identically on every run, the naive
+-- 'T.unlines' approach produces 100k+ chars (one full GHC diagnostic
+-- dump per run).  This function instead:
+--
+--   1. Surfaces only the FIRST error, truncated to 'errCap' chars.
+--   2. Notes how many subsequent errors were omitted.
+--
+-- The format matches the expectation the issue documents:
+-- @First error (1\/20): … [truncated; 19 similar errors omitted]@
+summariseMeasurementErrors :: [Text] -> Text
+summariseMeasurementErrors []           = ""
+summariseMeasurementErrors (first:rest) =
+  let total    = 1 + length rest
+      clipped  = T.take errCap first
+      truncSfx | T.length first > errCap = " [truncated]"
+               | otherwise              = ""
+      omitted  = length rest
+      omitSfx
+        | omitted > 0 =
+            "; " <> T.pack (show omitted)
+            <> " similar error" <> (if omitted == 1 then "" else "s")
+            <> " omitted"
+        | otherwise   = ""
+  in "First error (1/" <> T.pack (show total) <> "): "
+     <> clipped <> truncSfx <> omitSfx
+
+-- | Character budget for the first error in 'summariseMeasurementErrors'.
+-- 500 chars is enough to identify the root cause (module name + GHC code)
+-- without consuming meaningful context-window space.
+errCap :: Int
+errCap = 500
+
 -- | Issue #90 Phase C + Phase 2: status='ok' carries the measurement
 -- table. Per-run errors stay under 'result.errors' so the agent
 -- can drill in; 'measurements' has the aggregate stats.
@@ -314,7 +351,11 @@ renderResult args nss stats errs mBaseline =
                     ("All " <> T.pack (show (paRuns args))
                      <> " measurements errored. The GHC session may have lost "
                      <> "the module — run ghc_load to reload before benchmarking."))
-                      { Env.eeCause     = Just (T.unlines (take 3 errs))
+                      -- #135: deduplicate + truncate repeated stale-session errors.
+                      -- Previously T.unlines (take 3 errs) could still be hundreds
+                      -- of kilobytes when GHC emits a full module-load failure per
+                      -- measurement run.
+                      { Env.eeCause     = Just (summariseMeasurementErrors errs)
                       , Env.eeRemediation = Just "Call ghc_load(module_path=…) to reload the module, then retry ghc_perf."
                       }))
        else

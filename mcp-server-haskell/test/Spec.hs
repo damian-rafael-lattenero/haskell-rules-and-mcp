@@ -1216,6 +1216,11 @@ main = do
       , test "#106/F-31: perf renderResult with all errors returns failed" testPerfAllSamplesErrored
       , test "#136: readBaseline uses strict I/O (no lazy file handle)"    testPerfReadBaselineStrict
       , test "#136: save+compare both flags work sequentially (no lock)"   testPerfSaveAndCompareNoLock
+      -- Issue #135 — summariseMeasurementErrors truncation
+      , test "#135: summariseMeasurementErrors single error stays short"   testSummariseSingleError
+      , test "#135: summariseMeasurementErrors 20 repeated errors omits"  testSummariseRepeatedErrors
+      , test "#135: summariseMeasurementErrors long error truncates"       testSummariseLongError
+      , test "#135: summariseMeasurementErrors empty list is empty"        testSummariseEmptyList
       -- Issue #108 — typed-hole reclassification in check_module + refactor
       , test "#108: check_module compileOk true when only hole errors"   testCheckModuleHoleOnlyCompileOk
       , test "#108: check_module realErrors excludes GHC-88464"          testCheckModuleRealErrorsExcludesHoles
@@ -12245,6 +12250,46 @@ testPerfSaveAndCompareNoLock = withTempProject $ \pd -> do
   pure $ case (mEntry, mEntry2) of
     (Just e1, Just e2) -> PerfTool.beMeanNs e1 > 0 && PerfTool.beMeanNs e2 > 0
     _                  -> False
+
+--------------------------------------------------------------------------------
+-- Issue #135 — summariseMeasurementErrors truncation + dedup
+--------------------------------------------------------------------------------
+
+-- | #135: a single short error is presented as "First error (1/1): …"
+-- with no omit note and total length well under 600 chars.
+testSummariseSingleError :: IO Bool
+testSummariseSingleError = do
+  let msg    = "Could not load module 'Foo'" :: T.Text
+      result = PerfTool.summariseMeasurementErrors [msg]
+  pure $ T.isInfixOf "First error (1/1):" result
+      && T.isInfixOf msg result
+      && not (T.isInfixOf "omitted" result)
+      && T.length result < 600
+
+-- | #135: 20 identical errors are collapsed to one line with
+-- "[19 similar errors omitted]" and total length < 600 chars.
+testSummariseRepeatedErrors :: IO Bool
+testSummariseRepeatedErrors = do
+  let msg    = "Could not load module 'GHC.Types.Error'" :: T.Text
+      errs   = replicate 20 msg
+      result = PerfTool.summariseMeasurementErrors errs
+  pure $ T.isInfixOf "First error (1/20):" result
+      && T.isInfixOf "19 similar errors omitted" result
+      && T.length result < 600
+
+-- | #135: an error longer than 500 chars is truncated with a [truncated]
+-- note and the result stays under 600 chars.
+testSummariseLongError :: IO Bool
+testSummariseLongError = do
+  let longMsg = T.replicate 600 "x"
+      result  = PerfTool.summariseMeasurementErrors [longMsg]
+  pure $ T.isInfixOf "[truncated]" result
+      && T.length result < 600
+
+-- | #135: empty error list returns empty string (no crash).
+testSummariseEmptyList :: IO Bool
+testSummariseEmptyList =
+  pure $ PerfTool.summariseMeasurementErrors [] == ""
 
 --------------------------------------------------------------------------------
 -- Issue #108 — typed-hole reclassification in check_module + refactor
