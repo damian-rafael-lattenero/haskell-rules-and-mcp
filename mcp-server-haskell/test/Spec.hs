@@ -1140,6 +1140,13 @@ main = do
                                                                  testParseHeaderInvalidName
       , test "quickcheck: summariseStderr filters cabal noise"   testQcSummariseStderrFiltersNoise
       , test "quickcheck: summariseStderr caps at 1600 chars"    testQcSummariseStderrCaps
+      -- Issue #132 — not_in_scope classification
+      , test "#132: classifyStderrKind NotInScope on Variable not in scope"  testClassifyStderrNotInScope
+      , test "#132: classifyStderrKind SubprocessError on generic error"     testClassifyStderrGeneric
+      , test "#132: extractNotInScopeSymbol extracts bare name"              testExtractNisBareName
+      , test "#132: extractNotInScopeSymbol extracts name before type sig"   testExtractNisTypeSig
+      , test "#132: extractNotInScopeSymbol returns Nothing for other text"  testExtractNisAbsent
+      , test "#132: summariseStderr strips -Wmissing-home-modules lines"     testQcSummariseStripsWmhm
       , test "nextStep: ghc_load with typed-hole warning \8594 ghc_hole"
                                                                  testNextStepTypedHoleWarn
       , test "nextStep: ghc_load with non-hole warning \8594 ghc_fix_warning"
@@ -10946,6 +10953,55 @@ testQcSummariseStderrCaps =
       ( T.length summary <= 1700  -- 1600 + "…(truncated)" slack
         && "…(truncated)" `T.isSuffixOf` summary
       )
+
+--------------------------------------------------------------------------------
+-- Issue #132 — classifyStderrKind + extractNotInScopeSymbol
+--------------------------------------------------------------------------------
+
+-- | #132: "Variable not in scope" in stderr → NotInScope kind.
+testClassifyStderrNotInScope :: IO Bool
+testClassifyStderrNotInScope =
+  let hint = Just "Variable not in scope: sort :: [Int] -> [Int]"
+      kind = QcTool.classifyStderrKind hint
+  in pure (kind == Env.NotInScope)
+
+-- | #132: generic stderr → SubprocessError kind (unchanged from before).
+testClassifyStderrGeneric :: IO Bool
+testClassifyStderrGeneric =
+  let hint = Just "cabal repl exited with code 1"
+      kind = QcTool.classifyStderrKind hint
+  in pure (kind == Env.SubprocessError)
+
+-- | #132: extract bare name from "Variable not in scope: sort".
+testExtractNisBareName :: IO Bool
+testExtractNisBareName =
+  pure (QcTool.extractNotInScopeSymbol "Variable not in scope: sort" == Just "sort")
+
+-- | #132: extract name before the type annotation (":: …").
+testExtractNisTypeSig :: IO Bool
+testExtractNisTypeSig =
+  pure (QcTool.extractNotInScopeSymbol
+          "Variable not in scope: sort :: [Int] -> [Int]" == Just "sort")
+
+-- | #132: unrelated text yields Nothing.
+testExtractNisAbsent :: IO Bool
+testExtractNisAbsent =
+  pure (QcTool.extractNotInScopeSymbol "some other error" == Nothing)
+
+-- | #132: summariseStderr must strip -Wmissing-home-modules warning
+-- lines (and their continuation "Modules listed as … but not compiled:" line).
+testQcSummariseStripsWmhm :: IO Bool
+testQcSummariseStripsWmhm =
+  let noise = T.unlines
+        [ "<no location info>: warning: [-Wmissing-home-modules]"
+        , "    Modules listed as 'other-modules' but not compiled: HaskellFlows.Tool.Batch HaskellFlows.Tool.Eval"
+        , "<interactive>:1:1: error:"
+        , "    Variable not in scope: sort"
+        ]
+      result = QcTool.summariseStderr noise
+  in pure $ not ("missing-home-modules" `T.isInfixOf` result)
+         && not ("Modules listed as" `T.isInfixOf` result)
+         && "Variable not in scope: sort" `T.isInfixOf` result
 
 --------------------------------------------------------------------------------
 -- BUG-PLUS-mediocre-3: nextStep from ghc_load based on warning kind

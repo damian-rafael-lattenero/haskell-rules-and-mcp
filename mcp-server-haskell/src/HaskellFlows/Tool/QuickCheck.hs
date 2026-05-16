@@ -22,6 +22,8 @@ module HaskellFlows.Tool.QuickCheck
   , chooseStoreModule
   , isSimpleIdent
   , summariseStderr
+  , classifyStderrKind
+  , extractNotInScopeSymbol
     -- * Cabal library introspection (re-used by 'Tool.QuickCheckExport')
   , libraryExposedModules
   , scanLibraryExposedModules
@@ -539,14 +541,23 @@ renderResult qr mHint = case qr of
         response = (Env.mkNoMatch payload) { Env.reError = Just envErr }
     in Env.toolResponseToResult response
   QcUnparsed p raw ->
-    let payload = object $
+    -- #132: classify the error kind from the summarised stderr so
+    -- "Variable not in scope" surfaces as not_in_scope rather than
+    -- the opaque subprocess_error.
+    let kind    = classifyStderrKind mHint
+        msg | kind == Env.NotInScope =
+                  case mHint >>= extractNotInScopeSymbol of
+                    Just sym -> "Variable not in scope: " <> sym
+                                  <> " — add an import or qualify the name"
+                    Nothing  -> "Variable not in scope (see hint for details)"
+            | otherwise =
+                  "Could not parse cabal repl output for property '" <> p <> "'."
+        payload = object $
           [ "state"    .= ("unparsed" :: Text)
           , "property" .= p
           , "raw"      .= raw
           ] <> maybeHintPair mHint
-        envErr   = Env.mkErrorEnvelope Env.SubprocessError
-                     ( "Could not parse cabal repl output for property '"
-                       <> p <> "'." )
+        envErr   = Env.mkErrorEnvelope kind msg
         response = (Env.mkFailed envErr) { Env.reResult = Just payload }
     in Env.toolResponseToResult response
   where
@@ -555,6 +566,38 @@ renderResult qr mHint = case qr of
     -- nothing (suggests we have an explanation when we don't).
     maybeHintPair (Just h) | not (T.null (T.strip h)) = [ "hint" .= h ]
     maybeHintPair _                                    = []
+
+-- | #132: Classify the error kind from the summarised stderr hint.
+-- When the hint contains the GHC "Variable not in scope" diagnostic,
+-- the call failed because the user's expression referenced an unimported
+-- name — surface this as 'Env.NotInScope' rather than the opaque
+-- 'Env.SubprocessError'.
+classifyStderrKind :: Maybe Text -> Env.ErrorKind
+classifyStderrKind Nothing  = Env.SubprocessError
+classifyStderrKind (Just h)
+  | "Variable not in scope" `T.isInfixOf` h = Env.NotInScope
+  | otherwise                                = Env.SubprocessError
+
+-- | #132: Extract the symbol name from a GHC "Variable not in scope: <sym>"
+-- diagnostic. Returns 'Nothing' when the pattern is absent.
+--
+-- Examples:
+--
+-- > extractNotInScopeSymbol "Variable not in scope: sort :: [Int] -> [Int]"
+-- Just "sort"
+-- > extractNotInScopeSymbol "Variable not in scope: foo"
+-- Just "foo"
+-- > extractNotInScopeSymbol "some other error"
+-- Nothing
+extractNotInScopeSymbol :: Text -> Maybe Text
+extractNotInScopeSymbol t =
+  let marker = "Variable not in scope: "
+  in case T.breakOn marker t of
+       (_, rest) | T.null rest -> Nothing
+       (_, rest) ->
+         let sym  = T.strip (T.drop (T.length marker) rest)
+             name = T.takeWhile (\c -> c /= ' ' && c /= ':' && c /= '\n') sym
+         in if T.null name then Nothing else Just name
 
 -- | Read the project's @.cabal@ file and return every module name
 -- listed under the library's @exposed-modules@. Used to widen the
@@ -645,5 +688,15 @@ summariseStderr raw =
                  && " -w" `T.isInfixOf` l)  -- cabal's own "-W" banner
          && not ("resolving dependencies" `T.isPrefixOf` l)
          && not ("build profile" `T.isPrefixOf` l)
+         -- #132: filter -Wmissing-home-modules warnings + their
+         -- continuation lines. These fire whenever a project's
+         -- cabal file lists modules that aren't compiled under
+         -- the current stanza, and are always unrelated to the
+         -- user's property. A typical block looks like:
+         --   <no location info>: warning: [-Wmissing-home-modules]
+         --       Modules listed as ... but not compiled: Foo Bar
+         && not ("missing-home-modules" `T.isInfixOf` l)
+         && not ("modules listed as" `T.isInfixOf` l)
+         && not ("but not compiled:" `T.isInfixOf` l)
 
 
