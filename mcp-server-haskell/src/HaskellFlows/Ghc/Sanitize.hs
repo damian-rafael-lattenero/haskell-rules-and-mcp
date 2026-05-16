@@ -97,7 +97,7 @@ hasLargeIntLiteral = any (\run -> isDigit (T.head run) && T.length run >= 20)
 -- as a bare large literal, even though neither @2@ nor @64@ alone is
 -- a large literal.
 hasBigPowExponent :: Text -> Bool
-hasBigPowExponent t = go t
+hasBigPowExponent = go
   where
     go txt = case T.breakOn "^" txt of
       (_, "")   -> False

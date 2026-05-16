@@ -28,6 +28,7 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAsciiLower, isAsciiUpper)
 import Data.List.NonEmpty (toList)
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -247,7 +248,7 @@ preferTyCon
   :: [Maybe (TyThing, a, b, c, d)]
   -> Maybe (TyThing, a, b, c, d)
 preferTyCon results =
-  let alive = [r | Just r <- results]
+  let alive = catMaybes results
   in case [r | r@(ATyCon {}, _, _, _, _) <- alive] of
        (x:_) -> Just x           -- prefer TyCon when available
        []    -> case alive of

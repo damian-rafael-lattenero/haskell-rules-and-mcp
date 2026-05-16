@@ -147,11 +147,9 @@ handle store pd rawArgs = case parseEither parseJSON rawArgs of
 exportGuard :: FilePath -> Bool -> IO (Maybe ToolResult)
 exportGuard path force = do
   exists <- doesFileExist path
-  if not exists
+  if not exists || force
     then pure Nothing
-    else if force
-      then pure Nothing
-      else do
+    else do
         eFirst <- try (TIO.readFile path) :: IO (Either SomeException Text)
         case eFirst of
           Left _      -> pure Nothing  -- unreadable → let writeFile handle it

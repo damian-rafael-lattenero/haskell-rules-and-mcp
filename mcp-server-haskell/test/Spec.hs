@@ -11052,7 +11052,7 @@ testExtractNisTypeSig =
 -- | #132: unrelated text yields Nothing.
 testExtractNisAbsent :: IO Bool
 testExtractNisAbsent =
-  pure (QcTool.extractNotInScopeSymbol "some other error" == Nothing)
+  pure (isNothing (QcTool.extractNotInScopeSymbol "some other error"))
 
 -- | #132: summariseStderr must strip -Wmissing-home-modules warning
 -- lines (and their continuation "Modules listed as … but not compiled:" line).
