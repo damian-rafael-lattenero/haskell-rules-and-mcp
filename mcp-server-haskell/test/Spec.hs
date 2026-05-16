@@ -154,7 +154,12 @@ import HaskellFlows.Mcp.ResourceUri
   )
 import qualified HaskellFlows.Mcp.ResourceUri as ResourceUri
 import qualified HaskellFlows.Mcp.Resources as Resources
-import HaskellFlows.Tool.CheckProject (parseExposedModules)
+import HaskellFlows.Tool.CheckProject
+  ( parseExposedModules
+  , CheckProjectArgs (..)
+  , ModuleOutcome (..)
+  , renderResult
+  )
 import HaskellFlows.Tool.Lint (parseHlintJson)
 import qualified HaskellFlows.Tool.Lint as LintTool
 import HaskellFlows.Tool.Load (checkPathExists)
@@ -1289,6 +1294,13 @@ main = do
       , test "#110: isUnderAnySourceDir positive and negative"            testIsUnderAnySourceDir
       , test "#110: isUnderAnySourceDir dot matches everything"           testIsUnderAnySourceDirDot
       , test "#110: Env.OutsideSourceDirs exists in enum + wire form"     testOutsideSourceDirsKindExists
+      -- Issue #129 — ghc_check_project deadline-based timeout
+      , test "#129: CheckProjectArgs defaults timeout_seconds to 120"    testCheckProjectArgsDefaultTimeout
+      , test "#129: renderResult timedOut=True adds timed_out field"     testRenderResultTimedOutFlag
+      , test "#129: renderResult timedOut=True lists timed_out_modules"  testRenderResultTimedOutModules
+      , test "#129: renderResult timedOut=False omits timed_out field"   testRenderResultNoTimedOutField
+      , test "#129: MoTimedOut renders with status=timed_out"            testRenderOutcomeTimedOut
+      , test "#129: renderResult overall=false when any module timed out" testRenderResultTimedOutOverallFalse
       ]
   if and results then exitSuccess else exitFailure
 
@@ -12893,3 +12905,86 @@ testOutsideSourceDirsKindExists =
     Env.errorKindToText Env.OutsideSourceDirs == "outside_source_dirs"
     && Env.textToErrorKind "outside_source_dirs" == Just Env.OutsideSourceDirs
     && Env.OutsideSourceDirs `elem` ([minBound .. maxBound] :: [Env.ErrorKind])
+
+--------------------------------------------------------------------------------
+-- #129 — ghc_check_project deadline-based timeout
+--------------------------------------------------------------------------------
+
+-- | Helper: decode the @result@ sub-object from the first TextContent
+-- of a 'ToolResult' (the standard wire shape).
+decodeCheckProjectResult :: ToolResult -> Maybe A.Value
+decodeCheckProjectResult tr =
+  case trContent tr of
+    (TextContent body : _) ->
+      case A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)) of
+        Right (A.Object top) -> AKM.lookup "result" top
+        _                    -> Nothing
+    _ -> Nothing
+
+-- | #129: Parsing @{}@ as 'CheckProjectArgs' should yield
+-- 'cpTimeoutSeconds' == 120 (the documented default).
+testCheckProjectArgsDefaultTimeout :: IO Bool
+testCheckProjectArgsDefaultTimeout =
+  case A.eitherDecode "{}" :: Either String CheckProjectArgs of
+    Right args -> pure (cpTimeoutSeconds args == 120)
+    Left  _    -> pure False
+
+-- | #129: 'renderResult' with @timedOut=True@ must include
+-- @"timed_out": true@ in the payload.
+testRenderResultTimedOutFlag :: IO Bool
+testRenderResultTimedOutFlag = do
+  let tr = renderResult [MoTimedOut "Foo.Bar"] True
+  pure $ case decodeCheckProjectResult tr of
+    Just (A.Object r) ->
+      AKM.lookup "timed_out" r == Just (A.Bool True)
+    _ -> False
+
+-- | #129: 'renderResult' with @timedOut=True@ must list the timed-out
+-- module names in @"timed_out_modules"@.
+testRenderResultTimedOutModules :: IO Bool
+testRenderResultTimedOutModules = do
+  let tr = renderResult [MoTimedOut "Foo.Bar", MoTimedOut "Foo.Baz"] True
+  pure $ case decodeCheckProjectResult tr of
+    Just (A.Object r) ->
+      case AKM.lookup "timed_out_modules" r of
+        Just (A.Array arr) ->
+          Vector.toList arr == [A.String "Foo.Bar", A.String "Foo.Baz"]
+        _ -> False
+    _ -> False
+
+-- | #129: 'renderResult' with @timedOut=False@ must NOT include
+-- @"timed_out"@ in the payload (keeps the common-case response shape
+-- unchanged — avoids adding noise for projects that finish on time).
+testRenderResultNoTimedOutField :: IO Bool
+testRenderResultNoTimedOutField = do
+  let tr = renderResult [] False
+  pure $ case decodeCheckProjectResult tr of
+    Just (A.Object r) -> not (AKM.member "timed_out" r)
+    _                 -> False
+
+-- | #129: A 'MoTimedOut' outcome in @per_module@ must have
+-- @"status": "timed_out"@.
+testRenderOutcomeTimedOut :: IO Bool
+testRenderOutcomeTimedOut = do
+  let tr = renderResult [MoTimedOut "Foo.TimedOut"] True
+  pure $ case decodeCheckProjectResult tr of
+    Just (A.Object r) ->
+      case AKM.lookup "per_module" r of
+        Just (A.Array arr) ->
+          case Vector.toList arr of
+            [A.Object m] ->
+              AKM.lookup "status" m == Just (A.String "timed_out")
+              && AKM.lookup "module" m == Just (A.String "Foo.TimedOut")
+            _ -> False
+        _ -> False
+    _ -> False
+
+-- | #129: 'renderResult' with any 'MoTimedOut' module must return
+-- @"overall": false@ — a partial result is never a clean bill of health.
+testRenderResultTimedOutOverallFalse :: IO Bool
+testRenderResultTimedOutOverallFalse = do
+  let tr = renderResult [MoTimedOut "Foo.X"] True
+  pure $ case decodeCheckProjectResult tr of
+    Just (A.Object r) ->
+      AKM.lookup "overall" r == Just (A.Bool False)
+    _ -> False

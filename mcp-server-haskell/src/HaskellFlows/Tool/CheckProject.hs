@@ -18,6 +18,9 @@ module HaskellFlows.Tool.CheckProject
   , handle
   , CheckProjectArgs (..)
   , parseExposedModules
+    -- * Exposed for unit tests (#129)
+  , ModuleOutcome (..)
+  , renderResult
   ) where
 
 import Control.Exception (SomeException, try)
@@ -30,6 +33,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
 
@@ -74,22 +78,36 @@ descriptor =
                        \there are no compile errors, holes, or property \
                        \regressions. Default: true (pre-push strictness)." :: Text)
                   ]
+              -- #129: overall wall-clock budget
+              , "timeout_seconds" .= object
+                  [ "type"        .= ("integer" :: Text)
+                  , "description" .=
+                      ("Overall wall-clock budget in seconds. Default: 120. \
+                       \When the budget expires the tool returns partial \
+                       \results with timed_out=true rather than hanging \
+                       \the session." :: Text)
+                  ]
               ]
           , "additionalProperties" .= False
           ]
     }
 
 data CheckProjectArgs = CheckProjectArgs
-  { cpFailFast       :: !Bool
-  , cpWarningsBlock  :: !Bool
+  { cpFailFast        :: !Bool
+  , cpWarningsBlock   :: !Bool
+    -- ^ #129: overall wall-clock budget. Default 120 s. When the
+    -- deadline fires we return partial results rather than hanging.
+  , cpTimeoutSeconds  :: !Int
   }
   deriving stock (Show)
 
 instance FromJSON CheckProjectArgs where
   parseJSON = withObject "CheckProjectArgs" $ \o -> do
-    ff <- o .:? "fail_fast"      .!= False
-    wb <- o .:? "warnings_block" .!= True
-    pure CheckProjectArgs { cpFailFast = ff, cpWarningsBlock = wb }
+    ff <- o .:? "fail_fast"       .!= False
+    wb <- o .:? "warnings_block"  .!= True
+    ts <- o .:? "timeout_seconds" .!= 120
+    pure CheckProjectArgs { cpFailFast = ff, cpWarningsBlock = wb
+                          , cpTimeoutSeconds = max 1 ts }
 
 handle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
@@ -109,10 +127,16 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
           Right body -> do
             let moduleNames = parseExposedModules body
             modulePaths   <- resolveModulePaths pd moduleNames
-            results       <- runChecks ghcSess store pd
-                               (cpFailFast args) (cpWarningsBlock args)
-                               modulePaths
-            pure (renderResult results)
+            -- #129: compute an absolute deadline from the caller's
+            -- budget and pass it to runChecks so each module checks
+            -- the clock before starting — no async-exception surprises.
+            start    <- realToFrac <$> getPOSIXTime
+            let deadline = start + fromIntegral (cpTimeoutSeconds args)
+            (outcomes, timedOut) <- runChecks ghcSess store pd
+                                      (cpFailFast args) (cpWarningsBlock args)
+                                      (Just deadline)
+                                      modulePaths
+            pure (renderResult outcomes timedOut)
 
 
 -- | Issue #90 Phase C: no .cabal in project root → status='no_match'
@@ -262,35 +286,56 @@ resolveModulePaths pd = mapM locate
 --------------------------------------------------------------------------------
 
 data ModuleOutcome
-  = MoChecked !Text !ToolResult
+  = MoChecked  !Text !ToolResult
   | MoNotFound !Text
-  | MoSkipped !Text
+  | MoSkipped  !Text
+  | MoTimedOut !Text   -- #129: budget expired before this module ran
 
+-- | Run per-module checks with a deadline.
+--
+-- #129: Before processing each module we compare the current clock
+-- against 'mDeadline'. On expiry, remaining modules are tagged
+-- 'MoTimedOut' and we return @(outcomes, True)@ so the caller can
+-- surface a @timed_out=true@ field in the response.
 runChecks
   :: GhcSession
   -> Store
   -> ProjectDir
   -> Bool                  -- fail_fast
   -> Bool                  -- warnings_block — forwarded to ghc_check_module
+  -> Maybe Double          -- absolute deadline (POSIXTime seconds)
   -> [(Text, Maybe Text)]
-  -> IO [ModuleOutcome]
-runChecks _ _ _ _ _ [] = pure []
-runChecks ghcSess store pd ff wb ((nm, mp) : rest) = case mp of
-  Nothing ->
-    (MoNotFound nm :) <$> runChecks ghcSess store pd ff wb rest
-  Just relPath -> do
-    tr <- CheckModule.handle ghcSess store pd
-            (object
-              [ "module_path"    .= relPath
-              , "warnings_block" .= wb
-              ])
-    let this = MoChecked nm tr
-        stop = ff && trIsError tr
-    cont <-
-      if stop
-        then pure (map (MoSkipped . fst) rest)
-        else runChecks ghcSess store pd ff wb rest
-    pure (this : cont)
+  -> IO ([ModuleOutcome], Bool)  -- (outcomes, timed_out)
+runChecks _ _ _ _ _ _ [] = pure ([], False)
+runChecks ghcSess store pd ff wb mDeadline ((nm, mp) : rest) = do
+  -- #129: check the budget before each module.
+  expired <- case mDeadline of
+    Nothing  -> pure False
+    Just dl  -> do
+      now <- realToFrac <$> getPOSIXTime
+      pure (now >= dl)
+  if expired
+    then
+      -- Budget exhausted — tag this module and all remaining ones.
+      let timedOuts = map (MoTimedOut . fst) ((nm, mp) : rest)
+      in pure (timedOuts, True)
+    else case mp of
+      Nothing -> do
+        (cont, to) <- runChecks ghcSess store pd ff wb mDeadline rest
+        pure (MoNotFound nm : cont, to)
+      Just relPath -> do
+        tr <- CheckModule.handle ghcSess store pd
+                (object
+                  [ "module_path"    .= relPath
+                  , "warnings_block" .= wb
+                  ])
+        let this = MoChecked nm tr
+            stop = ff && trIsError tr
+        if stop
+          then pure (this : map (MoSkipped . fst) rest, False)
+          else do
+            (cont, to) <- runChecks ghcSess store pd ff wb mDeadline rest
+            pure (this : cont, to)
 
 --------------------------------------------------------------------------------
 -- response shaping
@@ -301,30 +346,53 @@ runChecks ghcSess store pd ff wb ((nm, mp) : rest) = case mp of
 -- (compile errors are already aggregated through ghc_check_module's
 -- envelope under 'per_module[i].result'; the project-level
 -- envelope just summarises).
-renderResult :: [ModuleOutcome] -> ToolResult
-renderResult outcomes =
+--
+-- #129: when 'timedOut=True', adds @timed_out=true@ and @checked@
+-- count so the agent knows partial results were returned. Status is
+-- still 'failed' when any checked module failed; 'ok' when all
+-- checked modules passed (even if some were skipped by the budget).
+renderResult :: [ModuleOutcome] -> Bool -> ToolResult
+renderResult outcomes timedOut =
   let checked   = [ (nm, tr) | MoChecked nm tr <- outcomes ]
       failing   = [ nm       | (nm, tr) <- checked, trIsError tr ]
       notFound  = [ nm       | MoNotFound nm <- outcomes ]
       skipped   = [ nm       | MoSkipped nm <- outcomes ]
-      overall   = null failing && null notFound
+      timedOutMs= [ nm       | MoTimedOut nm <- outcomes ]
+      overall   = null failing && null notFound && not timedOut
       total     = length outcomes
+      nChecked  = length checked
+      -- #129: timeout note appended to summary when budget expired.
+      timeoutNote
+        | timedOut  = " (" <> T.pack (show nChecked) <> "/"
+                   <> T.pack (show total)
+                   <> " checked before timeout)"
+        | otherwise = ""
       payload =
-        object
+        object $
           [ "overall"       .= overall
           , "total"         .= total
+          , "checked"       .= nChecked
           , "passed"        .= length (filter (not . trIsError . snd) checked)
           , "failed"        .= length failing
           , "not_found"     .= length notFound
           , "skipped"       .= length skipped
           , "per_module"    .= map renderOutcome outcomes
-          , "summary"       .= summarise total (length failing) (length notFound)
+          , "summary"       .= (summarise total (length failing) (length notFound)
+                                  <> timeoutNote)
           ]
+          -- #129: only include timed_out when it's true, keeping the
+          -- common-case response shape unchanged.
+          <> if timedOut
+               then [ "timed_out"         .= True
+                    , "timed_out_modules" .= timedOutMs ]
+               else []
   in if overall
        then Env.toolResponseToResult (Env.mkOk payload)
        else
-         let envErr   = Env.mkErrorEnvelope Env.Validation
-                          (summarise total (length failing) (length notFound))
+         let envErr   = Env.mkErrorEnvelope
+                          (if timedOut then Env.InnerTimeout else Env.Validation)
+                          (summarise total (length failing) (length notFound)
+                             <> timeoutNote)
              response = (Env.mkFailed envErr) { Env.reResult = Just payload }
          in Env.toolResponseToResult response
 
@@ -352,6 +420,12 @@ renderOutcome (MoSkipped nm) =
     [ "module" .= nm
     , "status" .= ("skipped" :: Text)
     , "reason" .= ("fail_fast tripped on an earlier module" :: Text)
+    ]
+renderOutcome (MoTimedOut nm) =
+  object
+    [ "module" .= nm
+    , "status" .= ("timed_out" :: Text)
+    , "reason" .= ("overall timeout_seconds budget exhausted" :: Text)
     ]
 
 -- | #119: extract a terse summary from a per-module 'ToolResult'.
