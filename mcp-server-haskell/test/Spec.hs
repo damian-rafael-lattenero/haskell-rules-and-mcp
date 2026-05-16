@@ -955,6 +955,8 @@ main = do
       , test "guidance: markdown drops retired-subprocess vocab (#56)" testGuidanceMdNoRetiredVocab
       , test "guidance: text mentions in-process GHC API (#56)" testGuidanceMentionsApi
       , test "guidance: markdown mentions in-process GHC API (#56)" testGuidanceMdMentionsApi
+      , test "#124: guidance text has no retired ghc_regression reference"   testGuidanceNoRetiredRegression
+      , test "#124: guidance markdown has no retired ghc_regression reference" testGuidanceMdNoRetiredRegression
       , test "deps: description has no phantom"     testDepsDescriptorNoPhantom
       , test "deps: hint text has no phantom"       testDepsHintNoPhantom
       , test "qcexport: modulePathToModule src"     testExportPathSrc
@@ -5604,6 +5606,20 @@ testGuidanceMdMentionsApi = do
         , "resetHscEnvInPlace"
         ]
   pure (all (`T.isInfixOf` md) newTerms)
+
+-- | #124: the plain-text guidance must not reference the retired
+-- @ghc_regression@ tool (replaced by @ghc_property_store@ in #94 Phase C).
+testGuidanceNoRetiredRegression :: IO Bool
+testGuidanceNoRetiredRegression = do
+  let txt = Guidance.sessionInstructionsText allToolDescriptors
+  pure (not ("ghc_regression" `T.isInfixOf` txt))
+
+-- | #124: the markdown guidance must not reference the retired
+-- @ghc_regression@ tool.
+testGuidanceMdNoRetiredRegression :: IO Bool
+testGuidanceMdNoRetiredRegression = do
+  let md = Guidance.workflowRulesMarkdown allToolDescriptors
+  pure (not ("ghc_regression" `T.isInfixOf` md))
 
 -- | BUG-09: the markdown resource must match the plain-text
 -- instructions in tool coverage — both are derived from the same
