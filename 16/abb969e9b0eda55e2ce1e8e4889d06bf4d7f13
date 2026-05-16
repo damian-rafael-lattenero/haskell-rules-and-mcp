@@ -1,0 +1,23 @@
+mcp-server-haskell/test/Spec.hs
+  s_54dbf5675ec5ae::t_736a970ace4e1c 8662-8695
+  s_54dbf5675ec5ae::t_c8afd29fe1ceec 772-773
+mcp-server-haskell/src/HaskellFlows/Tool/Gate.hs
+  s_54dbf5675ec5ae::t_251bd73dd1c919 373-378
+  s_54dbf5675ec5ae::t_ee2804fb789570 119-154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "16abb969e9b0eda55e2ce1e8e4889d06bf4d7f13",
+  "prompts": {},
+  "sessions": {
+    "s_54dbf5675ec5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d704d61f-ca86-414c-85d1-e75c1df02293",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
