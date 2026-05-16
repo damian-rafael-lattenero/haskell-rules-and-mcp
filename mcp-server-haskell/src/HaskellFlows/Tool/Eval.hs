@@ -43,6 +43,8 @@ import GHC
   , unLoc
   )
 import GHC.Runtime.Eval (compileExpr)
+import GHC.Types.SourceError (SourceError)
+import GHC.Utils.Panic (GhcException)
 import System.Timeout (timeout)
 import Unsafe.Coerce (unsafeCoerce)
 
@@ -165,6 +167,18 @@ trySyncOnly action = do
       | Just (_ :: SomeAsyncException) <- fromException e -> throwIO e
       | otherwise -> pure (Left e)
 
+-- | #134: classify a 'SomeException' caught during eval into the
+-- appropriate 'Env.ErrorKind'. 'GhcException' and 'SourceError' both
+-- originate from GHC's compilation stage (type-check failures, out-of-scope
+-- variables, parse errors) and map to 'Env.CompileError'. All other
+-- exceptions originate from evaluating the compiled expression at runtime
+-- and map to 'Env.RuntimeException'.
+classifyEvalException :: SomeException -> Env.ErrorKind
+classifyEvalException e
+  | Just (_ :: GhcException) <- fromException e = Env.CompileError
+  | Just (_ :: SourceError)  <- fromException e = Env.CompileError
+  | otherwise                                    = Env.RuntimeException
+
 -- | The original eval pipeline, unwrapped from the timeout envelope.
 -- See the Server.hs comment on why both 'withGhcSession' and
 -- 'withStanzaFlags' wrap every eval path.
@@ -219,14 +233,17 @@ runEvalBody ghcSess safe = do
             Right out ->
               pure (renderOk (truncateOutput (T.pack out)))
             Left ex ->
-              -- Issue #90 §4 / #115: a runtime exception from
-              -- compileExpr / evalIOString maps to status='failed' with
-              -- kind='runtime_exception' (not 'internal_error') so an
-              -- agent can tell "the expression raised an exception" from
-              -- an MCP-internal crash. The user-facing 'message' stays
-              -- terse; the full exception text lives in error.cause.
-              pure (Env.toolResponseToResult (Env.mkFailed
-                ((Env.mkErrorEnvelope Env.RuntimeException
+              -- Issue #90 §4 / #115: an exception from compileExpr /
+              -- evalIOString maps to status='failed'. #134: classify the
+              -- exception so callers can distinguish compile-time failures
+              -- (kind='compile_error') from runtime exceptions
+              -- (kind='runtime_exception'). GhcException and SourceError
+              -- come from compileExpr when the expression fails to
+              -- typecheck or is out of scope; all other SomeException
+              -- originate at the unsafeCoerce/evalIOString execution stage.
+              let kind = classifyEvalException ex
+              in pure (Env.toolResponseToResult (Env.mkFailed
+                ((Env.mkErrorEnvelope kind
                     ("ghc_eval failed: " <> T.take 200 (T.pack (show ex))))
                       { Env.eeCause = Just (T.pack (show ex)) })))
 

@@ -657,6 +657,8 @@ main = do
                                                    testEvalRefusesOversizedInteger
       , test "#127: ghc_eval refuses 18446744073709551616 (20-digit literal)"
                                                    testEvalRefusesLargeLiteral
+      , test "#134: classifyEvalException: source-text inspection"
+                                                   testClassifyEvalExceptionInSource
       , test "Envelope #90 Phase B: ghc_hole on module with hole → status=ok"
                                                    testHoleWithHoleOk
       , test "Envelope #90 Phase B: ghc_hole on hole-free module → status=no_match"
@@ -4744,6 +4746,17 @@ testEvalRefusesLargeLiteral = do
           Env.eeKind err == Env.OversizedInput
             && Env.eeField err == Just "expression"
     _ -> False
+
+-- | #134: the source must contain both the 'GhcException' and 'SourceError'
+-- pattern guards in 'classifyEvalException', confirming compile-time errors
+-- are routed to CompileError rather than RuntimeException.
+testClassifyEvalExceptionInSource :: IO Bool
+testClassifyEvalExceptionInSource = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Eval.hs"
+  pure $ T.isInfixOf "classifyEvalException" src
+      && T.isInfixOf "GhcException" src
+      && T.isInfixOf "SourceError"  src
+      && T.isInfixOf "Env.CompileError" src
 
 -- | Phase B helper: stage a tmpdir project + drive 'HoleTool.handle'.
 -- The stagedSource lets each test write whatever module body it
