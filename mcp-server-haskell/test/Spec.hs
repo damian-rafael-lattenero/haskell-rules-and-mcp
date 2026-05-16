@@ -957,6 +957,12 @@ main = do
       , test "qcexport: render drops self-import (#40)" testExportRenderDropsSelfImport
       , test "qcexport: render unions library mods (#40)" testExportRenderUnionsLibMods
       , test "qcexport: render dedupes lib + props (#40)" testExportRenderDedupesLibAndProps
+      -- #131: export guard
+      , test "#131: exportGuard allows new file"                  testExportGuardNewFile
+      , test "#131: exportGuard allows generated file"            testExportGuardGeneratedFile
+      , test "#131: exportGuard blocks hand-written file"         testExportGuardHandWritten
+      , test "#131: exportGuard bypassed with force=true"         testExportGuardForce
+      , test "#131: export handle refuses hand-written Spec.hs"   testExportHandleRefusesHandWritten
       , test "propstore: save auto-creates dir"     testPropStoreCreatesDir
       , test "propstore: save after rm -rf dir"     testPropStoreResurrectsDir
       , test "propstore: concurrent saves no loss"  testPropStoreConcurrentSaves
@@ -3584,11 +3590,12 @@ testEnvelopeErrorKindRoundTrip =
         , (Env.OuterTimeout,           "outer_timeout")
         , (Env.SessionExhausted,       "session_exhausted")
         , (Env.BinaryUnavailable,      "binary_unavailable")
+        , (Env.HandWrittenFileGuard,   "hand_written_file_guard")  -- #131
         ]
       pinnedOk = all (\(k, t) -> Env.errorKindToText k == t) pinned
       reverseTotal = all (\k -> Env.textToErrorKind (Env.errorKindToText k) == Just k)
                          allKinds
-      countOk = length allKinds == 26  -- §4: 24 + GateFailure (#119) + OutsideSourceDirs (#110)
+      countOk = length allKinds == 27  -- §4: 24 + GateFailure (#119) + OutsideSourceDirs (#110) + HandWrittenFileGuard (#131)
   in pure (pinnedOk && reverseTotal && countOk)
 
 -- | Companion round-trip for 'WarningKind'.
@@ -5687,6 +5694,63 @@ testExportRenderDedupesLibAndProps = do
       rendered = QcExport.renderTestFileWith Nothing libMods props
       occurrences = T.count "import Expr.Simplify" rendered
   pure (occurrences == 1)
+
+--------------------------------------------------------------------------------
+-- #131 — export guard: prevents overwriting hand-written Spec.hs
+--------------------------------------------------------------------------------
+
+-- | exportGuard returns Nothing (proceed) when the file does not exist.
+testExportGuardNewFile :: IO Bool
+testExportGuardNewFile = do
+  tmpDir <- getTemporaryDirectory
+  let path = tmpDir </> "hf-guard-new-Spec.hs"
+  removePathForcibly path
+  result <- QcExport.exportGuard path False
+  pure (isNothing result)
+
+-- | exportGuard returns Nothing when the file starts with the generated header.
+testExportGuardGeneratedFile :: IO Bool
+testExportGuardGeneratedFile = do
+  tmpDir <- getTemporaryDirectory
+  let path = tmpDir </> "hf-guard-gen-Spec.hs"
+  TIO.writeFile path (QcExport.generatedHeader <> "\nmodule Main where\n")
+  result <- QcExport.exportGuard path False
+  pure (isNothing result)
+
+-- | exportGuard returns Just (refusal) when the file is hand-written (no header).
+testExportGuardHandWritten :: IO Bool
+testExportGuardHandWritten = do
+  tmpDir <- getTemporaryDirectory
+  let path = tmpDir </> "hf-guard-handwritten-Spec.hs"
+  TIO.writeFile path "-- Hand-written test suite\nmodule Main where\n"
+  result <- QcExport.exportGuard path False
+  pure (isJust result)
+
+-- | exportGuard returns Nothing (proceed) when force=True, even for hand-written.
+testExportGuardForce :: IO Bool
+testExportGuardForce = do
+  tmpDir <- getTemporaryDirectory
+  let path = tmpDir </> "hf-guard-force-Spec.hs"
+  TIO.writeFile path "-- Hand-written test suite\nmodule Main where\n"
+  result <- QcExport.exportGuard path True
+  pure (isNothing result)
+
+-- | Integration: export handle refuses to overwrite a hand-written file.
+testExportHandleRefusesHandWritten :: IO Bool
+testExportHandleRefusesHandWritten =
+  withTempProject $ \pd -> do
+    store <- openStore pd
+    let specDir  = unProjectDirRaw pd </> "test"
+        specPath = specDir </> "Spec.hs"
+    createDirectoryIfMissing True specDir
+    TIO.writeFile specPath "-- Hand-written test suite\nmodule Main where\n"
+    let args = object [ "action" .= ("export" :: T.Text) ]
+    result <- QcExport.handle store pd args
+    case trContent result of
+      [TextContent body] ->
+        pure (  "hand_written_file_guard" `T.isInfixOf` body
+             || "Refusing to overwrite"   `T.isInfixOf` body)
+      _ -> pure False
 
 --------------------------------------------------------------------------------
 -- BUG-04 — PropertyStore cold-start resilience
