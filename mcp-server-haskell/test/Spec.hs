@@ -69,6 +69,7 @@ import HaskellFlows.Parser.TypeSignature
   , parseSignature
   , isSameTypeThroughout
   , stripForall
+  , stripLineComments
   )
 import HaskellFlows.Suggest.Rules
   ( Confidence (..)
@@ -1254,6 +1255,11 @@ main = do
       , test "#111: stripForall noop when no forall"                      testStripForallNoop
       , test "#111: parseSignature handles forall {a}. [a] -> [a]"        testParseSigForallList
       , test "#111: rules fire for forall-prefixed reverse signature"     testRulesFireForForallReverse
+      -- Issue #137 — Haddock comment stripping in parseSignature
+      , test "#137: stripLineComments strips -- ^ Haddock annotation"     testStripLineCommentsHaddock
+      , test "#137: stripLineComments strips mid-line -- comment"         testStripLineCommentsMid
+      , test "#137: stripLineComments preserves comment-free lines"       testStripLineCommentsClean
+      , test "#137: parseSignature handles multiline Haddock-annotated sig" testParseSigHaddockAnnotated
       -- Issue #116 — GHC-66111 category correction in Error.hs
       , test "#116: GHC-66111 routes to WcUnused, not WcDeferredError"    testGhc66111RoutesToUnused
       -- Issue #115 — RuntimeException kind in Envelope.hs + Eval.hs
@@ -12576,6 +12582,42 @@ testRulesFireForForallReverse =
       let suggs = applyRules "reverse" sig
       in pure $ any ((== "Involutive")           . sLaw) suggs
              && any ((== "Self-inverse on lists") . sLaw) suggs
+
+--------------------------------------------------------------------------------
+-- Issue #137 — Haddock comment stripping in parseSignature
+--------------------------------------------------------------------------------
+
+-- | #137: 'stripLineComments' strips a '-- ^' Haddock annotation to
+-- end of line, preserving the type token before it.
+testStripLineCommentsHaddock :: IO Bool
+testStripLineCommentsHaddock =
+  let raw    = "Set.Set String   -- ^ existing context module names"
+      result = stripLineComments raw
+  in pure $ T.isInfixOf "Set.Set String" result
+         && not ("--" `T.isInfixOf` result)
+
+-- | #137: mid-line '--' comment is stripped.
+testStripLineCommentsMid :: IO Bool
+testStripLineCommentsMid =
+  let raw    = "Int -- some note"
+      result = stripLineComments raw
+  in pure (T.strip result == "Int")
+
+-- | #137: comment-free lines pass through unchanged (modulo trailing
+-- whitespace normalisation by 'T.stripEnd').
+testStripLineCommentsClean :: IO Bool
+testStripLineCommentsClean =
+  let raw = "Set.Set String -> [String] -> [String]"
+  in pure (T.strip (stripLineComments raw) == raw)
+
+-- | #137: 'parseSignature' correctly parses a multi-line Haddock-annotated
+-- signature into its component types, recovering the exact same result as
+-- the comment-free version.
+testParseSigHaddockAnnotated :: IO Bool
+testParseSigHaddockAnnotated =
+  let annotated = "Set.Set String   -- ^ existing names\n  -> [String]   -- ^ candidates\n  -> [String]"
+      clean     = "Set.Set String -> [String] -> [String]"
+  in pure (parseSignature annotated == parseSignature clean)
 
 -- | #116: GHC-66111 (redundant import) must route to 'WcUnused', not
 -- 'WcDeferredError'. Before the fix it was listed in @deferredCodes@

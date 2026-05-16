@@ -20,6 +20,8 @@ module HaskellFlows.Parser.TypeSignature
   , returnType
     -- * Issue #111 — exposed for unit tests
   , stripForall
+    -- * Issue #137 — Haddock comment stripping (exposed for unit tests)
+  , stripLineComments
   ) where
 
 import Data.Char (isAlphaNum, isUpper, isLower)
@@ -61,7 +63,15 @@ data SigType
 -- the rest of the pipeline runs.
 parseSignature :: Text -> Maybe ParsedSig
 parseSignature raw = do
-  let trimmed = collapseWs (T.strip raw)
+  -- #137: strip Haskell line comments (including Haddock '-- ^' per-argument
+  -- annotations) BEFORE collapsing whitespace. Without this step a signature
+  -- like "Set.Set String  -- ^ ctx\n  -> [String]" becomes the single token
+  -- string "Set.Set String -- ^ ctx -> [String]" after collapseWs, which the
+  -- arrow-splitter then reads as "Set.Set String -- ^ ctx" (first argument)
+  -- and "[String]" (second), producing a mangled ParsedSig that matches no
+  -- rule pattern.
+  let noComments = stripLineComments raw
+      trimmed = collapseWs (T.strip noComments)
       noForall = stripForall trimmed
   (constraints, body) <- splitConstraints noForall
   let chain = splitTopArrow body
@@ -110,6 +120,30 @@ returnType = psReturn
 
 collapseWs :: Text -> Text
 collapseWs = T.unwords . T.words
+
+-- | #137: Strip Haskell line comments — including Haddock @-- ^@
+-- per-argument annotations — from a (possibly multi-line) type
+-- signature string.
+--
+-- Type signatures in well-documented Haskell code commonly look like:
+--
+-- @
+-- Set.Set String   -- ^ existing context module names
+--   -> [String]    -- ^ candidate extras
+--   -> [String]
+-- @
+--
+-- We drop everything from @--@ to end-of-line on each line, then
+-- 'collapseWs' collapses the resulting whitespace, producing the
+-- clean form @\"Set.Set String -> [String] -> [String]\"@.
+--
+-- This is safe for type signatures because they never contain string
+-- literals and @--@ has no other syntactic role there.
+stripLineComments :: Text -> Text
+stripLineComments = T.unlines . map stripLine . T.lines
+  where
+    -- Drop everything from '--' to end of line; strip trailing space.
+    stripLine ln = T.stripEnd (fst (T.breakOn "--" ln))
 
 -- | Issue #111: strip a leading @forall@ quantifier from a GHC-rendered
 -- type string. GHC can include @forall@s in 'showPprUnsafe' output even
