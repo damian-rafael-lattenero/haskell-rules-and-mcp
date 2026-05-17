@@ -202,6 +202,9 @@ data ErrorKind
     -- but a quality gate (warnings-block, properties, coverage) failed.
     -- (#119)
   | GateFailure
+    -- Performance regression (status = failed) — measured result exceeded
+    -- the stored baseline by more than the configured threshold. (#190)
+  | Regression
     -- Lookup miss (status = no_match) ----------------------------------
   | NotInScope
   | ModuleNotInGraph
@@ -247,6 +250,7 @@ errorKindToText = \case
   CompileError            -> "compile_error"
   TypeError               -> "type_error"
   GateFailure             -> "gate_failure"
+  Regression              -> "regression"
   NotInScope              -> "not_in_scope"
   ModuleNotInGraph        -> "module_not_in_graph"
   ModulePathDoesNotExist  -> "module_path_does_not_exist"

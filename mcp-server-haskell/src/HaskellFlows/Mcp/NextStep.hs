@@ -643,11 +643,17 @@ dispatch name payload = case name of
     (Just (object [ "function_name" .= ("<the symbol you just typed>" :: Text) ])))
 
   -- Definition site located → surface the prose contract via Haddock.
-  GhcInfo -> Just (simple GhcDoc
-    "Definition + kind + instances are in. ghc_doc retrieves the \
-    \Haddock block (if any) for the contract / corner-cases the \
-    \author documented."
-    (Just (object [ "name" .= ("<same name you just inspected>" :: Text) ])))
+  -- On no_match, the name is not in scope: redirect to hoogle_search. (#185)
+  GhcInfo
+    | statusNoMatch_ payload -> Just (simple HoogleSearch
+        "Name not found in interactive scope — hoogle_search discovers \
+        \names across Hackage and surfaces the module to import."
+        (Just (object [ "query" .= ("<the name you looked up>" :: Text) ])))
+    | otherwise -> Just (simple GhcDoc
+        "Definition + kind + instances are in. ghc_doc retrieves the \
+        \Haddock block (if any) for the contract / corner-cases the \
+        \author documented."
+        (Just (object [ "name" .= ("<same name you just inspected>" :: Text) ])))
 
   -- Expression evaluated → if it was a property, lift to QC harness.
   -- Suppressed on degraded status (a failed eval has its error, no
@@ -665,16 +671,28 @@ dispatch name payload = case name of
 
   -- Source location returned → browse the module's surface to find
   -- siblings related to the symbol you jumped to.
-  GhcGoto -> Just (simple GhcBrowse
-    "You located the definition. Browse the module to discover sibling \
-    \bindings — common patterns + alternative entry points."
-    (Just (object [ "module" .= ("<location.module from the result>" :: Text) ])))
+  -- On no_match, the name is not in scope: redirect to hoogle_search. (#185)
+  GhcGoto
+    | statusNoMatch_ payload -> Just (simple HoogleSearch
+        "Name not found in the loaded session — hoogle_search discovers \
+        \names across Hackage and surfaces the module to import."
+        (Just (object [ "query" .= ("<the name you looked up>" :: Text) ])))
+    | otherwise -> Just (simple GhcBrowse
+        "You located the definition. Browse the module to discover sibling \
+        \bindings — common patterns + alternative entry points."
+        (Just (object [ "module" .= ("<location.module from the result>" :: Text) ])))
 
   -- Doc read → browse the module for siblings with similar contracts.
-  GhcDoc -> Just (simple GhcBrowse
-    "Doc read. Browse the same module's full export surface to spot \
-    \siblings whose contracts likely follow the same shape."
-    (Just (object [ "module" .= ("<module hosting the name>" :: Text) ])))
+  -- On no_match, the name has no Haddock entry: redirect to hoogle_search. (#185)
+  GhcDoc
+    | statusNoMatch_ payload -> Just (simple HoogleSearch
+        "Name not found in Haddock — hoogle_search discovers names \
+        \across Hackage and surfaces the module to import."
+        (Just (object [ "query" .= ("<the name you looked up>" :: Text) ])))
+    | otherwise -> Just (simple GhcBrowse
+        "Doc read. Browse the same module's full export surface to spot \
+        \siblings whose contracts likely follow the same shape."
+        (Just (object [ "module" .= ("<module hosting the name>" :: Text) ])))
 
   -- Complete → drill into a candidate via ghc_info. Suppressed when
   -- the prefix matched zero in-scope identifiers.
@@ -741,7 +759,14 @@ projectNext payload
         \orient yourself in the new project: phase classifier, \
         \tools active, and staleness check against the new .cabal."
         (Just (object [ "action" .= ("status" :: Text) ])))
-  -- bootstrap
+  -- bootstrap: written path — rules already on disk (#179)
+  | Just (String "written") <- envField "mode" payload
+  , Just _ <- envField "host" payload =
+      Just (simple GhcWorkflow
+        "Rules written to disk. Run 'ghc_workflow(action=\"help\")' to \
+        \get the next project-level step."
+        (Just (object [ "action" .= ("help" :: Text) ])))
+  -- bootstrap: preview path — file not yet written
   | Just _ <- envField "host" payload =
       Just (simple GhcWorkflow
         "Host rules preview emitted. Re-run with write=true to persist \
@@ -974,6 +999,12 @@ statusOk_ v = case envField "status" v of
   Nothing                 -> case envField "success" v of
     Just (Bool b) -> b
     _             -> False
+
+-- | True when the response status is @no_match@ — the tool ran
+-- cleanly but found no result. Used by lookup tools (ghc_info,
+-- ghc_doc, ghc_goto) to route 'nextStep' to 'hoogle_search'. (#185)
+statusNoMatch_ :: Value -> Bool
+statusNoMatch_ v = envField "status" v == Just (String "no_match")
 
 --------------------------------------------------------------------------------
 -- injection

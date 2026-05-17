@@ -467,7 +467,7 @@ renderResult args nss stats errs mBaseline warmupNs =
         Nothing -> "baseline exceeded"
   in if isRegression
        then Env.toolResponseToResult
-              (Env.mkRefused
-                ((Env.mkErrorEnvelope Env.Validation regressionMsg)
+              (Env.mkFailed
+                ((Env.mkErrorEnvelope Env.Regression regressionMsg)
                   { Env.eeCause = Just regressionCause }))
        else Env.toolResponseToResult (Env.mkOk payload)

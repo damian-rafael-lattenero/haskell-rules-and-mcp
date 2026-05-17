@@ -814,6 +814,10 @@ main = do
       , test "nextStep: check_project -> coverage" testNextStepCheckProject
       , test "nextStep: errors -> no suggestion"   testNextStepErrorsSuppressed
       , test "nextStep: exploratory -> no suggestion" testNextStepExploratoryNothing
+      , test "#185: ghc_info no_match -> hoogle_search"  testNextStepInfoNoMatchIsHoogle
+      , test "#185: ghc_doc no_match -> hoogle_search"   testNextStepDocNoMatchIsHoogle
+      , test "#185: ghc_goto no_match -> hoogle_search"  testNextStepGotoNoMatchIsHoogle
+      , test "#185: ghc_info found -> ghc_doc (not hoogle)" testNextStepInfoFoundIsDoc
       , test "nextStep: coverage exhaustive (PR-3)"   testNextStepCoverageExhaustive
       , test "nextStep: action-discriminated coverage" testNextStepActionCoverage
       , test "nextStep: suppressIf suppresses when rule holds (#95)"  testNextStepSuppressIfTrue
@@ -1155,6 +1159,8 @@ main = do
       , test "bootstrap: preview returns dynamic content" testBootstrapPreview
       , test "bootstrap: write persists to disk"      testBootstrapWrite
       , test "bootstrap: pathForHost is closed enum"  testBootstrapPathEnum
+      , test "#179: bootstrap write=true nextStep says rules written" testBootstrapWriteNextStep
+      , test "#179: bootstrap preview nextStep says re-run with write=true" testBootstrapPreviewNextStep
       , test "doc: main README uses haskell-flows-mcp" testDocsMainReadme
       , test "doc: haskell README lists real tools"   testDocsHaskellReadme
       , test "release: workflow file exists + well-formed" testReleaseWorkflow
@@ -1345,6 +1351,7 @@ main = do
       , test "#161: saveBaseline save→save sequence does not lock"          testPerfSaveBaselinesNoLock
       , test "#174: perf default threshold is 30%, not 10%"               testPerfDefaultThreshold30
       , test "#174: threshold_pct param overrides default"                testPerfCustomThreshold
+      , test "#190: perf regression returns status=failed + kind=regression"  testPerfRegressionStatusFailed
       , test "#174: perf threshold_pct clamped to [1,200]"               testPerfThresholdClamped
       -- Issue #135 — summariseMeasurementErrors truncation
       , test "#135: summariseMeasurementErrors single error stays short"   testSummariseSingleError
@@ -4016,11 +4023,12 @@ testEnvelopeErrorKindRoundTrip =
         , (Env.SessionExhausted,       "session_exhausted")
         , (Env.BinaryUnavailable,      "binary_unavailable")
         , (Env.HandWrittenFileGuard,   "hand_written_file_guard")  -- #131
+        , (Env.Regression,             "regression")               -- #190
         ]
       pinnedOk = all (\(k, t) -> Env.errorKindToText k == t) pinned
       reverseTotal = all (\k -> Env.textToErrorKind (Env.errorKindToText k) == Just k)
                          allKinds
-      countOk = length allKinds == 27  -- §4: 24 + GateFailure (#119) + OutsideSourceDirs (#110) + HandWrittenFileGuard (#131)
+      countOk = length allKinds == 28  -- §4: 24 + GateFailure (#119) + OutsideSourceDirs (#110) + HandWrittenFileGuard (#131) + Regression (#190)
   in pure (pinnedOk && reverseTotal && countOk)
 
 -- | Companion round-trip for 'WarningKind'.
@@ -7271,6 +7279,36 @@ testBootstrapPathEnum = pure $
        == ".cursor/rules/haskell-flows-mcp.md"
   && Bootstrap.pathForHost Bootstrap.HostGeneric == ""
 
+-- | #179: when bootstrap returns mode=written, nextStep.why must NOT say
+-- "Re-run with write=true" — the file is already on disk.
+testBootstrapWriteNextStep :: IO Bool
+testBootstrapWriteNextStep =
+  let payload = A.object
+        [ "status" .= ("ok"      :: Text)
+        , "mode"   .= ("written" :: Text)
+        , "host"   .= ("claude-code" :: Text)
+        , "path"   .= ("/some/path" :: Text)
+        ]
+  in pure $ case suggestNext GhcProject True payload of
+       Just ns ->
+         not ("write=true" `T.isInfixOf` nsWhy ns)
+         && "written" `T.isInfixOf` nsWhy ns
+       Nothing -> False
+
+-- | #179: when bootstrap returns mode=preview, nextStep.why must say
+-- "Re-run with write=true" so the agent knows what to do next.
+testBootstrapPreviewNextStep :: IO Bool
+testBootstrapPreviewNextStep =
+  let payload = A.object
+        [ "status"  .= ("ok"      :: Text)
+        , "mode"    .= ("preview" :: Text)
+        , "host"    .= ("claude-code" :: Text)
+        , "content" .= ("# rules" :: Text)
+        ]
+  in pure $ case suggestNext GhcProject True payload of
+       Just ns -> "write=true" `T.isInfixOf` nsWhy ns
+       Nothing -> False
+
 --------------------------------------------------------------------------------
 -- BUG-11 + BUG-12 — README accuracy (doc-as-code)
 --------------------------------------------------------------------------------
@@ -10009,6 +10047,46 @@ testNextStepExploratoryNothing = pure $
   where
     nothing Nothing = True
     nothing _       = False
+
+--------------------------------------------------------------------------------
+-- #185 — no_match nextStep for lookup tools
+--------------------------------------------------------------------------------
+
+-- | #185: ghc_info on a name not found (status=no_match) must route to
+-- hoogle_search, not ghc_doc (which will also no_match on the same name).
+testNextStepInfoNoMatchIsHoogle :: IO Bool
+testNextStepInfoNoMatchIsHoogle =
+  let payload = A.object [ "status" .= ("no_match" :: Text), "name" .= ("unknownXYZ" :: Text) ]
+  in pure $ case suggestNext GhcInfo True payload of
+       Just ns -> nsTool ns == HoogleSearch
+       Nothing -> False
+
+-- | #185: ghc_doc on a name not found (status=no_match) must route to
+-- hoogle_search, not ghc_browse (which expects a module, not a symbol).
+testNextStepDocNoMatchIsHoogle :: IO Bool
+testNextStepDocNoMatchIsHoogle =
+  let payload = A.object [ "status" .= ("no_match" :: Text), "name" .= ("unknownXYZ" :: Text) ]
+  in pure $ case suggestNext GhcDoc True payload of
+       Just ns -> nsTool ns == HoogleSearch
+       Nothing -> False
+
+-- | #185: ghc_goto on a name not found (status=no_match) must route to
+-- hoogle_search.
+testNextStepGotoNoMatchIsHoogle :: IO Bool
+testNextStepGotoNoMatchIsHoogle =
+  let payload = A.object [ "status" .= ("no_match" :: Text), "name" .= ("unknownXYZ" :: Text) ]
+  in pure $ case suggestNext GhcGoto True payload of
+       Just ns -> nsTool ns == HoogleSearch
+       Nothing -> False
+
+-- | #185: ghc_info on a name FOUND (status=ok) must still route to ghc_doc,
+-- not hoogle_search — the no_match branch must not fire on success.
+testNextStepInfoFoundIsDoc :: IO Bool
+testNextStepInfoFoundIsDoc =
+  let payload = A.object [ "status" .= ("ok" :: Text), "name" .= ("Data.List.sort" :: Text) ]
+  in pure $ case suggestNext GhcInfo True payload of
+       Just ns -> nsTool ns == GhcDoc
+       Nothing -> False
 
 -- | PR-3 exhaustivity: every tool except the 2 anti-loop exemptions
 -- (GhcWorkflow, GhcBatch) returns 'Just' for a canonical success
@@ -13658,7 +13736,33 @@ testPerfCustomThreshold = do
            [TextContent body_] ->
              case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
                Just (A.Object top) ->
-                 AKM.lookup "status" top == Just (A.String "refused")
+                 -- #190: regression must be status=failed, not status=refused
+                 AKM.lookup "status" top == Just (A.String "failed")
+               _ -> False
+           _ -> False
+    _ -> pure False
+
+-- | #190: a measured regression must carry status=failed + kind=regression,
+-- not status=refused + kind=validation.
+testPerfRegressionStatusFailed :: IO Bool
+testPerfRegressionStatusFailed = do
+  let raw = A.object [ "expression"    .= ("1+1" :: T.Text)
+                     , "threshold_pct" .= (10.0 :: Double) ]
+      baseline = Just (PerfTool.BaselineEntry { PerfTool.beMeanNs = 1000.0 })
+  case A.fromJSON raw :: A.Result PerfTool.PerfArgs of
+    A.Success args ->
+      let nss    = [1500, 1500, 1500, 1500, 1500 :: Word64]   -- 50% slower
+          stats  = PerfTool.aggregate nss
+          result = PerfTool.renderResult args nss stats [] baseline 0
+      in pure $ case trContent result of
+           [TextContent body_] ->
+             case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+               Just (A.Object top) ->
+                 AKM.lookup "status" top == Just (A.String "failed")
+                 && case AKM.lookup "error" top of
+                      Just (A.Object err) ->
+                        AKM.lookup "kind" err == Just (A.String "regression")
+                      _ -> False
                _ -> False
            _ -> False
     _ -> pure False
