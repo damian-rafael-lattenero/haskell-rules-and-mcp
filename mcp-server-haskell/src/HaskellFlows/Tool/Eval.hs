@@ -17,6 +17,7 @@ module HaskellFlows.Tool.Eval
   , evalContextExtras
   , selectMissingExtras
   , ioUnitResult
+  , importRedirectResult
   ) where
 
 import Control.Exception
@@ -111,6 +112,13 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
           (T.pack ("Invalid arguments: " <> parseError)))
             { Env.eeCause = Just (T.pack parseError) })))
   Right (EvalArgs expr) ->
+    -- #143: detect `import ...` as the expression prefix and redirect
+    -- to ghc_add_import before sanitization. GHCi doesn't allow import
+    -- statements in expression context; the parse error ("parse error on
+    -- input 'import'") gives no guidance. Return a structured redirect.
+    if "import " `T.isPrefixOf` T.stripStart expr
+      then pure (Env.toolResponseToResult (importRedirectResult expr))
+      else
     case sanitizeExpression expr of
       Left cmdErr ->
         pure (Env.toolResponseToResult (Env.mkRefused
@@ -284,6 +292,34 @@ timeoutResult =
               , Env.eeRemediation = Just remediation
               }
   in Env.toolResponseToResult (Env.mkTimeout err)
+
+-- | #143: redirect when the expression is an import statement.
+-- 'ghc_eval' cannot execute import directives — they are not
+-- Haskell expressions. Return a structured error with a nextStep
+-- pointer to 'ghc_add_import' so the agent knows exactly what to
+-- do instead of seeing a raw GHC parse error.
+importRedirectResult :: Text -> Env.ToolResponse
+importRedirectResult expr =
+  let moduleName = T.strip (T.drop (T.length "import ") (T.stripStart expr))
+      err = (Env.mkErrorEnvelope Env.CompileError
+               "ghc_eval cannot execute import statements")
+              { Env.eeCause = Just
+                  "'import' is a declaration, not an expression. \
+                  \GHCi eval context only accepts expressions and IO actions."
+              , Env.eeRemediation = Just
+                  "Use ghc_add_import to bring a module into scope, then \
+                  \use ghc_eval to call names from it."
+              }
+      nextStep = object
+        [ "tool"    .= ("ghc_add_import" :: Text)
+        , "why"     .= ("'import' is not a valid expression for ghc_eval. \
+                        \ghc_add_import(name=\"Module.Name\") loads the \
+                        \module into scope so its names are available in \
+                        \subsequent ghc_eval / ghc_type / ghc_quickcheck \
+                        \calls." :: Text)
+        , "example" .= object [ "name" .= moduleName ]
+        ]
+  in Env.withNextStep nextStep (Env.mkFailed err)
 
 -- | Fast path: wrap user expr in 'show', compile, coerce. Returns
 -- 'Nothing' if the wrap fails to compile (typically an IO

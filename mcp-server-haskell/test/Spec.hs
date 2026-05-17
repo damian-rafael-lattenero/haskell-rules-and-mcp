@@ -661,6 +661,8 @@ main = do
                                                    testTypeNotInScope
       , test "Envelope #90 Phase B: ghc_eval pure expr → status=ok"
                                                    testEvalPureExprOk
+      , test "#143: ghc_eval import prefix → compile_error + nextStep=ghc_add_import"
+                                                   testEvalImportRedirect
       , test "Envelope #90 Phase B: ghc_eval refuses newline in expression"
                                                    testEvalRefusesNewline
       , test "Envelope #90 Phase B: ghc_eval refuses sentinel string"
@@ -4759,6 +4761,22 @@ testEvalPureExprOk = do
           AKM.lookup (AKey.fromText "output") payload == Just (A.String "2")
             && AKM.lookup (AKey.fromText "truncated") payload == Just (A.Bool False)
     _ -> False
+
+-- | #143: an expression that starts with 'import ' is not a valid
+-- Haskell expression — redirect to ghc_add_import with a structured
+-- error + nextStep. Checks without a live GhcSession (the redirect
+-- fires before sanitization and GHC loading).
+testEvalImportRedirect :: IO Bool
+testEvalImportRedirect =
+  let resp = EvalTool.importRedirectResult "import Data.Map"
+  in pure $ Env.reStatus resp == Env.StatusFailed
+          && case Env.reError resp of
+               Just err -> Env.eeKind err == Env.CompileError
+               Nothing  -> False
+          && case Env.reNextStep resp of
+               Just (A.Object ns) ->
+                 AKM.lookup "tool" ns == Just (A.String "ghc_add_import")
+               _ -> False
 
 -- | Newline in expression → status='refused' with
 -- kind='newline_injection'.
