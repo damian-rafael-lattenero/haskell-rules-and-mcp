@@ -433,6 +433,8 @@ main = do
                                                    testExplainErrorRejectsTraversal
       , test "#100C: ghc_lab rejects traversal path"
                                                    testLabRejectsTraversal
+      , test "#160: ghc_lab non-existent file → module_path_does_not_exist"
+                                                   testLabNonExistentFile
       , test "#100C: ghc_load rejects traversal path"
                                                    testLoadRejectsTraversal
       , test "#100C: ghc_refactor rejects traversal path"
@@ -11402,6 +11404,28 @@ testLabRejectsTraversal = do
               (undefined :: Store)
               pd args
       pure (isTraversalRefused (decodeToolResult tr))
+
+-- | #160: 'ghc_lab' on a non-existent file must return
+-- status='failed' with kind='module_path_does_not_exist', not
+-- kind='subprocess_error'. The existence check fires before any
+-- I/O or GhcSession usage.
+testLabNonExistentFile :: IO Bool
+testLabNonExistentFile = do
+  case mkProjectDir "/tmp" of
+    Left _ -> pure False
+    Right pd -> do
+      let args = A.object
+            [ "module_path" A..= ("src/DoesNotExist.hs" :: Text) ]
+      tr <- LabTool.handle
+              (undefined :: GhcSession)
+              (undefined :: Store)
+              pd args
+      case decodeToolResult tr of
+        Right env
+          | Env.reStatus env == Env.StatusFailed
+          , Just err <- Env.reError env ->
+              pure (Env.eeKind err == Env.ModulePathDoesNotExist)
+        _ -> pure False
 
 -- | #100C: 'ghc_load' must refuse traversal paths when 'module_path' is supplied.
 -- 'mkModulePath' fires in the Just-path branch before 'countHaskellSources'

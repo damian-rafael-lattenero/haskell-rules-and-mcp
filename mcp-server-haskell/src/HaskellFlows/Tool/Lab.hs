@@ -47,6 +47,7 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import System.Directory (doesFileExist)
 
 import HaskellFlows.Data.PropertyStore (Store)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
@@ -142,12 +143,23 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
     Left e   -> pure (pathTraversalResult (T.pack (show e)))
     Right mp -> do
       let full = unModulePath mp
-      eBody <- try (TIO.readFile full)
-                 :: IO (Either SomeException Text)
-      case eBody of
-        Left e -> pure (subprocessResult
-          (T.pack ("Could not read module: " <> show e)))
-        Right body -> runLab ghcSess store pd args (laModulePath args) body
+      -- #160: check existence before reading — a missing file was
+      -- previously reported as kind=subprocess_error because
+      -- TIO.readFile throws an IOException. Use the semantically
+      -- correct kind=module_path_does_not_exist instead.
+      exists <- doesFileExist full
+      if not exists
+        then pure (Env.toolResponseToResult (Env.mkFailed
+          ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
+              ("module_path '" <> laModulePath args <> "' does not exist"))
+                { Env.eeField = Just "module_path" })))
+        else do
+          eBody <- try (TIO.readFile full)
+                     :: IO (Either SomeException Text)
+          case eBody of
+            Left e -> pure (subprocessResult
+              (T.pack ("Could not read module: " <> show e)))
+            Right body -> runLab ghcSess store pd args (laModulePath args) body
 
 
 -- | Issue #90 Phase C: 'mkModulePath' rejection.
