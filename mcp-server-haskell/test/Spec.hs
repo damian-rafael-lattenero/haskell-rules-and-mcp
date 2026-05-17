@@ -810,6 +810,10 @@ main = do
                                                                  testInfoSuccessClassMethods
       , test "info: successResult drops class_methods on a data type (#70)"
                                                                  testInfoSuccessDropsClassMethods
+      , test "#142: successResult caps instances at 30 and sets instance_count"
+                                                                 testInfoInstanceCap
+      , test "#142: successResult sets instances_truncated=false when under cap"
+                                                                 testInfoInstancesNotTruncated
       , test "check: propertiesGate empty -> ok=true (#42)"   testCheckGateEmpty
       , test "check: propertiesGate all pass -> ok=true (#42)" testCheckGatePass
       , test "check: propertiesGate regressed -> ok=false (#42)" testCheckGateRegressed
@@ -7127,6 +7131,65 @@ testInfoSuccessDropsClassMethods =
            Just (A.Object env) -> case AKM.lookup (AKey.fromText "result") env of
              Just (A.Object o) ->
                isNothing (AKM.lookup (AKey.fromText "class_methods") o)
+             _ -> False
+           _ -> False
+       _ -> False
+
+-- | #142: when piInstances has more than 30 entries, successResult
+-- caps the 'instances' list and emits instance_count with the total.
+testInfoInstanceCap :: IO Bool
+testInfoInstanceCap =
+  let insts  = map (\i -> "instance Foo Type" <> T.pack (show (i :: Int)))
+                   [1 .. 50]
+      parsed = ParsedInfo
+        { piName       = "Foo"
+        , piKind       = IkClass
+        , piDefinition = "class Foo a"
+        , piInstances  = insts
+        }
+      result = InfoTool.successResult parsed [] []
+  in pure $ case trContent result of
+       [TextContent t] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
+           Just (A.Object env) -> case AKM.lookup (AKey.fromText "result") env of
+             Just (A.Object o) ->
+               let instList      = AKM.lookup (AKey.fromText "instances") o
+                   instCount     = AKM.lookup (AKey.fromText "instance_count") o
+                   instTruncated = AKM.lookup (AKey.fromText "instances_truncated") o
+               in case (instList, instCount, instTruncated) of
+                    (Just (A.Array arr), Just (A.Number n), Just (A.Bool b)) ->
+                         length arr == 30
+                      && floor n == (50 :: Int)
+                      && b
+                    _ -> False
+             _ -> False
+           _ -> False
+       _ -> False
+
+-- | #142: when piInstances is under the cap, instances_truncated is
+-- false and instance_count equals the list length.
+testInfoInstancesNotTruncated :: IO Bool
+testInfoInstancesNotTruncated =
+  let insts  = ["instance Foo A", "instance Foo B"]
+      parsed = ParsedInfo
+        { piName       = "Foo"
+        , piKind       = IkClass
+        , piDefinition = "class Foo a"
+        , piInstances  = insts
+        }
+      result = InfoTool.successResult parsed [] []
+  in pure $ case trContent result of
+       [TextContent t] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
+           Just (A.Object env) -> case AKM.lookup (AKey.fromText "result") env of
+             Just (A.Object o) ->
+               let instCount     = AKM.lookup (AKey.fromText "instance_count") o
+                   instTruncated = AKM.lookup (AKey.fromText "instances_truncated") o
+               in case (instCount, instTruncated) of
+                    (Just (A.Number n), Just (A.Bool b)) ->
+                         floor n == (2 :: Int)
+                      && not b
+                    _ -> False
              _ -> False
            _ -> False
        _ -> False

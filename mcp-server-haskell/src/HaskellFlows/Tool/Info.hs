@@ -428,9 +428,21 @@ notInScopePayload nm _ = object
                       \candidates ghc_info cannot reach." :: Text)
   ]
 
+-- | Hard cap on the number of instances included in 'successPayload'.
+-- Uncapped, popular typeclasses ('Show', 'Eq', 'Ord') can return
+-- 130+ entries which inflates the context window without benefit.
+-- The full count is always reported in 'instance_count'.
+instanceCap :: Int
+instanceCap = 30
+
 -- | Successful resolution payload. Issue #90 Phase B: the same
 -- legacy shape (name, kind, definition, instances; constructors
 -- and class_methods conditionally) but now lives under 'result'.
+--
+-- #142: 'instances' is now capped at 'instanceCap' entries.
+-- 'instance_count' carries the total and 'instances_truncated'
+-- signals when the list was cut so the agent can ask for a more
+-- specific query if needed.
 successPayload
   :: ParsedInfo
   -> [(Text, [Text])]   -- ^ #54 — data/newtype constructors.
@@ -439,11 +451,16 @@ successPayload
 successPayload parsed ctors methods =
   let renderedCtors   = renderConstructorsBlock ctors
       renderedMethods = renderClassMethodsBlock methods
+      allInsts        = piInstances parsed
+      cappedInsts     = take instanceCap allInsts
+      truncated       = length allInsts > instanceCap
       basePayload =
-        [ "name"       .= piName parsed
-        , "kind"       .= kindToText (piKind parsed)
-        , "definition" .= piDefinition parsed
-        , "instances"  .= piInstances parsed
+        [ "name"                .= piName parsed
+        , "kind"                .= kindToText (piKind parsed)
+        , "definition"          .= piDefinition parsed
+        , "instances"           .= cappedInsts
+        , "instance_count"      .= length allInsts
+        , "instances_truncated" .= truncated
         ]
       withCtors
         | null ctors = basePayload
