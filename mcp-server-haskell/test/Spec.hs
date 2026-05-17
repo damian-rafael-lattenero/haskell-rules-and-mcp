@@ -1256,6 +1256,10 @@ main = do
       -- Issue #132 — not_in_scope classification
       , test "#132: classifyStderrKind NotInScope on Variable not in scope"  testClassifyStderrNotInScope
       , test "#132: classifyStderrKind SubprocessError on generic error"     testClassifyStderrGeneric
+      , test "#186: classifyStderrKind CompileError on GHC error line"       testClassifyStderrCompileError
+      , test "#186: classifyStderrKind CompileError on GHC-N error code"     testClassifyStderrCompileErrorCode
+      , test "#186: isCompileErrorStderr true on ': error:' pattern"         testIsCompileErrorStderrTrue
+      , test "#186: isCompileErrorStderr false on generic message"           testIsCompileErrorStderrFalse
       , test "#132: extractNotInScopeSymbol extracts bare name"              testExtractNisBareName
       , test "#132: extractNotInScopeSymbol extracts name before type sig"   testExtractNisTypeSig
       , test "#132: extractNotInScopeSymbol returns Nothing for other text"  testExtractNisAbsent
@@ -1429,6 +1433,7 @@ main = do
       , test "#166: loadSpecificFileForTarget exported from ApiSession"
                                                               testLoadSpecificFileExported
       -- Issue #129 — ghc_check_project deadline-based timeout
+      , test "#191: check_project delegates to check_module (no own loadForTarget)" testCheckProjectDelegates
       , test "#129: CheckProjectArgs defaults timeout_seconds to 120"    testCheckProjectArgsDefaultTimeout
       , test "#129: renderResult timedOut=True adds timed_out field"     testRenderResultTimedOutFlag
       , test "#129: renderResult timedOut=True lists timed_out_modules"  testRenderResultTimedOutModules
@@ -12184,6 +12189,30 @@ testClassifyStderrGeneric =
       kind = QcTool.classifyStderrKind hint
   in pure (kind == Env.SubprocessError)
 
+-- | #186: GHC ": error:" pattern in stderr → CompileError kind.
+testClassifyStderrCompileError :: IO Bool
+testClassifyStderrCompileError =
+  let hint = Just "src/WithError.hs:3:10: error: No instance for IsString Int"
+      kind = QcTool.classifyStderrKind hint
+  in pure (kind == Env.CompileError)
+
+-- | #186: GHC "error: [GHC-N]" pattern in stderr → CompileError kind.
+testClassifyStderrCompileErrorCode :: IO Bool
+testClassifyStderrCompileErrorCode =
+  let hint = Just "src/Foo.hs:5:3: error: [GHC-39999] …"
+      kind = QcTool.classifyStderrKind hint
+  in pure (kind == Env.CompileError)
+
+-- | #186: isCompileErrorStderr positive case.
+testIsCompileErrorStderrTrue :: IO Bool
+testIsCompileErrorStderrTrue =
+  pure $ QcTool.isCompileErrorStderr "src/Foo.hs:5:3: error: type mismatch"
+
+-- | #186: isCompileErrorStderr negative case — generic message without GHC patterns.
+testIsCompileErrorStderrFalse :: IO Bool
+testIsCompileErrorStderrFalse =
+  pure $ not (QcTool.isCompileErrorStderr "cabal repl exited unexpectedly")
+
 -- | #132: extract bare name from "Variable not in scope: sort".
 testExtractNisBareName :: IO Bool
 testExtractNisBareName =
@@ -14476,6 +14505,16 @@ decodeCheckProjectResult tr =
     _ -> Nothing
 
 -- | #129: Parsing @{}@ as 'CheckProjectArgs' should yield
+-- | #191: ghc_check_project must NOT call loadForTarget directly; it must
+-- delegate to ghc_check_module.handle so the loadSpecificFileForTarget fix
+-- from #188 automatically applies. This is a source-level structural check.
+testCheckProjectDelegates :: IO Bool
+testCheckProjectDelegates = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/CheckProject.hs"
+  -- Must use CheckModule.handle, not call loadForTarget directly.
+  pure $ T.isInfixOf "CheckModule.handle" src
+      && not (T.isInfixOf "loadForTarget ghcSess" src)
+
 -- 'cpTimeoutSeconds' == 120 (the documented default).
 testCheckProjectArgsDefaultTimeout :: IO Bool
 testCheckProjectArgsDefaultTimeout =

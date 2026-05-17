@@ -23,6 +23,7 @@ module HaskellFlows.Tool.QuickCheck
   , isSimpleIdent
   , summariseStderr
   , classifyStderrKind
+  , isCompileErrorStderr
   , extractNotInScopeSymbol
     -- * Cabal library introspection (re-used by 'Tool.QuickCheckExport')
   , libraryExposedModules
@@ -551,15 +552,19 @@ renderResult qr mHint = case qr of
         response = (Env.mkNoMatch payload) { Env.reError = Just envErr }
     in Env.toolResponseToResult response
   QcUnparsed p raw ->
-    -- #132: classify the error kind from the summarised stderr so
-    -- "Variable not in scope" surfaces as not_in_scope rather than
-    -- the opaque subprocess_error.
+    -- #132 / #186: classify the error kind from the summarised stderr so
+    -- the agent gets a structured, actionable error rather than an opaque
+    -- subprocess_error.
     let kind    = classifyStderrKind mHint
         msg | kind == Env.NotInScope =
                   case mHint >>= extractNotInScopeSymbol of
                     Just sym -> "Variable not in scope: " <> sym
                                   <> " — add an import or qualify the name"
                     Nothing  -> "Variable not in scope (see hint for details)"
+            | kind == Env.CompileError =
+                  -- #186: project has compile errors; cabal repl couldn't load.
+                  "Project has compile errors — fix them with ghc_check_project \
+                  \before running this property."
             | otherwise =
                   "Could not parse cabal repl output for property '" <> p <> "'."
         payload = object $
@@ -568,7 +573,19 @@ renderResult qr mHint = case qr of
           , "raw"      .= raw
           ] <> maybeHintPair mHint
         envErr   = Env.mkErrorEnvelope kind msg
-        response = (Env.mkFailed envErr) { Env.reResult = Just payload }
+        -- #186: for compile errors, inject a nextStep even though the
+        -- response is failed (suggestNext suppresses hints on failure, so we
+        -- set reNextStep directly).
+        nextHint | kind == Env.CompileError = Just (object
+                     [ "tool" .= ("ghc_check_project" :: Text)
+                     , "why"  .= ("Project has compile errors preventing cabal \
+                                  \repl from loading — fix them before running \
+                                  \properties." :: Text)
+                     ])
+                 | otherwise = Nothing
+        response = (Env.mkFailed envErr)
+                     { Env.reResult   = Just payload
+                     , Env.reNextStep = nextHint }
     in Env.toolResponseToResult response
   where
     -- Attach the 'hint' key ONLY when the stderr actually carried
@@ -577,16 +594,26 @@ renderResult qr mHint = case qr of
     maybeHintPair (Just h) | not (T.null (T.strip h)) = [ "hint" .= h ]
     maybeHintPair _                                    = []
 
--- | #132: Classify the error kind from the summarised stderr hint.
--- When the hint contains the GHC "Variable not in scope" diagnostic,
--- the call failed because the user's expression referenced an unimported
--- name — surface this as 'Env.NotInScope' rather than the opaque
--- 'Env.SubprocessError'.
+-- | #132 / #186: Classify the error kind from the summarised stderr hint.
+--
+--   * "Variable not in scope" → 'Env.NotInScope'  (unimported name)
+--   * GHC compile error patterns → 'Env.CompileError'  (project has errors,
+--     checked by priority before SubprocessError) (#186)
+--   * anything else → 'Env.SubprocessError'
 classifyStderrKind :: Maybe Text -> Env.ErrorKind
 classifyStderrKind Nothing  = Env.SubprocessError
 classifyStderrKind (Just h)
   | "Variable not in scope" `T.isInfixOf` h = Env.NotInScope
-  | otherwise                                = Env.SubprocessError
+  | isCompileErrorStderr h                  = Env.CompileError
+  | otherwise                               = Env.SubprocessError
+
+-- | #186: True when cabal repl stderr contains GHC compile-error patterns,
+-- indicating the project has errors that prevent 'cabal repl' from loading
+-- (as opposed to a property execution failure).
+isCompileErrorStderr :: Text -> Bool
+isCompileErrorStderr h =
+     ": error:"      `T.isInfixOf` h   -- GHC src:line:col: error: pattern
+  || "error: [GHC-"  `T.isInfixOf` h   -- GHC 9.x diagnostic code prefix
 
 -- | #132: Extract the symbol name from a GHC "Variable not in scope: <sym>"
 -- diagnostic. Returns 'Nothing' when the pattern is absent.
