@@ -1238,6 +1238,7 @@ main = do
       , test "#106/F-31: perf renderResult with all errors returns failed" testPerfAllSamplesErrored
       , test "#136: readBaseline uses strict I/O (no lazy file handle)"    testPerfReadBaselineStrict
       , test "#136: save+compare both flags work sequentially (no lock)"   testPerfSaveAndCompareNoLock
+      , test "#161: saveBaseline save→save sequence does not lock"          testPerfSaveBaselinesNoLock
       -- Issue #135 — summariseMeasurementErrors truncation
       , test "#135: summariseMeasurementErrors single error stays short"   testSummariseSingleError
       , test "#135: summariseMeasurementErrors 20 repeated errors omits"  testSummariseRepeatedErrors
@@ -12407,6 +12408,26 @@ testPerfSaveAndCompareNoLock = withTempProject $ \pd -> do
   pure $ case (mEntry, mEntry2) of
     (Just e1, Just e2) -> PerfTool.beMeanNs e1 > 0 && PerfTool.beMeanNs e2 > 0
     _                  -> False
+
+-- | #161: saveBaseline called twice in sequence must not lock.
+-- Root cause: saveBaseline used lazy BL.readFile, which deferred handle
+-- closure to GC. The subsequent BL.writeFile in the same call (or the
+-- next call's BL.readFile) raced on the file lock. Fixed by switching
+-- saveBaseline's internal read to strict BS.readFile + decodeStrict.
+testPerfSaveBaselinesNoLock :: IO Bool
+testPerfSaveBaselinesNoLock = withTempProject $ \pd -> do
+  let path  = unProjectDir pd </> ".haskell-flows" </> "perf.json"
+      expr  = "length [1..100]" :: T.Text
+      stats = PerfTool.aggregate [500, 510, 490, 505, 495]
+  -- Two consecutive saves: the second one reads the file that the first
+  -- wrote. With BL.readFile the lazy handle from the read in the second
+  -- saveBaseline races with its own subsequent BL.writeFile.
+  PerfTool.saveBaseline path expr stats
+  PerfTool.saveBaseline path expr stats  -- must not throw "resource busy"
+  mEntry <- PerfTool.readBaseline path expr
+  pure $ case mEntry of
+    Just e -> PerfTool.beMeanNs e > 0
+    Nothing -> False
 
 --------------------------------------------------------------------------------
 -- Issue #135 — summariseMeasurementErrors truncation + dedup

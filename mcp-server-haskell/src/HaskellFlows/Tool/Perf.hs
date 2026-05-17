@@ -271,10 +271,13 @@ saveBaseline path expr stats = do
     exists <- doesFileExist path
     if not exists then pure (Object KeyMap.empty)
     else do
-      raw <- try @SomeException (BL.readFile path)
+      -- #161: use strict BS.readFile so the OS handle is closed immediately.
+      -- BL.readFile defers closure to GC, which races with the subsequent
+      -- BL.writeFile and produces "resource busy (file is locked)".
+      raw <- try @SomeException (BS.readFile path)
       case raw of
         Left  _     -> pure (Object KeyMap.empty)
-        Right bytes -> pure (fromMaybe (Object KeyMap.empty) (decode bytes))
+        Right bytes -> pure (fromMaybe (Object KeyMap.empty) (decodeStrict bytes))
   let entry = toJSON (BaselineEntry { beMeanNs = sMean stats })
       updated = case current of
         Object km -> Object (KeyMap.insert (keyFromText expr) entry km)
