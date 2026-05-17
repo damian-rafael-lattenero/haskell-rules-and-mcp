@@ -1,0 +1,42 @@
+mcp-server-haskell/test-e2e/Scenarios/ExprSources.hs
+  s_54dbf5675ec5ae::t_81ffe758ae608e 251-267,270-272
+  s_54dbf5675ec5ae::t_cda7103e786880 268-269
+  s_54dbf5675ec5ae::t_df9b380ceed9e7 25
+  s_54dbf5675ec5ae::t_b6cae505d4bbf1 45,49
+mcp-server-haskell/test-e2e/Scenarios/ExprEvaluator.hs
+  s_54dbf5675ec5ae::t_650f60423f3533 62
+  s_54dbf5675ec5ae::t_f22a8ac8acdf2e 291-300,307
+mcp-server-haskell/src/HaskellFlows/Ghc/ApiSession.hs
+  s_54dbf5675ec5ae::t_6bf654da88cefe 80
+  s_54dbf5675ec5ae::t_f7341e3dd3d123 1115-1120
+  s_54dbf5675ec5ae::t_ec2347e6d58531 976-985
+  s_54dbf5675ec5ae::t_b1a1e7765e8391 1144-1152
+mcp-server-haskell/test-e2e/Scenarios/ExprEvaluatorDogfoodSources.hs
+  s_54dbf5675ec5ae::t_9c315f94174cf0 42,46
+mcp-server-haskell/test-e2e/Scenarios/FlowBrowseInteractive.hs
+  s_54dbf5675ec5ae::t_36e34cb14a4859 1-2,4-8,10,12-18
+  s_54dbf5675ec5ae::t_df04e36a039367 47-50,53-65,67
+  s_54dbf5675ec5ae::t_e115d7d139fecd 36
+mcp-server-haskell/test-e2e/Scenarios/FlowExprEvaluatorDogfood.hs
+  s_54dbf5675ec5ae::t_d7ba3a23f8bcfc 73,92-102
+  s_54dbf5675ec5ae::t_0fda5b7c4b533d 207
+  s_54dbf5675ec5ae::t_d2c0e89ee72cf3 9
+  s_54dbf5675ec5ae::t_059281e00e1d6c 217
+  s_54dbf5675ec5ae::t_8331a5f24c8c4f 261-263
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "e16b13adc43ba8e513e7a68638795e8aceba224f",
+  "prompts": {},
+  "sessions": {
+    "s_54dbf5675ec5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d704d61f-ca86-414c-85d1-e75c1df02293",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
