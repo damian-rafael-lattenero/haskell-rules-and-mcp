@@ -42,15 +42,13 @@ import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAsciiLower, isDigit, toUpper)
-import Data.List (isPrefixOf, nub)
-import Data.Maybe (mapMaybe)
+import Data.List (nub)
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import System.Directory (doesFileExist, listDirectory)
-import System.Exit (ExitCode)
+import System.Directory (listDirectory)
 import System.FilePath ((</>), takeExtension)
-import qualified System.Process as Proc
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
@@ -262,7 +260,7 @@ parseSections = go Nothing False []
 gatherHsFiles :: FilePath -> [Text] -> IO [FilePath]
 gatherHsFiles root srcDirs = do
   let dirs = map (\d -> root </> T.unpack d) srcDirs
-  fmap nub (fmap concat (traverse (recHsFiles []) dirs))
+  fmap (nub . concat) (traverse (recHsFiles []) dirs)
   where
     recHsFiles acc dir = do
       eEntries <- try (listDirectory dir) :: IO (Either SomeException [FilePath])
@@ -270,7 +268,7 @@ gatherHsFiles root srcDirs = do
         Left _ -> pure acc
         Right entries -> do
           let fullPaths = map (dir </>) entries
-          fmap concat $ traverse (classify acc) fullPaths
+          concat <$> traverse (classify acc) fullPaths
     classify acc p
       | takeExtension p == ".hs" = pure (p : acc)
       | otherwise = do
@@ -285,7 +283,7 @@ gatherHsFiles root srcDirs = do
 findImportSites :: Text -> [FilePath] -> IO [Text]
 findImportSites pkg files = do
   hits <- traverse (fileHasMatchingImport pkg) files
-  pure (mapMaybe id hits)
+  pure (catMaybes hits)
 
 fileHasMatchingImport :: Text -> FilePath -> IO (Maybe Text)
 fileHasMatchingImport pkg fp = do
@@ -316,9 +314,8 @@ importMatchesPkg pkg ln =
          -- 'import' or 'import qualified'
          let withoutQual = case T.stripPrefix " qualified " afterImport of
                Just s  -> s
-               Nothing -> case T.stripPrefix " qualified\t" afterImport of
-                 Just s  -> s
-                 Nothing -> afterImport
+               Nothing ->
+                 fromMaybe afterImport (T.stripPrefix " qualified\t" afterImport)
              modName = T.takeWhile (\c -> c /= ' ' && c /= '\t'
                                        && c /= '(' && c /= '\n')
                                    (T.stripStart withoutQual)

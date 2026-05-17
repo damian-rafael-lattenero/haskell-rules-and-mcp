@@ -83,8 +83,8 @@ descriptor =
 
 -- | #163: timeout is now configurable via the @timeout_minutes@
 -- argument. Default 5 minutes; clamped to [1, 60] minutes.
-data CoverageArgs = CoverageArgs
-  { caTimeoutMinutes :: !Int
+newtype CoverageArgs = CoverageArgs
+  { caTimeoutMinutes :: Int
   }
   deriving stock (Show)
 

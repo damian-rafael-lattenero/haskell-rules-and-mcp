@@ -8531,7 +8531,7 @@ testCabalComponentsLibrary =
       (stanzas, srcDirs) = DepsExplain.cabalComponentsMatchingPkg "aeson" cabalText
   in pure
        (  length stanzas == 1
-       && "library" `T.isPrefixOf` (head stanzas)
+       && "library" `T.isPrefixOf` head stanzas
        && any (\(_, ds) -> "src" `elem` ds) srcDirs
        )
 
@@ -8788,7 +8788,7 @@ testPAInterpretUnparsedEmptyCause =
   in pure
        (  status == "skipped"
        && not (T.null detail)
-       && not ("probe load/parse failure: " == detail)
+       && ("probe load/parse failure: " /= detail)
        -- Must contain something actionable after the colon
        && T.isInfixOf "no GHCi output" detail
        )
@@ -11233,7 +11233,7 @@ testSuggestEitherParserRoundtrip = do
             }
           roundtrips = filter (\s -> sLaw s == "Printer/parser roundtrip")
                                (applyRulesCtx ctx)
-          usesRight  = any ("Right x" `T.isInfixOf`) (map sProperty roundtrips)
+          usesRight  = any (("Right x" `T.isInfixOf`) . sProperty) roundtrips
       in pure (not (null roundtrips) && usesRight)
     _ -> pure False
 
