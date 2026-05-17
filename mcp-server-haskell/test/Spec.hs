@@ -78,6 +78,11 @@ import HaskellFlows.Suggest.Rules
   , applyRules
   , applyRulesCtx
   , mkRuleContext
+    -- #147: name-semantic helpers
+  , nameHintsInterpreter
+  , nameHintsPrinter
+  , nameHintsParser
+  , namesFormPrinterParserPair
   )
 import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNameTexts)
 import HaskellFlows.Mcp.NextStep
@@ -1148,6 +1153,10 @@ main = do
                                                                  testCabalHsSourceDirsIgnored
       , test "suggest: printer/parser roundtrip rule fires"       testSuggestRoundtripRule
       , test "suggest: no roundtrip when sibling shape mismatches" testSuggestRoundtripNegative
+      , test "#147: nameHintsInterpreter filters eval/hash"       testSuggestInterpreterNameGuard
+      , test "#147: unrelated sibling skipped by evaluator-preservation" testSuggestEvalPreservNoHash
+      , test "#147: namesFormPrinterParserPair recognises pairs"  testSuggestPrinterParserPairNames
+      , test "#147: unrelated roundtrip sibling filtered by name" testSuggestRoundtripUnrelatedFiltered
       , test "ghc-api: external cabal edit invalidates stanza cache"
                                                                  testMtimeInvalidation
       , test "ghc-api: withGhcSession ensures stanza flags (#49)"
@@ -11017,6 +11026,72 @@ testSuggestRoundtripNegative = do
             filter (\s -> sLaw s == "Printer/parser roundtrip")
                    (applyRulesCtx ctx)
       in pure (null roundtripSuggestions)
+    _ -> pure False
+
+--------------------------------------------------------------------------------
+-- #147: name-semantic guards prevent type-shape coincidence pairings
+--------------------------------------------------------------------------------
+
+-- | 'nameHintsInterpreter' must return True for evaluation-like
+-- names and False for unrelated names that share the interpreter
+-- type shape (e.g. @hash :: Expr -> Int@).
+testSuggestInterpreterNameGuard :: IO Bool
+testSuggestInterpreterNameGuard = pure $
+     nameHintsInterpreter "eval"
+  && nameHintsInterpreter "runExpr"
+  && nameHintsInterpreter "interpret"
+  && not (nameHintsInterpreter "hash")
+  && not (nameHintsInterpreter "size")
+  && not (nameHintsInterpreter "pretty")
+
+-- | When a sibling's name does NOT hint at interpretation, the
+-- evaluator-preservation rule must NOT pair it with the focal
+-- transform. Pre-fix, @hash :: Expr -> Int@ was paired with
+-- @simplify :: Expr -> Expr@ because it shared the interpreter
+-- type shape.
+testSuggestEvalPreservNoHash :: IO Bool
+testSuggestEvalPreservNoHash = do
+  let simpSig = HaskellFlows.Parser.TypeSignature.parseSignature "Expr -> Expr"
+      evalSig = HaskellFlows.Parser.TypeSignature.parseSignature "Expr -> Int"
+  case (simpSig, evalSig) of
+    (Just ss, Just es) ->
+      let ctx = RuleContext
+            { rcName     = "simplify"
+            , rcSig      = ss
+            , rcSiblings = [("hash", es)]  -- same shape as eval but name doesn't hint
+            }
+          evalLaws = filter (\s -> sCategory s == "evaluator") (applyRulesCtx ctx)
+      in pure (null evalLaws)
+    _ -> pure False
+
+-- | 'namesFormPrinterParserPair' must recognise valid pairs and
+-- reject unrelated names that happen to coincide in type shape.
+testSuggestPrinterParserPairNames :: IO Bool
+testSuggestPrinterParserPairNames = pure $
+     namesFormPrinterParserPair "pretty"      "parseExpr"
+  && namesFormPrinterParserPair "encode"      "decode"
+  && namesFormPrinterParserPair "serialize"   "deserialize"
+  && namesFormPrinterParserPair "toJSON"      "fromJSON"
+  && not (namesFormPrinterParserPair "size"        "length")
+  && not (namesFormPrinterParserPair "hash"         "sort")
+  && not (namesFormPrinterParserPair "pretty"       "hash")
+
+-- | When a roundtrip-sibling's name does not correlate with the
+-- focal's name (no printer/parser pair), no roundtrip law is emitted.
+testSuggestRoundtripUnrelatedFiltered :: IO Bool
+testSuggestRoundtripUnrelatedFiltered = do
+  let focalSig  = HaskellFlows.Parser.TypeSignature.parseSignature "Expr -> Text"
+      unrelSig  = HaskellFlows.Parser.TypeSignature.parseSignature "Text -> Expr"
+  case (focalSig, unrelSig) of
+    (Just fs, Just us) ->
+      let ctx = RuleContext
+            { rcName     = "hash"        -- not a printer name
+            , rcSig      = fs
+            , rcSiblings = [("lookup", us)]  -- not a parser name
+            }
+          roundtrips = filter (\s -> sLaw s == "Printer/parser roundtrip")
+                               (applyRulesCtx ctx)
+      in pure (null roundtrips)
     _ -> pure False
 
 --------------------------------------------------------------------------------

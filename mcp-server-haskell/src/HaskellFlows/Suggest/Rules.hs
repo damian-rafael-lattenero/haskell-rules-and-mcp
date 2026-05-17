@@ -19,6 +19,11 @@ module HaskellFlows.Suggest.Rules
   , applyRules
   , applyRulesCtx
   , Suggestion (..)
+    -- * Name-semantic helpers (#147)
+  , nameHintsInterpreter
+  , nameHintsPrinter
+  , nameHintsParser
+  , namesFormPrinterParserPair
   ) where
 
 import Data.Maybe (fromMaybe, listToMaybe)
@@ -466,6 +471,56 @@ nameHintsOptimization nm =
         ]
   in any (`T.isInfixOf` lc) hints
 
+-- | #147: Name tokens that suggest a function interprets,
+-- evaluates, or executes a data structure — distinct from
+-- transforms that merely reshape it.  Used by
+-- 'interpreterSiblings' to filter out type-shape coincidences:
+-- @hash :: Expr -> Int@ shares the interpreter shape but is
+-- semantically unrelated to @eval :: Expr -> Int@.
+nameHintsInterpreter :: Text -> Bool
+nameHintsInterpreter nm =
+  let lc = T.toLower nm
+      hints =
+        [ "eval", "interp", "run", "exec", "execute"
+        , "interpret", "check", "compute", "calculate"
+        , "score", "process", "apply", "render", "display"
+        ]
+  in any (`T.isInfixOf` lc) hints
+
+-- | #147: Name tokens that suggest a function serialises a
+-- structured value to a flat representation (string, bytes,
+-- JSON, etc.).
+nameHintsPrinter :: Text -> Bool
+nameHintsPrinter nm =
+  let lc = T.toLower nm
+      hints =
+        [ "pretty", "print", "show", "encode", "serial"
+        , "format", "render", "emit", "write", "display"
+        , "tostring", "totext", "tojson", "marshal"
+        ]
+  in any (`T.isInfixOf` lc) hints
+
+-- | #147: Name tokens that suggest a function deserialises a
+-- flat representation back into a structured value.
+nameHintsParser :: Text -> Bool
+nameHintsParser nm =
+  let lc = T.toLower nm
+      hints =
+        [ "parse", "read", "decode", "deserial", "from"
+        , "unmarshal", "load", "fromstring", "fromtext"
+        , "fromjson", "scan", "lex"
+        ]
+  in any (`T.isInfixOf` lc) hints
+
+-- | #147: Do the two names look like a printer/encoder +
+-- parser/decoder pair?  One must hint at printing/encoding and
+-- the other at parsing/decoding.  Guards against pairing
+-- semantically unrelated functions that share a type shape.
+namesFormPrinterParserPair :: Text -> Text -> Bool
+namesFormPrinterParserPair a b =
+     (nameHintsPrinter a && nameHintsParser b)
+  || (nameHintsParser  a && nameHintsPrinter b)
+
 -- | Functor identity law: @fmap id == id@.
 -- Functor composition law: @fmap (f . g) == fmap f . fmap g@.
 --
@@ -589,10 +644,16 @@ data Interpreter = Interpreter
 -- | Find siblings whose FINAL argument type matches the focal
 -- function's input type and whose return type differs. Extra
 -- leading arguments are treated as "context" (env, store, config).
+--
+-- #147: Only siblings whose name hints at interpretation / evaluation
+-- are kept. This prevents type-shape coincidences (e.g. @hash ::
+-- Expr -> Int@ has the same shape as @eval :: Expr -> Int@ but is
+-- semantically unrelated) from producing spurious law suggestions.
 interpreterSiblings :: SigType -> [(Text, ParsedSig)] -> [Interpreter]
 interpreterSiblings targetType sibs =
   [ Interpreter { iName = nm, iArity = length (psArgs sig) }
   | (nm, sig) <- sibs
+  , nameHintsInterpreter nm   -- #147: semantic name guard
   , case reverse (psArgs sig) of
       (lastArg : _) -> lastArg == targetType && psReturn sig /= targetType
       []            -> False
@@ -655,7 +716,7 @@ rulePrinterParserRoundtrip = Rule
            ([srcTy], tgtTy) | srcTy /= tgtTy ->
              [ mkRoundtripLaw nm srcTy sibName needsJust
              | (sibName, needsJust) <-
-                 findInverseSiblings srcTy tgtTy (rcSiblings ctx)
+                 findInverseSiblings nm srcTy tgtTy (rcSiblings ctx)
              ]
            _ -> []
   }
@@ -665,14 +726,21 @@ rulePrinterParserRoundtrip = Rule
 -- (@g :: B -> A@) or wraps it in Maybe (@g :: B -> Maybe A@).
 -- The Bool in the result is True when the sibling returns Maybe
 -- (so the property asserts @== Just x@ rather than @== x@).
+--
+-- #147: The focal name and sibling name must form a semantic
+-- printer/parser pair (one hints at serialisation, the other at
+-- deserialisation). Purely type-shape matches between unrelated
+-- functions (e.g. @toList@ + @fromMaybe@) are suppressed.
 findInverseSiblings
-  :: SigType           -- source type (focal's input)
+  :: Text              -- focal function name (#147 semantic guard)
+  -> SigType           -- source type (focal's input)
   -> SigType           -- target type (focal's output)
   -> [(Text, ParsedSig)]
   -> [(Text, Bool)]
-findInverseSiblings src tgt sibs =
+findInverseSiblings focalName src tgt sibs =
   [ (name, needsJust)
   | (name, sig) <- sibs
+  , namesFormPrinterParserPair focalName name  -- #147
   , Just needsJust <- [classifyInverse src tgt sig]
   ]
 
