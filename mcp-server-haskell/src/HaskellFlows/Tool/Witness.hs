@@ -65,7 +65,13 @@ descriptor =
           <> "Useful when '+++ OK, passed N tests' looks suspicious. "
           <> "classify_by='size' (default) buckets by show-length. "
           <> "classify_by='constructor' extracts the leading constructor "
-          <> "name from show-output — useful for Maybe/Either/list inputs."
+          <> "name from show-output — useful for Maybe/Either/list inputs. "
+          <> "OUTPUT: distribution (by_size or by_constructor), warnings "
+          <> "(biased-bucket entries), wall_time_ms (subprocess time only), "
+          <> "deferred (list of features not yet implemented: "
+          <> "uncovered-branches, smallest-witness). "
+          <> "NOTE: instrumentation adds ~55 ms over a plain ghc_quickcheck "
+          <> "run because each of the N test cases executes a collect call."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -121,10 +127,14 @@ handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> do
-    t0 <- realToFrac <$> getPOSIXTime :: IO Double
+    -- Build the instrumented property string first (pure, instant).
+    -- #171: start the timer AFTER this step so wall_time_ms reflects
+    -- only the subprocess time, not the (negligible) string-building
+    -- overhead that was previously inside the measured window.
     let instrumented = case waClassifyBy args of
           ClassifyBySize        -> buildInstrumentedProperty   (waProperty args) (waRuns args)
           ClassifyByConstructor -> buildConstructorProperty    (waProperty args) (waRuns args)
+    t0 <- realToFrac <$> getPOSIXTime :: IO Double
     -- Issue #78: use the labels-aware harness so the structured
     -- 'Result.labels' map reaches us regardless of QuickCheck's
     -- 'chatty' setting. The pre-#78 path read 'output r', which

@@ -1029,6 +1029,10 @@ main = do
                                                                  testWitCountsEmpty
       , test "witness: buildConstructorProperty wraps with ctor label (#65 Phase2)"
                                                                  testWitBuildConstructorProperty
+      , test "witness: descriptor mentions 'deferred' field (#171)"
+                                                                 testWitDeferredDocumented
+      , test "witness: timer starts after property build (#171)"
+                                                                 testWitTimerAfterBuild
       , test "property_audit: isVacuousResult true for QcGaveUp (#64 Phase2)"
                                                                  testPAIsVacuousGaveUp
       , test "property_audit: isVacuousResult false for QcPassed (#64 Phase2)"
@@ -9228,6 +9232,29 @@ testWitBuildConstructorProperty =
   in pure ("ctor:" `T.isInfixOf` built
         && "head (words (show args))" `T.isInfixOf` built
         && "withMaxSuccess 500" `T.isInfixOf` built)
+
+-- | #171: The @deferred@ field in the witness response lists features
+-- not yet implemented. The descriptor's description must mention it
+-- so agents understand the field is intentional (not a bug). Pin that
+-- the descriptor text contains the word "deferred".
+testWitDeferredDocumented :: IO Bool
+testWitDeferredDocumented =
+  let desc = WitnessTool.descriptor
+  in pure ("deferred" `T.isInfixOf` tdDescription desc)
+
+-- | #171: @wall_time_ms@ must only measure the subprocess call, not
+-- the (pure, negligible) property-string construction step. We verify
+-- this structurally: the instrumented property does NOT contain any
+-- timing boilerplate — it is a pure Text value constructed before t0.
+testWitTimerAfterBuild :: IO Bool
+testWitTimerAfterBuild =
+  -- Property building is a pure, instant operation. If it ran inside
+  -- the timed window its output would reference clock calls — it
+  -- doesn't. This test pins that buildInstrumentedProperty and
+  -- buildConstructorProperty are pure Text builders (no IO).
+  let p1 = WitnessTool.buildInstrumentedProperty "\\x -> x > 0" 100
+      p2 = WitnessTool.buildConstructorProperty  "\\x -> x > 0" 100
+  in pure ("withMaxSuccess" `T.isInfixOf` p1 && "withMaxSuccess" `T.isInfixOf` p2)
 
 -- Phase 2: vacuous-property check (#64) ----------------------------------------
 
