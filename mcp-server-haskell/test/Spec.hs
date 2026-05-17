@@ -936,6 +936,11 @@ main = do
       , test "deps_explain: identifyRootCause picks deepest (#63)" testDepsExplainRoot
       , test "deps_explain: extractPackages strips versions (#63)" testDepsExplainPackages
       , test "deps_explain: parseSolverOutput Nothing on clean (#63)" testDepsExplainClean
+      , test "#156: pkgSearchTokens aeson → [Aeson]"            testPkgSearchTokensSimple
+      , test "#156: pkgSearchTokens data-default → [DataDefault,Data,Default]" testPkgSearchTokensHyphen
+      , test "#156: importMatchesPkg aeson import Data.Aeson"   testImportMatchesPkgHit
+      , test "#156: importMatchesPkg aeson import Data.Map miss" testImportMatchesPkgMiss
+      , test "#156: cabalComponentsMatchingPkg finds library stanza" testCabalComponentsLibrary
       , test "lab: listTopLevelBindings finds simple sigs (#60)" testLabListSimple
       , test "lab: listTopLevelBindings handles multi-line sig (#60)" testLabListMultiline
       , test "lab: listTopLevelBindings skips empty + non-sigs (#60)" testLabListSkips
@@ -8398,6 +8403,64 @@ testDepsExplainClean =
         , " - my-project-0.1.0.0 (lib)"
         ]
   in pure (isNothing (DepsExplain.parseSolverOutput dump))
+
+-- | #156: pkgSearchTokens for a single-word package name.
+testPkgSearchTokensSimple :: IO Bool
+testPkgSearchTokensSimple =
+  pure (DepsExplain.pkgSearchTokens "aeson" == ["Aeson"])
+
+-- | #156: pkgSearchTokens for a hyphenated package name produces
+-- joined and individual capitalised tokens.
+testPkgSearchTokensHyphen :: IO Bool
+testPkgSearchTokensHyphen =
+  let tokens = DepsExplain.pkgSearchTokens "data-default"
+  in pure
+       (  "DataDefault" `elem` tokens
+       && "Data"        `elem` tokens
+       && "Default"     `elem` tokens
+       )
+
+-- | #156: importMatchesPkg recognises a direct import from the package.
+testImportMatchesPkgHit :: IO Bool
+testImportMatchesPkgHit =
+  pure
+    (  DepsExplain.importMatchesPkg "aeson" "import Data.Aeson"
+    && DepsExplain.importMatchesPkg "aeson" "import qualified Data.Aeson.Key as Key"
+    )
+
+-- | #156: importMatchesPkg rejects imports unrelated to the package.
+testImportMatchesPkgMiss :: IO Bool
+testImportMatchesPkgMiss =
+  pure
+    (  not (DepsExplain.importMatchesPkg "aeson" "import Data.Map")
+    && not (DepsExplain.importMatchesPkg "aeson" "import Prelude")
+    )
+
+-- | #156: cabalComponentsMatchingPkg finds the library stanza
+-- when it lists the package in build-depends.
+testCabalComponentsLibrary :: IO Bool
+testCabalComponentsLibrary =
+  let cabalText = T.unlines
+        [ "cabal-version: 3.4"
+        , "name: my-project"
+        , ""
+        , "library"
+        , "  hs-source-dirs: src"
+        , "  build-depends:"
+        , "      base"
+        , "    , aeson"
+        , ""
+        , "test-suite my-test"
+        , "  hs-source-dirs: test"
+        , "  build-depends:"
+        , "      base"
+        ]
+      (stanzas, srcDirs) = DepsExplain.cabalComponentsMatchingPkg "aeson" cabalText
+  in pure
+       (  length stanzas == 1
+       && "library" `T.isPrefixOf` (head stanzas)
+       && any (\(_, ds) -> "src" `elem` ds) srcDirs
+       )
 
 -- | Issue #60: 'listTopLevelBindings' must pick up every
 -- column-0 type signature.

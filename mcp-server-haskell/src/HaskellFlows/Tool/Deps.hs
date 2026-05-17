@@ -114,9 +114,9 @@ descriptor =
         "Manage build-depends in the project's .cabal file. Actions: "
           <> "'list' (current deps), 'add' (insert pkg + optional "
           <> "version constraint), 'remove' (delete by name), "
-          <> "'explain' (translate a cabal solver dump into a "
-          <> "structured root-cause + verified fix candidates — #94 "
-          <> "Phase C: subsumes the retired ghc_deps_explain). After "
+          <> "'explain' (show which stanzas declare package X and "
+          <> "which source files import its modules — pass package=X). "
+          <> "After "
           <> "add/remove, the next ghc_load picks up the new "
           <> "package graph — no explicit session restart needed."
     , tdInputSchema = schema
@@ -163,17 +163,17 @@ schema = Schema.discriminatedSchema "action"
   , Schema.SchemaBranch
       { Schema.sbDiscriminantValue = "explain"
       , Schema.sbDescription       =
-          "Translate a cabal solver dependency-conflict dump into a \
-          \structured root cause + verified fix candidates. Pass the \
-          \cabal output verbatim under 'cabal_output'. (#94 Phase C: \
-          \this subsumes the retired ghc_deps_explain.)"
+          "Show which stanzas declare a dependency and which source \
+          \files import its modules. (#156: replaces the old solver-\
+          \conflict analyser; use 'cabal v2-build --dry-run' output \
+          \directly for solver diagnostics.)"
       , Schema.sbProperties        =
-          [ ("cabal_output", Schema.stringField
-              "Verbatim cabal solver output (the 'Could not resolve \
-              \dependencies' block). Pass the whole dump including the \
-              \'next goal' / 'rejecting' lines.")
+          [ ("package", Schema.stringField
+              "Package name to explain (e.g. 'aeson', 'QuickCheck'). \
+              \The tool searches build-depends across all stanzas and \
+              \scans source files for matching imports.")
           ]
-      , Schema.sbRequired          = ["cabal_output"]
+      , Schema.sbRequired          = ["package"]
       }
   ]
   where
