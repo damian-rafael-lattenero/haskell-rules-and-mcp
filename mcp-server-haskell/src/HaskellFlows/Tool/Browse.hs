@@ -13,6 +13,7 @@ module HaskellFlows.Tool.Browse
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Data.List (isPrefixOf)
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -27,6 +28,7 @@ import GHC
   , mkModuleName
   , modInfoExports
   , moduleName
+  , ms_hspp_file
   , ms_mod
   )
 import GHC.Types.Name (nameOccName)
@@ -35,9 +37,10 @@ import GHC.Types.Var (varType)
 import GHC.Utils.Outputable (showPprUnsafe)
 
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
+import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject, withGhcSession)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Types (unProjectDir)
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -78,7 +81,8 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
           (T.pack ("Invalid arguments: " <> err)))
             { Env.eeCause = Just (T.pack err) })))
   Right (BrowseArgs m) -> do
-    eRes <- try (withGhcSession ghcSess (queryBrowse m))
+    let root = unProjectDir (gsProject ghcSess)
+    eRes <- try (withGhcSession ghcSess (queryBrowse root m))
     pure $ Env.toolResponseToResult $ case eRes of
       Left (se :: SomeException) ->
         Env.mkFailed
@@ -114,14 +118,23 @@ parseErrorKind err
 
 -- | Look up the module in the current module graph, pull its exports,
 -- render each as "name :: type" (or just the name for non-Id things).
-queryBrowse :: Text -> Ghc (Maybe [Text])
-queryBrowse nm = do
+--
+-- Only modules whose preprocessed source file (@ms_hspp_file@) lives
+-- under the project root are considered. On some CI environments (Linux
+-- Docker with GHC installed from source) the module graph also includes
+-- external package modules (e.g. @Prelude@ from @base@). Filtering by
+-- the project root restricts 'ghc_browse' to the project's own source,
+-- which is the documented contract: use 'ghc_info' or 'hoogle_search'
+-- for upstream/external modules.
+queryBrowse :: FilePath -> Text -> Ghc (Maybe [Text])
+queryBrowse projectRoot nm = do
   let wanted = mkModuleName (T.unpack nm)
   mg <- getModuleGraph
   let matches =
         [ ms_mod ms
         | ms <- mgModSummaries mg
         , moduleName (ms_mod ms) == wanted
+        , projectRoot `isPrefixOf` ms_hspp_file ms
         ]
   case matches of
     []      -> pure Nothing

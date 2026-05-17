@@ -984,14 +984,25 @@ statusOk_ v = case envField "status" v of
 -- content is not JSON or not an object, the tool result is returned
 -- unchanged — we prefer silently skipping injection over corrupting
 -- a non-JSON payload.
+-- | Splice a 'NextStep' into the first 'TextContent' block of a
+-- 'ToolResult' — but only when the payload does not already carry a
+-- 'nextStep' key. This makes the dispatcher hint a true backstop:
+-- tool-specific hints (set via 'Env.withNextStep') are preserved;
+-- the dispatcher fills in only when the tool has no opinion.
+--
+-- Previously this used 'KeyMap.insert' which always overwrote, so
+-- 'Env.withNextStep moduleNotInGraphNextStep' in 'Browse.handle'
+-- was silently overridden by the global GhcBrowse → ghc_suggest hint.
 injectNextStep :: NextStep -> ToolResult -> ToolResult
 injectNextStep ns tr = tr { trContent = map splice (trContent tr) }
   where
     splice (TextContent t) = case decodeObject t of
       Nothing -> TextContent t
       Just o  ->
-        let enriched = Object (KeyMap.insert "nextStep" (toJSON ns) o)
-        in TextContent (encodeText enriched)
+        -- Preserve a tool-specific nextStep; inject only as fallback.
+        if KeyMap.member "nextStep" o
+          then TextContent t
+          else TextContent (encodeText (Object (KeyMap.insert "nextStep" (toJSON ns) o)))
 
 -- | Decode a Text into a JSON object. Returns 'Nothing' if the Text
 -- is not valid JSON or not an object at the top level.
