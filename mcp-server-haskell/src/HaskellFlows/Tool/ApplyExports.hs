@@ -16,6 +16,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.PermissiveJSON (BoolField (unBoolField))
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.ModuleName (isReservedKeyword)
@@ -50,6 +51,13 @@ descriptor =
                   [ "type"  .= ("array" :: Text)
                   , "items" .= object [ "type" .= ("string" :: Text) ]
                   ]
+              , "write" .= object
+                  [ "type"        .= ("boolean" :: Text)
+                  , "description" .=
+                      ("When false (default true), preview the new header "
+                       <> "without writing to disk. The response carries "
+                       <> "applied=false and the would-be exports list." :: Text)
+                  ]
               ]
           , "required"             .= (["module_path", "exports"] :: [Text])
           , "additionalProperties" .= False
@@ -59,14 +67,21 @@ descriptor =
 data ApplyExportsArgs = ApplyExportsArgs
   { aeModulePath :: !Text
   , aeExports    :: ![Text]
+  , aeWrite      :: !Bool  -- ^ #155: default True; False = dry-run preview
   }
   deriving stock (Show)
 
 instance FromJSON ApplyExportsArgs where
-  parseJSON = withObject "ApplyExportsArgs" $ \o ->
-    ApplyExportsArgs
-      <$> o .: "module_path"
-      <*> o .: "exports"
+  parseJSON = withObject "ApplyExportsArgs" $ \o -> do
+    mp <- o .:  "module_path"
+    ex <- o .:  "exports"
+    -- Default write=true (write to disk). BoolField accepts string "false".
+    wr <- maybe True unBoolField <$> o .:? "write"
+    pure ApplyExportsArgs
+      { aeModulePath = mp
+      , aeExports    = ex
+      , aeWrite      = wr
+      }
 
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
@@ -90,12 +105,17 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
             Right body ->
               case rewriteHeader (aeExports args) body of
                 Nothing -> pure (noChangeResult full)
-                Just newBody -> do
-                  wres <- try (TIO.writeFile full newBody)
-                    :: IO (Either SomeException ())
-                  case wres of
-                    Left e  -> pure (errorResult (T.pack ("Could not write: " <> show e)))
-                    Right _ -> pure (successResult full (aeExports args))
+                Just _newBody ->
+                  -- #155: when write=false, return a preview with
+                  -- applied=false — do NOT write to disk.
+                  if not (aeWrite args)
+                    then pure (previewResult full (aeExports args))
+                    else do
+                      wres <- try (TIO.writeFile full _newBody)
+                        :: IO (Either SomeException ())
+                      case wres of
+                        Left e  -> pure (errorResult (T.pack ("Could not write: " <> show e)))
+                        Right _ -> pure (successResult full (aeExports args))
 
 -- | Filter the export list down to entries that are unambiguously
 -- invalid as Haskell exports — reserved keywords. We deliberately
@@ -149,6 +169,18 @@ successResult path exports =
     [ "path"    .= T.pack path
     , "exports" .= exports
     , "applied" .= True
+    ]))
+
+-- | #155: dry-run preview → status='ok', applied=false.
+-- The file is NOT written; the response shows the would-be export list
+-- so the caller can confirm before committing with write=true.
+previewResult :: FilePath -> [Text] -> ToolResult
+previewResult path exports =
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "path"    .= T.pack path
+    , "exports" .= exports
+    , "applied" .= False
+    , "preview" .= True
     ]))
 
 -- | Issue #90 Phase C: idempotent no-op → status='ok' with

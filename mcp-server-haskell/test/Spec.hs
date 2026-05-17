@@ -832,6 +832,8 @@ main = do
       , test "#133: noChangeResult includes applied=false"  testApplyExportsNoChangeHasApplied
       , test "#133: handle write path returns applied=true" testApplyExportsHandleAppliedTrue
       , test "#133: handle no-op path returns applied=false" testApplyExportsHandleAppliedFalse
+      , test "#155: apply_exports write=false → applied=false, file unchanged"
+                                                              testApplyExportsWriteFalse
       -- ISSUE-47: module-name validator unit tests
       , test "modname: valid single segment"        testValidModuleNameSingle
       , test "modname: valid dotted name"           testValidModuleNameDotted
@@ -7437,6 +7439,27 @@ testApplyExportsHandleAppliedFalse = withFixture $ \pd _ -> do
   let payload = resultPayload tr
   pure $ fieldEquals "applied"   (A.Bool False) payload
       && fieldEquals "no_change" (A.Bool True)  payload
+
+-- | #155: write=false (dry-run) must return applied=false and must NOT
+-- write to disk. Before the fix the tool always wrote and returned
+-- applied=true regardless of the write parameter.
+testApplyExportsWriteFalse :: IO Bool
+testApplyExportsWriteFalse = withFixture $ \pd _ -> do
+  let projectDir = HaskellFlows.Types.unProjectDir pd
+      modulePath = projectDir </> "src" </> "WriteFalse.hs"
+      origBody   = T.unlines ["module WriteFalse where", "foo = 42"]
+  createDirectoryIfMissing True (projectDir </> "src")
+  TIO.writeFile modulePath origBody
+  let args = A.object
+        [ "module_path" A..= ("src/WriteFalse.hs" :: Text)
+        , "exports"     A..= (["foo"] :: [Text])
+        , "write"       A..= False
+        ]
+  tr <- ApplyExports.handle pd args
+  bodyAfter <- TIO.readFile modulePath
+  let payload = resultPayload tr
+  pure $ fieldEquals "applied" (A.Bool False) payload
+      && bodyAfter == origBody  -- file must be unchanged
 
 --------------------------------------------------------------------------------
 -- ISSUE-47 — Module-name validator (Parser.ModuleName)
