@@ -32,7 +32,7 @@ import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.List (nubBy)
-import Data.Maybe (mapMaybe, fromMaybe, listToMaybe)
+import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import System.Directory (findExecutable)
@@ -105,7 +105,7 @@ instance FromJSON HoogleArgs where
     -- Accept both "limit" (canonical) and "count" (common LLM alias — #158)
     mLimit <- o .:? "limit"
     mCount <- o .:? "count"
-    let l = fromMaybe 10 (listToMaybe [x | Just x <- [mLimit, mCount]])
+    let l = fromMaybe 10 (listToMaybe (catMaybes [mLimit, mCount]))
     pure HoogleArgs { haQuery = q, haLimit = clampLimit l }
 
 clampLimit :: Int -> Int
