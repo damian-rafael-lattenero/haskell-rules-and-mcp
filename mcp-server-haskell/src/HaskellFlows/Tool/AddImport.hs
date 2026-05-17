@@ -1,14 +1,26 @@
 -- | @ghc_add_import@ — for \"not in scope\" errors, search via
--- Hoogle and return candidate @import@ lines. Does NOT modify files
--- — the agent chooses which line to apply.
+-- Hoogle for candidate @import@ lines AND add the top hit to the
+-- live GHCi interactive context so subsequent 'ghc_eval' calls can
+-- use it immediately. Does NOT modify source files — the agent
+-- chooses which candidate to persist to disk.
+--
+-- #146: previously the tool only returned candidates without touching
+-- the session, making its name misleading. Now the top candidate
+-- (if any) is injected into the interactive context via
+-- 'parseImportDecl' + 'setContext'. The response carries
+-- @session_updated@ (bool) and @added_import@ (the line that was
+-- injected, or null) so callers can see what happened.
 module HaskellFlows.Tool.AddImport
   ( descriptor
   , handle
   , AddImportArgs (..)
   , renderImportLine
   , extractModules
+    -- * Session helper (exported for unit tests)
+  , addImportToSession
   ) where
 
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (parseEither)
@@ -17,8 +29,10 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import GHC (InteractiveImport (IIDecl), getContext, parseImportDecl, setContext)
 import System.Directory (findExecutable)
 
+import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -29,19 +43,25 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcAddImport
     , tdDescription =
-        "PURPOSE: Suggest `import` lines for a name that is \"Not in "
-          <> "scope\". "
+        "PURPOSE: Look up which module exports a name and add the top "
+          <> "hit to the live GHCi session so ghc_eval can use it "
+          <> "immediately. "
           <> "WHEN: a compile error reports a missing identifier and you "
-          <> "need to know which module exports it; preparing an import "
-          <> "before ghc_apply_exports / ghc_load. "
+          <> "need to know which module exports it; adding a transient "
+          <> "import to the interactive session before evaluating an "
+          <> "expression with ghc_eval. "
           <> "WHEN NOT: the name is already in scope — check via "
           <> "ghc_imports first; you want to discover names by type "
-          <> "signature — use hoogle_search directly. "
+          <> "signature — use hoogle_search directly; you want to persist "
+          <> "the import to a source file — use ghc_apply_exports or "
+          <> "edit the file directly then ghc_load. "
           <> "PREREQUISITES: hoogle binary on PATH (ghc_toolchain "
           <> "action='status' confirms availability). "
-          <> "OUTPUT: ranked candidate import lines; does NOT modify "
-          <> "files — the agent picks one and applies it. "
-          <> "SEE ALSO: ghc_imports, hoogle_search."
+          <> "OUTPUT: {name, count, imports, session_updated, "
+          <> "added_import, hint}. The top candidate is injected into "
+          <> "the GHCi session (session_updated=true) so ghc_eval works "
+          <> "immediately. Does NOT modify source files. "
+          <> "SEE ALSO: ghc_imports, hoogle_search, ghc_apply_exports."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -72,8 +92,8 @@ instance FromJSON AddImportArgs where
       <$> o .:  "name"
       <*> o .:? "qualified" .!= False
 
-handle :: Value -> IO ToolResult
-handle rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> Value -> IO ToolResult
+handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err ->
     pure (Env.toolResponseToResult (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind err)
@@ -96,27 +116,65 @@ handle rawArgs = case parseEither parseJSON rawArgs of
         let candidates = extractModules hoogleRes
             imports    = map (renderImportLine (aiQualified args))
                            (uniqueTop 5 candidates)
+        -- #146: inject the top candidate into the live GHCi session so
+        -- subsequent ghc_eval calls can use the imported name
+        -- immediately, without requiring the user to reload or edit a
+        -- source file.
+        mSessionResult <- case imports of
+          []    -> pure Nothing
+          (i:_) -> Just <$> addImportToSession ghcSess i
+        let sessionAdded = maybe False fst mSessionResult
+            addedImport  = case mSessionResult of
+              Just (True, importLine) -> toJSON importLine
+              _                       -> Null
+            hintText :: Text
             hintText
               | null imports =
                   "Hoogle returned no matches for '" <> aiName args
                   <> "'. Check spelling, try a fully-qualified search \
                      \(e.g. 'Map.lookup'), or look it up by type."
+              | sessionAdded =
+                  "Top candidate injected into the GHCi session — "
+                  <> "ghc_eval can use it now. To persist it to a "
+                  <> "source file, paste the import line at the top of "
+                  <> "your .hs file and call ghc_load."
               | otherwise =
                   "None of these are guaranteed correct — pick the \
                   \module whose context best fits your use case. \
-                  \Then paste the line at the top of your .hs file \
-                  \and reload with ghc_load."
+                  \Paste the line at the top of your .hs file and \
+                  \reload with ghc_load."
             payload = object
-              [ "name"    .= aiName args
-              , "count"   .= length imports
-              , "imports" .= imports
-              , "hint"    .= (hintText :: Text)
+              [ "name"            .= aiName args
+              , "count"           .= length imports
+              , "imports"         .= imports
+              , "session_updated" .= sessionAdded
+              , "added_import"    .= addedImport
+              , "hint"            .= hintText
               ]
         -- Issue #90 §6: zero suggestions → status='no_match'.
         -- Hits → status='ok'. Same payload either way.
         pure $ Env.toolResponseToResult $ case imports of
           [] -> Env.mkNoMatch payload
           _  -> Env.mkOk payload
+
+-- | #146: inject @importLine@ into the live GHCi interactive context
+-- by parsing it with 'parseImportDecl' and prepending the result to
+-- 'getContext'. Returns @(True, importLine)@ on success,
+-- @(False, errorMsg)@ when GHC rejects the line.
+--
+-- The change is in-memory only — source files are not touched. The
+-- import persists until the next 'invalidateLoadCache' triggers a
+-- fresh 'setContext' in 'withGhcSession'.
+addImportToSession :: GhcSession -> Text -> IO (Bool, Text)
+addImportToSession ghcSess importLine = do
+  eRes <- try (withGhcSession ghcSess $ do
+    ctx   <- getContext
+    idecl <- parseImportDecl (T.unpack importLine)
+    setContext (IIDecl idecl : ctx)
+    ) :: IO (Either SomeException ())
+  pure $ case eRes of
+    Left  e -> (False, T.pack (show e))
+    Right _ -> (True,  importLine)
 
 -- | Discriminate the FromJSON failure shape — same heuristic as
 -- the other Phase-B migrations.

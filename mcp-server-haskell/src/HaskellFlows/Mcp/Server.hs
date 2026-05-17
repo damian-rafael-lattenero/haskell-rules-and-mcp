@@ -572,9 +572,12 @@ dispatchByName srv args = \case
     store   <- readIORef (srvStore srv)
     GateTool.handle store ghcSess pd args
   GhcAddImport -> do
-    r <- AddImportTool.handle args
-    invalidateGhcSessionIfPresent srv
-    pure r
+    -- #146: AddImportTool now needs the session to inject the top
+    -- candidate directly into the interactive context. We do NOT
+    -- invalidate the load cache here — the whole point is to KEEP the
+    -- newly-added import in scope for subsequent ghc_eval calls.
+    ghcSess <- getOrStartGhcSession srv
+    AddImportTool.handle ghcSess args
   GhcModules -> do
     -- #94 Phase B: action-discriminated 'modules' primitive.
     -- ModulesTool.handle dispatches on args.action ∈ {"add","remove"}

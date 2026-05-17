@@ -799,6 +799,8 @@ main = do
       , test "code tools: all 5 registered"        testCodeToolsRegistered
       , test "add_import: qualified renderImportLine" testAddImportQualified
       , test "add_import: missing hoogle returns success=false (#53)" testAddImportMissingHoogle
+      , test "#146: addImportToSession rejects invalid import gracefully" testAddImportToSessionInvalid
+      , test "#146: addImportToSession accepts valid base import"       testAddImportToSessionValid
       , test "info: renderConstructorsBlock empty (#54)"  testInfoCtorBlockEmpty
       , test "info: renderConstructorsBlock Maybe (#54)"  testInfoCtorBlockMaybe
       , test "info: successResult includes constructors (#54)" testInfoSuccessIncludesCtors
@@ -5038,13 +5040,24 @@ runHoogle args = do
       pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
     _ -> pure (Left "expected exactly one TextContent")
 
+-- | #146: AddImportTool.handle now requires a GhcSession. For tests
+-- that short-circuit before the session is touched (hoogle missing,
+-- parse error), a stub session on an empty tmpdir is sufficient.
 runAddImport :: A.Value -> IO (Either String Env.ToolResponse)
 runAddImport args = do
-  tr <- AddImportTool.handle args
-  case trContent tr of
-    [TextContent body] ->
-      pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
-    _ -> pure (Left "expected exactly one TextContent")
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-add-import-stub"
+  createDirectoryIfMissing True dir
+  case mkProjectDir dir of
+    Left _  -> pure (Left "could not build ProjectDir for stub session")
+    Right pd -> do
+      sess <- startGhcSession pd
+      tr <- AddImportTool.handle sess args
+      killGhcSession sess
+      case trContent tr of
+        [TextContent body] ->
+          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+        _ -> pure (Left "expected exactly one TextContent")
 
 -- | An empty hoogle query → status='refused' with
 -- kind='empty_input' + field='query'.
@@ -7321,9 +7334,21 @@ testAddImportMissingHoogle :: IO Bool
 testAddImportMissingHoogle = do
   origPath <- System.Environment.lookupEnv "PATH"
   System.Environment.setEnv "PATH" "/nonexistent/path-for-test-only"
-  -- Use a dedicated tempdir as PATH so hoogle is guaranteed missing
+  -- Use a dedicated tempdir as PATH so hoogle is guaranteed missing.
+  -- #146: AddImportTool.handle now requires a GhcSession; the stub
+  -- session on an empty dir is sufficient since the tool fails at
+  -- the hoogle-availability gate, before touching the session.
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-add-import-nohoogle"
+  createDirectoryIfMissing True dir
   let args = A.object [ "name" A..= ("fromMaybe" :: T.Text) ]
-  result <- AddImport.handle args
+  result <- case mkProjectDir dir of
+    Left _  -> pure (ToolResult { trContent = [TextContent "{}"], trIsError = False })
+    Right pd -> do
+      sess <- startGhcSession pd
+      r <- AddImport.handle sess args
+      killGhcSession sess
+      pure r
   -- Restore PATH so other tests aren't affected.
   case origPath of
     Just p  -> System.Environment.setEnv "PATH" p
@@ -7357,6 +7382,39 @@ testAddImportMissingHoogle = do
     fieldText _ _ = Nothing
     lookupField k (A.Object o) = AKM.lookup (AKey.fromText k) o
     lookupField _ _            = Nothing
+
+-- | #146: addImportToSession returns (False, msg) when the import
+-- line is syntactically invalid — GHC rejects it during parseImportDecl
+-- and the exception is caught gracefully.
+testAddImportToSessionInvalid :: IO Bool
+testAddImportToSessionInvalid = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-add-import-invalid"
+  createDirectoryIfMissing True dir
+  case mkProjectDir dir of
+    Left _   -> pure False
+    Right pd -> do
+      sess <- startGhcSession pd
+      (ok, msg) <- AddImport.addImportToSession sess
+                     "this is not a valid import at all"
+      killGhcSession sess
+      pure (not ok && not (T.null msg))
+
+-- | #146: addImportToSession returns (True, importLine) for a
+-- well-formed import of a GHC base module.
+testAddImportToSessionValid :: IO Bool
+testAddImportToSessionValid = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-add-import-valid"
+  createDirectoryIfMissing True dir
+  case mkProjectDir dir of
+    Left _   -> pure False
+    Right pd -> do
+      sess <- startGhcSession pd
+      let importLine = "import Data.Maybe"
+      (ok, added) <- AddImport.addImportToSession sess importLine
+      killGhcSession sess
+      pure (ok && added == importLine)
 
 -- | Issue #53: nextStep dispatch on a ghc_add_import payload
 -- with @count: 0@ must return 'Nothing' (no \"reload to confirm\"
