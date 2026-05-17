@@ -23,6 +23,7 @@ module HaskellFlows.Tool.Type
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Data.List (isInfixOf)
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC (Ghc, TcRnExprMode (TM_Inst), exprType)
@@ -94,15 +95,24 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
         eRes <- try (withGhcSession ghcSess (queryExprType safe))
         pure $ Env.toolResponseToResult $ case eRes of
           Left (se :: SomeException) ->
-            -- Issue #90 §4: type-checker failure (expression does
-            -- not type-check) maps to status='failed' with
-            -- kind='type_error'. The user-facing message stays
-            -- short ("expression did not type-check"); the full
-            -- GHC SDoc lives in error.cause for debugging.
-            Env.mkFailed
-              ((Env.mkErrorEnvelope Env.TypeError
-                  ("expression '" <> expr <> "' did not type-check"))
-                    { Env.eeCause = Just (T.pack (show se)) })
+            -- Issue #141: GHC raises the same 'SomeException' for both
+            -- genuine type errors and "Not in scope" failures (missing
+            -- import). Distinguish by inspecting the message: when the
+            -- cause contains "Not in scope", the fix is to load the
+            -- required module, not to change the expression.
+            let cause = show se
+                (ekind, emsg)
+                  | "Not in scope" `isInfixOf` cause =
+                      ( Env.NotInScope
+                      , "expression '" <> expr <> "' references a name not in scope"
+                      )
+                  | otherwise =
+                      ( Env.TypeError
+                      , "expression '" <> expr <> "' did not type-check"
+                      )
+            in Env.mkFailed
+                ((Env.mkErrorEnvelope ekind emsg)
+                  { Env.eeCause = Just (T.pack cause) })
           Right tyText -> Env.mkOk (typePayload expr tyText)
 
 -- | Discriminate the FromJSON failure shape — same heuristic as

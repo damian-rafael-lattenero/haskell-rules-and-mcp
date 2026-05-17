@@ -653,6 +653,8 @@ main = do
                                                    testTypeIllTypedFailed
       , test "Envelope #90 Phase B: ghc_type refuses newline in expression"
                                                    testTypeRefusesNewline
+      , test "#141: ghc_type 'Not in scope' → kind=not_in_scope"
+                                                   testTypeNotInScope
       , test "Envelope #90 Phase B: ghc_eval pure expr → status=ok"
                                                    testEvalPureExprOk
       , test "Envelope #90 Phase B: ghc_eval refuses newline in expression"
@@ -4697,6 +4699,20 @@ testTypeRefusesNewline = do
       , Just err <- Env.reError env ->
           Env.eeKind err == Env.NewlineInjection
             && Env.eeField err == Just "expression"
+    _ -> False
+
+-- | #141: an expression whose name is not in scope → status='failed'
+-- with kind='not_in_scope', not kind='type_error'.
+-- 'Data.Map.fromList' is not imported by default so asking for its
+-- type triggers GHC's "Not in scope" diagnostic.
+testTypeNotInScope :: IO Bool
+testTypeNotInScope = do
+  decoded <- runType (A.object [ "expression" A..= ("Data.Map.fromList" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusFailed
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.NotInScope
     _ -> False
 
 -- | Phase B helper: stage a tmpdir + drive 'EvalTool.handle'.
