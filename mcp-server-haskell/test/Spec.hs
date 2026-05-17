@@ -63,6 +63,7 @@ import HaskellFlows.Parser.Hole
   , extractValidFits
   , isContinuationFitLine
   , parseFitLine
+  , splitFitTypeSource
   )
 import HaskellFlows.Parser.TypeSignature
   ( ParsedSig (..)
@@ -744,6 +745,14 @@ main = do
                                                                  testValidFitsOperatorBoundary
       , test "isContinuationFitLine: ' :: ' tagged line is a fresh fit (#71)"
                                                                  testHoleContinuationDetector
+      , test "parseFitLine: HasCallStack type not truncated (#169)"
+                                                                 testParseFitHasCallStack
+      , test "splitFitTypeSource: splits bound-at annotation (#169)"
+                                                                 testSplitFitTypeBoundAt
+      , test "splitFitTypeSource: splits imported-from annotation (#169)"
+                                                                 testSplitFitTypeImportedFrom
+      , test "splitFitTypeSource: no annotation returns full type (#169)"
+                                                                 testSplitFitTypeNoAnnotation
       , test "parseSignature simple a -> a"         testSigSimple
       , test "parseSignature with constraint"       testSigConstraint
       , test "parseSignature list"                  testSigList
@@ -5589,6 +5598,54 @@ testHoleContinuationDetector =
             Just hf -> hfName hf == "(-)"
                     && "Num a" `T.isInfixOf` hfType hf
             Nothing -> False
+
+-- | #169: Functions with @HasCallStack@ / @(?callStack :: CallStack)@
+-- constraints were silently dropped from the @validFits@ list because
+-- 'parseFitLine' broke on the first @\"(\"@, producing an empty type
+-- and triggering the @T.null (T.strip ty)@ guard.  After the fix,
+-- the type must survive intact.
+testParseFitHasCallStack :: IO Bool
+testParseFitHasCallStack =
+  -- GHC can render HasCallStack either as the class name or as the
+  -- desugared (?callStack :: CallStack) form.
+  let line1 = "        error :: HasCallStack => [Char] -> a (imported from GHC.Stack)"
+      line2 = "        error :: (?callStack :: CallStack) => [Char] -> a (imported from GHC.Stack)"
+      check line = case parseFitLine line of
+        Nothing -> False
+        Just hf ->
+          hfName hf == "error"
+          -- Type must include the constraint, not be empty or truncated.
+          && (T.isInfixOf "HasCallStack" (hfType hf)
+              || T.isInfixOf "callStack" (hfType hf))
+          && T.isInfixOf "[Char] -> a" (hfType hf)
+  in pure (check line1 && check line2)
+
+-- | #169: 'splitFitTypeSource' must split at \" (bound at \" and
+-- return the annotation as the second component.
+testSplitFitTypeBoundAt :: IO Bool
+testSplitFitTypeBoundAt =
+  let (ty, src) = splitFitTypeSource
+        "(?callStack :: CallStack) => [Char] -> a (bound at src/Foo.hs:1:1)"
+  in pure $
+       T.isInfixOf "callStack" ty
+    && T.isInfixOf "[Char] -> a" ty
+    && T.isInfixOf "bound at" src
+
+-- | #169: 'splitFitTypeSource' must split at \" (imported from \" too.
+testSplitFitTypeImportedFrom :: IO Bool
+testSplitFitTypeImportedFrom =
+  let (ty, src) = splitFitTypeSource
+        "Int -> Int -> Int (imported from Data.Bits)"
+  in pure $
+       ty == "Int -> Int -> Int"
+    && T.isInfixOf "Data.Bits" src
+
+-- | #169: when there is no annotation, the full input is returned as
+-- the type and the source component is empty.
+testSplitFitTypeNoAnnotation :: IO Bool
+testSplitFitTypeNoAnnotation =
+  let (ty, src) = splitFitTypeSource "forall a. Num a => a -> a -> a"
+  in pure $ ty == "forall a. Num a => a -> a -> a" && T.null src
 
 --------------------------------------------------------------------------------
 -- Phase 10b: TypeSignature parser + rules catalog

@@ -24,6 +24,7 @@ module HaskellFlows.Parser.Hole
   , extractValidFits
   , isContinuationFitLine    -- #71: exported for unit tests
   , parseFitLine             -- #71: exported for unit tests
+  , splitFitTypeSource       -- #169: exported for unit tests
   ) where
 
 import Data.Char (isDigit)
@@ -231,6 +232,25 @@ isContinuationFitLine l =
       hasTypeSig = " :: " `T.isInfixOf` stripped
   in indent >= 6 && not hasTypeSig
 
+-- | #169: Split "type (annotation)" at a GHC source-location
+-- annotation.  GHC appends either @\" (bound at ...)\"@ (local
+-- bindings) or @\" (imported from ...)\"@ (imported names) after the
+-- type.  We must anchor on these specific phrases rather than the
+-- first @\"(\"@ — that naive approach truncates types containing
+-- @\"(\"@, most notably @HasCallStack@ constraints which GHC
+-- renders as @(?callStack :: CallStack) => …@.
+splitFitTypeSource :: Text -> (Text, Text)
+splitFitTypeSource t =
+  let candidates = [ T.length pre
+                   | needle <- [" (bound at ", " (imported from "]
+                   , let (pre, suf) = T.breakOn needle t
+                   , not (T.null suf)
+                   ]
+  in case candidates of
+       [] -> (t, "")
+       ps -> let idx = minimum ps
+             in (T.take idx t, T.drop (idx + 1) t)
+
 parseFitLine :: Text -> Maybe HoleFit
 parseFitLine l =
   let stripped = T.strip l
@@ -238,10 +258,11 @@ parseFitLine l =
        (_, rest) | T.null rest -> Nothing
        (nm, rest) ->
          let tyFull = T.strip (T.drop 2 rest)
-             -- Any "(bound at" / "(imported from" annotation on the
-             -- same line is kept as source; the type half is
-             -- everything before that.
-             (ty, srcRaw) = T.breakOn "(" tyFull
+             -- #169: use splitFitTypeSource instead of T.breakOn "("
+             -- so that types containing "(" — like the HasCallStack
+             -- desugaring "(?callStack :: CallStack) => …" — are not
+             -- truncated.
+             (ty, srcRaw) = splitFitTypeSource tyFull
              src = if T.null srcRaw then Nothing else Just (T.strip srcRaw)
          in if T.null (T.strip nm) || T.null (T.strip ty)
               then Nothing
