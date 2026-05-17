@@ -1284,6 +1284,8 @@ main = do
       , test "#106/F-10: importsPayload has session_preloads field" testImportsHasSessionPreloads
       , test "#106/F-21: compileFailResult has status=failed and dry_run=false" testRefactorCompileFailShape
       , test "#106/F-31: perf renderResult with all errors returns failed" testPerfAllSamplesErrored
+      , test "#162: perf renderResult exposes warmup_ns field"            testPerfWarmupNsInPayload
+      , test "#162: perf warm samples exclude warmup from mean"           testPerfWarmSamplesNotSkewed
       , test "#136: readBaseline uses strict I/O (no lazy file handle)"    testPerfReadBaselineStrict
       , test "#136: save+compare both flags work sequentially (no lock)"   testPerfSaveAndCompareNoLock
       , test "#161: saveBaseline save→save sequence does not lock"          testPerfSaveBaselinesNoLock
@@ -12701,7 +12703,7 @@ testPerfSamplesGated =
                }
       nss   = [100, 110, 90, 105, 95]
       stats = PerfTool.aggregate nss
-      result = PerfTool.renderResult args nss stats [] Nothing
+      result = PerfTool.renderResult args nss stats [] Nothing 0
   in pure $ case trContent result of
        [TextContent body_] ->
          case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
@@ -12730,7 +12732,7 @@ testPerfRegressionCausePlain =
       nss      = [1_000_000, 1_100_000, 900_000, 1_050_000, 950_000]
       stats    = PerfTool.aggregate nss
       baseline = Just (PerfTool.BaselineEntry { PerfTool.beMeanNs = 1000.0 })
-      result   = PerfTool.renderResult args nss stats [] baseline
+      result   = PerfTool.renderResult args nss stats [] baseline 0
   in pure $ case trContent result of
        [TextContent body_] ->
          case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
@@ -12953,7 +12955,7 @@ testPerfAllSamplesErrored =
                }
       errs   = ["err1", "err2", "err3"]
       stats  = PerfTool.aggregate []
-      result = PerfTool.renderResult args [] stats errs Nothing
+      result = PerfTool.renderResult args [] stats errs Nothing 0
   in pure $ case trContent result of
        [TextContent body_] ->
          case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
@@ -12967,6 +12969,48 @@ testPerfAllSamplesErrored =
                   _ -> False
            _ -> False
        _ -> False
+
+-- | #162: 'renderResult' must expose a 'warmup_ns' field in the
+-- top-level payload so the agent can inspect the discarded
+-- compilation cost separately from the measured statistics.
+testPerfWarmupNsInPayload :: IO Bool
+testPerfWarmupNsInPayload =
+  let args = PerfTool.PerfArgs
+               { PerfTool.paExpression      = "1 + 1"
+               , PerfTool.paRuns            = 5
+               , PerfTool.paSaveBaseline    = False
+               , PerfTool.paCompareBaseline = False
+               , PerfTool.paVerbose         = False
+               }
+      nss     = [90, 100, 110, 95, 105]
+      stats   = PerfTool.aggregate nss
+      warmup  = 5_000_000_000 :: Word64  -- 5 s — simulate compile cost
+      result  = PerfTool.renderResult args nss stats [] Nothing warmup
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "result" top of
+               Just (A.Object r) ->
+                 AKM.lookup "warmup_ns" r == Just (A.toJSON warmup)
+               _ -> False
+           _ -> False
+       _ -> False
+
+-- | #162: the warm samples passed to 'aggregate' must NOT include
+-- the warmup sample. Pre-fix, all runs including the first cold-start
+-- were included, severely skewing mean_ns upward. We verify that a
+-- hand-chosen warmup (5 s) + warm samples (all ~100 ns) yield a
+-- mean that matches the warm samples only — not a blend with the
+-- 5 s outlier. This is a pure-stats regression test (no IO).
+testPerfWarmSamplesNotSkewed :: IO Bool
+testPerfWarmSamplesNotSkewed =
+  let warmNss = [90, 100, 110, 95, 105] :: [Word64]
+      -- If the warmup (5_000_000_000 ns) were included in stats the mean
+      -- would jump to ~(5e9 + 500) / 6 ≈ 833 ms, not ~100 ns.
+      stats   = PerfTool.aggregate warmNss
+      warmMean = PerfTool.sMean stats
+  in pure $ warmMean < 200.0  -- well under 1 µs — compile outlier excluded
 
 -- | #136: readBaseline must use strict ByteString I/O so the file handle
 -- is closed before saveBaseline opens it for writing. Verified by source

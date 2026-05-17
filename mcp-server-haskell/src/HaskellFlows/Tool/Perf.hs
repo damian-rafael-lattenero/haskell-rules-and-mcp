@@ -148,6 +148,15 @@ runPerf ghcSess pd args safe = do
   -- forces full evaluation under the timing window AND satisfies
   -- the 'IO String' contract (no runtime stg_ap_v_ret crash).
   let wrappedExpr = "pure (show (" <> safe <> ")) :: IO String"
+  -- #162: always run one warmup sample to absorb the GHC compilation
+  -- cost. The first eval in a session triggers a full in-process
+  -- recompile; without discarding it a 5 s compile latency dominates
+  -- mean_ns in a 30-sample run (e.g. 167 ms mean from a single 5 s
+  -- outlier swamps the true 50 µs warm latency). The warmup timing is
+  -- reported separately under 'warmup_ns' so the agent can inspect it.
+  warmupSample <- timeOnce ghcSess wrappedExpr (0 :: Int)
+  let warmupNs = fst warmupSample
+  -- Collect the measured (warm) samples.
   samples <- mapM (timeOnce ghcSess wrappedExpr) [1 .. paRuns args]
   let nss   = map fst samples
       errs  = [e | (_, Left e) <- map fst' samples]
@@ -159,7 +168,7 @@ runPerf ghcSess pd args safe = do
                  else pure Nothing
   when (paSaveBaseline args) $
     saveBaseline baselinePath (paExpression args) stats
-  pure (renderResult args nss stats errs mBaseline)
+  pure (renderResult args nss stats errs mBaseline warmupNs)
   where
     fst' (n, Right _) = (n, Right ())
     fst' (n, Left e)  = (n, Left e)
@@ -341,8 +350,10 @@ errCap = 500
 -- Phase 2: when 'mBaseline' is provided and the current mean is
 -- >10 % slower, the response carries a 'regression' field with
 -- 'kind="validation"' signalling so the agent can act on it.
-renderResult :: PerfArgs -> [Word64] -> Stats -> [Text] -> Maybe BaselineEntry -> ToolResult
-renderResult args nss stats errs mBaseline =
+-- #162: 'warmupNs' is the discarded first-run latency (the compile
+-- cost); the agent can inspect it but it does NOT affect mean/median.
+renderResult :: PerfArgs -> [Word64] -> Stats -> [Text] -> Maybe BaselineEntry -> Word64 -> ToolResult
+renderResult args nss stats errs mBaseline warmupNs =
   -- F-31: when every sample errored the session has likely lost the
   -- module. Surface this directly rather than computing a meaningless
   -- regression percentage against a baseline.
@@ -384,6 +395,7 @@ renderResult args nss stats errs mBaseline =
         [ "expression"    .= paExpression args
         , "runs_request"  .= paRuns args
         , "runs_executed" .= sCount stats
+        , "warmup_ns"     .= warmupNs
         , "errors"        .= errs
         , "measurements"  .= object
             ( [ "mean_ns"   .= sMean stats
@@ -403,6 +415,7 @@ renderResult args nss stats errs mBaseline =
                 [ "mean_ns"   .= sMean stats
                 , "median_ns" .= sMedian stats
                 ]
+            , "warmup_ns"    .= warmupNs
             ]
         , "instructions_for_agent" .=
             ( "Phase 2: set save_baseline=true to persist a mean_ns baseline, \
