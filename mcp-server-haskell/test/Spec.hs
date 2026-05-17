@@ -1234,6 +1234,8 @@ main = do
       -- Issue #158 — 'count' alias for 'limit' must not be silently dropped
       , test "#158: hoogle_search FromJSON accepts 'count' as alias for 'limit'" testHoogleCountAlias
       , test "#106/F-25: ghc_explain_error drops redundant module_source" testExplainErrorNoModuleSource
+      , test "#153: ghc_explain_error error_text used directly (not ignored)"
+                                                           testExplainErrorTextUsed
       , test "#106/F-11: ghc_doc strips LaTeX delimiters" testDocStripLatex
       , test "#144: ghc_doc strips spurious [ ] brackets from doc string"
                                                            testDocStripBrackets
@@ -12236,6 +12238,30 @@ testExplainErrorNoModuleSource = do
               case AKM.lookup "context" r of
                 Just (A.Object ctx) -> not (AKM.member "module_source" ctx)
                 _                   -> False
+            _ -> False
+        _ -> False
+    _ -> False
+
+-- | #153: when error_text is provided, renderContext must use that
+-- text as the diagnostic message — not fall through to recompilation.
+-- We test the pure 'syntheticError' + 'renderContext' path directly.
+testExplainErrorTextUsed :: IO Bool
+testExplainErrorTextUsed = do
+  let body    = T.unlines ["module Foo where", "foo :: Int", "foo = 42"]
+      errTxt  = "Couldn't match expected type 'Int' with actual type 'Bool'"
+      -- Simulate the path that handle takes when error_text is supplied
+      synDiag = ExplainError.syntheticError "src/Foo.hs" errTxt
+      result  = ExplainError.renderContext "src/Foo.hs" body synDiag [synDiag] Nothing
+  pure $ case trContent result of
+    [TextContent body_] ->
+      case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+        Just (A.Object top) ->
+          case AKM.lookup "result" top of
+            Just (A.Object r) ->
+              case AKM.lookup "diagnostic" r of
+                Just (A.Object d) ->
+                  AKM.lookup "message" d == Just (A.String errTxt)
+                _ -> False
             _ -> False
         _ -> False
     _ -> False

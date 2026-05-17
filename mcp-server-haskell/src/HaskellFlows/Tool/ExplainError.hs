@@ -30,6 +30,7 @@ module HaskellFlows.Tool.ExplainError
   , applyLinePatch
     -- * Response shaping (exported for unit tests)
   , renderContext
+  , syntheticError
   ) where
 
 import Control.Exception (SomeException, try)
@@ -70,6 +71,14 @@ descriptor =
           [ "type"       .= ("object" :: Text)
           , "properties" .= object
               [ "module_path"      .= obj "string"
+              , "error_text"       .= object
+                  [ "type"        .= ("string" :: Text)
+                  , "description" .=
+                      ("The GHC error message to explain. When supplied, the \
+                       \tool uses this text directly instead of recompiling \
+                       \module_path. Useful when explaining a diagnostic from \
+                       \a prior compilation pass." :: Text)
+                  ]
               , "diagnostic_index" .= obj "integer"
               , "verify_patch"     .= object
                   [ "type" .= ("object" :: Text)
@@ -108,6 +117,10 @@ instance FromJSON PatchSpec where
 
 data ExplainErrorArgs = ExplainErrorArgs
   { eaModulePath      :: !Text
+  , eaErrorText       :: !(Maybe Text)
+    -- ^ #153: when set, use this text as the diagnostic instead of
+    -- recompiling. Lets callers explain a prior diagnostic without
+    -- requiring the module to currently be broken.
   , eaDiagnosticIndex :: !(Maybe Int)
   , eaVerifyPatch     :: !(Maybe PatchSpec)
     -- ^ Phase 2: when set, apply this patch, recompile, check if
@@ -119,6 +132,7 @@ instance FromJSON ExplainErrorArgs where
   parseJSON = withObject "ExplainErrorArgs" $ \o ->
     ExplainErrorArgs
       <$> o .:  "module_path"
+      <*> o .:? "error_text"
       <*> o .:? "diagnostic_index"
       <*> o .:? "verify_patch"
 
@@ -135,22 +149,48 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
         Left e -> pure (subprocessResult
           (T.pack ("Could not read module: " <> show e)))
         Right body -> do
-          (_, diags) <- loadAndCaptureDiagnostics ghcSess Strict
-          -- Filter to OWN-module errors so a sibling's failure
-          -- doesn't drag the agent off-target.
-          let ownDiags = filter (ownsThisModule (eaModulePath args)) diags
-          case pickDiagnostic (eaDiagnosticIndex args) ownDiags of
-            Nothing ->
-              pure (renderNoErrors (eaModulePath args) ownDiags)
-            Just diag -> do
-              -- Phase 2: optional patch verification.
+          -- #153: when error_text is supplied, use it directly as the
+          -- diagnostic rather than recompiling the module. This is the
+          -- intended use-case for explaining a diagnostic from a prior
+          -- compilation pass even when the module now compiles cleanly.
+          case eaErrorText args of
+            Just errTxt -> do
+              let syntheticDiag = syntheticError (eaModulePath args) errTxt
               mVerify <- case eaVerifyPatch args of
                 Nothing    -> pure Nothing
-                Just patch -> Just <$> runVerifyPatch ghcSess mp body diag patch
-              pure (renderContext (eaModulePath args) body diag ownDiags mVerify)
+                Just patch -> Just <$> runVerifyPatch ghcSess mp body syntheticDiag patch
+              pure (renderContext (eaModulePath args) body syntheticDiag
+                      [syntheticDiag] mVerify)
+            Nothing -> do
+              (_, diags) <- loadAndCaptureDiagnostics ghcSess Strict
+              -- Filter to OWN-module errors so a sibling's failure
+              -- doesn't drag the agent off-target.
+              let ownDiags = filter (ownsThisModule (eaModulePath args)) diags
+              case pickDiagnostic (eaDiagnosticIndex args) ownDiags of
+                Nothing ->
+                  pure (renderNoErrors (eaModulePath args) ownDiags)
+                Just diag -> do
+                  -- Phase 2: optional patch verification.
+                  mVerify <- case eaVerifyPatch args of
+                    Nothing    -> pure Nothing
+                    Just patch -> Just <$> runVerifyPatch ghcSess mp body diag patch
+                  pure (renderContext (eaModulePath args) body diag ownDiags mVerify)
 
 ownsThisModule :: Text -> GhcError -> Bool
 ownsThisModule rel diag = rel `T.isSuffixOf` geFile diag
+
+-- | #153: synthesise a minimal 'GhcError' from a caller-supplied text.
+-- Used when 'error_text' is given so the rendering path doesn't need
+-- to special-case the no-recompile branch.
+syntheticError :: Text -> Text -> GhcError
+syntheticError modulePath errTxt = GhcError
+  { geFile     = modulePath
+  , geLine     = 1
+  , geColumn   = 1
+  , geSeverity = SevError
+  , geCode     = Nothing
+  , geMessage  = errTxt
+  }
 
 --------------------------------------------------------------------------------
 -- diagnostic selection
