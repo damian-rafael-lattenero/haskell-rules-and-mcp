@@ -141,6 +141,7 @@ library
                     , text              >= 2.0  && < 2.2
                     , time              >= 1.12 && < 1.16
                     , scientific        >= 0.3  && < 0.4
+                    , unix
 
 executable haskell-flows-mcp
     import:           shared

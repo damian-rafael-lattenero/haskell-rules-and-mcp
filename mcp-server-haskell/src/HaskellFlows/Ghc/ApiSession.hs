@@ -63,6 +63,8 @@ module HaskellFlows.Ghc.ApiSession
   , readCabalMtimeForTest
   , readLoadedRefForTest
   , writeLoadedRefForTest
+    -- * Exposed for unit testing only
+  , captureStdout
     -- * Issue #43 — absolutize stanza-flag paths
   , absolutizePathArg
   , absolutizeStanzaFlags
@@ -75,7 +77,7 @@ module HaskellFlows.Ghc.ApiSession
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)
-import Control.Exception (SomeException, bracket, catch, throwIO, try)
+import Control.Exception (SomeException, bracket, catch, evaluate, throwIO, try)
 import Control.Monad (filterM, unless, when)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Foldable
@@ -137,19 +139,18 @@ import System.Directory
   ( doesDirectoryExist
   , doesFileExist
   , getModificationTime
-  , getTemporaryDirectory
   , listDirectory
-  , removeFile
   )
-import GHC.IO.Handle (hDuplicate, hDuplicateTo)
 import System.IO
   ( hClose
   , hFlush
+  , hGetContents
   , hSetEncoding
-  , openTempFile
   , stdout
   , utf8
   )
+import qualified System.Posix.IO as Posix
+import System.Posix.Types (Fd (..))
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock.POSIX (POSIXTime, utcTimeToPOSIXSeconds)
 import System.FilePath ((</>), takeExtension)
@@ -1248,32 +1249,51 @@ evalIOUnitCapture stmt = do
   let action = unsafeCoerce hv :: IO ()
   liftIO (captureStdout action)
 
--- | Redirect 'stdout' to a fresh temporary file, run @action@,
--- restore 'stdout', and return what was written.
+-- | #182: Redirect 'stdout' via a POSIX pipe, run @action@, restore
+-- 'stdout', and return what the action wrote.
 --
--- The file is created, read (strictly via 'TIO.readFile'), and
--- removed entirely within this call — no lazy-I/O hazard.
+-- The previous 'hDuplicate'/'hDuplicateTo' implementation was unreliable
+-- in the MCP runtime (where stdout is a pipe to the JSON-RPC transport)
+-- because 'hDuplicateTo' changes the Handle's @fdFD@ to the temp-file FD
+-- rather than keeping @fdFD = 1@. On the restore call, 'c_dup2' is
+-- invoked with the temp-file FD as dst, which aliases that FD to the
+-- saved-stdout FD — effectively closing the transport pipe when
+-- 'hClose tmpHandle' runs. The POSIX pipe approach works directly at the
+-- OS FD level (always operating on @stdOutput = 1@) so there is no
+-- Handle-layer aliasing confusion, and the GHC Handle for 'stdout'
+-- continues to reference FD 1 throughout (whose target just changes).
 captureStdout :: IO () -> IO String
 captureStdout action = do
-  tmpDir <- getTemporaryDirectory
-  bracket
-    (openTempFile tmpDir "ghceval-stdout.tmp")
-    (\(p, h) ->
-      ignoreErr (hClose h) >>
-      ignoreErr (removeFile p))
-    (\(tmpPath, tmpHandle) -> do
-      hSetEncoding tmpHandle utf8
-      savedOut <- hDuplicate stdout
-      hDuplicateTo tmpHandle stdout
-      result <- try action :: IO (Either SomeException ())
-      hFlush stdout
-      hDuplicateTo savedOut stdout
-      hClose savedOut
-      hClose tmpHandle
-      out <- T.unpack <$> TIO.readFile tmpPath
-      case result of
-        Right () -> pure out
-        Left ex  -> throwIO ex)
+  -- Create an anonymous pipe: writes land at writeEnd, reads come from readEnd.
+  (readEnd, writeEnd) <- Posix.createPipe
+  -- Save the real stdout FD before redirecting.
+  savedFd <- Posix.dup Posix.stdOutput
+  -- Flush any pending Haskell-buffer content to the real stdout BEFORE
+  -- redirecting so it does not end up captured as part of this eval.
+  ignoreErr (hFlush stdout)
+  -- Redirect FD 1 → pipe write end.
+  _ <- Posix.dupTo writeEnd Posix.stdOutput
+  -- Close the original write-end FD — FD 1 is now its only copy.
+  -- Keeping writeEnd open would prevent EOF on readEnd after the restore.
+  Posix.closeFd writeEnd
+  -- Run the captured action.
+  result <- try action :: IO (Either SomeException ())
+  -- Flush any output the action left in the Haskell Handle buffer.
+  ignoreErr (hFlush stdout)
+  -- Restore FD 1 → original stdout (MCP transport).
+  _ <- Posix.dupTo savedFd Posix.stdOutput
+  Posix.closeFd savedFd
+  -- All write ends of the pipe are now gone → 'hGetContents' below
+  -- reaches EOF naturally.
+  readHandle <- Posix.fdToHandle readEnd
+  hSetEncoding readHandle utf8
+  out <- hGetContents readHandle
+  -- Force the lazy String to ensure all bytes are read before we return.
+  _ <- evaluate (length out)
+  hClose readHandle
+  case result of
+    Right () -> pure out
+    Left ex  -> throwIO ex
   where
     ignoreErr io = io `catch` (\(_ :: SomeException) -> pure ())
 

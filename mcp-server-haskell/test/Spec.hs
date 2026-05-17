@@ -258,6 +258,7 @@ import HaskellFlows.Types
   )
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
+  , captureStdout
   , evalIOString
   , killGhcSession
   , readLoadedRefForTest
@@ -1347,6 +1348,7 @@ main = do
       , test "#106/F-34: moduleNameToPath accepts file paths without mangling" testMoveModuleNameToPath
       , test "#106/F-12: ioUnitResult has kind=io_unit_no_output" testEvalIoUnitResult
       , test "#167: ioUnitResult hint is not circular (no putStrLn advice)" testEvalIoUnitHintNotCircular
+      , test "#182: evalIOUnitCapture actually captures putStrLn output"    testCaptureStdoutActuallyCaptures
       , test "#106/F-23: mergeDiags prefers deferred version at same position" testLoadMergeDiagsPreferDeferred
       , test "#106/F-04: toolchain warmup includes gates in response" testWarmupIncludesGates
       , test "#106/F-01: classifyPhase stays PreScaffold beyond 3 calls w/o load" testClassifyPhaseNoLoad
@@ -13528,6 +13530,19 @@ testEvalIoUnitHintNotCircular =
                _ -> False
            _ -> False
        _ -> False
+
+-- | #182: 'captureStdout' must actually capture output written to
+-- 'System.IO.stdout'. The previous 'hDuplicate'/'hDuplicateTo'
+-- implementation silently returned empty string in the MCP runtime
+-- (stdout is a pipe to the JSON-RPC transport) due to Handle-level FD
+-- aliasing on the restore call. The new POSIX pipe implementation must
+-- return the expected string.
+testCaptureStdoutActuallyCaptures :: IO Bool
+testCaptureStdoutActuallyCaptures = do
+  -- Test captureStdout directly — no GHC session needed; it's a plain
+  -- IO capture utility. putStrLn is already in scope.
+  out <- captureStdout (putStrLn "hello")
+  pure (out == "hello\n")
 
 -- | F-23: 'mergeDiags' must prefer the deferred (warning-severity)
 -- version when both passes report a diagnostic at the same position.
