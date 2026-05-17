@@ -208,7 +208,8 @@ prettySrc =
 -- sibling-aware suggest engine discovers them.
 genSrc :: Text
 genSrc =
-  "module Gen\n\
+  "{-# OPTIONS_GHC -Wno-orphans #-}\n\
+  \module Gen\n\
   \  ( module Expr.Syntax\n\
   \  , module Expr.Eval\n\
   \  , module Expr.Simplify\n\
