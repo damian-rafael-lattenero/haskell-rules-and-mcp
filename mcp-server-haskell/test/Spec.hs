@@ -7192,7 +7192,7 @@ testCreateUsesSuppliedPath = withTempProject $ \pd -> do
   -- The temp dir is freshly created — no cabal.project or Spec.hs.
   -- Before the fix, the clash check looked in the *active* projectDir
   -- (mcp-server-haskell/) which DOES have those files.
-  result <- CreateProject.scaffold (unProjectDir pd) "fresh-pkg" "FreshPkg" False True
+  result <- CreateProject.scaffold (unProjectDirRaw pd) "fresh-pkg" "FreshPkg" False True
   pure (not (trIsError result))
 
 testCheckGateReasonMatchesOk :: IO Bool
@@ -12394,7 +12394,7 @@ testPerfReadBaselineStrict = do
 -- This test exercises the actual file I/O round-trip in a temp directory.
 testPerfSaveAndCompareNoLock :: IO Bool
 testPerfSaveAndCompareNoLock = withTempProject $ \pd -> do
-  let path  = unProjectDir pd </> ".haskell-flows" </> "perf.json"
+  let path  = unProjectDirRaw pd </> ".haskell-flows" </> "perf.json"
       expr  = "sum [1..10]" :: T.Text
       stats = PerfTool.aggregate [1000, 1100, 900, 1050, 1000]
   -- Save a baseline first so compare has something to read.
@@ -12416,7 +12416,7 @@ testPerfSaveAndCompareNoLock = withTempProject $ \pd -> do
 -- saveBaseline's internal read to strict BS.readFile + decodeStrict.
 testPerfSaveBaselinesNoLock :: IO Bool
 testPerfSaveBaselinesNoLock = withTempProject $ \pd -> do
-  let path  = unProjectDir pd </> ".haskell-flows" </> "perf.json"
+  let path  = unProjectDirRaw pd </> ".haskell-flows" </> "perf.json"
       expr  = "length [1..100]" :: T.Text
       stats = PerfTool.aggregate [500, 510, 490, 505, 495]
   -- Two consecutive saves: the second one reads the file that the first
