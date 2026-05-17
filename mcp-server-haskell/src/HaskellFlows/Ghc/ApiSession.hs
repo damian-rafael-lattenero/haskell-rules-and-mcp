@@ -91,7 +91,7 @@ import GHC
   ( Ghc
   , InteractiveImport (IIDecl)
   , LoadHowMuch (LoadAllTargets)
-  , SuccessFlag (Succeeded)
+  , SuccessFlag (Succeeded, Failed)
   , getModuleGraph
   , getSession
   , getSessionDynFlags
@@ -346,21 +346,32 @@ autoLoadProject pd = do
     _  -> do
       targets <- traverse (\f -> guessTarget f Nothing Nothing) files
       setTargets targets
-      _ <- load LoadAllTargets
-      mg <- getModuleGraph
-      let homeImports =
-            [ IIDecl (simpleImportDecl (moduleName (ms_mod ms)))
-            | ms <- mgModSummaries mg
-            ]
-          preludeImport =
+      -- #193: capture the load result so we can guard against adding
+      -- unloaded (broken) modules to the interactive context.
+      -- If 'load' returns 'Failed', some modules in the graph did not
+      -- compile. Including them via 'setContext' triggers GHC-58427
+      -- ("attempting to use module M which is not loaded") on the
+      -- next 'ghc_eval', breaking the session. When the load fails we
+      -- fall back to Prelude-only context so basic evaluation keeps
+      -- working while the user fixes the compile error.
+      loadResult <- load LoadAllTargets
+      let preludeImport =
             IIDecl (simpleImportDecl (mkModuleName "Prelude"))
-      -- Auto-import: propagate each source module's 'import …'
-      -- declarations into the interactive context verbatim, so
-      -- qualified + aliased imports ('import qualified Data.Map as Map')
-      -- reach 'ghc_eval' with the project's own naming. See
-      -- 'projectInteractiveImports'.
-      projImports <- projectInteractiveImports searchDirs
-      setContext (preludeImport : homeImports ++ projImports)
+      case loadResult of
+        Failed -> setContext [preludeImport]
+        Succeeded -> do
+          mg <- getModuleGraph
+          let homeImports =
+                [ IIDecl (simpleImportDecl (moduleName (ms_mod ms)))
+                | ms <- mgModSummaries mg
+                ]
+          -- Auto-import: propagate each source module's 'import …'
+          -- declarations into the interactive context verbatim, so
+          -- qualified + aliased imports ('import qualified Data.Map as Map')
+          -- reach 'ghc_eval' with the project's own naming. See
+          -- 'projectInteractiveImports'.
+          projImports <- projectInteractiveImports searchDirs
+          setContext (preludeImport : homeImports ++ projImports)
 
 -- | Derive a list of 'InteractiveImport's from the project's own
 -- @import …@ declarations, preserving qualifier + alias (so
@@ -1182,8 +1193,12 @@ targetForPath sess path = do
   ensureStanzaFlags sess
   stanzas <- readIORef (gsStanzaFlags sess)
   let fallback = Bootstrap.TargetLibrary
-      prefix p = any (\c -> c == '/' || c == '\\') (drop (length p) path)
-                 && take (length p) path == p
+      -- #194: use a simple prefix check. The old guard required a '/' in
+      -- the remainder (matching only nested paths like "test/foo/Bar.hs")
+      -- and silently fell through to 'TargetLibrary' for flat files like
+      -- "test/Gen.hs", loading them without QuickCheck and causing compile
+      -- failures. A plain 'take' prefix is sufficient and correct.
+      prefix p = take (length p) path == p
       firstOf predicate =
         case [ t | t <- Map.keys stanzas, predicate t ] of
           (t : _) -> t

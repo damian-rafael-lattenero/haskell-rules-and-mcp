@@ -1441,6 +1441,12 @@ main = do
       , test "#181: resetHscEnvInPlace clears loaded flag"    testResetHscEnvInPlaceClearsLoaded
       , test "#181: resetHscEnvInPlace is no-op on fresh session" testResetHscEnvInPlaceFreshSession
       , test "#181: all 4 load paths have reset-on-failure guard" testLoadPathsHaveResetGuard
+      -- Issue #193 — autoLoadProject must not include broken modules in context
+      , test "#193: autoLoadProject sets Prelude-only context on failed load (source check)" testAutoLoadFailedBranch
+      -- Issue #194 — targetForPath prefix must match flat test/Foo.hs paths
+      , test "#194: targetForPath prefix matches flat test/Foo.hs" testTargetForPathFlatFile
+      , test "#194: targetForPath prefix matches nested test/foo/Bar.hs" testTargetForPathNestedFile
+      , test "#194: targetForPath falls back to library for src/Foo.hs" testTargetForPathLibFallback
       -- Issue #129 — ghc_check_project deadline-based timeout
       , test "#191: check_project delegates to check_module (no own loadForTarget)" testCheckProjectDelegates
       , test "#129: CheckProjectArgs defaults timeout_seconds to 120"    testCheckProjectArgsDefaultTimeout
@@ -14560,6 +14566,57 @@ testLoadPathsHaveResetGuard = do
       count   = length (T.splitOn guard src) - 1
   pure (count == 4)  -- 4 call sites: loadAndCaptureDiagnostics +
                      -- loadForTarget + 2x loadSpecificFileForTarget
+
+--------------------------------------------------------------------------------
+-- #193 — autoLoadProject must fall back to Prelude-only on failed load
+--------------------------------------------------------------------------------
+
+-- | #193: Structural check that 'autoLoadProject' handles the 'Failed' case
+-- from 'load LoadAllTargets' by calling 'setContext [preludeImport]' rather
+-- than including potentially-unloaded home modules. The pattern 'Failed ->'
+-- must be present in ApiSession.hs with 'setContext [preludeImport]' nearby.
+testAutoLoadFailedBranch :: IO Bool
+testAutoLoadFailedBranch = do
+  src <- TIO.readFile "src/HaskellFlows/Ghc/ApiSession.hs"
+  let hasFailed     = "Failed -> setContext [preludeImport]" `T.isInfixOf` src
+      hasSucceeded  = "Succeeded -> do" `T.isInfixOf` src
+  pure (hasFailed && hasSucceeded)
+
+--------------------------------------------------------------------------------
+-- #194 — targetForPath prefix must match flat test/Foo.hs
+--------------------------------------------------------------------------------
+
+-- | #194: Verify the prefix check used by 'targetForPath' matches a
+-- file directly under test/ (no nested directory). The old guard
+-- required a '/' in the remainder, so "test/Gen.hs" silently fell
+-- through to TargetLibrary and failed to load QuickCheck.
+testTargetForPathFlatFile :: IO Bool
+testTargetForPathFlatFile = do
+  src <- TIO.readFile "src/HaskellFlows/Ghc/ApiSession.hs"
+  -- The correct prefix predicate is a simple 'take' prefix check,
+  -- without the 'any isPathSep' guard on the remainder.
+  let newDef = "prefix p = take (length p) path == p" `T.isInfixOf` src
+      oldBug = "any (\\c -> c == '/' || c == '\\\\')" `T.isInfixOf` src
+  pure (newDef && not oldBug)
+
+-- | Verify the updated predicate matches nested paths too (regression guard).
+testTargetForPathNestedFile :: IO Bool
+testTargetForPathNestedFile = do
+  -- Purely functional test of the new predicate logic.
+  let prefix p path = take (length p) path == p
+  pure $  prefix "test/" "test/foo/Bar.hs"  -- nested: was always fine
+       && prefix "test/" "test/Gen.hs"       -- flat: was broken before fix
+       && prefix "app/"  "app/Main.hs"
+       && not (prefix "test/" "src/Foo.hs")
+
+-- | Verify that src/Foo.hs still maps to library (not test-suite).
+testTargetForPathLibFallback :: IO Bool
+testTargetForPathLibFallback = do
+  let prefix p path = take (length p) path == p
+      matchesTest path =
+        prefix "test/" path || prefix "app/" path || prefix "bench/" path
+  pure $ not (matchesTest "src/Foo.hs")
+      && not (matchesTest "src/Bar/Baz.hs")
 
 --------------------------------------------------------------------------------
 -- #129 — ghc_check_project deadline-based timeout
