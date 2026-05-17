@@ -800,6 +800,13 @@ main = do
       , test "gate: all-skip parses + passes"      testGateAllSkip
       , test "#138: gate all-skip returns refused/validation" testGateAllSkipRefused
       , test "#138: gate summary avoids empty-verbs malform" testGateSummaryNoEmptyVerbs
+      , test "#163: coverage default timeout is 5 min"        testCoverageDefaultTimeout
+      , test "#163: coverage timeout_minutes clamps to [1,60]" testCoverageTimeoutClamp
+      , test "#163: coverage timeout msg reflects actual minutes" testCoverageTimeoutMessage
+      , test "#164: gate default test timeout is 5 min"        testGateDefaultTestTimeout
+      , test "#164: gate default build timeout is 3 min"       testGateDefaultBuildTimeout
+      , test "#164: gate test_timeout_minutes parses"          testGateCustomTestTimeout
+      , test "#164: gate build_timeout_minutes parses"         testGateCustomBuildTimeout
       , test "qcexport: tool registered"           testQcExportRegistered
       , test "qcexport: renderTestFile shape"      testQcExportRenderShape
       , test "qcexport: sanitizeLabel strips LF"   testQcExportSanitize
@@ -9254,6 +9261,96 @@ testQcExportSanitize = pure $
 
 -- | Phase 11g: ghc_gate must be in the canonical tool list + the
 -- descriptor mentions its three sub-steps.
+--------------------------------------------------------------------------------
+-- #163: ghc_coverage configurable timeout
+--------------------------------------------------------------------------------
+
+-- | Default CoverageArgs must produce a 5-minute timeout (unchanged
+-- from the pre-#163 hard-coded value so existing workflows see no
+-- behavioural difference).
+testCoverageDefaultTimeout :: IO Bool
+testCoverageDefaultTimeout =
+  let args = CoverageTool.CoverageArgs { CoverageTool.caTimeoutMinutes = 5 }
+  in pure $ CoverageTool.coverageTimeoutMicros args == 5 * 60 * 1_000_000
+
+-- | Clamping: values below 1 become 1, above 60 become 60.
+testCoverageTimeoutClamp :: IO Bool
+testCoverageTimeoutClamp =
+  let raw0  = A.object []  -- defaults to 5
+      raw10 = A.object ["timeout_minutes" .= (10 :: Int)]
+      raw80 = A.object ["timeout_minutes" .= (80 :: Int)]
+      raw0_ = A.object ["timeout_minutes" .= (0  :: Int)]
+  in case ( A.fromJSON raw0  :: A.Result CoverageTool.CoverageArgs
+          , A.fromJSON raw10 :: A.Result CoverageTool.CoverageArgs
+          , A.fromJSON raw80 :: A.Result CoverageTool.CoverageArgs
+          , A.fromJSON raw0_ :: A.Result CoverageTool.CoverageArgs ) of
+       (A.Success a0, A.Success a10, A.Success a80, A.Success a0_) ->
+         pure $ CoverageTool.caTimeoutMinutes a0  == 5
+             && CoverageTool.caTimeoutMinutes a10 == 10
+             && CoverageTool.caTimeoutMinutes a80 == 60  -- clamped
+             && CoverageTool.caTimeoutMinutes a0_ == 1   -- clamped
+       _ -> pure False
+
+-- | The timeout error message must reflect the ACTUAL configured
+-- minutes (not hard-code "5 minutes"). This caught by checking
+-- the cause field when CovTimeout is rendered with a 15-minute arg.
+testCoverageTimeoutMessage :: IO Bool
+testCoverageTimeoutMessage =
+  let args   = CoverageTool.CoverageArgs { CoverageTool.caTimeoutMinutes = 15 }
+      result = CoverageTool.renderResult args CoverageTool.CovTimeout
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "error" top of
+               Just (A.Object err) ->
+                 case AKM.lookup "cause" err of
+                   Just (A.String cause) -> T.isInfixOf "15m" cause
+                   _                    -> False
+               _ -> False
+           _ -> False
+       _ -> False
+
+--------------------------------------------------------------------------------
+-- #164: ghc_gate configurable timeouts
+--------------------------------------------------------------------------------
+
+-- | Default GateArgs must give 5 min for test (unchanged).
+testGateDefaultTestTimeout :: IO Bool
+testGateDefaultTestTimeout =
+  let raw = A.object []
+  in case A.fromJSON raw :: A.Result Gate.GateArgs of
+       A.Success args ->
+         pure $ Gate.cabalTestTimeoutMicros args == 5 * 60 * 1_000_000
+       _ -> pure False
+
+-- | Default GateArgs must give 3 min for build (unchanged).
+testGateDefaultBuildTimeout :: IO Bool
+testGateDefaultBuildTimeout =
+  let raw = A.object []
+  in case A.fromJSON raw :: A.Result Gate.GateArgs of
+       A.Success args ->
+         pure $ Gate.cabalBuildTimeoutMicros args == 3 * 60 * 1_000_000
+       _ -> pure False
+
+-- | Passing test_timeout_minutes=20 raises the test budget to 20 min.
+testGateCustomTestTimeout :: IO Bool
+testGateCustomTestTimeout =
+  let raw = A.object ["test_timeout_minutes" .= (20 :: Int)]
+  in case A.fromJSON raw :: A.Result Gate.GateArgs of
+       A.Success args ->
+         pure $ Gate.cabalTestTimeoutMicros args == 20 * 60 * 1_000_000
+       _ -> pure False
+
+-- | Passing build_timeout_minutes=10 raises the build budget to 10 min.
+testGateCustomBuildTimeout :: IO Bool
+testGateCustomBuildTimeout =
+  let raw = A.object ["build_timeout_minutes" .= (10 :: Int)]
+  in case A.fromJSON raw :: A.Result Gate.GateArgs of
+       A.Success args ->
+         pure $ Gate.cabalBuildTimeoutMicros args == 10 * 60 * 1_000_000
+       _ -> pure False
+
 testGateRegistered :: IO Bool
 testGateRegistered = pure $
      "ghc_gate" `elem` allToolNameTexts

@@ -35,6 +35,9 @@ module HaskellFlows.Tool.Gate
   ( descriptor
   , handle
   , GateArgs (..)
+    -- * Timeout helpers (#164: exported for unit tests)
+  , cabalTestTimeoutMicros
+  , cabalBuildTimeoutMicros
   ) where
 
 import Control.Exception (SomeException, try)
@@ -75,9 +78,15 @@ descriptor =
         object
           [ "type"       .= ("object" :: Text)
           , "properties" .= object
-              [ "skip_regression" .= bool_ "Skip the regression replay."
-              , "skip_cabal_test" .= bool_ "Skip `cabal test` invocation."
-              , "skip_cabal_build".= bool_ "Skip `cabal build` invocation."
+              [ "skip_regression"      .= bool_ "Skip the regression replay."
+              , "skip_cabal_test"      .= bool_ "Skip `cabal test` invocation."
+              , "skip_cabal_build"     .= bool_ "Skip `cabal build` invocation."
+              , "test_timeout_minutes" .= int_
+                  "Minutes allowed for `cabal test`. Default 5, clamp [1,60]. \
+                  \Raise for large projects with slow test suites."
+              , "build_timeout_minutes" .= int_
+                  "Minutes allowed for `cabal build`. Default 3, clamp [1,60]. \
+                  \Raise for large projects with heavy TH or code-gen."
               ]
           , "additionalProperties" .= False
           ]
@@ -85,29 +94,50 @@ descriptor =
   where
     bool_ :: Text -> Value
     bool_ desc = object [ "type" .= ("boolean" :: Text), "description" .= desc ]
+    int_ :: Text -> Value
+    int_ desc  = object [ "type" .= ("integer" :: Text), "description" .= desc ]
 
+-- | #164: test and build timeouts are now configurable via optional
+-- arguments. Defaults match the old hard-coded values (5 min test,
+-- 3 min build). The regression step stays at the fixed 2-minute budget
+-- (it only replays in-process QuickCheck — no cabal spawn involved).
 data GateArgs = GateArgs
-  { gaSkipRegression :: !Bool
-  , gaSkipCabalTest  :: !Bool
-  , gaSkipCabalBuild :: !Bool
+  { gaSkipRegression      :: !Bool
+  , gaSkipCabalTest       :: !Bool
+  , gaSkipCabalBuild      :: !Bool
+  , gaTestTimeoutMinutes  :: !Int  -- #164: configurable test timeout
+  , gaBuildTimeoutMinutes :: !Int  -- #164: configurable build timeout
   }
   deriving stock (Show)
 
 instance FromJSON GateArgs where
-  parseJSON = withObject "GateArgs" $ \o ->
-    GateArgs
-      <$> o .:? "skip_regression"  .!= False
-      <*> o .:? "skip_cabal_test"  .!= False
-      <*> o .:? "skip_cabal_build" .!= False
+  parseJSON = withObject "GateArgs" $ \o -> do
+    sr  <- o .:? "skip_regression"       .!= False
+    st  <- o .:? "skip_cabal_test"       .!= False
+    sb  <- o .:? "skip_cabal_build"      .!= False
+    ttm <- o .:? "test_timeout_minutes"  .!= 5
+    btm <- o .:? "build_timeout_minutes" .!= 3
+    pure GateArgs
+      { gaSkipRegression      = sr
+      , gaSkipCabalTest       = st
+      , gaSkipCabalBuild      = sb
+      , gaTestTimeoutMinutes  = max 1 (min 60 ttm)
+      , gaBuildTimeoutMinutes = max 1 (min 60 btm)
+      }
 
 --------------------------------------------------------------------------------
 -- per-step budgets (microseconds)
 --------------------------------------------------------------------------------
 
-regressionTimeoutMicros, cabalTestTimeoutMicros, cabalBuildTimeoutMicros :: Int
-regressionTimeoutMicros  = 2 * 60 * 1_000_000     -- 2 min
-cabalTestTimeoutMicros   = 5 * 60 * 1_000_000     -- 5 min
-cabalBuildTimeoutMicros  = 3 * 60 * 1_000_000     -- 3 min
+regressionTimeoutMicros :: Int
+regressionTimeoutMicros = 2 * 60 * 1_000_000     -- 2 min (fixed)
+
+-- | #164: derive test/build timeouts from the parsed args.
+cabalTestTimeoutMicros :: GateArgs -> Int
+cabalTestTimeoutMicros args = gaTestTimeoutMinutes args * 60 * 1_000_000
+
+cabalBuildTimeoutMicros :: GateArgs -> Int
+cabalBuildTimeoutMicros args = gaBuildTimeoutMinutes args * 60 * 1_000_000
 
 --------------------------------------------------------------------------------
 -- handle
@@ -128,10 +158,10 @@ handle store sess pd rawArgs = case parseEither parseJSON rawArgs of
                  else runStep regressionTimeoutMicros (regressionStep store sess)
         tst <- if gaSkipCabalTest args
                  then pure Skipped
-                 else runStep cabalTestTimeoutMicros  (cabalStep pd ["test"])
+                 else runStep (cabalTestTimeoutMicros  args) (cabalStep pd ["test"])
         bld <- if gaSkipCabalBuild args
                  then pure Skipped
-                 else runStep cabalBuildTimeoutMicros (cabalStep pd ["build"])
+                 else runStep (cabalBuildTimeoutMicros args) (cabalStep pd ["build"])
         t1  <- now
         let allPassed =
               stepPassed reg && stepPassed tst && stepPassed bld

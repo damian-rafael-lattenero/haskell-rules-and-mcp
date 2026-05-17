@@ -9,6 +9,10 @@ module HaskellFlows.Tool.Coverage
   ( descriptor
   , handle
   , CoverageArgs (..)
+  , coverageTimeoutMicros
+    -- * Outcome type (#163: exported for tests)
+  , CovOutcome (..)
+  , renderResult
     -- * Pure helpers (re-exported for unit tests; see Spec.hs)
   , summarise
   , renderMetric
@@ -63,34 +67,47 @@ descriptor =
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
-          , "properties" .= object []
+          , "properties" .= object
+              [ "timeout_minutes" .= object
+                  [ "type"        .= ("integer" :: Text)
+                  , "description" .=
+                      ("Maximum minutes to wait for 'cabal test \
+                       \--enable-coverage'. Default 5. Clamp [1, 60]. \
+                       \Raise for large projects where HPC instrumentation \
+                       \adds significant compile time." :: Text)
+                  ]
+              ]
           , "additionalProperties" .= False
           ]
     }
 
+-- | #163: timeout is now configurable via the @timeout_minutes@
+-- argument. Default 5 minutes; clamped to [1, 60] minutes.
 data CoverageArgs = CoverageArgs
+  { caTimeoutMinutes :: !Int
+  }
   deriving stock (Show)
 
 instance FromJSON CoverageArgs where
-  parseJSON = withObject "CoverageArgs" $ \_ -> pure CoverageArgs
+  parseJSON = withObject "CoverageArgs" $ \o -> do
+    t <- o .:? "timeout_minutes" .!= 5
+    pure CoverageArgs { caTimeoutMinutes = max 1 (min 60 t) }
 
--- | Upper bound for the coverage run. HPC over a medium project is
--- ~30s typical; 5 minutes is generous without leaving a stuck process
--- around forever.
-coverageTimeoutMicros :: Int
-coverageTimeoutMicros = 5 * 60 * 1_000_000
+-- | Compute the timeout in microseconds from the args.
+coverageTimeoutMicros :: CoverageArgs -> Int
+coverageTimeoutMicros args = caTimeoutMinutes args * 60 * 1_000_000
 
 handle :: ProjectDir -> Value -> IO ToolResult
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
-  Right CoverageArgs -> do
+  Right args -> do
     mCabal <- findExecutable "cabal"
     case mCabal of
       Nothing   -> pure (unavailableResult "cabal binary not found on PATH")
       Just _    -> do
-        outcome <- runCoverage pd
-        pure (renderResult outcome)
+        outcome <- runCoverage (coverageTimeoutMicros args) pd
+        pure (renderResult args outcome)
 
 
 --------------------------------------------------------------------------------
@@ -103,8 +120,8 @@ data CovOutcome
   | CovFailure !Int !Text
   deriving stock (Eq, Show)
 
-runCoverage :: ProjectDir -> IO CovOutcome
-runCoverage pd = do
+runCoverage :: Int -> ProjectDir -> IO CovOutcome
+runCoverage timeoutMicros pd = do
   let cp = (proc "cabal" ["test", "--enable-coverage"])
              { cwd     = Just (unProjectDir pd)
              , std_in  = NoStream
@@ -116,7 +133,7 @@ runCoverage pd = do
   errVar <- newEmptyMVar
   _ <- forkIO (hGetContents hOut >>= putMVar outVar)
   _ <- forkIO (hGetContents hErr >>= putMVar errVar)
-  exited <- timeout coverageTimeoutMicros (waitForProcess ph)
+  exited <- timeout timeoutMicros (waitForProcess ph)
   case exited of
     Nothing -> do
       terminateProcess ph
@@ -235,14 +252,14 @@ runHpcReport mixDirs tix = do
 -- response shaping
 --------------------------------------------------------------------------------
 
--- | Issue #90 Phase C:
+-- | Issue #90 Phase C + #163:
 --
 -- * 'CovSuccess' → status='ok' with parsed metrics under 'result'.
--- * 'CovTimeout' → status='timeout' kind='inner_timeout', cause='5m'.
+-- * 'CovTimeout' → status='timeout' kind='inner_timeout', cause=NmT.
 -- * 'CovFailure' → status='failed' kind='subprocess_error',
 --                  cause=<exit code>.
-renderResult :: CovOutcome -> ToolResult
-renderResult (CovSuccess out) =
+renderResult :: CoverageArgs -> CovOutcome -> ToolResult
+renderResult _ (CovSuccess out) =
   let report  = parseCoverage out
       metrics = crMetrics report
       payload =
@@ -252,12 +269,20 @@ renderResult (CovSuccess out) =
           , "raw"     .= out
           ]
   in Env.toolResponseToResult (Env.mkOk payload)
-renderResult CovTimeout =
-  let envErr = (Env.mkErrorEnvelope Env.InnerTimeout
-                  ("cabal test --enable-coverage timed out after 5 minutes" :: Text))
-                 { Env.eeCause = Just "5m" }
+renderResult args CovTimeout =
+  let mins   = T.pack (show (caTimeoutMinutes args)) <> "m"
+      envErr = (Env.mkErrorEnvelope Env.InnerTimeout
+                  ("cabal test --enable-coverage timed out after "
+                   <> mins))
+                 { Env.eeCause      = Just mins
+                 , Env.eeRemediation =
+                     Just ("Raise the timeout via timeout_minutes=N \
+                           \(current: " <> T.pack (show (caTimeoutMinutes args))
+                           <> " min). Large projects with HPC \
+                           \instrumentation typically need 10-20 min.")
+                 }
   in Env.toolResponseToResult (Env.mkTimeout envErr)
-renderResult (CovFailure code err) =
+renderResult _ (CovFailure code err) =
   let msg    = "cabal test --enable-coverage exited with code "
                  <> T.pack (show code) <> ": " <> T.strip err
       envErr = (Env.mkErrorEnvelope Env.SubprocessError msg)
