@@ -1,0 +1,21 @@
+mcp-server-haskell/src/HaskellFlows/Tool/Deps.hs
+  s_54dbf5675ec5ae::t_8b9a4a84071a46 166-170,174-180,182
+mcp-server-haskell/src/HaskellFlows/Tool/DepsExplain.hs
+  s_54dbf5675ec5ae::t_8db241742d7823 62-72,76-83,96-101,145-167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "869225991d5272d8392fd3997f5685e69875305b",
+  "prompts": {},
+  "sessions": {
+    "s_54dbf5675ec5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d704d61f-ca86-414c-85d1-e75c1df02293",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
