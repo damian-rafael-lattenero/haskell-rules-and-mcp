@@ -19,10 +19,12 @@ import qualified Data.Text as T
 
 import GHC
   ( Ghc
+  , Module
   , Name
   , TyThing (AnId)
   , getModuleGraph
   , getModuleInfo
+  , lookupModule
   , lookupName
   , mgModSummaries
   , mkModuleName
@@ -49,15 +51,19 @@ descriptor =
     , tdDescription =
         "PURPOSE: List names exported by a loaded module + their types. "
           <> "WHEN: orienting in an unfamiliar module before touching it; "
-          <> "confirming an export was added or surfaced. "
-          <> "WHEN NOT: the module is not in the project graph — use "
-          <> "hoogle_search for upstream/external modules, or ghc_info for "
-          <> "a single name's details. "
+          <> "confirming an export was added or surfaced; exploring what "
+          <> "a session-preloaded module (Prelude, Data.Map, etc.) exports "
+          <> "after ghc_add_import brought it into scope. "
+          <> "WHEN NOT: the module cannot be found in the project graph "
+          <> "or the package environment — use hoogle_search for discovery, "
+          <> "or ghc_info for a single name's details. "
           <> "PREREQUISITES: any prior ghc_load / ghc_check_module / "
-          <> "ghc_check_project pulls the target into the compile graph. "
+          <> "ghc_check_project pulls the target into the compile graph; "
+          <> "ghc_add_import makes standard-library modules browseable too. "
           <> "OUTPUT: {module, count, entries:[\"name :: type\"]}; "
-          <> "status='no_match' when the module is not in this project. "
-          <> "SEE ALSO: ghc_info, hoogle_search."
+          <> "status='no_match' when the module is not in this project or "
+          <> "the current package environment. "
+          <> "SEE ALSO: ghc_info, hoogle_search, ghc_add_import."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -82,25 +88,31 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
             { Env.eeCause = Just (T.pack err) })))
   Right (BrowseArgs m) -> do
     let root = unProjectDir (gsProject ghcSess)
-    eRes <- try (withGhcSession ghcSess (queryBrowse root m))
-    pure $ Env.toolResponseToResult $ case eRes of
+    -- Primary: look in the compile graph (project-own modules).
+    eRes <- try (withGhcSession ghcSess (queryBrowseGraph root m))
+    case eRes of
       Left (se :: SomeException) ->
-        Env.mkFailed
-          ((Env.mkErrorEnvelope Env.InternalError
-              (T.pack ("GHC API error: " <> show se)))
-                { Env.eeCause = Just (T.pack (show se)) })
-      Right Nothing ->
-        -- Issue #72 + #90: 'browse' can only enumerate modules
-        -- from the project's compile graph. Phase B re-shapes the
-        -- response: the not-found case is now status='no_match'
-        -- (the question was well-formed, the answer is "this
-        -- module isn't in this graph") with the diagnostic
-        -- context inside 'result' and a 'nextStep' pointer at
-        -- 'ghc_info' / 'hoogle_search' for the agent's next move.
-        Env.withNextStep moduleNotInGraphNextStep
-          (Env.mkNoMatch (moduleNotInGraphPayload m))
+        pure $ Env.toolResponseToResult $
+          Env.mkFailed
+            ((Env.mkErrorEnvelope Env.InternalError
+                (T.pack ("GHC API error: " <> show se)))
+                  { Env.eeCause = Just (T.pack (show se)) })
       Right (Just entries) ->
-        Env.mkOk (browsePayload m entries)
+        pure $ Env.toolResponseToResult (Env.mkOk (browsePayload m entries))
+      Right Nothing -> do
+        -- #168 fallback: try the session's package environment.
+        -- lookupModule throws when the module is completely unknown,
+        -- which we catch at the IO level via try.  If it succeeds,
+        -- getModuleInfo gives us the exports just like the graph path.
+        eFallback <- try (withGhcSession ghcSess (queryBrowseFallback m))
+                       :: IO (Either SomeException (Maybe [Text]))
+        pure $ Env.toolResponseToResult $ case eFallback of
+          Right (Just entries) ->
+            Env.mkOk (browsePayload m entries)
+          _ ->
+            -- Issue #72 + #90: module not found anywhere — status='no_match'.
+            Env.withNextStep moduleNotInGraphNextStep
+              (Env.mkNoMatch (moduleNotInGraphPayload m))
 
 -- | Discriminate the FromJSON failure shape — same heuristic as
 -- 'HaskellFlows.Tool.Workflow.parseErrorKind'. A missing required
@@ -116,18 +128,13 @@ parseErrorKind err
       in any (\i -> take n (drop i haystack) == needle)
              [0 .. length haystack - n]
 
--- | Look up the module in the current module graph, pull its exports,
--- render each as "name :: type" (or just the name for non-Id things).
---
--- Only modules whose preprocessed source file (@ms_hspp_file@) lives
--- under the project root are considered. On some CI environments (Linux
--- Docker with GHC installed from source) the module graph also includes
--- external package modules (e.g. @Prelude@ from @base@). Filtering by
--- the project root restricts 'ghc_browse' to the project's own source,
--- which is the documented contract: use 'ghc_info' or 'hoogle_search'
--- for upstream/external modules.
-queryBrowse :: FilePath -> Text -> Ghc (Maybe [Text])
-queryBrowse projectRoot nm = do
+-- | Primary browse path: look for the module in the compile graph,
+-- restricted to source files under the project root.  Filtering by
+-- project root prevents browsing stray external-package modules that
+-- some CI environments include in the graph (e.g. @Prelude@ from
+-- @base@ in GHC-from-source builds).
+queryBrowseGraph :: FilePath -> Text -> Ghc (Maybe [Text])
+queryBrowseGraph projectRoot nm = do
   let wanted = mkModuleName (T.unpack nm)
   mg <- getModuleGraph
   let matches =
@@ -138,14 +145,31 @@ queryBrowse projectRoot nm = do
         ]
   case matches of
     []      -> pure Nothing
-    (m : _) -> do
-      minfo <- getModuleInfo m
-      case minfo of
-        Nothing -> pure (Just [])
-        Just mi -> do
-          let exports = modInfoExports mi
-          entries <- traverse renderExport exports
-          pure (Just entries)
+    (m : _) -> browseModuleInfo m
+
+-- | #168 fallback: try the session's loaded package environment via
+-- 'lookupModule'.  Called only when 'queryBrowseGraph' returns
+-- 'Nothing'. Covers session-preloaded modules (Prelude, Data.Map, …)
+-- that exist in the GHC package environment but are not part of the
+-- project's own compile graph.
+--
+-- 'lookupModule' throws a 'SourceError' when the module is completely
+-- unknown; the caller catches that at the 'IO' level.
+queryBrowseFallback :: Text -> Ghc (Maybe [Text])
+queryBrowseFallback nm = do
+  let wanted = mkModuleName (T.unpack nm)
+  m <- lookupModule wanted Nothing
+  browseModuleInfo m
+
+browseModuleInfo :: Module -> Ghc (Maybe [Text])
+browseModuleInfo m = do
+  minfo <- getModuleInfo m
+  case minfo of
+    Nothing -> pure (Just [])
+    Just mi -> do
+      let exports = modInfoExports mi
+      entries <- traverse renderExport exports
+      pure (Just entries)
 
 -- | Render a single exported 'Name' as @"name :: type"@ when the
 -- underlying 'TyThing' carries a type (identifier bindings); fall
