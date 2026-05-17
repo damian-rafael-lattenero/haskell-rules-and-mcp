@@ -1,0 +1,20 @@
+mcp-server-haskell/test/Spec.hs
+  s_54dbf5675ec5ae::t_d44087eabd970f 12397,12419
+  s_54dbf5675ec5ae::t_33d75e9c8bbbee 7195
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "ddda38ca4ad1545ecd72c122614cd66e74e79ad7",
+  "prompts": {},
+  "sessions": {
+    "s_54dbf5675ec5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d704d61f-ca86-414c-85d1-e75c1df02293",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
