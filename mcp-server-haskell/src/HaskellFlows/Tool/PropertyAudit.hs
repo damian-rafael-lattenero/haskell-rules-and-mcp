@@ -309,9 +309,18 @@ interpretProbeResult = \case
     , "Probe falsified at: " <> counterex
     )
   QcUnparsed _ raw ->
-    ( "skipped"
-    , "probe load/parse failure: " <> T.take 200 raw
-    )
+    -- #149: when the repl produces no stdout (e.g. build failure or
+    -- load error writing only to stderr), 'raw' is empty and the
+    -- original message ended with a bare colon. Provide a human-
+    -- readable fallback so the agent can act on the skipped pair.
+    let rawNote
+          | T.null (T.strip raw) =
+              "(no GHCi output — the REPL may have failed to load the \
+              \module; run ghc_check_project to see compile errors)"
+          | otherwise = T.take 200 raw
+    in ( "skipped"
+       , "probe load/parse failure: " <> rawNote
+       )
   QcException _ msg ->
     ( "skipped"
     , "probe exception: " <> T.take 200 msg

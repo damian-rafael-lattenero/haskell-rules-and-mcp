@@ -955,6 +955,8 @@ main = do
                                                                  testPAInterpretFailed
       , test "property_audit: interpretProbeResult QcGaveUp/Unparsed/Exception → skipped (#77)"
                                                                  testPAInterpretSkipped
+      , test "#149: interpretProbeResult QcUnparsed empty raw has non-empty cause"
+                                                                 testPAInterpretUnparsedEmptyCause
       , test "property_audit: dedupByExpression keeps first occurrence (#77)"
                                                                  testPADedupByExpression
       , test "property_audit: dedupByExpression preserves singletons (#77)"
@@ -8509,6 +8511,21 @@ testPAInterpretSkipped =
       (s3, _) = PropertyAuditTool.interpretProbeResult
                   (QcGaveUp    "p" 10 50)
   in pure (s1 == "skipped" && s2 == "skipped" && s3 == "skipped")
+
+-- | #149: when QcUnparsed carries empty raw output (no GHCi stdout,
+-- e.g. because the REPL failed with only stderr), the cause field in
+-- the skipped finding must be non-empty and provide actionable text.
+testPAInterpretUnparsedEmptyCause :: IO Bool
+testPAInterpretUnparsedEmptyCause =
+  let (status, detail) = PropertyAuditTool.interpretProbeResult
+                           (QcUnparsed "\\x -> x == x" "")
+  in pure
+       (  status == "skipped"
+       && not (T.null detail)
+       && not ("probe load/parse failure: " == detail)
+       -- Must contain something actionable after the colon
+       && T.isInfixOf "no GHCi output" detail
+       )
 
 -- | Issue #77 (cascade of #74): when the store has duplicate
 -- rows for the same expression under different module shapes,
