@@ -61,6 +61,8 @@ module HaskellFlows.Ghc.ApiSession
   , firstLibraryOrTestSuite
     -- * Test-only introspection
   , readCabalMtimeForTest
+  , readLoadedRefForTest
+  , writeLoadedRefForTest
     -- * Issue #43 — absolutize stanza-flag paths
   , absolutizePathArg
   , absolutizeStanzaFlags
@@ -263,6 +265,21 @@ invalidateStanzaFlags sess = do
 -- populated + advanced. Not part of the operational surface.
 readCabalMtimeForTest :: GhcSession -> IO (Maybe POSIXTime)
 readCabalMtimeForTest = readIORef . gsCabalMtime
+
+-- | Test-only accessor for the loaded-flag. Exposed so
+-- 'testResetHscEnvInPlace*' tests can verify the flag is cleared
+-- after a reset without needing to export the full record field.
+-- Not part of the operational surface.
+readLoadedRefForTest :: GhcSession -> IO Bool
+readLoadedRefForTest = readIORef . gsLoadedRef
+
+-- | Test-only setter for the loaded flag. Lets unit tests prime the
+-- flag to True (mimicking what 'loadForTarget' /
+-- 'loadAndCaptureDiagnostics' do before a compile) and then verify
+-- that 'resetHscEnvInPlace' clears it. Not part of the operational
+-- surface.
+writeLoadedRefForTest :: GhcSession -> Bool -> IO ()
+writeLoadedRefForTest sess = writeIORef (gsLoadedRef sess)
 
 
 withGhcSession :: GhcSession -> Ghc a -> IO a
@@ -481,7 +498,12 @@ loadAndCaptureDiagnostics sess flavour = do
   -- (that case really is a \"module not in graph\" situation).
   let orderedDiags = filterArtifacts (reverse diags)
       anyErrors    = any ((== SevError) . geSeverity) orderedDiags
-  pure (success && not anyErrors, orderedDiags)
+      ok           = success && not anyErrors
+  -- #181: reset HscEnv on load failure so subsequent tools (ghc_type,
+  -- ghc_eval, ghc_info …) get a clean session rather than the broken
+  -- partial state a failed compile leaves behind.
+  unless ok (resetHscEnvInPlace sess)
+  pure (ok, orderedDiags)
 
 -- | Issue #57: filter out spurious GHC-58427 \"is not loaded\"
 -- artifacts when at least one other real diagnostic accompanies
@@ -1005,7 +1027,11 @@ loadForTarget sess tgt flavour = do
       -- diagnostics. See 'filterArtifacts' for the exact rule.
       let ordered   = filterArtifacts (reverse diags)
           anyErrors = any ((== SevError) . geSeverity) ordered
-      pure (success && not anyErrors, ordered)
+          ok        = success && not anyErrors
+      -- #181: reset HscEnv on load failure so the next withGhcSession
+      -- boots a clean environment instead of the broken partial state.
+      unless ok (resetHscEnvInPlace sess)
+      pure (ok, ordered)
 
 -- | Issue #166: like 'loadForTarget' but loads ONLY the specified
 -- file (plus its transitive imports), not the full directory scan.
@@ -1059,7 +1085,10 @@ loadSpecificFileForTarget sess tgt flavour specificFile = do
       diags <- readIORef diagRef
       let ordered   = filterArtifacts (reverse diags)
           anyErrors = any ((== SevError) . geSeverity) ordered
-      pure (success && not anyErrors, ordered)
+          ok        = success && not anyErrors
+      -- #181: reset on failure (no-stanza-flags path).
+      unless ok (resetHscEnvInPlace sess)
+      pure (ok, ordered)
     Just _sf -> do
       diagRef <- newIORef []
       writeIORef (gsLoadedRef sess) True
@@ -1101,7 +1130,10 @@ loadSpecificFileForTarget sess tgt flavour specificFile = do
       diags <- readIORef diagRef
       let ordered   = filterArtifacts (reverse diags)
           anyErrors = any ((== SevError) . geSeverity) ordered
-      pure (success && not anyErrors, ordered)
+          ok        = success && not anyErrors
+      -- #181: reset on failure (stanza-flags path).
+      unless ok (resetHscEnvInPlace sess)
+      pure (ok, ordered)
 
 -- | Return the first detected test-suite target, or 'TargetLibrary'
 -- as fallback. Used by runtime tools (QC / regression / determinism)

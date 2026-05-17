@@ -260,8 +260,11 @@ import HaskellFlows.Ghc.ApiSession
   ( GhcSession
   , evalIOString
   , killGhcSession
+  , readLoadedRefForTest
+  , resetHscEnvInPlace
   , startGhcSession
   , withGhcSession
+  , writeLoadedRefForTest
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
@@ -286,7 +289,7 @@ import HaskellFlows.Tool.SwitchProject
   ( ValidationError (..)
   , validateSwitchTarget
   )
-import Data.IORef (newIORef, readIORef)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import HaskellFlows.Ghc.CabalBootstrap
   ( StanzaFlags (..)
   , Target (..)
@@ -1432,6 +1435,10 @@ main = do
                                                               testLoadSpecificFileIgnoresStray
       , test "#166: loadSpecificFileForTarget exported from ApiSession"
                                                               testLoadSpecificFileExported
+      -- Issue #181 — session left broken after ghc_load with compile errors
+      , test "#181: resetHscEnvInPlace clears loaded flag"    testResetHscEnvInPlaceClearsLoaded
+      , test "#181: resetHscEnvInPlace is no-op on fresh session" testResetHscEnvInPlaceFreshSession
+      , test "#181: all 4 load paths have reset-on-failure guard" testLoadPathsHaveResetGuard
       -- Issue #129 — ghc_check_project deadline-based timeout
       , test "#191: check_project delegates to check_module (no own loadForTarget)" testCheckProjectDelegates
       , test "#129: CheckProjectArgs defaults timeout_seconds to 120"    testCheckProjectArgsDefaultTimeout
@@ -14488,6 +14495,56 @@ testLoadSpecificFileExported :: IO Bool
 testLoadSpecificFileExported = do
   src <- TIO.readFile "src/HaskellFlows/Ghc/ApiSession.hs"
   pure $ "loadSpecificFileForTarget" `T.isInfixOf` src
+
+--------------------------------------------------------------------------------
+-- #181 — session left broken after ghc_load with compile errors
+--------------------------------------------------------------------------------
+
+-- | #181: 'resetHscEnvInPlace' must clear the loaded flag so the next
+-- 'withGhcSession' call re-runs 'autoLoadProject' instead of operating
+-- on the broken partial HscEnv a failed compile leaves behind.
+--
+-- Simulates the sequence: loadForTarget pre-flips gsLoadedRef=True before
+-- a compile, compile fails, resetHscEnvInPlace is called → flag goes False.
+testResetHscEnvInPlaceClearsLoaded :: IO Bool
+testResetHscEnvInPlaceClearsLoaded =
+  case mkProjectDir "/tmp" of
+    Left  _  -> pure False
+    Right pd -> do
+      sess <- startGhcSession pd
+      -- Simulate the pre-flip loadForTarget / loadAndCaptureDiagnostics
+      -- do before starting a compile.
+      writeLoadedRefForTest sess True
+      before <- readLoadedRefForTest sess
+      -- After the (simulated) failed compile, resetHscEnvInPlace is called.
+      resetHscEnvInPlace sess
+      after <- readLoadedRefForTest sess
+      pure (before && not after)  -- True → False
+
+-- | #181: 'resetHscEnvInPlace' is idempotent — calling it on a fresh
+-- session (loaded=False) keeps the flag False; calling it twice is safe.
+testResetHscEnvInPlaceFreshSession :: IO Bool
+testResetHscEnvInPlaceFreshSession =
+  case mkProjectDir "/tmp" of
+    Left  _  -> pure False
+    Right pd -> do
+      sess <- startGhcSession pd
+      -- Idempotent: double reset on a fresh session must not error.
+      resetHscEnvInPlace sess
+      resetHscEnvInPlace sess
+      loaded <- readLoadedRefForTest sess
+      pure (not loaded)  -- still False after double reset
+
+-- | #181: all four load paths (loadAndCaptureDiagnostics, loadForTarget
+-- stanza branch, loadSpecificFileForTarget both branches) must contain
+-- the reset guard that calls resetHscEnvInPlace on failure.
+testLoadPathsHaveResetGuard :: IO Bool
+testLoadPathsHaveResetGuard = do
+  src <- TIO.readFile "src/HaskellFlows/Ghc/ApiSession.hs"
+  let guard   = "unless ok (resetHscEnvInPlace sess)"
+      count   = length (T.splitOn guard src) - 1
+  pure (count == 4)  -- 4 call sites: loadAndCaptureDiagnostics +
+                     -- loadForTarget + 2x loadSpecificFileForTarget
 
 --------------------------------------------------------------------------------
 -- #129 — ghc_check_project deadline-based timeout
