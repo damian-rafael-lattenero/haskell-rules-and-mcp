@@ -1,0 +1,73 @@
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheckExport.hs
+  s_54dbf5675ec5ae::t_a0e39aa352bd95 263,265-267,269-279,293-297,299-304,312-326
+  s_54dbf5675ec5ae::t_69a153d5a4456f 253-254,268,280-282,306-307
+mcp-server-haskell/src/HaskellFlows/Tool/Batch.hs
+  s_54dbf5675ec5ae::t_6d4190d0f2df21 36-37
+  s_54dbf5675ec5ae::t_2a17887fea9bae 44,47
+  s_54dbf5675ec5ae::t_b75c01dae269a2 222-236,242
+mcp-server-haskell/test/Spec.hs
+  s_54dbf5675ec5ae::t_e929e2591e9ec6 13061
+  s_54dbf5675ec5ae::t_15d26eddfd5998 1326-1328
+  s_54dbf5675ec5ae::t_a2a14d9dadcffd 13315
+  s_54dbf5675ec5ae::t_90cb7bd4548cce 2032-2099,2101-2124
+  s_54dbf5675ec5ae::t_8eba5fd2108edc 7820-7821,7829,7838-7840
+  s_54dbf5675ec5ae::t_79175ca9193bae 2100
+  s_54dbf5675ec5ae::t_3091fd29f41552 5722-5739
+  s_54dbf5675ec5ae::t_a206d5768a66ec 873-876
+  s_54dbf5675ec5ae::t_41b892d65c652b 1277-1280
+  s_54dbf5675ec5ae::t_e576792ee2c067 9461
+  s_54dbf5675ec5ae::t_b5315c64a4f525 9487
+  s_54dbf5675ec5ae::t_3efb4e94ef1fa7 12750-12752,12756
+  s_54dbf5675ec5ae::t_dc040b3a1411d4 13431-13477
+  s_54dbf5675ec5ae::t_06d181a9767a65 13345
+  s_54dbf5675ec5ae::t_8854b88bb867d0 13090
+  s_54dbf5675ec5ae::t_adddf12d59638e 128
+  s_54dbf5675ec5ae::t_156ed2edcd40f1 363-374
+  s_54dbf5675ec5ae::t_64c35ff0c2cadb 1968-1975,1990-1993,1995,1997-2000,2015
+  s_54dbf5675ec5ae::t_76625f2e667fee 646-647
+  s_54dbf5675ec5ae::t_70a5f9ff5372d1 7842-7867
+  s_54dbf5675ec5ae::t_4ff949fd73d991 12776-12777,12783-12795
+  s_54dbf5675ec5ae::t_fcf9520cde6ce2 4541-4556
+  s_54dbf5675ec5ae::t_e13e94ce036655 756
+mcp-server-haskell/src/HaskellFlows/Tool/Perf.hs
+  s_54dbf5675ec5ae::t_75a547605a1a77 449-451
+  s_54dbf5675ec5ae::t_27a928e3e3b4ff 6-12
+  s_54dbf5675ec5ae::t_187707c7a2674e 118,123-127,138,145,152-153
+  s_54dbf5675ec5ae::t_ba47870b7bbdaa 459-460
+  s_54dbf5675ec5ae::t_6e46a06b3363ff 74-77,91-99
+  s_54dbf5675ec5ae::t_f83dfb82913a8b 406-407
+mcp-server-haskell/src/HaskellFlows/Parser/Coverage.hs
+  s_54dbf5675ec5ae::t_f1903466df53d6 91-93,98-99,101-107,110-116
+  s_54dbf5675ec5ae::t_a8e1791ca4fd0e 131-136,140-143,149-168
+  s_54dbf5675ec5ae::t_c35bf0da7f8235 62-66,68-74
+mcp-server-haskell/src/HaskellFlows/Tool/Coverage.hs
+  s_54dbf5675ec5ae::t_bba7be7b5f6e83 79-86
+  s_54dbf5675ec5ae::t_6f7c43b03257a0 269,272,277,280-283
+  s_54dbf5675ec5ae::t_c628795c880c88 94-100,107-108
+  s_54dbf5675ec5ae::t_bf99298c08de95 305,310-312,315-325,327-330,338-340
+mcp-server-haskell/src/HaskellFlows/Tool/Bootstrap.hs
+  s_54dbf5675ec5ae::t_4577301925e8c4 86-90
+  s_54dbf5675ec5ae::t_54b4d1fd0987ca 134-145
+mcp-server-haskell/src/HaskellFlows/Tool/ApplyExports.hs
+  s_54dbf5675ec5ae::t_12416430896009 137-151,156,158-164,166-183
+  s_54dbf5675ec5ae::t_1e6060be5fb163 12-13
+  s_54dbf5675ec5ae::t_bf21ee019222c1 112-114,120
+  s_54dbf5675ec5ae::t_50b973701c99c4 224-226,233-246
+  s_54dbf5675ec5ae::t_d58c16b0677e10 2-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "51a600a28c572192da7d3612af9dcdc0c8f8ecf5",
+  "prompts": {},
+  "sessions": {
+    "s_54dbf5675ec5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d704d61f-ca86-414c-85d1-e75c1df02293",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
