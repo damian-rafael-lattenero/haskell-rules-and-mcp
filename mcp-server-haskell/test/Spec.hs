@@ -25,6 +25,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing)
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import Data.Word (Word64)
 import System.Exit (exitFailure, exitSuccess)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Timeout (timeout)

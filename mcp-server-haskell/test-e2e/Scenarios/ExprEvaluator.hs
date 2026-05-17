@@ -29,7 +29,6 @@ module Scenarios.ExprEvaluator
 
 import Control.Monad (forM)
 import Data.Aeson (Value (..), object, (.=))
-import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
@@ -157,10 +156,6 @@ step1_initialStatus c = do
         (\case Array a -> not (V.null a); _ -> False)
         "toolsActive should list the registered MCP tools"
     ]
-
-objMap :: Value -> KeyMap.KeyMap Value
-objMap (Object o) = o
-objMap _          = KeyMap.empty
 
 --------------------------------------------------------------------------------
 -- step 2 — scaffold
@@ -460,9 +455,6 @@ step12_regressionList c = do
         (fromIntegral (fromMaybe 0 (fieldInt "count" r)) >= (3 :: Integer))
         "expected 3+ properties in the store (idempotent + soundness + roundtrip)"
     ]
-  where
-    fromMaybe d Nothing  = d
-    fromMaybe _ (Just x) = x
 
 --------------------------------------------------------------------------------
 -- step 13 — regression run: every persisted law replays green
