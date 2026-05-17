@@ -41,8 +41,10 @@ import GHC
   , parseName
   )
 import GHC.Core.Class (Class, classMethods)
+import GHC.Core.ConLike (ConLike (PatSynCon, RealDataCon))
 import GHC.Core.DataCon
   ( DataCon
+  , dataConDisplayType
   , dataConName
   , dataConOrigArgTys
   )
@@ -219,6 +221,21 @@ queryInfo nm = do
             AnId i ->
               let typeText = T.pack (showPprUnsafe (idType i))
                   defText  = nm <> " :: " <> typeText
+              in (defText, [], [])
+            -- Issue #184: data constructors and pattern synonyms (AConLike).
+            -- The legacy catch-all called 'showPprUnsafe thing' which produces
+            -- "Data constructor 'Just'" and then concatenated it as
+            -- "data Just Data constructor 'Just'". Fix: render as "Name :: Type"
+            -- using 'dataConUserType' (for RealDataCon) or pretty-print the
+            -- PatSyn directly.
+            AConLike (RealDataCon dc) ->
+              -- dataConDisplayType False = user-visible type without multiplicity annotations
+              -- e.g. "Just :: forall a. a -> Maybe a"
+              let typeText = T.pack (showPprUnsafe (dataConDisplayType False dc))
+                  defText  = nm <> " :: " <> typeText
+              in (defText, [], [])
+            AConLike (PatSynCon ps) ->
+              let defText  = nm <> " :: " <> T.pack (showPprUnsafe ps)
               in (defText, [], [])
             -- Type synonyms and other TyThings: legacy shape.
             _ ->

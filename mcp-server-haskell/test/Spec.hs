@@ -1363,6 +1363,9 @@ main = do
       -- Issue #130 — eponymous record TyCon selection
       , test "#130: preferTyCon present in Info.hs source"                testInfoPreferTyConInSource
       , test "#130: queryInfo uses preferTyCon not first-name shortcut"   testInfoQueryUsesPreferTyCon
+      -- Issue #184 — AConLike data constructors render as "Name :: Type"
+      , test "#184: AConLike branch exists in Info.hs (not catch-all)"    testInfoAConLikeBranchExists
+      , test "#184: AConLike uses dataConDisplayType not renderDefinition" testInfoAConLikeUsesDisplayType
       -- Issue #111 — forall stripping in parseSignature
       , test "#111: stripForall handles forall {a}."                      testStripForallInferred
       , test "#111: stripForall handles forall a."                        testStripForallExplicit
@@ -13805,6 +13808,38 @@ testInfoQueryUsesPreferTyCon = do
   pure $ T.isInfixOf "preferTyCon infos" code
       -- The old first-name shortcut must be gone
       && not (T.isInfixOf "n :| _" code)
+  where
+    isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
+
+--------------------------------------------------------------------------------
+-- Issue #184 — AConLike data constructors render as "Name :: Type"
+--------------------------------------------------------------------------------
+
+-- | #184: Info.hs must have an explicit 'AConLike (RealDataCon dc)' branch
+-- so that data constructors like 'Just', 'Nothing', 'True' are rendered as
+-- "Name :: Type" and NOT routed to the catch-all renderDefinition which
+-- produced the garbled "data Just Data constructor 'Just'" output.
+testInfoAConLikeBranchExists :: IO Bool
+testInfoAConLikeBranchExists = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Info.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  pure $ T.isInfixOf "AConLike (RealDataCon dc)" code
+      && T.isInfixOf "AConLike (PatSynCon ps)" code
+  where
+    isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
+
+-- | #184: the RealDataCon branch must use 'dataConDisplayType' to build
+-- the "Name :: Type" string, not 'renderDefinition' (which prepends "data ").
+testInfoAConLikeUsesDisplayType :: IO Bool
+testInfoAConLikeUsesDisplayType = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Info.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  pure $ T.isInfixOf "dataConDisplayType" code
+      -- The old garble path must not be taken for constructors:
+      && not (T.isInfixOf "renderDefinition kind nm renderedThing" code
+               && T.isInfixOf "AConLike" (T.unlines
+                    [ ln | ln <- T.lines code
+                    , T.isInfixOf "renderDefinition kind nm renderedThing" ln ]))
   where
     isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
 
