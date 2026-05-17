@@ -998,6 +998,7 @@ main = do
       -- #131: export guard
       , test "#131: exportGuard allows new file"                  testExportGuardNewFile
       , test "#131: exportGuard allows generated file"            testExportGuardGeneratedFile
+      , test "#131: exportGuard allows scaffold-generated file"   testExportGuardScaffoldFile
       , test "#131: exportGuard blocks hand-written file"         testExportGuardHandWritten
       , test "#131: exportGuard bypassed with force=true"         testExportGuardForce
       , test "#131: export handle refuses hand-written Spec.hs"   testExportHandleRefusesHandWritten
@@ -5927,6 +5928,17 @@ testExportGuardGeneratedFile = do
   tmpDir <- getTemporaryDirectory
   let path = tmpDir </> "hf-guard-gen-Spec.hs"
   TIO.writeFile path (QcExport.generatedHeader <> "\nmodule Main where\n")
+  result <- QcExport.exportGuard path False
+  pure (isNothing result)
+
+-- | exportGuard returns Nothing when the file starts with the scaffold header
+-- (produced by ghc_project(action="create")). Both headers are MCP-generated;
+-- the scaffold stub is intentionally replaced by a real property suite.
+testExportGuardScaffoldFile :: IO Bool
+testExportGuardScaffoldFile = do
+  tmpDir <- getTemporaryDirectory
+  let path = tmpDir </> "hf-guard-scaffold-Spec.hs"
+  TIO.writeFile path (QcExport.scaffoldTestFileHeader <> "\nmodule Main where\n")
   result <- QcExport.exportGuard path False
   pure (isNothing result)
 
