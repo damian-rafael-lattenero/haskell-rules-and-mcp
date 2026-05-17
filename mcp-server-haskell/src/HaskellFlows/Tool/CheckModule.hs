@@ -22,6 +22,7 @@ import Data.Char (isAlphaNum)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import System.Directory (doesFileExist)
 import System.FilePath ((</>))
 
 import HaskellFlows.Data.PropertyStore
@@ -52,6 +53,7 @@ import HaskellFlows.Types
   ( ProjectDir
   , PathError (..)
   , mkModulePath
+  , unModulePath
   , unProjectDir
   )
 
@@ -112,90 +114,101 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
     pure (formatParseError parseError)
   Right (CheckArgs raw warnBlock) -> case mkModulePath pd (T.unpack raw) of
     Left e -> pure (pathTraversalResult (formatPathError e))
-    Right _ -> do
-      invalidateLoadCache ghcSess
-      tgt <- targetForPath ghcSess (T.unpack raw)
-      eStrict <- try (loadForTarget ghcSess tgt Strict)
-      case eStrict :: Either SomeException (Bool, [GhcError]) of
-        Left ex ->
-          pure (subprocessResult
-                  ("loadForTarget failed: " <> T.pack (show ex)))
-        Right (strictOk, strictDiags) -> do
-          -- 'loadForTarget' loads the whole target (library or
-          -- test-suite), so 'strictDiags' is the UNION of warnings
-          -- across every module in that target. Filter to this
-          -- module's file only: without the filter, a warning in
-          -- 'Expr.Pretty' would red-gate 'Expr.Syntax' too, and
-          -- 'check_project' would show the same warnings attributed
-          -- to N modules (one per module it iterated).
-          -- Diagnostic attribution: GHC reports absolute paths in
-          -- 'geFile' (e.g. @/tmp/proj/src/Foo.hs@); the user passed
-          -- a project-relative path (e.g. @src/Foo.hs@). A suffix
-          -- match on the relative path is enough to own/disown a
-          -- diag — the absolute path will always end with the
-          -- relative one when GHC is pointed at this project root.
-          let ownDiag d = raw `T.isSuffixOf` geFile d
-              ownDiags  = filter ownDiag strictDiags
-              -- Issue #108 (F-23 propagation): GHC reports typed holes
-              -- (code GHC-88464) as SevError in the strict pass, which
-              -- caused compile.ok=false + holes.ok=true (vacuously) when
-              -- the only issues were holes. Reclassify holes out of the
-              -- errors bucket so they flow to the holes gate instead.
-              isHoleErr d = geSeverity d == SevError
-                         && geCode d == Just "GHC-88464"
-              errors    = filter (\d -> geSeverity d == SevError
-                                     && not (isHoleErr d)) ownDiags
-              warnings  = filter ((== SevWarning) . geSeverity) ownDiags
-              -- compileOk: null real errors, and either the project-wide
-              -- strict flag says OK, or this module's only SevErrors were
-              -- holes (which means strictOk=False is caused by holes, not
-              -- a real compile failure in this module's own stanza).
-              ownHoleOnly = null errors
-                         && any isHoleErr ownDiags
-              compileOk = null errors
-                       && (strictOk || ownHoleOnly)
-          holes <- if compileOk
-                     then do
-                       eDef <- try (loadForTarget ghcSess tgt Deferred)
-                       pure $ case eDef :: Either SomeException (Bool, [GhcError]) of
-                         Left _           -> []
-                         Right (_, diags) ->
-                           parseTypedHoles (renderGhciStyle diags)
-                     else pure []
-          allProps <- loadAll store
-          -- Issue #74: 'ghc_quickcheck' persists 'module' as the
-          -- Haskell module name ("Foo.Bar"), but 'check_module' is
-          -- called with a relative path ("src/Foo/Bar.hs"). Resolve
-          -- the path to its module name and accept either shape so
-          -- the gate sees the properties it should be guarding.
-          mModName <- resolveModuleName pd raw
-          let propMatches sp = case spModule sp of
-                Just s  -> s == raw
-                       || (Just s == mModName)
-                Nothing -> False
-              relevant = filter propMatches allProps
-          -- Reuse the Wave-3 Regression.runOne — it's already
-          -- in-process via evalIOString.
-          replays <- mapM (RegTool.runOne ghcSess) relevant
-          -- Issue #42 + #51: split replays into three buckets:
-          --   * load_failed — module didn't compile, replay never ran;
-          --   * regressed   — replay ran, found a counterexample;
-          --   * passed      — implicit (everything else).
-          let isLoadFailed r = case RegTool.rpLoadFailure r of
-                                 Just _  -> True
-                                 Nothing -> False
-              loadFailedReplays = filter isLoadFailed replays
-              evaluatedReplays  = filter (not . isLoadFailed) replays
-              regressions =
-                [ (RegTool.rpStored r, RegTool.rpResult r)
-                | r <- evaluatedReplays
-                , case RegTool.rpResult r of
-                    QcPassed _ _ -> False
-                    _            -> True
-                ]
-          pure $ renderResult
-            raw compileOk errors warnings holes regressions
-            (length relevant) (length loadFailedReplays) warnBlock
+    Right mp -> do
+      -- #150: check file existence before any GHC loading.
+      -- Without this guard, a missing file causes GHC to succeed
+      -- vacuously — every gate passes with no diagnostics, giving a
+      -- false "All gates green" for a file that does not exist.
+      exists <- doesFileExist (unModulePath mp)
+      if not exists
+        then pure (Env.toolResponseToResult (Env.mkFailed
+          ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
+              ("module_path '" <> raw <> "' does not exist"))
+                { Env.eeField = Just "module_path" })))
+        else do
+          invalidateLoadCache ghcSess
+          tgt <- targetForPath ghcSess (T.unpack raw)
+          eStrict <- try (loadForTarget ghcSess tgt Strict)
+          case eStrict :: Either SomeException (Bool, [GhcError]) of
+            Left ex ->
+              pure (subprocessResult
+                      ("loadForTarget failed: " <> T.pack (show ex)))
+            Right (strictOk, strictDiags) -> do
+              -- 'loadForTarget' loads the whole target (library or
+              -- test-suite), so 'strictDiags' is the UNION of warnings
+              -- across every module in that target. Filter to this
+              -- module's file only: without the filter, a warning in
+              -- 'Expr.Pretty' would red-gate 'Expr.Syntax' too, and
+              -- 'check_project' would show the same warnings attributed
+              -- to N modules (one per module it iterated).
+              -- Diagnostic attribution: GHC reports absolute paths in
+              -- 'geFile' (e.g. @/tmp/proj/src/Foo.hs@); the user passed
+              -- a project-relative path (e.g. @src/Foo.hs@). A suffix
+              -- match on the relative path is enough to own/disown a
+              -- diag — the absolute path will always end with the
+              -- relative one when GHC is pointed at this project root.
+              let ownDiag d = raw `T.isSuffixOf` geFile d
+                  ownDiags  = filter ownDiag strictDiags
+                  -- Issue #108 (F-23 propagation): GHC reports typed holes
+                  -- (code GHC-88464) as SevError in the strict pass, which
+                  -- caused compile.ok=false + holes.ok=true (vacuously) when
+                  -- the only issues were holes. Reclassify holes out of the
+                  -- errors bucket so they flow to the holes gate instead.
+                  isHoleErr d = geSeverity d == SevError
+                             && geCode d == Just "GHC-88464"
+                  errors    = filter (\d -> geSeverity d == SevError
+                                         && not (isHoleErr d)) ownDiags
+                  warnings  = filter ((== SevWarning) . geSeverity) ownDiags
+                  -- compileOk: null real errors, and either the project-wide
+                  -- strict flag says OK, or this module's only SevErrors were
+                  -- holes (which means strictOk=False is caused by holes, not
+                  -- a real compile failure in this module's own stanza).
+                  ownHoleOnly = null errors
+                             && any isHoleErr ownDiags
+                  compileOk = null errors
+                           && (strictOk || ownHoleOnly)
+              holes <- if compileOk
+                         then do
+                           eDef <- try (loadForTarget ghcSess tgt Deferred)
+                           pure $ case eDef :: Either SomeException (Bool, [GhcError]) of
+                             Left _           -> []
+                             Right (_, diags) ->
+                               parseTypedHoles (renderGhciStyle diags)
+                         else pure []
+              allProps <- loadAll store
+              -- Issue #74: 'ghc_quickcheck' persists 'module' as the
+              -- Haskell module name ("Foo.Bar"), but 'check_module' is
+              -- called with a relative path ("src/Foo/Bar.hs"). Resolve
+              -- the path to its module name and accept either shape so
+              -- the gate sees the properties it should be guarding.
+              mModName <- resolveModuleName pd raw
+              let propMatches sp = case spModule sp of
+                    Just s  -> s == raw
+                           || (Just s == mModName)
+                    Nothing -> False
+                  relevant = filter propMatches allProps
+              -- Reuse the Wave-3 Regression.runOne — it's already
+              -- in-process via evalIOString.
+              replays <- mapM (RegTool.runOne ghcSess) relevant
+              -- Issue #42 + #51: split replays into three buckets:
+              --   * load_failed — module didn't compile, replay never ran;
+              --   * regressed   — replay ran, found a counterexample;
+              --   * passed      — implicit (everything else).
+              let isLoadFailed r = case RegTool.rpLoadFailure r of
+                                     Just _  -> True
+                                     Nothing -> False
+                  loadFailedReplays = filter isLoadFailed replays
+                  evaluatedReplays  = filter (not . isLoadFailed) replays
+                  regressions =
+                    [ (RegTool.rpStored r, RegTool.rpResult r)
+                    | r <- evaluatedReplays
+                    , case RegTool.rpResult r of
+                        QcPassed _ _ -> False
+                        _            -> True
+                    ]
+              pure $ renderResult
+                raw compileOk errors warnings holes regressions
+                (length relevant) (length loadFailedReplays) warnBlock
 
 --------------------------------------------------------------------------------
 -- response shaping

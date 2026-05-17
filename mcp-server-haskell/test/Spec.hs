@@ -427,6 +427,8 @@ main = do
                                                    testFormatRejectsTraversal
       , test "#100C: ghc_check_module rejects traversal path"
                                                    testCheckModuleRejectsTraversal
+      , test "#150: ghc_check_module non-existent file → module_path_does_not_exist"
+                                                   testCheckModuleNonExistentFile
       , test "#100C: ghc_explain_error rejects traversal path"
                                                    testExplainErrorRejectsTraversal
       , test "#100C: ghc_lab rejects traversal path"
@@ -673,6 +675,8 @@ main = do
                                                    testHoleNoHoleMatch
       , test "Envelope #90 Phase B: ghc_hole rejects path traversal"
                                                    testHoleRejectsTraversal
+      , test "#148: ghc_hole non-existent file → module_path_does_not_exist"
+                                                   testHoleNonExistentFile
       , test "Envelope #90 Phase B: ghc_info on real symbol → status=ok (#87)"
                                                    testInfoRealSymbolOk
       , test "Envelope #90 Phase B: ghc_info on unknown name → status=no_match (closes #87)"
@@ -4871,6 +4875,23 @@ testHoleNoHoleMatch = do
       | Env.reStatus env == Env.StatusNoMatch
       , Just (A.Object payload) <- Env.reResult env ->
           AKM.lookup (AKey.fromText "hole_count") payload == Just (A.Number 0)
+    _ -> False
+
+-- | #148: a module_path that does not exist on disk → status='failed'
+-- with kind='module_path_does_not_exist'. Before the fix the tool
+-- returned status='no_match' (hole_count=0) — indistinguishable from
+-- a valid hole-free file.
+testHoleNonExistentFile :: IO Bool
+testHoleNonExistentFile = do
+  let src = T.pack "module Foo where\nfoo :: Int\nfoo = 1\n"
+  decoded <- runHole src
+    (A.object [ "module_path" A..= ("src/DoesNotExist.hs" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusFailed
+      , Just err <- Env.reError env ->
+          Env.eeKind err == Env.ModulePathDoesNotExist
+            && Env.eeField err == Just "module_path"
     _ -> False
 
 -- | A path that escapes the project root is refused via the
@@ -11330,6 +11351,30 @@ testCheckModuleRejectsTraversal = do
               (undefined :: Store)
               pd args
       pure (isTraversalRefused (decodeToolResult tr))
+
+-- | #150: 'ghc_check_module' on a non-existent file must return
+-- status='failed' with kind='module_path_does_not_exist'. Before the
+-- fix the tool returned status='ok' with all gates green — a false
+-- all-green for a file that does not exist.
+-- The GhcSession and Store are not reached (existence check fires first).
+testCheckModuleNonExistentFile :: IO Bool
+testCheckModuleNonExistentFile = do
+  case mkProjectDir "/tmp" of
+    Left _ -> pure False
+    Right pd -> do
+      let args = A.object
+            [ "module_path" A..= ("src/DoesNotExist.hs" :: Text) ]
+      tr <- CheckModule.handle
+              (undefined :: GhcSession)
+              (undefined :: Store)
+              pd args
+      case decodeToolResult tr of
+        Right env
+          | Env.reStatus env == Env.StatusFailed
+          , Just err <- Env.reError env ->
+              pure (Env.eeKind err == Env.ModulePathDoesNotExist
+                 && Env.eeField err == Just "module_path")
+        _ -> pure False
 
 -- | #100C: 'ghc_explain_error' must refuse traversal paths.
 testExplainErrorRejectsTraversal :: IO Bool

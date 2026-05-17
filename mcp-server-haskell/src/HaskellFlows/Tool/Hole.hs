@@ -15,6 +15,7 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
+import System.Directory (doesFileExist)
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession
@@ -94,29 +95,40 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
         pure (Env.toolResponseToResult (Env.mkRefused
           ((Env.mkErrorEnvelope Env.PathTraversal (formatPathError err))
               { Env.eeField = Just "module_path" })))
-      Right _ -> do
-        tgt <- targetForPath ghcSess (T.unpack rawPath)
-        eRes <- try (loadForTarget ghcSess tgt Deferred)
-        case eRes :: Either SomeException (Bool, [GhcError]) of
-          Left ex ->
-            pure (Env.toolResponseToResult (Env.mkFailed
-              ((Env.mkErrorEnvelope Env.InternalError
-                  ("loadForTarget failed: " <> T.pack (show ex)))
-                    { Env.eeCause = Just (T.pack (show ex)) })))
-          Right (_ok, diags) -> do
-            let rendered = renderGhciStyle diags
-                allHoles = parseTypedHoles rendered
-                holes    = case filt of
-                  Nothing  -> allHoles
-                  Just nm  -> filter ((== nm) . thHole) allHoles
-                payload  = holesPayload rawPath holes
-            -- Issue #90 §3 + §6: zero-holes case maps to
-            -- 'no_match' (the question — "where are the typed
-            -- holes?" — was well-formed; the answer is the empty
-            -- set). Non-empty → 'ok'.
-            pure $ Env.toolResponseToResult $ case holes of
-              [] -> Env.mkNoMatch payload
-              _  -> Env.mkOk payload
+      Right mp -> do
+        -- #148: check file existence before attempting to load.
+        -- Without this, a missing file silently returns hole_count=0
+        -- which is indistinguishable from a hole-free file.
+        let absPath = unModulePath mp
+        exists <- doesFileExist absPath
+        if not exists
+          then pure (Env.toolResponseToResult (Env.mkFailed
+            ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
+                ("module_path '" <> rawPath <> "' does not exist"))
+                  { Env.eeField = Just "module_path" })))
+          else do
+            tgt <- targetForPath ghcSess (T.unpack rawPath)
+            eRes <- try (loadForTarget ghcSess tgt Deferred)
+            case eRes :: Either SomeException (Bool, [GhcError]) of
+              Left ex ->
+                pure (Env.toolResponseToResult (Env.mkFailed
+                  ((Env.mkErrorEnvelope Env.InternalError
+                      ("loadForTarget failed: " <> T.pack (show ex)))
+                        { Env.eeCause = Just (T.pack (show ex)) })))
+              Right (_ok, diags) -> do
+                let rendered = renderGhciStyle diags
+                    allHoles = parseTypedHoles rendered
+                    holes    = case filt of
+                      Nothing  -> allHoles
+                      Just nm  -> filter ((== nm) . thHole) allHoles
+                    payload  = holesPayload rawPath holes
+                -- Issue #90 §3 + §6: zero-holes case maps to
+                -- 'no_match' (the question — "where are the typed
+                -- holes?" — was well-formed; the answer is the empty
+                -- set). Non-empty → 'ok'.
+                pure $ Env.toolResponseToResult $ case holes of
+                  [] -> Env.mkNoMatch payload
+                  _  -> Env.mkOk payload
 
 -- | Discriminate the FromJSON failure shape — same heuristic as
 -- the other Phase-B migrations.
