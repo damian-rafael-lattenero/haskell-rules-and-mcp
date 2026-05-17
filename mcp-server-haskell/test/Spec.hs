@@ -1323,6 +1323,8 @@ main = do
       , test "#129: renderResult timedOut=False omits timed_out field"   testRenderResultNoTimedOutField
       , test "#129: MoTimedOut renders with status=timed_out"            testRenderOutcomeTimedOut
       , test "#129: renderResult overall=false when any module timed out" testRenderResultTimedOutOverallFalse
+      , test "#151: timeout summary does not claim 'N/N green' when only k<N checked"
+                                                              testRenderResultTimedOutSummary
       ]
   if and results then exitSuccess else exitFailure
 
@@ -13206,6 +13208,27 @@ testRenderOutcomeTimedOut = do
               AKM.lookup "status" m == Just (A.String "timed_out")
               && AKM.lookup "module" m == Just (A.String "Foo.TimedOut")
             _ -> False
+        _ -> False
+    _ -> False
+
+-- | #151: the summary must NOT claim 'total/total green' when the run
+-- timed out after checking only k < total modules. Before the fix:
+-- "168 / 168 modules green. (1/168 checked before timeout)".
+-- After the fix: "1/168 modules checked before timeout. 167 not evaluated."
+testRenderResultTimedOutSummary :: IO Bool
+testRenderResultTimedOutSummary = do
+  -- 1 timed-out module, 0 checked modules, timedOut=True
+  let tr = renderResult [MoTimedOut "Foo.X"] True
+  pure $ case decodeCheckProjectResult tr of
+    Just (A.Object r) ->
+      case AKM.lookup "summary" r of
+        Just (A.String s) ->
+          -- Must mention how many were checked (0), not claim total are green
+          T.isInfixOf "0/" s
+            -- Must NOT say "0 / 1 modules green" (the old contradictory message)
+            && not (T.isInfixOf "green" s)
+            -- Must mention "not evaluated"
+            && T.isInfixOf "not evaluated" s
         _ -> False
     _ -> False
 

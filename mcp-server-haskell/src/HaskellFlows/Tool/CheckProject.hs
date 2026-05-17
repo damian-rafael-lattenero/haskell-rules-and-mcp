@@ -361,12 +361,13 @@ renderResult outcomes timedOut =
       overall   = null failing && null notFound && not timedOut
       total     = length outcomes
       nChecked  = length checked
-      -- #129: timeout note appended to summary when budget expired.
-      timeoutNote
-        | timedOut  = " (" <> T.pack (show nChecked) <> "/"
-                   <> T.pack (show total)
-                   <> " checked before timeout)"
-        | otherwise = ""
+      -- #151: use a timeout-aware summary that only counts actually-
+      -- evaluated modules. The old code passed 'total' to summarise
+      -- even when only nChecked modules were examined, producing the
+      -- contradictory "168/168 modules green. (1/168 checked)".
+      summaryText
+        | timedOut  = timeoutSummarise total nChecked (length failing) (length notFound)
+        | otherwise = summarise total (length failing) (length notFound)
       payload =
         object $
           [ "overall"       .= overall
@@ -377,8 +378,7 @@ renderResult outcomes timedOut =
           , "not_found"     .= length notFound
           , "skipped"       .= length skipped
           , "per_module"    .= map renderOutcome outcomes
-          , "summary"       .= (summarise total (length failing) (length notFound)
-                                  <> timeoutNote)
+          , "summary"       .= summaryText
           ]
           -- #129: only include timed_out when it's true, keeping the
           -- common-case response shape unchanged.
@@ -391,8 +391,7 @@ renderResult outcomes timedOut =
        else
          let envErr   = Env.mkErrorEnvelope
                           (if timedOut then Env.InnerTimeout else Env.Validation)
-                          (summarise total (length failing) (length notFound)
-                             <> timeoutNote)
+                          summaryText
              response = (Env.mkFailed envErr) { Env.reResult = Just payload }
          in Env.toolResponseToResult response
 
@@ -460,4 +459,17 @@ summarise total failed notFound =
   <> (if failed   > 0 then ", "    <> T.pack (show failed)   <> " failed"    else "")
   <> (if notFound > 0 then "; "    <> T.pack (show notFound) <> " not found" else "")
   <> "."
+
+-- | #151: timeout-aware summary. Only mentions modules that were
+-- actually evaluated ('nChecked'). The previous 'summarise' call with
+-- 'total' produced "168/168 green. (1/168 checked)" which was
+-- contradictory — the unchecked modules were never verified.
+timeoutSummarise :: Int -> Int -> Int -> Int -> Text
+timeoutSummarise total nChecked failed notFound =
+  let notEvaluated = total - nChecked
+  in T.pack (show nChecked) <> "/" <> T.pack (show total)
+       <> " modules checked before timeout"
+       <> (if failed   > 0 then ", " <> T.pack (show failed)   <> " failed"    else "")
+       <> (if notFound > 0 then "; " <> T.pack (show notFound) <> " not found" else "")
+       <> ". " <> T.pack (show notEvaluated) <> " not evaluated."
 
