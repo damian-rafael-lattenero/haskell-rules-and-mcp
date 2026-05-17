@@ -1,0 +1,23 @@
+mcp-server-haskell/src/HaskellFlows/Tool/RemoveModules.hs
+  s_54dbf5675ec5ae::t_a301a9d3da000e 153-165,167-168,175-183,187-188,200-201
+  s_54dbf5675ec5ae::t_01e069cbdb0d72 239-245
+mcp-server-haskell/test/Spec.hs
+  s_54dbf5675ec5ae::t_bef74d89def404 1097-1099
+  s_54dbf5675ec5ae::t_59deb1304e0b61 6792-6840
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "d421ae3c2ab8863885b0b02a9c318abc95b16437",
+  "prompts": {},
+  "sessions": {
+    "s_54dbf5675ec5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d704d61f-ca86-414c-85d1-e75c1df02293",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
