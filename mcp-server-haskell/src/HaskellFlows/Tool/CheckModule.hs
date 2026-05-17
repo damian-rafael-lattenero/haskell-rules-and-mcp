@@ -34,7 +34,7 @@ import HaskellFlows.Ghc.ApiSession
   ( GhcSession
   , LoadFlavour (..)
   , invalidateLoadCache
-  , loadForTarget
+  , loadSpecificFileForTarget
   , targetForPath
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -128,19 +128,21 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
         else do
           invalidateLoadCache ghcSess
           tgt <- targetForPath ghcSess (T.unpack raw)
-          eStrict <- try (loadForTarget ghcSess tgt Strict)
+          -- Issue #188 / F-13: use loadSpecificFileForTarget so only the
+          -- requested file is compiled, not every .hs file discovered by
+          -- enumerateHaskellSources. The wide scan caused strictOk=False
+          -- whenever any unregistered broken file existed in src/, even if
+          -- the checked module itself was clean.
+          let absFile = unModulePath mp
+          eStrict <- try (loadSpecificFileForTarget ghcSess tgt Strict absFile)
           case eStrict :: Either SomeException (Bool, [GhcError]) of
             Left ex ->
               pure (subprocessResult
                       ("loadForTarget failed: " <> T.pack (show ex)))
             Right (strictOk, strictDiags) -> do
-              -- 'loadForTarget' loads the whole target (library or
-              -- test-suite), so 'strictDiags' is the UNION of warnings
-              -- across every module in that target. Filter to this
-              -- module's file only: without the filter, a warning in
-              -- 'Expr.Pretty' would red-gate 'Expr.Syntax' too, and
-              -- 'check_project' would show the same warnings attributed
-              -- to N modules (one per module it iterated).
+              -- 'strictDiags' may still contain diagnostics for transitive
+              -- imports; filter to this module's file so only its own
+              -- errors/warnings count against it.
               -- Diagnostic attribution: GHC reports absolute paths in
               -- 'geFile' (e.g. @/tmp/proj/src/Foo.hs@); the user passed
               -- a project-relative path (e.g. @src/Foo.hs@). A suffix
@@ -169,7 +171,7 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
                            && (strictOk || ownHoleOnly)
               holes <- if compileOk
                          then do
-                           eDef <- try (loadForTarget ghcSess tgt Deferred)
+                           eDef <- try (loadSpecificFileForTarget ghcSess tgt Deferred absFile)
                            pure $ case eDef :: Either SomeException (Bool, [GhcError]) of
                              Left _           -> []
                              Right (_, diags) ->

@@ -1356,6 +1356,8 @@ main = do
       , test "#108: check_module realErrors excludes GHC-88464"          testCheckModuleRealErrorsExcludesHoles
       , test "#108: refactor commitResultWithDiff excludes holes from pre_existing_errors"
                                                                          testRefactorPreExistingHolesExcluded
+      -- Issue #188 — check_module uses loadSpecificFileForTarget
+      , test "#188: check_module uses loadSpecificFileForTarget not loadForTarget" testCheckModuleUsesSpecificLoader
       -- Issue #109 — .cabal comment-stripping in check_project
       , test "#109: parseExposedModules strips inline -- comments"        testParseExposedModulesStripsComments
       , test "#109: parseExposedModules rejects tokens with punctuation"  testParseExposedModulesRejectsPunct
@@ -13752,6 +13754,27 @@ testRefactorPreExistingHolesExcluded = do
   pure $ T.isInfixOf "isHoleErr" code
       && T.isInfixOf "GHC-88464" code
       && T.isInfixOf "not (isHoleErr d)" code
+  where
+    isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
+
+--------------------------------------------------------------------------------
+-- Issue #188 — check_module uses loadSpecificFileForTarget
+--------------------------------------------------------------------------------
+
+-- | #188: 'ghc_check_module' used to call 'loadForTarget' which scans all
+-- .hs files via 'enumerateHaskellSources', causing 'strictOk=False' when
+-- any unregistered broken file existed in src/ even if the checked module
+-- was clean. Fix: use 'loadSpecificFileForTarget' so only the requested
+-- file is compiled.
+testCheckModuleUsesSpecificLoader :: IO Bool
+testCheckModuleUsesSpecificLoader = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/CheckModule.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  pure $ T.isInfixOf "loadSpecificFileForTarget" code
+      -- loadForTarget must NOT appear as a function call (it can appear
+      -- in comments or error message strings, but not as the actual call)
+      && not (T.isInfixOf "loadForTarget ghcSess tgt Strict" code)
+      && not (T.isInfixOf "loadForTarget ghcSess tgt Deferred" code)
   where
     isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
 
