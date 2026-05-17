@@ -11,6 +11,7 @@ module HaskellFlows.Tool.Complete
   ( descriptor
   , handle
   , CompleteArgs (..)
+  , renderCompletions
   ) where
 
 import Control.Exception (SomeException, try)
@@ -150,15 +151,35 @@ queryCompletions prefix = do
 -- answer is the empty set), 'ok' otherwise. The legacy field
 -- shape ('prefix', 'count', 'candidates', 'truncated') is
 -- preserved inside 'result' for the dual-shape window.
+--
+-- #145: when 0 candidates and the prefix looks qualified (contains
+-- a dot), add a remediation hint: GHCi only resolves qualified
+-- completions when the module is imported into the interactive scope.
 renderCompletions :: Text -> Int -> [Text] -> Env.ToolResponse
 renderCompletions prefix limit candidates =
   let capped = take limit candidates
-      payload = object
+      isQualified = "." `T.isInfixOf` prefix
+      basePayload = object
         [ "prefix"     .= prefix
         , "count"      .= length capped
         , "candidates" .= capped
         , "truncated"  .= (length candidates > limit)
         ]
+      noMatchPayload
+        | isQualified =
+            object
+              [ "prefix"      .= prefix
+              , "count"       .= (0 :: Int)
+              , "candidates"  .= ([] :: [Text])
+              , "truncated"   .= False
+              -- #145: explain the missing-import root cause
+              , "remediation" .=
+                  ("Qualified completions only work when the module is "
+                   <> "imported into the GHCi interactive scope. "
+                   <> "Use ghc_add_import(name=\"<Module>\") first, then "
+                   <> "retry ghc_complete." :: Text)
+              ]
+        | otherwise = basePayload
   in case candidates of
-       [] -> Env.mkNoMatch payload
-       _  -> Env.mkOk payload
+       [] -> Env.mkNoMatch noMatchPayload
+       _  -> Env.mkOk basePayload

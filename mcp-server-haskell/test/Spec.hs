@@ -637,6 +637,8 @@ main = do
                                                    testCompleteHitsOk
       , test "Envelope #90 Phase B: ghc_complete with zero hits → status=no_match"
                                                    testCompleteNoMatch
+      , test "#145: ghc_complete zero hits + qualified prefix → remediation hint"
+                                                   testCompleteQualifiedRemediation
       , test "Envelope #90 Phase B: ghc_complete refuses newline in prefix"
                                                    testCompleteRefusesNewline
       , test "Envelope #90 Phase B: ghc_goto on local name → status=ok"
@@ -4495,6 +4497,20 @@ testCompleteNoMatch = do
       , Just (A.Object payload) <- Env.reResult env ->
           AKM.lookup (AKey.fromText "count") payload == Just (A.Number 0)
     _ -> False
+
+-- | #145: zero hits for a qualified prefix (contains '.') must include
+-- a 'remediation' field explaining the import-scope root cause.
+-- Unqualified zero-hit results should NOT include the remediation field.
+testCompleteQualifiedRemediation :: IO Bool
+testCompleteQualifiedRemediation = pure $
+  let qualResp  = CompleteTool.renderCompletions "Data.Map." 25 []
+      plainResp = CompleteTool.renderCompletions "zZqUnlikely" 25 []
+      hasRemediation env =
+        case Env.reResult env of
+          Just (A.Object o) -> AKM.member "remediation" o
+          _                 -> False
+  in Env.reStatus qualResp  == Env.StatusNoMatch && hasRemediation qualResp
+  && Env.reStatus plainResp == Env.StatusNoMatch && not (hasRemediation plainResp)
 
 -- | A newline-laden prefix → status='refused' with
 -- error.kind='newline_injection'. Issue #90 Phase B: every
