@@ -798,6 +798,7 @@ main = do
       , test "ghc_add_modules: accepts stanza param"            testAddModulesStanzaParam
       , test "ghc_check_project: also scans test/app/bench"     testCheckProjectTestDirs
       , test "ghc_quickcheck: widens scope via :m +"            testQuickCheckScopeWidening
+      , test "ghc_quickcheck: runner uses :{ do :} not bare <-"  testQuickCheckRunnerDoBrace
       , test "initialize emits instructions field"  testInitializeEmitsInstructions
       , test "instructions mention key tools+flows" testInstructionsMentionCore
       , test "nextStep: create_project -> deps"     testNextStepCreateProject
@@ -10412,6 +10413,26 @@ testQuickCheckScopeWidening = do
   where
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- | #187 / F-11: GHC 9.12 batch/stdin mode no longer accepts bare
+-- top-level @r <- quickCheckWithResult …@ without an explicit @do@.
+-- The runner must wrap IO statements in @:{@ @do { … }@ @:}@ so
+-- GHCi parses them as a single IO action regardless of whether stdin
+-- is a TTY. Both runner blocks (main and stability/witness) must
+-- use this pattern.
+testQuickCheckRunnerDoBrace :: IO Bool
+testQuickCheckRunnerDoBrace = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/QuickCheck.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  -- Must have the :{ / :} delimiters in the generated input strings
+  pure $ T.isInfixOf "\":{\""  code
+      && T.isInfixOf "\":}\""  code
+      -- Must use explicit do-block syntax
+      && T.isInfixOf "\"do {" code
+      -- Must NOT have bare top-level r <- any more
+      && not (T.isInfixOf "\"r <- quickCheckWithResult" code)
+  where
+    isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
 
 -- | Cure regression: the interactive context must be derived from
 -- the project's own @import …@ declarations, not from a hardcoded

@@ -286,15 +286,21 @@ runQuickCheckViaCabalRepl pd mModule safeProp = do
       input = unlines $
         loadDirective <>
         moduleImport <>
+        -- GHC 9.12 batch/stdin mode no longer accepts bare top-level '<-'
+        -- without an explicit 'do'. Wrap IO statements in ':{ do ... :}'.
+        -- 'let qcArgs' moves inside the do-block so the whole thing is
+        -- one IO action (record-update field must remain unqualified —
+        -- GHC 9.12 panics on the fully-qualified Test.QuickCheck.chatty
+        -- variant inside a record update).
         [ "import Test.QuickCheck"
-        -- Record-update with unqualified field names — GHC 9.12
-        -- panics on the fully-qualified @Test.QuickCheck.chatty@
-        -- variant inside a record update.
-        , "let qcArgs = stdArgs { chatty = False }"
-        , "r <- quickCheckWithResult qcArgs (" <> T.unpack safeProp <> ")"
-        , "putStrLn \"__QC_OUTPUT_START__\""
-        , "putStr (output r)"
-        , "putStrLn \"__QC_OUTPUT_END__\""
+        , ":{"
+        , "do { let qcArgs = stdArgs { chatty = False }"
+        , "   ; r <- quickCheckWithResult qcArgs (" <> T.unpack safeProp <> ")"
+        , "   ; putStrLn \"__QC_OUTPUT_START__\""
+        , "   ; putStr (output r)"
+        , "   ; putStrLn \"__QC_OUTPUT_END__\""
+        , "   }"
+        , ":}"
         , ":q"
         ]
       -- Target @all@ by default. The repl loads the library +
@@ -367,6 +373,7 @@ runQuickCheckWithLabelsViaCabalRepl pd mModule safeProp = do
       input = unlines $
         loadDirective <>
         moduleImport <>
+        -- GHC 9.12 batch/stdin mode: wrap IO statements in ':{ do ... :}'.
         [ "import Test.QuickCheck"
         -- Use 'Data.Map' (from 'containers'). The cabal v2-repl
         -- invocation below pins '--build-depends=containers' so
@@ -374,12 +381,13 @@ runQuickCheckWithLabelsViaCabalRepl pd mModule safeProp = do
         -- own build-depends list looks like.
         , "import qualified Data.Map as M"
         , "import Data.List (intercalate)"
-        , "let qcArgs = stdArgs { chatty = False }"
-        , "r <- quickCheckWithResult qcArgs (" <> T.unpack safeProp <> ")"
-        , "putStrLn \"__QC_OUTPUT_START__\""
-        , "putStr (output r)"
-        , "putStrLn \"__QC_OUTPUT_END__\""
-        , "putStrLn \"__QC_LABELS_START__\""
+        , ":{"
+        , "do { let qcArgs = stdArgs { chatty = False }"
+        , "   ; r <- quickCheckWithResult qcArgs (" <> T.unpack safeProp <> ")"
+        , "   ; putStrLn \"__QC_OUTPUT_START__\""
+        , "   ; putStr (output r)"
+        , "   ; putStrLn \"__QC_OUTPUT_END__\""
+        , "   ; putStrLn \"__QC_LABELS_START__\""
         -- Emit one line per label: "<label-set-joined-by-+><tab><count>".
         -- Most properties carry single-label sets so the join is a
         -- no-op; for 'classify'-heavy properties we keep grouping
@@ -390,9 +398,11 @@ runQuickCheckWithLabelsViaCabalRepl pd mModule safeProp = do
         -- '"size:1-5"' (with the literal quote characters). We
         -- unquote here so the structured labels block carries the
         -- raw bucket name the agent sent in.
-        , "let unquote s = if length s >= 2 && head s == '\"' && last s == '\"' then init (tail s) else s"
-        , "mapM_ (\\(ks, n) -> putStrLn (intercalate \"+\" (map unquote ks) ++ \"\\t\" ++ show n)) (M.toList (labels r))"
-        , "putStrLn \"__QC_LABELS_END__\""
+        , "   ; let unquote s = if length s >= 2 && head s == '\"' && last s == '\"' then init (tail s) else s"
+        , "   ; mapM_ (\\(ks, n) -> putStrLn (intercalate \"+\" (map unquote ks) ++ \"\\t\" ++ show n)) (M.toList (labels r))"
+        , "   ; putStrLn \"__QC_LABELS_END__\""
+        , "   }"
+        , ":}"
         , ":q"
         ]
       cp = (Proc.proc "cabal"
