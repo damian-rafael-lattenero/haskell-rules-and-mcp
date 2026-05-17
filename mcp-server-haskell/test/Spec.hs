@@ -7174,7 +7174,9 @@ testCreateWriteFalseIsPreview = do
 testCreateWriteFalseContent :: IO Bool
 testCreateWriteFalseContent = do
   result <- CreateProject.scaffold "/nonexistent-dir" "my-pkg" "MyPkg" False False
-  case extractPayload result of
+  -- The preview fields live inside the 'result' key of the envelope,
+  -- not at the top level — use resultPayload, not extractPayload.
+  case resultPayload result of
     A.Object o ->
       let hasPreview = AKM.member (AKey.fromText "preview") o
           writeFalse = case AKM.lookup (AKey.fromText "write") o of

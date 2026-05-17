@@ -262,7 +262,11 @@ outOfScopeResult fn ghcOutput =
         ]
       envErr   = Env.mkErrorEnvelope Env.NotInScope
                    ("'" <> fn <> "' is not in scope")
-      response = (Env.mkNoMatch payload) { Env.reError = Just envErr }
+      -- #139 made StatusNoMatch non-failing (isError=false), but a
+      -- "function not in scope" IS a runtime error the agent must fix
+      -- (load the module). Use mkFailed so trIsError=true and the
+      -- structured hint is still available under the 'result' key.
+      response = (Env.mkFailed envErr) { Env.reResult = Just payload }
   in Env.toolResponseToResult response
 
 --------------------------------------------------------------------------------
