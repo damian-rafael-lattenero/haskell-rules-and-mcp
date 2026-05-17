@@ -1052,6 +1052,10 @@ main = do
                                                                  testEEApplyLinePatchMiss
       , test "explain_error: applyLinePatch rejects out-of-bounds line (#59 Phase2)"
                                                                  testEEApplyLinePatchOob
+      , test "#189: parseGhcLineCol extracts line+col from error text" testParseGhcLineColBasic
+      , test "#189: parseGhcLineCol handles col range (7-15 → 7)"      testParseGhcLineColRange
+      , test "#189: parseGhcLineCol falls back to 1:1 on no location"  testParseGhcLineColFallback
+      , test "#189: syntheticError uses parsed line+col"                testSyntheticErrorLineCol
       , test "workflow-state: initial empty"       testWorkflowStateInitial
       , test "workflow-state: tracks load + edits" testWorkflowStateTracks
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
@@ -1312,6 +1316,9 @@ main = do
       , test "#103: extractHaddockAbove returns Nothing for no comment" testExtractHaddockNoComment
       -- Issue #106 sub-findings
       , test "#106/F-14: mkGhcError propagates code from captureHook" testMkGhcErrorCode
+      , test "#180: stripGhcInternalQual removes ghc-internal prefix"  testStripGhcInternalQual
+      , test "#180: stripGhcInternalQual multiple occurrences"          testStripGhcInternalQualMulti
+      , test "#180: stripGhcInternalQual leaves normal text untouched"  testStripGhcInternalQualNoop
       , test "#106/F-17: previewResult omits patch key when dropLine" testFixWarnNoPatchKey
       , test "#106/F-07: error remediation uses ghc_project(action=create)" testRemediationToolName
       , test "#106/F-20: parseHoogleLine populates hhName field" testHoogleHitName
@@ -9384,6 +9391,35 @@ testEEApplyLinePatchOob =
                                      }
   in pure (isNothing (ExplainError.applyLinePatch body patch))
 
+--------------------------------------------------------------------------------
+-- #189 — parseGhcLineCol
+--------------------------------------------------------------------------------
+
+-- | #189: standard GHC error format extracts line + column.
+testParseGhcLineColBasic :: IO Bool
+testParseGhcLineColBasic =
+  let errText = "src/WithError.hs:5:10: error: [GHC-39999] No instance for IsString Int"
+  in pure (ExplainError.parseGhcLineCol errText == (5, 10))
+
+-- | #189: col range @7-15@ yields just @7@ (end stripped by isDigit).
+testParseGhcLineColRange :: IO Bool
+testParseGhcLineColRange =
+  let errText = "src/Foo.hs:42:7-15: error: something"
+  in pure (ExplainError.parseGhcLineCol errText == (42, 7))
+
+-- | #189: plain error text without a location prefix falls back to (1,1).
+testParseGhcLineColFallback :: IO Bool
+testParseGhcLineColFallback =
+  let errText = "No instance for IsString Int"
+  in pure (ExplainError.parseGhcLineCol errText == (1, 1))
+
+-- | #189: syntheticError must use parsed line+col, not hardcoded 1:1.
+testSyntheticErrorLineCol :: IO Bool
+testSyntheticErrorLineCol =
+  let errText = "src/WithError.hs:5:10: error: No instance for IsString Int"
+      diag    = ExplainError.syntheticError "src/WithError.hs" errText
+  in pure (geLine diag == 5 && geColumn diag == 10)
+
 testLabConfidence :: IO Bool
 testLabConfidence = pure $
      LabTool.confidenceAtLeast Low    Low    -- threshold Low,    candidate Low    → True
@@ -13134,6 +13170,32 @@ testMkGhcErrorCode =
        [e] -> geCode e == Just "GHC-66111"
            && geSeverity e == SevWarning
        _   -> False
+
+--------------------------------------------------------------------------------
+-- #180 — stripGhcInternalQual
+--------------------------------------------------------------------------------
+
+-- | #180: GHC 9.12 leaks 'ghc-internal-VERSION:GHC.Internal.*' prefixes into
+-- diagnostics. 'stripGhcInternalQual' must remove them, leaving the public
+-- module path.
+testStripGhcInternalQual :: IO Bool
+testStripGhcInternalQual =
+  let raw = "No instance for 'ghc-internal-9.1202.0:GHC.Internal.Data.String.IsString Int'"
+      want = "No instance for 'Data.String.IsString Int'"
+  in pure (ApiSession.stripGhcInternalQual raw == want)
+
+-- | #180: multiple occurrences in one message must all be stripped.
+testStripGhcInternalQualMulti :: IO Bool
+testStripGhcInternalQualMulti =
+  let raw  = "ghc-internal-9.1202.0:GHC.Internal.Enum and ghc-internal-9.1202.0:GHC.Internal.Show"
+      want = "Enum and Show"
+  in pure (ApiSession.stripGhcInternalQual raw == want)
+
+-- | #180: text without internal package qualifications is left unchanged.
+testStripGhcInternalQualNoop :: IO Bool
+testStripGhcInternalQualNoop =
+  let raw = "No instance for 'Data.String.IsString Int'"
+  in pure (ApiSession.stripGhcInternalQual raw == raw)
 
 -- | F-17: 'previewResult' for a dropLine plan must omit the @patch@ key
 -- entirely rather than emitting @\"patch\": null@. Agents that branch on

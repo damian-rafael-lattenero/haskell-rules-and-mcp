@@ -31,11 +31,14 @@ module HaskellFlows.Tool.ExplainError
     -- * Response shaping (exported for unit tests)
   , renderContext
   , syntheticError
+    -- * Location parsing (exported for unit tests)
+  , parseGhcLineCol
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Aeson
+import Text.Read (readMaybe)
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -182,15 +185,42 @@ ownsThisModule rel diag = rel `T.isSuffixOf` geFile diag
 -- | #153: synthesise a minimal 'GhcError' from a caller-supplied text.
 -- Used when 'error_text' is given so the rendering path doesn't need
 -- to special-case the no-recompile branch.
+-- #189: line and column are parsed from the GHC 'file:line:col:' prefix
+-- in 'errTxt' rather than hardcoded to 1:1.
 syntheticError :: Text -> Text -> GhcError
-syntheticError modulePath errTxt = GhcError
-  { geFile     = modulePath
-  , geLine     = 1
-  , geColumn   = 1
-  , geSeverity = SevError
-  , geCode     = Nothing
-  , geMessage  = errTxt
-  }
+syntheticError modulePath errTxt =
+  let (ln, col) = parseGhcLineCol errTxt
+  in GhcError
+    { geFile     = modulePath
+    , geLine     = ln
+    , geColumn   = col
+    , geSeverity = SevError
+    , geCode     = Nothing
+    , geMessage  = errTxt
+    }
+
+-- | #189: parse the @\<file\>:\<line\>:\<col\>:@ prefix from a GHC error
+-- message. Returns @(line, col)@ on success, @(1, 1)@ as fallback.
+--
+-- Handles the standard forms:
+--   @src\/Foo.hs:42:7: error: …@         → (42, 7)
+--   @src\/Foo.hs:42:7-15: error: …@      → (42, 7)
+--
+-- The fallback @(1, 1)@ is used when the text does not start with a
+-- file:line:col pattern (e.g., raw error text without a location prefix).
+parseGhcLineCol :: Text -> (Int, Int)
+parseGhcLineCol txt =
+  -- Split the first line on ':' to extract <file>:<line>:<col>[- ...]
+  let parts = T.splitOn ":" (T.takeWhile (/= '\n') txt)
+  in case parts of
+       (_ : lineT : colT : _) ->
+         -- col may be "7" or "7-15"; take digits only.
+         let mLn  = readMaybe (T.unpack (T.strip lineT))
+             mCol = readMaybe (T.unpack (T.takeWhile isDigit (T.strip colT)))
+         in case (mLn, mCol) of
+              (Just l, Just c) | l > 0, c > 0 -> (l, c)
+              _ -> (1, 1)
+       _ -> (1, 1)
 
 --------------------------------------------------------------------------------
 -- diagnostic selection

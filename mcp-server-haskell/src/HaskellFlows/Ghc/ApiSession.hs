@@ -68,6 +68,8 @@ module HaskellFlows.Ghc.ApiSession
   , filterArtifacts
     -- * Issue #84 — empty-project pre-flight detection
   , enumerateHaskellSources
+    -- * Issue #180 — strip internal GHC package qualifications
+  , stripGhcInternalQual
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)
@@ -549,7 +551,8 @@ installCaptureHook ref = do
 -- messages (output, dump) are dropped.
 captureHook :: IORef [GhcError] -> LogAction -> LogAction
 captureHook ref _orig _lflags msgClass ss sdoc = do
-  let body = T.pack (renderWithContext sdocContextPlain sdoc)
+  let body = stripGhcInternalQual
+               (T.pack (renderWithContext sdocContextPlain sdoc))
       (mCode, txt) = case msgClass of
         MCDiagnostic _ _ (Just dc) ->
           let codeText = T.pack (show dc)
@@ -563,6 +566,31 @@ captureHook ref _orig _lflags msgClass ss sdoc = do
 -- is plain JSON, not a terminal.
 sdocContextPlain :: SDocContext
 sdocContextPlain = defaultSDocContext
+
+-- | #180: strip GHC 9.12 internal package qualifications from rendered
+-- diagnostics. In GHC 9.12, @defaultSDocContext@ emits fully-qualified
+-- internal names such as @ghc-internal-9.1202.0:GHC.Internal.Data.String.IsString@
+-- instead of the public @Data.String.IsString@. We strip the
+-- @ghc-internal-VERSION:GHC.Internal.@ prefix so callers see the
+-- canonical public API name.
+--
+-- Applies recursively to all occurrences within a single diagnostic
+-- message (type errors, hole fits, instance origin notes, …).
+stripGhcInternalQual :: Text -> Text
+stripGhcInternalQual = go
+  where
+    marker = "ghc-internal-"
+    go txt = case T.breakOn marker txt of
+      (pre, "")   -> pre
+      (pre, rest) ->
+        -- 'rest' starts with "ghc-internal-…". Find the ':' separator,
+        -- then check whether it is followed by "GHC.Internal.".
+        case T.breakOn ":" rest of
+          (_, "")           -> pre <> rest   -- no ':' found; leave as-is
+          (_, colonAndRest) ->
+            case T.stripPrefix ":GHC.Internal." colonAndRest of
+              Nothing    -> pre <> rest       -- not the internal pattern
+              Just after -> pre <> go after  -- strip and recurse
 
 msgClassToSeverity :: MessageClass -> Maybe Severity
 msgClassToSeverity = \case
