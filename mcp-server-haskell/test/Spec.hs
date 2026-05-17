@@ -1307,6 +1307,7 @@ main = do
       , test "#106/F-08: ghc_deps list all stanzas returns stanzas map" testDepsListAllStanzas
       , test "#106/F-34: moduleNameToPath accepts file paths without mangling" testMoveModuleNameToPath
       , test "#106/F-12: ioUnitResult has kind=io_unit_no_output" testEvalIoUnitResult
+      , test "#167: ioUnitResult hint is not circular (no putStrLn advice)" testEvalIoUnitHintNotCircular
       , test "#106/F-23: mergeDiags prefers deferred version at same position" testLoadMergeDiagsPreferDeferred
       , test "#106/F-04: toolchain warmup includes gates in response" testWarmupIncludesGates
       , test "#106/F-01: classifyPhase stays PreScaffold beyond 3 calls w/o load" testClassifyPhaseNoLoad
@@ -13149,6 +13150,31 @@ testEvalIoUnitResult =
              case AKM.lookup "result" top of
                Just (A.Object r) ->
                  AKM.lookup "kind" r == Just (A.String "io_unit_no_output")
+               _ -> False
+           _ -> False
+       _ -> False
+
+-- | #167: The old 'ioUnitResult' hint said "Use putStrLn / print for
+-- visible output" — circular advice when the user already called
+-- putStrLn and got @output: ""@. The new hint must NOT contain the
+-- phrase "Use putStrLn" (or the equivalent "use putStrLn") and must
+-- instead explain that the action ran but produced no stdout output.
+testEvalIoUnitHintNotCircular :: IO Bool
+testEvalIoUnitHintNotCircular =
+  let result = EvalTool.ioUnitResult
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "result" top of
+               Just (A.Object r) ->
+                 case AKM.lookup "hint" r of
+                   Just (A.String hint) ->
+                     -- Must NOT contain circular "Use putStrLn for visible output"
+                     not (T.isInfixOf "Use putStrLn / print for visible output" hint)
+                     -- Must still describe the IO () execution
+                     && T.isInfixOf "IO ()" hint
+                   _ -> False
                _ -> False
            _ -> False
        _ -> False

@@ -49,6 +49,7 @@ module HaskellFlows.Ghc.ApiSession
     -- * Phase-7 in-process evaluation
   , evalIOString
   , evalIOUnit
+  , evalIOUnitCapture
     -- * Wave-1 cabal-aware DynFlags
   , ensureStanzaFlags
   , withStanzaFlags
@@ -69,7 +70,7 @@ module HaskellFlows.Ghc.ApiSession
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)
-import Control.Exception (SomeException, try)
+import Control.Exception (SomeException, bracket, catch, throwIO, try)
 import Control.Monad (filterM, unless, when)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Foldable
@@ -131,8 +132,20 @@ import System.Directory
   ( doesDirectoryExist
   , doesFileExist
   , getModificationTime
+  , getTemporaryDirectory
   , listDirectory
+  , removeFile
   )
+import GHC.IO.Handle (hDuplicate, hDuplicateTo)
+import System.IO
+  ( hClose
+  , hFlush
+  , hSetEncoding
+  , openTempFile
+  , stdout
+  , utf8
+  )
+import qualified Data.Text.IO as TIO
 import Data.Time.Clock.POSIX (POSIXTime, utcTimeToPOSIXSeconds)
 import System.FilePath ((</>), takeExtension)
 
@@ -1064,6 +1077,48 @@ evalIOUnit stmt = do
   hv <- compileExpr ("((" <> stmt <> ") :: IO ())")
   let action = unsafeCoerce hv :: IO ()
   liftIO action
+
+-- | #167: Like 'evalIOUnit' but redirects 'stdout' to a temporary
+-- file so that anything the action writes (via 'putStrLn', 'print',
+-- etc.) is captured and returned as a 'String', rather than leaking
+-- onto the MCP JSON-RPC transport channel.
+--
+-- Thread-safety: the GhcSession lock ('withGhcSession') ensures
+-- only one eval runs at a time, so the stdout redirect cannot race.
+evalIOUnitCapture :: String -> Ghc String
+evalIOUnitCapture stmt = do
+  hv <- compileExpr ("((" <> stmt <> ") :: IO ())")
+  let action = unsafeCoerce hv :: IO ()
+  liftIO (captureStdout action)
+
+-- | Redirect 'stdout' to a fresh temporary file, run @action@,
+-- restore 'stdout', and return what was written.
+--
+-- The file is created, read (strictly via 'TIO.readFile'), and
+-- removed entirely within this call — no lazy-I/O hazard.
+captureStdout :: IO () -> IO String
+captureStdout action = do
+  tmpDir <- getTemporaryDirectory
+  bracket
+    (openTempFile tmpDir "ghceval-stdout.tmp")
+    (\(p, h) ->
+      ignoreErr (hClose h) >>
+      ignoreErr (removeFile p))
+    (\(tmpPath, tmpHandle) -> do
+      hSetEncoding tmpHandle utf8
+      savedOut <- hDuplicate stdout
+      hDuplicateTo tmpHandle stdout
+      result <- try action :: IO (Either SomeException ())
+      hFlush stdout
+      hDuplicateTo savedOut stdout
+      hClose savedOut
+      hClose tmpHandle
+      out <- T.unpack <$> TIO.readFile tmpPath
+      case result of
+        Right () -> pure out
+        Left ex  -> throwIO ex)
+  where
+    ignoreErr io = io `catch` (\(_ :: SomeException) -> pure ())
 
 -- | Tweak the session 'DynFlags' for the requested load flavour.
 -- 'Strict' clears the defer flags; 'Deferred' enables them so

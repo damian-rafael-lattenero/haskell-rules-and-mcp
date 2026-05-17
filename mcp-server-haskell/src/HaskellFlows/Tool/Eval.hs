@@ -55,6 +55,7 @@ import HaskellFlows.Ghc.ApiSession
   , LoadFlavour (..)
   , evalIOString
   , evalIOUnit
+  , evalIOUnitCapture
   , firstLibraryOrTestSuite
   , loadForTarget
   , resetHscEnvInPlace
@@ -221,17 +222,22 @@ runEvalBody ghcSess safe = do
   case eFast :: Either SomeException (Maybe Text) of
     Right (Just out) -> pure (renderOk (truncateOutput out))
     _ -> do
-      -- F-12: try IO () first.  evalIOUnit compiles the expression
-      -- with an explicit (:: IO ()) annotation, so any expression
-      -- that is NOT IO () fails here and falls through to evalIOString.
-      -- Without this probe, evalIOString unsafeCoerces () to []
-      -- (same GHC RTS heap shape) and silently returns "".
+      -- F-12 / #167: try IO () first with stdout capture.
+      -- 'evalIOUnitCapture' compiles the expression with an explicit
+      -- (:: IO ()) annotation, so any expression that is NOT IO ()
+      -- causes compileExpr to throw a SourceError and we fall through
+      -- to evalIOString. The capture redirects stdout to a temp file
+      -- so putStrLn / print output is returned rather than leaking
+      -- onto the MCP JSON-RPC channel.
       eUnit <- trySyncOnly (withGhcSession ghcSess $
                               withStanzaFlags ghcSess tgt $ do
                                 augmentEvalContext
-                                evalIOUnit (T.unpack safe))
-      case eUnit :: Either SomeException () of
-        Right () -> pure ioUnitResult
+                                evalIOUnitCapture (T.unpack safe))
+      case eUnit :: Either SomeException String of
+        Right captured
+          | not (null captured) ->
+              pure (renderOk (truncateOutput (T.pack captured)))
+          | otherwise -> pure ioUnitResult
         Left _ -> do
           eIO <- trySyncOnly (withGhcSession ghcSess $
                                 withStanzaFlags ghcSess tgt $ do
@@ -262,9 +268,10 @@ runEvalBody ghcSess safe = do
 -- structured discriminator (@FlowTimeoutEnforcement@'s oracle was
 -- updated in this commit to accept it). Clients that key on the
 -- new 'status' field get the cleaner discriminator immediately.
--- | F-12: result for an @IO ()@ expression — executed successfully,
--- no string output to capture.  Surfaced as status='ok' with
--- @output: ""@ and a hint so agents know the action ran.
+-- | F-12 / #167: result for an @IO ()@ expression that produced
+-- no stdout output — executed successfully but silent.
+-- Surfaced as status='ok' with @output: ""@ and a hint so agents
+-- know the action ran but wrote nothing to stdout.
 ioUnitResult :: ToolResult
 ioUnitResult =
   Env.toolResponseToResult (Env.mkOk (object
@@ -272,9 +279,11 @@ ioUnitResult =
     , "truncated"  .= False
     , "kind"       .= ("io_unit_no_output" :: Text)
     , "hint"       .=
-        ( "Expression has type IO () — it was executed but produces no \
-          \string output. Use putStrLn / print for visible output, or \
-          \wrap in show to capture a value." :: Text )
+        ( "Expression has type IO () and produced no stdout output. \
+          \If you expected visible output, check that the action writes \
+          \to stdout (putStrLn / print) and not just to a file handle \
+          \or to stderr. To capture a computed value, wrap it in show: \
+          \e.g. 'show someValue' or 'putStrLn (show result)'." :: Text )
     ]))
 
 timeoutResult :: ToolResult
