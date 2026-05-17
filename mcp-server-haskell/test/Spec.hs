@@ -1229,6 +1229,8 @@ main = do
       , test "#158: hoogle_search FromJSON accepts 'count' as alias for 'limit'" testHoogleCountAlias
       , test "#106/F-25: ghc_explain_error drops redundant module_source" testExplainErrorNoModuleSource
       , test "#106/F-11: ghc_doc strips LaTeX delimiters" testDocStripLatex
+      , test "#144: ghc_doc strips spurious [ ] brackets from doc string"
+                                                           testDocStripBrackets
       , test "#106/F-26: ghc_perf omits samples by default" testPerfSamplesGated
       , test "#106/F-32: ghc_perf regression cause is plain text" testPerfRegressionCausePlain
       , test "#106/F-08: ghc_deps list all stanzas returns stanzas map" testDepsListAllStanzas
@@ -12193,6 +12195,17 @@ testDocStripLatex =
            Just (A.String d) -> not (T.isInfixOf "\\(" d) && T.isInfixOf "O(" d
            _                 -> False
        _ -> False
+
+-- | #144: GHC's 'showPprUnsafe' wraps Haddock doc strings in literal
+-- @[@ … @]@ brackets (its internal DocH list format). 'hasDocPayload'
+-- must strip those brackets so agents receive clean prose.
+testDocStripBrackets :: IO Bool
+testDocStripBrackets = pure $
+  DocTool.stripDocBrackets "[ Left-associative fold @since base-4.6.0.0]"
+    == "Left-associative fold @since base-4.6.0.0"
+  && DocTool.stripDocBrackets "no brackets here" == "no brackets here"
+  && DocTool.stripDocBrackets "[ ]" == ""
+  && DocTool.stripDocBrackets "[single]" == "single"
 
 -- | F-26: when 'verbose=false' (default), the 'measurements' object
 -- must not contain a 'samples' key — sending thousands of integers

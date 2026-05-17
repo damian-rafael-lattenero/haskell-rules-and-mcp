@@ -14,6 +14,7 @@ module HaskellFlows.Tool.Doc
   , extractHaddockAbove
     -- * Response shaping (exported for unit tests)
   , hasDocPayload
+  , stripDocBrackets
   ) where
 
 import Control.Exception (SomeException, try)
@@ -223,14 +224,24 @@ hasDocPayload :: Text -> Text -> Value
 hasDocPayload nm doc = object
   [ "name"   .= nm
   , "hasDoc" .= True
-  , "doc"    .= stripLatex (T.strip doc)
+  , "doc"    .= (stripLatex . stripDocBrackets . T.strip) doc
   ]
+
+-- | #144: GHC's 'showPprUnsafe' of a Haddock 'HsDocString' wraps
+-- the entire string in literal @[@ … @]@ brackets — its internal
+-- 'DocH' list serialisation format. Strip them when both are present
+-- so agents receive clean prose instead of a spurious @[…]@ wrapper.
+stripDocBrackets :: Text -> Text
+stripDocBrackets t
+  | "[" `T.isPrefixOf` t && "]" `T.isSuffixOf` t =
+      T.strip (T.drop 1 (T.dropEnd 1 t))
+  | otherwise = t
 
 -- | Strip LaTeX delimiters from Haddock strings (F-11). GHC's pretty-
 -- printer emits @\\(…\\)@ for math notation; agents receive raw escape
 -- sequences they cannot render. Replace with the inner expression.
 stripLatex :: Text -> Text
-stripLatex = T.replace "\\(" "" . T.replace "\\)" ""
+stripLatex = T.replace "\\(" "" . T.replace "\\)"  ""
 
 -- | No-doc payload (rides StatusNoMatch). result.{name, hasDoc=false,
 -- reason}. Two semantically-distinct cases share this shape — name
