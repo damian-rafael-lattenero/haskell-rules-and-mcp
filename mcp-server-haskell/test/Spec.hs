@@ -1403,6 +1403,11 @@ main = do
       , test "#110: isUnderAnySourceDir positive and negative"            testIsUnderAnySourceDir
       , test "#110: isUnderAnySourceDir dot matches everything"           testIsUnderAnySourceDirDot
       , test "#110: Env.OutsideSourceDirs exists in enum + wire form"     testOutsideSourceDirsKindExists
+      -- Issue #166 — ghc_load must not pick up unregistered src/ files
+      , test "#166: ghc_load with module_path ignores stray unregistered files"
+                                                              testLoadSpecificFileIgnoresStray
+      , test "#166: loadSpecificFileForTarget exported from ApiSession"
+                                                              testLoadSpecificFileExported
       -- Issue #129 — ghc_check_project deadline-based timeout
       , test "#129: CheckProjectArgs defaults timeout_seconds to 120"    testCheckProjectArgsDefaultTimeout
       , test "#129: renderResult timedOut=True adds timed_out field"     testRenderResultTimedOutFlag
@@ -14155,6 +14160,60 @@ testOutsideSourceDirsKindExists =
     Env.errorKindToText Env.OutsideSourceDirs == "outside_source_dirs"
     && Env.textToErrorKind "outside_source_dirs" == Just Env.OutsideSourceDirs
     && Env.OutsideSourceDirs `elem` ([minBound .. maxBound] :: [Env.ErrorKind])
+
+--------------------------------------------------------------------------------
+-- #166 — ghc_load must not pick up unregistered src/ files
+--------------------------------------------------------------------------------
+
+-- | #166: when @module_path@ is given, loading a clean module must not
+-- fail because of a broken UNREGISTERED file sitting in the same @src/@
+-- directory. Pre-fix, 'loadForTarget' enumerated ALL @.hs@ files in
+-- @src/@ and added them all as GHC targets — a broken stray file
+-- blocked loading of unrelated registered modules.
+-- Post-fix, 'loadSpecificFileForTarget' compiles only the specified
+-- file (plus its transitive imports).
+testLoadSpecificFileIgnoresStray :: IO Bool
+testLoadSpecificFileIgnoresStray = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-issue-166"
+  removePathForcibly dir
+  createDirectoryIfMissing True (dir </> "src")
+  -- Good registered module
+  TIO.writeFile (dir </> "src" </> "Good.hs")
+    (T.pack "module Good where\ngood :: Int\ngood = 42\n")
+  -- Broken UNREGISTERED file in the same src/ dir
+  TIO.writeFile (dir </> "src" </> "Stray.hs")
+    (T.pack "module Stray where\nin bad syntax here = 1\n")
+  result <- case mkProjectDir dir of
+    Left _   -> pure (Left "could not build ProjectDir")
+    Right pd -> do
+      sess <- startGhcSession pd
+      -- Load the GOOD file by explicit module_path; stray must be invisible
+      tr   <- LoadTool.handle sess pd
+                (A.object [ "module_path" A..= ("src/Good.hs" :: Text) ])
+      killGhcSession sess
+      case trContent tr of
+        [TextContent body] ->
+          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+        _ -> pure (Left "expected exactly one TextContent")
+  removePathForcibly dir
+  pure $ case result of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          -- No errors from Stray.hs in the error list
+          case AKM.lookup (AKey.fromText "errors") payload of
+            Just (A.Array errs) -> null errs
+            _                   -> False
+    _ -> False
+
+-- | #166: 'loadSpecificFileForTarget' must be exported from
+-- 'ApiSession' so 'Load.hs' can import it directly. Static
+-- compilation check (this module imports it).
+testLoadSpecificFileExported :: IO Bool
+testLoadSpecificFileExported = do
+  src <- TIO.readFile "src/HaskellFlows/Ghc/ApiSession.hs"
+  pure $ "loadSpecificFileForTarget" `T.isInfixOf` src
 
 --------------------------------------------------------------------------------
 -- #129 — ghc_check_project deadline-based timeout

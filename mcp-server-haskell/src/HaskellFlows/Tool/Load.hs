@@ -37,6 +37,7 @@ import HaskellFlows.Ghc.ApiSession
   , LoadFlavour (..)
   , enumerateHaskellSources
   , loadForTarget
+  , loadSpecificFileForTarget
   , targetForPath
   , firstTestSuiteOrLibrary
   )
@@ -100,6 +101,8 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right (LoadArgs mModPath dx) -> do
+    -- eTgt: Right (target, Just absPath) for single-file loads (#166),
+    --        Right (target, Nothing)      for whole-project loads.
     eTgt <- case mModPath of
       Nothing -> do
         -- Issue #84: when the caller didn't pin a module_path, we
@@ -114,7 +117,9 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
         sourceCount <- countHaskellSources pd
         if sourceCount == 0
           then pure (Left EmptyProject)
-          else Right <$> firstTestSuiteOrLibrary ghcSess
+          else do
+            tgt <- firstTestSuiteOrLibrary ghcSess
+            pure (Right (tgt, Nothing))
       Just p  -> case mkModulePath pd (T.unpack p) of
         Left pathErr -> pure (Left (PathRefused (formatPathError pathErr)))
         Right _      -> do
@@ -136,17 +141,30 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
               mBadDirs <- checkNotInSourceDirs pd (T.unpack p)
               case mBadDirs of
                 Just dirs -> pure (Left (OutsideSourceDirs p dirs))
-                Nothing   -> Right <$> targetForPath ghcSess (T.unpack p)
+                Nothing   -> do
+                  tgt <- targetForPath ghcSess (T.unpack p)
+                  -- Issue #166: record the absolute path so we load
+                  -- ONLY this file — stray unregistered files in src/
+                  -- must not pollute the diagnostic result.
+                  let absFile = unProjectDir pd </> T.unpack p
+                  pure (Right (tgt, Just absFile))
     case eTgt of
       Left EmptyProject                     -> pure emptyProjectResult
       Left (PathRefused m)                  -> pure (pathTraversalResult m)
       Left (PathMissing m)                  -> pure (pathMissingResult m)
       Left (OutsideSourceDirs modPath dirs) -> pure (outsideSourceDirsResult modPath dirs)
-      Right tgt -> do
+      Right (tgt, mSpecificFile) -> do
+        -- Issue #166: when a specific module_path was given, compile
+        -- only that file via 'loadSpecificFileForTarget' so unregistered
+        -- stray .hs files in src/ cannot pollute the results.
+        -- When no module_path was given, load the whole project as before.
+        let doLoad fl = case mSpecificFile of
+              Just absFile -> loadSpecificFileForTarget ghcSess tgt fl absFile
+              Nothing      -> loadForTarget             ghcSess tgt fl
         -- Strict first gives agents the canonical error set.
         -- diagnostics=true merges a Deferred pass so typed holes
         -- and deferred-type-errors also show up as warnings.
-        eStrict <- try (loadForTarget ghcSess tgt Strict)
+        eStrict <- try (doLoad Strict)
         case eStrict :: Either SomeException (Bool, [GhcError]) of
           Left ex ->
             pure (subprocessResult
@@ -154,7 +172,7 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
           Right (strictOk, strictDiags) ->
             if dx
               then do
-                eDef <- try (loadForTarget ghcSess tgt Deferred)
+                eDef <- try (doLoad Deferred)
                 case eDef :: Either SomeException (Bool, [GhcError]) of
                   Left _  -> pure (okResult strictOk strictDiags)
                   Right (deferredOk, deferredDiags) ->

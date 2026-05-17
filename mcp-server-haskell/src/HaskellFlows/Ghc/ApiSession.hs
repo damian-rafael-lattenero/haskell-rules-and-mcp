@@ -55,6 +55,7 @@ module HaskellFlows.Ghc.ApiSession
   , withStanzaFlags
     -- * Wave-2 compile via stanza flags
   , loadForTarget
+  , loadSpecificFileForTarget
   , targetForPath
   , firstTestSuiteOrLibrary
   , firstLibraryOrTestSuite
@@ -974,6 +975,102 @@ loadForTarget sess tgt flavour = do
       -- Issue #57: drop the GHC-58427 "is not loaded" artifact that
       -- the deferred pass emits as a follow-up to typed-hole
       -- diagnostics. See 'filterArtifacts' for the exact rule.
+      let ordered   = filterArtifacts (reverse diags)
+          anyErrors = any ((== SevError) . geSeverity) ordered
+      pure (success && not anyErrors, ordered)
+
+-- | Issue #166: like 'loadForTarget' but loads ONLY the specified
+-- file (plus its transitive imports), not the full directory scan.
+-- Called by 'ghc_load' when the user supplies an explicit
+-- @module_path@ so that unregistered stray @.hs@ files in @src/@
+-- cannot pollute the diagnostic result.
+--
+-- The target stanza is still required for cabal-aware DynFlags
+-- (package-db + -hide-all-packages + include paths); 'withStanzaFlags'
+-- provides exactly that without enumerating the whole directory.
+loadSpecificFileForTarget
+  :: GhcSession
+  -> Bootstrap.Target
+  -> LoadFlavour
+  -> FilePath           -- ^ absolute path of the one file to compile
+  -> IO (Bool, [GhcError])
+loadSpecificFileForTarget sess tgt flavour specificFile = do
+  ensureStanzaFlags sess
+  stanzas <- readIORef (gsStanzaFlags sess)
+  case Map.lookup tgt stanzas of
+    -- No stanza flags captured: fall back to loading just the specific
+    -- file without cabal-aware flags (best-effort for bare projects).
+    Nothing -> do
+      diagRef <- newIORef []
+      writeIORef (gsLoadedRef sess) True
+      eRes <- try $ withGhcSession sess $ do
+        applyFlavour flavour
+        t <- guessTarget specificFile Nothing Nothing
+        setTargets [t]
+        installCaptureHook diagRef
+        ok <- load LoadAllTargets
+        mg <- getModuleGraph
+        let homeImports =
+              [ IIDecl (simpleImportDecl (moduleName (ms_mod ms)))
+              | ms <- mgModSummaries mg
+              ]
+            preludeImport =
+              IIDecl (simpleImportDecl (mkModuleName "Prelude"))
+        setContext (preludeImport : homeImports)
+        pure (case ok of { Succeeded -> True; _ -> False })
+      success <- case eRes :: Either SomeException Bool of
+        Left ex -> do
+          let msg = T.pack (show ex)
+              err = GhcError
+                { geFile = "", geLine = 0, geColumn = 0
+                , geSeverity = SevError, geCode = Nothing
+                , geMessage  = msg }
+          modifyIORef' diagRef (err :)
+          pure False
+        Right ok -> pure ok
+      diags <- readIORef diagRef
+      let ordered   = filterArtifacts (reverse diags)
+          anyErrors = any ((== SevError) . geSeverity) ordered
+      pure (success && not anyErrors, ordered)
+    Just _sf -> do
+      diagRef <- newIORef []
+      writeIORef (gsLoadedRef sess) True
+      let root       = unProjectDir (gsProject sess)
+          searchDirs = case tgt of
+            Bootstrap.TargetLibrary      -> [root </> "src", root </> "app"]
+            Bootstrap.TargetTestSuite _  -> [root </> "test", root </> "src"]
+            Bootstrap.TargetExecutable _ -> [root </> "app", root </> "src"]
+            Bootstrap.TargetBenchmark _  -> [root </> "bench", root </> "src"]
+      eRes <- try $ withGhcSession sess $
+        withStanzaFlags sess tgt $ do
+          applyFlavour flavour
+          -- Issue #166: load ONLY the specified file, not all files in
+          -- searchDirs. Unregistered stray files in src/ are invisible.
+          t <- guessTarget specificFile Nothing Nothing
+          setTargets [t]
+          installCaptureHook diagRef
+          ok <- load LoadAllTargets
+          mg <- getModuleGraph
+          let homeImports =
+                [ IIDecl (simpleImportDecl (moduleName (ms_mod ms)))
+                | ms <- mgModSummaries mg
+                ]
+              preludeImport =
+                IIDecl (simpleImportDecl (mkModuleName "Prelude"))
+          projImports <- projectInteractiveImports searchDirs
+          setContext (preludeImport : homeImports ++ projImports)
+          pure (case ok of { Succeeded -> True; _ -> False })
+      success <- case eRes :: Either SomeException Bool of
+        Left ex -> do
+          let msg = T.pack (show ex)
+              err = GhcError
+                { geFile = "", geLine = 0, geColumn = 0
+                , geSeverity = SevError, geCode = Nothing
+                , geMessage  = msg }
+          modifyIORef' diagRef (err :)
+          pure False
+        Right ok -> pure ok
+      diags <- readIORef diagRef
       let ordered   = filterArtifacts (reverse diags)
           anyErrors = any ((== SevError) . geSeverity) ordered
       pure (success && not anyErrors, ordered)
