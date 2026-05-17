@@ -156,6 +156,7 @@ allRules =
   , ruleEvaluatorPreservation
   , ruleConstantFoldingSoundness
   , rulePrinterParserRoundtrip
+  , ruleEitherReturn    -- #159
   ]
 
 -- | @f :: a -> a@ ⇒ check @f (f x) == f x@.
@@ -721,11 +722,18 @@ rulePrinterParserRoundtrip = Rule
            _ -> []
   }
 
+-- | How the sibling wraps the recovered source type.
+-- 'DirectResult' → @== x@; 'MaybeResult' → @== Just x@;
+-- 'EitherResult' → @== Right x@. Added 'EitherResult' for #159
+-- so parsers returning @Either e A@ generate correct roundtrip
+-- properties instead of being silently skipped.
+data InverseShape = DirectResult | MaybeResult | EitherResult
+  deriving stock (Show, Eq)
+
 -- | Collect siblings that serve as inverses of a focal
 -- @A -> B@ function. An inverse either returns @A@ directly
--- (@g :: B -> A@) or wraps it in Maybe (@g :: B -> Maybe A@).
--- The Bool in the result is True when the sibling returns Maybe
--- (so the property asserts @== Just x@ rather than @== x@).
+-- (@g :: B -> A@), wraps it in Maybe (@g :: B -> Maybe A@),
+-- or wraps it in Either (@g :: B -> Either e A@) — #159.
 --
 -- #147: The focal name and sibling name must form a semantic
 -- printer/parser pair (one hints at serialisation, the other at
@@ -736,37 +744,49 @@ findInverseSiblings
   -> SigType           -- source type (focal's input)
   -> SigType           -- target type (focal's output)
   -> [(Text, ParsedSig)]
-  -> [(Text, Bool)]
+  -> [(Text, InverseShape)]
 findInverseSiblings focalName src tgt sibs =
-  [ (name, needsJust)
+  [ (name, shape)
   | (name, sig) <- sibs
   , namesFormPrinterParserPair focalName name  -- #147
-  , Just needsJust <- [classifyInverse src tgt sig]
+  , Just shape <- [classifyInverse src tgt sig]
   ]
 
-classifyInverse :: SigType -> SigType -> ParsedSig -> Maybe Bool
+classifyInverse :: SigType -> SigType -> ParsedSig -> Maybe InverseShape
 classifyInverse src tgt sig = case (psArgs sig, psReturn sig) of
   ([sibArg], sibRet)
-    | sibArg == tgt && sibRet == src      -> Just False
-    | sibArg == tgt, Just inner <- stripMaybe sibRet, inner == src
-                                          -> Just True
-  _                                       -> Nothing
+    | sibArg == tgt && sibRet == src
+        -> Just DirectResult
+    | sibArg == tgt
+    , Just inner <- stripMaybe sibRet
+    , inner == src
+        -> Just MaybeResult
+    | sibArg == tgt                    -- #159: Either parsers
+    , Just inner <- stripEitherRight sibRet
+    , inner == src
+        -> Just EitherResult
+  _ -> Nothing
   where
-    stripMaybe (TyApp (TyCon "Maybe") [t]) = Just t
-    stripMaybe _                           = Nothing
+    stripMaybe (TyApp (TyCon "Maybe") [t])       = Just t
+    stripMaybe _                                  = Nothing
+    stripEitherRight (TyApp (TyCon "Either") [_, t]) = Just t  -- #159
+    stripEitherRight _                            = Nothing
 
-mkRoundtripLaw :: Text -> SigType -> Text -> Bool -> Suggestion
-mkRoundtripLaw printer srcTy parser needsJust =
-  Suggestion
+mkRoundtripLaw :: Text -> SigType -> Text -> InverseShape -> Suggestion
+mkRoundtripLaw printer srcTy parser shape =
+  let (wrapper, rhs) = case shape of
+        DirectResult -> (""                , "x")
+        MaybeResult  -> (" (wrapped in Maybe)", "Just x")
+        EitherResult -> (" (wrapped in Either)", "Right x")  -- #159
+  in Suggestion
     { sLaw        = "Printer/parser roundtrip"
     , sProperty   =
-        "\\x -> " <> parser <> " (" <> printer <> " x) == "
-          <> (if needsJust then "Just x" else "x")
+        "\\x -> " <> parser <> " (" <> printer <> " x) == " <> rhs
     , sRationale  =
         "Sibling `" <> parser <> "` has the inverse shape of `"
           <> printer <> "`: parser's input type matches printer's \
           \output, parser's output recovers the printer's input"
-          <> (if needsJust then " (wrapped in Maybe)" else "")
+          <> wrapper
           <> ". Any roundtrip through a printer/parser pair must \
           \preserve the source — a counterexample points at a \
           \real drift between the two."
@@ -775,3 +795,39 @@ mkRoundtripLaw printer srcTy parser needsJust =
     }
   where
     _ = srcTy  -- retained in signature for clarity; unused in output today
+
+-- | #159: functions returning @Either e b@ get zero suggestions from
+-- the existing rules because none pattern-match on @Either@. Add a
+-- totality law so the agent at least has a runnable starting point,
+-- and direct it towards the roundtrip law when a printer sibling exists.
+--
+-- Confidence is Low — the totality check is trivially true for any
+-- well-typed function; its value is detecting functions that throw
+-- exceptions instead of returning @Left@.
+ruleEitherReturn :: Rule
+ruleEitherReturn = Rule
+  { rId = "either-total"
+  , rMatches = legacy $ \nm sig ->
+      case psReturn sig of
+        TyApp (TyCon "Either") [_, _]
+          | argCount sig >= 1 ->
+              let xAnn = annotateParam (psConstraints sig)
+                           (fromMaybe (TyVar "a") (listToMaybe (psArgs sig)))
+                           "x"
+              in Just Suggestion
+                { sLaw        = "Either totality"
+                , sProperty   =
+                    "\\" <> xAnn <> " -> either (const True) (const True) ("
+                    <> nm <> " x)"
+                , sRationale  =
+                    "Return type is `Either e b`; this tautology verifies \
+                    \the function is total (never throws an exception — \
+                    \all failure modes are returned as `Left`). If a \
+                    \sibling encodes the input (pretty, encode, show), \
+                    \the printer/parser roundtrip rule will fire instead \
+                    \with `" <> nm <> " (encode x) == Right x`."
+                , sConfidence = Low
+                , sCategory   = "either"
+                }
+        _ -> Nothing
+  }

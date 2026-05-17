@@ -1157,6 +1157,9 @@ main = do
       , test "#147: unrelated sibling skipped by evaluator-preservation" testSuggestEvalPreservNoHash
       , test "#147: namesFormPrinterParserPair recognises pairs"  testSuggestPrinterParserPairNames
       , test "#147: unrelated roundtrip sibling filtered by name" testSuggestRoundtripUnrelatedFiltered
+      , test "#159: Either return type gets totality suggestion"   testSuggestEitherTotality
+      , test "#159: Either parser roundtrip emits Right x"        testSuggestEitherParserRoundtrip
+      , test "#159: Either rule in allRules catalog"              testSuggestEitherRuleRegistered
       , test "ghc-api: external cabal edit invalidates stanza cache"
                                                                  testMtimeInvalidation
       , test "ghc-api: withGhcSession ensures stanza flags (#49)"
@@ -11095,6 +11098,59 @@ testSuggestRoundtripUnrelatedFiltered = do
                                (applyRulesCtx ctx)
       in pure (null roundtrips)
     _ -> pure False
+
+--------------------------------------------------------------------------------
+-- #159: Either-return law templates
+--------------------------------------------------------------------------------
+
+-- | A function @parse :: Text -> Either String Expr@ must emit at
+-- least the totality law even when no sibling is present. Before
+-- the fix, @ghc_suggest@ returned 0 suggestions for this shape.
+testSuggestEitherTotality :: IO Bool
+testSuggestEitherTotality = do
+  let sig = HaskellFlows.Parser.TypeSignature.parseSignature
+              "Text -> Either String Expr"
+  case sig of
+    Just s ->
+      let ctx = RuleContext { rcName = "parse", rcSig = s, rcSiblings = [] }
+          sug = applyRulesCtx ctx
+          hasTotality = any (\x -> sCategory x == "either") sug
+      in pure hasTotality
+    Nothing -> pure False
+
+-- | When a printer sibling exists (@pretty :: Expr -> Text@), the
+-- roundtrip property for an Either-returning parser must use
+-- @Right x@, not @Just x@ or bare @x@.
+testSuggestEitherParserRoundtrip :: IO Bool
+testSuggestEitherParserRoundtrip = do
+  let parseSig  = HaskellFlows.Parser.TypeSignature.parseSignature
+                    "Text -> Either String Expr"
+      prettySig = HaskellFlows.Parser.TypeSignature.parseSignature
+                    "Expr -> Text"
+  case (parseSig, prettySig) of
+    (Just ps, Just pr) ->
+      let ctx = RuleContext
+            { rcName     = "parse"
+            , rcSig      = ps
+            , rcSiblings = [("pretty", pr)]
+            }
+          roundtrips = filter (\s -> sLaw s == "Printer/parser roundtrip")
+                               (applyRulesCtx ctx)
+          usesRight  = any ("Right x" `T.isInfixOf`) (map sProperty roundtrips)
+      in pure (not (null roundtrips) && usesRight)
+    _ -> pure False
+
+-- | The 'ruleEitherReturn' rule must be present in 'allRules'.
+testSuggestEitherRuleRegistered :: IO Bool
+testSuggestEitherRuleRegistered = do
+  let sig = HaskellFlows.Parser.TypeSignature.parseSignature
+              "Int -> Either String Bool"
+  case sig of
+    Just s ->
+      let ctx = RuleContext { rcName = "validate", rcSig = s, rcSiblings = [] }
+          sug = applyRulesCtx ctx
+      in pure (any (\x -> sCategory x == "either") sug)
+    Nothing -> pure False
 
 --------------------------------------------------------------------------------
 -- BUG-PLUS-03: external cabal edit invalidates stanza cache
