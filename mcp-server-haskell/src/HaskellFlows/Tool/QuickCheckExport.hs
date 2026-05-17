@@ -293,7 +293,7 @@ injectTypeAnnotations expr =
               let params        = filter (not . T.null) (T.words paramPart)
                   exprBody      = T.drop 4 arrowAndBody  -- strip " -> "
                   bodyWithArrow = T.drop 1 arrowAndBody  -- for output
-                  annotated     = map (\p -> annotateOne p exprBody) params
+                  annotated     = map (`annotateOne` exprBody) params
               in "\\" <> T.intercalate " " annotated <> " " <> bodyWithArrow
   where
     annotateOne p exprBody
@@ -313,7 +313,7 @@ injectTypeAnnotations expr =
     -- True when any occurrence of " p" is immediately preceded by a
     -- letter, digit, ')' or '\'' — meaning 'p' follows a named callee.
     -- Scans all occurrences via repeated T.breakOn.
-    isConstrainedBy p body = go body
+    isConstrainedBy p = go
       where
         pat = " " <> p
         go txt = case T.breakOn pat txt of

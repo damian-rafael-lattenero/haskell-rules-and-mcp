@@ -13636,7 +13636,7 @@ testPerfSaveBaselinesNoLock = withTempProject $ \pd -> do
 -- new threshold (30%) it must NOT be flagged.
 testPerfDefaultThreshold30 :: IO Bool
 testPerfDefaultThreshold30 = do
-  raw <- A.fromJSON <$> pure (A.object [ "expression" .= ("1+1" :: T.Text) ])
+  let raw = A.fromJSON (A.object [ "expression" .= ("1+1" :: T.Text) ])
   case raw :: A.Result PerfTool.PerfArgs of
     A.Success args -> pure (PerfTool.paThresholdPct args == 30.0)
     _              -> pure False

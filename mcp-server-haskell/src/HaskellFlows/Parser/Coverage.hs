@@ -33,7 +33,7 @@ module HaskellFlows.Parser.Coverage
   ) where
 
 import Data.Char (isDigit)
-import Data.Maybe (mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Text.Read (readMaybe)
@@ -164,5 +164,5 @@ extractCount marker haystack =
       -- The number immediately precedes the marker, e.g. ", 2 always True"
       -- Take the last whitespace-separated word of the prefix text.
       case reverse (T.words prefix) of
-        (w:_) -> maybe 0 id (readMaybe (T.unpack w))
+        (w:_) -> fromMaybe 0 (readMaybe (T.unpack w))
         []    -> 0
