@@ -59,14 +59,28 @@ import HaskellFlows.Types (ProjectDir, unProjectDir)
 -- Args
 -- ---------------------------------------------------------------------------
 
-newtype DepsExplainArgs = DepsExplainArgs
-  { daePackage :: Text
-  }
+-- | Two modes for the @explain@ action:
+--
+-- * 'DepsExplainPkg' — @package=X@: show which stanzas declare X and
+--   which source files import it (#156 new behaviour).
+-- * 'DepsExplainDump' — @cabal_output=X@: parse a solver dump and
+--   extract the root-cause conflict (#63 original behaviour, kept so
+--   that E2E tests and existing callers that pass a pre-fetched dump
+--   continue to work).
+data DepsExplainArgs
+  = DepsExplainPkg  !Text   -- ^ package=X
+  | DepsExplainDump !Text   -- ^ cabal_output=X
   deriving stock (Show)
 
 instance FromJSON DepsExplainArgs where
-  parseJSON = withObject "DepsExplainArgs" $ \o ->
-    DepsExplainArgs <$> o .: "package"
+  parseJSON = withObject "DepsExplainArgs" $ \o -> do
+    mPkg    <- o .:? "package"
+    mOutput <- o .:? "cabal_output"
+    case (mPkg, mOutput) of
+      (Just p,  _       ) -> pure (DepsExplainPkg p)
+      (Nothing, Just out) -> pure (DepsExplainDump out)
+      (Nothing, Nothing ) ->
+        fail "Either 'package' or 'cabal_output' is required for explain"
 
 -- ---------------------------------------------------------------------------
 -- Main handler
@@ -79,7 +93,12 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
       ((Env.mkErrorEnvelope Env.MissingArg
           (T.pack ("Invalid arguments: " <> err)))
             { Env.eeCause = Just (T.pack err) })))
-  Right (DepsExplainArgs pkg) -> do
+  Right (DepsExplainPkg  pkg)  -> handlePkgUsage pd pkg
+  Right (DepsExplainDump dump) -> pure (handleSolverConflict dump)
+
+-- | #156: show which stanzas declare @pkg@ and which source files import it.
+handlePkgUsage :: ProjectDir -> Text -> IO ToolResult
+handlePkgUsage pd pkg = do
     let root = unProjectDir pd
     -- Step 1: find the cabal file
     mCabal <- findCabalFile root
@@ -122,6 +141,30 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
                                    \action='list' to see declared deps." :: Text)
                    ])
             else Env.mkOk payload
+
+-- | #63: parse a cabal solver dump and surface the root-cause conflict.
+-- Returns @status=ok@ with a @conflict@ object when rejections are found,
+-- or @status=no_match@ with @conflict=null@ for a clean (conflict-free) dump.
+handleSolverConflict :: Text -> ToolResult
+handleSolverConflict dump =
+  case parseSolverOutput dump of
+    Nothing ->
+      Env.toolResponseToResult $
+        Env.mkNoMatch (object ["conflict" .= Null])
+    Just c  ->
+      let root    = cRoot c
+          payload = object
+            [ "conflict" .= object
+                [ "root_cause" .= object
+                    [ "package" .= rPackage root
+                    , "depth"   .= rDepth root
+                    , "reason"  .= rReason root
+                    ]
+                , "packages"  .= cPackages c
+                , "backjumps" .= cBackjumps c
+                ]
+            ]
+      in Env.toolResponseToResult (Env.mkOk payload)
 
 -- ---------------------------------------------------------------------------
 -- Cabal file parsing

@@ -163,17 +163,23 @@ schema = Schema.discriminatedSchema "action"
   , Schema.SchemaBranch
       { Schema.sbDiscriminantValue = "explain"
       , Schema.sbDescription       =
-          "Show which stanzas declare a dependency and which source \
-          \files import its modules. (#156: replaces the old solver-\
-          \conflict analyser; use 'cabal v2-build --dry-run' output \
-          \directly for solver diagnostics.)"
+          "Two modes — pass exactly one of: (1) 'package' to show \
+          \which stanzas declare that dependency and which source files \
+          \import its modules; (2) 'cabal_output' (raw output from \
+          \'cabal v2-build --dry-run' or a solver conflict dump) to \
+          \extract the root-cause rejection and affected packages."
       , Schema.sbProperties        =
           [ ("package", Schema.stringField
               "Package name to explain (e.g. 'aeson', 'QuickCheck'). \
-              \The tool searches build-depends across all stanzas and \
-              \scans source files for matching imports.")
+              \Searches build-depends across all stanzas and scans \
+              \source files for matching imports. \
+              \Mutually exclusive with cabal_output.")
+          , ("cabal_output", Schema.stringField
+              "Raw cabal solver / dry-run output. The tool extracts \
+              \the root-cause conflict and affected packages. \
+              \Mutually exclusive with package.")
           ]
-      , Schema.sbRequired          = ["package"]
+      , Schema.sbRequired          = []
       }
   ]
   where
