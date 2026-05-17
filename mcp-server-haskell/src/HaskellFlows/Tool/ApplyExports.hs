@@ -1,11 +1,16 @@
 -- | @ghc_apply_exports@ — rewrite a module's header to include an
--- explicit export list. Idempotent; if the header already has one,
--- returns @{no_change: true}@.
+-- explicit export list.
+--
+-- #173: if the header already has an export list and it DIFFERS from
+-- the requested one, the list is REPLACED.  Only if it is already
+-- identical does the tool return @{no_change: true}@.
 module HaskellFlows.Tool.ApplyExports
   ( descriptor
   , handle
   , ApplyExportsArgs (..)
   , rewriteHeader
+    -- * Internals exposed for unit tests
+  , RewriteResult (..)
   ) where
 
 import Control.Exception (SomeException, try)
@@ -104,14 +109,15 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
             Left e -> pure (errorResult (T.pack ("Could not read: " <> show e)))
             Right body ->
               case rewriteHeader (aeExports args) body of
-                Nothing -> pure (noChangeResult full)
-                Just _newBody ->
+                Unchanged  -> pure (noChangeResult full)
+                NoHeader   -> pure (noHeaderResult full)
+                Rewritten newBody ->
                   -- #155: when write=false, return a preview with
                   -- applied=false — do NOT write to disk.
                   if not (aeWrite args)
                     then pure (previewResult full (aeExports args))
                     else do
-                      wres <- try (TIO.writeFile full _newBody)
+                      wres <- try (TIO.writeFile full newBody)
                         :: IO (Either SomeException ())
                       case wres of
                         Left e  -> pure (errorResult (T.pack ("Could not write: " <> show e)))
@@ -128,21 +134,53 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
 rejectedExports :: [Text] -> [Text]
 rejectedExports = filter (isReservedKeyword . T.strip)
 
--- | If the source has a @module Foo where@ header with no export
--- list, rewrite it to @module Foo (e1, e2, …) where@. Returns
--- 'Nothing' if an export list already exists OR if no header was
--- found — either way a no-change is the right answer.
-rewriteHeader :: [Text] -> Text -> Maybe Text
+-- | Outcome of 'rewriteHeader'.
+data RewriteResult
+  = Unchanged  -- ^ Export list already matches; nothing to do.
+  | NoHeader   -- ^ No @module Foo where@ line found in the file.
+  | Rewritten !Text  -- ^ New file content with the updated export list.
+  deriving stock (Eq, Show)
+
+-- | Rewrite the module header to include 'exports'.
+--
+-- * No header found → 'NoHeader'.
+-- * Header found, no existing export list → inject it → 'Rewritten'.
+-- * Header found, existing list identical to 'exports' → 'Unchanged'.
+-- * Header found, existing list DIFFERS from 'exports' → replace it
+--   → 'Rewritten'. (#173: was incorrectly returning 'Nothing' here.)
+rewriteHeader :: [Text] -> Text -> RewriteResult
 rewriteHeader exports body =
   let lns = T.lines body
       (pre, rest) = break isModuleHeader lns
   in case rest of
-       []      -> Nothing
+       []      -> NoHeader
        (h : tl)
-         | "(" `T.isInfixOf` h -> Nothing   -- already has an export list
+         | "(" `T.isInfixOf` h ->
+             -- #173: header already has a list. Replace it unless it's
+             -- already identical to the requested list.
+             let newH = replaceExportList exports h
+             in if newH == h
+                  then Unchanged
+                  else Rewritten (T.unlines (pre <> (newH : tl)))
          | otherwise ->
-             let new = injectExports exports h
-             in Just (T.unlines (pre <> (new : tl)))
+             let newH = injectExports exports h
+             in Rewritten (T.unlines (pre <> (newH : tl)))
+
+-- | Replace the existing @(…)@ export list in a module header line
+-- with the new 'exports'. Preserves the @module Name@ prefix and
+-- the @where@ suffix.  Falls back to the original line on parse failure.
+replaceExportList :: [Text] -> Text -> Text
+replaceExportList exports headerLine =
+  case T.breakOn "(" headerLine of
+    (_, "")      -> headerLine  -- no "(" found, leave untouched
+    (before, rest) ->
+      -- rest = "(e1, e2, ...) where" — strip everything up to and
+      -- including the last ')' to get the after-close text.
+      let upToClose  = T.dropWhileEnd (/= ')') rest  -- "(e1, e2, ...)"
+          afterClose = T.drop (T.length upToClose) rest  -- " where" or ""
+      in if T.null upToClose
+           then headerLine
+           else before <> "(" <> T.intercalate ", " exports <> ")" <> afterClose
 
 isModuleHeader :: Text -> Bool
 isModuleHeader ln = "module " `T.isPrefixOf` T.stripStart ln
@@ -183,19 +221,29 @@ previewResult path exports =
     , "preview" .= True
     ]))
 
--- | Issue #90 Phase C: idempotent no-op → status='ok' with
--- 'no_change=True' under 'result'. Same predicate as before
--- (callers branched on @no_change@), unchanged.
--- #133: also include @applied=false@ so callers have a consistent
--- boolean discriminator alongside @no_change@.
+-- | Issue #90 Phase C + #173: idempotent no-op → status='ok' with
+-- 'no_change=True'. Only emitted when the existing export list is
+-- already identical to the requested one.
 noChangeResult :: FilePath -> ToolResult
 noChangeResult path =
   Env.toolResponseToResult (Env.mkOk (object
     [ "path"      .= T.pack path
     , "applied"   .= False
     , "no_change" .= True
-    , "reason"    .= ("The module header already has an export list, \
-                      \or no `module Foo where` line was found." :: Text)
+    , "reason"    .= ("The module header already has this exact export \
+                      \list — nothing to change." :: Text)
+    ]))
+
+-- | #173: no @module Foo where@ line found in the source file.
+-- Distinct from the 'Unchanged' case so callers can tell the difference.
+noHeaderResult :: FilePath -> ToolResult
+noHeaderResult path =
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "path"      .= T.pack path
+    , "applied"   .= False
+    , "no_change" .= True
+    , "reason"    .= ("No 'module Foo where' declaration was found in \
+                      \the file — cannot inject an export list." :: Text)
     ]))
 
 -- | Issue #90 Phase C: bad-input / IO failure path → status='failed',

@@ -33,14 +33,18 @@ module HaskellFlows.Tool.Batch
   , handle
   , BatchArgs (..)
   , BatchAction (..)
+    -- * Exposed for unit tests
+  , unwrapResult
   ) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
@@ -215,12 +219,27 @@ renderResult ff outcomes =
          Env.toolResponseToResult
            ((Env.mkPartial payload) { Env.reError = Just envErr })
 
+-- | #175: unwrap the MCP content-block wrapper that
+-- 'toolResponseToResult' places around every tool response.
+-- Without this 'renderOutcome' serialised sub-results as
+-- @{content:[{type:\"text\",text:\"<JSON>\"}],isError:bool}@ instead
+-- of the plain @{status,result,…}@ domain object the agent expects.
+--
+-- Falls back to the raw 'ToolResult' JSON on the (pathological) case
+-- where the content list is empty or the text is not valid JSON.
+unwrapResult :: ToolResult -> Value
+unwrapResult tr =
+  case trContent tr of
+    (TextContent body : _) ->
+      fromMaybe (toJSON tr) (decodeStrict (TE.encodeUtf8 body))
+    _ -> toJSON tr
+
 renderOutcome :: ActionOutcome -> Value
 renderOutcome (AoOk nm tr) =
   object
     [ "tool"     .= nm
     , "status"   .= (if trIsError tr then "failed" :: Text else "ok")
-    , "result"   .= toJSON tr
+    , "result"   .= unwrapResult tr
     ]
 renderOutcome (AoSkipped nm) =
   object

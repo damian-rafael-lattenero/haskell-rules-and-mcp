@@ -250,7 +250,8 @@ renderPropBinding i sp =
       expr  = injectTypeAnnotations (spExpression sp)
   in label <> " = " <> expr
 
--- | Inject @:: T@ type annotations into unannotated lambda parameters.
+-- | Inject @:: T@ type annotations into unannotated lambda parameters
+-- that are genuinely ambiguous in compiled (non-GHCi) context.
 --
 -- This is a belt-and-suspenders catch-all for properties persisted
 -- before 'Suggest.Rules' started emitting annotated forms (issue #104).
@@ -259,13 +260,26 @@ renderPropBinding i sp =
 -- exported @Spec.hs@ (GHC's @ExtendedDefaultRules@ only applies
 -- inside a GHCi session, not in compiled modules).
 --
--- Heuristic: parameters whose name ends in @s@ (xs, ys, vals …)
--- are annotated @:: [Int]@; all others get @:: Int@.  Already-annotated
--- parameters (those whose param block contains @::@) pass through
--- unchanged.
+-- #172 — improved heuristic (three-tier):
 --
--- Only the outermost lambda head is examined; inner lambdas in the
--- body are left untouched.
+--  1. Parameters whose name ends in @s@ and contains only identifier
+--     chars (@xs@, @ys@, @vals@ …) are annotated @:: [Int]@ — these are
+--     almost always list variables in QuickCheck properties.
+--
+--  2. Parameters that appear in the expression body as an argument to a
+--     named function (e.g. @reverseStr x@, @T.pack s@) are left
+--     unannotated — their type is constrained by the callee and injecting
+--     @:: Int@ would produce a type error.  Detection: the parameter is
+--     preceded in the body by a space and then a letter, digit, or
+--     closing paren (e.g. @"reverseStr x"@ matches; @"x + y"@ does not).
+--
+--  3. All remaining parameters (e.g. @x@, @y@ used only in operator
+--     expressions like @x + y@) are annotated @:: Int@ as the safe
+--     default for arithmetic ambiguity.
+--
+-- Already-annotated parameters (those whose param block contains @::@)
+-- pass through unchanged. Only the outermost lambda head is examined;
+-- inner lambdas in the body are left untouched.
 injectTypeAnnotations :: Text -> Text
 injectTypeAnnotations expr =
   case T.stripPrefix "\\" (T.strip expr) of
@@ -276,22 +290,40 @@ injectTypeAnnotations expr =
         (paramPart, arrowAndBody)
           | "::" `T.isInfixOf` paramPart -> expr  -- already annotated
           | otherwise ->
-              let params    = filter (not . T.null) (T.words paramPart)
-                  annotated = map annotateOne params
-                  body      = T.drop 1 arrowAndBody  -- drop leading space
-              in "\\" <> T.intercalate " " annotated <> " " <> body
+              let params        = filter (not . T.null) (T.words paramPart)
+                  exprBody      = T.drop 4 arrowAndBody  -- strip " -> "
+                  bodyWithArrow = T.drop 1 arrowAndBody  -- for output
+                  annotated     = map (\p -> annotateOne p exprBody) params
+              in "\\" <> T.intercalate " " annotated <> " " <> bodyWithArrow
   where
-    annotateOne p
-      | "(" `T.isPrefixOf` p = p
-      | T.null p             = p
-      | otherwise            =
-          let ann = if isList p then "[Int]" else "Int"
-          in "(" <> p <> " :: " <> ann <> ")"
+    annotateOne p exprBody
+      | "(" `T.isPrefixOf` p       = p  -- already wrapped / annotated
+      | T.null p                   = p
+      | isListParam p              = "(" <> p <> " :: [Int])"
+      | isConstrainedBy p exprBody = p  -- #172: type determined by caller
+      | otherwise                  = "(" <> p <> " :: Int)"
 
-    isList p =
+    -- Names ending in 's' composed of identifier chars → list params.
+    isListParam p =
       T.length p >= 2
         && T.last p == 's'
         && T.all (\c -> isAlpha c || c == '_' || c == '\'') p
+
+    -- Does 'p' appear as an argument to a named function in 'body'?
+    -- True when any occurrence of " p" is immediately preceded by a
+    -- letter, digit, ')' or '\'' — meaning 'p' follows a named callee.
+    -- Scans all occurrences via repeated T.breakOn.
+    isConstrainedBy p body = go body
+      where
+        pat = " " <> p
+        go txt = case T.breakOn pat txt of
+          (_, "")     -> False
+          (pre, rest) ->
+            let prevIsTyping = case T.uncons (T.reverse pre) of
+                  Just (c, _) -> isAlpha c || isDigit c || c == ')' || c == '\''
+                  Nothing     -> False
+                remaining = T.drop (T.length pat) rest
+            in prevIsTyping || go remaining
 
 renderRunLine :: Int -> StoredProperty -> Text
 renderRunLine i sp =

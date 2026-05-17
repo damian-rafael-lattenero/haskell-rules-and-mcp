@@ -59,12 +59,19 @@ newtype CoverageReport = CoverageReport
 -- See Issue #89 for the bug this shape fixes (the old @!Int@ percent
 -- claimed @100%@ for @0/0@ rows and dragged the across-metrics
 -- average upward).
+--
+-- 'mAlwaysTrue' / 'mAlwaysFalse' capture the HPC annotation emitted
+-- for @\'if\'@ conditions that were reached but never exercised in
+-- both directions, e.g. @\", 2 always True\"@. Both default to 0.
+-- See Issue #177.
 data Metric = Metric
-  { mLabel   :: !Text
-  , mPercent :: !(Maybe Int)
-  , mCovered :: !Int
-  , mTotal   :: !Int
-  , mStatus  :: !Text
+  { mLabel       :: !Text
+  , mPercent     :: !(Maybe Int)
+  , mCovered     :: !Int
+  , mTotal       :: !Int
+  , mStatus      :: !Text
+  , mAlwaysTrue  :: !Int
+  , mAlwaysFalse :: !Int
   }
   deriving stock (Eq, Show)
 
@@ -81,27 +88,32 @@ parseLine :: Text -> Maybe Metric
 parseLine ln = do
   let stripped = T.strip ln
   (pct, rest1) <- takePercent stripped
-  (covered, total, label) <- takeFractionAndLabel rest1
-  pure (mkMetric (T.strip label) pct covered total)
+  (covered, total, label, suffix) <- takeFractionLabelAndSuffix rest1
+  let (at, af) = parseAnnotation suffix
+  pure (mkMetric (T.strip label) pct covered total at af)
 
 -- | Smart constructor — collapses the @total == 0@ row to the
 -- @\"not_applicable\"@ shape regardless of what HPC's leading-column
 -- percent claimed.
-mkMetric :: Text -> Int -> Int -> Int -> Metric
-mkMetric label pct covered total
+mkMetric :: Text -> Int -> Int -> Int -> Int -> Int -> Metric
+mkMetric label pct covered total alwaysTrue alwaysFalse
   | total <= 0 = Metric
-      { mLabel   = label
-      , mPercent = Nothing
-      , mCovered = covered
-      , mTotal   = total
-      , mStatus  = "not_applicable"
+      { mLabel       = label
+      , mPercent     = Nothing
+      , mCovered     = covered
+      , mTotal       = total
+      , mStatus      = "not_applicable"
+      , mAlwaysTrue  = alwaysTrue
+      , mAlwaysFalse = alwaysFalse
       }
   | otherwise  = Metric
-      { mLabel   = label
-      , mPercent = Just pct
-      , mCovered = covered
-      , mTotal   = total
-      , mStatus  = if covered >= total then "covered" else "uncovered"
+      { mLabel       = label
+      , mPercent     = Just pct
+      , mCovered     = covered
+      , mTotal       = total
+      , mStatus      = if covered >= total then "covered" else "uncovered"
+      , mAlwaysTrue  = alwaysTrue
+      , mAlwaysFalse = alwaysFalse
       }
 
 -- | Consume a leading @NN%@ (with optional leading whitespace) and
@@ -116,17 +128,41 @@ takePercent t =
        _ -> Nothing
 
 -- | Given text like @expressions used (12\/12)@ return
--- @(covered, total, label)@. Requires both a parenthesised fraction and
--- a non-empty label before it.
-takeFractionAndLabel :: Text -> Maybe (Int, Int, Text)
-takeFractionAndLabel t =
+-- @(covered, total, label, suffix)@ where @suffix@ is whatever HPC
+-- appended after the closing @)@, e.g. @\", 2 always True\"@.
+-- Requires both a parenthesised fraction and a non-empty label before it.
+-- Issue #177: suffix is passed back so the caller can parse annotations.
+takeFractionLabelAndSuffix :: Text -> Maybe (Int, Int, Text, Text)
+takeFractionLabelAndSuffix t =
   case T.breakOn "(" t of
     (_, parenRest) | T.null parenRest -> Nothing
     (label, parenRest) ->
-      let frac = T.takeWhile (/= ')') (T.drop 1 parenRest)
+      let inner  = T.drop 1 parenRest               -- strip leading "("
+          frac   = T.takeWhile (/= ')') inner
+          after  = T.dropWhile (/= ')') inner
+          suffix = if T.null after then "" else T.drop 1 after  -- strip ")"
       in case T.breakOn "/" frac of
            (_, afterSlash) | T.null afterSlash -> Nothing
            (leftTxt, rightTxt) -> do
              l <- readMaybe (T.unpack (T.strip leftTxt))
              r <- readMaybe (T.unpack (T.strip (T.drop 1 rightTxt)))
-             pure (l, r, label)
+             pure (l, r, label, suffix)
+
+-- | Parse @\", N always True\"@ and/or @\", N always False\"@ from
+-- the HPC annotation suffix that follows the @(a\/b)@ fraction on
+-- @\'if\'@ condition lines. Returns @(alwaysTrue, alwaysFalse)@.
+-- Both default to 0 when the annotation is absent or unparseable.
+-- Issue #177.
+parseAnnotation :: Text -> (Int, Int)
+parseAnnotation t = (extractCount "always True" t, extractCount "always False" t)
+
+extractCount :: Text -> Text -> Int
+extractCount marker haystack =
+  case T.breakOn marker haystack of
+    (_, rest) | T.null rest -> 0
+    (prefix, _) ->
+      -- The number immediately precedes the marker, e.g. ", 2 always True"
+      -- Take the last whitespace-separated word of the prefix text.
+      case reverse (T.words prefix) of
+        (w:_) -> maybe 0 id (readMaybe (T.unpack w))
+        []    -> 0

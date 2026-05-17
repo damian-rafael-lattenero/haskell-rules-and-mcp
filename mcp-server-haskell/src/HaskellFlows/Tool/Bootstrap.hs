@@ -83,10 +83,11 @@ instance FromJSON BootstrapArgs where
 handle :: ProjectDir -> [ToolDescriptor] -> Value -> IO ToolResult
 handle pd descriptors rawArgs = case parseEither parseJSON rawArgs of
   Left err ->
-    pure (Env.toolResponseToResult (Env.mkFailed
-      ((Env.mkErrorEnvelope (parseErrorKind err)
-          (T.pack ("Invalid arguments: " <> err)))
-            { Env.eeCause = Just (T.pack err) })))
+    let kind = parseErrorKind err
+        msg  = friendlyParseError kind err
+    in pure (Env.toolResponseToResult (Env.mkFailed
+         ((Env.mkErrorEnvelope kind msg)
+           { Env.eeCause = Just (T.pack err) })))
   Right (BootstrapArgs host write) -> do
     let body = workflowRulesMarkdown descriptors
     case host of
@@ -129,6 +130,18 @@ gitRootOf dir = do
           if parent == d   -- reached filesystem root
             then pure dir  -- fallback to original dir
             else go parent
+
+-- | Human-readable message for the agent. When 'host' is missing we
+-- list every accepted value rather than leaking the raw aeson key
+-- name. Other errors fall back to the raw aeson message.
+--
+-- >>> friendlyParseError Env.MissingArg "key \"host\" not found"
+-- "bootstrap requires: host (\"claude-code\" | \"cursor\" | \"generic\") — optionally pass write=true to persist to disk"
+friendlyParseError :: Env.ErrorKind -> String -> Text
+friendlyParseError Env.MissingArg _ =
+  "bootstrap requires: host (\"claude-code\" | \"cursor\" | \"generic\") \
+  \— optionally pass write=true to persist to disk"
+friendlyParseError _ err = T.pack ("Invalid arguments: " <> err)
 
 -- | Discriminate the FromJSON failure shape — same heuristic as
 -- 'HaskellFlows.Tool.Workflow.parseErrorKind'. \"unknown host\"

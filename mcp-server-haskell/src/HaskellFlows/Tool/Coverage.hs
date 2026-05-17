@@ -76,6 +76,14 @@ descriptor =
                        \Raise for large projects where HPC instrumentation \
                        \adds significant compile time." :: Text)
                   ]
+              , "verbose" .= object
+                  [ "type"        .= ("boolean" :: Text)
+                  , "description" .=
+                      ("When true, include the full cabal stdout in \
+                       \result.raw. Default false — omit raw to keep \
+                       \responses small. The structured metrics array \
+                       \already contains all parsed information." :: Text)
+                  ]
               ]
           , "additionalProperties" .= False
           ]
@@ -83,15 +91,21 @@ descriptor =
 
 -- | #163: timeout is now configurable via the @timeout_minutes@
 -- argument. Default 5 minutes; clamped to [1, 60] minutes.
-newtype CoverageArgs = CoverageArgs
-  { caTimeoutMinutes :: Int
+--
+-- #178: @verbose@ (default @false@) controls whether the full cabal
+-- stdout is included in @result.raw@. When false the raw field is
+-- omitted, keeping responses small.
+data CoverageArgs = CoverageArgs
+  { caTimeoutMinutes :: !Int
+  , caVerbose        :: !Bool
   }
   deriving stock (Show)
 
 instance FromJSON CoverageArgs where
   parseJSON = withObject "CoverageArgs" $ \o -> do
     t <- o .:? "timeout_minutes" .!= 5
-    pure CoverageArgs { caTimeoutMinutes = max 1 (min 60 t) }
+    v <- o .:? "verbose"         .!= False
+    pure CoverageArgs { caTimeoutMinutes = max 1 (min 60 t), caVerbose = v }
 
 -- | Compute the timeout in microseconds from the args.
 coverageTimeoutMicros :: CoverageArgs -> Int
@@ -252,22 +266,21 @@ runHpcReport mixDirs tix = do
 -- response shaping
 --------------------------------------------------------------------------------
 
--- | Issue #90 Phase C + #163:
+-- | Issue #90 Phase C + #163 + #176 + #177 + #178:
 --
 -- * 'CovSuccess' → status='ok' with parsed metrics under 'result'.
+--   @raw@ is only included when @verbose=true@ (#178).
 -- * 'CovTimeout' → status='timeout' kind='inner_timeout', cause=NmT.
 -- * 'CovFailure' → status='failed' kind='subprocess_error',
 --                  cause=<exit code>.
 renderResult :: CoverageArgs -> CovOutcome -> ToolResult
-renderResult _ (CovSuccess out) =
+renderResult args (CovSuccess out) =
   let report  = parseCoverage out
       metrics = crMetrics report
-      payload =
-        object
-          [ "metrics" .= map renderMetric metrics
-          , "summary" .= summarise metrics
-          , "raw"     .= out
-          ]
+      base    = [ "metrics" .= map renderMetric metrics
+                , "summary" .= summarise metrics
+                ]
+      payload = object (base <> [ "raw" .= out | caVerbose args ])
   in Env.toolResponseToResult (Env.mkOk payload)
 renderResult args CovTimeout =
   let mins   = T.pack (show (caTimeoutMinutes args)) <> "m"
@@ -289,26 +302,32 @@ renderResult _ (CovFailure code err) =
                  { Env.eeCause = Just (T.pack (show code)) }
   in Env.toolResponseToResult (Env.mkFailed envErr)
 
--- | Issue #89: 'percent' is null when the metric has no applicable
+-- | Issue #89 + #177: 'percent' is null when the metric has no applicable
 -- program points (@total == 0@). 'status' is the categorical
 -- discriminator @\"covered\" | \"uncovered\" | \"not_applicable\"@
 -- — agents should branch on it instead of treating @percent: 100,
 -- total: 0@ as a positive contribution.
+--
+-- #177: @alwaysTrue@ and @alwaysFalse@ are only emitted when non-zero
+-- to keep the common case (no annotation) clean.
 renderMetric :: Metric -> Value
 renderMetric m =
-  object
-    [ "label"   .= mLabel m
-    , "percent" .= mPercent m
-    , "covered" .= mCovered m
-    , "total"   .= mTotal m
-    , "status"  .= mStatus m
-    ]
+  let base =
+        [ "label"   .= mLabel m
+        , "percent" .= mPercent m
+        , "covered" .= mCovered m
+        , "total"   .= mTotal m
+        , "status"  .= mStatus m
+        ]
+      annots =
+        [ "alwaysTrue"  .= mAlwaysTrue  m | mAlwaysTrue  m > 0 ] <>
+        [ "alwaysFalse" .= mAlwaysFalse m | mAlwaysFalse m > 0 ]
+  in object (base <> annots)
 
--- | Issue #89: average across only the *applicable* metrics
--- (@total > 0@). The @0/0@ rows that HPC reports as @100%@ aren't
--- evidence of coverage — folding them into the average mis-anchors
--- the headline number for any project that doesn't exercise every
--- branch flavour.
+-- | Issue #89 + #176: average across only the *applicable* metrics
+-- (@total > 0@), excluding @\"boolean coverage\"@ which is the parent
+-- bucket of guards, @\'if\'@ conditions, and qualifiers. Including it
+-- would double-count any @\'if\'@ condition failures in the average.
 --
 -- The summary string names the count of applicable metrics so an
 -- agent can tell at a glance how many categories actually applied
@@ -316,7 +335,9 @@ renderMetric m =
 summarise :: [Metric] -> Text
 summarise [] = "No coverage metrics parsed from the cabal output."
 summarise ms =
-  let applicable = [p | Metric { mPercent = Just p } <- ms]
+  -- #176: exclude "boolean coverage" (parent bucket) from the average.
+  let filtered   = filter ((/= "boolean coverage") . mLabel) ms
+      applicable = [p | Metric { mPercent = Just p } <- filtered]
       n          = length applicable
   in case n of
        0 -> "No applicable HPC metrics for this project ("

@@ -3,8 +3,13 @@
 -- Phase 2 (this commit): adds baseline persistence to
 -- @.haskell-flows\/perf.json@. The file maps expression strings to
 -- their last-recorded mean_ns. Use @save_baseline=true@ to record a
--- measurement and @compare_baseline=true@ to check for regressions
--- (threshold: >10 % slower than stored mean).
+-- measurement and @compare_baseline=true@ to check for regressions.
+--
+-- #174: the default regression threshold is 30 % (raised from 10 %).
+-- The old 10 % threshold was appropriate for Criterion-quality
+-- measurements but far too tight for single-pass GHCi wall-clock
+-- timings that routinely vary ±20 %. The threshold can be tuned via
+-- @threshold_pct@ for callers that need stricter or looser gates.
 --
 -- Remaining deferrals (still Phase 3+):
 --   * Criterion-style autotuning + warmup loops.
@@ -66,7 +71,10 @@ descriptor =
           <> "times in-process and returns aggregate statistics "
           <> "(mean/median/min/max ns). Phase 2: set save_baseline=true "
           <> "to persist the mean to .haskell-flows/perf.json, or "
-          <> "compare_baseline=true to detect regressions (>10% slower). "
+          <> "compare_baseline=true to detect regressions. Default "
+          <> "threshold is 30% slower (tunable via threshold_pct). Use "
+          <> "a tighter threshold only when Criterion warmup is implemented; "
+          <> "GHCi wall-clock timings vary ±20% on sub-ms expressions. "
           <> "Both flags may be combined: comparison runs first, then the "
           <> "new measurement is saved as the updated baseline. "
           <> "Criterion warmup, Core dump, and allocation tracking remain "
@@ -80,6 +88,15 @@ descriptor =
               , "save_baseline"    .= obj "boolean"
               , "compare_baseline" .= obj "boolean"
               , "verbose"          .= obj "boolean"
+              , "threshold_pct"   .= object
+                  [ "type"        .= ("number" :: Text)
+                  , "description" .=
+                      ( "Regression threshold as a percentage (default 30). \
+                        \A measurement is flagged as a regression only when \
+                        \the current mean exceeds the stored baseline by more \
+                        \than this percentage. Lower values increase \
+                        \false-positive rate for GHCi micro-benchmarks." :: Text )
+                  ]
               ]
           , "required"             .= (["expression"] :: [Text])
           , "additionalProperties" .= False
@@ -98,11 +115,16 @@ data PerfArgs = PerfArgs
   , paCompareBaseline :: !Bool
     -- ^ Phase 2: when True, compare the current mean_ns against the
     -- stored baseline and surface a regression warning if the
-    -- current measurement is >10 % slower.
+    -- current measurement exceeds 'paThresholdPct'.
   , paVerbose         :: !Bool
     -- ^ F-26: when False (default), omit the per-sample 'samples'
     -- array from the response. Avoids sending thousands of integers
     -- for large 'runs' values.
+  , paThresholdPct    :: !Double
+    -- ^ #174: regression threshold in percent. Default 30.0. Raised from
+    -- the old 10 % hard-code which produced false positives on GHCi
+    -- wall-clock timings that vary ±20 % on sub-ms expressions.
+    -- Clamped to [1, 200] to prevent degenerate values.
   }
   deriving stock (Show)
 
@@ -113,18 +135,22 @@ instance FromJSON PerfArgs where
     sb <- o .:? "save_baseline"    .!= False
     cb <- o .:? "compare_baseline" .!= False
     v  <- o .:? "verbose"          .!= False
+    t  <- o .:? "threshold_pct"    .!= (30.0 :: Double)
     pure PerfArgs
       { paExpression      = e
       , paRuns            = clampRuns r
       , paSaveBaseline    = sb
       , paCompareBaseline = cb
       , paVerbose         = v
+      , paThresholdPct    = clampThreshold t
       }
     where
       -- Bound the runs so a typo of "1000000" doesn't tie up the
       -- session for hours. Floor at 1 (one sample is technically
       -- valid; the agent decides whether it's enough signal).
       clampRuns n = max 1 (min 1000 n)
+      -- Clamp threshold to [1, 200] percent.
+      clampThreshold x = max 1.0 (min 200.0 x)
 
 handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
@@ -377,7 +403,8 @@ renderResult args nss stats errs mBaseline warmupNs =
         be  <- mBaseline
         pct <- regressionPct (beMeanNs be) (sMean stats)
         pure (pct, beMeanNs be)
-      isRegression = maybe False (\(pct, _) -> pct > 10.0) mRegression
+      threshold    = paThresholdPct args
+      isRegression = maybe False (\(pct, _) -> pct > threshold) mRegression
       baselineFields = case mRegression of
         Nothing -> []
         Just (pct, baseMean) ->
@@ -419,8 +446,9 @@ renderResult args nss stats errs mBaseline warmupNs =
             ]
         , "instructions_for_agent" .=
             ( "Phase 2: set save_baseline=true to persist a mean_ns baseline, \
-              \compare_baseline=true to detect regressions (>10% slower). \
-              \Pass verbose=true to include per-sample timing array." :: Text )
+              \compare_baseline=true to detect regressions (threshold: "
+              <> T.pack (show (round threshold :: Int)) <> "% slower, tunable via threshold_pct). \
+              \Pass verbose=true to include per-sample timing array." )
         -- #119: callers can't tell if the baseline was persisted without
         -- this flag; the response shape is identical regardless.
         , "baseline_saved" .= paSaveBaseline args
@@ -428,7 +456,8 @@ renderResult args nss stats errs mBaseline warmupNs =
       -- F-32: cause is a human-readable summary, not a stringified JSON blob.
       regressionMsg = case mRegression of
         Just (pct, _) -> "Regression: " <> T.pack (show (round pct :: Int))
-                           <> "% slower than stored baseline (threshold 10%)"
+                           <> "% slower than stored baseline (threshold "
+                           <> T.pack (show (round threshold :: Int)) <> "%)"
         Nothing       -> "Regression detected"
       regressionCause = case mRegression of
         Just (pct, baseMean) ->

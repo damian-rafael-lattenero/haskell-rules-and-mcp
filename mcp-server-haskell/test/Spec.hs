@@ -125,7 +125,7 @@ import HaskellFlows.Mcp.PermissiveJSON
   ( BoolField (..)
   , IntField (..)
   )
-import HaskellFlows.Tool.Batch (BatchArgs (..))
+import HaskellFlows.Tool.Batch (BatchArgs (..), unwrapResult)
 import qualified HaskellFlows.Tool.Coverage as CoverageTool
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
@@ -360,6 +360,18 @@ main = do
                                                    testCoverageAllMetricsApplicable
       , test "summarise handles all-non-applicable (#89)"
                                                    testCoverageAllNotApplicable
+      , test "#176: summarise excludes boolean-coverage parent from average"
+                                                   testCoverageSummariseExcludesBooleanParent
+      , test "#177: parseCoverage captures alwaysTrue annotation"
+                                                   testCoverageAlwaysTrueParsed
+      , test "#177: parseCoverage captures alwaysFalse annotation"
+                                                   testCoverageAlwaysFalseParsed
+      , test "#177: parseCoverage captures combined always annotation"
+                                                   testCoverageAlwaysBothParsed
+      , test "#178: renderResult omits raw by default"
+                                                   testCoverageRawOmittedByDefault
+      , test "#178: renderResult includes raw when verbose=true"
+                                                   testCoverageRawIncludedWhenVerbose
       , test "eval ctx · empty adds all 5 extras (#86)"
                                                    testEvalContextEmptyAddsAll
       , test "eval ctx · existing Prelude suppresses dup (#86)"
@@ -631,6 +643,8 @@ main = do
                                                    testBootstrapRejectsUnknownHost
       , test "Envelope #90 Phase B: ghc_bootstrap rejects missing host"
                                                    testBootstrapRejectsMissingHost
+      , test "#165: bootstrap missing-host message lists accepted values"
+                                                   testBootstrapMissingHostFriendlyMessage
       , test "Envelope #90 Phase B: ghc_imports emits envelope with count + imports"
                                                    testImportsEnvelopeShape
       , test "Envelope #90 Phase D: legacy 'success' field dropped"
@@ -739,6 +753,7 @@ main = do
       , test "suggest skips unmatched shapes"       testSuggestNoMatch
       , test "batch parses documented {tool,args}"  testBatchParsesToolArgs
       , test "batch accepts MCP {name,arguments}"   testBatchParsesNameArgs
+      , test "batch result not double-wrapped (#175)" testBatchResultNotDoubleWrapped
       , test "suggest reverse Idempotent is Low"    testSuggestReverseIdempotentLow
       , test "suggest normalize Idempotent Medium"  testSuggestNormalizeIdempotentMedium
       , test "workflow tool names match tools/list" testWorkflowToolsParity
@@ -855,6 +870,10 @@ main = do
       , test "add_modules: moduleToPath mapping"   testAddModulesPath
       , test "apply_exports: rewriteHeader idempotent" testApplyExportsIdempotent
       , test "apply_exports: injects exports"      testApplyExportsInjects
+      , test "#173: rewriteHeader replaces different existing list"
+                                                   testApplyExportsReplacesExistingList
+      , test "#173: rewriteHeader NoHeader on missing module decl"
+                                                   testApplyExportsNoHeader
       , test "#133: successResult includes applied=true"    testApplyExportsSuccessHasApplied
       , test "#133: noChangeResult includes applied=false"  testApplyExportsNoChangeHasApplied
       , test "#133: handle write path returns applied=true" testApplyExportsHandleAppliedTrue
@@ -1255,6 +1274,10 @@ main = do
       , test "#104c: injectTypeAnnotations passes through annotated"   testInjectAnnotateAlreadyAnnotated
       , test "#104c: injectTypeAnnotations no-op on non-lambda"        testInjectAnnotateNonLambda
       , test "#104c: injectTypeAnnotations multi-param x y"           testInjectAnnotateMultiParam
+      , test "#172: injectTypeAnnotations leaves String-constrained x verbatim"
+                                                                       testInjectAnnotateStringConstrained
+      , test "#172: injectTypeAnnotations still annotates operator-only x with Int"
+                                                                       testInjectAnnotateOperatorOnlyX
       -- Issue #104a: Suggest/Rules.hs annotated lambda output
       , test "#104a: suggest idempotent rule emits :: Int annotation"  testSuggestIdempotentAnnotated
       , test "#104a: suggest involutive rule emits :: Int annotation"  testSuggestInvolutiveAnnotated
@@ -1300,6 +1323,9 @@ main = do
       , test "#136: readBaseline uses strict I/O (no lazy file handle)"    testPerfReadBaselineStrict
       , test "#136: save+compare both flags work sequentially (no lock)"   testPerfSaveAndCompareNoLock
       , test "#161: saveBaseline save→save sequence does not lock"          testPerfSaveBaselinesNoLock
+      , test "#174: perf default threshold is 30%, not 10%"               testPerfDefaultThreshold30
+      , test "#174: threshold_pct param overrides default"                testPerfCustomThreshold
+      , test "#174: perf threshold_pct clamped to [1,200]"               testPerfThresholdClamped
       -- Issue #135 — summariseMeasurementErrors truncation
       , test "#135: summariseMeasurementErrors single error stays short"   testSummariseSingleError
       , test "#135: summariseMeasurementErrors 20 repeated errors omits"  testSummariseRepeatedErrors
@@ -1939,11 +1965,14 @@ testCoverageMetricNotApplicable =
          && mTotal   quals  == 0         && mCovered quals  == 0
        _ -> False
 
--- | Issue #89: 'summarise' must skip 'not_applicable' rows when
--- computing the headline average. Anchor: mixed input where 2 of
--- 8 metrics have @total = 0@; the average must be @(89+0+0+50+
--- 100+100) / 6 = 56%@, not @67%@ (the buggy 8-metric average that
--- counted the @100%@ from each @0/0@ row).
+-- | Issue #89 + #176: 'summarise' must skip 'not_applicable' rows AND
+-- the 'boolean coverage' parent bucket when computing the headline
+-- average. Anchor: 8 metrics, 2 are 0/0 (not_applicable) and
+-- 'boolean coverage' is the parent of 'if' conditions (both have
+-- total > 0). After excluding not_applicable + boolean coverage we
+-- have 5 applicable metrics: expressions(89%), 'if' conditions(0%),
+-- alternatives(50%), local(100%), top-level(100%).
+-- Average = (89+0+50+100+100)/5 = 67%.
 testCoverageAverageSkipsNotApplicable :: IO Bool
 testCoverageAverageSkipsNotApplicable =
   let raw = T.unlines
@@ -1958,16 +1987,17 @@ testCoverageAverageSkipsNotApplicable =
         ]
       summary = CoverageTool.summarise (crMetrics (parseCoverage raw))
   in pure $
-       T.isInfixOf "6 applicable metrics" summary
-         && T.isInfixOf "56%" summary
-         -- Make sure the buggy answer never reappears.
-         && not (T.isInfixOf "67%" summary)
+       T.isInfixOf "5 applicable metrics" summary
+         && T.isInfixOf "67%" summary
+         -- Make sure the buggy answers never reappear.
+         && not (T.isInfixOf "56%" summary)
          && not (T.isInfixOf "8 metrics" summary)
+         && not (T.isInfixOf "6 metrics" summary)
 
--- | Issue #89 anchor: when EVERY metric is applicable (all rows
--- have @total > 0@), the summary should still mention all of them.
--- Catches a regression where the new logic over-corrects and counts
--- only a subset.
+-- | Issue #89 + #176 anchor: when all 8 metrics are applicable
+-- (total > 0), the parent 'boolean coverage' is still excluded from
+-- the average, leaving 7 leaf metrics. Catches a regression where
+-- the exclusion is dropped under the all-applicable case.
 testCoverageAllMetricsApplicable :: IO Bool
 testCoverageAllMetricsApplicable =
   let raw = T.unlines
@@ -1982,7 +2012,7 @@ testCoverageAllMetricsApplicable =
         ]
       summary = CoverageTool.summarise (crMetrics (parseCoverage raw))
   in pure $
-       T.isInfixOf "8 applicable metrics" summary
+       T.isInfixOf "7 applicable metrics" summary
          && T.isInfixOf "%" summary
 
 -- | Issue #89 edge case: every metric is non-applicable. Don't
@@ -1998,6 +2028,99 @@ testCoverageAllNotApplicable =
   in pure $
        T.isInfixOf "No applicable HPC metrics" summary
          && T.isInfixOf "3 metrics seen" summary
+
+-- | #176: 'summarise' must exclude 'boolean coverage' (parent bucket)
+-- from the average even when it has total > 0. Here both boolean
+-- coverage and its child 'if' conditions have total=2, so without the
+-- fix both would be counted and produce a different average.
+testCoverageSummariseExcludesBooleanParent :: IO Bool
+testCoverageSummariseExcludesBooleanParent =
+  let raw = T.unlines
+        [ "100% expressions used (10/10)"
+        , "  0% boolean coverage (0/2)"
+        , "100% guards (0/0)"
+        , "  0% 'if' conditions (0/2)"
+        , "100% qualifiers (0/0)"
+        ]
+      -- Applicable (total > 0) AFTER excluding boolean coverage parent:
+      -- expressions(100%) + 'if' conditions(0%) = 2 metrics, avg = 50%
+      -- If boolean coverage were included: 3 metrics, avg = 33%
+      summary = CoverageTool.summarise (crMetrics (parseCoverage raw))
+  in pure $
+       T.isInfixOf "2 applicable metrics" summary
+         && T.isInfixOf "50%" summary
+         && not (T.isInfixOf "33%" summary)
+         && not (T.isInfixOf "3 applicable" summary)
+
+-- | #177: 'parseCoverage' must capture the "N always True" HPC
+-- annotation on 'if' condition lines.
+testCoverageAlwaysTrueParsed :: IO Bool
+testCoverageAlwaysTrueParsed =
+  let raw = T.unlines
+        [ "  0% 'if' conditions (0/2), 2 always True" ]
+  in pure $ case crMetrics (parseCoverage raw) of
+       [m] -> mAlwaysTrue m == 2 && mAlwaysFalse m == 0
+       _   -> False
+
+-- | #177: 'parseCoverage' must capture the "N always False" HPC
+-- annotation.
+testCoverageAlwaysFalseParsed :: IO Bool
+testCoverageAlwaysFalseParsed =
+  let raw = T.unlines
+        [ "  0% 'if' conditions (0/3), 3 always False" ]
+  in pure $ case crMetrics (parseCoverage raw) of
+       [m] -> mAlwaysTrue m == 0 && mAlwaysFalse m == 3
+       _   -> False
+
+-- | #177: 'parseCoverage' must capture both annotations when HPC
+-- emits "N always True, M always False".
+testCoverageAlwaysBothParsed :: IO Bool
+testCoverageAlwaysBothParsed =
+  let raw = T.unlines
+        [ "  0% 'if' conditions (0/5), 3 always True, 2 always False" ]
+  in pure $ case crMetrics (parseCoverage raw) of
+       [m] -> mAlwaysTrue m == 3 && mAlwaysFalse m == 2
+       _   -> False
+
+-- | #178: when 'verbose' is not set (default), 'renderResult' must
+-- NOT include a 'raw' field in the result payload.
+testCoverageRawOmittedByDefault :: IO Bool
+testCoverageRawOmittedByDefault =
+  let args   = CoverageTool.CoverageArgs
+                 { CoverageTool.caTimeoutMinutes = 5
+                 , CoverageTool.caVerbose        = False
+                 }
+      out    = "100% expressions used (5/5)\n"
+      result = CoverageTool.renderResult args (CoverageTool.CovSuccess out)
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "result" top of
+               Just (A.Object res) -> not (AKM.member "raw" res)
+               _                   -> False
+           _ -> False
+       _ -> False
+
+-- | #178: when 'verbose=true', 'renderResult' MUST include the raw
+-- cabal stdout in the result payload.
+testCoverageRawIncludedWhenVerbose :: IO Bool
+testCoverageRawIncludedWhenVerbose =
+  let args   = CoverageTool.CoverageArgs
+                 { CoverageTool.caTimeoutMinutes = 5
+                 , CoverageTool.caVerbose        = True
+                 }
+      out    = "100% expressions used (5/5)\n"
+      result = CoverageTool.renderResult args (CoverageTool.CovSuccess out)
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "result" top of
+               Just (A.Object res) -> AKM.member "raw" res
+               _                   -> False
+           _ -> False
+       _ -> False
 
 --------------------------------------------------------------------------------
 -- Issue #86: augmentEvalContext dedup
@@ -4415,6 +4538,22 @@ testBootstrapRejectsMissingHost = do
           Env.eeKind err == Env.MissingArg
     _ -> False
 
+-- | #165: when 'host' is missing the error message must mention the
+-- accepted values, not leak a raw aeson key name.
+testBootstrapMissingHostFriendlyMessage :: IO Bool
+testBootstrapMissingHostFriendlyMessage = do
+  decoded <- runBootstrap (A.object [])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusFailed
+      , Just err <- Env.reError env
+      , Env.eeKind err == Env.MissingArg ->
+          let msg = Env.eeMessage err
+          in  "claude-code" `T.isInfixOf` msg
+           && "cursor"      `T.isInfixOf` msg
+           && "generic"     `T.isInfixOf` msg
+    _ -> False
+
 -- | 'ghc_imports' returns the interactive context's import list.
 -- Phase B: status='ok' with result carrying the legacy 'count' +
 -- 'imports' fields (preserved during the dual-shape window). The
@@ -5579,6 +5718,24 @@ testBatchParsesNameArgs =
          [tc] -> pure (tcName tc == "ghc_eval")
          _    -> pure False
        A.Error _ -> pure False
+
+-- | Issue #175: @ghc_batch@ sub-results were double-wrapped in the
+-- MCP content-block envelope (@{content:[{type:\"text\",text:\"…\"}],
+-- isError:bool}@) instead of returning the domain JSON directly.
+-- 'unwrapResult' must peel off that wrapper so agents see
+-- @{status,result,…}@ at @results[i].result@.
+testBatchResultNotDoubleWrapped :: IO Bool
+testBatchResultNotDoubleWrapped = do
+  -- Build a ToolResult the same way every tool handler does.
+  let innerPayload = object [ "value" .= ("42" :: Text) ]
+      tr           = Env.toolResponseToResult (Env.mkOk innerPayload)
+  -- unwrapResult should return the domain JSON, not the wire wrapper.
+  case unwrapResult tr of
+    A.Object obj ->
+      -- Must have "status" (domain field), must NOT have "content" (wire field).
+      pure (AKM.member (AKey.fromString "status") obj
+         && not (AKM.member (AKey.fromString "content") obj))
+    _ -> pure False
 
 -- | Issue #23: @reverse :: [a] -> [a]@ fits the @a -> a@ shape that
 -- 'ruleIdempotent' used to blindly promote to 'Medium'. Dampened
@@ -7660,6 +7817,8 @@ testAddModulesPath = pure $
      AddModules.moduleToPath "Expr.Syntax"  == "src/Expr/Syntax.hs"
   && AddModules.moduleToPath "Main"         == "src/Main.hs"
 
+-- | #173: idempotent case — when the requested list is IDENTICAL to
+-- the existing one, must return Unchanged.
 testApplyExportsIdempotent :: IO Bool
 testApplyExportsIdempotent =
   let body = T.unlines
@@ -7667,7 +7826,7 @@ testApplyExportsIdempotent =
         , "module Foo (a, b) where"
         , "a = 1"
         ]
-  in pure (isNothing (ApplyExports.rewriteHeader ["x"] body))
+  in pure (ApplyExports.rewriteHeader ["a", "b"] body == ApplyExports.Unchanged)
 
 testApplyExportsInjects :: IO Bool
 testApplyExportsInjects =
@@ -7676,8 +7835,36 @@ testApplyExportsInjects =
         , "a = 1"
         ]
   in case ApplyExports.rewriteHeader ["a", "b"] body of
-       Just newBody -> pure (T.isInfixOf "module Foo (a, b) where" newBody)
-       Nothing      -> pure False
+       ApplyExports.Rewritten newBody ->
+         pure (T.isInfixOf "module Foo (a, b) where" newBody)
+       _ -> pure False
+
+-- | #173: when the header already has a DIFFERENT export list,
+-- 'rewriteHeader' must return 'Rewritten' with the new list — not
+-- 'Unchanged'.
+testApplyExportsReplacesExistingList :: IO Bool
+testApplyExportsReplacesExistingList =
+  let body = T.unlines
+        [ "module Foo (greet, reverseStr, double, Color, Tree (..)) where"
+        , "greet = undefined"
+        ]
+  in case ApplyExports.rewriteHeader ["greet", "reverseStr"] body of
+       ApplyExports.Rewritten newBody ->
+         pure $ T.isInfixOf "module Foo (greet, reverseStr) where" newBody
+              && not (T.isInfixOf "double" newBody)
+              && not (T.isInfixOf "Tree" newBody)
+       _ -> pure False
+
+-- | #173: when the source has no @module Foo where@ line,
+-- 'rewriteHeader' must return 'NoHeader', not 'Unchanged'.
+testApplyExportsNoHeader :: IO Bool
+testApplyExportsNoHeader =
+  let body = T.unlines
+        [ "-- No module declaration"
+        , "main :: IO ()"
+        , "main = pure ()"
+        ]
+  in pure (ApplyExports.rewriteHeader ["main"] body == ApplyExports.NoHeader)
 
 -- | #133: successResult (file written) must include applied=true in
 -- the result payload so callers can distinguish write from no-op.
@@ -9271,7 +9458,7 @@ testQcExportSanitize = pure $
 -- behavioural difference).
 testCoverageDefaultTimeout :: IO Bool
 testCoverageDefaultTimeout =
-  let args = CoverageTool.CoverageArgs { CoverageTool.caTimeoutMinutes = 5 }
+  let args = CoverageTool.CoverageArgs { CoverageTool.caTimeoutMinutes = 5, CoverageTool.caVerbose = False }
   in pure $ CoverageTool.coverageTimeoutMicros args == 5 * 60 * 1_000_000
 
 -- | Clamping: values below 1 become 1, above 60 become 60.
@@ -9297,7 +9484,7 @@ testCoverageTimeoutClamp =
 -- the cause field when CovTimeout is rendered with a 15-minute arg.
 testCoverageTimeoutMessage :: IO Bool
 testCoverageTimeoutMessage =
-  let args   = CoverageTool.CoverageArgs { CoverageTool.caTimeoutMinutes = 15 }
+  let args   = CoverageTool.CoverageArgs { CoverageTool.caTimeoutMinutes = 15, CoverageTool.caVerbose = False }
       result = CoverageTool.renderResult args CoverageTool.CovTimeout
   in pure $ case trContent result of
        [TextContent body_] ->
@@ -12560,11 +12747,13 @@ testExtractModulesTopLevel = do
 -- Issue #104c · injectTypeAnnotations
 --------------------------------------------------------------------------------
 
--- | A bare @\\x ->@ lambda acquires @:: Int@.
+-- | #172: A bare @\\x ->@ lambda whose parameter is constrained by a
+-- named function ('foo x') must NOT be annotated — the type is
+-- determined by 'foo' and injecting @:: Int@ would cause a type error.
 testInjectAnnotateBareX :: IO Bool
 testInjectAnnotateBareX = pure $
   QcExport.injectTypeAnnotations "\\x -> foo x == foo (foo x)"
-    == "\\(x :: Int) -> foo x == foo (foo x)"
+    == "\\x -> foo x == foo (foo x)"
 
 -- | A parameter whose name ends in @s@ (list convention) acquires @:: [Int]@.
 testInjectAnnotateXs :: IO Bool
@@ -12584,11 +12773,26 @@ testInjectAnnotateNonLambda =
   let expr = "foo x == foo (foo x)"
   in pure (QcExport.injectTypeAnnotations expr == expr)
 
--- | Two bare params — @x@ and @y@ — both get @:: Int@.
+-- | Two bare params — @x@ and @y@ — used only in operator expressions
+-- get @:: Int@ (both are unconstrained by any named function).
 testInjectAnnotateMultiParam :: IO Bool
 testInjectAnnotateMultiParam = pure $
   QcExport.injectTypeAnnotations "\\x y -> x + y == y + x"
     == "\\(x :: Int) (y :: Int) -> x + y == y + x"
+
+-- | #172: A parameter constrained by a String function must NOT
+-- receive @:: Int@ — that would produce a type error.
+testInjectAnnotateStringConstrained :: IO Bool
+testInjectAnnotateStringConstrained = pure $
+  QcExport.injectTypeAnnotations "\\x -> reverseStr (reverseStr x) == x"
+    == "\\x -> reverseStr (reverseStr x) == x"
+
+-- | #172: A parameter used only in an operator expression (no named
+-- function constrains its type) must still get @:: Int@.
+testInjectAnnotateOperatorOnlyX :: IO Bool
+testInjectAnnotateOperatorOnlyX = pure $
+  QcExport.injectTypeAnnotations "\\x -> x + 1 == 1 + x"
+    == "\\(x :: Int) -> x + 1 == 1 + x"
 
 --------------------------------------------------------------------------------
 -- Issue #104a · Suggest/Rules emits annotated lambda params
@@ -12854,6 +13058,7 @@ testPerfSamplesGated =
                , PerfTool.paSaveBaseline    = False
                , PerfTool.paCompareBaseline = False
                , PerfTool.paVerbose         = False
+               , PerfTool.paThresholdPct    = 30.0
                }
       nss   = [100, 110, 90, 105, 95]
       stats = PerfTool.aggregate nss
@@ -12882,6 +13087,7 @@ testPerfRegressionCausePlain =
                , PerfTool.paSaveBaseline    = False
                , PerfTool.paCompareBaseline = True
                , PerfTool.paVerbose         = False
+               , PerfTool.paThresholdPct    = 30.0
                }
       nss      = [1_000_000, 1_100_000, 900_000, 1_050_000, 950_000]
       stats    = PerfTool.aggregate nss
@@ -13106,6 +13312,7 @@ testPerfAllSamplesErrored =
                , PerfTool.paSaveBaseline    = False
                , PerfTool.paCompareBaseline = False
                , PerfTool.paVerbose         = False
+               , PerfTool.paThresholdPct    = 30.0
                }
       errs   = ["err1", "err2", "err3"]
       stats  = PerfTool.aggregate []
@@ -13135,6 +13342,7 @@ testPerfWarmupNsInPayload =
                , PerfTool.paSaveBaseline    = False
                , PerfTool.paCompareBaseline = False
                , PerfTool.paVerbose         = False
+               , PerfTool.paThresholdPct    = 30.0
                }
       nss     = [90, 100, 110, 95, 105]
       stats   = PerfTool.aggregate nss
@@ -13218,6 +13426,54 @@ testPerfSaveBaselinesNoLock = withTempProject $ \pd -> do
   pure $ case mEntry of
     Just e -> PerfTool.beMeanNs e > 0
     Nothing -> False
+
+--------------------------------------------------------------------------------
+-- Issue #174 — perf threshold_pct param
+--------------------------------------------------------------------------------
+
+-- | #174: the default regression threshold must be 30%, not 10%.
+-- A 20% regression at the old threshold (10%) would be flagged; at the
+-- new threshold (30%) it must NOT be flagged.
+testPerfDefaultThreshold30 :: IO Bool
+testPerfDefaultThreshold30 = do
+  raw <- A.fromJSON <$> pure (A.object [ "expression" .= ("1+1" :: T.Text) ])
+  case raw :: A.Result PerfTool.PerfArgs of
+    A.Success args -> pure (PerfTool.paThresholdPct args == 30.0)
+    _              -> pure False
+
+-- | #174: 'threshold_pct' param must override the default.
+testPerfCustomThreshold :: IO Bool
+testPerfCustomThreshold = do
+  let raw   = A.object [ "expression"    .= ("1+1" :: T.Text)
+                       , "threshold_pct" .= (15.0 :: Double) ]
+      args' = A.fromJSON raw :: A.Result PerfTool.PerfArgs
+      -- A 20% regression with threshold=15% must be flagged.
+      baseline = Just (PerfTool.BaselineEntry { PerfTool.beMeanNs = 1000.0 })
+  case args' of
+    A.Success args ->
+      let nss   = [1200, 1200, 1200, 1200, 1200 :: Word64]
+          stats = PerfTool.aggregate nss
+          result = PerfTool.renderResult args nss stats [] baseline 0
+      in pure $ case trContent result of
+           [TextContent body_] ->
+             case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+               Just (A.Object top) ->
+                 AKM.lookup "status" top == Just (A.String "refused")
+               _ -> False
+           _ -> False
+    _ -> pure False
+
+-- | #174: 'threshold_pct' is clamped to [1, 200].
+testPerfThresholdClamped :: IO Bool
+testPerfThresholdClamped = do
+  let rawLow  = A.object [ "expression" .= ("1+1" :: T.Text), "threshold_pct" .= (-5.0 :: Double) ]
+      rawHigh = A.object [ "expression" .= ("1+1" :: T.Text), "threshold_pct" .= (999.0 :: Double) ]
+  case (A.fromJSON rawLow :: A.Result PerfTool.PerfArgs
+       , A.fromJSON rawHigh :: A.Result PerfTool.PerfArgs) of
+    (A.Success lo, A.Success hi) ->
+      pure $ PerfTool.paThresholdPct lo == 1.0
+          && PerfTool.paThresholdPct hi == 200.0
+    _ -> pure False
 
 --------------------------------------------------------------------------------
 -- Issue #135 — summariseMeasurementErrors truncation + dedup
