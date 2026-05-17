@@ -467,6 +467,10 @@ main = do
                                                    testRefactorExtractBindingMissingScope
       , test "Refactor · published schema uses discriminatedSchema (#92B)"
                                                    testRefactorSchemaIsDiscriminated
+      , test "#154: list_actions returns available actions without module_path"
+                                                   testRefactorListActions
+      , test "#154: list_actions response has required field catalogue"
+                                                   testRefactorListActionsHasRequired
       -- Issue #92 Phase B: ghc_deps migration
       , test "Deps · 'list' bare {action:list} parses (#92B)"
                                                    testDepsListBareParses
@@ -2504,21 +2508,84 @@ testRefactorExtractBindingMissingScope = do
 -- rejects) would fail this.
 testRefactorSchemaIsDiscriminated :: IO Bool
 testRefactorSchemaIsDiscriminated =
-  -- #94 Phase C: schema now has THREE branches —
-  -- rename_local / extract_binding / move_symbol (the latter
-  -- subsumed the retired ghc_move). Post-flat-schema fix
-  -- (Claude API top-level oneOf rejection): we anchor on the
-  -- discriminant 'enum' instead of a per-branch 'oneOf' array.
+  -- #94 Phase C: THREE action branches + #154 adds list_actions → FOUR.
+  -- Post-flat-schema fix (Claude API top-level oneOf rejection): we
+  -- anchor on the discriminant 'enum' instead of a per-branch 'oneOf'.
   let s = tdInputSchema RefactorTool.descriptor
   in pure $ case s of
        A.Object km -> case AKM.lookup "properties" km of
          Just (A.Object props) -> case AKM.lookup "action" props of
            Just (A.Object actObj) -> case AKM.lookup "enum" actObj of
-             Just (A.Array xs) -> length xs == 3
+             Just (A.Array xs) -> length xs == 4
              _                 -> False
            _ -> False
          _ -> False
        _ -> False
+
+-- | #154: list_actions with no other args returns status=ok and
+-- an 'actions' list (no module_path / new_name required).
+testRefactorListActions :: IO Bool
+testRefactorListActions = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-refactor-list-actions"
+  createDirectoryIfMissing True dir
+  case mkProjectDir dir of
+    Left _   -> pure False
+    Right pd -> do
+      sess <- startGhcSession pd
+      let rawArgs = A.object [ "action" A..= ("list_actions" :: T.Text) ]
+      tr <- RefactorTool.handle sess pd rawArgs
+      killGhcSession sess
+      case trContent tr of
+        [TextContent t] ->
+          case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) :: Maybe A.Value of
+            Just (A.Object env) ->
+              case AKM.lookup (AKey.fromText "status") env of
+                Just (A.String "ok") -> pure True
+                _                    -> pure False
+            _ -> pure False
+        _ -> pure False
+
+-- | #154: list_actions response carries 'actions' array with an entry
+-- for 'move_symbol' that lists the correct field names ('symbol','from','to').
+testRefactorListActionsHasRequired :: IO Bool
+testRefactorListActionsHasRequired = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-refactor-list-actions-req"
+  createDirectoryIfMissing True dir
+  case mkProjectDir dir of
+    Left _   -> pure False
+    Right pd -> do
+      sess <- startGhcSession pd
+      let rawArgs = A.object [ "action" A..= ("list_actions" :: T.Text) ]
+      tr <- RefactorTool.handle sess pd rawArgs
+      killGhcSession sess
+      case trContent tr of
+        [TextContent t] ->
+          case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) :: Maybe A.Value of
+            Just (A.Object env) ->
+              case AKM.lookup (AKey.fromText "result") env of
+                Just (A.Object res) ->
+                  case AKM.lookup (AKey.fromText "actions") res of
+                    Just (A.Array arr) ->
+                      -- Check that 'move_symbol' has 'symbol','from','to'
+                      let moveEntry = [ o | A.Object o <- Vector.toList arr
+                                      , AKM.lookup (AKey.fromText "action") o
+                                          == Just (A.String "move_symbol")
+                                      ]
+                      in case moveEntry of
+                           [o] -> case AKM.lookup (AKey.fromText "required") o of
+                             Just (A.Array req) ->
+                               let reqStrs = [ s | A.String s <- Vector.toList req ]
+                               in pure (  "symbol" `elem` reqStrs
+                                       && "from"   `elem` reqStrs
+                                       && "to"     `elem` reqStrs)
+                             _ -> pure False
+                           _ -> pure False
+                    _ -> pure False
+                _ -> pure False
+            _ -> pure False
+        _ -> pure False
 
 --------------------------------------------------------------------------------
 -- Issue #92 Phase B: ghc_deps migration anchors

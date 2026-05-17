@@ -87,17 +87,25 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcRefactor
     , tdDescription =
-        "Refactors with snapshot-and-compile safety. Actions: "
-          <> "'rename_local' (scoped identifier rename), "
-          <> "'extract_binding' (lift a line range to a named "
-          <> "top-level binding), 'move_symbol' (atomic cross-module "
-          <> "move of a top-level binding — slices signature + "
-          <> "Haddock + body, rewrites consumer imports, verifies, "
-          <> "rolls back on failure). If GHCi reports a compile "
-          <> "error on the rewrite, the file is restored from "
-          <> "snapshot — the refactor is atomic from the agent's "
-          <> "perspective. (#94 Phase C: 'move_symbol' subsumes the "
-          <> "retired ghc_move.)"
+        "Refactors with snapshot-and-compile safety. "
+          <> "Actions and their required fields: "
+          <> "(1) 'rename_local': module_path, old_name, new_name, "
+          <> "scope_line_start, scope_line_end — scoped identifier "
+          <> "rename within an explicit line range. "
+          <> "(2) 'extract_binding': module_path, new_name, "
+          <> "scope_line_start, scope_line_end — lift a line range to "
+          <> "a named top-level binding. "
+          <> "(3) 'move_symbol': symbol, from, to — atomic cross-module "
+          <> "move of a top-level binding (note: field is 'symbol' NOT "
+          <> "'symbol_name'; module paths are 'from' and 'to' NOT "
+          <> "'source'/'target'). Slices signature + Haddock + body, "
+          <> "rewrites consumer imports, verifies, rolls back on failure. "
+          <> "(4) 'list_actions': no other args — returns this catalogue "
+          <> "with required fields per action. "
+          <> "If GHCi reports a compile error on the rewrite, the file "
+          <> "is restored from snapshot — the refactor is atomic from "
+          <> "the agent's perspective. (#94 Phase C: 'move_symbol' "
+          <> "subsumes the retired ghc_move.)"
     , tdInputSchema = schema
     }
 
@@ -175,10 +183,49 @@ schema = Schema.discriminatedSchema "action"
       , Schema.sbRequired
           = [ "symbol", "from", "to" ]
       }
+    -- #154: list_actions is a discovery action — no fields required.
+    -- Adding it to the schema enum ensures the host shows it as a
+    -- valid action value in completions.
+  , Schema.SchemaBranch
+      { Schema.sbDiscriminantValue = "list_actions"
+      , Schema.sbDescription       =
+          "Return available actions and their required fields. No other args needed."
+      , Schema.sbProperties        = []
+      , Schema.sbRequired          = []
+      }
   ]
 
 data Action = ActRename | ActExtract
   deriving stock (Eq, Show)
+
+-- | #154: machine-readable action catalogue returned by @list_actions@.
+-- Each entry documents the action name and its required fields so agents
+-- can discover the correct field names without trial-and-error.
+availableActions :: Value
+availableActions = toJSON
+  [ object
+      [ "action"   .= ("rename_local" :: Text)
+      , "required" .= (["module_path","old_name","new_name"
+                        ,"scope_line_start","scope_line_end"] :: [Text])
+      , "optional" .= (["dry_run"] :: [Text])
+      ]
+  , object
+      [ "action"   .= ("extract_binding" :: Text)
+      , "required" .= (["module_path","new_name"
+                        ,"scope_line_start","scope_line_end"] :: [Text])
+      , "optional" .= (["dry_run"] :: [Text])
+      ]
+  , object
+      [ "action"   .= ("move_symbol" :: Text)
+      , "required" .= (["symbol","from","to"] :: [Text])
+      , "optional" .= (["dry_run"] :: [Text])
+      ]
+  , object
+      [ "action"   .= ("list_actions" :: Text)
+      , "required" .= ([] :: [Text])
+      , "optional" .= ([] :: [Text])
+      ]
+  ]
 
 data RefactorArgs = RefactorArgs
   { raAction         :: !Action
@@ -242,6 +289,16 @@ instance FromJSON RefactorArgs where
 
 handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess pd rawArgs
+  -- #154: 'list_actions' is a zero-arg discovery action — intercept
+  -- it before the rename/extract parser so the caller does not need to
+  -- supply module_path / new_name. Returns available action names and
+  -- their required fields.
+  | actionTextOf rawArgs == Just "list_actions" =
+      pure (Env.toolResponseToResult (Env.mkOk (object
+        [ "actions" .= availableActions
+        , "hint"    .= ("Pass one of these 'action' values with the \
+                        \corresponding required fields." :: Text)
+        ])))
   -- #94 Phase C: 'move_symbol' is a passthrough to Move.handle.
   -- Intercepted before the rename/extract parser because its payload
   -- shape (symbol/from/to) doesn't match RefactorArgs.
@@ -257,7 +314,8 @@ handle ghcSess pd rawArgs
           pure r
   where
     -- Peek at the 'action' field without committing to RefactorArgs's
-    -- parser; cheap helper used only for the move_symbol dispatch above.
+    -- parser; cheap helper used only for the move_symbol / list_actions
+    -- dispatch above.
     actionTextOf :: Value -> Maybe Text
     actionTextOf v = case v of
       Object o -> case KeyMap.lookup "action" o of
