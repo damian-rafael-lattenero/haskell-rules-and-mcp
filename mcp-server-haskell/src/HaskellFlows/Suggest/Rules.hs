@@ -761,9 +761,9 @@ classifyInverse src tgt sig = case (psArgs sig, psReturn sig) of
     , Just inner <- stripMaybe sibRet
     , inner == src
         -> Just MaybeResult
-    | sibArg == tgt                    -- #159: Either parsers
-    , Just inner <- stripEitherRight sibRet
-    , inner == src
+    | Just inner <- stripEitherRight tgt  -- #159: focal returns Either e inner
+    , sibArg == inner                      -- sibling takes the inner type
+    , sibRet == src                        -- sibling returns focal's input type
         -> Just EitherResult
   _ -> Nothing
   where
