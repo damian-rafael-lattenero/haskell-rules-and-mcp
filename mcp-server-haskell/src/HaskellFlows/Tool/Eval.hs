@@ -54,7 +54,6 @@ import HaskellFlows.Ghc.ApiSession
   ( GhcSession
   , LoadFlavour (..)
   , evalIOString
-  , evalIOUnit
   , evalIOUnitCapture
   , firstLibraryOrTestSuite
   , loadForTarget

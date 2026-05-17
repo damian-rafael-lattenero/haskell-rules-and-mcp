@@ -77,7 +77,7 @@ module HaskellFlows.Ghc.ApiSession
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)
-import Control.Exception (SomeException, bracket, catch, evaluate, throwIO, try)
+import Control.Exception (SomeException, catch, evaluate, throwIO, try)
 import Control.Monad (filterM, unless, when)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Foldable
@@ -150,8 +150,6 @@ import System.IO
   , utf8
   )
 import qualified System.Posix.IO as Posix
-import System.Posix.Types (Fd (..))
-import qualified Data.Text.IO as TIO
 import Data.Time.Clock.POSIX (POSIXTime, utcTimeToPOSIXSeconds)
 import System.FilePath ((</>), takeExtension)
 
@@ -975,6 +973,16 @@ loadForTarget sess tgt flavour = do
       diagRef <- newIORef []
       -- Pre-flip gsLoadedRef so withGhcSession skips its auto-load.
       writeIORef (gsLoadedRef sess) True
+      -- #198: when switching stanzas, clear the cached HscEnv so
+      -- withGhcSession starts from the runGhc baseline instead of
+      -- restoring the previous stanza's module graph. The previous
+      -- stanza's HPT may carry unit IDs that conflict with the new
+      -- stanza's -package-id flags, causing GHC to panic inside
+      -- setSessionDynFlags or setTargets. Starting env-less costs
+      -- one extra DynFlags application but eliminates the panic.
+      applied <- readIORef (gsAppliedTarget sess)
+      when (applied /= Just tgt) $
+        writeIORef (gsEnvRef sess) Nothing
       let root       = unProjectDir (gsProject sess)
           -- Scope the FS scan to the directories the target owns.
           -- A library target only owns @src/@ (and @app/@ if the
@@ -1104,6 +1112,12 @@ loadSpecificFileForTarget sess tgt flavour specificFile = do
     Just _sf -> do
       diagRef <- newIORef []
       writeIORef (gsLoadedRef sess) True
+      -- #198: same stanza-switch guard as 'loadForTarget' — clear the
+      -- cached env when the requested target differs from the last
+      -- applied one so withGhcSession starts from a clean baseline.
+      applied <- readIORef (gsAppliedTarget sess)
+      when (applied /= Just tgt) $
+        writeIORef (gsEnvRef sess) Nothing
       let root       = unProjectDir (gsProject sess)
           searchDirs = case tgt of
             Bootstrap.TargetLibrary      -> [root </> "src", root </> "app"]
@@ -1127,7 +1141,15 @@ loadSpecificFileForTarget sess tgt flavour specificFile = do
               preludeImport =
                 IIDecl (simpleImportDecl (mkModuleName "Prelude"))
           projImports <- projectInteractiveImports searchDirs
-          setContext (preludeImport : homeImports ++ projImports)
+          -- #197: setContext may throw GHC-58427 when projImports
+          -- includes an 'import X' from another source file whose
+          -- module X was not compiled in THIS single-file load
+          -- (e.g. B.hs imports A, but we are checking XvDemo alone).
+          -- Fall back to the home + Prelude baseline so the actual
+          -- compile verdict (ok) is not masked by a context error.
+          _ <- handleSourceError
+                 (\_ -> setContext (preludeImport : homeImports))
+                 (setContext (preludeImport : homeImports ++ projImports))
           pure (case ok of { Succeeded -> True; _ -> False })
       success <- case eRes :: Either SomeException Bool of
         Left ex -> do

@@ -6,7 +6,7 @@
 --   * The whole MCP workflow — scaffold + deps + add_modules +
 --     write sources + load + check_project + quickcheck + regression
 --     — survives a realistic 4-module Haskell project with a
---     test-suite that depends on QuickCheck.
+--     test-suite that depends on QuickCheck and containers.
 --
 --   * The three bugs the dogfood caught and fixed STAY fixed. Each
 --     has a dedicated pin in terms the scenario's oracle can judge:
@@ -40,8 +40,6 @@ module Scenarios.FlowExprEvaluatorDogfood
   ) where
 
 import Data.Aeson (Value (..), object, (.=))
-import qualified Data.Aeson.Key as Key
-import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -72,7 +70,7 @@ runFlow c projectDir = do
   ----------------------------------------------------------------
   -- step 1 · scaffold (create_project + deps + add_modules)
   ----------------------------------------------------------------
-  t0 <- stepHeader 1 "scaffold · ghc_create_project + 2 deps + 4 modules"
+  t0 <- stepHeader 1 "scaffold · ghc_create_project + 3 deps + 4 modules"
   _ <- Client.callTool c GhcProject
          (object
                      [ "action" .= ("create" :: Text)
@@ -90,6 +88,18 @@ runFlow c projectDir = do
          , "package" .= ("QuickCheck" :: Text)
          , "stanza"  .= ("test-suite" :: Text)
          , "version" .= (">= 2.14" :: Text)
+         ])
+  -- #199: Spec.hs imports Data.Map.Strict directly, so the test-suite
+  -- stanza must declare 'containers' in its own build-depends.  Without
+  -- this, 'ghc_load test/Spec.hs' fails with GHC-87110 "member of the
+  -- hidden package containers-0.7" even though the library stanza already
+  -- carries the dep — cabal only exposes a package to a component when
+  -- that component lists it in its own build-depends.
+  _ <- Client.callTool c GhcDeps (object
+         [ "action"  .= ("add" :: Text)
+         , "package" .= ("containers" :: Text)
+         , "stanza"  .= ("test-suite" :: Text)
+         , "version" .= (">= 0.6 && < 0.9" :: Text)
          ])
   _ <- Client.callTool c GhcModules (object [ "action" .= ("add" :: Text), "modules" .= (["Expr.Syntax", "Expr.Eval", "Expr.Simplify", "Expr.Pretty"]
                       :: [Text])
@@ -194,7 +204,7 @@ runFlow c projectDir = do
   ----------------------------------------------------------------
   t5 <- stepHeader 6 "regression · store has 3 props, all replay green"
   regR <- Client.callTool c GhcPropertyStore
-            (object [ "action" .= ("run" :: Text), "action" .= ("run" :: Text) ])
+            (object [ "action" .= ("run" :: Text) ])
   let regPassed = fieldInt "passed" regR == Just 3
       regTotal  = fieldInt "total"  regR == Just 3
       regRegressions = fieldArrayLen "regressions" regR == Just 0
@@ -204,7 +214,7 @@ runFlow c projectDir = do
     ("If this fails, the property store's module-path association \
      \is broken: the scope lookup must succeed for 'prop_*' in the \
      \module persisted at quickcheck time. Raw: " <> truncRender regR)
-  stepFooter 5 t5
+  stepFooter 6 t5
 
   ----------------------------------------------------------------
   -- step 7 · BUG PINS via ghc_eval
@@ -248,10 +258,9 @@ runFlow c projectDir = do
 
   -- Pin #3: simplify short-circuits 0*x → 0 even when x is an
   -- unbound variable. Refinement, not strict preservation.
-  -- Spec.hs imports 'Expr.Syntax (Env, Error, Expr (..))' — it has
--- the types but not the value-level 'emptyEnv'. It /does/ import
--- 'Data.Map.Strict as Map', so 'Map.empty' is the in-scope way to
--- spell an empty env at this point.
+  -- Spec.hs imports 'Data.Map.Strict as Map' (for 'genEnv') and the
+  -- test-suite stanza now declares 'containers' in build-depends, so
+  -- 'Map.empty' is in scope here after 'ghc_load test/Spec.hs'.
   rPin3 <- Client.callTool c GhcEval (object
     [ "expression" .=
         ("eval Map.empty (simplify (Mul (Lit 0) (Var \"noSuchVar\"))) \

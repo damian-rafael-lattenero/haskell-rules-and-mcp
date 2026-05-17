@@ -22,6 +22,7 @@ module Scenarios.ExprSources
   , simplifySrc
   , prettySrc
   , genSrc
+  , specSrc
   ) where
 
 import Data.Text (Text)
@@ -41,11 +42,11 @@ syntaxSrc =
   \  | Neg Expr\n\
   \  | Add Expr Expr\n\
   \  | Mul Expr Expr\n\
-  \  deriving stock (Eq, Show)\n\
+  \  deriving (Eq, Show)\n\
   \\n\
   \data Error\n\
   \  = UnboundVar String\n\
-  \  deriving stock (Eq, Show)\n\
+  \  deriving (Eq, Show)\n\
   \\n\
   \type Env = [(String, Int)]\n"
 
@@ -247,3 +248,25 @@ genSrc =
   \  shrink (Neg e)   = e : (Neg <$> shrink e)\n\
   \  shrink (Add l r) = [l, r] ++ [Add l' r | l' <- shrink l] ++ [Add l r' | r' <- shrink r]\n\
   \  shrink (Mul l r) = [l, r] ++ [Mul l' r | l' <- shrink l] ++ [Mul l r' | r' <- shrink r]\n"
+
+-- | Minimal 'test/Spec.hs' for the expr-evaluator test-suite.
+--
+-- The scaffold written by 'ghc_project(create)' imports the initial
+-- stub module (ExprEvaluator) which is removed in step 5. Without
+-- overwriting 'test/Spec.hs', the broken import causes the test-suite
+-- bootstrap ('cabal v2-repl test:expr-evaluator-test') to fail —
+-- the shim never sees @ghc --interactive@ and stanza flags for
+-- the test-suite are never captured. Downstream consequence: the
+-- test-suite target is missing from the stanza map, 'targetForPath'
+-- falls back to TargetLibrary (no QuickCheck), and step 8's
+-- 'ghc_load(test/Gen.hs)' fails to compile.
+--
+-- This file is overwritten by 'ghc_property_store(action="export")'
+-- in step 14 with the proper QuickCheck Spec.
+specSrc :: Text
+specSrc =
+  "-- | Scaffolded test suite.\n\
+  \module Main where\n\
+  \\n\
+  \main :: IO ()\n\
+  \main = pure ()\n"

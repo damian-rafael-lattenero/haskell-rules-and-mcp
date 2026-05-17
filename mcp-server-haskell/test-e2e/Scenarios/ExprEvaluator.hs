@@ -59,6 +59,7 @@ import Scenarios.ExprSources
   , genSrc
   , prettySrc
   , simplifySrc
+  , specSrc
   , syntaxSrc
   )
 
@@ -287,12 +288,23 @@ step6_writeSources projectDir = do
   wSimplify <- write "src/Expr/Simplify.hs" simplifySrc
   wPretty   <- write "src/Expr/Pretty.hs"   prettySrc
   wGen      <- write "test/Gen.hs"          genSrc
+  -- Fix #196: overwrite test/Spec.hs with a minimal valid Main.
+  -- The scaffold written by ghc_project(create) imports ExprEvaluator
+  -- which is deleted in step 5. Without this overwrite the test-suite
+  -- bootstrap ('cabal v2-repl test:expr-evaluator-test') fails — the
+  -- shim never captures stanza flags — and loadSpecificFileForTarget
+  -- falls back to TargetLibrary (no QuickCheck), breaking step 8.
+  -- Step 14 (ghc_property_store export) later overwrites Spec.hs with
+  -- the QuickCheck property file, so the content here is intentionally
+  -- minimal. It just needs to be a valid 'main-is' entry point.
+  wSpec     <- write "test/Spec.hs"         specSrc
   pure
     [ checkPure "step 6 · wrote src/Expr/Syntax.hs"   wSyntax   "file not on disk after write"
     , checkPure "step 6 · wrote src/Expr/Eval.hs"     wEval     "file not on disk after write"
     , checkPure "step 6 · wrote src/Expr/Simplify.hs" wSimplify "file not on disk after write"
     , checkPure "step 6 · wrote src/Expr/Pretty.hs"   wPretty   "file not on disk after write"
     , checkPure "step 6 · wrote test/Gen.hs"          wGen      "file not on disk after write"
+    , checkPure "step 6 · wrote test/Spec.hs (stub)"  wSpec     "file not on disk after write"
     ]
   where
     takeDir p = reverse (dropWhile (/= '/') (reverse p))
