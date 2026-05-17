@@ -1094,6 +1094,9 @@ main = do
       , test "remove_modules: strips exposed entry"   testRemoveModulesStripsCabal
       , test "remove_modules: idempotent no-op"       testRemoveModulesIdempotent
       , test "remove_modules: preserves other fields" testRemoveModulesPreservesFields
+      , test "#157: remove_modules strips other-modules entry"    testRemoveModulesOtherModules
+      , test "#157: remove_modules other-modules idempotent"      testRemoveModulesOtherModulesIdempotent
+      , test "#157: remove_modules finds both sections"           testRemoveModulesBothSections
       , test "nextStep: remove_modules -> check+load" testNextStepRemoveModules
       , test "gate: runStep catches exceptions"       testGateRunStepCatchesExceptions
       , test "gate: cabalStep uses bracket + partial safe" testGateCabalStepBracket
@@ -6785,6 +6788,55 @@ testRemoveModulesPreservesFields =
          && T.isInfixOf "build-depends:    base" newCabal
          && T.isInfixOf "test-suite expr-test"   newCabal
          && T.isInfixOf "QuickCheck"             newCabal
+
+-- | #157: modules listed under @other-modules:@ are removed just
+-- like @exposed-modules:@ entries. Before the fix only
+-- @exposed-modules@ was scanned, so 'other-modules' entries
+-- silently fell through with an empty 'cabal_removed'.
+testRemoveModulesOtherModules :: IO Bool
+testRemoveModulesOtherModules =
+  let cabal = T.unlines
+        [ "library"
+        , "  other-modules:  Internal.Helper"
+        , "                  Internal.Drop"
+        , "  build-depends:  base"
+        ]
+      (newCabal, removed) = RM.removeModulesFromBody cabal ["Internal.Drop"]
+  in pure $ removed == ["Internal.Drop"]
+         && T.isInfixOf "Internal.Helper" newCabal
+         && not ("Internal.Drop" `T.isInfixOf` newCabal)
+
+-- | #157: removing a module that does not appear in @other-modules@
+-- is still a no-op (same idempotency guarantee as exposed-modules).
+testRemoveModulesOtherModulesIdempotent :: IO Bool
+testRemoveModulesOtherModulesIdempotent =
+  let cabal = T.unlines
+        [ "library"
+        , "  other-modules:  Internal.Helper"
+        , "  build-depends:  base"
+        ]
+      (newCabal, removed) = RM.removeModulesFromBody cabal ["Internal.NeverExisted"]
+  in pure (null removed && newCabal == cabal)
+
+-- | #157: when a module appears in @exposed-modules@ of one stanza
+-- and @other-modules@ of another, both occurrences are removed and
+-- both names appear in the returned list.
+testRemoveModulesBothSections :: IO Bool
+testRemoveModulesBothSections =
+  let cabal = T.unlines
+        [ "library"
+        , "  exposed-modules:  Shared.Core"
+        , "                    Shared.Util"
+        , "  build-depends:    base"
+        , ""
+        , "test-suite pkg-test"
+        , "  other-modules:  Shared.Util"
+        , "  build-depends:  base, QuickCheck"
+        ]
+      (newCabal, removed) = RM.removeModulesFromBody cabal ["Shared.Util"]
+  in pure $ "Shared.Util" `elem` removed
+         && T.isInfixOf "Shared.Core"     newCabal
+         && not ("Shared.Util" `T.isInfixOf` newCabal)
 
 -- | BUG-01 — static source check that 'runStep' catches
 -- synchronous exceptions from a step's body. If someone removes

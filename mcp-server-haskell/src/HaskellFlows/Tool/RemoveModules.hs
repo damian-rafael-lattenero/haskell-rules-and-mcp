@@ -150,55 +150,55 @@ tryRewriteCabal file mods = do
                Left e  -> pure (Left (T.pack ("Could not write: " <> show e)))
                Right _ -> pure (Right removed)
 
--- | Strip any exposed-modules entry whose stripped name is in
--- the remove-set. Preserves every other line verbatim. Returns
--- the updated body + the list of names that were actually
--- removed.
+-- | #157: remove modules from BOTH @exposed-modules:@ and
+-- @other-modules:@ sections. Runs 'removeFromSection' for each
+-- header kind in sequence so modules in either section are found.
+removeModulesFromBody :: Text -> [Text] -> (Text, [Text])
+removeModulesFromBody body mods =
+  let (body1, removed1) = removeFromSection isExposedHeader body mods
+      (body2, removed2) = removeFromSection isOtherModulesHeader body1 mods
+  in (body2, removed1 <> removed2)
+
+-- | Strip any entry whose stripped name is in the remove-set from
+-- the section identified by 'hdrPred'. Preserves every other line
+-- verbatim. Returns the updated body + the list of names that were
+-- actually removed.
 --
--- The scaffolded cabal often places the FIRST module on the
--- header line itself:
+-- The scaffolded cabal often places the FIRST module on the header
+-- line itself:
 --
 -- @
 --     exposed-modules:  ExprEvaluator
 --                       Expr.Syntax
 -- @
 --
--- so 'splitContinuation' alone misses it. We extract whatever
--- name lives after @exposed-modules:@ on the header line, treat
--- it as an additional candidate, and splice it back if it was
--- not a victim. If every module is gone we emit a bare
--- @exposed-modules:@ header — cabal accepts that and
--- 'ghc_add_modules' re-populates it on the next call.
-removeModulesFromBody :: Text -> [Text] -> (Text, [Text])
-removeModulesFromBody body mods =
-  let lns              = T.lines body
-      (pre, hAndRest)  = break isExposedHeader lns
+-- so 'splitContinuation' alone misses it. We extract whatever name
+-- lives after the header colon, treat it as an additional candidate,
+-- and splice it back if it was not a victim. If every module is gone
+-- we emit a bare header — cabal accepts that and 'ghc_add_modules'
+-- re-populates it on the next call.
+removeFromSection :: (Text -> Bool) -> Text -> [Text] -> (Text, [Text])
+removeFromSection hdrPred body mods =
+  let lns             = T.lines body
+      (pre, hAndRest) = break hdrPred lns
   in case hAndRest of
        [] -> (body, [])
        (h : rest) ->
-         let (cont, tailLns)    = break isNewField rest
-             (keptCont, remCont) = splitContinuation mods cont
+         let (cont, tailLns)      = break isNewField rest
+             (keptCont, remCont)  = splitContinuation mods cont
              (headerLeft, headerName) = splitHeaderLine h
              (newHeader, remHead) = case headerName of
                Just n | n `elem` mods ->
-                 -- Victim on the header line. Drop it — leave the
-                 -- bare "   exposed-modules:" so later adds can
-                 -- re-seed the block. If there's at least one kept
-                 -- continuation, promote the first to the header
-                 -- line so the block keeps a module on each line.
                  case keptCont of
                    (firstKept : _) ->
                      (headerLeft <> T.stripStart firstKept, [n])
                    [] -> (headerLeft, [n])
                _ -> (h, [])
-             -- Continuation lines to emit AFTER the rewritten
-             -- header. If we promoted the first kept line into
-             -- the header, drop it from the continuation list.
              newCont = case (headerName, keptCont) of
                (Just n, _ : rest2) | n `elem` mods -> rest2
                _                                    -> keptCont
-             removed  = remHead <> remCont
-             newBody  = T.unlines (pre <> (newHeader : newCont) <> tailLns)
+             removed = remHead <> remCont
+             newBody = T.unlines (pre <> (newHeader : newCont) <> tailLns)
          in if null removed then (body, [])
                             else (newBody, removed)
 
@@ -235,6 +235,13 @@ splitContinuation victims = foldr go ([], [])
 isExposedHeader :: Text -> Bool
 isExposedHeader ln =
   "exposed-modules:" `T.isPrefixOf` T.toLower (T.stripStart ln)
+
+-- | #157: also handle the @other-modules:@ section that
+-- 'isExposedHeader' misses. Same normalisation: strip leading
+-- whitespace, compare lower-case.
+isOtherModulesHeader :: Text -> Bool
+isOtherModulesHeader ln =
+  "other-modules:" `T.isPrefixOf` T.toLower (T.stripStart ln)
 
 -- | Matches the sentinel used by 'AddModules.isNewField': a
 -- continuation block ends at a blank line or the next field.
