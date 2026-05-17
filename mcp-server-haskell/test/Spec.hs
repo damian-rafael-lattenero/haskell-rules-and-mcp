@@ -348,6 +348,7 @@ main = do
       , test "parseConstructors inline form"       testCtorsInline
       , test "parseConstructors multiline form"    testCtorsMultiline
       , test "parseConstructors rejects synonym"   testCtorsSynonym
+      , test "parseConstructors: no unique-suffix in args (#170)" testCtorsNoUniqueSuffix
       , test "renderTemplate 3 ctors"              testTemplate3
       , test "parseHoogleLine normal hit"          testHoogleHit
       , test "parseHoogleLine no-results line"    testHoogleEmpty
@@ -1893,6 +1894,34 @@ testCtorsSynonym :: IO Bool
 testCtorsSynonym =
   let raw = "type Alias = Int"
   in pure (null (parseConstructors raw))
+
+-- | #170: 'renderDataCon' used 'showPprUnsafe' which includes GHC's
+-- internal unique suffix on type variable names (e.g. @a_ig1m@).
+-- After the fix it uses @sdocSuppressUniques = True@ so arg names
+-- are clean user-facing identifiers.
+--
+-- This test pins the contract on 'parseConstructors': a data decl
+-- rendered with clean type-var names (as 'renderDataCon' now
+-- produces) must produce @cArgs@ with exactly those clean names —
+-- no underscore-hash suffix that would confuse downstream consumers.
+testCtorsNoUniqueSuffix :: IO Bool
+testCtorsNoUniqueSuffix =
+  -- Simulate the clean output that renderDataCon now produces.
+  -- If the unique suffix leaked, the decl would be "data Pair a_ig1m b_xyz = Pair a_ig1m b_xyz"
+  -- and cArgs would contain "a_ig1m", "b_xyz".
+  let clean  = "data Pair a b = Pair a b"
+      leaky  = "data Pair a_ig1m b_xyz99 = Pair a_ig1m b_xyz99"
+  in pure $
+       -- Clean form: args should be exactly ["a", "b"]
+       ( case parseConstructors clean of
+           [c] -> cArgs c == ["a", "b"]
+           _   -> False )
+       -- Leaky form would produce unique-like args — confirm parser
+       -- is transparent (does not strip them): the fix must be in
+       -- renderDataCon, not in the parser.
+       && ( case parseConstructors leaky of
+              [c] -> cArgs c == ["a_ig1m", "b_xyz99"]
+              _   -> False )
 
 testTemplate3 :: IO Bool
 testTemplate3 =

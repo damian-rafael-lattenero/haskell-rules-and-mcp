@@ -55,7 +55,14 @@ import GHC.Types.Var (tyVarName)
 import GHC.Core.TyCo.Rep (scaledThing)
 import GHC.Types.Name (nameOccName)
 import GHC.Types.Name.Occurrence (occNameString)
-import GHC.Utils.Outputable (showPprUnsafe)
+import GHC.Utils.Outputable
+  ( Outputable
+  , defaultSDocContext
+  , ppr
+  , renderWithContext
+  , sdocSuppressUniques
+  , showPprUnsafe
+  )
 
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
@@ -219,10 +226,21 @@ renderTyConAsDataDecl tc =
        then header
        else header <> " = " <> rhs
 
+-- | #170: Render an 'Outputable' value without GHC's internal unique
+-- suffixes (e.g. @a_ig1m@ → @a@). 'showPprUnsafe' uses the default
+-- 'SDocContext' which has 'sdocSuppressUniques = False', causing type
+-- variable names in constructor argument positions to leak GHC-
+-- internal identifiers into the response's @constructors.args@ field.
+showPprNoUniques :: Outputable a => a -> String
+showPprNoUniques =
+  renderWithContext (defaultSDocContext { sdocSuppressUniques = True }) . ppr
+
 renderDataCon :: DataCon -> Text
 renderDataCon dc =
   let cn   = T.pack (occNameString (nameOccName (dataConName dc)))
-      args = map (parenArg . T.pack . showPprUnsafe . scaledThing)
+      -- #170: use showPprNoUniques so argument types containing type
+      -- variables print "a b" not "a_ig1m b_xyz99".
+      args = map (parenArg . T.pack . showPprNoUniques . scaledThing)
                  (dataConOrigArgTys dc)
   in if null args then cn else cn <> " " <> T.intercalate " " args
   where
