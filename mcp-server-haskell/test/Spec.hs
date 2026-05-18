@@ -346,6 +346,7 @@ main = do
       , test "parseQuickCheckOutput passed"        testQcPassed
       , test "parseQuickCheckOutput failed"        testQcFailed
       , test "parseQuickCheckOutput gave up"       testQcGaveUp
+      , test "#211: QcGaveUp renderResult kind=validation" testQcGaveUpValidationKind
       , test "parseQuickCheckOutput exception"     testQcException
       , test "parseQuickCheckOutput unparsed"      testQcUnparsed
       , test "parseTypedHoles extracts one hole"   testHoleOne
@@ -1867,6 +1868,22 @@ testQcGaveUp =
   in pure $ case parseQuickCheckOutput "prop" raw of
        QcGaveUp _ 12 88 -> True
        _                -> False
+
+-- | Issue #211: QcGaveUp must produce kind='validation', not
+-- kind='not_in_scope' (which wrongly implies "add an import").
+testQcGaveUpValidationKind :: IO Bool
+testQcGaveUpValidationKind =
+  let result = QcTool.renderResult (QcGaveUp "\\x -> x > 0" 0 1000) Nothing
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "error" top of
+               Just (A.Object err) ->
+                 AKM.lookup "kind" err == Just (A.String "validation")
+               _ -> False
+           _ -> False
+       _ -> False
 
 testQcException :: IO Bool
 testQcException =

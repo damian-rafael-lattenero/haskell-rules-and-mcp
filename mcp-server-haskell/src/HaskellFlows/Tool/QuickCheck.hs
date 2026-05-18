@@ -25,6 +25,8 @@ module HaskellFlows.Tool.QuickCheck
   , classifyStderrKind
   , isCompileErrorStderr
   , extractNotInScopeSymbol
+    -- * Issue #211 — result renderer exposed for envelope-shape tests
+  , renderResult
     -- * Cabal library introspection (re-used by 'Tool.QuickCheckExport')
   , libraryExposedModules
   , scanLibraryExposedModules
@@ -494,10 +496,11 @@ isSimpleIdent t = case T.uncons t of
 --                     (the property bombed mid-shrink). Special
 --                     case: the timeout path passes a fixed string
 --                     prefix; we surface it as 'inner_timeout'.
---   * 'QcGaveUp'    → status='no_match'      kind='not_in_scope'
---                     (semantically, no input satisfied the
---                     precondition; consumers branch on this
---                     same as on a missing fixture).
+--   * 'QcGaveUp'    → status='no_match'      kind='validation'
+--                     (Issue #211: the precondition is too restrictive;
+--                     the correct remediation is to relax it or write a
+--                     custom generator — not to add an import, which
+--                     'not_in_scope' incorrectly implied).
 --   * 'QcUnparsed'  → status='failed'        kind='subprocess_error'
 --                     (cabal repl printed something we can't
 --                     parse — usually a load error; the optional
@@ -545,7 +548,10 @@ renderResult qr mHint = case qr of
                              \Consider relaxing the precondition or writing a \
                              \custom generator." :: Text)
           ]
-        envErr   = Env.mkErrorEnvelope Env.NotInScope
+        -- Issue #211: was Env.NotInScope — wrong signal (implies
+        -- "add an import"). Validation is correct: the property's
+        -- precondition is too restrictive; fix it or use a custom gen.
+        envErr   = Env.mkErrorEnvelope Env.Validation
                      ("QuickCheck gave up after "
                        <> T.pack (show disc) <> " discards / "
                        <> T.pack (show n) <> " passes")
