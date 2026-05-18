@@ -14,6 +14,7 @@ module HaskellFlows.Tool.Doc
   , extractHaddockAbove
     -- * Response shaping (exported for unit tests)
   , hasDocPayload
+  , noDocInScopePayload
   , stripDocBrackets
   ) where
 
@@ -118,8 +119,12 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
               Right (Just txt) ->
                 Env.mkOk (hasDocPayload safe txt)
               _ ->
-                Env.mkNoMatch (noDocPayload safe
-                  "No Haddock available (package may have been built without -haddock)")
+                -- Issue #195: the name IS in scope but has no Haddock
+                -- and no source @-- |@ comment.  Use status='ok' with
+                -- hasDoc=false so the nextStep routes to ghc_info (the
+                -- type + definition site) rather than hoogle_search
+                -- (which searches Hackage and is wrong for local names).
+                Env.mkOk (noDocInScopePayload safe)
 
 -- | Discriminate the FromJSON failure shape — a missing required
 -- field maps to 'MissingArg'; everything else falls back to
@@ -183,9 +188,13 @@ sourceDoc nm = do
 --
 -- Rules (per Haskell Haddock spec):
 --   * Scan upward from @defLine - 1@.
+--   * Issue #195: skip over type-signature lines (lines containing
+--     @::@ that are not themselves comments) — GHC's @nameSrcSpan@
+--     points to the binding equation, not the type signature, so the
+--     type-sig line sits between the Haddock comment and @defLine@.
 --   * Collect lines that start with @--@ (after stripping leading
 --     whitespace).
---   * Stop at the first non-comment line.
+--   * Stop at the first non-comment, non-type-sig line.
 --   * The block is a Haddock block if its topmost collected line
 --     starts with @-- |@.  Otherwise return 'Nothing'.
 --   * Strip comment prefixes (@-- | @, @-- @, @--@) before returning.
@@ -197,13 +206,26 @@ extractHaddockAbove file defLine = do
     Right content -> do
       let ls         = T.lines content
           above      = reverse (take (defLine - 1) ls)
-          collected  = takeWhile isComment above
+          -- Issue #195: GHC reports the binding line (e.g. "f x = …")
+          -- as the span start.  The type signature (e.g. "f :: Int -> Int")
+          -- sits between the Haddock comment and the binding, so
+          -- "takeWhile isComment above" stops at the sig line and never
+          -- reaches the comment block.  Skip leading type-sig lines first.
+          skipSigs   = dropWhile isTypeSig above
+          collected  = takeWhile isComment skipSigs
       if null collected || not (any isHaddockStart collected)
         then pure Nothing
         else pure (Just (T.unlines (map stripCommentPrefix (reverse collected))))
   where
-    isComment ln     = "--" `T.isPrefixOf` T.strip ln
+    isComment ln      = "--" `T.isPrefixOf` T.strip ln
     isHaddockStart ln = "-- |" `T.isPrefixOf` T.strip ln
+    -- A line is a type signature when it contains "::" and is not a
+    -- comment line.  Blank lines are not type sigs (they are terminators).
+    isTypeSig ln =
+      let s = T.strip ln
+      in not (T.null s)
+           && not ("--" `T.isPrefixOf` s)
+           && "::" `T.isInfixOf` s
     stripCommentPrefix ln =
       let s = T.strip ln
       in if "-- | " `T.isPrefixOf` s then T.drop 5 s
@@ -244,14 +266,28 @@ stripLatex :: Text -> Text
 stripLatex = T.replace "\\(" "" . T.replace "\\)"  ""
 
 -- | No-doc payload (rides StatusNoMatch). result.{name, hasDoc=false,
--- reason}. Two semantically-distinct cases share this shape — name
--- not in scope vs name in scope but no doc — and the consumer
--- discriminates via the 'reason' string. Both are 'no_match'
--- because in both cases the question was well-formed and the
--- answer is the empty set.
+-- reason}. Used only when the name is NOT in scope at all.
 noDocPayload :: Text -> Text -> Value
 noDocPayload nm reason = object
   [ "name"   .= nm
   , "hasDoc" .= False
   , "reason" .= reason
+  ]
+
+-- | Issue #195: name is in scope but has no Haddock and no
+-- @-- |@ source comment.  Status is @ok@ (not @no_match@) because
+-- the name was found — the question was answered, just negatively.
+-- The @found_in_scope=true@ field lets consumers distinguish this
+-- from the "name not in scope" @no_match@ case.
+-- Using @ok@ also routes nextStep to @ghc_info@ (type + def site)
+-- instead of @hoogle_search@ (Hackage lookup, wrong for local names).
+noDocInScopePayload :: Text -> Value
+noDocInScopePayload nm = object
+  [ "name"           .= nm
+  , "hasDoc"         .= False
+  , "found_in_scope" .= True
+  , "reason"         .=
+      ("No Haddock doc string found. The package may have been built \
+       \without -haddock, or the definition has no -- | comment. \
+       \Use ghc_info to see the type and definition site." :: Text)
   ]

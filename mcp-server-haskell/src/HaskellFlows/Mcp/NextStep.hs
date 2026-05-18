@@ -45,6 +45,8 @@ module HaskellFlows.Mcp.NextStep
   , withDogfoodHint
   , isWriteTool
   , modulePathInSelf
+    -- * Issue #195 (exported for unit tests only)
+  , hasDocFalse
   ) where
 
 import Data.Aeson
@@ -683,12 +685,20 @@ dispatch name payload = case name of
         (Just (object [ "module" .= ("<location.module from the result>" :: Text) ])))
 
   -- Doc read → browse the module for siblings with similar contracts.
-  -- On no_match, the name has no Haddock entry: redirect to hoogle_search. (#185)
+  -- On no_match, the name is not in scope at all: redirect to hoogle_search. (#185)
+  -- Issue #195: distinguish "not in scope" from "in scope, no Haddock".
+  -- When the name WAS found (found_in_scope=true or status=ok + hasDoc=false),
+  -- ghc_info is more useful than hoogle_search (which searches Hackage).
   GhcDoc
     | statusNoMatch_ payload -> Just (simple HoogleSearch
         "Name not found in Haddock — hoogle_search discovers names \
         \across Hackage and surfaces the module to import."
         (Just (object [ "query" .= ("<the name you looked up>" :: Text) ])))
+    | hasDocFalse payload -> Just (simple GhcInfo
+        "Name is in scope but has no doc string. ghc_info returns the \
+        \type, definition site, and instances in one call — more useful \
+        \than hoogle_search for a locally-defined name."
+        (Just (object [ "name" .= ("<same name>" :: Text) ])))
     | otherwise -> Just (simple GhcBrowse
         "Doc read. Browse the same module's full export surface to spot \
         \siblings whose contracts likely follow the same shape."
@@ -1017,6 +1027,15 @@ statusOk_ v = case envField "status" v of
 -- ghc_doc, ghc_goto) to route 'nextStep' to 'hoogle_search'. (#185)
 statusNoMatch_ :: Value -> Bool
 statusNoMatch_ v = envField "status" v == Just (String "no_match")
+
+-- | Issue #195: True when @ghc_doc@ returned status=ok but the name
+-- has no documentation (@hasDoc=false@). Uses a case-match rather
+-- than @== Just (Bool False)@ to avoid a polymorphic-equality
+-- comparison with the Aeson 'Value' constructor.
+hasDocFalse :: Value -> Bool
+hasDocFalse v = case envField "hasDoc" v of
+  Just (Bool b) -> not b
+  _             -> False
 
 --------------------------------------------------------------------------------
 -- injection

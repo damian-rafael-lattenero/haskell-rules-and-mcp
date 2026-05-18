@@ -1345,6 +1345,11 @@ main = do
       , test "#103: extractHaddockAbove finds -- | comment"           testExtractHaddockFindsDoc
       , test "#103: extractHaddockAbove returns Nothing for plain --" testExtractHaddockNoHaddock
       , test "#103: extractHaddockAbove returns Nothing for no comment" testExtractHaddockNoComment
+      -- Issue #195 — type-sig skip + nextStep routing
+      , test "#195: extractHaddockAbove finds -- | above type signature" testExtractHaddockAboveTypeSig
+      , test "#195: noDocInScopePayload has found_in_scope=true"        testNoDocInScopePayloadShape
+      , test "#195: hasDocFalse returns True for noDocInScopePayload"   testHasDocFalseDirectly
+      , test "#195: nextStep for doc ok+hasDoc=false routes to ghc_info" testDocNoDocNextStepIsInfo
       -- Issue #106 sub-findings
       , test "#106/F-14: mkGhcError propagates code from captureHook" testMkGhcErrorCode
       , test "#180: stripGhcInternalQual removes ghc-internal prefix"  testStripGhcInternalQual
@@ -13471,6 +13476,80 @@ testExtractHaddockNoComment = do
   result <- DocTool.extractHaddockAbove path 1
   removePathForcibly path
   pure (isNothing result)
+
+--------------------------------------------------------------------------------
+-- Issue #195 — extractHaddockAbove type-sig skip + nextStep routing
+--------------------------------------------------------------------------------
+
+-- | #195: 'extractHaddockAbove' must find a @-- |@ comment that sits
+-- above a type-signature line, which in turn sits above the binding.
+-- GHC reports the binding line (not the sig line) as @defLine@, so
+-- the scanner must skip the sig line before collecting the comment.
+testExtractHaddockAboveTypeSig :: IO Bool
+testExtractHaddockAboveTypeSig = do
+  tmp <- getTemporaryDirectory
+  let path = tmp </> "haskell-flows-195-typesig.hs"
+  TIO.writeFile path $ T.unlines
+    [ "-- | Greet a person."
+    , "greet :: String -> String"
+    , "greet name = \"Hello, \" <> name <> \"!\""
+    ]
+  -- defLine = 3 (the binding line)
+  result <- DocTool.extractHaddockAbove path 3
+  removePathForcibly path
+  pure $ case result of
+    Just txt -> "Greet a person" `T.isInfixOf` txt
+    Nothing  -> False
+
+-- | #195: 'noDocInScopePayload' must have @hasDoc=false@,
+-- @found_in_scope=true@, and a non-empty @reason@.
+testNoDocInScopePayloadShape :: IO Bool
+testNoDocInScopePayloadShape =
+  case DocTool.noDocInScopePayload "greet" of
+    A.Object o ->
+      let hasDoc      = AKM.lookup "hasDoc"         o == Just (A.Bool False)
+          foundInScope = AKM.lookup "found_in_scope" o == Just (A.Bool True)
+          hasReason   = case AKM.lookup "reason" o of
+                          Just (A.String r) -> not (T.null r)
+                          _                 -> False
+      in pure (hasDoc && foundInScope && hasReason)
+    _ -> pure False
+
+-- | #195: 'hasDocFalse' must return 'True' when fed a payload whose
+-- @hasDoc@ field is @false@. This is a direct probe of the helper
+-- so that if 'testDocNoDocNextStepIsInfo' fails we can distinguish
+-- "helper broken" from "dispatch guard ordering wrong".
+testHasDocFalseDirectly :: IO Bool
+testHasDocFalseDirectly =
+  let payloadFalse = DocTool.noDocInScopePayload "greet"
+      payloadTrue  = DocTool.hasDocPayload "greet" "some doc"
+      falsePayload = object [ "hasDoc" .= False ]
+      truePayload  = object [ "hasDoc" .= True  ]
+  in pure $  NextStep.hasDocFalse payloadFalse
+          && not (NextStep.hasDocFalse payloadTrue)
+          && NextStep.hasDocFalse falsePayload
+          && not (NextStep.hasDocFalse truePayload)
+
+-- | #195: when ghc_doc returns status=ok with @hasDoc=false@, the
+-- injected nextStep must route to @ghc_info@, not @hoogle_search@.
+-- Previously it routed to hoogle_search (wrong for local names).
+testDocNoDocNextStepIsInfo :: IO Bool
+testDocNoDocNextStepIsInfo =
+  -- Issue #195: when ghc_doc returns ok + hasDoc=false (in-scope but
+  -- no doc string), the nextStep must route to ghc_info, not hoogle_search.
+  -- We pass the noDocInScopePayload directly so the envField lookup finds
+  -- hasDoc at the top level, bypassing the two-level drill-down.
+  -- The full envelope path (status=ok + result={...}) is exercised by
+  -- injectNextStep at runtime; here we test the routing logic in isolation.
+  -- NOTE: We only check nsTool==GhcInfo (not nsWhy text) because the why
+  -- text intentionally mentions "hoogle_search" as a *contrast* ("more
+  -- useful than hoogle_search for a locally-defined name"), so a substring
+  -- search for "hoogle" would false-positive on that explanation.
+  let payload = DocTool.noDocInScopePayload "greet"
+      mNs = NextStep.suggestNext GhcDoc True payload
+  in case mNs of
+       Just ns -> pure (NextStep.nsTool ns == GhcInfo)
+       Nothing -> pure False
 
 --------------------------------------------------------------------------------
 -- Issue #106 sub-findings
