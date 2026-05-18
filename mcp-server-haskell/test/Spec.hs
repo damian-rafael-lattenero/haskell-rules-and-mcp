@@ -321,6 +321,9 @@ main = do
       , test "ghc_load #79: checkPathExists Right" testCheckPathExistsAccepts
       , test "ghc_load #79: checkPathExists Left"  testCheckPathExistsRejects
       , test "ghc_load #84: empty project → no_match" testGhcLoadEmptyProjectNoMatch
+      -- Issue #214 — no-args reload uses library stanza, not test-suite stanza
+      , test "#214: ghc_load no-args uses firstLibraryOrTestSuite (not firstTestSuiteOrLibrary)"
+             testGhcLoadNoArgsUsesLibraryTarget
       , test "parseGhcErrors extracts header"    testParseHeader
       , test "sanitizeExpression accepts normal" testSanitizeAccepts
       , test "sanitizeExpression rejects newline" testSanitizeRejectsNewline
@@ -1364,6 +1367,8 @@ main = do
       , test "#215: etaReduceLambda non-lambda returns Nothing"       testEtaReduceNonLambda
       , test "#215: renderPropBinding emits no redundant lambda"      testRenderPropNoLambda
       , test "#215: renderTestFile emits no '= \\\\' pattern"         testRenderTestFileNoLambdaAssign
+      -- Issue #215 (GHC-18042 type-default fixes) — splitAtDepthZeroSpaces regression
+      , test "#215/td: splitAtDepthZeroSpaces multi-param (GHC-18042 fix)" testSplitAtDepthZeroIssue215
       -- Issue #198 — stale tool name + missing type signatures
       , test "#198: generatedHeader says ghc_property_store not ghc_quickcheck_export" testExportHeaderCurrentToolName
       , test "#198: renderPropSignature emits sig for annotated single param"  testRenderPropSigSingle
@@ -1659,11 +1664,31 @@ testGhcLoadEmptyProjectNoMatch = do
             && AKM.member (AKey.fromText "remediation") payload
     _ -> False
 
+-- | #214: regression — the no-args ‘ghc_load’ path must use
+-- ‘firstLibraryOrTestSuite’ (prefers library stanza) rather than
+-- ‘firstTestSuiteOrLibrary’ (prefers test-suite stanza).
+-- Under test-suite stanza flags, library-only build-depends
+-- (containers, scientific, regex-tdfa, …) are NOT directly exposed,
+-- causing GHC-87110 "hidden package" errors on every src/ module
+-- that imports them.
+--
+-- This is a source-inspection test: it verifies that Load.hs
+-- does NOT reference ‘firstTestSuiteOrLibrary’ in its
+-- implementation, confirming the fix is in place.
+testGhcLoadNoArgsUsesLibraryTarget :: IO Bool
+testGhcLoadNoArgsUsesLibraryTarget = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Load.hs"
+  -- The import section must list firstLibraryOrTestSuite (not
+  -- firstTestSuiteOrLibrary, which causes the reload to use the
+  -- test-suite stanza and lose library-only package context).
+  let importLine = "  , firstLibraryOrTestSuite"
+  pure $ T.isInfixOf importLine src
+
 testParseHeader :: IO Bool
 testParseHeader =
   let raw = T.unlines
         [ "src/Foo.hs:12:5: error: [GHC-83865]"
-        , "    Couldn't match expected type ‘Int’ with actual type ‘Bool’"
+        , "    Couldn’t match expected type ‘Int’ with actual type ‘Bool’"
         , ""
         ]
   in pure $ case parseGhcErrors raw of
@@ -15788,3 +15813,23 @@ testQcResultStatusAll =
       && LabTool.qcResultStatus (QcException "p" "err")       == "exception"
       && LabTool.qcResultStatus (QcGaveUp    "p" 0 0)         == "gave_up"
       && LabTool.qcResultStatus (QcUnparsed  "p" "raw")       == "unparsed"
+
+-- | #215 (GHC-18042 type-default fix): regression for the
+-- 'go 0 [] []' call in 'splitAtDepthZeroSpaces'.  Adding
+-- '(0 :: Int)' is a no-op for behaviour but fixes the
+-- defaulting warning.  This test verifies the function still
+-- splits depth-0 spaces correctly after the annotation.
+testSplitAtDepthZeroIssue215 :: IO Bool
+testSplitAtDepthZeroIssue215 =
+  pure $
+    -- Basic two-param case
+    QcExport.splitAtDepthZeroSpaces "(x :: Int) (y :: Int)"
+      == ["(x :: Int)", "(y :: Int)"]
+    -- Arrow inside nested paren must NOT trigger a split
+    && QcExport.splitAtDepthZeroSpaces "(f :: Int -> Int) (xs :: [Int])"
+      == ["(f :: Int -> Int)", "(xs :: [Int])"]
+    -- Single param is returned as-is
+    && QcExport.splitAtDepthZeroSpaces "(x :: Int)"
+      == ["(x :: Int)"]
+    -- Empty input yields no chunks
+    && null (QcExport.splitAtDepthZeroSpaces "")

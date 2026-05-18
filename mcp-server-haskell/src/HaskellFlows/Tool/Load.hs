@@ -39,7 +39,7 @@ import HaskellFlows.Ghc.ApiSession
   , loadForTarget
   , loadSpecificFileForTarget
   , targetForPath
-  , firstTestSuiteOrLibrary
+  , firstLibraryOrTestSuite
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
@@ -118,7 +118,16 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
         if sourceCount == 0
           then pure (Left EmptyProject)
           else do
-            tgt <- firstTestSuiteOrLibrary ghcSess
+            -- Issue #214: use firstLibraryOrTestSuite (prefers library)
+            -- instead of firstTestSuiteOrLibrary (prefers test-suite).
+            -- The no-args path loads src/ + app/ (library source dirs).
+            -- Under test-suite stanza flags, library-only packages
+            -- (containers, scientific, regex-tdfa, …) are NOT directly
+            -- exposed, so every src/ file that imports them fails with
+            -- GHC-87110 "hidden package" errors.  Library stanza flags
+            -- expose all library build-depends directly, fixing the
+            -- reload-without-args context loss.
+            tgt <- firstLibraryOrTestSuite ghcSess
             pure (Right (tgt, Nothing))
       Just p  -> case mkModulePath pd (T.unpack p) of
         Left pathErr -> pure (Left (PathRefused (formatPathError pathErr)))

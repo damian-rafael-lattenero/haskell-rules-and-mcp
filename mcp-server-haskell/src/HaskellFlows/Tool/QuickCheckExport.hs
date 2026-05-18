@@ -278,7 +278,7 @@ splitAtDepthZeroSpaces :: Text -> [Text]
 splitAtDepthZeroSpaces txt =
   map (T.strip . T.pack) $
     filter (not . null) $
-      go 0 [] [] (T.unpack txt)
+      go (0 :: Int) [] [] (T.unpack txt)
   where
     go _ cur acc []        = acc ++ [reverse cur]
     go 0 cur acc (' ':cs)  = go 0 [] (acc ++ [reverse cur]) cs
@@ -364,7 +364,7 @@ etaReduceLambda expr =
 -- \" -> \" inside a type annotation like @(f :: Int -> Int)@ would
 -- match before the outer lambda arrow.
 findTopLevelArrow :: String -> Maybe Int
-findTopLevelArrow = go 0 0
+findTopLevelArrow = go (0 :: Int) (0 :: Int)
   where
     go 0     pos (' ':'-':'>':' ':_) = Just pos   -- found at depth 0
     go depth pos ('(':rest)           = go (depth + 1)       (pos + 1) rest

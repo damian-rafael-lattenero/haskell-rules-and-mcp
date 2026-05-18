@@ -428,8 +428,8 @@ distributeResults [] _ = []
 distributeResults ((b, Left reason) : rest) ts =
   buildFnReport b (Left reason) : distributeResults rest ts
 distributeResults ((b, Right sugs) : rest) ts =
-  let (mine, rem) = splitAt (length sugs) ts
-  in buildFnReport b (Right mine) : distributeResults rest rem
+  let (mine, remaining) = splitAt (length sugs) ts
+  in buildFnReport b (Right mine) : distributeResults rest remaining
 
 -- | Phase 2: run a passing property via 'DeterminismTool' to check
 -- for flakiness. Returns @Just "stable"@ when all reruns pass,
