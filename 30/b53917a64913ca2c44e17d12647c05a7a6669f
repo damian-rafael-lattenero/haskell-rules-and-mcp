@@ -1,0 +1,19 @@
+mcp-server-haskell/src/HaskellFlows/Tool/PropertyAudit.hs
+  s_54dbf5675ec5ae::t_f437a95845512a 174-201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.9",
+  "base_commit_sha": "30b53917a64913ca2c44e17d12647c05a7a6669f",
+  "prompts": {},
+  "sessions": {
+    "s_54dbf5675ec5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d704d61f-ca86-414c-85d1-e75c1df02293",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
