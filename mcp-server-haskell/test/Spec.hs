@@ -1327,6 +1327,12 @@ main = do
       , test "#215: etaReduceLambda non-lambda returns Nothing"       testEtaReduceNonLambda
       , test "#215: renderPropBinding emits no redundant lambda"      testRenderPropNoLambda
       , test "#215: renderTestFile emits no '= \\\\' pattern"         testRenderTestFileNoLambdaAssign
+      -- Issue #198 — stale tool name + missing type signatures
+      , test "#198: generatedHeader says ghc_property_store not ghc_quickcheck_export" testExportHeaderCurrentToolName
+      , test "#198: renderPropSignature emits sig for annotated single param"  testRenderPropSigSingle
+      , test "#198: renderPropSignature emits sig for annotated multi param"   testRenderPropSigMulti
+      , test "#198: renderPropSignature returns Nothing for unannotated param" testRenderPropSigNone
+      , test "#198: renderTestFile emits type sig before prop binding"         testRenderTestFileSigPresent
       , test "#104c: injectTypeAnnotations multi-param x y"           testInjectAnnotateMultiParam
       , test "#172: injectTypeAnnotations leaves String-constrained x verbatim"
                                                                        testInjectAnnotateStringConstrained
@@ -13327,6 +13333,54 @@ testRenderTestFileNoLambdaAssign =
       out    = QcExport.renderTestFile props
       lines_ = T.lines out
   in pure $ not (any ("= \\" `T.isInfixOf`) lines_)
+
+--------------------------------------------------------------------------------
+-- Issue #198 — stale tool name + missing type signatures
+--------------------------------------------------------------------------------
+
+-- | #198: 'generatedHeader' must reference the current tool name
+-- @ghc_property_store@, not the retired @ghc_quickcheck_export@.
+testExportHeaderCurrentToolName :: IO Bool
+testExportHeaderCurrentToolName =
+  pure $  "ghc_property_store" `T.isInfixOf` QcExport.generatedHeader
+       && not ("ghc_quickcheck_export" `T.isInfixOf` QcExport.generatedHeader)
+
+-- | #198: 'renderPropSignature' returns a @prop_N :: T -> Bool@ line
+-- for a single annotated parameter.
+testRenderPropSigSingle :: IO Bool
+testRenderPropSigSingle =
+  pure $ QcExport.renderPropSignature 1 "(xs :: [Int])"
+       == Just "prop_1 :: [Int] -> Bool"
+
+-- | #198: 'renderPropSignature' concatenates multiple param types
+-- with @->@ and appends @-> Bool@.
+testRenderPropSigMulti :: IO Bool
+testRenderPropSigMulti =
+  pure $ QcExport.renderPropSignature 2 "(x :: Int) (y :: Int)"
+       == Just "prop_2 :: Int -> Int -> Bool"
+
+-- | #198: 'renderPropSignature' returns Nothing for an unannotated
+-- bare parameter (no @::@ present in the param string).
+testRenderPropSigNone :: IO Bool
+testRenderPropSigNone =
+  pure (isNothing (QcExport.renderPropSignature 3 "x"))
+
+-- | #198: 'renderTestFile' output must include a type signature line
+-- immediately before each @prop_N@ binding that has annotated params.
+testRenderTestFileSigPresent :: IO Bool
+testRenderTestFileSigPresent =
+  let sp = StoredProperty
+             { spExpression = "\\(xs :: [Int]) -> reverse (reverse xs) == xs"
+             , spModule     = Nothing
+             , spPassed     = 1
+             , spUpdated    = 0 }
+      out   = QcExport.renderTestFile [sp]
+      lns   = T.lines out
+      -- The sig line must appear directly before the binding line
+      pairs = zip lns (drop 1 lns)
+  in pure $ any (\(sig, bind) ->
+       "prop_1 :: [Int] -> Bool" `T.isInfixOf` sig &&
+       "prop_1 (xs :: [Int])" `T.isInfixOf` bind) pairs
 
 -- | Two bare params — @x@ and @y@ — used only in operator expressions
 -- get @:: Int@ (both are unconstrained by any named function).
