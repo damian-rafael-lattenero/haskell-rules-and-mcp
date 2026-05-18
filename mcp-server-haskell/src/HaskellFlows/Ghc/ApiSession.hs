@@ -1280,9 +1280,21 @@ evalIOUnit stmt = do
 --
 -- Thread-safety: the GhcSession lock ('withGhcSession') ensures
 -- only one eval runs at a time, so the stdout redirect cannot race.
+-- | Issue #194: wrap the compiled statement so that 'System.IO.hFlush
+-- System.IO.stdout' runs *inside* the interpreter at the end.  The host-level
+-- 'hFlush stdout' in 'captureStdout' flushes the host's Handle buffer; but in
+-- GHC 9.12 the in-process interpreter may maintain a separate buffer for the
+-- same underlying FD.  By flushing from INSIDE the compiled action we
+-- guarantee that the interpreter's buffer is drained to FD 1 (which
+-- captureStdout has redirected to a pipe) before we read the pipe.
+--
+-- Prerequisite: 'System.IO' must be in the interactive context before this
+-- call — 'augmentEvalContext' (called by 'Eval.runEvalBody') guarantees that.
 evalIOUnitCapture :: String -> Ghc String
 evalIOUnitCapture stmt = do
-  hv <- compileExpr ("((" <> stmt <> ") :: IO ())")
+  let wrapped =
+        "(do { (" <> stmt <> " :: IO ()); System.IO.hFlush System.IO.stdout })"
+  hv <- compileExpr wrapped
   let action = unsafeCoerce hv :: IO ()
   liftIO (captureStdout action)
 

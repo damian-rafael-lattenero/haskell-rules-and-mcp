@@ -33,11 +33,15 @@ import HaskellFlows.Mcp.ToolName (ToolName (..))
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c projectDir = do
   ----------------------------------------------------------------
-  -- (1) claude-code preview — returns markdown, no file written
+  -- (1) claude-code write=false (preview) — returns markdown, no file written
+  -- Issue #193: default is now write=true; pass write=false explicitly to test preview.
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "bootstrap(claude-code) preview"
   r1 <- Client.callTool c GhcProject
-          (object [ "action" .= ("bootstrap" :: Text), "host" .= ("claude-code" :: Text) ])
+          (object [ "action" .= ("bootstrap" :: Text)
+                  , "host"  .= ("claude-code" :: Text)
+                  , "write" .= False
+                  ])
   -- Dropped: "claude-code preview success" — redundant with 'mode=preview'
   -- which is the stronger semantic assertion (tool cannot return
   -- mode=preview with success=false).

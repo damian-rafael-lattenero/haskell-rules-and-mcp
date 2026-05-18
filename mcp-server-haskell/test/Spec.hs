@@ -261,6 +261,7 @@ import HaskellFlows.Ghc.ApiSession
   ( GhcSession
   , captureStdout
   , evalIOString
+  , evalIOUnitCapture
   , killGhcSession
   , readLoadedRefForTest
   , resetHscEnvInPlace
@@ -1378,6 +1379,7 @@ main = do
       , test "#106/F-12: ioUnitResult has kind=io_unit_no_output" testEvalIoUnitResult
       , test "#167: ioUnitResult hint is not circular (no putStrLn advice)" testEvalIoUnitHintNotCircular
       , test "#182: evalIOUnitCapture actually captures putStrLn output"    testCaptureStdoutActuallyCaptures
+      , test "#194: evalIOUnitCapture via GHC session captures putStrLn"    testEvalIOUnitCaptureViaSess
       , test "#106/F-23: mergeDiags prefers deferred version at same position" testLoadMergeDiagsPreferDeferred
       , test "#106/F-04: toolchain warmup includes gates in response" testWarmupIncludesGates
       , test "#106/F-01: classifyPhase stays PreScaffold beyond 3 calls w/o load" testClassifyPhaseNoLoad
@@ -13927,6 +13929,30 @@ testCaptureStdoutActuallyCaptures = do
   -- IO capture utility. putStrLn is already in scope.
   out <- captureStdout (putStrLn "hello")
   pure (out == "hello\n")
+
+-- | #194: 'evalIOUnitCapture' must capture output even when the IO ()
+-- action is compiled at runtime by the GHC API interpreter — not just
+-- when a direct Haskell action is passed to 'captureStdout'. Exercises
+-- the complete path used by 'ghc_eval("putStrLn \"hello\"")'.
+testEvalIOUnitCaptureViaSess :: IO Bool
+testEvalIOUnitCaptureViaSess = case mkProjectDir "/tmp" of
+  Left _   -> pure False
+  Right pd -> do
+    sess   <- startGhcSession pd
+    eOut   <- try (withGhcSession sess $ do
+                -- Import both Prelude AND System.IO — the latter is needed
+                -- because evalIOUnitCapture wraps the stmt with
+                -- "System.IO.hFlush System.IO.stdout" (issue #194 fix).
+                setContext
+                  [ IIDecl (simpleImportDecl (mkModuleName "Prelude"))
+                  , IIDecl (simpleImportDecl (mkModuleName "System.IO"))
+                  ]
+                evalIOUnitCapture "putStrLn \"hello-from-eval\"")
+              :: IO (Either SomeException String)
+    killGhcSession sess
+    pure (case eOut of
+            Right s -> s == "hello-from-eval\n"
+            Left  _ -> False)
 
 -- | F-23: 'mergeDiags' must prefer the deferred (warning-severity)
 -- version when both passes report a diagnostic at the same position.
