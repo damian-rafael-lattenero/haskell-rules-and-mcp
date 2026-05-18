@@ -1417,6 +1417,8 @@ main = do
       -- Issue #117 — ghc_goto InModule returns no_match + has_location
       , test "#117: goto InModule gives no_match + has_location=false"     testGotoLibraryNameNoMatch
       , test "#117: goto InFile gives ok + has_location=true"              testGotoFileHasLocation
+      -- Issue #214 — remediation must not claim "no local source file"
+      , test "#214: goto InModule remediation says compiled not no-source"  testGotoCompiledModuleRemediation
       -- Issue #118 — removeDep drops blank continuation lines
       , test "#118: removeDep no trailing blank on single-dep line"        testRemoveDepNoTrailingBlank
       , test "#118: removeDep preserves multi-dep block correctly"         testRemoveDepMultiDep
@@ -14086,14 +14088,18 @@ testCheckModuleHolesReasonCount =
        [TextContent body_] ->
          case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
            Just (A.Object top) ->
-             case AKM.lookup "result" top >>= \r ->
-                    AKM.lookup "gates" r >>= \g ->
-                    AKM.lookup "holes" g of
-               Just (A.Object holesGate) ->
-                 AKM.lookup "ok"     holesGate == Just (A.Bool False)
-                 && case AKM.lookup "reason" holesGate of
-                      Just (A.String r) -> "2 typed hole(s)" `T.isInfixOf` r
-                      _                 -> False
+             case AKM.lookup "result" top of
+               Just (A.Object r) ->
+                 case AKM.lookup "gates" r of
+                   Just (A.Object g) ->
+                     case AKM.lookup "holes" g of
+                       Just (A.Object holesGate) ->
+                         AKM.lookup "ok" holesGate == Just (A.Bool False)
+                         && case AKM.lookup "reason" holesGate of
+                              Just (A.String rr) -> "2 typed hole(s)" `T.isInfixOf` rr
+                              _                  -> False
+                       _ -> False
+                   _ -> False
                _ -> False
            _ -> False
        _ -> False
@@ -14389,6 +14395,24 @@ testGotoFileHasLocation =
   in case payload of
        A.Object o ->
          pure (AKM.lookup "has_location" o == Just (A.Bool True))
+       _ -> pure False
+
+-- | #214: the InModule remediation message must NOT say "no local source
+-- file" because compiled project modules DO have a local source file —
+-- they're simply compiled. The message must use "was compiled" instead.
+testGotoCompiledModuleRemediation :: IO Bool
+testGotoCompiledModuleRemediation =
+  let -- A project-local module name (same shape as Scratch)
+      loc = GotoTool.InModule "Scratch"
+      payload = GotoTool.locationPayload "greet" loc
+  in case payload of
+       A.Object o ->
+         case AKM.lookup "remediation" o of
+           Just (A.String t) ->
+             let hasCompiled   = "was compiled" `T.isInfixOf` t
+                 noFalseSource = not ("no local source file" `T.isInfixOf` t)
+             in pure (hasCompiled && noFalseSource)
+           _ -> pure False
        _ -> pure False
 
 -- | #118: 'removeDep' must not leave a blank continuation line when

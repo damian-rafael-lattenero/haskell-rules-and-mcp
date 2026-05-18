@@ -243,14 +243,19 @@ locationPayload nm = \case
       , "remediation"  .= remediationFor m
       ]
   where
+    -- Issue #214: the old message said "no local source file" which is
+    -- factually wrong for project-local modules compiled as a library.
+    -- The real reason is that compiled Names carry an UnhelpfulSpan —
+    -- the SrcSpan is not preserved across compilation. The message now
+    -- reflects the actual limitation without misleading the agent.
     remediationFor m
       | m == "<unknown>" =
           "Name has no SrcSpan — it may be a built-in or auto-derived \
           \binding. Use ghc_info for type information." :: Text
       | otherwise =
-          "Name is defined in library module '" <> m <> "' which has \
-          \no local source file. Use ghc_info for its type or \
-          \ghc_doc for Haddock documentation."
+          "Name is defined in module '" <> m <> "' but was compiled — \
+          \source location is not available in compiled mode. \
+          \Use ghc_info for its type or ghc_doc for Haddock documentation."
 
 -- | Result payload for the no-match (name-not-in-scope) path.
 -- Carries the searched name + a remediation pointer so the agent
