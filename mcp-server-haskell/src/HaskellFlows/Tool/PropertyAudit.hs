@@ -171,34 +171,34 @@ runPairProbe ghcSess _args (p1, p2) = do
                         \Audit these manually."
            }
     else do
-  let probe = buildContradictionProbe e1 e2
-  -- Issue #112: the contradiction probe is a SYNTHETIC lambda, not a
-  -- named property. Loading P1's source module often fails when the
-  -- probe body doesn't reference project symbols at all, and using a
-  -- single module context is wrong when P1 and P2 come from different
-  -- stanzas. Pass Nothing → the repl gets `:m + <exposed modules>`
-  -- (all library modules) which covers self-contained lambdas and
-  -- standard-library terms. Probes that genuinely need a project module
-  -- will fall to QcUnparsed → "skipped" (honest signal).
-  res <- try @SomeException $
-    Qc.runQuickCheckViaCabalRepl (gsProject ghcSess)
-      Nothing probe
-  pure $ case res of
-    Left e ->
-      PairFinding
-        { pfP1     = p1
-        , pfP2     = p2
-        , pfStatus = "skipped"
-        , pfDetail = T.pack ("subprocess error: " <> show e)
-        }
-    Right (out, _err) ->
-      let (status, detail) = interpretProbeResult (parseQuickCheckOutput probe out)
-      in PairFinding
-           { pfP1     = p1
-           , pfP2     = p2
-           , pfStatus = status
-           , pfDetail = detail
-           }
+      let probe = buildContradictionProbe e1 e2
+      -- Issue #112: the contradiction probe is a SYNTHETIC lambda, not a
+      -- named property. Loading P1's source module often fails when the
+      -- probe body doesn't reference project symbols at all, and using a
+      -- single module context is wrong when P1 and P2 come from different
+      -- stanzas. Pass Nothing → the repl gets `:m + <exposed modules>`
+      -- (all library modules) which covers self-contained lambdas and
+      -- standard-library terms. Probes that genuinely need a project module
+      -- will fall to QcUnparsed → "skipped" (honest signal).
+      res <- try @SomeException $
+        Qc.runQuickCheckViaCabalRepl (gsProject ghcSess)
+          Nothing probe
+      pure $ case res of
+        Left e ->
+          PairFinding
+            { pfP1     = p1
+            , pfP2     = p2
+            , pfStatus = "skipped"
+            , pfDetail = T.pack ("subprocess error: " <> show e)
+            }
+        Right (out, _err) ->
+          let (status, detail) = interpretProbeResult (parseQuickCheckOutput probe out)
+          in PairFinding
+               { pfP1     = p1
+               , pfP2     = p2
+               , pfStatus = status
+               , pfDetail = detail
+               }
 
 --------------------------------------------------------------------------------
 -- Phase 2: vacuous-property check

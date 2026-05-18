@@ -63,7 +63,6 @@ import GHC.Utils.Outputable
   , ppr
   , renderWithContext
   , sdocSuppressUniques
-  , showPprUnsafe
   )
 
 import HaskellFlows.Ghc.ApiSession
