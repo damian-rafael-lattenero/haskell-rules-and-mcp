@@ -282,33 +282,42 @@ patchTailBindings nm = go
 
 writePatched :: FilePath -> FixPlan -> FixWarningArgs -> Text -> IO ToolResult
 writePatched full plan args body = do
-  let lns = T.lines body
-      ix  = fwLine args - 1
-      (pre, rest) = splitAt ix lns
-      newLns
-        | fpDrop plan = case rest of
-            []       -> lns
-            (_ : tl) -> pre <> tl
-        | Just patched <- fpPatch plan = case rest of
-            []       -> lns
-            -- Issue #202: for GHC-40910 also rename any binding equations
-            -- that immediately follow the sig line, so we don't produce a
-            -- "type signature lacks accompanying binding" error.
-            (_ : tl) ->
-              let fixedTail = case (fwCode args, fwName args) of
-                    ("GHC-40910", Just nm) -> patchTailBindings nm tl
-                    _                      -> tl
-              in pre <> [patched] <> fixedTail
-        | otherwise = lns  -- defensive: shouldn't reach when fpFixable=True
-      newBody = T.unlines newLns
-  if T.null (T.strip newBody)
-    then pure (errorResult "Refusing to write — the patch would empty the file.")
+  let lns        = T.lines body
+      ix         = fwLine args - 1
+      totalLines = length lns
+  -- Issue #221: guard before any patch logic so out-of-bounds
+  -- lines return a clear error rather than a silent no-op.
+  if ix < 0 || ix >= totalLines
+    then pure (Env.toolResponseToResult (Env.mkFailed
+          (Env.mkErrorEnvelope Env.Validation
+            (T.pack ( "line " <> show (fwLine args)
+                   <> " out of bounds — file has "
+                   <> show totalLines <> " line(s)" )))))
     else do
-      wres <- try (TIO.writeFile full newBody)
-        :: IO (Either SomeException ())
-      case wres of
-        Left e  -> pure (errorResult (T.pack ("Could not write: " <> show e)))
-        Right _ -> pure (appliedResult full plan args)
+      let (pre, rest) = splitAt ix lns
+          newLns
+            | fpDrop plan = case rest of
+                []       -> lns
+                (_ : tl) -> pre <> tl
+            | Just patched <- fpPatch plan = case rest of
+                []       -> lns
+                -- Issue #202: for GHC-40910 also rename any binding
+                -- equations that immediately follow the sig line.
+                (_ : tl) ->
+                  let fixedTail = case (fwCode args, fwName args) of
+                        ("GHC-40910", Just nm) -> patchTailBindings nm tl
+                        _                      -> tl
+                  in pre <> [patched] <> fixedTail
+            | otherwise = lns  -- defensive: shouldn't reach when fpFixable=True
+          newBody = T.unlines newLns
+      if T.null (T.strip newBody)
+        then pure (errorResult "Refusing to write — the patch would empty the file.")
+        else do
+          wres <- try (TIO.writeFile full newBody)
+            :: IO (Either SomeException ())
+          case wres of
+            Left e  -> pure (errorResult (T.pack ("Could not write: " <> show e)))
+            Right _ -> pure (appliedResult full plan args)
 
 -- | Issue #90 Phase C: read-only preview → status='ok' with the
 -- plan ('fixable', 'patch', 'hint', 'dropLine') under 'result'.

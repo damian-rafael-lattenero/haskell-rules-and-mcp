@@ -991,6 +991,7 @@ main = do
       , test "fix_warning: underscorePrefix respects word boundary (#55)" testUnderscorePrefixWordBoundary
       , test "fix_warning: underscorePrefix idempotent on _name (#55)" testUnderscorePrefixIdempotent
       , test "fix_warning: patchTailBindings renames binding equations (#202)" testPatchTailBindings202
+      , test "#221: fix_warning out-of-bounds line returns validation error"  testFixWarningOutOfBounds
       , test "remove_modules: scanImportersInBody plain (#41)" testRMScanImportPlain
       , test "remove_modules: scanImportersInBody respects hierarchy (#41)" testRMScanRespectsHierarchy
       , test "remove_modules: scanImportersInBody quiet on no match (#41)" testRMScanQuietOnNoMatch
@@ -10043,6 +10044,37 @@ testPatchTailBindings202 = pure $
   && FixWarning.patchTailBindings "unusedBinding"
        [ "_unusedBinding = 42" ]
        == [ "_unusedBinding = 42" ]
+
+-- | Issue #221: applying a fix to a line beyond the file's end must
+-- return a validation error, not a silent no-op with applied=true.
+testFixWarningOutOfBounds :: IO Bool
+testFixWarningOutOfBounds = do
+  tmp <- getTemporaryDirectory
+  let dir  = tmp </> "haskell-flows-issue-221"
+      file = dir </> "Fixture.hs"
+  removePathForcibly dir
+  createDirectoryIfMissing True dir
+  TIO.writeFile file "module Fixture where\n\nfoo = 1\n"   -- 3 lines
+  result <- case mkProjectDir dir of
+    Left _   -> pure False
+    Right pd -> do
+      let args = A.object
+            [ "module_path" A..= ("Fixture.hs" :: Text)
+            , "line"        A..= (999 :: Int)
+            , "code"        A..= ("GHC-66111" :: Text)
+            , "apply"       A..= True
+            ]
+      tr <- FixWarning.handle pd args
+      pure $ case decodeToolResult tr of
+        Right env ->
+             Env.reStatus env == Env.StatusFailed
+          && maybe False
+               (\e ->  Env.eeKind e == Env.Validation
+                    && T.isInfixOf "out of bounds" (Env.eeMessage e))
+               (Env.reError env)
+        Left _ -> False
+  removePathForcibly dir
+  pure result
 
 -- | Phase 11i: warning categorizer buckets common messages into
 -- the 5 coarse classes the agent can prioritise on.
