@@ -38,6 +38,8 @@ module HaskellFlows.Tool.Gate
     -- * Timeout helpers (#164: exported for unit tests)
   , cabalTestTimeoutMicros
   , cabalBuildTimeoutMicros
+    -- * Issue #216: dynamic regression budget (exported for unit tests)
+  , dynamicRegressionTimeout
   ) where
 
 import Control.Exception (SomeException, try)
@@ -62,7 +64,7 @@ import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Parser.QuickCheck as QC
-import HaskellFlows.Tool.Regression (Replay (..), runOne)
+import HaskellFlows.Tool.Regression (Replay (..), runOne, replayTimeoutMicros)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 descriptor :: ToolDescriptor
@@ -129,8 +131,15 @@ instance FromJSON GateArgs where
 -- per-step budgets (microseconds)
 --------------------------------------------------------------------------------
 
-regressionTimeoutMicros :: Int
-regressionTimeoutMicros = 2 * 60 * 1_000_000     -- 2 min (fixed)
+-- | Issue #216: regression timeout is dynamic — n_props × per-property
+-- budget + 30 s spawn overhead, floored at 2 minutes.  A fixed 2-minute
+-- budget fires as soon as the store grows past ~4 properties, each
+-- needing its own cabal-repl launch (~15–20 s).
+dynamicRegressionTimeout :: Int -> Int
+dynamicRegressionTimeout nProps =
+  max (2 * 60 * 1_000_000)
+      (nProps * replayTimeoutMicros + 30_000_000)
+      -- 30 s padding for process-spawn overhead across all launches
 
 -- | #164: derive test/build timeouts from the parsed args.
 cabalTestTimeoutMicros :: GateArgs -> Int
@@ -155,7 +164,11 @@ handle store sess pd rawArgs = case parseEither parseJSON rawArgs of
         t0  <- now
         reg <- if gaSkipRegression args
                  then pure Skipped
-                 else runStep regressionTimeoutMicros (regressionStep store sess)
+                 else do
+                   -- Issue #216: budget must scale with store size so the outer
+                   -- timeout doesn't fire before all per-property replays finish.
+                   nProps <- length <$> loadAll store
+                   runStep (dynamicRegressionTimeout nProps) (regressionStep store sess)
         tst <- if gaSkipCabalTest args
                  then pure Skipped
                  else runStep (cabalTestTimeoutMicros  args) (cabalStep pd ["test"])

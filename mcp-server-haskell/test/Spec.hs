@@ -848,6 +848,9 @@ main = do
       , test "#164: gate default build timeout is 3 min"       testGateDefaultBuildTimeout
       , test "#164: gate test_timeout_minutes parses"          testGateCustomTestTimeout
       , test "#164: gate build_timeout_minutes parses"         testGateCustomBuildTimeout
+      -- Issue #216 — dynamic regression timeout scales with store size
+      , test "#216: dynamic regression timeout floors at 2 min"  testDynamicRegressionFloor
+      , test "#216: dynamic regression timeout scales above 4 props" testDynamicRegressionScales
       , test "qcexport: tool registered"           testQcExportRegistered
       , test "qcexport: renderTestFile shape"      testQcExportRenderShape
       , test "qcexport: sanitizeLabel strips LF"   testQcExportSanitize
@@ -9909,6 +9912,19 @@ testGateCustomBuildTimeout =
        A.Success args ->
          pure $ Gate.cabalBuildTimeoutMicros args == 10 * 60 * 1_000_000
        _ -> pure False
+
+-- | #216: with 0 properties the dynamic timeout must not fall below 2 min.
+testDynamicRegressionFloor :: IO Bool
+testDynamicRegressionFloor =
+  pure $ Gate.dynamicRegressionTimeout 0 == 2 * 60 * 1_000_000
+
+-- | #216: with 7 properties the dynamic timeout must exceed 2 min so
+-- the budget doesn't fire before all 7 cabal-repl launches finish.
+-- Formula: max(2 min, n × replayTimeout + 30 s overhead)
+-- With n=7 and replayTimeout=30 s:  7×30 + 30 = 240 s > 120 s
+testDynamicRegressionScales :: IO Bool
+testDynamicRegressionScales =
+  pure $ Gate.dynamicRegressionTimeout 7 > 2 * 60 * 1_000_000
 
 testGateRegistered :: IO Bool
 testGateRegistered = pure $

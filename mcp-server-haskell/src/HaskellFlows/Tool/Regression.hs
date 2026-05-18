@@ -19,6 +19,8 @@ module HaskellFlows.Tool.Regression
   , summariseLoadError
     -- * ISO-8601 helper (exported for unit tests, #119)
   , formatIso8601
+    -- * Issue #216 — exported so Gate.hs can compute a dynamic budget
+  , replayTimeoutMicros
   ) where
 
 import Control.Exception (SomeException, try)
