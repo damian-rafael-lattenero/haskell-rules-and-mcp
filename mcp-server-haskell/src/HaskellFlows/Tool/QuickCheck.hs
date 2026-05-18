@@ -17,7 +17,9 @@ module HaskellFlows.Tool.QuickCheck
     -- * Shared runtime-execution helper (Regression, Determinism)
   , runQuickCheckViaCabalRepl
   , runQuickCheckWithLabelsViaCabalRepl
+  , runBatchPropertiesViaCabalRepl
   , extractLabelsBlock
+  , extractQcOutputAt
     -- * Pure helpers exposed for unit tests
   , chooseStoreModule
   , isSimpleIdent
@@ -447,6 +449,83 @@ extractLabelsBlock full =
   let (_, afterStart) = T.breakOn "__QC_LABELS_START__" full
       body            = T.drop (T.length "__QC_LABELS_START__") afterStart
       (captured, _)   = T.breakOn "__QC_LABELS_END__" body
+  in T.strip captured
+
+-- | Run multiple QuickCheck properties in a single @cabal v2-repl@
+-- subprocess (#201). All N properties share one process startup
+-- instead of N separate ones. Each property i is wrapped with
+-- indexed sentinels (@__QC_START_i__@ / @__QC_END_i__@) so
+-- results can be sliced back out.
+--
+-- Returns @[]@ immediately for an empty input. On total subprocess
+-- failure (non-zero exit + all sentinels absent) returns
+-- 'QcUnparsed' for every property.
+runBatchPropertiesViaCabalRepl
+  :: ProjectDir -> Maybe Text -> [Text] -> IO [QuickCheckResult]
+runBatchPropertiesViaCabalRepl _  _       []    = pure []
+runBatchPropertiesViaCabalRepl pd mModule props = do
+  libMods <- libraryExposedModules pd
+  let loadDirective = case mModule of
+        Just modPath | not (T.null modPath) -> [":load " <> T.unpack modPath]
+        _ -> []
+      moduleImport
+        | null libMods = []
+        | otherwise    = [":m + " <> unwords (map T.unpack libMods)]
+      -- Build one :{...} block with all N properties.
+      -- Variable names r_0, r_1, … are distinct within the do-block.
+      propBlock i p =
+        [ "   ; r_" <> show i <> " <- quickCheckWithResult qcArgs ("
+            <> T.unpack p <> ")"
+        , "   ; putStrLn \"__QC_START_" <> show i <> "__\""
+        , "   ; putStr (output r_" <> show i <> ")"
+        , "   ; putStrLn \"__QC_END_" <> show i <> "__\""
+        ]
+      input = unlines $
+        loadDirective <>
+        moduleImport <>
+        [ "import Test.QuickCheck"
+        , ":{"
+        , "do { let qcArgs = stdArgs { chatty = False }"
+        ] <>
+        concatMap (uncurry propBlock) (zip [0 :: Int ..] props) <>
+        [ "   }"
+        , ":}"
+        , ":q"
+        ]
+      cp = (Proc.proc "cabal"
+             [ "v2-repl", "all"
+             , "--build-depends=QuickCheck"
+             , "-v0"
+             ])
+             { Proc.cwd     = Just (unProjectDir pd)
+             , Proc.std_in  = Proc.CreatePipe
+             , Proc.std_out = Proc.CreatePipe
+             , Proc.std_err = Proc.CreatePipe
+             }
+  (ec, outStr, errStr) <- Proc.readCreateProcessWithExitCode cp input
+  let stdoutT  = T.pack outStr
+      errText  = T.pack errStr
+      parsed   = [ parseQuickCheckOutput p (extractQcOutputAt i stdoutT)
+                 | (i, p) <- zip [0 :: Int ..] props
+                 ]
+      isUnp (QcUnparsed _ _) = True
+      isUnp _                = False
+      allUnp   = all isUnp parsed
+      fallback = map (\p -> QcUnparsed p (summariseStderr errText)) props
+  case ec of
+    ExitSuccess    -> pure parsed
+    ExitFailure _c -> pure (if allUnp then fallback else parsed)
+
+-- | Slice the i-th indexed output from batch repl stdout.
+-- Returns empty text when the sentinel pair is absent (the property
+-- did not execute — e.g., the repl exited before reaching index i).
+extractQcOutputAt :: Int -> Text -> Text
+extractQcOutputAt i full =
+  let startMarker = "__QC_START_" <> T.pack (show i) <> "__"
+      endMarker   = "__QC_END_"   <> T.pack (show i) <> "__"
+      (_, afterStart) = T.breakOn startMarker full
+      body            = T.drop (T.length startMarker) afterStart
+      (captured, _)   = T.breakOn endMarker body
   in T.strip captured
 
 

@@ -32,6 +32,8 @@ module HaskellFlows.Tool.Lab
   , Binding (..)
   , listTopLevelBindings
   , confidenceAtLeast
+  , qcResultStatus   -- #201
+  , qcResultDetail   -- #201
   ) where
 
 import Control.Exception (SomeException, try)
@@ -49,12 +51,13 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Directory (doesFileExist)
 
-import HaskellFlows.Data.PropertyStore (Store)
+import HaskellFlows.Data.PropertyStore (Store, save)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..))
 import HaskellFlows.Parser.TypeSignature (parseSignature)
 import HaskellFlows.Suggest.Rules
   ( Confidence (..)
@@ -180,7 +183,36 @@ runLab
 runLab ghcSess store pd args modulePath body = do
   t0 <- realToFrac <$> getPOSIXTime :: IO Double
   let bindings = listTopLevelBindings body
-  perFn <- mapM (auditOne ghcSess store pd args modulePath) bindings
+      -- Pure: suggestions per binding (Left = skipped reason, Right = candidates)
+      analyzed    = [(b, computeSuggest args b) | b <- bindings]
+      -- Flatten: all (binding, suggestion) pairs across every binding with
+      -- at least one matching law — batch them into a single subprocess.
+      flatWork    = [ (b, sug)
+                    | (b, Right sugs) <- analyzed
+                    , sug             <- sugs
+                    ]
+      flatProps   = map (sProperty . snd) flatWork
+  -- Single batch run — one cabal v2-repl startup for ALL suggestions (#201).
+  batchQc <- Qc.runBatchPropertiesViaCabalRepl pd (Just modulePath) flatProps
+  -- Persist passing properties to the regression store.
+  mapM_ (\((_, sug), qr) ->
+           case qr of
+             QcPassed _ _ -> save store (sProperty sug) (Just modulePath)
+             _            -> pure ())
+         (zip flatWork batchQc)
+  -- Phase 2: determinism (per-property, only on passing; still individual runs).
+  batchStab <-
+    if laDeterminismRuns args > 0
+      then mapM (\((_, sug), qr) ->
+                   case qr of
+                     QcPassed _ _ ->
+                       checkDeterminism ghcSess args modulePath (sProperty sug)
+                     _ -> pure Nothing)
+                (zip flatWork batchQc)
+      else pure (replicate (length flatWork) Nothing)
+  -- Distribute flat results back into per-binding function reports.
+  let triples = zip3 (map snd flatWork) batchQc batchStab
+      perFn   = distributeResults analyzed triples
   t1 <- realToFrac <$> getPOSIXTime :: IO Double
   pure (renderReport args modulePath perFn (truncate ((t1 - t0) * 1000)))
 
@@ -319,87 +351,85 @@ data FunctionReport = FunctionReport
   }
   deriving stock (Show)
 
-auditOne
-  :: GhcSession -> Store -> ProjectDir -> LabArgs -> Text -> Binding
-  -> IO FunctionReport
-auditOne ghcSess store pd args modulePath bind =
-  case parseSignature (bSignature bind) of
-    Nothing -> pure FunctionReport
-      { frName       = bName bind
-      , frSignature  = bSignature bind
-      , frProperties = []
-      , frReason     = "signature-parse-failed"
-      }
-    Just sig ->
-      let suggestions = filter
-            (confidenceAtLeast (laMinConfidence args) . sConfidence)
-            (applyRules (bName bind) sig)
-      in if null suggestions
-           then pure FunctionReport
-             { frName       = bName bind
-             , frSignature  = bSignature bind
-             , frProperties = []
-             , frReason     = "no-laws-matched"
-             }
-           else do
-             outs <- mapM (runProperty ghcSess store pd args modulePath) suggestions
-             pure FunctionReport
-               { frName       = bName bind
-               , frSignature  = bSignature bind
-               , frProperties = outs
-               , frReason     = ""
-               }
+-- | Pure: compute filtered suggestions for a single binding (#201).
+-- Returns @Left reason@ when the binding has no runnable laws, or
+-- @Right sugs@ when at least one suggestion passes the confidence
+-- threshold.
+computeSuggest :: LabArgs -> Binding -> Either Text [Suggestion]
+computeSuggest args bind = case parseSignature (bSignature bind) of
+  Nothing -> Left "signature-parse-failed"
+  Just sig ->
+    let sugs = filter
+          (confidenceAtLeast (laMinConfidence args) . sConfidence)
+          (applyRules (bName bind) sig)
+    in if null sugs then Left "no-laws-matched" else Right sugs
 
--- | Drive 'Tool.QuickCheck.handle' once and translate its JSON
--- payload into our compact 'PropertyOutcome'.
---
--- Phase 2: when 'laDeterminismRuns' > 0 and the property passes,
--- also runs it N more times via 'DeterminismTool.handle' and sets
--- 'poStability' to @"stable"@ or @"unstable"@.
-runProperty
-  :: GhcSession -> Store -> ProjectDir -> LabArgs -> Text -> Suggestion
-  -> IO PropertyOutcome
-runProperty ghcSess store pd args modulePath sug = do
-  let qcArgs = object
-        [ "property" .= sProperty sug
-        , "module"   .= modulePath
-        ]
-  res <- Qc.handle store ghcSess qcArgs
-  let payload = decodeFirst (trContent res)
-      status  = decideStatus payload
-      detail  = fromMaybe "" (lookupString "raw" payload)
-  -- Phase 2: determinism check on passing properties when enabled.
-  stability <- if status == "passed" && laDeterminismRuns args > 0
-                 then checkDeterminism ghcSess args modulePath (sProperty sug)
-                 else pure Nothing
-  pure PropertyOutcome
-    { poLaw        = sLaw sug
-    , poCategory   = sCategory sug
-    , poConfidence = sConfidence sug
-    , poExpression = sProperty sug
-    , poStatus     = status
-    , poDetail     = T.take 400 detail
-    , poStability  = stability
+-- | Pure: build a 'FunctionReport' from a binding and its pre-computed
+-- QC result triples @(suggestion, qcResult, stability)@.
+buildFnReport
+  :: Binding
+  -> Either Text [(Suggestion, QuickCheckResult, Maybe Text)]
+  -> FunctionReport
+buildFnReport bind (Left reason) =
+  FunctionReport
+    { frName       = bName bind
+    , frSignature  = bSignature bind
+    , frProperties = []
+    , frReason     = reason
     }
-  where
-    _ = pd  -- pd kept in signature for cohesion; unused in Phase 1
-    -- Decode the tool-response envelope and peel the @result@ wrapper
-    -- so downstream field lookups (@"state"@, @"passed"@) find what
-    -- they expect.  'Qc.handle' returns
-    -- @{"status":"ok","result":{"state":"passed",...}}@ — before this
-    -- fix, @lookupString "state"@ was searching the top-level object
-    -- (which has @"status"@, not @"state"@) and always fell back to
-    -- @"unknown"@.  That made the lab report @properties_passed: 0@
-    -- even when the store was growing (issue #104).
-    decodeFirst (TextContent t : _) =
-      case decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-        Just (Object o) ->
-          case AKM.lookup (AKey.fromText "result") o of
-            Just r -> r
-            Nothing -> Object o
-        Just v  -> v
-        Nothing -> Null
-    decodeFirst _ = Null
+buildFnReport bind (Right results) =
+  FunctionReport
+    { frName       = bName bind
+    , frSignature  = bSignature bind
+    , frProperties = map toOutcome results
+    , frReason     = ""
+    }
+
+-- | Build a 'PropertyOutcome' from a suggestion + QC result pair.
+toOutcome :: (Suggestion, QuickCheckResult, Maybe Text) -> PropertyOutcome
+toOutcome (sug, qr, stab) = PropertyOutcome
+  { poLaw        = sLaw sug
+  , poCategory   = sCategory sug
+  , poConfidence = sConfidence sug
+  , poExpression = sProperty sug
+  , poStatus     = qcResultStatus qr
+  , poDetail     = T.take 400 (qcResultDetail qr)
+  , poStability  = stab
+  }
+
+-- | Status string for a 'QuickCheckResult' (#201).
+qcResultStatus :: QuickCheckResult -> Text
+qcResultStatus (QcPassed _ _)    = "passed"
+qcResultStatus QcFailed {}       = "failed"
+qcResultStatus (QcException _ _) = "exception"
+qcResultStatus QcGaveUp {}       = "gave_up"
+qcResultStatus (QcUnparsed _ _)  = "unparsed"
+
+-- | Detail string for a 'QuickCheckResult' (#201). Surfaces the
+-- counterexample for 'QcFailed' so the agent can read it directly
+-- instead of digging into the @raw@ field. Empty for all other
+-- outcomes.
+qcResultDetail :: QuickCheckResult -> Text
+qcResultDetail (QcFailed _ n shr cex) =
+  "counterexample: " <> cex
+    <> " (after " <> T.pack (show n) <> " passes, "
+    <> T.pack (show shr) <> " shrinks)"
+qcResultDetail _ = ""
+
+-- | Distribute the flat batch result triples back into per-binding
+-- function reports (#201). Consumes the triple list sequentially —
+-- the first @length sugs@ triples belong to the first binding with
+-- @Right sugs@, and so on.
+distributeResults
+  :: [(Binding, Either Text [Suggestion])]
+  -> [(Suggestion, QuickCheckResult, Maybe Text)]
+  -> [FunctionReport]
+distributeResults [] _ = []
+distributeResults ((b, Left reason) : rest) ts =
+  buildFnReport b (Left reason) : distributeResults rest ts
+distributeResults ((b, Right sugs) : rest) ts =
+  let (mine, rem) = splitAt (length sugs) ts
+  in buildFnReport b (Right mine) : distributeResults rest rem
 
 -- | Phase 2: run a passing property via 'DeterminismTool' to check
 -- for flakiness. Returns @Just "stable"@ when all reruns pass,
@@ -425,14 +455,6 @@ checkDeterminism ghcSess args modulePath expr = do
     decodeToolJson (TextContent t : _) =
       fromMaybe Null (decode (TLE.encodeUtf8 (TL.fromStrict t)))
     decodeToolJson _ = Null
-
-decideStatus :: Value -> Text
-decideStatus payload = case lookupString "state" payload of
-  Just s  -> s   -- usually "passed" / "failed" / "exception" / "gave_up"
-  Nothing -> case lookupBool "success" payload of
-    Just True  -> "passed"
-    Just False -> "failed"
-    Nothing    -> "unknown"
 
 --------------------------------------------------------------------------------
 -- response shaping
@@ -519,11 +541,6 @@ lookupString :: Text -> Value -> Maybe Text
 lookupString k v = case lookupField k v of
   Just (String s) -> Just s
   _               -> Nothing
-
-lookupBool :: Text -> Value -> Maybe Bool
-lookupBool k v = case lookupField k v of
-  Just (Bool b) -> Just b
-  _             -> Nothing
 
 lookupField :: Text -> Value -> Maybe Value
 lookupField k (Object o) = AKM.lookup (AKey.fromText k) o

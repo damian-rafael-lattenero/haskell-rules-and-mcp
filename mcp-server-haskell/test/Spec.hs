@@ -1424,6 +1424,11 @@ main = do
       , test "#205: extractFreeVarNames picks up not-in-scope variables"        testExtractFreeVarNames
       , test "#205: extractFreeVarNames empty when no not-in-scope errors"      testExtractFreeVarNamesEmpty
       , test "#205: compileFailResult adds note for free-variable errors"       testRefactorFreeVarNote
+      , test "#201: extractQcOutputAt slices indexed sentinel output"          testExtractQcOutputAt
+      , test "#201: extractQcOutputAt returns empty when sentinel absent"       testExtractQcOutputAtMissing
+      , test "#201: qcResultDetail formats counterexample for QcFailed"        testQcResultDetailFailed
+      , test "#201: qcResultDetail returns empty for QcPassed"                 testQcResultDetailPassed
+      , test "#201: qcResultStatus covers all five constructors"               testQcResultStatusAll
       , test "#106/F-31: perf renderResult with all errors returns failed" testPerfAllSamplesErrored
       , test "#162: perf renderResult exposes warmup_ns field"            testPerfWarmupNsInPayload
       , test "#162: perf warm samples exclude warmup from mean"           testPerfWarmSamplesNotSkewed
@@ -15672,3 +15677,49 @@ testRefactorFreeVarNote =
                _ -> False
            _ -> False
        _ -> False
+
+-- | #201: 'QcTool.extractQcOutputAt' slices the correct indexed
+-- sentinel block from batch repl stdout.
+testExtractQcOutputAt :: IO Bool
+testExtractQcOutputAt =
+  let full = T.unlines
+        [ "__QC_START_0__"
+        , "passed (100 tests)"
+        , "__QC_END_0__"
+        , "__QC_START_1__"
+        , "Failed! Falsified (after 3 tests):"
+        , "__QC_END_1__"
+        ]
+  in pure $ QcTool.extractQcOutputAt 0 full == "passed (100 tests)"
+         && QcTool.extractQcOutputAt 1 full == "Failed! Falsified (after 3 tests):"
+
+-- | #201: 'QcTool.extractQcOutputAt' returns empty text when the
+-- requested index has no matching sentinel in the output.
+testExtractQcOutputAtMissing :: IO Bool
+testExtractQcOutputAtMissing =
+  let full = "__QC_START_0__\npassed\n__QC_END_0__"
+  in pure (QcTool.extractQcOutputAt 1 full == "")
+
+-- | #201: 'LabTool.qcResultDetail' formats the counterexample string
+-- and shrink count for 'QcFailed'.
+testQcResultDetailFailed :: IO Bool
+testQcResultDetailFailed =
+  let qr = QcFailed "prop" 10 3 "Just 0"
+  in pure $ LabTool.qcResultDetail qr
+         == "counterexample: Just 0 (after 10 passes, 3 shrinks)"
+
+-- | #201: 'LabTool.qcResultDetail' returns empty text for 'QcPassed'
+-- (no counterexample to report).
+testQcResultDetailPassed :: IO Bool
+testQcResultDetailPassed =
+  pure (LabTool.qcResultDetail (QcPassed "prop" 100) == "")
+
+-- | #201: 'LabTool.qcResultStatus' maps all five 'QuickCheckResult'
+-- constructors to the expected status strings.
+testQcResultStatusAll :: IO Bool
+testQcResultStatusAll =
+  pure $ LabTool.qcResultStatus (QcPassed    "p" 100)         == "passed"
+      && LabTool.qcResultStatus (QcFailed    "p" 0 0 "")      == "failed"
+      && LabTool.qcResultStatus (QcException "p" "err")       == "exception"
+      && LabTool.qcResultStatus (QcGaveUp    "p" 0 0)         == "gave_up"
+      && LabTool.qcResultStatus (QcUnparsed  "p" "raw")       == "unparsed"
