@@ -13285,8 +13285,7 @@ testEtaReduceNestedArrow =
 -- | #215: a non-lambda expression returns @Nothing@.
 testEtaReduceNonLambda :: IO Bool
 testEtaReduceNonLambda =
-  pure $ QcExport.etaReduceLambda "foo x == foo (foo x)"
-      == Nothing
+  pure $ isNothing (QcExport.etaReduceLambda "foo x == foo (foo x)")
 
 -- | #215: 'renderPropBinding' must NOT emit @= \\@ (the HLint-flagged
 -- redundant-lambda pattern) for a plain stored property.
