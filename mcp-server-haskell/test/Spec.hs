@@ -9021,12 +9021,13 @@ testExplainIndexOutOfRangeHint203 =
           case AKM.lookup "result" top of
             Just (A.Object r) ->
               let hint = AKM.lookup "hint" r
-              in hint /= Nothing
+              in isJust hint
                  -- must mention "out of range"
-                 && maybe False (\h -> "out of range" `T.isInfixOf`
-                      case h of A.String s -> s; _ -> "") hint
+                 && maybe False (\case
+                      A.String s -> "out of range" `T.isInfixOf` s
+                      _          -> False) hint
                  -- must NOT say the old wrong message
-                 && maybe True (\h -> case h of
+                 && maybe True (\case
                       A.String s -> not ("No errors detected" `T.isInfixOf` s)
                       _          -> True) hint
             _ -> False
