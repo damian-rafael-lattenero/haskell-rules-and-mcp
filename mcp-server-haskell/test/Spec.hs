@@ -967,6 +967,7 @@ main = do
       , test "fix_warning: underscorePrefix replaces token (#55)" testUnderscorePrefixToken
       , test "fix_warning: underscorePrefix respects word boundary (#55)" testUnderscorePrefixWordBoundary
       , test "fix_warning: underscorePrefix idempotent on _name (#55)" testUnderscorePrefixIdempotent
+      , test "fix_warning: patchTailBindings renames binding equations (#202)" testPatchTailBindings202
       , test "remove_modules: scanImportersInBody plain (#41)" testRMScanImportPlain
       , test "remove_modules: scanImportersInBody respects hierarchy (#41)" testRMScanRespectsHierarchy
       , test "remove_modules: scanImportersInBody quiet on no match (#41)" testRMScanQuietOnNoMatch
@@ -9612,6 +9613,44 @@ testUnderscorePrefixIdempotent :: IO Bool
 testUnderscorePrefixIdempotent =
   let line = "f x _ys = x"
   in pure (isNothing (FixWarning.underscorePrefix "ys" line))
+
+-- | Issue #202: patchTailBindings renames binding equations that
+-- immediately follow the sig line, fixing the GHC-44432 breakage
+-- that occurred when only the sig was patched.
+testPatchTailBindings202 :: IO Bool
+testPatchTailBindings202 = pure $
+  -- typical: sig + single equation
+     FixWarning.patchTailBindings "unusedBinding"
+       [ "unusedBinding = 42"
+       , ""
+       , "greet x = x"
+       ]
+       == [ "_unusedBinding = 42"
+          , ""
+          , "greet x = x"
+          ]
+  -- multiple equations (pattern matching)
+  && FixWarning.patchTailBindings "f"
+       [ "f 0 = 1"
+       , "f n = n + 1"
+       , ""
+       ]
+       == [ "_f 0 = 1"
+          , "_f n = n + 1"
+          , ""
+          ]
+  -- stops at first non-matching line
+  && FixWarning.patchTailBindings "foo"
+       [ "bar = 1"
+       , "foo = 2"
+       ]
+       == [ "bar = 1"
+          , "foo = 2"
+          ]
+  -- already prefixed: underscorePrefix returns Nothing → passthrough
+  && FixWarning.patchTailBindings "unusedBinding"
+       [ "_unusedBinding = 42" ]
+       == [ "_unusedBinding = 42" ]
 
 -- | Phase 11i: warning categorizer buckets common messages into
 -- the 5 coarse classes the agent can prioritise on.

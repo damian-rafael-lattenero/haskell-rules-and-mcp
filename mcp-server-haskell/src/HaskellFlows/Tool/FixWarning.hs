@@ -17,6 +17,8 @@ module HaskellFlows.Tool.FixWarning
     -- * Issue #55 — concrete-patch helpers
   , planForCodeWithName
   , underscorePrefix
+    -- * Issue #202 — binding-tail patch
+  , patchTailBindings
     -- * Test-only
   , previewResult
   ) where
@@ -243,6 +245,41 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
             then writePatched full plan args body
             else pure (previewResult full plan args)
 
+-- | Issue #202: after renaming a GHC-40910 type-sig line, scan
+-- subsequent lines and rename every binding equation whose first
+-- token is exactly @nm@ (at column 0, word-boundary). Stops as
+-- soon as a line does not start with @nm@.
+--
+-- Example: given @nm = "unusedBinding"@ and tail
+--   @["unusedBinding = 42", ""]@
+-- returns @["_unusedBinding = 42", ""]@.
+patchTailBindings :: Text -> [Text] -> [Text]
+patchTailBindings nm = go
+  where
+    go []     = []
+    go (l:ls) =
+      if isBindingFor l
+        then case underscorePrefix nm l of
+               Just patched -> patched : go ls
+               Nothing      -> l : ls   -- already prefixed or ambiguous
+        else l : ls  -- first non-binding line → stop
+
+    -- True when line starts with @nm@ at column 0 with a word
+    -- boundary after it (i.e. it's a binding equation, not a type
+    -- signature or unrelated identifier).
+    isBindingFor l =
+      case T.stripPrefix nm l of
+        Nothing   -> False
+        Just rest ->
+          -- Don't match the sig itself (":: …") — that's already patched.
+          not (T.isPrefixOf "::" (T.stripStart rest))
+            && case T.uncons rest of
+                 Nothing     -> True
+                 Just (c, _) -> not (isIdentChar c)
+
+    isIdentChar c = isAsciiLower c || isAsciiUpper c
+                 || isDigit c || c == '_' || c == '\''
+
 writePatched :: FilePath -> FixPlan -> FixWarningArgs -> Text -> IO ToolResult
 writePatched full plan args body = do
   let lns = T.lines body
@@ -254,7 +291,14 @@ writePatched full plan args body = do
             (_ : tl) -> pre <> tl
         | Just patched <- fpPatch plan = case rest of
             []       -> lns
-            (_ : tl) -> pre <> [patched] <> tl
+            -- Issue #202: for GHC-40910 also rename any binding equations
+            -- that immediately follow the sig line, so we don't produce a
+            -- "type signature lacks accompanying binding" error.
+            (_ : tl) ->
+              let fixedTail = case (fwCode args, fwName args) of
+                    ("GHC-40910", Just nm) -> patchTailBindings nm tl
+                    _                      -> tl
+              in pre <> [patched] <> fixedTail
         | otherwise = lns  -- defensive: shouldn't reach when fpFixable=True
       newBody = T.unlines newLns
   if T.null (T.strip newBody)
