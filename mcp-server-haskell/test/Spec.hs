@@ -1319,6 +1319,14 @@ main = do
       , test "#104c: injectTypeAnnotations annotates xs as list"      testInjectAnnotateXs
       , test "#104c: injectTypeAnnotations passes through annotated"   testInjectAnnotateAlreadyAnnotated
       , test "#104c: injectTypeAnnotations no-op on non-lambda"        testInjectAnnotateNonLambda
+      -- Issue #215: eta-reduced export (no redundant lambda)
+      , test "#215: etaReduceLambda bare param"                       testEtaReduceBare
+      , test "#215: etaReduceLambda annotated param"                  testEtaReduceAnnotated
+      , test "#215: etaReduceLambda list param"                       testEtaReduceList
+      , test "#215: etaReduceLambda nested arrow in type is safe"     testEtaReduceNestedArrow
+      , test "#215: etaReduceLambda non-lambda returns Nothing"       testEtaReduceNonLambda
+      , test "#215: renderPropBinding emits no redundant lambda"      testRenderPropNoLambda
+      , test "#215: renderTestFile emits no '= \\\\' pattern"         testRenderTestFileNoLambdaAssign
       , test "#104c: injectTypeAnnotations multi-param x y"           testInjectAnnotateMultiParam
       , test "#172: injectTypeAnnotations leaves String-constrained x verbatim"
                                                                        testInjectAnnotateStringConstrained
@@ -9806,8 +9814,11 @@ testQcExportRenderShape =
        T.isInfixOf "module Main where"          body
     && T.isInfixOf "import Test.QuickCheck"     body
     && T.isInfixOf "import DogfoodRle"          body
-    && T.isInfixOf "prop_1 ="                   body
-    && T.isInfixOf "prop_2 ="                   body
+    -- Issue #215: properties are now emitted as "prop_N args = body"
+    -- (eta-reduced), not "prop_N = \args -> body".
+    && T.isInfixOf "prop_1 "                   body   -- binding exists
+    && T.isInfixOf "prop_2 "                   body   -- binding exists
+    && not (T.isInfixOf "prop_1 = \\" body)           -- not lambda-style
     && T.isInfixOf "runProp :: Testable p"      body
     && T.isInfixOf "exitFailure"                body
 
@@ -13243,6 +13254,75 @@ testInjectAnnotateNonLambda :: IO Bool
 testInjectAnnotateNonLambda =
   let expr = "foo x == foo (foo x)"
   in pure (QcExport.injectTypeAnnotations expr == expr)
+
+-- | #215: bare single param eta-reduces correctly.
+testEtaReduceBare :: IO Bool
+testEtaReduceBare =
+  pure $ QcExport.etaReduceLambda "\\x -> x + 1 == x + 1"
+      == Just ("x", "x + 1 == x + 1")
+
+-- | #215: annotated param @(x :: Int)@ eta-reduces preserving the
+-- parenthesised annotation intact.
+testEtaReduceAnnotated :: IO Bool
+testEtaReduceAnnotated =
+  pure $ QcExport.etaReduceLambda "\\(x :: Int) -> x + 0 == x"
+      == Just ("(x :: Int)", "x + 0 == x")
+
+-- | #215: list param @(xs :: [Int])@ eta-reduces.
+testEtaReduceList :: IO Bool
+testEtaReduceList =
+  pure $ QcExport.etaReduceLambda "\\(xs :: [Int]) -> reverse (reverse xs) == xs"
+      == Just ("(xs :: [Int])", "reverse (reverse xs) == xs")
+
+-- | #215: a param with a function-type annotation @(f :: Int -> Int)@
+-- contains a nested \" -> \" inside the parens. The paren-aware
+-- scanner must not split there; it must find the outer arrow.
+testEtaReduceNestedArrow :: IO Bool
+testEtaReduceNestedArrow =
+  pure $ QcExport.etaReduceLambda "\\(f :: Int -> Int) -> f 0 == 0"
+      == Just ("(f :: Int -> Int)", "f 0 == 0")
+
+-- | #215: a non-lambda expression returns @Nothing@.
+testEtaReduceNonLambda :: IO Bool
+testEtaReduceNonLambda =
+  pure $ QcExport.etaReduceLambda "foo x == foo (foo x)"
+      == Nothing
+
+-- | #215: 'renderPropBinding' must NOT emit @= \\@ (the HLint-flagged
+-- redundant-lambda pattern) for a plain stored property.
+testRenderPropNoLambda :: IO Bool
+testRenderPropNoLambda =
+  let sp  = StoredProperty
+              { spExpression = "\\x -> double (double x) == (4 * x :: Int)"
+              , spModule     = Just "src/Scratch.hs"
+              , spPassed     = 1
+              , spUpdated    = 0
+              }
+      -- Access via renderTestFile so we test the full pipeline.
+      out = QcExport.renderTestFile [sp]
+  in pure $ not ("= \\" `T.isInfixOf` out)
+
+-- | #215: a full 'renderTestFile' output for the canonical property
+-- set must contain no @prop_N = \\@ lines at all.
+testRenderTestFileNoLambdaAssign :: IO Bool
+testRenderTestFileNoLambdaAssign =
+  let props =
+        [ StoredProperty
+            { spExpression = "\\x -> double (double x) == (4 * x :: Int)"
+            , spModule     = Just "src/Scratch.hs"
+            , spPassed     = 1, spUpdated = 0 }
+        , StoredProperty
+            { spExpression = "\\(x :: Int) -> safeDiv (x :: Int) 0 == Nothing"
+            , spModule     = Just "src/Scratch.hs"
+            , spPassed     = 1, spUpdated = 0 }
+        , StoredProperty
+            { spExpression = "\\(xs :: [Int]) -> reverse (reverse xs) == xs"
+            , spModule     = Nothing
+            , spPassed     = 1, spUpdated = 0 }
+        ]
+      out    = QcExport.renderTestFile props
+      lines_ = T.lines out
+  in pure $ not (any ("= \\" `T.isInfixOf`) lines_)
 
 -- | Two bare params — @x@ and @y@ — used only in operator expressions
 -- get @:: Int@ (both are unconstrained by any named function).

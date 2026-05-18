@@ -31,6 +31,8 @@ module HaskellFlows.Tool.QuickCheckExport
   , sanitizeLabel
   , modulePathToModule
   , injectTypeAnnotations
+    -- * Issue #215 — eta-reduce helper (exported for unit tests)
+  , etaReduceLambda
     -- * Internals exposed for unit tests
   , generatedHeader
   , scaffoldTestFileHeader
@@ -248,7 +250,64 @@ renderPropBinding :: Int -> StoredProperty -> Text
 renderPropBinding i sp =
   let label = "prop_" <> T.pack (show i)
       expr  = injectTypeAnnotations (spExpression sp)
-  in label <> " = " <> expr
+  -- Issue #215: emit eta-reduced form "prop_N args = body" rather than
+  -- "prop_N = \args -> body" so HLint does not flag "Redundant lambda"
+  -- in the exported test file (which blocks CI under -Wall).
+  in case etaReduceLambda expr of
+       Just (params, body) -> label <> " " <> params <> " = " <> body
+       Nothing             -> label <> " = " <> expr
+
+-- | Issue #215: eta-reduce a lambda expression to its argument-pattern
+-- form.  Returns @Just (params, body)@ when @expr@ is a lambda with a
+-- \" -> \" at the outermost (depth-0) nesting level; @Nothing@ when
+-- the expression is not a lambda or the arrow is not present.
+--
+-- The search for \" -> \" is parenthesis-aware so parameters with
+-- function-type annotations (e.g. @(f :: Int -> Int)@) are kept whole
+-- and not split mid-annotation.
+--
+-- Examples:
+--
+-- > etaReduceLambda "\\x -> x + 1"
+-- >   == Just ("x", "x + 1")
+--
+-- > etaReduceLambda "\\(x :: Int) -> x + 0 == x"
+-- >   == Just ("(x :: Int)", "x + 0 == x")
+--
+-- > etaReduceLambda "\\(xs :: [Int]) -> reverse (reverse xs) == xs"
+-- >   == Just ("(xs :: [Int])", "reverse (reverse xs) == xs")
+--
+-- > etaReduceLambda "someExpr"
+-- >   == Nothing
+etaReduceLambda :: Text -> Maybe (Text, Text)
+etaReduceLambda expr =
+  case T.stripPrefix "\\" (T.strip expr) of
+    Nothing   -> Nothing  -- not a lambda
+    Just rest ->
+      case findTopLevelArrow (T.unpack rest) of
+        Nothing  -> Nothing  -- no " -> " at depth 0
+        Just pos ->
+          let params = T.strip (T.take pos rest)
+              body   = T.strip (T.drop (pos + 4) rest)  -- skip " -> "
+          in if T.null params || T.null body
+               then Nothing
+               else Just (params, body)
+
+-- | Find the 0-indexed position of the first \" -> \" that appears at
+-- parenthesis-nesting depth 0.  Returns the index of the leading space
+-- in \" -> \".
+--
+-- The depth guard on the first alternative is critical: without it,
+-- \" -> \" inside a type annotation like @(f :: Int -> Int)@ would
+-- match before the outer lambda arrow.
+findTopLevelArrow :: String -> Maybe Int
+findTopLevelArrow = go 0 0
+  where
+    go 0     pos (' ':'-':'>':' ':_) = Just pos   -- found at depth 0
+    go depth pos ('(':rest)           = go (depth + 1)       (pos + 1) rest
+    go depth pos (')':rest)           = go (max 0 (depth-1)) (pos + 1) rest
+    go depth pos (_  :rest)           = go depth             (pos + 1) rest
+    go _     _   []                   = Nothing
 
 -- | Inject @:: T@ type annotations into unannotated lambda parameters
 -- that are genuinely ambiguous in compiled (non-GHCi) context.
