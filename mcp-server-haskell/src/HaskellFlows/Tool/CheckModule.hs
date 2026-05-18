@@ -13,6 +13,8 @@ module HaskellFlows.Tool.CheckModule
     -- * Issue #74 — path → module-name resolver helpers
   , resolveModuleName
   , parseModuleHeader
+    -- * Issue #213 — renderResult exposed for holes-reason tests
+  , renderResult
   ) where
 
 import Control.Exception (SomeException, try)
@@ -237,7 +239,12 @@ renderResult mp compileOk errs warns holes regressions totalProps loadFailed war
                <> "pass warnings_block=false to keep iterating)"
             else T.pack (show (length warns))
               <> " warning(s) (informational; warnings_block=false)"
-      gateNoHoles    = gate (null holes)  "no deferred typed holes"
+      -- Issue #213: reason must reflect ok=false when holes exist.
+      -- Same conditional pattern used by gateNoWarnings above.
+      gateNoHoles    = gate (null holes) $
+        if null holes
+          then "no deferred typed holes"
+          else T.pack (show (length holes)) <> " typed hole(s) found"
       -- Issue #42: gates.properties used to say
       -- '"reason": "1 stored properties pass"' even when ok=false,
       -- because the reason text was computed independently of

@@ -1380,6 +1380,7 @@ main = do
       , test "#135: summariseMeasurementErrors 20 repeated errors omits"  testSummariseRepeatedErrors
       , test "#135: summariseMeasurementErrors long error truncates"       testSummariseLongError
       , test "#135: summariseMeasurementErrors empty list is empty"        testSummariseEmptyList
+      , test "#213: check_module holes.reason reflects count when holes present" testCheckModuleHolesReasonCount
       -- Issue #108 — typed-hole reclassification in check_module + refactor
       , test "#108: check_module compileOk true when only hole errors"   testCheckModuleHoleOnlyCompileOk
       , test "#108: check_module realErrors excludes GHC-88464"          testCheckModuleRealErrorsExcludesHoles
@@ -14065,6 +14066,38 @@ testSummariseEmptyList =
 -- (GHC-88464) out of the 'errors' bucket and compute 'compileOk' from
 -- the remaining real errors.  Checked structurally by scanning the
 -- source file so we don't need a live GHCi session in unit tests.
+-- | Issue #213: when holes are present, holes.reason must say
+-- "N typed hole(s) found", not the contradictory "no deferred
+-- typed holes". Use renderResult directly to avoid a live session.
+testCheckModuleHolesReasonCount :: IO Bool
+testCheckModuleHolesReasonCount =
+  -- Pass 2 dummy holes (unit values — holes param is polymorphic [a])
+  let result = CheckModule.renderResult
+                 "src/Scratch.hs"
+                 True   -- compileOk
+                 []     -- errors
+                 []     -- warnings
+                 [(), ()] -- 2 holes
+                 []     -- regressions
+                 0      -- totalProps
+                 0      -- loadFailed
+                 True   -- warnings_block
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "result" top >>= \r ->
+                    AKM.lookup "gates" r >>= \g ->
+                    AKM.lookup "holes" g of
+               Just (A.Object holesGate) ->
+                 AKM.lookup "ok"     holesGate == Just (A.Bool False)
+                 && case AKM.lookup "reason" holesGate of
+                      Just (A.String r) -> "2 typed hole(s)" `T.isInfixOf` r
+                      _                 -> False
+               _ -> False
+           _ -> False
+       _ -> False
+
 testCheckModuleHoleOnlyCompileOk :: IO Bool
 testCheckModuleHoleOnlyCompileOk = do
   src <- TIO.readFile "src/HaskellFlows/Tool/CheckModule.hs"
