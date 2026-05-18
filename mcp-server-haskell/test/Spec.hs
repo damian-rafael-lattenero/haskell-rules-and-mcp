@@ -1068,6 +1068,18 @@ main = do
                                                                  testWitDeferredDocumented
       , test "witness: timer starts after property build (#171)"
                                                                  testWitTimerAfterBuild
+      , test "#199: isPrimitiveBuckets true for numeric ctor labels"
+                                                                 testWitIsPrimitiveBucketsTrue
+      , test "#199: isPrimitiveBuckets false for ADT ctor labels"
+                                                                 testWitIsPrimitiveBucketsFalse
+      , test "#199: isPrimitiveBuckets false when empty"
+                                                                 testWitIsPrimitiveBucketsEmpty
+      , test "#199: primitive fallback adds warning + uses by_size"
+                                                                 testWitPrimitiveFallbackWarning
+      , test "#199: raw_truncated=true when qc_raw_output > 1000 chars"
+                                                                 testWitRawTruncatedFlag
+      , test "#199: raw_truncated absent when output <= 1000 chars"
+                                                                 testWitNoRawTruncatedWhenShort
       , test "property_audit: isVacuousResult true for QcGaveUp (#64 Phase2)"
                                                                  testPAIsVacuousGaveUp
       , test "property_audit: isVacuousResult false for QcPassed (#64 Phase2)"
@@ -15366,6 +15378,120 @@ testRenderResultTimedOutOverallFalse = do
     Just (A.Object r) ->
       AKM.lookup "overall" r == Just (A.Bool False)
     _ -> False
+
+-- | #199: 'isPrimitiveBuckets' returns True when > 80% of ctor labels
+-- are numeric (digits or leading minus).
+testWitIsPrimitiveBucketsTrue :: IO Bool
+testWitIsPrimitiveBucketsTrue =
+  -- 5 numeric out of 6 = 83% > 80%.
+  let dist = [ ("ctor:-1", 2.5), ("ctor:42", 1.5), ("ctor:7", 3.0)
+             , ("ctor:0",  2.0), ("ctor:99", 1.0)
+             , ("ctor:Just", 0.5)                    -- 1 ADT
+             ]
+  in pure (WitnessTool.isPrimitiveBuckets dist)
+
+-- | #199: 'isPrimitiveBuckets' returns False for ADT constructors
+-- (start with uppercase).
+testWitIsPrimitiveBucketsFalse :: IO Bool
+testWitIsPrimitiveBucketsFalse =
+  let dist = [ ("ctor:Just",    60.0)
+             , ("ctor:Nothing", 40.0)
+             ]
+  in pure (not (WitnessTool.isPrimitiveBuckets dist))
+
+-- | #199: 'isPrimitiveBuckets' returns False for an empty list
+-- (avoids a divide-by-zero in the heuristic).
+testWitIsPrimitiveBucketsEmpty :: IO Bool
+testWitIsPrimitiveBucketsEmpty =
+  pure (not (WitnessTool.isPrimitiveBuckets []))
+
+-- | #199 Bug 1: when 'renderReport' detects primitive constructor
+-- buckets it must add a 'primitive-constructor-fallback' warning and
+-- switch the distribution key to @by_size@.
+testWitPrimitiveFallbackWarning :: IO Bool
+testWitPrimitiveFallbackWarning = do
+  let argsJson = object
+        [ "property"     .= ("\\x -> x > (0::Int)" :: Text)
+        , "classify_by"  .= ("constructor"         :: Text)
+        , "runs"         .= (200                   :: Int)
+        ]
+  case A.fromJSON argsJson :: A.Result WitnessTool.WitnessArgs of
+    A.Error _ -> pure False
+    A.Success args ->
+      -- All numeric "ctor:" labels — should trigger primitive fallback.
+      let ctorDist = [ ("ctor:-1", 20.0), ("ctor:0",  15.0), ("ctor:1", 15.0)
+                     , ("ctor:2",  10.0), ("ctor:42", 10.0), ("ctor:7", 10.0)
+                     , ("ctor:3",  10.0), ("ctor:10",  5.0), ("ctor:5",  5.0)
+                     ]
+          tr      = WitnessTool.renderReport args (QcPassed "prop" 200)
+                      ctorDist [] "" 0
+      in pure $ case trContent tr of
+           [TextContent body] ->
+             case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+               Just (env :: Env.ToolResponse)
+                 | Just (A.Object payload) <- Env.reResult env ->
+                     -- Must use by_size (fallback), not by_constructor.
+                     case AKM.lookup "distribution" payload of
+                       Just (A.Object dist_) ->
+                         AKM.member "by_size" dist_
+                           && not (AKM.member "by_constructor" dist_)
+                           -- Must contain the primitive-fallback warning.
+                           && case AKM.lookup "warnings" payload of
+                                Just (A.Array ws) ->
+                                  any primitiveWarn (Vector.toList ws)
+                                _ -> False
+                       _ -> False
+               _ -> False
+           _ -> False
+  where
+    primitiveWarn (A.Object w) =
+      AKM.lookup "kind" w
+        == Just (A.String "primitive-constructor-fallback")
+    primitiveWarn _ = False
+
+-- | #199 Bug 2: when 'qc_raw_output' is truncated (raw > 1000 chars),
+-- the response must include @raw_truncated: true@.
+testWitRawTruncatedFlag :: IO Bool
+testWitRawTruncatedFlag = do
+  let argsJson = object
+        [ "property" .= ("\\x -> True" :: Text)
+        , "runs"     .= (100           :: Int)
+        ]
+  case A.fromJSON argsJson :: A.Result WitnessTool.WitnessArgs of
+    A.Error _ -> pure False
+    A.Success args ->
+      let longRaw = T.replicate 1001 "x"
+          tr      = WitnessTool.renderReport args (QcPassed "prop" 100) [] [] longRaw 0
+      in pure $ case trContent tr of
+           [TextContent body] ->
+             case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+               Just (env :: Env.ToolResponse)
+                 | Just (A.Object payload) <- Env.reResult env ->
+                     AKM.lookup "raw_truncated" payload == Just (A.Bool True)
+               _ -> False
+           _ -> False
+
+-- | #199 Bug 2: when 'qc_raw_output' fits within 1000 chars the
+-- response must NOT contain a 'raw_truncated' field at all.
+testWitNoRawTruncatedWhenShort :: IO Bool
+testWitNoRawTruncatedWhenShort = do
+  let argsJson = object
+        [ "property" .= ("\\x -> True" :: Text)
+        , "runs"     .= (100           :: Int)
+        ]
+  case A.fromJSON argsJson :: A.Result WitnessTool.WitnessArgs of
+    A.Error _ -> pure False
+    A.Success args ->
+      let shortRaw = "size:0\t50\nsize:1-5\t50"
+          tr       = WitnessTool.renderReport args (QcPassed "prop" 100) [] [] shortRaw 0
+      in pure $ case trContent tr of
+           [TextContent body] ->
+             case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+               Just (env :: Env.ToolResponse)
+                 | Just (A.Object payload) <- Env.reResult env ->
+                     not (AKM.member "raw_truncated" payload)
+               _ -> False
+           _ -> False
 
 -- | #197: 'ruleMaybeReturn' fires for a 2-argument Maybe-returning
 -- signature and the generated property uses @maybe True (const True)@

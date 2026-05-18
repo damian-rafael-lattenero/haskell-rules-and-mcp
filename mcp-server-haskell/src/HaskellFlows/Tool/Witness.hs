@@ -22,6 +22,7 @@ module HaskellFlows.Tool.Witness
   ( descriptor
   , handle
   , WitnessArgs (..)
+  , ClassifyBy (..)           -- #199: exported for unit tests
     -- * Pure helpers (exported for unit tests)
   , bucketSize
   , buildInstrumentedProperty
@@ -30,6 +31,8 @@ module HaskellFlows.Tool.Witness
   , parseLabelCounts
   , countsToDistribution
   , biasWarnings
+  , isPrimitiveBuckets        -- #199: exported for unit tests
+  , renderReport              -- #199: exported for unit tests
   ) where
 
 import Control.Exception (SomeException, try)
@@ -323,6 +326,28 @@ biasWarnings dist =
   , "size:" `T.isPrefixOf` label
   ]
 
+-- | #199: Detect whether @classify_by=constructor@ is producing
+-- numeric noise instead of ADT-constructor signal.
+--
+-- Haskell data constructors must start with an uppercase letter.
+-- When @show@ is applied to a numeric type (@Int@, @Double@, etc.)
+-- the result starts with a digit (@\"42\"@) or a minus sign
+-- (@\"-1\"@).  When more than 80 %% of the @\"ctor:\"@-prefixed
+-- bucket labels fall into this category we know the user fed a
+-- primitive type — the constructor breakdown is useless noise.
+isPrimitiveBuckets :: [(Text, Double)] -> Bool
+isPrimitiveBuckets [] = False
+isPrimitiveBuckets ctorDist =
+  let total    = fromIntegral (length ctorDist) :: Double
+      primCount = fromIntegral (length (filter (isPrimLabel . fst) ctorDist)) :: Double
+  in primCount / total > 0.8
+  where
+    isPrimLabel lbl =
+      let core = T.drop (T.length "ctor:") lbl
+      in case T.uncons core of
+           Just (c, _) -> isDigit c || c == '-'
+           Nothing     -> False
+
 --------------------------------------------------------------------------------
 -- response shaping
 --------------------------------------------------------------------------------
@@ -343,7 +368,11 @@ renderReport args qc dist warnings rawForResponse wallMs =
       isCtor = waClassifyBy args == ClassifyByConstructor
       ctorDist = filter (("ctor:" `T.isPrefixOf`) . fst) dist
       sizeDist = filter (("size:" `T.isPrefixOf`) . fst) dist
-      distObj = if isCtor
+      -- #199 Bug 1: when constructor mode was requested but the buckets are
+      -- all numeric (digits / minus-sign labels), fall back to size and warn.
+      primFallback = isCtor && isPrimitiveBuckets ctorDist
+      effectiveCtor = isCtor && not primFallback
+      distObj = if effectiveCtor
         then object
           [ "by_constructor" .= object
               [ "buckets"       .= map renderBucket ctorDist
@@ -356,24 +385,42 @@ renderReport args qc dist warnings rawForResponse wallMs =
               , "total_labels" .= length sizeDist
               ]
           ]
-      payload = object
-        [ "property"     .= waProperty args
-        , "module"       .= waModulePath args
-        , "runs"         .= waRuns args
-        , "classify_by"  .= (if isCtor then "constructor" else "size" :: Text)
-        , "passed"       .= passed
-        , "failed"       .= failed
-        , "distribution" .= distObj
-        , "warnings"     .= map (\w -> object [ "kind" .= ("biased-distribution" :: Text)
-                                              , "message" .= w
-                                              ]) warnings
-        , "wall_time_ms" .= wallMs
-        , "phase"        .= ("2-constructor" :: Text)
-        , "deferred"     .= ([ "uncovered-branches"
-                             , "smallest-witness"
-                             ] :: [Text])
-        , "qc_raw_output" .= T.take 1000 raw
+      -- Build the warnings array, prepending the primitive-fallback notice
+      -- with its own kind tag so consumers can distinguish it from
+      -- the generic bias warnings.
+      biasObjs =
+        map (\w -> object [ "kind"    .= ("biased-distribution" :: Text)
+                          , "message" .= w
+                          ]) warnings
+      primObjs =
+        [ object [ "kind"    .= ("primitive-constructor-fallback" :: Text)
+                 , "message" .= ("classify_by=constructor is not meaningful "
+                                  <> "for numeric/primitive types; "
+                                  <> "showing size distribution instead" :: Text)
+                 ]
+        | primFallback
         ]
+      allWarningObjs = primObjs ++ biasObjs
+      -- #199 Bug 2: flag silent raw-output truncation.
+      rawTruncated = T.length raw > 1000
+      payload = object
+        ( [ "property"     .= waProperty args
+          , "module"       .= waModulePath args
+          , "runs"         .= waRuns args
+          , "classify_by"  .= (if effectiveCtor then "constructor" else "size" :: Text)
+          , "passed"       .= passed
+          , "failed"       .= failed
+          , "distribution" .= distObj
+          , "warnings"     .= allWarningObjs
+          , "wall_time_ms" .= wallMs
+          , "phase"        .= ("2-constructor" :: Text)
+          , "deferred"     .= ([ "uncovered-branches"
+                               , "smallest-witness"
+                               ] :: [Text])
+          , "qc_raw_output" .= T.take 1000 raw
+          ]
+          ++ [ "raw_truncated" .= True | rawTruncated ]
+        )
   in Env.toolResponseToResult (Env.mkOk payload)
 
 renderBucket :: (Text, Double) -> Value
