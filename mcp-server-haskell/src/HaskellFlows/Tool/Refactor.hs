@@ -34,6 +34,7 @@ module HaskellFlows.Tool.Refactor
   , errorSignatures
     -- * Exposed for unit tests
   , compileFailResult
+  , extractFreeVarNames  -- #205
   ) where
 
 import Control.Exception (SomeException, try)
@@ -466,7 +467,7 @@ commitWithVerify ghcSess mp orig newContent baseSuccess = do
               -- sees what tripped the rollback. We attach the new-
               -- only subset as 'new_errors' for clarity.
               newErrs = filter (\e -> errorKey e `elem` newErrSigs) postErrs
-          pure (compileFailResult newErrs (renderDiags postDiags) restoreMsg)
+          pure (compileFailResult False newErrs (renderDiags postDiags) restoreMsg)
         else
           pure (commitResultWithDiff baseSuccess preDiags postDiags)
 
@@ -507,7 +508,7 @@ dryRunWithVerify ghcSess mp orig newContent baseSuccess = do
       if regressed
         then do
           let newErrs = filter (\e -> errorKey e `elem` newErrSigs) postErrs
-          pure (compileFailResult newErrs (renderDiags postDiags)
+          pure (compileFailResult True newErrs (renderDiags postDiags)
                   " — dry_run, original preserved; patch is invalid")
         else pure (dryRunResult baseSuccess newContent)
 
@@ -623,19 +624,62 @@ insertKV k = KeyMap.insert (Key.fromText k)
 -- status='failed' with kind='verify_failed'. The diagnostic detail
 -- ('errors', 'raw', 'note') stays under 'result' so consumers can
 -- branch per-error.
-compileFailResult :: [GhcError] -> Text -> Text -> ToolResult
-compileFailResult errs raw restoreMsg =
+--
+-- #205 Bug 2: @dryRun@ is now threaded through from the caller so
+-- the machine-readable @dry_run@ field in the error payload reflects
+-- what the user actually asked for (was @False@ regardless).
+--
+-- #205 Bug 1: when the errors contain \"Variable not in scope\",
+-- a @note@ field is added that names the free variables and explains
+-- that parameterised extraction is not yet supported.
+compileFailResult :: Bool -> [GhcError] -> Text -> Text -> ToolResult
+compileFailResult dryRun errs raw restoreMsg =
   let envErr = (Env.mkErrorEnvelope Env.VerifyFailed
                  ("Rewrite did not type-check" <> restoreMsg))
                  { Env.eeCause = Just (T.take 400 raw) }
-      payload = object
-        [ "dry_run" .= False
+      freeVars = extractFreeVarNames errs
+      noteField = case freeVars of
+        [] -> []
+        vs -> [ "note" .= ( "expression references free variable"
+                             <> (if length vs == 1 then " " else "s ")
+                             <> T.intercalate ", " vs
+                             <> " — extract_binding does not yet support "
+                             <> "parameterised extraction; extract the "
+                             <> "expression manually and add the variables "
+                             <> "as parameters to the new top-level binding."
+                           :: Text ) ]
+      payload = object $
+        [ "dry_run" .= dryRun
         , "compile" .= ("failed" :: Text)
         , "errors"  .= errs
         , "raw"     .= raw
         ]
+        ++ noteField
       response = (Env.mkFailed envErr) { Env.reResult = Just payload }
   in Env.toolResponseToResult response
+
+-- | #205 Bug 1: extract variable names from @\"Variable not in scope: <name>\"@
+-- GHC error messages. Returns the names deduplicated in order of first
+-- appearance.
+extractFreeVarNames :: [GhcError] -> [Text]
+extractFreeVarNames errs =
+  dedupe
+    [ name
+    | e <- errs
+    , geSeverity e == SevError
+    , "Variable not in scope:" `T.isInfixOf` geMessage e
+    , Just name <- [parseVarName (geMessage e)]
+    ]
+  where
+    parseVarName msg =
+      let marker = "Variable not in scope:"
+      in case T.stripPrefix marker (T.dropWhile (/= 'V') msg) of
+           Nothing   -> Nothing
+           Just rest ->
+             let name = T.strip (T.takeWhile (\c -> c /= ' ' && c /= ':' && c /= '\n') (T.strip rest))
+             in if T.null name then Nothing else Just name
+    dedupe []       = []
+    dedupe (x : xs) = x : dedupe (filter (/= x) xs)
 
 -- | Issue #90 Phase C: routed through the envelope. Most refactor
 -- failures map to kind='validation' (the input was structurally

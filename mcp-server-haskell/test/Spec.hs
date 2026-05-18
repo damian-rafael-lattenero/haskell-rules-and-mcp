@@ -1420,6 +1420,10 @@ main = do
       , test "#106/F-03: nextPayload suggests quickcheck after suggest" testWorkflowNextHistoryAware
       , test "#106/F-10: importsPayload has session_preloads field" testImportsHasSessionPreloads
       , test "#106/F-21: compileFailResult has status=failed and dry_run=false" testRefactorCompileFailShape
+      , test "#205: compileFailResult dry_run=true propagates to result field"  testRefactorCompileFailDryRunTrue
+      , test "#205: extractFreeVarNames picks up not-in-scope variables"        testExtractFreeVarNames
+      , test "#205: extractFreeVarNames empty when no not-in-scope errors"      testExtractFreeVarNamesEmpty
+      , test "#205: compileFailResult adds note for free-variable errors"       testRefactorFreeVarNote
       , test "#106/F-31: perf renderResult with all errors returns failed" testPerfAllSamplesErrored
       , test "#162: perf renderResult exposes warmup_ns field"            testPerfWarmupNsInPayload
       , test "#162: perf warm samples exclude warmup from mean"           testPerfWarmSamplesNotSkewed
@@ -14191,7 +14195,8 @@ testImportsHasSessionPreloads =
 -- agent knows the dry-run rewrite did NOT type-check.
 testRefactorCompileFailShape :: IO Bool
 testRefactorCompileFailShape =
-  let result = RefactorTool.compileFailResult [] "error text" " (file restored)"
+  -- #205 Bug 2: pass dryRun=False explicitly (was hardcoded False before fix)
+  let result = RefactorTool.compileFailResult False [] "error text" " (file restored)"
   in pure $ case trContent result of
        [TextContent body_] ->
          case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
@@ -15595,3 +15600,75 @@ testPrioritizeNoDotNoOp =
   let q    = "fromMaybe"
       mods = ["Data.Maybe", "Prelude"]
   in pure (AddImport.prioritizeModuleMatch q mods == mods)
+
+-- | #205 Bug 2: 'compileFailResult' with @dryRun=True@ must set
+-- @dry_run: true@ in the result payload — it was hardcoded @false@
+-- before the fix.
+testRefactorCompileFailDryRunTrue :: IO Bool
+testRefactorCompileFailDryRunTrue =
+  let result = RefactorTool.compileFailResult True [] "error" " (dry run, original preserved)"
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "result" top of
+               Just (A.Object r) ->
+                 AKM.lookup "dry_run" r == Just (A.Bool True)
+               _ -> False
+           _ -> False
+       _ -> False
+
+-- | #205 Bug 1: 'extractFreeVarNames' picks up variable names from
+-- @\"Variable not in scope: …\"@ GHC error messages.
+testExtractFreeVarNames :: IO Bool
+testExtractFreeVarNames =
+  let mkErr msg = GhcError
+        { geFile = "src/Foo.hs", geLine = 5, geColumn = 3
+        , geSeverity = SevError, geCode = Nothing
+        , geMessage = msg
+        }
+      errs = [ mkErr "[GHC-76037] Variable not in scope: x :: Int"
+             , mkErr "[GHC-76037] Variable not in scope: y"
+             , mkErr "Couldn't match expected type 'Int' with 'Bool'"
+             ]
+      names = RefactorTool.extractFreeVarNames errs
+  in pure $ names == ["x", "y"]
+
+-- | #205 Bug 1: 'extractFreeVarNames' returns @[]@ when no
+-- not-in-scope errors are present.
+testExtractFreeVarNamesEmpty :: IO Bool
+testExtractFreeVarNamesEmpty =
+  let mkErr msg = GhcError
+        { geFile = "src/Foo.hs", geLine = 1, geColumn = 1
+        , geSeverity = SevError, geCode = Nothing
+        , geMessage = msg
+        }
+      errs = [ mkErr "Couldn't match expected type 'Int' with 'Bool'" ]
+  in pure (null (RefactorTool.extractFreeVarNames errs))
+
+-- | #205 Bug 1: 'compileFailResult' adds a @\"note\"@ field when the
+-- error list contains not-in-scope variables.
+testRefactorFreeVarNote :: IO Bool
+testRefactorFreeVarNote =
+  let mkErr msg = GhcError
+        { geFile = "src/Foo.hs", geLine = 5, geColumn = 3
+        , geSeverity = SevError, geCode = Nothing
+        , geMessage = msg
+        }
+      errs   = [ mkErr "Variable not in scope: x :: Int" ]
+      result = RefactorTool.compileFailResult False errs "raw errors" " (restored)"
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "result" top of
+               Just (A.Object r) ->
+                 case AKM.lookup "note" r of
+                   Just (A.String note) ->
+                     "x" `T.isInfixOf` note
+                       && "free variable" `T.isInfixOf` note
+                       && "extract_binding" `T.isInfixOf` note
+                   _ -> False
+               _ -> False
+           _ -> False
+       _ -> False
