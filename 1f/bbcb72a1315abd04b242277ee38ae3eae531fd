@@ -1,0 +1,24 @@
+mcp-server-haskell/test/Spec.hs
+  s_54dbf5675ec5ae::t_caf3411621a280 994
+  s_54dbf5675ec5ae::t_8d5d937a231569 10048-10078
+mcp-server-haskell/src/HaskellFlows/Tool/FixWarning.hs
+  s_54dbf5675ec5ae::t_cc1ead2e918734 285-286,288-289,299-320
+  s_54dbf5675ec5ae::t_65c6489ff502d7 287,290-291,293-295,297-298
+  s_54dbf5675ec5ae::t_54ae61f148ec9c 292
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.9",
+  "base_commit_sha": "1fbbcb72a1315abd04b242277ee38ae3eae531fd",
+  "prompts": {},
+  "sessions": {
+    "s_54dbf5675ec5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d704d61f-ca86-414c-85d1-e75c1df02293",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
