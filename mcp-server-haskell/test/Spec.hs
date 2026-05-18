@@ -185,6 +185,7 @@ import HaskellFlows.Parser.Type
   )
 import HaskellFlows.Tool.Arbitrary
   ( Constructor (..)
+  , compileFailedErr
   , hasRecursiveConstructor
   , isRecursiveArg
   , parseConstructors
@@ -1155,6 +1156,7 @@ main = do
       , test "arbitrary: Tree polymorphic sized"      testArbitraryTreeSized
       , test "arbitrary: Status flat template"        testArbitraryFlatTemplate
       , test "arbitrary: recursion detection tokens"  testArbitraryRecursionTokens
+      , test "#210: ghc_arbitrary compile-fail returns status=failed" testArbitraryCompileFailShape
       , test "remove_modules: tool registered"        testRemoveModulesRegistered
       , test "remove_modules: strips exposed entry"   testRemoveModulesStripsCabal
       , test "remove_modules: idempotent no-op"       testRemoveModulesIdempotent
@@ -7075,6 +7077,27 @@ testArbitraryRecursionTokens = pure $
   && not (isRecursiveArg "Tree" "TreeLike a")   -- different identifier
   && not (isRecursiveArg "Tree" "Int")
   && not (isRecursiveArg "Tree" "String")
+
+-- | Issue #210: when loadForTarget returns (False, errs),
+-- 'compileFailedErr' must produce status='failed' with
+-- kind='validation' and a message mentioning the error count.
+testArbitraryCompileFailShape :: IO Bool
+testArbitraryCompileFailShape =
+  let result = compileFailedErr 3
+  in pure $ case trContent result of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             AKM.lookup "status" top == Just (A.String "failed")
+             && case AKM.lookup "error" top of
+                  Just (A.Object err) ->
+                    AKM.lookup "kind" err == Just (A.String "validation")
+                    && case AKM.lookup "message" err of
+                         Just (A.String msg) -> "3 compile error(s)" `T.isInfixOf` msg
+                         _                   -> False
+                  _ -> False
+           _ -> False
+       _ -> False
 
 --------------------------------------------------------------------------------
 -- BUG-16 — ghc_remove_modules symmetric to ghc_add_modules

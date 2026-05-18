@@ -23,6 +23,8 @@ module HaskellFlows.Tool.Arbitrary
   , isRecursiveArg
   , isRecursiveConstructor
   , hasRecursiveConstructor
+    -- * Issue #210 — compile-failure response (exported for tests)
+  , compileFailedErr
   ) where
 
 import Control.Exception (SomeException, try)
@@ -132,7 +134,14 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
         Left ex ->
           pure (subprocessErr
                   ("loadForTarget failed: " <> T.pack (show ex)))
-        Right _ -> do
+        -- Issue #210: check the Bool — False means the module has
+        -- compile errors. Proceeding to renderTyThing would then
+        -- fail with a confusing not_in_scope on a type that IS
+        -- defined but wasn't loaded. Return a clear validation
+        -- error instead.
+        Right (False, loadErrs) ->
+          pure (compileFailedErr (length loadErrs))
+        Right (True, _) -> do
           -- loadForTarget already primed the session with the
           -- correct stanza flags + setContext. Don't wrap in
           -- withStanzaFlags here — re-applying setSessionDynFlags
@@ -187,6 +196,18 @@ subprocessErr :: Text -> ToolResult
 subprocessErr msg =
   Env.toolResponseToResult
     (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
+
+-- | Issue #210: module compile failure — loadForTarget returned
+-- (False, errors). The user needs to fix compile errors before
+-- ghc_arbitrary can resolve the type. Status='failed',
+-- kind='validation'.
+compileFailedErr :: Int -> ToolResult
+compileFailedErr n =
+  Env.toolResponseToResult
+    (Env.mkFailed (Env.mkErrorEnvelope Env.Validation
+      ( "Module has " <> T.pack (show n) <> " compile error(s); "
+      <> "fix them first (use ghc_check_module or ghc_explain_error), "
+      <> "then retry ghc_arbitrary." )))
 
 -- | Resolve the name and render the resulting 'TyThing' in the
 -- exact @data T = A | B Int | ...@ shape @:info@ would print.
