@@ -25,6 +25,8 @@ module HaskellFlows.Tool.Arbitrary
   , hasRecursiveConstructor
     -- * Issue #210 — compile-failure response (exported for tests)
   , compileFailedErr
+    -- * Issue #219 — unboxed-constructor detection (exported for tests)
+  , hasUnboxedConstructor
   ) where
 
 import Control.Exception (SomeException, try)
@@ -151,9 +153,21 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
             Left ex ->
               pure (notInScopeErr
                       ("'" <> safe <> "' not in scope: " <> T.pack (show ex)))
+            -- Issue #218: getInfo returned Nothing after a successful
+            -- parseName + loadForTarget. This happens for GHC wired-in
+            -- primitives (Bool lives in ghc-prim which is not explicitly
+            -- listed in the stanza's -package-id flags; after
+            -- -hide-all-packages the lookup fails silently). Report a
+            -- clear validation error instead of the misleading "not in
+            -- scope" message.
             Right Nothing ->
-              pure (notInScopeErr
-                      ("'" <> safe <> "' not in scope (getInfo=Nothing)"))
+              pure (validationErr
+                      ( "ghc_arbitrary cannot introspect '" <> safe <> "'. "
+                      <> "This happens for GHC wired-in primitives (Bool, "
+                      <> "Char, Int, Word, …) and type classes or type "
+                      <> "synonyms. These types already have Arbitrary "
+                      <> "instances in Test.QuickCheck — no template is "
+                      <> "needed." ))
             Right (Just rendered)
               | isOutOfScope rendered -> pure (notInScopeErr rendered)
               | otherwise -> do
@@ -163,8 +177,24 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
                               ( "No constructors parsed for '" <> safe
                               <> "'. It may be a GADT, typeclass, or type synonym — "
                               <> "those need a hand-written Arbitrary." ))
-                    ctors -> pure (successResult safe ctors
-                                    (renderTemplate safe params ctors))
+                    ctors
+                      -- Issue #219: primitive-wrapping types (Int, Char,
+                      -- Word, …) expose unboxed constructors (I#, C#, W#)
+                      -- whose args are unboxed types (Int#, Char#). There
+                      -- is no Arbitrary Int# in QuickCheck, so the
+                      -- generated template would not compile. Detect and
+                      -- report instead of emitting broken code.
+                      | any hasUnboxedConstructor ctors ->
+                          pure (validationErr
+                                  ( "'" <> safe <> "' has unboxed-primop "
+                                  <> "constructors (e.g. I#, C#, W#). "
+                                  <> "ghc_arbitrary cannot generate a valid "
+                                  <> "template for these types. Use "
+                                  <> "'arbitraryBoundedIntegral' for integral "
+                                  <> "types or 'arbitraryUnicodeChar' for Char." ))
+                      | otherwise ->
+                          pure (successResult safe ctors
+                                  (renderTemplate safe params ctors))
 
 -- | Issue #90 Phase C: caller-side parse failure → status='failed'
 -- with kind='missing_arg' or 'type_mismatch' (Aeson FromJSON
@@ -416,6 +446,14 @@ isRecursiveConstructor typeName c = any (isRecursiveArg typeName) (cArgs c)
 
 hasRecursiveConstructor :: Text -> [Constructor] -> Bool
 hasRecursiveConstructor typeName = any (isRecursiveConstructor typeName)
+
+-- | Issue #219: detect constructors whose name ends with @#@ (GHC
+-- unboxed-primop wrappers: I#, C#, W#, …). The args of these
+-- constructors are unboxed types (Int#, Char#, …) for which
+-- 'Arbitrary' does not exist, so any template we'd emit would fail
+-- to compile.
+hasUnboxedConstructor :: Constructor -> Bool
+hasUnboxedConstructor c = "#" `T.isSuffixOf` cName c
 
 renderTemplate :: Text -> [Text] -> [Constructor] -> Text
 renderTemplate typeName params ctors =

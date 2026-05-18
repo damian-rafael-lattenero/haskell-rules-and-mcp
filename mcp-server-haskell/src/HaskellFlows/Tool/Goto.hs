@@ -60,8 +60,13 @@ descriptor =
           <> "WHEN NOT: you also want the type/kind/instances — that is "
           <> "ghc_info (which already includes 'defined_at'); cross-"
           <> "module re-exports / macro names — future ghc_hls. "
-          <> "PREREQUISITES: name must be in scope. "
-          <> "OUTPUT: {name, location:{file, line, column, module?}}. "
+          <> "PREREQUISITES: name must be in scope. File+line is only "
+          <> "available for names loaded in interpreted (byte-code) mode. "
+          <> "Most project modules are compiled to object code, so goto "
+          <> "typically returns the defining module name only "
+          <> "(has_location: false). Use grep or ghc_info as a fallback. "
+          <> "OUTPUT: {name, has_location, location?:{file, line, column}, "
+          <> "module?}. "
           <> "SEE ALSO: ghc_info, ghc_browse."
     , tdInputSchema =
         object

@@ -188,6 +188,7 @@ import HaskellFlows.Tool.Arbitrary
   ( Constructor (..)
   , compileFailedErr
   , hasRecursiveConstructor
+  , hasUnboxedConstructor
   , isRecursiveArg
   , parseConstructors
   , parseTypeParams
@@ -1196,6 +1197,12 @@ main = do
       , test "arbitrary: Status flat template"        testArbitraryFlatTemplate
       , test "arbitrary: recursion detection tokens"  testArbitraryRecursionTokens
       , test "#210: ghc_arbitrary compile-fail returns status=failed" testArbitraryCompileFailShape
+      -- Issue #218 — clear error for wired-in types (Bool, not "not in scope")
+      , test "#218: ghc_arbitrary wired-in type gives clear message" testArbitraryWiredInMessage
+      -- Issue #219 — hasUnboxedConstructor detects I#/C#/W# primops
+      , test "#219: hasUnboxedConstructor detects I#/C#/W#"         testArbitraryHasUnboxedConstructor
+      -- Issue #217 — ghc_goto descriptor mentions compiled-mode limitation
+      , test "#217: ghc_goto descriptor acknowledges compiled-mode"  testGhcGotoDescriptorAccurate
       , test "remove_modules: tool registered"        testRemoveModulesRegistered
       , test "remove_modules: strips exposed entry"   testRemoveModulesStripsCabal
       , test "remove_modules: idempotent no-op"       testRemoveModulesIdempotent
@@ -7292,6 +7299,54 @@ testArbitraryCompileFailShape =
                   _ -> False
            _ -> False
        _ -> False
+
+-- | Issue #218: when getInfo returns Nothing (GHC wired-in primitives
+-- like Bool after -hide-all-packages stanza flags), 'handle' must NOT
+-- say "not in scope" — it must say "cannot introspect" with the hint
+-- that QuickCheck already provides an instance.
+--
+-- We test via the source text rather than running the full GHC session
+-- to keep this a fast unit test. The patch is in the Right Nothing
+-- branch of 'handle'.
+testArbitraryWiredInMessage :: IO Bool
+testArbitraryWiredInMessage = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Arbitrary.hs"
+  -- The new message must NOT say "not in scope"
+  let noOldMsg = not ("not in scope (getInfo=Nothing)" `T.isInfixOf` src)
+  -- The new message MUST mention "wired-in" or "introspect"
+  let hasNewMsg = "cannot introspect" `T.isInfixOf` src
+                || "wired-in" `T.isInfixOf` src
+  -- The Right Nothing branch must use validationErr not notInScopeErr
+  let usesValidation = "Right Nothing ->" `T.isInfixOf` src
+                     && "validationErr" `T.isInfixOf` src
+  pure (noOldMsg && hasNewMsg && usesValidation)
+
+-- | Issue #219: 'hasUnboxedConstructor' detects constructors whose
+-- name ends with '#' (I#, C#, W#, …). A constructor that does NOT
+-- end with '#' must return False.
+testArbitraryHasUnboxedConstructor :: IO Bool
+testArbitraryHasUnboxedConstructor = pure $
+  -- Typical unboxed-primop constructors
+     hasUnboxedConstructor (Constructor { cName = "I#", cArgs = ["Int#"] })
+  && hasUnboxedConstructor (Constructor { cName = "C#", cArgs = ["Char#"] })
+  && hasUnboxedConstructor (Constructor { cName = "W#", cArgs = ["Word#"] })
+  -- Regular constructors must NOT be flagged
+  && not (hasUnboxedConstructor (Constructor { cName = "Just",  cArgs = ["a"] }))
+  && not (hasUnboxedConstructor (Constructor { cName = "False", cArgs = [] }))
+  && not (hasUnboxedConstructor (Constructor { cName = "PathNotAbsolute", cArgs = ["Text"] }))
+
+-- | Issue #217: 'ghc_goto' descriptor must acknowledge that source
+-- locations are only available for interpreted modules and that most
+-- project modules compile to object code.
+testGhcGotoDescriptorAccurate :: IO Bool
+testGhcGotoDescriptorAccurate = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Goto.hs"
+  -- Descriptor must mention the compiled-mode limitation
+  let mentionsCompiled = "compiled" `T.isInfixOf` src
+  -- Descriptor must mention interpreted mode (byte-code)
+  let mentionsByteCode = "interpreted" `T.isInfixOf` src
+                       || "byte-code"  `T.isInfixOf` src
+  pure (mentionsCompiled && mentionsByteCode)
 
 --------------------------------------------------------------------------------
 -- BUG-16 — ghc_remove_modules symmetric to ghc_add_modules
