@@ -1174,6 +1174,7 @@ main = do
       , test "gate: cabalStep uses bracket + partial safe" testGateCabalStepBracket
       , test "bootstrap: tool registered"             testBootstrapRegistered
       , test "bootstrap: preview returns dynamic content" testBootstrapPreview
+      , test "#193: bootstrap default (no write arg) writes to disk" testBootstrapDefaultWrite
       , test "bootstrap: write persists to disk"      testBootstrapWrite
       , test "bootstrap: pathForHost is closed enum"  testBootstrapPathEnum
       , test "#179: bootstrap write=true nextStep says rules written" testBootstrapWriteNextStep
@@ -4625,12 +4626,13 @@ runBootstrap args = do
   removePathForcibly dir
   pure result
 
--- | 'ghc_bootstrap host=claude-code' (default mode=preview) emits
--- status='ok' with the rules content + the canonical claude-code
--- target path inside 'result'.
+-- | 'ghc_bootstrap host=claude-code write=false' emits status='ok' with
+-- the rules content + the canonical claude-code target path inside 'result'.
+-- Issue #193: pass write=false explicitly; the default is now write=true (write to disk).
 testBootstrapClaudeCodePreviewEnvelope :: IO Bool
 testBootstrapClaudeCodePreviewEnvelope = do
-  decoded <- runBootstrap (A.object [ "host" A..= ("claude-code" :: Text) ])
+  decoded <- runBootstrap (A.object [ "host" A..= ("claude-code" :: Text)
+                                    , "write" A..= False ])
   pure $ case decoded of
     Right env
       | Env.reStatus env == Env.StatusOk
@@ -7330,9 +7332,13 @@ testBootstrapRegistered = pure ("ghc_project" `elem` allToolNameTexts)
 -- does NOT write anything. The markdown is inlined as a JSON
 -- string field, so newlines etc. are escaped — we assert
 -- *markers* from the markdown, not byte equality.
+-- | 'ghc_bootstrap(host="claude-code", write=false)' returns preview content
+-- without writing to disk. Issue #193: pass write=false explicitly since
+-- the default is now write=true.
 testBootstrapPreview :: IO Bool
 testBootstrapPreview = withTempProject $ \pd -> do
-  let args = A.object [ "host" .= ("claude-code" :: Text) ]
+  let args = A.object [ "host" .= ("claude-code" :: Text)
+                      , "write" .= False ]
   tr <- Bootstrap.handle pd allToolDescriptors args
   let body = case trContent tr of
         (TextContent t : _) -> t
@@ -7345,6 +7351,23 @@ testBootstrapPreview = withTempProject $ \pd -> do
       && T.isInfixOf "haskell-flows"            body
       && T.isInfixOf "ghc_workflow"            body
       && not wrote          -- preview must NOT write
+
+-- | #193: 'ghc_bootstrap(host="claude-code")' with NO write arg must
+-- write to disk (write defaults to true, not false). Previously the
+-- 'BootstrapArgs' FromJSON defaulted 'write' to False, contradicting
+-- the schema which says "If true (default), write files to disk."
+testBootstrapDefaultWrite :: IO Bool
+testBootstrapDefaultWrite = withTempProject $ \pd -> do
+  let args = A.object [ "host" .= ("claude-code" :: Text) ]
+  tr <- Bootstrap.handle pd allToolDescriptors args
+  let body = case trContent tr of
+        (TextContent t : _) -> t
+        _                   -> ""
+      dest = unProjectDirRaw pd </> ".claude" </> "rules" </> "haskell-flows-mcp.md"
+  wrote <- doesFileExist dest
+  pure $ not (trIsError tr)
+      && T.isInfixOf "\"mode\":\"written\"" body
+      && wrote          -- default must WRITE to disk
 
 -- | 'ghc_bootstrap(host="claude-code", write=true)' persists the
 -- markdown under '.claude/rules/haskell-flows-mcp.md' inside the

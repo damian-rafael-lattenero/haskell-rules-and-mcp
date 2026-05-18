@@ -72,7 +72,10 @@ data BootstrapArgs = BootstrapArgs
 instance FromJSON BootstrapArgs where
   parseJSON = withObject "BootstrapArgs" $ \o -> do
     hTxt <- o .:  "host"
-    w    <- o .:? "write" .!= False
+    -- Issue #193: default is True (write to disk), matching the schema
+    -- description "If true (default), write files to disk". The previous
+    -- .!= False silently defaulted to preview mode, contradicting the schema.
+    w    <- o .:? "write" .!= True
     h <- case hTxt :: Text of
       "claude-code" -> pure HostClaudeCode
       "cursor"      -> pure HostCursor
