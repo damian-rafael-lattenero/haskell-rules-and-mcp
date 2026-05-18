@@ -1,0 +1,27 @@
+mcp-server-haskell/src/HaskellFlows/Tool/Regression.hs
+  s_54dbf5675ec5ae::t_c42e238a2f14cb 22-23
+mcp-server-haskell/src/HaskellFlows/Tool/Gate.hs
+  s_54dbf5675ec5ae::t_854af213adf588 134-142
+  s_54dbf5675ec5ae::t_a54d45314e1a9a 167-171
+  s_54dbf5675ec5ae::t_4c10d63deaee99 41-42
+  s_54dbf5675ec5ae::t_2bd344f2afb6f3 67
+mcp-server-haskell/test/Spec.hs
+  s_54dbf5675ec5ae::t_7b0f3c74439872 9916-9928
+  s_54dbf5675ec5ae::t_be395e25e565bb 851-853
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.9",
+  "base_commit_sha": "7a44db88ab67cb47137cad1db14162be6234edef",
+  "prompts": {},
+  "sessions": {
+    "s_54dbf5675ec5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d704d61f-ca86-414c-85d1-e75c1df02293",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
