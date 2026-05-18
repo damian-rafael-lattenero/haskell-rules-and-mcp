@@ -26,6 +26,7 @@ module HaskellFlows.Tool.Perf
     -- * Baseline helpers (exported for unit tests)
   , BaselineEntry (..)
   , regressionPct
+  , roundTo1dp
   , readBaseline
   , saveBaseline
     -- * Response shaping (exported for unit tests)
@@ -326,6 +327,13 @@ regressionPct baselineMean currentMean
   | baselineMean <= 0 = Nothing
   | otherwise         = Just ((currentMean - baselineMean) / baselineMean * 100)
 
+-- | Issue #200: round a Double to 1 decimal place so that
+-- @regression_pct@ in the response carries at most 1 decimal digit
+-- instead of 15 IEEE-754 digits. A ±20 % variance metric has no
+-- meaningful sub-1 % precision.
+roundTo1dp :: Double -> Double
+roundTo1dp x = fromIntegral (round (x * 10) :: Int) / 10.0
+
 -- | Internal helper: convert a Text key to an Aeson KeyMap key.
 keyFromText :: Text -> AesonKey.Key
 keyFromText = AesonKey.fromText
@@ -411,7 +419,9 @@ renderResult args nss stats errs mBaseline warmupNs =
           [ "baseline" .= object
               [ "baseline_mean_ns" .= baseMean
               , "current_mean_ns"  .= sMean stats
-              , "regression_pct"   .= pct
+                -- #200: round to 1 dp — 15-decimal IEEE precision is
+                -- meaningless for a ±20% variance wall-clock metric.
+              , "regression_pct"   .= roundTo1dp pct
               , "regressed"        .= isRegression
               ]
           ]

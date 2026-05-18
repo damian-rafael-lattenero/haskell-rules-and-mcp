@@ -19,6 +19,7 @@ description:
 license:            BSD-3-Clause
 author:             Damián Rafael Lattenero
 maintainer:         damian.lattenero@mercadolibre.com
+category:           Development, Testing, Haskell
 build-type:         Simple
 extra-source-files: README.md
                     test-e2e/Fixtures/Baseline/baseline.cabal
@@ -141,7 +142,7 @@ library
                     , text              >= 2.0  && < 2.2
                     , time              >= 1.12 && < 1.16
                     , scientific        >= 0.3  && < 0.4
-                    , unix
+                    , unix              >= 2.7  && < 2.9
 
 executable haskell-flows-mcp
     import:           shared

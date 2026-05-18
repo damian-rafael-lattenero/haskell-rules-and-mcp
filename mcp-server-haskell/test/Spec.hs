@@ -1386,6 +1386,9 @@ main = do
       , test "#174: threshold_pct param overrides default"                testPerfCustomThreshold
       , test "#190: perf regression returns status=failed + kind=regression"  testPerfRegressionStatusFailed
       , test "#174: perf threshold_pct clamped to [1,200]"               testPerfThresholdClamped
+      -- Issue #200 — regression_pct precision
+      , test "#200: roundTo1dp rounds to 1 decimal place"                testPerfRoundTo1dp
+      , test "#200: regression_pct in payload has at most 1 decimal"     testPerfRegressionPctPrecision
       -- Issue #135 — summariseMeasurementErrors truncation
       , test "#135: summariseMeasurementErrors single error stays short"   testSummariseSingleError
       , test "#135: summariseMeasurementErrors 20 repeated errors omits"  testSummariseRepeatedErrors
@@ -1430,6 +1433,8 @@ main = do
       , test "#117: goto InFile gives ok + has_location=true"              testGotoFileHasLocation
       -- Issue #214 — remediation must not claim "no local source file"
       , test "#214: goto InModule remediation says compiled not no-source"  testGotoCompiledModuleRemediation
+      -- Issue #208 — gate nextStep text must reflect actual steps run
+      , test "#208: gate nextStep text uses payload summary not hardcoded names" testGateNextStepTextFromSummary
       -- Issue #118 — removeDep drops blank continuation lines
       , test "#118: removeDep no trailing blank on single-dep line"        testRemoveDepNoTrailingBlank
       , test "#118: removeDep preserves multi-dep block correctly"         testRemoveDepMultiDep
@@ -14116,6 +14121,60 @@ testPerfThresholdClamped = do
     _ -> pure False
 
 --------------------------------------------------------------------------------
+-- Issue #200 — regression_pct precision
+--------------------------------------------------------------------------------
+
+-- | #200: 'roundTo1dp' must round to exactly 1 decimal place.
+testPerfRoundTo1dp :: IO Bool
+testPerfRoundTo1dp =
+  pure $  PerfTool.roundTo1dp 15.234 == 15.2
+       && PerfTool.roundTo1dp 15.289 == 15.3
+       && PerfTool.roundTo1dp (-3.75) == (-3.8)
+       && PerfTool.roundTo1dp 0.0    == 0.0
+
+-- | #200: when a baseline comparison is present, 'regression_pct'
+-- in the structured payload must have at most 1 decimal place — not
+-- 15 IEEE-754 digits. We verify by checking the JSON representation
+-- has no more than 3 significant digits after the decimal point.
+testPerfRegressionPctPrecision :: IO Bool
+testPerfRegressionPctPrecision =
+  let args = PerfTool.PerfArgs
+               { PerfTool.paExpression      = "1 + 1"
+               , PerfTool.paRuns            = 5
+               , PerfTool.paSaveBaseline    = False
+               , PerfTool.paCompareBaseline = True
+               , PerfTool.paVerbose         = False
+               , PerfTool.paThresholdPct    = 30.0
+               }
+      -- baseline = 1000 ns, current samples average ≈ 1234 ns
+      -- exact pct = 23.4 -- trimmed to 1 dp = 23.4
+      nss   = [1234, 1234, 1234, 1234, 1234]
+      stats = PerfTool.aggregate nss
+      baseline = Just (PerfTool.BaselineEntry { PerfTool.beMeanNs = 1000.0 })
+      result = PerfTool.renderResult args nss stats [] baseline 0
+      encoded = case trContent result of
+        [TextContent body_] -> body_
+        _                   -> ""
+  in case A.decode (TLE.encodeUtf8 (TL.fromStrict encoded)) of
+       Just (A.Object top) ->
+         case AKM.lookup "result" top of
+           Just (A.Object res) ->
+             case AKM.lookup "baseline" res of
+               Just (A.Object bl) ->
+                 case AKM.lookup "regression_pct" bl of
+                   Just (A.Number n) ->
+                     -- render as text and ensure at most 1 digit after the dot
+                     let rendered = T.pack (show (realToFrac n :: Double))
+                         decimals = case T.breakOn "." rendered of
+                           (_, "") -> 0
+                           (_, d)  -> T.length (T.takeWhile (/= 'e') (T.drop 1 d))
+                     in pure (decimals <= 1)
+                   _ -> pure False
+               _ -> pure False
+           _ -> pure False
+       _ -> pure False
+
+--------------------------------------------------------------------------------
 -- Issue #135 — summariseMeasurementErrors truncation + dedup
 --------------------------------------------------------------------------------
 
@@ -14509,6 +14568,43 @@ testGotoCompiledModuleRemediation =
              in pure (hasCompiled && noFalseSource)
            _ -> pure False
        _ -> pure False
+
+-- | #208: when 'ghc_gate' succeeds with some steps skipped, the
+-- 'nextStep.why' text must reflect only the steps that actually ran
+-- rather than always claiming "regression + cabal test + cabal build
+-- all passed".
+--
+-- We build a minimal gate payload that looks like only 'regression'
+-- ran (cabal_test and cabal_build are 'skip') and verify the injected
+-- nextStep text contains the payload's 'summary' field verbatim
+-- instead of the old hardcoded string.
+testGateNextStepTextFromSummary :: IO Bool
+testGateNextStepTextFromSummary =
+  let -- Minimal payload matching Gate.hs renderReport shape:
+      -- status=ok, result.summary says only regression ran.
+      summaryText = "All requested gates passed: regression. Safe to push." :: T.Text
+      payload = A.object
+        [ "status" .= ("ok" :: T.Text)
+        , "result" .= A.object
+            [ "totalDurationSec" .= (5.0 :: Double)
+            , "summary"          .= summaryText
+            , "steps"            .= A.object
+                [ "regression" .= A.object [ "status" .= ("pass" :: T.Text) ]
+                , "cabal_test"  .= A.object [ "status" .= ("skip" :: T.Text) ]
+                , "cabal_build" .= A.object [ "status" .= ("skip" :: T.Text) ]
+                ]
+            ]
+        ]
+      mNs = NextStep.suggestNext GhcGate True payload
+  in case mNs of
+       Just ns ->
+         let why = NextStep.nsWhy ns
+             -- Must contain the payload's summary (mentions "regression" only)
+             hasSummary = T.isInfixOf summaryText why
+             -- Must NOT contain the old hardcoded all-three string
+             noAllThree = not (T.isInfixOf "regression + cabal test + cabal build" why)
+         in pure (hasSummary && noAllThree)
+       Nothing -> pure False
 
 -- | #118: 'removeDep' must not leave a blank continuation line when
 -- the only dep on that line is the one being removed.

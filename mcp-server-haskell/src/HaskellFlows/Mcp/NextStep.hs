@@ -812,15 +812,27 @@ projectNext payload
 gateNext :: Value -> NextStep
 gateNext payload
   | gatePassed payload = simple GhcCoverage
-      "ghc_gate is green — regression + cabal test + cabal build \
-      \all passed. Optional: run ghc_coverage for the HPC summary. \
-      \Otherwise you're clear to git commit + push."
+      (gateGreenText payload)
       Nothing
   | otherwise = simple GhcCheckProject
       "At least one gate step failed. Drop one level down into \
       \ghc_check_project to isolate the red module, then drill in \
       \with ghc_check_module + ghc_load(diagnostics=true)."
       Nothing
+
+-- | Issue #208: derive the success text from the payload's 'summary'
+-- field (which only lists the non-skipped gates) instead of
+-- hardcoding all three names. The hardcoded text claimed all three
+-- gates passed even when the caller used skip_regression /
+-- skip_cabal_test / skip_cabal_build.
+gateGreenText :: Value -> Text
+gateGreenText payload = case envField "summary" payload of
+  Just (String s) ->
+    s <> " Optional: run ghc_coverage for the HPC summary."
+  _ ->
+    "ghc_gate is green — all gates passed. \
+    \Optional: run ghc_coverage for the HPC summary. \
+    \Otherwise you're clear to git commit + push."
 
 -- | #94 Phase C: discriminate ghc_quickcheck single-run vs multi-run
 -- (determinism) responses. The Determinism handler emits a payload
