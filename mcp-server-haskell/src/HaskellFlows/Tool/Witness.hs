@@ -46,7 +46,7 @@ import qualified Data.Text as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Text.Read (readMaybe)
 
-import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
+import HaskellFlows.Ghc.ApiSession (GhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -74,7 +74,8 @@ descriptor =
           <> "deferred (list of features not yet implemented: "
           <> "uncovered-branches, smallest-witness). "
           <> "NOTE: instrumentation adds ~55 ms over a plain ghc_quickcheck "
-          <> "run because each of the N test cases executes a collect call."
+          <> "run because each of the N test cases executes a collect call. "
+          <> "Uses the in-process GHC API session (#220) — no subprocess overhead."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -138,13 +139,14 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
           ClassifyBySize        -> buildInstrumentedProperty   (waProperty args) (waRuns args)
           ClassifyByConstructor -> buildConstructorProperty    (waProperty args) (waRuns args)
     t0 <- realToFrac <$> getPOSIXTime :: IO Double
-    -- Issue #78: use the labels-aware harness so the structured
-    -- 'Result.labels' map reaches us regardless of QuickCheck's
-    -- 'chatty' setting. The pre-#78 path read 'output r', which
-    -- 'chatty=False' (set by the harness) suppresses — leaving the
-    -- distribution silently empty.
+    -- Issue #220: replaced the cabal-repl subprocess (~40s startup) with
+    -- the in-process GHC API path. 'runQuickCheckWithLabelsInProcess'
+    -- loads the test-suite stanza, augments the interactive context with
+    -- Test.QuickCheck/Data.Map/Data.List, then compiles and runs the
+    -- instrumented property via 'evalIOString'. Same (out, labels, err)
+    -- shape — 'parseLabelCounts' and 'extractQcOutput' work unchanged.
     res <- try @SomeException $
-      Qc.runQuickCheckWithLabelsViaCabalRepl (gsProject ghcSess)
+      Qc.runQuickCheckWithLabelsInProcess ghcSess
         (waModulePath args) instrumented
     t1 <- realToFrac <$> getPOSIXTime :: IO Double
     case res of

@@ -1090,6 +1090,10 @@ main = do
                                                                  testWitRawTruncatedFlag
       , test "#199: raw_truncated absent when output <= 1000 chars"
                                                                  testWitNoRawTruncatedWhenShort
+      , test "#220: witnessEvalExpr contains sentinel markers and QC calls"
+                                                                 testWitnessEvalExprStructure
+      , test "#220: Witness.hs uses runQuickCheckWithLabelsInProcess (in-process)"
+                                                                 testWitnessUsesInProcessPath
       , test "property_audit: isVacuousResult true for QcGaveUp (#64 Phase2)"
                                                                  testPAIsVacuousGaveUp
       , test "property_audit: isVacuousResult false for QcPassed (#64 Phase2)"
@@ -15737,6 +15741,30 @@ testWitNoRawTruncatedWhenShort = do
                      not (AKM.member "raw_truncated" payload)
                _ -> False
            _ -> False
+
+-- | #220: 'witnessEvalExpr' must produce a well-formed in-process
+-- expression that contains the QC sentinel markers, the
+-- 'quickCheckWithResult' call, and the 'Data.Map.toList' + 'labels r'
+-- extraction needed for the structured labels path.
+testWitnessEvalExprStructure :: IO Bool
+testWitnessEvalExprStructure =
+  let expr = T.pack (QcTool.witnessEvalExpr "\\x -> x > 0")
+  in pure $  T.isInfixOf "quickCheckWithResult"   expr
+          && T.isInfixOf "Data.Map.toList"         expr
+          && T.isInfixOf "labels r"                expr
+          && T.isInfixOf "__QC_OUTPUT_START__"     expr
+          && T.isInfixOf "__QC_LABELS_START__"     expr
+          && T.isInfixOf "__QC_OUTPUT_END__"       expr
+          && T.isInfixOf "__QC_LABELS_END__"       expr
+          && T.isInfixOf "stdArgs"                 expr
+
+-- | #220: 'Witness.hs' must call 'runQuickCheckWithLabelsInProcess'
+-- (in-process path) rather than 'runQuickCheckWithLabelsViaCabalRepl'
+-- (subprocess path) in its 'handle' function.
+testWitnessUsesInProcessPath :: IO Bool
+testWitnessUsesInProcessPath = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Witness.hs"
+  pure $ T.isInfixOf "runQuickCheckWithLabelsInProcess ghcSess" src
 
 -- | #197: 'ruleMaybeReturn' fires for a 2-argument Maybe-returning
 -- signature and the generated property uses @maybe True (const True)@

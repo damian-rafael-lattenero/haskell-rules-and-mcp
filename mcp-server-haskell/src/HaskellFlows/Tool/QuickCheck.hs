@@ -20,6 +20,9 @@ module HaskellFlows.Tool.QuickCheck
   , runBatchPropertiesViaCabalRepl
   , extractLabelsBlock
   , extractQcOutputAt
+    -- * Issue #220 — in-process witness harness (replaces cabal-repl subprocess)
+  , runQuickCheckWithLabelsInProcess
+  , witnessEvalExpr
     -- * Pure helpers exposed for unit tests
   , chooseStoreModule
   , isSimpleIdent
@@ -40,6 +43,7 @@ import Data.Aeson
 import qualified Data.Aeson.Types as AesonTypes
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAlpha, isAlphaNum)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import System.Timeout (timeout)
@@ -56,6 +60,7 @@ import HaskellFlows.Data.PropertyStore (Store, save)
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
   , LoadFlavour (..)
+  , evalIOString
   , firstTestSuiteOrLibrary
   , gsProject
   , loadForTarget
@@ -69,6 +74,15 @@ import GHC
   , mgModSummaries
   , modInfoExports
   , ms_mod
+    -- #220: in-process interactive-context manipulation
+  , InteractiveImport (IIDecl)
+  , getContext
+  , ideclName
+  , mkModuleName
+  , moduleNameString
+  , setContext
+  , simpleImportDecl
+  , unLoc
   )
 import GHC.Data.FastString (unpackFS)
 import GHC.Types.Name (nameOccName, nameSrcSpan)
@@ -528,6 +542,86 @@ extractQcOutputAt i full =
       (captured, _)   = T.breakOn endMarker body
   in T.strip captured
 
+
+--------------------------------------------------------------------------------
+-- Issue #220 — in-process labels-aware harness (replaces cabal-repl subprocess)
+--------------------------------------------------------------------------------
+
+-- | In-process replacement for 'runQuickCheckWithLabelsViaCabalRepl'.
+--
+-- The old path spawned @cabal v2-repl all@ on every call, incurring ~40s
+-- of subprocess startup. This path uses the persistent GHC API session:
+--
+--   1. Load the test-suite (or library) stanza so the QuickCheck package
+--      is available to 'compileExpr'.
+--   2. Augment the interactive context with @Test.QuickCheck@, @Data.Map@,
+--      and @Data.List@ if they are not already present. (Each subsequent
+--      'loadForTarget' wipes the context back to @Prelude + home modules@,
+--      so these additions are transient — they do not bleed into other tools.)
+--   3. Compile and run the sentinel-delimited @IO String@ expression produced
+--      by 'witnessEvalExpr' in-process via 'evalIOString'.
+--   4. Return @(qcOutput, labelsBlock, "")@ with the same shape as the old
+--      cabal-repl harness so 'Witness.handle' works unchanged.
+--
+-- On any GHC compilation or runtime exception, returns @("", "", errText)@;
+-- the caller ('Witness.handle') wraps with 'try' and routes to 'subprocessResult'.
+runQuickCheckWithLabelsInProcess
+  :: GhcSession -> Maybe Text -> Text -> IO (Text, Text, Text)
+runQuickCheckWithLabelsInProcess ghcSess _mModule safeProp = do
+  -- Load the test-suite stanza so the QuickCheck package is available.
+  tgt <- firstTestSuiteOrLibrary ghcSess
+  _   <- try @SomeException (loadForTarget ghcSess tgt Strict)
+  -- Augment the interactive context and evaluate inside one session lock.
+  eRaw <- try @SomeException $
+    withGhcSession ghcSess $ do
+      existing <- getContext
+      let existingNames = Set.fromList
+            [ moduleNameString (unLoc (ideclName d)) | IIDecl d <- existing ]
+          needed  = ["Test.QuickCheck", "Data.Map", "Data.List"]
+          missing = filter (`Set.notMember` existingNames) needed
+      case missing of
+        [] -> pure ()
+        xs -> setContext
+                (existing
+                  <> [ IIDecl (simpleImportDecl (mkModuleName m)) | m <- xs ])
+      evalIOString (witnessEvalExpr safeProp)
+  case eRaw of
+    Left ex  -> pure ("", "", T.pack (show ex))
+    Right raw ->
+      let tc = T.pack raw
+      in pure (extractQcOutput tc, extractLabelsBlock tc, "")
+
+-- | Build the sentinel-delimited @IO String@ expression for
+-- 'runQuickCheckWithLabelsInProcess'. The expression:
+--
+--   1. Runs the instrumented property with @chatty = False@ via
+--      'quickCheckWithResult'.
+--   2. Emits the QC pass/fail summary between @__QC_OUTPUT_START__@
+--      and @__QC_OUTPUT_END__@ sentinels.
+--   3. Emits each @label\\tcount@ pair from @Result.labels@ between
+--      @__QC_LABELS_START__@ and @__QC_LABELS_END__@, unquoting the
+--      label strings that 'collect' quotes via @show@.
+--
+-- The sentinel format is identical to the old cabal-repl harness so
+-- 'extractQcOutput' and 'extractLabelsBlock' parse the result unchanged.
+witnessEvalExpr :: Text -> String
+witnessEvalExpr safeProp = concat
+  [ "do { let qcArgs = stdArgs { chatty = False }"
+  , "; r <- quickCheckWithResult qcArgs ("
+  , T.unpack safeProp
+  , ")"
+  , "; let lmap = Data.Map.toList (labels r)"
+  -- unquote strips the surrounding double-quotes that QuickCheck's
+  -- collect adds via 'label (show x)' — e.g. "\"size:1-5\"" → "size:1-5".
+  , "; let unquote s = if length s >= 2 && head s == '\"' && last s == '\"'"
+  , " then init (tail s) else s"
+  , "; let labelLines = concatMap"
+  , " (\\(ks, n) -> Data.List.intercalate \"+\" (map unquote ks)"
+  , " ++ \"\\t\" ++ show n ++ \"\\n\") lmap"
+  , "; return (\"__QC_OUTPUT_START__\\n\" ++ output r ++ \"\\n__QC_OUTPUT_END__\""
+  , " ++ \"\\n__QC_LABELS_START__\\n\" ++ labelLines ++ \"__QC_LABELS_END__\")"
+  , "}"
+  ]
 
 --------------------------------------------------------------------------------
 -- store-module resolution
