@@ -777,6 +777,14 @@ main = do
       , test "suggest matches associative on a->a->a" testSuggestAssoc
       , test "suggest associative template applies fn at outer (#52)" testSuggestAssocTemplate
       , test "suggest skips unmatched shapes"       testSuggestNoMatch
+      , test "#197: suggest Maybe-totality for a->b->Maybe c"
+                                                   testSuggestMaybeReturn2Arg
+      , test "#197: suggest Maybe-totality for a->Maybe b"
+                                                   testSuggestMaybeReturn1Arg
+      , test "#197: no-match hint omits 'arity > 2' for arity-2 sig"
+                                                   testSuggestHintNoArityForArity2
+      , test "#197: no-match hint includes 'arity > 2' for arity-3 sig"
+                                                   testSuggestHintArityForArity3
       , test "batch parses documented {tool,args}"  testBatchParsesToolArgs
       , test "batch accepts MCP {name,arguments}"   testBatchParsesNameArgs
       , test "batch result not double-wrapped (#175)" testBatchResultNotDoubleWrapped
@@ -15358,3 +15366,60 @@ testRenderResultTimedOutOverallFalse = do
     Just (A.Object r) ->
       AKM.lookup "overall" r == Just (A.Bool False)
     _ -> False
+
+-- | #197: 'ruleMaybeReturn' fires for a 2-argument Maybe-returning
+-- signature and the generated property uses @maybe True (const True)@
+-- applied to both arguments.
+testSuggestMaybeReturn2Arg :: IO Bool
+testSuggestMaybeReturn2Arg =
+  case parseSignature "a -> b -> Maybe c" of
+    Nothing  -> pure False
+    Just sig ->
+      let sug = filter (\s -> sCategory s == "maybe") (applyRules "lookup" sig)
+      in case sug of
+           [s] ->
+             pure $ T.isInfixOf "maybe True (const True)" (sProperty s)
+                 && T.isInfixOf "lookup x y" (sProperty s)
+                 && sLaw s == "Maybe totality"
+           _   -> pure False
+
+-- | #197: 'ruleMaybeReturn' fires for a 1-argument Maybe-returning
+-- signature and the generated property uses @maybe True (const True)@.
+testSuggestMaybeReturn1Arg :: IO Bool
+testSuggestMaybeReturn1Arg =
+  case parseSignature "k -> Maybe v" of
+    Nothing  -> pure False
+    Just sig ->
+      let sug = filter (\s -> sCategory s == "maybe") (applyRules "find" sig)
+      in case sug of
+           [s] ->
+             pure $ T.isInfixOf "maybe True (const True)" (sProperty s)
+                 && T.isInfixOf "find x" (sProperty s)
+                 && sLaw s == "Maybe totality"
+           _   -> pure False
+
+-- | #197: when no rules match and arity == 'maxRuleArity', the hint must
+-- NOT mention @\"arity > N\"@ — that would be a lie for a 2-arg function.
+testSuggestHintNoArityForArity2 :: IO Bool
+testSuggestHintNoArityForArity2 =
+  -- "String -> Int -> Bool" has arity 2 (== maxRuleArity) and won't match
+  -- any generic algebraic rule, so the hint fires on [].
+  case parseSignature "String -> Int -> Bool" of
+    Nothing  -> pure False
+    Just sig ->
+      let sug  = applyRules "weirdFn" sig
+          hint = SuggestTool.hintFor (length (psArgs sig)) sug
+      in pure $ not (T.isInfixOf "arity" hint)
+
+-- | #197: when no rules match and arity exceeds 'maxRuleArity', the hint
+-- MUST mention @\"arity > N\"@ so the developer understands why.
+testSuggestHintArityForArity3 :: IO Bool
+testSuggestHintArityForArity3 =
+  -- "a -> b -> c -> d" has arity 3 (> maxRuleArity == 2).
+  case parseSignature "a -> b -> c -> d" of
+    Nothing  -> pure False
+    Just sig ->
+      let sug  = applyRules "threeArg" sig
+          hint = SuggestTool.hintFor (length (psArgs sig)) sug
+      in pure $ T.isInfixOf "arity" hint
+              && T.isInfixOf (T.pack (show SuggestTool.maxRuleArity)) hint

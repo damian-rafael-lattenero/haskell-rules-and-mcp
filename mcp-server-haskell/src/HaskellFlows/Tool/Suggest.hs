@@ -28,6 +28,9 @@ module HaskellFlows.Tool.Suggest
   , gatherSiblings
   , parseShowModules
   , parseBrowseBindings
+    -- * Exported for unit tests (#197)
+  , hintFor
+  , maxRuleArity
   ) where
 
 import Data.Aeson
@@ -73,7 +76,7 @@ import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error (GhcError)
 import HaskellFlows.Parser.Type (isOutOfScope)
-import HaskellFlows.Parser.TypeSignature (ParsedSig, parseSignature)
+import HaskellFlows.Parser.TypeSignature (ParsedSig, argCount, parseSignature)
 import HaskellFlows.Suggest.Rules
   ( Confidence (..)
   , RuleContext (..)
@@ -164,7 +167,7 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
                           filtered = case saCategory args of
                             Nothing -> matches
                             Just c  -> filter ((c ==) . sCategory) matches
-                      pure (successResult safe typeText filtered)
+                      pure (successResult safe typeText sig filtered)
 
 
 -- | Issue #90 Phase C: GHC API exception (load threw).
@@ -194,14 +197,17 @@ queryType safe = do
 -- | Issue #90 Phase C: matched suggestions → status='ok'. The
 -- payload shape ('function', 'signature', 'count', 'suggestions',
 -- 'hint') is preserved verbatim under 'result'.
-successResult :: Text -> Text -> [Suggestion] -> ToolResult
-successResult fn sig suggestions =
+--
+-- #197: 'parsedSig' is passed so 'hintFor' can mention arity only
+-- when the function's actual arity exceeds the rules' max.
+successResult :: Text -> Text -> ParsedSig -> [Suggestion] -> ToolResult
+successResult fn sig parsedSig suggestions =
   Env.toolResponseToResult (Env.mkOk (object
     [ "function"    .= fn
     , "signature"   .= sig
     , "count"       .= length suggestions
     , "suggestions" .= map renderSuggestion suggestions
-    , "hint"        .= hintFor suggestions
+    , "hint"        .= hintFor (argCount parsedSig) suggestions
     ]))
 
 renderSuggestion :: Suggestion -> Value
@@ -220,17 +226,31 @@ renderConfidence = \case
   Medium -> "medium"
   Low    -> "low"
 
-hintFor :: [Suggestion] -> Text
-hintFor [] =
+-- | #197: produce a context-aware hint when no laws matched.
+-- Only mention arity as a candidate reason when the function's actual
+-- arity exceeds the rules' maximum (currently 2); for arity-2
+-- functions the previous hardcoded "arity > 2" hint was misleading.
+hintFor :: Int -> [Suggestion] -> Text
+hintFor fnArity [] =
   "No laws matched the signature. Common reasons: function is effectful \
-  \(IO / monadic), arity > 2, or return type is polymorphic in a way rules \
-  \don't pattern-match on yet."
-hintFor xs =
+  \(IO / monadic)"
+  <> (if fnArity > maxRuleArity
+        then ", arity > " <> T.pack (show maxRuleArity)
+        else "")
+  <> ", or return type is polymorphic in a way rules don't pattern-match on yet."
+hintFor _ xs =
   "Try the highest-confidence suggestion first via ghc_quickcheck. "
   <> "Total: " <> T.pack (show (length xs))
   <> " candidate law(s). High-confidence: "
   <> T.pack (show (length (filter ((High ==) . sConfidence) xs)))
   <> "."
+
+-- | Highest arity the current rule catalog handles. Any function with
+-- more arguments than this will never match any rule; worth mentioning
+-- in the no-match hint.  Update this constant whenever a rule is added
+-- that handles arity > 2.
+maxRuleArity :: Int
+maxRuleArity = 2
 
 -- | BUG-15: a structured response for the "function not in scope"
 -- case. The raw GHC error (@<interactive>:1:1: error: [GHC-88464]

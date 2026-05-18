@@ -157,6 +157,7 @@ allRules =
   , ruleConstantFoldingSoundness
   , rulePrinterParserRoundtrip
   , ruleEitherReturn    -- #159
+  , ruleMaybeReturn     -- #197
   ]
 
 -- | @f :: a -> a@ ⇒ check @f (f x) == f x@.
@@ -829,5 +830,58 @@ ruleEitherReturn = Rule
                 , sConfidence = Low
                 , sCategory   = "either"
                 }
+        _ -> Nothing
+  }
+
+-- | #197: functions returning @Maybe c@ with arity 1 or 2 get zero
+-- suggestions from the existing rules (which pattern-match on specific
+-- argument shapes, not on the return type).  Add a totality law that
+-- — at minimum — verifies the function is total (never throws).  The
+-- 'Nothing' branch in the @maybe@ combinator makes the property
+-- involve the Nothing case, satisfying the acceptance criterion that
+-- the agent receives at least one runnable starting point.
+--
+-- Confidence is Low — the tautology is always @True@ for any
+-- well-typed function; its value is catching functions that throw
+-- exceptions instead of returning @Nothing@.
+--
+-- Arity 1 (@a -> Maybe b@) and arity 2 (@a -> b -> Maybe c@) are
+-- handled explicitly; higher arities are left to future rules.
+ruleMaybeReturn :: Rule
+ruleMaybeReturn = Rule
+  { rId = "maybe-total"
+  , rMatches = legacy $ \nm sig ->
+      case (psArgs sig, psReturn sig) of
+        ([argA], TyApp (TyCon "Maybe") [_]) ->
+          let xAnn = annotateParam (psConstraints sig) argA "x"
+          in Just Suggestion
+            { sLaw       = "Maybe totality"
+            , sProperty  =
+                "\\" <> xAnn <> " -> maybe True (const True) (" <> nm <> " x)"
+            , sRationale =
+                "Return type is `Maybe _`; this tautology verifies the \
+                \function is total (never throws). Separately test the \
+                \`Nothing` case with inputs that should be rejected \
+                \(invalid keys, empty containers, out-of-range indices)."
+            , sConfidence = Low
+            , sCategory   = "maybe"
+            }
+        ([argA, argB], TyApp (TyCon "Maybe") [_]) ->
+          let cons = psConstraints sig
+              xAnn = annotateParam cons argA "x"
+              yAnn = annotateParam cons argB "y"
+          in Just Suggestion
+            { sLaw       = "Maybe totality"
+            , sProperty  =
+                "\\" <> xAnn <> " " <> yAnn
+                <> " -> maybe True (const True) (" <> nm <> " x y)"
+            , sRationale =
+                "Return type is `Maybe _`; this tautology verifies the \
+                \function is total (never throws). Separately test the \
+                \`Nothing` case with degenerate inputs (e.g. division \
+                \by zero, empty denominator, out-of-bounds index)."
+            , sConfidence = Low
+            , sCategory   = "maybe"
+            }
         _ -> Nothing
   }
