@@ -92,9 +92,9 @@ displacement.
 | Listing imports currently in scope | `ghc_imports()` | Reads the live GHC session; checking source files misses MCP-injected preloads. |
 | Listing names exported by a module | `ghc_browse(module="Foo.Bar")` | Resolves against the loaded module graph; off-graph modules → `hoogle_search`. |
 | Searching upstream Hackage | `hoogle_search(query="…")` | Off-graph; for in-project lookups use `ghc_browse` or `ghc_info`. |
-| Quick `:t expr` / `:i name` / `:doc name` / `:complete prefix` | `ghc_type` / `ghc_info` / `ghc_doc` / `ghc_complete` | Same as the GHCi commands; cheaper than reloading. |
+| Quick `:t expr` / `:i name` / `:doc name` / `:complete prefix` | `ghc_type(expression="…")` / `ghc_info` / `ghc_doc` / `ghc_complete` | Same as the GHCi commands; cheaper than reloading. |
 | Jumping to a name's definition | `ghc_goto(name="…")` | Returns file + line from "Defined at"; faster than grep when you have a session. |
-| Eval a single Haskell expression | `ghc_eval(expr="…")` | 64 KiB output cap; not for mutating state. |
+| Eval a single Haskell expression | `ghc_eval(expression="…")` | 64 KiB output cap; not for mutating state. Parameter is `expression`, not `expr`. |
 | Checking a single module is clean | `ghc_check_module(module_path="…")` | Aggregates compile + warnings + holes + property replay. |
 | Checking the whole project | `ghc_check_project()` | Same gates over every exposed-module + other-module. |
 | HLint over the project | `ghc_lint(path="mcp-server-haskell")` | Recursive, matches CI; prefer over module-only `ghc_lint(module_path=…)` for the pre-push gate. |
