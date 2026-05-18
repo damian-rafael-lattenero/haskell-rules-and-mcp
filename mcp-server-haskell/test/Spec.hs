@@ -1004,6 +1004,7 @@ main = do
       , test "explain_error: pickDiagnostic default first (#59)" testExplainPickDefault
       , test "explain_error: pickDiagnostic by index (#59)" testExplainPickIndex
       , test "explain_error: pickDiagnostic out of range (#59)" testExplainPickOOR
+      , test "explain_error: index out of range gives clear hint, not 'No errors' (#203)" testExplainIndexOutOfRangeHint203
       , test "explain_error: extractImports recognises shapes (#59)" testExplainExtractImports
       , test "explain_error: enclosingLineRange clamps (#59)" testExplainRangeClamps
       , test "perf: aggregate empty -> zeros (#61)" testPerfAggregateEmpty
@@ -9006,6 +9007,31 @@ testExplainPickOOR =
   let diags =
         [ GhcError "f.hs" 1 1 SevError Nothing "a" ]
   in pure (isNothing (ExplainError.pickDiagnostic (Just 5) diags))
+
+-- | Issue #203: renderIndexOutOfRange returns a clear "index N out of
+-- range — M error(s) found" hint, not the misleading "No errors detected".
+testExplainIndexOutOfRangeHint203 :: IO Bool
+testExplainIndexOutOfRangeHint203 =
+  let diags  = [ GhcError "src/F.hs" 1 1 SevError Nothing "boom" ]
+      result = ExplainError.renderIndexOutOfRange "src/F.hs" 3 1 diags
+  in pure $ case trContent result of
+    [TextContent body_] ->
+      case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+        Just (A.Object top) ->
+          case AKM.lookup "result" top of
+            Just (A.Object r) ->
+              let hint = AKM.lookup "hint" r
+              in hint /= Nothing
+                 -- must mention "out of range"
+                 && maybe False (\h -> "out of range" `T.isInfixOf`
+                      case h of A.String s -> s; _ -> "") hint
+                 -- must NOT say the old wrong message
+                 && maybe True (\h -> case h of
+                      A.String s -> not ("No errors detected" `T.isInfixOf` s)
+                      _          -> True) hint
+            _ -> False
+        _ -> False
+    _ -> False
 
 -- | Issue #59: 'extractImports' must recognise plain, qualified,
 -- and parenthesised import forms.

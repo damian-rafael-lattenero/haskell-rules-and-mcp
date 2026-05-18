@@ -30,6 +30,7 @@ module HaskellFlows.Tool.ExplainError
   , applyLinePatch
     -- * Response shaping (exported for unit tests)
   , renderContext
+  , renderIndexOutOfRange
   , syntheticError
     -- * Location parsing (exported for unit tests)
   , parseGhcLineCol
@@ -169,10 +170,15 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
               -- Filter to OWN-module errors so a sibling's failure
               -- doesn't drag the agent off-target.
               let ownDiags = filter (ownsThisModule (eaModulePath args)) diags
-              case pickDiagnostic (eaDiagnosticIndex args) ownDiags of
-                Nothing ->
+                  ownErrs  = filter ((== SevError) . geSeverity) ownDiags
+              -- Issue #203: distinguish "no errors" from "index out of range"
+              -- so callers get a useful message instead of "No errors detected".
+              case (eaDiagnosticIndex args, pickDiagnostic (eaDiagnosticIndex args) ownDiags) of
+                (Just i, Nothing) | not (null ownErrs) ->
+                  pure (renderIndexOutOfRange (eaModulePath args) i (length ownErrs) ownDiags)
+                (_, Nothing) ->
                   pure (renderNoErrors (eaModulePath args) ownDiags)
-                Just diag -> do
+                (_, Just diag) -> do
                   -- Phase 2: optional patch verification.
                   mVerify <- case eaVerifyPatch args of
                     Nothing    -> pure Nothing
@@ -390,6 +396,26 @@ renderContext modulePath body diag ownDiags mVerify =
               \let the tool apply it, recompile, and report whether the \
               \error is resolved. The original file is always restored." :: Text )
         ] <> verifyFields
+  in Env.toolResponseToResult (Env.mkOk payload)
+
+-- | Issue #203: diagnostic_index is out of range — there ARE errors,
+-- just not as many as the caller expected. Status='ok' so the agent
+-- can recover; 'diagnostic=null' signals nothing was selected.
+renderIndexOutOfRange :: Text -> Int -> Int -> [GhcError] -> ToolResult
+renderIndexOutOfRange modulePath idx total diags =
+  let payload = object
+        [ "module_path" .= modulePath
+        , "diagnostic"  .= Null
+        , "hint"        .= ( "diagnostic_index " <> T.pack (show idx)
+                               <> " is out of range — "
+                               <> T.pack (show total)
+                               <> " error(s) found (valid indices 0.."
+                               <> T.pack (show (total - 1))
+                               <> "). Omit diagnostic_index to get the \
+                                  \first error." :: Text )
+        , "all_errors"  .= map renderDiag
+                              (filter ((== SevError) . geSeverity) diags)
+        ]
   in Env.toolResponseToResult (Env.mkOk payload)
 
 -- | Issue #90 Phase C: no error to explain → status='ok' with
