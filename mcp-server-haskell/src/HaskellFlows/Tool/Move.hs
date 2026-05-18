@@ -42,6 +42,7 @@ module HaskellFlows.Tool.Move
   , rewriteSelectiveImport
   , removeFromSourceExportList
   , addToDestinationExportList
+  , hasBareImportOf
   , moduleNameToPath
   ) where
 
@@ -53,6 +54,7 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.List (find)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -176,13 +178,28 @@ proceedMove sess pd args fromAbs toAbs fromBody toBody sliced = do
         (fromAbs, fromBody, fromBody')
           : (toAbs, toBody, toBody')
           : changedConsumers
+      -- #206: detect consumer files that carry a bare import of the source
+      -- module (e.g. @import FromMod@). Phase 1 only rewrites the selective
+      -- shape @import From (sym, …)@; bare imports are left unchanged. If
+      -- any such file exists, surface a warning so the user knows verify
+      -- may fail if that file relies on the moved symbol.
+      bareFiles = [ T.pack path
+                  | (path, body, _) <- plannedConsumers
+                  , hasBareImportOf (maFrom args) body ]
+      mWarn = if null bareFiles
+                then Nothing
+                else Just ( "These consumer files import "
+                           <> maFrom args
+                           <> " without an explicit list and were NOT rewritten — \
+                              \verify may fail if they rely on the moved symbol: "
+                           <> T.intercalate ", " bareFiles )
   if maDryRun args
-    then pure (dryRunResult args allWrites)
-    else doApply sess args allWrites
+    then pure (dryRunResult args allWrites mWarn)
+    else doApply sess args allWrites mWarn
 
 doApply
-  :: GhcSession -> MoveArgs -> [(FilePath, Text, Text)] -> IO ToolResult
-doApply sess args allWrites = do
+  :: GhcSession -> MoveArgs -> [(FilePath, Text, Text)] -> Maybe Text -> IO ToolResult
+doApply sess args allWrites mWarn = do
   appliedRef <- newIORef ([] :: [FilePath])
   outcome    <- writeAll appliedRef allWrites
   case outcome of
@@ -207,7 +224,7 @@ doApply sess args allWrites = do
         Right (ok, diags) ->
           let errs = filter ((== SevError) . geSeverity) diags
           in if ok && null errs
-               then pure (successResult args allWrites)
+               then pure (successResult args allWrites mWarn)
                else do
                  restoreAll allWrites done
                  pure (verifyFailedResult args errs)
@@ -377,6 +394,9 @@ removeFromSourceExportList symbol body =
         Nothing       -> body
         Just newHeader -> T.unlines (newHeader : tl)
   where
+    -- #207: use stripSuffix " where" + stripSuffix ")" to locate the
+    -- outermost export-list boundaries. The old T.breakOn ")" misparsed
+    -- Type(..) entries (stopped at the ')' inside the parens).
     rewriteHeader :: Text -> Text -> Maybe Text
     rewriteHeader sym ln =
       let leading  = T.takeWhile (== ' ') ln
@@ -384,22 +404,26 @@ removeFromSourceExportList symbol body =
       in case T.stripPrefix "module " stripped of
            Nothing -> Nothing
            Just rest ->
-             case T.breakOn "(" rest of
-               (_, parenAndAfter) | T.null parenAndAfter -> Nothing
-               (modPart, parenAndAfter) ->
-                 let afterOpen = T.drop 1 parenAndAfter
-                     (inside, closeAndAfter) = T.breakOn ")" afterOpen
-                 in if T.null closeAndAfter then Nothing
-                    else
-                      let items   = map T.strip (T.splitOn "," inside)
-                          kept    = filter (\t -> t /= sym && not (T.null t))
-                                           items
-                          afterClose = T.drop 1 closeAndAfter
-                      in if sym `notElem` items then Nothing
-                         else Just $ leading
-                              <> "module " <> T.stripEnd modPart
-                              <> " (" <> T.intercalate ", " kept <> ")"
-                              <> afterClose
+             let normed = T.intercalate " " (T.words rest)
+             in case T.stripSuffix " where" normed of
+                  Nothing       -> Nothing
+                  Just withList ->
+                    case T.stripSuffix ")" withList of
+                      Nothing         -> Nothing  -- open export (no closing ')')
+                      Just beforeClose ->
+                        case T.breakOn "(" beforeClose of
+                          (_, "")  -> Nothing  -- no explicit list
+                          (mp, ao) ->
+                            let inside  = T.drop 1 ao
+                                items   = map T.strip (T.splitOn "," inside)
+                                trimmed = filter (not . T.null) items
+                            in if sym `notElem` trimmed then Nothing
+                               else
+                                 let kept = filter (/= sym) trimmed
+                                 in Just $ leading
+                                      <> "module " <> T.stripEnd mp
+                                      <> " (" <> T.intercalate ", " kept <> ")"
+                                      <> " where"
 
 -- | Issue #76: symmetric companion to 'removeFromSourceExportList'.
 --
@@ -427,31 +451,38 @@ addToDestinationExportList symbol body =
       Nothing       -> body
       Just newHeader -> T.unlines (newHeader : tl)
   where
+    -- #207: use stripSuffix " where" + stripSuffix ")" to locate the
+    -- outermost export-list boundaries, mirroring the fix in
+    -- removeFromSourceExportList. The old T.breakOn ")" misparsed
+    -- Type(..) entries (stopped at the ')' inside the constructor parens).
     rewriteHeader :: Text -> Text -> Maybe Text
     rewriteHeader sym ln =
       let leading  = T.takeWhile (== ' ') ln
           stripped = T.drop (T.length leading) ln
       in case T.stripPrefix "module " stripped of
-        Nothing -> Nothing
-        Just rest -> case T.breakOn "(" rest of
-          (_, parenAndAfter) | T.null parenAndAfter -> Nothing  -- open export
-          (modPart, parenAndAfter) ->
-            let afterOpen = T.drop 1 parenAndAfter
-                (inside, closeAndAfter) = T.breakOn ")" afterOpen
-            in if T.null closeAndAfter
-                  then Nothing
-                  else
-                    let items = map T.strip (T.splitOn "," inside)
-                        trimmed = filter (not . T.null) items
-                    in if sym `elem` trimmed
-                          then Nothing  -- already exported, no change
-                          else
-                            let newItems  = trimmed ++ [sym]
-                                afterClose = T.drop 1 closeAndAfter
-                            in Just $ leading
-                                 <> "module " <> T.stripEnd modPart
-                                 <> " (" <> T.intercalate ", " newItems <> ")"
-                                 <> afterClose
+           Nothing -> Nothing
+           Just rest ->
+             let normed = T.intercalate " " (T.words rest)
+             in case T.stripSuffix " where" normed of
+                  Nothing       -> Nothing
+                  Just withList ->
+                    case T.stripSuffix ")" withList of
+                      Nothing         -> Nothing  -- open export (no closing ')')
+                      Just beforeClose ->
+                        case T.breakOn "(" beforeClose of
+                          (_, "")  -> Nothing  -- no explicit list
+                          (mp, ao) ->
+                            let inside  = T.drop 1 ao
+                                items   = map T.strip (T.splitOn "," inside)
+                                trimmed = filter (not . T.null) items
+                            in if sym `elem` trimmed
+                                 then Nothing  -- already exported, no change
+                                 else
+                                   let newItems = trimmed ++ [sym]
+                                   in Just $ leading
+                                        <> "module " <> T.stripEnd mp
+                                        <> " (" <> T.intercalate ", " newItems <> ")"
+                                        <> " where"
 
 collapseBlanks :: [Text] -> [Text]
 collapseBlanks = go False
@@ -548,6 +579,28 @@ stripImportList input =
                 , T.drop 1 closeAndAfter
                 )
 
+-- | Issue #206: returns 'True' when the file body contains a bare
+-- (non-selective) import of the given module — e.g. @import From@ or
+-- @import qualified From@ without a parenthesised import list. These
+-- lines are NOT rewritten by 'rewriteImports' in Phase 1 (selective
+-- rewrites only), so callers should surface a warning when they are
+-- found.
+hasBareImportOf :: Text -> Text -> Bool
+hasBareImportOf fromMod body =
+  any (isBareImport . T.strip) (T.lines body)
+  where
+    isBareImport ln =
+      case T.stripPrefix "import " ln of
+        Nothing   -> False
+        Just rest ->
+          let rest' = fromMaybe rest (T.stripPrefix "qualified " rest)
+              modTok = T.takeWhile isModChar rest'
+          in modTok == fromMod && not ("(" `T.isInfixOf` ln)
+    isModChar c = isAsciiUpper c
+               || isAsciiLower c
+               || isDigit c
+               || c == '.' || c == '_' || c == '\''
+
 --------------------------------------------------------------------------------
 -- consumer enumeration
 --------------------------------------------------------------------------------
@@ -610,9 +663,9 @@ moduleNameToPath m
 -- (unwritten) plan under 'result'. Field names preserved verbatim
 -- so callers depending on @applied@/@dry_run@/@files_modified@
 -- still work.
-dryRunResult :: MoveArgs -> [(FilePath, Text, Text)] -> ToolResult
-dryRunResult args allWrites =
-  let payload = object
+dryRunResult :: MoveArgs -> [(FilePath, Text, Text)] -> Maybe Text -> ToolResult
+dryRunResult args allWrites mWarn =
+  let base =
         [ "applied"           .= False
         , "dry_run"           .= True
         , "symbol"            .= maSymbol args
@@ -622,14 +675,15 @@ dryRunResult args allWrites =
             map (\(p,_,_) -> T.pack p) allWrites
         , "consumers_updated" .= max 0 (length allWrites - 2)
         ]
+      payload = object (base <> maybe [] (\w -> ["warning" .= w]) mWarn)
   in Env.toolResponseToResult (Env.mkOk payload)
 
 -- | Issue #90 Phase C: applied + verified move → status='ok'.
 -- 'verification.compile_status' stays under 'result' so the
 -- unchanged shape ('compile_status', 'new_errors') is intact.
-successResult :: MoveArgs -> [(FilePath, Text, Text)] -> ToolResult
-successResult args allWrites =
-  let payload = object
+successResult :: MoveArgs -> [(FilePath, Text, Text)] -> Maybe Text -> ToolResult
+successResult args allWrites mWarn =
+  let base =
         [ "applied"           .= True
         , "dry_run"           .= False
         , "symbol"            .= maSymbol args
@@ -643,6 +697,7 @@ successResult args allWrites =
             , "new_errors"     .= (0 :: Int)
             ]
         ]
+      payload = object (base <> maybe [] (\w -> ["warning" .= w]) mWarn)
   in Env.toolResponseToResult (Env.mkOk payload)
 
 -- | Issue #90 §4: post-move type-check failure → status='failed'

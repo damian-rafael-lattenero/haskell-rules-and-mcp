@@ -1007,6 +1007,11 @@ main = do
       , test "move: addToDestinationExportList no-op on open export (#76)"
                                                                  testMoveAddDestExportOpen
       , test "move: slicer stops at next binding's Haddock (#76)" testMoveSliceStopsAtHaddock
+      , test "#207: addToDestinationExportList handles Type(..) exports"    testMoveAddDestExportTypeCons
+      , test "#207: removeFromSourceExportList handles Type(..) exports"    testMoveRemoveExportTypeCons
+      , test "#206: hasBareImportOf detects bare import"                    testHasBareImportOfDetects
+      , test "#206: hasBareImportOf detects qualified bare import"          testHasBareImportOfQualified
+      , test "#206: hasBareImportOf misses selective import"                testHasBareImportOfSelectiveMiss
       , test "deps_explain: parseSolverOutput on real dump (#63)" testDepsExplainParse
       , test "deps_explain: identifyRootCause picks deepest (#63)" testDepsExplainRoot
       , test "deps_explain: extractPackages strips versions (#63)" testDepsExplainPackages
@@ -8989,6 +8994,66 @@ testMoveAddDestExportOpen =
         ]
       out = MoveTool.addToDestinationExportList "moved" body
   in pure (out == body)
+
+-- | Issue #207: 'addToDestinationExportList' must not stop at the ')'
+-- inside a Type(..) constructor export. The old T.breakOn ")" approach
+-- misparsed @module Dest (Expr(..), eval) where@ as if the ')' inside
+-- @Expr(..)@ was the export-list close, so the new symbol was never
+-- appended.
+testMoveAddDestExportTypeCons :: IO Bool
+testMoveAddDestExportTypeCons =
+  let body = T.unlines
+        [ "module Dest (Expr(..), eval) where"
+        , ""
+        , "data Expr = Lit Int"
+        , "eval :: Expr -> Int"
+        , "eval (Lit n) = n"
+        ]
+      out = MoveTool.addToDestinationExportList "moved" body
+  in pure $ T.isInfixOf "module Dest (Expr(..), eval, moved) where" out
+         && T.isInfixOf "data Expr" out  -- body preserved
+
+-- | Issue #207: 'removeFromSourceExportList' must also correctly parse
+-- headers containing Type(..) constructor exports and not corrupt them.
+testMoveRemoveExportTypeCons :: IO Bool
+testMoveRemoveExportTypeCons =
+  let body = T.unlines
+        [ "module Source (Expr(..), eval, moved) where"
+        , ""
+        , "data Expr = Lit Int"
+        ]
+      out = MoveTool.removeFromSourceExportList "moved" body
+      header = T.takeWhile (/= '\n') out
+  in pure $ T.isInfixOf "module Source (Expr(..), eval) where" out
+         && not ("moved" `T.isInfixOf` header)
+
+-- | Issue #206: 'hasBareImportOf' detects a plain @import Foo@ line.
+testHasBareImportOfDetects :: IO Bool
+testHasBareImportOfDetects =
+  let body = T.unlines
+        [ "module Consumer where"
+        , "import Data.Text"
+        , "import HaskellFlows.Tool.Source"
+        , "foo = 1"
+        ]
+  in pure (MoveTool.hasBareImportOf "HaskellFlows.Tool.Source" body)
+
+-- | Issue #206: 'hasBareImportOf' detects @import qualified Foo@.
+testHasBareImportOfQualified :: IO Bool
+testHasBareImportOfQualified =
+  let body = T.unlines
+        [ "import qualified HaskellFlows.Tool.Source"
+        ]
+  in pure (MoveTool.hasBareImportOf "HaskellFlows.Tool.Source" body)
+
+-- | Issue #206: 'hasBareImportOf' must NOT trigger on a selective
+-- import @import Foo (sym)@ — the rewriter handles those already.
+testHasBareImportOfSelectiveMiss :: IO Bool
+testHasBareImportOfSelectiveMiss =
+  let body = T.unlines
+        [ "import HaskellFlows.Tool.Source (sym)"
+        ]
+  in pure (not (MoveTool.hasBareImportOf "HaskellFlows.Tool.Source" body))
 
 -- | Issue #76: the slicer's biggest leak is mistaking the next
 -- binding's '-- |' Haddock for a continuation of the current
