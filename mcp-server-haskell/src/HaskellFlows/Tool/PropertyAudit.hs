@@ -154,7 +154,24 @@ runPairProbe
   :: GhcSession -> PropertyAuditArgs
   -> (StoredProperty, StoredProperty) -> IO PairFinding
 runPairProbe ghcSess _args (p1, p2) = do
-  let probe = buildContradictionProbe (spExpression p1) (spExpression p2)
+  -- Issue #212: statically detect ==> before touching the REPL.
+  -- P ==> Q has type `Int -> Property`, not `Int -> Bool`, so
+  -- `not (P args)` fails to type-check. Emit a clear reason
+  -- instead of the generic "probe load/parse failure" message.
+  let hasImplication e = "==>" `T.isInfixOf` e
+      e1 = spExpression p1
+      e2 = spExpression p2
+  if hasImplication e1 || hasImplication e2
+    then pure PairFinding
+           { pfP1     = p1
+           , pfP2     = p2
+           , pfStatus = "skipped"
+           , pfDetail = "skipped: property uses (==>) which returns Property, \
+                        \not Bool — incompatible with the conjunction probe. \
+                        \Audit these manually."
+           }
+    else do
+  let probe = buildContradictionProbe e1 e2
   -- Issue #112: the contradiction probe is a SYNTHETIC lambda, not a
   -- named property. Loading P1's source module often fails when the
   -- probe body doesn't reference project symbols at all, and using a

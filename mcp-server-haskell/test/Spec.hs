@@ -1017,6 +1017,7 @@ main = do
       , test "perf: regressionPct negative when faster (#61 Phase2)" testPerfRegressionPctNegative
       , test "perf: regressionPct Nothing when zero baseline (#61 Phase2)" testPerfRegressionPctZeroBaseline
       , test "perf: BaselineEntry JSON roundtrip (#61 Phase2)" testPerfBaselineEntryRoundtrip
+      , test "#212: audit detects ==> in expression text"       testPAImplicationDetection
       , test "property_audit: pairCombinations 0 elements (#64)" testPACombinationsEmpty
       , test "property_audit: pairCombinations 5 elements (#64)" testPACombinations5
       , test "property_audit: pairCombinations distinct pairs (#64)" testPACombinationsDistinct
@@ -9166,6 +9167,18 @@ testPerfBaselineEntryRoundtrip =
        Nothing      -> pure False
 
 -- | Issue #64: 'pairCombinations' on an empty list returns no
+-- | Issue #212: ==> detection pins the text predicate used by
+-- 'runPairProbe' to short-circuit the REPL probe. Expressions
+-- with implication must be detected; those without must not.
+testPAImplicationDetection :: IO Bool
+testPAImplicationDetection = pure $
+  let has e = "==>" `T.isInfixOf` e
+  in  has "\\(x :: Int) -> x > 0 ==> safeDiv x x == Just 1"
+   && has "prop_foo ==> prop_bar"
+   && not (has "\\x -> x + 0 == x")
+   && not (has "\\xs -> reverse (reverse xs) == xs")
+   && not (has "\\x -> double x == x * 2")
+
 -- pairs. Edge case the auditor relies on so a property store
 -- with 0 entries doesn't try to run a probe.
 testPACombinationsEmpty :: IO Bool
