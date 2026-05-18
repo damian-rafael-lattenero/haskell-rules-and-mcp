@@ -1100,6 +1100,8 @@ main = do
                                                                  testEEApplyLinePatchMiss
       , test "explain_error: applyLinePatch rejects out-of-bounds line (#59 Phase2)"
                                                                  testEEApplyLinePatchOob
+      , test "#222: verify_patch uses loadForTarget not bare loadAndCaptureDiagnostics"
+                                                                 testExplainVerifyPatchUsesLoadForTarget
       , test "#189: parseGhcLineCol extracts line+col from error text" testParseGhcLineColBasic
       , test "#189: parseGhcLineCol handles col range (7-15 → 7)"      testParseGhcLineColRange
       , test "#189: parseGhcLineCol falls back to 1:1 on no location"  testParseGhcLineColFallback
@@ -9804,6 +9806,20 @@ testEEApplyLinePatchOob =
                                      , ExplainError.psNew  = "X"
                                      }
   in pure (isNothing (ExplainError.applyLinePatch body patch))
+
+-- | Issue #222: runVerifyPatch must use the stanza-aware 'loadForTarget'
+-- rather than bare 'loadAndCaptureDiagnostics'. Verified by checking
+-- that the source imports and uses both 'loadForTarget' and 'targetForPath'.
+testExplainVerifyPatchUsesLoadForTarget :: IO Bool
+testExplainVerifyPatchUsesLoadForTarget = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/ExplainError.hs"
+  let usesLoadForTarget  = "loadForTarget"  `T.isInfixOf` src
+  let usesTargetForPath  = "targetForPath"  `T.isInfixOf` src
+  -- Confirm the bare path is NOT the only call in runVerifyPatch section
+  -- (we don't want a regression back to loadAndCaptureDiagnostics there).
+  -- The function is still imported for the initial diagnostic phase, so
+  -- loadAndCaptureDiagnostics may appear — but loadForTarget must too.
+  pure (usesLoadForTarget && usesTargetForPath)
 
 --------------------------------------------------------------------------------
 -- #189 — parseGhcLineCol

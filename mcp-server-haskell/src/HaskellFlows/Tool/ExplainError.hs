@@ -50,6 +50,9 @@ import HaskellFlows.Ghc.ApiSession
   , LoadFlavour (..)
   , invalidateLoadCache
   , loadAndCaptureDiagnostics
+    -- Issue #222: verify_patch needs stanza-aware recompilation
+  , loadForTarget
+  , targetForPath
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
@@ -323,7 +326,15 @@ runVerifyPatch ghcSess mp body origDiag patch = do
             ])
         Right _ -> do
           invalidateLoadCache ghcSess
-          (_, postDiags) <- loadAndCaptureDiagnostics ghcSess Strict
+          -- Issue #222: use the stanza-aware loader so verify_patch
+          -- recompiles with the correct language extensions and package
+          -- flags. The bare loadAndCaptureDiagnostics path starts from
+          -- an empty env (no stanza flags) when the initial load failed
+          -- and resetHscEnvInPlace was called, causing spurious errors
+          -- ("Illegal \case", "Could not find module 'Data.Aeson'") in
+          -- unrelated modules to appear in diagnostics_after.
+          tgt <- targetForPath ghcSess (unModulePath mp)
+          (_, postDiags) <- loadForTarget ghcSess tgt Strict
           -- Restore original regardless of outcome.
           _ <- try (TIO.writeFile path body) :: IO (Either SomeException ())
           invalidateLoadCache ghcSess
