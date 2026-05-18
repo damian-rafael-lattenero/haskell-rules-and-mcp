@@ -1,0 +1,23 @@
+mcp-server-haskell/src/HaskellFlows/Parser/Hole.hs
+  s_54dbf5675ec5ae::t_c934c029e4fab6 289
+  s_54dbf5675ec5ae::t_712cd79ed79322 25-27
+mcp-server-haskell/test/Spec.hs
+  s_54dbf5675ec5ae::t_62ce70d4941f45 5892
+  s_54dbf5675ec5ae::t_0c342c56db04ee 5877-5891
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.9",
+  "base_commit_sha": "5a364fbdddd37109d2409473fd138b2b655a7eff",
+  "prompts": {},
+  "sessions": {
+    "s_54dbf5675ec5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d704d61f-ca86-414c-85d1-e75c1df02293",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
