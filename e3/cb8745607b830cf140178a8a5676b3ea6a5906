@@ -1,0 +1,27 @@
+mcp-server-haskell/test-e2e/Scenarios/FlowBootstrap.hs
+  s_54dbf5675ec5ae::t_ace2c43668f387 36-37,41-44
+mcp-server-haskell/test/Spec.hs
+  s_54dbf5675ec5ae::t_1acc2d794da700 1382
+  s_54dbf5675ec5ae::t_d48f9c66db05cb 13943-13949
+  s_54dbf5675ec5ae::t_a74bc722efeea2 13953-13955
+  s_54dbf5675ec5ae::t_e761279f958ced 13933-13942,13950-13952,13956
+  s_54dbf5675ec5ae::t_e8f52a549e8d9c 264
+mcp-server-haskell/src/HaskellFlows/Ghc/ApiSession.hs
+  s_54dbf5675ec5ae::t_b9c2219a45926e 1283-1292,1295-1297
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.9",
+  "base_commit_sha": "e3cb8745607b830cf140178a8a5676b3ea6a5906",
+  "prompts": {},
+  "sessions": {
+    "s_54dbf5675ec5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d704d61f-ca86-414c-85d1-e75c1df02293",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
