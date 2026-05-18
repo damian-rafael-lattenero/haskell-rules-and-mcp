@@ -16,6 +16,9 @@ module HaskellFlows.Tool.AddImport
   , AddImportArgs (..)
   , renderImportLine
   , extractModules
+    -- * Pure helpers (exported for unit tests)
+  , filterInternal         -- #204
+  , prioritizeModuleMatch  -- #204
     -- * Session helper (exported for unit tests)
   , addImportToSession
   ) where
@@ -68,7 +71,7 @@ descriptor =
           , "properties" .= object
               [ "name" .= object
                   [ "type"        .= ("string" :: Text)
-                  , "description" .= ("Name to look up. Examples: \"fromMaybe\", \"Map\"." :: Text)
+                  , "description" .= ("Name to look up. Examples: \"fromMaybe\", \"Map.lookup\", \"Data.Map.Strict\"." :: Text)
                   ]
               , "qualified" .= object
                   [ "type"        .= ("boolean" :: Text)
@@ -114,8 +117,12 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
               ]
         hoogleRes <- Hoogle.handle hoogleArgs
         let candidates = extractModules hoogleRes
-            imports    = map (renderImportLine (aiQualified args))
-                           (uniqueTop 5 candidates)
+            -- #204: strip .Internal modules then bring the closest
+            -- name/module match to the front of the candidate list.
+            ranked  = prioritizeModuleMatch (aiName args)
+                        (filterInternal candidates)
+            imports = map (renderImportLine (aiQualified args))
+                        (uniqueTop 5 ranked)
         -- #146: inject the top candidate into the live GHCi session so
         -- subsequent ghc_eval calls can use the imported name
         -- immediately, without requiring the user to reload or edit a
@@ -243,6 +250,32 @@ extractModules tr = case trContent tr of
           _               -> []
       _ -> []
   _ -> []
+
+-- | #204: Remove @.Internal@ modules from the candidate list.
+--
+-- Modules like @Data.Map.Internal@ and @Data.Sequence.Internal@ are
+-- implementation-detail modules that are never part of the public API.
+-- Surfacing them as the top hit (which Hoogle does when the user queries
+-- by module path) gives wrong and confusing guidance.
+filterInternal :: [Text] -> [Text]
+filterInternal = filter (not . (".Internal" `T.isInfixOf`))
+
+-- | #204: When the query looks like a qualified module path (contains
+-- @\".\"@), reorder candidates so that exact matches come first, then
+-- prefix matches, then everything else — without otherwise altering
+-- Hoogle's ordering within each group.
+--
+-- This ensures that @ghc_add_import(name=\"Data.Map.Strict\")@ returns
+-- @Data.Map.Strict@ as the top hit rather than @Data.Map.Lazy@ or
+-- whatever Hoogle happens to rank highest.
+prioritizeModuleMatch :: Text -> [Text] -> [Text]
+prioritizeModuleMatch q mods
+  | "." `T.isInfixOf` q =
+      let exact  = filter (== q)                                     mods
+          prefix = filter (\m -> q `T.isPrefixOf` m && m /= q)      mods
+          other  = filter (\m -> not (q `T.isPrefixOf` m) && m /= q) mods
+      in exact ++ prefix ++ other
+  | otherwise = mods
 
 uniqueTop :: Int -> [Text] -> [Text]
 uniqueTop n = take n . dedupe

@@ -1341,6 +1341,11 @@ main = do
       -- Issue #105: extractModules envelope peeling
       , test "#105: extractModules reads hits inside result envelope"  testExtractModulesEnvelope
       , test "#105: extractModules ignores wrong key 'results'"        testExtractModulesTopLevel
+      -- Issue #204: Internal module filter + exact-match priority
+      , test "#204: filterInternal removes .Internal modules"         testFilterInternalRemoves
+      , test "#204: filterInternal keeps public modules"              testFilterInternalKeeps
+      , test "#204: prioritizeModuleMatch exact match first"          testPrioritizeExactFirst
+      , test "#204: prioritizeModuleMatch no-op for non-dotted query" testPrioritizeNoDotNoOp
       -- Issue #104c: injectTypeAnnotations safety-net
       , test "#104c: injectTypeAnnotations annotates bare x"          testInjectAnnotateBareX
       , test "#104c: injectTypeAnnotations annotates xs as list"      testInjectAnnotateXs
@@ -15549,3 +15554,44 @@ testSuggestHintArityForArity3 =
           hint = SuggestTool.hintFor (length (psArgs sig)) sug
       in pure $ T.isInfixOf "arity" hint
               && T.isInfixOf (T.pack (show SuggestTool.maxRuleArity)) hint
+
+-- | #204: 'filterInternal' removes any module whose name contains
+-- @\".Internal\"@.
+testFilterInternalRemoves :: IO Bool
+testFilterInternalRemoves =
+  let mods = [ "Data.Map.Internal"
+             , "Data.Map.Strict"
+             , "Data.Sequence.Internal"
+             , "Data.Map.Lazy"
+             ]
+      result = AddImport.filterInternal mods
+  in pure $ result == ["Data.Map.Strict", "Data.Map.Lazy"]
+
+-- | #204: 'filterInternal' keeps public modules untouched.
+testFilterInternalKeeps :: IO Bool
+testFilterInternalKeeps =
+  let mods = ["Data.Map.Strict", "Data.Map.Lazy", "Data.Set"]
+  in pure (AddImport.filterInternal mods == mods)
+
+-- | #204: 'prioritizeModuleMatch' puts the exact-match module first
+-- when the query is a dotted path.
+testPrioritizeExactFirst :: IO Bool
+testPrioritizeExactFirst =
+  let q    = "Data.Map.Strict"
+      mods = [ "Data.Map.Lazy"
+             , "Data.Map.Strict"
+             , "Data.Map.StrictWithKey"
+             , "Data.IntMap.Strict"
+             ]
+      result = AddImport.prioritizeModuleMatch q mods
+  in pure $ case result of
+       (first : _) -> first == "Data.Map.Strict"
+       []          -> False
+
+-- | #204: 'prioritizeModuleMatch' is a no-op when the query has
+-- no dots (plain function name lookup like @\"fromMaybe\"@).
+testPrioritizeNoDotNoOp :: IO Bool
+testPrioritizeNoDotNoOp =
+  let q    = "fromMaybe"
+      mods = ["Data.Maybe", "Prelude"]
+  in pure (AddImport.prioritizeModuleMatch q mods == mods)
