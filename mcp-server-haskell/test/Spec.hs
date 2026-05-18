@@ -1462,6 +1462,8 @@ main = do
       -- Issue #200 — regression_pct precision
       , test "#200: roundTo1dp rounds to 1 decimal place"                testPerfRoundTo1dp
       , test "#200: regression_pct in payload has at most 1 decimal"     testPerfRegressionPctPrecision
+      , test "#223: perf runtime exception gets 'threw' message not 'module lost'"
+                                                                          testPerfRuntimeExceptionMessage
       -- Issue #135 — summariseMeasurementErrors truncation
       , test "#135: summariseMeasurementErrors single error stays short"   testSummariseSingleError
       , test "#135: summariseMeasurementErrors 20 repeated errors omits"  testSummariseRepeatedErrors
@@ -14658,6 +14660,41 @@ testPerfRegressionPctPrecision =
                            (_, d)  -> T.length (T.takeWhile (/= 'e') (T.drop 1 d))
                      in pure (decimals <= 1)
                    _ -> pure False
+               _ -> pure False
+           _ -> pure False
+       _ -> pure False
+
+-- | Issue #223: when all measurements throw a runtime exception (e.g.
+-- Prelude.undefined), the error message must say "threw a runtime exception"
+-- NOT "GHC session may have lost the module".
+testPerfRuntimeExceptionMessage :: IO Bool
+testPerfRuntimeExceptionMessage =
+  let args = PerfTool.PerfArgs
+               { PerfTool.paExpression      = "1 + undefined"
+               , PerfTool.paRuns            = 3
+               , PerfTool.paSaveBaseline    = False
+               , PerfTool.paCompareBaseline = False
+               , PerfTool.paVerbose         = False
+               , PerfTool.paThresholdPct    = 30.0
+               }
+      -- All 3 errs contain "Prelude." → runtime-exception path
+      errs  = [ "Prelude.undefined\nCallStack (from HasCallStack):\n  error, called at …"
+              , "Prelude.undefined\nCallStack (from HasCallStack):\n  error, called at …"
+              , "Prelude.undefined\nCallStack (from HasCallStack):\n  error, called at …"
+              ] :: [Text]
+      stats   = PerfTool.aggregate ([] :: [Word64])
+      result  = PerfTool.renderResult args [] stats errs Nothing 0
+      encoded = case trContent result of
+        [TextContent body_] -> body_
+        _                   -> ""
+  in case A.decode (TLE.encodeUtf8 (TL.fromStrict encoded)) of
+       Just (A.Object top) ->
+         case AKM.lookup "error" top of
+           Just (A.Object err) ->
+             case AKM.lookup "message" err of
+               Just (A.String msg) ->
+                    pure ( "threw a runtime exception" `T.isInfixOf` msg
+                        && not ("session may have lost" `T.isInfixOf` msg) )
                _ -> pure False
            _ -> pure False
        _ -> pure False

@@ -393,18 +393,36 @@ renderResult args nss stats errs mBaseline warmupNs =
   -- regression percentage against a baseline.
   let allErrored = not (null errs) && length errs == paRuns args
   in if allErrored
-       then Env.toolResponseToResult
-              (Env.mkFailed
-                ((Env.mkErrorEnvelope Env.SubprocessError
-                    ("All " <> T.pack (show (paRuns args))
+       then
+         -- Issue #223: distinguish runtime exceptions (e.g. Prelude.undefined)
+         -- from session-loss errors so the remediation message is accurate.
+         let firstErr  = case errs of { (e : _) -> e; [] -> "" }
+             isRuntimeExn =
+               any (`T.isInfixOf` firstErr)
+                 [ "Prelude.", "CallStack", "ErrorCall"
+                 , "error, called at", "Exception:"
+                 , "ArithException", "IOException"
+                 ]
+             (errMsg, remediation)
+               | isRuntimeExn =
+                   ( "All " <> T.pack (show (paRuns args))
+                     <> " measurements threw a runtime exception. "
+                     <> "Fix the expression before benchmarking."
+                   , "Expression threw at runtime — check for bottom values "
+                     <> "(undefined, error, partial functions) in the expression."
+                   )
+               | otherwise =
+                   ( "All " <> T.pack (show (paRuns args))
                      <> " measurements errored. The GHC session may have lost "
-                     <> "the module — run ghc_load to reload before benchmarking."))
+                     <> "the module — run ghc_load to reload before benchmarking."
+                   , "Call ghc_load(module_path=\8230) to reload the module, then retry ghc_perf."
+                   )
+         in Env.toolResponseToResult
+              (Env.mkFailed
+                ((Env.mkErrorEnvelope Env.SubprocessError errMsg)
                       -- #135: deduplicate + truncate repeated stale-session errors.
-                      -- Previously T.unlines (take 3 errs) could still be hundreds
-                      -- of kilobytes when GHC emits a full module-load failure per
-                      -- measurement run.
-                      { Env.eeCause     = Just (summariseMeasurementErrors errs)
-                      , Env.eeRemediation = Just "Call ghc_load(module_path=…) to reload the module, then retry ghc_perf."
+                      { Env.eeCause       = Just (summariseMeasurementErrors errs)
+                      , Env.eeRemediation = Just remediation
                       }))
        else
   let mRegression = do

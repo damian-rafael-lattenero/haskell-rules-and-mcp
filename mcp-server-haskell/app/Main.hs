@@ -61,7 +61,7 @@ main = do
   runStdioTransport server
 
 isFlag :: String -> Bool
-isFlag s = "--" `isPrefixOf` s || (length s == 2 && head s == '-')
+isFlag s = "--" `isPrefixOf` s || (length s == 2 && take 1 s == "-")
 
 isVersionFlag :: String -> Bool
 isVersionFlag s = s == "--version" || s == "-v"
