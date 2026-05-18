@@ -22,9 +22,10 @@ module HaskellFlows.Parser.Hole
   , parseTypedHoles
   , splitDiagnosticBlocks
   , extractValidFits
-  , isContinuationFitLine    -- #71: exported for unit tests
-  , parseFitLine             -- #71: exported for unit tests
-  , splitFitTypeSource       -- #169: exported for unit tests
+  , isContinuationFitLine      -- #71: exported for unit tests
+  , parseFitLine               -- #71: exported for unit tests
+  , splitFitTypeSource         -- #169: exported for unit tests
+  , repairConstraintInSource   -- #196: exported for unit tests
   ) where
 
 import Data.Char (isDigit)
@@ -180,7 +181,8 @@ extractValidFits ls =
   let rest = dropWhile (not . ("Valid hole fits include" `T.isInfixOf`)) ls
   in case rest of
        []     -> []
-       (_:rs) -> collapseFits (takeWhile isFitRegion rs)
+       (_:rs) -> map repairConstraintInSource
+                   (collapseFits (takeWhile isFitRegion rs))
   where
     isFitRegion l =
       let s = T.strip l
@@ -250,6 +252,40 @@ splitFitTypeSource t =
        [] -> (t, "")
        ps -> let idx = minimum ps
              in (T.take idx t, T.drop (idx + 1) t)
+
+-- | #196: GHC 9.12 wraps the type of @HasCallStack@-constrained fits
+-- across a continuation line.  The qualified constraint (e.g.
+-- @Stack.Types.HasCallStack => [a] -> [a]@) ends up in @hfSource@
+-- instead of @hfType@.  Repair: if @hfSource@ begins with a fragment
+-- that contains @\" => \"@ before the first @\" with \"@, that
+-- fragment is the remainder of the type — promote it back into the
+-- @type@ field.
+--
+-- Examples:
+--
+-- @
+-- -- Before repair (GHC 9.12 wrapped output)
+-- HoleFit { hfName="cycle"
+--         , hfType="forall a."
+--         , hfSource=Just "Stack.Types.HasCallStack => [a] -> [a] with cycle @Char (imported from 'Prelude' ...)" }
+--
+-- -- After repair
+-- HoleFit { hfName="cycle"
+--         , hfType="forall a. Stack.Types.HasCallStack => [a] -> [a]"
+--         , hfSource=Just "with cycle @Char (imported from 'Prelude' ...)" }
+-- @
+repairConstraintInSource :: HoleFit -> HoleFit
+repairConstraintInSource hf = case hfSource hf of
+  Nothing  -> hf
+  Just src ->
+    let (beforeWith, afterWith) = T.breakOn " with " src
+    in if " => " `T.isInfixOf` beforeWith
+         then hf { hfType   = T.strip (hfType hf) <> " " <> T.strip beforeWith
+                 , hfSource = if T.null afterWith
+                                then Nothing
+                                else Just (T.strip afterWith)
+                 }
+         else hf
 
 parseFitLine :: Text -> Maybe HoleFit
 parseFitLine l =

@@ -64,6 +64,7 @@ import HaskellFlows.Parser.Hole
   , isContinuationFitLine
   , parseFitLine
   , splitFitTypeSource
+  , repairConstraintInSource
   )
 import HaskellFlows.Parser.TypeSignature
   ( ParsedSig (..)
@@ -765,6 +766,10 @@ main = do
                                                                  testSplitFitTypeImportedFrom
       , test "splitFitTypeSource: no annotation returns full type (#169)"
                                                                  testSplitFitTypeNoAnnotation
+      , test "repairConstraintInSource: moves HasCallStack prefix to type (#196)"
+                                                                 testRepairConstraintInSource
+      , test "extractValidFits: HasCallStack wrap across continuation lines (#196)"
+                                                                 testExtractValidFitsGhc912
       , test "parseSignature simple a -> a"         testSigSimple
       , test "parseSignature with constraint"       testSigConstraint
       , test "parseSignature list"                  testSigList
@@ -5811,6 +5816,79 @@ testSplitFitTypeNoAnnotation :: IO Bool
 testSplitFitTypeNoAnnotation =
   let (ty, src) = splitFitTypeSource "forall a. Num a => a -> a -> a"
   in pure $ ty == "forall a. Num a => a -> a -> a" && T.null src
+
+-- | #196: GHC 9.12 wraps @HasCallStack@-constrained types onto a
+-- continuation line, landing the constraint in @hfSource@ instead of
+-- @hfType@.  'repairConstraintInSource' must move the constraint prefix
+-- back into the type field and keep only the @with …@ clause in source.
+testRepairConstraintInSource :: IO Bool
+testRepairConstraintInSource =
+  let -- Simulates the post-collapseFits state for GHC 9.12 output:
+      --   cycle :: forall a.
+      --             Stack.Types.HasCallStack => [a] -> [a]
+      --             with cycle @Char (imported from 'Prelude' ...)
+      broken = HoleFit
+        { hfName   = "cycle"
+        , hfType   = "forall a."
+        , hfSource = Just "Stack.Types.HasCallStack => [a] -> [a] with cycle @Char (imported from 'Prelude' ...)"
+        }
+      repaired = repairConstraintInSource broken
+      -- No-op case: source starts with a non-constraint annotation.
+      noOp = HoleFit
+        { hfName   = "id"
+        , hfType   = "forall a. a -> a"
+        , hfSource = Just "with id @Char (imported from 'Prelude' ...)"
+        }
+      noOpRepaired = repairConstraintInSource noOp
+  in pure $
+       -- Type now carries the full constraint.
+       "Stack.Types.HasCallStack" `T.isInfixOf` hfType repaired
+       && "[a] -> [a]"            `T.isInfixOf` hfType repaired
+       && "forall a."             `T.isInfixOf` hfType repaired
+       -- Source kept the with-clause only.
+       && case hfSource repaired of
+            Just s  -> "with cycle @Char" `T.isInfixOf` s
+                    && not ("HasCallStack" `T.isInfixOf` s)
+            Nothing -> False
+       -- No-op: id's source must not be touched.
+       && hfType repaired /= hfType broken   -- repair happened
+       && hfType noOpRepaired == hfType noOp -- no-op untouched
+
+-- | #196: end-to-end check through 'extractValidFits' using a GHC 9.12
+-- simulated output block where @cycle@'s type is wrapped onto a
+-- continuation line.
+testExtractValidFitsGhc912 :: IO Bool
+testExtractValidFitsGhc912 =
+  let block = T.lines $ T.unlines
+        -- GHC 9.12 wraps the HasCallStack constraint onto a separate
+        -- continuation line (indent=10) instead of keeping it on the
+        -- fit-head line.
+        [ "    • Valid hole fits include"
+        , "        cycle :: forall a."
+        , "          Stack.Types.HasCallStack => [a] -> [a]"
+        , "          with cycle @Char"
+        , "          (imported from 'Prelude' at /tmp/F.hs:1:1-16)"
+        , "        tail :: forall a."
+        , "          Stack.Types.HasCallStack => [a] -> [a]"
+        , "          with tail @Char"
+        , "          (imported from 'Prelude' at /tmp/F.hs:1:1-16)"
+        ]
+      fits = extractValidFits block
+  in case fits of
+       [cycleFit, tailFit] ->
+         pure $
+           -- Both fit names parsed correctly.
+           hfName cycleFit == "cycle"
+           && hfName tailFit  == "tail"
+           -- Types must include the full constraint, not be truncated.
+           && "HasCallStack" `T.isInfixOf` hfType cycleFit
+           && "[a] -> [a]"  `T.isInfixOf` hfType cycleFit
+           && "HasCallStack" `T.isInfixOf` hfType tailFit
+           && "[a] -> [a]"  `T.isInfixOf` hfType tailFit
+           -- The constraint must NOT appear in the source fields.
+           && not ("HasCallStack" `T.isInfixOf` fromMaybe "" (hfSource cycleFit))
+           && not ("HasCallStack" `T.isInfixOf` fromMaybe "" (hfSource tailFit))
+       _ -> pure False
 
 --------------------------------------------------------------------------------
 -- Phase 10b: TypeSignature parser + rules catalog
