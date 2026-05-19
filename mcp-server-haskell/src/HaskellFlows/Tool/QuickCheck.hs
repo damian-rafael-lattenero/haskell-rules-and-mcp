@@ -563,12 +563,20 @@ extractQcOutputAt i full =
 --   4. Return @(qcOutput, labelsBlock, "")@ with the same shape as the old
 --      cabal-repl harness so 'Witness.handle' works unchanged.
 --
--- On any GHC compilation or runtime exception, returns @("", "", errText)@;
--- the caller ('Witness.handle') wraps with 'try' and routes to 'subprocessResult'.
+-- Fallback: when the in-process path fails (e.g. the user's project does not
+-- list QuickCheck in its build-depends, so 'loadForTarget' produces a package
+-- environment that excludes Test.QuickCheck), this function automatically
+-- falls back to 'runQuickCheckWithLabelsViaCabalRepl'. The subprocess injects
+-- @--build-depends=QuickCheck@ so it always succeeds regardless of the
+-- project's own dep list. Similarly, if 'evalIOString' returns output that
+-- does not contain the expected sentinel markers (indicating a silent type
+-- error or empty run), the subprocess path is tried.
 runQuickCheckWithLabelsInProcess
   :: GhcSession -> Maybe Text -> Text -> IO (Text, Text, Text)
-runQuickCheckWithLabelsInProcess ghcSess _mModule safeProp = do
+runQuickCheckWithLabelsInProcess ghcSess mModule safeProp = do
   -- Load the test-suite stanza so the QuickCheck package is available.
+  -- (If this stanza's build-depends excludes QuickCheck, evalIOString will
+  -- fail and we will fall back to the subprocess path below.)
   tgt <- firstTestSuiteOrLibrary ghcSess
   _   <- try @SomeException (loadForTarget ghcSess tgt Strict)
   -- Augment the interactive context and evaluate inside one session lock.
@@ -586,10 +594,22 @@ runQuickCheckWithLabelsInProcess ghcSess _mModule safeProp = do
                   <> [ IIDecl (simpleImportDecl (mkModuleName m)) | m <- xs ])
       evalIOString (witnessEvalExpr safeProp)
   case eRaw of
-    Left ex  -> pure ("", "", T.pack (show ex))
-    Right raw ->
-      let tc = T.pack raw
-      in pure (extractQcOutput tc, extractLabelsBlock tc, "")
+    -- In-process eval failed: QuickCheck is not in the project's
+    -- package environment (e.g. the user's test-suite build-depends does
+    -- not list QuickCheck), or the session state is inconsistent after a
+    -- prior load. Fall back to the cabal-repl subprocess which always
+    -- works because it injects --build-depends=QuickCheck.
+    Left _ex ->
+      runQuickCheckWithLabelsViaCabalRepl (gsProject ghcSess) mModule safeProp
+    Right raw
+      -- Guard: the expression compiled and ran but produced no sentinel
+      -- markers. This can happen when the IO action returned () or the
+      -- expression was silently coerced. Fall back to subprocess.
+      | not (T.isInfixOf "__QC_OUTPUT_START__" (T.pack raw)) ->
+          runQuickCheckWithLabelsViaCabalRepl (gsProject ghcSess) mModule safeProp
+      | otherwise ->
+          let tc = T.pack raw
+          in pure (extractQcOutput tc, extractLabelsBlock tc, "")
 
 -- | Build the sentinel-delimited @IO String@ expression for
 -- 'runQuickCheckWithLabelsInProcess'. The expression:

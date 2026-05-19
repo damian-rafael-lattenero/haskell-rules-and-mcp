@@ -1094,6 +1094,8 @@ main = do
                                                                  testWitnessEvalExprStructure
       , test "#220: Witness.hs uses runQuickCheckWithLabelsInProcess (in-process)"
                                                                  testWitnessUsesInProcessPath
+      , test "#220: runQuickCheckWithLabelsInProcess has subprocess fallback"
+                                                                 testWitnessInProcessFallback
       , test "property_audit: isVacuousResult true for QcGaveUp (#64 Phase2)"
                                                                  testPAIsVacuousGaveUp
       , test "property_audit: isVacuousResult false for QcPassed (#64 Phase2)"
@@ -15765,6 +15767,24 @@ testWitnessUsesInProcessPath :: IO Bool
 testWitnessUsesInProcessPath = do
   src <- TIO.readFile "src/HaskellFlows/Tool/Witness.hs"
   pure $ T.isInfixOf "runQuickCheckWithLabelsInProcess ghcSess" src
+
+-- | #220: 'runQuickCheckWithLabelsInProcess' must fall back to the
+-- cabal-repl subprocess path when 'evalIOString' fails (e.g. the
+-- user's project has no QuickCheck in its build-depends, so the
+-- loaded stanza's package environment excludes Test.QuickCheck).
+--
+-- The cabal-repl fallback injects @--build-depends=QuickCheck@
+-- automatically, so it always works regardless of the project's deps.
+-- The fallback is triggered both on Left (compile/runtime exception)
+-- and on Right with no sentinel markers (silent type-mismatch).
+testWitnessInProcessFallback :: IO Bool
+testWitnessInProcessFallback = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/QuickCheck.hs"
+  pure $  -- Left (exception) branch triggers subprocess fallback
+          T.isInfixOf "Left _ex ->" src
+       && T.isInfixOf "runQuickCheckWithLabelsViaCabalRepl (gsProject ghcSess)" src
+          -- Right (no-sentinel) branch also falls back
+       && T.isInfixOf "__QC_OUTPUT_START__" src
 
 -- | #197: 'ruleMaybeReturn' fires for a 2-argument Maybe-returning
 -- signature and the generated property uses @maybe True (const True)@
