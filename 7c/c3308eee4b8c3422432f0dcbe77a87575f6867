@@ -1,0 +1,25 @@
+mcp-server-haskell/src/HaskellFlows/Refactor/Extract.hs
+  s_5a1a3bf347e8f7::t_f3baede398f522 45-46
+  s_5a1a3bf347e8f7::t_3041dddb1820e0 180-206
+  s_5a1a3bf347e8f7::t_1c9d72a8680d8b 94-100
+mcp-server-haskell/test/Spec.hs
+  s_5a1a3bf347e8f7::t_8ce0c6757a1bd5 572-574
+  s_5a1a3bf347e8f7::t_20e485e4903dca 3698-3729
+  s_5a1a3bf347e8f7::t_e930d408553101 228
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "7cc3308eee4b8c3422432f0dcbe77a87575f6867",
+  "prompts": {},
+  "sessions": {
+    "s_5a1a3bf347e8f7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "32bafca0-95de-485a-b61f-c02d185f4171",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
