@@ -10,7 +10,10 @@
 --      file-to-be-modified without writing anything to disk.
 --   3. Real move — assert success, files updated, the consumer's
 --      selective import was split, the project still loads.
---   4. Negative test: a missing destination module is rejected
+--   4. File content invariants after the move.
+--   5. Multi-line header (#228): move from a module whose export
+--      list spans multiple lines — should succeed, not rollback.
+--   6. Negative test: a missing destination module is rejected
 --      with @error_kind=module_path_does_not_exist@ (post-#90
 --      Phase C; the legacy @destination_module_missing@ string is
 --      still accepted during the dual-shape window) before any
@@ -39,6 +42,31 @@ import E2E.Assert
 import qualified E2E.Client as Client
 import E2E.Envelope (statusOk, errorKind, fieldBool, lookupField)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
+
+-- | Source module with a multi-line export list (triggers #228 regression).
+multiSrcSrc :: Text
+multiSrcSrc = T.unlines
+  [ "module MultiSrc"
+  , "  ( stayFn"
+  , "  , helper"
+  , "  ) where"
+  , ""
+  , "stayFn :: Int -> Int"
+  , "stayFn x = x + 1"
+  , ""
+  , "-- | Helper to be moved."
+  , "helper :: Int -> Int"
+  , "helper x = x * 2"
+  ]
+
+-- | Destination for the multi-line header move test.
+multiDestSrc :: Text
+multiDestSrc = T.unlines
+  [ "module MultiDest where"
+  , ""
+  , "placeholder :: ()"
+  , "placeholder = ()"
+  ]
 
 sourceSrc :: Text
 sourceSrc = T.unlines
@@ -140,8 +168,34 @@ runFlow c projectDir = do
       <> "\nConsumer body:\n" <> T.take 400 consumerAfter )
   stepFooter 3 t2
 
-  -- Step 5 — negative: missing destination is refused.
-  t3 <- stepHeader 4 "ghc_move refuses missing destination (#62)"
+  -- Step 5 — multi-line header (#228): a source module whose export
+  -- list spans several lines should have its symbol correctly removed
+  -- after a move (not silently skipped, causing a verify rollback).
+  t4 <- stepHeader 5 "ghc_move multi-line export list (#228)"
+  _ <- Client.callTool c GhcModules
+         (object [ "action" .= ("add" :: Text), "modules" .= (["MultiSrc", "MultiDest"] :: [Text]) ])
+  TIO.writeFile (projectDir </> "src" </> "MultiSrc.hs") multiSrcSrc
+  TIO.writeFile (projectDir </> "src" </> "MultiDest.hs") multiDestSrc
+  rMulti <- Client.callTool c GhcRefactor (object
+    [ "action" .= ("move_symbol" :: Text)
+    , "symbol" .= ("helper" :: Text)
+    , "from"   .= ("MultiSrc"  :: Text)
+    , "to"     .= ("MultiDest" :: Text)
+    ])
+  multiSrcAfter <- TIO.readFile (projectDir </> "src" </> "MultiSrc.hs")
+  let multiOk      = statusOk rMulti == Just True
+                  && fieldBool "applied" rMulti == Just True
+      helperGone   = not ("helper" `T.isInfixOf` T.takeWhile (/= '\n') multiSrcAfter)
+  cMulti <- liveCheck $ checkPure
+    "#228: move from multi-line export list succeeds, symbol removed from header"
+    (multiOk && helperGone)
+    ( "Expected success+applied=true and 'helper' gone from first line. Got: "
+      <> truncRender rMulti
+      <> "\nMultiSrc.hs after:\n" <> T.take 400 multiSrcAfter )
+  stepFooter 5 t4
+
+  -- Step 6 — negative: missing destination is refused.
+  t3 <- stepHeader 6 "ghc_move refuses missing destination (#62)"
   rMissing <- Client.callTool c GhcRefactor (object [ "action" .= ("move_symbol" :: Text), "symbol" .= ("greet"             :: Text)
     , "from"   .= ("Source"            :: Text)
     , "to"     .= ("Definitely.Missing" :: Text)
@@ -160,9 +214,9 @@ runFlow c projectDir = do
     "missing destination → success=false, error_kind=module_path_does_not_exist"
     missingOk
     ("Expected module_path_does_not_exist. Got: " <> truncRender rMissing)
-  stepFooter 4 t3
+  stepFooter 6 t3
 
-  pure [cDry, cApply, cInvariants, cMissing]
+  pure [cDry, cApply, cInvariants, cMulti, cMissing]
 
 --------------------------------------------------------------------------------
 -- helpers

@@ -42,6 +42,7 @@ module HaskellFlows.Tool.Move
   , rewriteSelectiveImport
   , removeFromSourceExportList
   , addToDestinationExportList
+  , collectModuleHeader
   , hasBareImportOf
   , moduleNameToPath
   ) where
@@ -385,104 +386,118 @@ insertSliceAtEnd slice destBody =
 --
 -- Operates on the FULL body so the rest of the file is preserved
 -- byte-for-byte.
+-- | Collect the module header block (possibly multi-line).
+-- Returns @(lineCount, normalizedSingleLine)@ when the body starts
+-- with a @module@ declaration, @Nothing@ otherwise.
+-- The returned single line has all internal whitespace normalised to
+-- single spaces so that 'rewriteHeader' (which expects the single-line
+-- form) can parse it unchanged.
+collectModuleHeader :: [Text] -> Maybe (Int, Text)
+collectModuleHeader [] = Nothing
+collectModuleHeader (h : rest)
+  | not ("module " `T.isPrefixOf` T.stripStart h) = Nothing
+  | "where" `T.isSuffixOf` T.strip h =
+      Just (1, T.unwords (T.words h))
+  | otherwise = go 1 [h] rest
+  where
+    go n acc [] =
+      Just (n, T.unwords (concatMap T.words (reverse acc)))
+    go n acc (l : ls)
+      | "where" `T.isSuffixOf` T.strip l =
+          Just (n + 1, T.unwords (concatMap T.words (reverse (l : acc))))
+      | otherwise = go (n + 1) (l : acc) ls
+
+-- | Shared header-rewrite logic used by both export-list functions.
+-- Parses a normalised single-line module header and rewrites the
+-- export list, returning @Nothing@ when no change is needed.
+rewriteHeaderRemove :: Text -> Text -> Maybe Text
+rewriteHeaderRemove sym ln =
+  case T.stripPrefix "module " (T.stripStart ln) of
+    Nothing -> Nothing
+    Just rest ->
+      let normed = T.intercalate " " (T.words rest)
+      in case T.stripSuffix " where" normed of
+           Nothing       -> Nothing
+           Just withList ->
+             case T.stripSuffix ")" withList of
+               Nothing         -> Nothing
+               Just beforeClose ->
+                 case T.breakOn "(" beforeClose of
+                   (_, "")  -> Nothing
+                   (mp, ao) ->
+                     let inside  = T.drop 1 ao
+                         items   = map T.strip (T.splitOn "," inside)
+                         trimmed = filter (not . T.null) items
+                     in if sym `notElem` trimmed then Nothing
+                        else
+                          let kept = filter (/= sym) trimmed
+                          in Just $ "module " <> T.stripEnd mp
+                               <> " (" <> T.intercalate ", " kept <> ")"
+                               <> " where"
+
+rewriteHeaderAdd :: Text -> Text -> Maybe Text
+rewriteHeaderAdd sym ln =
+  case T.stripPrefix "module " (T.stripStart ln) of
+    Nothing -> Nothing
+    Just rest ->
+      let normed = T.intercalate " " (T.words rest)
+      in case T.stripSuffix " where" normed of
+           Nothing       -> Nothing
+           Just withList ->
+             case T.stripSuffix ")" withList of
+               Nothing         -> Nothing
+               Just beforeClose ->
+                 case T.breakOn "(" beforeClose of
+                   (_, "")  -> Nothing
+                   (mp, ao) ->
+                     let inside  = T.drop 1 ao
+                         items   = map T.strip (T.splitOn "," inside)
+                         trimmed = filter (not . T.null) items
+                     in if sym `elem` trimmed
+                          then Nothing
+                          else
+                            let newItems = trimmed ++ [sym]
+                            in Just $ "module " <> T.stripEnd mp
+                                 <> " (" <> T.intercalate ", " newItems <> ")"
+                                 <> " where"
+
+-- | #228: remove @symbol@ from the source module's explicit export list.
+-- Handles both single-line and multi-line module headers by collecting
+-- all header lines (up to and including the line ending in @where@)
+-- before parsing. A multi-line header is collapsed to a single line
+-- after the rewrite.
 removeFromSourceExportList :: Text -> Text -> Text
 removeFromSourceExportList symbol body =
-  case T.lines body of
-    []       -> body
-    (h : tl) ->
-      case rewriteHeader symbol h of
-        Nothing       -> body
-        Just newHeader -> T.unlines (newHeader : tl)
-  where
-    -- #207: use stripSuffix " where" + stripSuffix ")" to locate the
-    -- outermost export-list boundaries. The old T.breakOn ")" misparsed
-    -- Type(..) entries (stopped at the ')' inside the parens).
-    rewriteHeader :: Text -> Text -> Maybe Text
-    rewriteHeader sym ln =
-      let leading  = T.takeWhile (== ' ') ln
-          stripped = T.drop (T.length leading) ln
-      in case T.stripPrefix "module " stripped of
-           Nothing -> Nothing
-           Just rest ->
-             let normed = T.intercalate " " (T.words rest)
-             in case T.stripSuffix " where" normed of
-                  Nothing       -> Nothing
-                  Just withList ->
-                    case T.stripSuffix ")" withList of
-                      Nothing         -> Nothing  -- open export (no closing ')')
-                      Just beforeClose ->
-                        case T.breakOn "(" beforeClose of
-                          (_, "")  -> Nothing  -- no explicit list
-                          (mp, ao) ->
-                            let inside  = T.drop 1 ao
-                                items   = map T.strip (T.splitOn "," inside)
-                                trimmed = filter (not . T.null) items
-                            in if sym `notElem` trimmed then Nothing
-                               else
-                                 let kept = filter (/= sym) trimmed
-                                 in Just $ leading
-                                      <> "module " <> T.stripEnd mp
-                                      <> " (" <> T.intercalate ", " kept <> ")"
-                                      <> " where"
+  let lns = T.lines body
+  in case collectModuleHeader lns of
+       Nothing -> body
+       Just (headerLineCount, joinedHeader) ->
+         let tl = drop headerLineCount lns
+         in case rewriteHeaderRemove symbol joinedHeader of
+              Nothing        -> body
+              Just newHeader -> T.unlines (newHeader : tl)
 
 -- | Issue #76: symmetric companion to 'removeFromSourceExportList'.
 --
 -- Walks the destination module's header and inserts @symbol@
--- into its explicit export list. The supported header shapes
--- (single-line) are:
---
--- @
--- module Foo (a, b) where        -- inserts symbol before ')'
--- module Foo where               -- left untouched (open export)
--- @
+-- into its explicit export list. Handles both single-line and
+-- multi-line module headers (#228).
 --
 -- Returns the body unchanged when:
 --
---   * the header has no explicit list (open export — every
---     binding is exported by default);
+--   * the header has no explicit list (open export);
 --   * the symbol is already in the list (idempotent);
---   * we cannot recognise the header shape (defensive: leave
---     the file alone rather than risk corrupting it).
+--   * we cannot recognise the header shape.
 addToDestinationExportList :: Text -> Text -> Text
 addToDestinationExportList symbol body =
-  case T.lines body of
-    []       -> body
-    (h : tl) -> case rewriteHeader symbol h of
-      Nothing       -> body
-      Just newHeader -> T.unlines (newHeader : tl)
-  where
-    -- #207: use stripSuffix " where" + stripSuffix ")" to locate the
-    -- outermost export-list boundaries, mirroring the fix in
-    -- removeFromSourceExportList. The old T.breakOn ")" misparsed
-    -- Type(..) entries (stopped at the ')' inside the constructor parens).
-    rewriteHeader :: Text -> Text -> Maybe Text
-    rewriteHeader sym ln =
-      let leading  = T.takeWhile (== ' ') ln
-          stripped = T.drop (T.length leading) ln
-      in case T.stripPrefix "module " stripped of
-           Nothing -> Nothing
-           Just rest ->
-             let normed = T.intercalate " " (T.words rest)
-             in case T.stripSuffix " where" normed of
-                  Nothing       -> Nothing
-                  Just withList ->
-                    case T.stripSuffix ")" withList of
-                      Nothing         -> Nothing  -- open export (no closing ')')
-                      Just beforeClose ->
-                        case T.breakOn "(" beforeClose of
-                          (_, "")  -> Nothing  -- no explicit list
-                          (mp, ao) ->
-                            let inside  = T.drop 1 ao
-                                items   = map T.strip (T.splitOn "," inside)
-                                trimmed = filter (not . T.null) items
-                            in if sym `elem` trimmed
-                                 then Nothing  -- already exported, no change
-                                 else
-                                   let newItems = trimmed ++ [sym]
-                                   in Just $ leading
-                                        <> "module " <> T.stripEnd mp
-                                        <> " (" <> T.intercalate ", " newItems <> ")"
-                                        <> " where"
+  let lns = T.lines body
+  in case collectModuleHeader lns of
+       Nothing -> body
+       Just (headerLineCount, joinedHeader) ->
+         let tl = drop headerLineCount lns
+         in case rewriteHeaderAdd symbol joinedHeader of
+              Nothing        -> body
+              Just newHeader -> T.unlines (newHeader : tl)
 
 collapseBlanks :: [Text] -> [Text]
 collapseBlanks = go False

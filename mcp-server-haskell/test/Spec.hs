@@ -1014,6 +1014,10 @@ main = do
       , test "move: slicer stops at next binding's Haddock (#76)" testMoveSliceStopsAtHaddock
       , test "#207: addToDestinationExportList handles Type(..) exports"    testMoveAddDestExportTypeCons
       , test "#207: removeFromSourceExportList handles Type(..) exports"    testMoveRemoveExportTypeCons
+      , test "#228: collectModuleHeader single-line"                         testCollectModuleHeaderSingle
+      , test "#228: collectModuleHeader multi-line"                          testCollectModuleHeaderMulti
+      , test "#228: removeFromSourceExportList multi-line header"            testMoveRemoveExportMultiLine
+      , test "#228: addToDestinationExportList multi-line header"            testMoveAddDestExportMultiLine
       , test "#206: hasBareImportOf detects bare import"                    testHasBareImportOfDetects
       , test "#206: hasBareImportOf detects qualified bare import"          testHasBareImportOfQualified
       , test "#206: hasBareImportOf misses selective import"                testHasBareImportOfSelectiveMiss
@@ -9117,6 +9121,63 @@ testMoveRemoveExportTypeCons =
       header = T.takeWhile (/= '\n') out
   in pure $ T.isInfixOf "module Source (Expr(..), eval) where" out
          && not ("moved" `T.isInfixOf` header)
+
+-- | #228: collectModuleHeader handles a standard single-line header.
+testCollectModuleHeaderSingle :: IO Bool
+testCollectModuleHeaderSingle =
+  let lns = [ "module Source (greet, double) where"
+            , ""
+            , "greet = \"hi\""
+            ]
+  in pure $ MoveTool.collectModuleHeader lns
+         == Just (1, "module Source (greet, double) where")
+
+-- | #228: collectModuleHeader collects all lines up to and including
+-- the one ending with @where@.
+testCollectModuleHeaderMulti :: IO Bool
+testCollectModuleHeaderMulti =
+  let lns = [ "module Source"
+            , "  ( greet"
+            , "  , double"
+            , "  ) where"
+            , ""
+            , "greet = \"hi\""
+            ]
+  in pure $ MoveTool.collectModuleHeader lns
+         == Just (4, "module Source ( greet , double ) where")
+
+-- | #228: removeFromSourceExportList works on multi-line headers.
+-- The multi-line header is collapsed to a single line after the rewrite.
+testMoveRemoveExportMultiLine :: IO Bool
+testMoveRemoveExportMultiLine =
+  let body = T.unlines
+        [ "module Source"
+        , "  ( greet"
+        , "  , double"
+        , "  ) where"
+        , ""
+        , "greet = \"hi\""
+        , "double x = x * 2"
+        ]
+      out = MoveTool.removeFromSourceExportList "double" body
+  in pure $ "module Source (greet) where" `T.isInfixOf` out
+         && not ("double" `T.isInfixOf` T.takeWhile (/= '\n') out)
+
+-- | #228: addToDestinationExportList works on multi-line headers.
+-- The multi-line header is collapsed to a single line after the rewrite.
+testMoveAddDestExportMultiLine :: IO Bool
+testMoveAddDestExportMultiLine =
+  let body = T.unlines
+        [ "module Dest"
+        , "  ( foo"
+        , "  , bar"
+        , "  ) where"
+        , ""
+        , "foo = 1"
+        , "bar = 2"
+        ]
+      out = MoveTool.addToDestinationExportList "double" body
+  in pure $ "module Dest (foo, bar, double) where" `T.isInfixOf` out
 
 -- | Issue #206: 'hasBareImportOf' detects a plain @import Foo@ line.
 testHasBareImportOfDetects :: IO Bool
