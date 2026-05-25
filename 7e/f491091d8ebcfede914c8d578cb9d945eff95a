@@ -1,0 +1,28 @@
+mcp-server-haskell/test/Spec.hs
+  s_5a1a3bf347e8f7::t_ee0b3966517432 9125-9149,9151-9162,9164-9166,9168-9179,9181
+  s_5a1a3bf347e8f7::t_957a6b7fe7f259 1017-1020
+  s_5a1a3bf347e8f7::t_78a023bed25c63 9150,9163,9167,9180
+mcp-server-haskell/src/HaskellFlows/Tool/Move.hs
+  s_5a1a3bf347e8f7::t_8b0ef2c0ffc122 389-468,471-478,483-484,488,490,493-500
+  s_5a1a3bf347e8f7::t_68c16cef3d48eb 45
+mcp-server-haskell/test-e2e/Scenarios/FlowMoveSymbol.hs
+  s_5a1a3bf347e8f7::t_438cabd46a90c1 13-16
+  s_5a1a3bf347e8f7::t_f6c76b049123f4 46-70
+  s_5a1a3bf347e8f7::t_0fe38921518067 171-198,217,219
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "7ef491091d8ebcfede914c8d578cb9d945eff95a",
+  "prompts": {},
+  "sessions": {
+    "s_5a1a3bf347e8f7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "32bafca0-95de-485a-b61f-c02d185f4171",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
