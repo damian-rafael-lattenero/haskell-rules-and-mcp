@@ -32,6 +32,8 @@ module HaskellFlows.Tool.PropertyAudit
   , dedupByExpression
     -- * Phase 2 helpers (exported for unit tests)
   , isVacuousResult
+    -- * #230 (exported for unit tests)
+  , kindFor
   ) where
 
 import Control.Exception (SomeException, try)
@@ -64,6 +66,9 @@ import qualified HaskellFlows.Tool.QuickCheck as Qc
 -- when the agent calls @ghc_property_store(action=\"audit\")@.
 -- Behaviour is byte-identical to the legacy @ghc_property_audit@
 -- surface.
+--
+-- #230: @renderFinding@ previously hard-coded @"kind": "contradictory-pair"@
+-- even for skipped findings. The kind now reflects the actual status.
 
 data PropertyAuditArgs = PropertyAuditArgs
   { paModulePath   :: !(Maybe Text)
@@ -267,9 +272,14 @@ renderReport args nProps nPairs findings vacuousFindings wallMs =
           else []
   in Env.toolResponseToResult (Env.mkOk payload)
 
+kindFor :: Text -> Text
+kindFor "contradictory" = "contradictory-pair"
+kindFor "skipped"       = "skipped-pair"
+kindFor _               = "compatible-pair"
+
 renderFinding :: PairFinding -> Value
 renderFinding f = object
-  [ "kind"           .= ("contradictory-pair" :: Text)
+  [ "kind"           .= kindFor (pfStatus f)
   , "status"         .= pfStatus f
   , "p1_expression"  .= spExpression (pfP1 f)
   , "p2_expression"  .= spExpression (pfP2 f)

@@ -1108,6 +1108,10 @@ main = do
                                                                  testPAIsVacuousGaveUp
       , test "property_audit: isVacuousResult false for QcPassed (#64 Phase2)"
                                                                  testPAIsVacuousNotPassed
+      , test "#230: renderFinding kind=contradictory-pair for contradictory status"
+                                                                 testPARenderFindingKindContradictory
+      , test "#230: renderFinding kind=skipped-pair for skipped status"
+                                                                 testPARenderFindingKindSkipped
       , test "explain_error: applyLinePatch replaces old text (#59 Phase2)"
                                                                  testEEApplyLinePatch
       , test "explain_error: applyLinePatch returns Nothing when old not found (#59 Phase2)"
@@ -9905,6 +9909,16 @@ testPAIsVacuousNotPassed :: IO Bool
 testPAIsVacuousNotPassed =
   let qcr = QcPassed "\\x -> True" 100
   in pure (not (PropertyAuditTool.isVacuousResult qcr))
+
+-- | #230: kindFor contradictory → "contradictory-pair".
+testPARenderFindingKindContradictory :: IO Bool
+testPARenderFindingKindContradictory =
+  pure (PropertyAuditTool.kindFor "contradictory" == "contradictory-pair")
+
+-- | #230: kindFor skipped → "skipped-pair".
+testPARenderFindingKindSkipped :: IO Bool
+testPARenderFindingKindSkipped =
+  pure (PropertyAuditTool.kindFor "skipped" == "skipped-pair")
 
 -- Phase 2: explain_error patch verification (#59) ------------------------------
 
