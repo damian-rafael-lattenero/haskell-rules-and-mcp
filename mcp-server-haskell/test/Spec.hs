@@ -1401,6 +1401,7 @@ main = do
       -- Issue #215 (GHC-18042 type-default fixes) — splitAtDepthZeroSpaces regression
       , test "#215/td: splitAtDepthZeroSpaces multi-param (GHC-18042 fix)" testSplitAtDepthZeroIssue215
       -- Issue #198 — stale tool name + missing type signatures
+      , test "#231: renderTestFile emits OPTIONS_GHC pragma suppressing unused-imports and missing-sigs" testExportOptionsGhcPragma
       , test "#198: generatedHeader says ghc_property_store not ghc_quickcheck_export" testExportHeaderCurrentToolName
       , test "#198: renderPropSignature emits sig for annotated single param"  testRenderPropSigSingle
       , test "#198: renderPropSignature emits sig for annotated multi param"   testRenderPropSigMulti
@@ -13818,6 +13819,18 @@ testRenderTestFileNoLambdaAssign =
   in pure $ not (any ("= \\" `T.isInfixOf`) lines_)
 
 --------------------------------------------------------------------------------
+-- Issue #231 — unused imports + missing-sigs warnings in generated file
+--------------------------------------------------------------------------------
+
+-- | #231: generated file contains OPTIONS_GHC pragma suppressing both
+-- -Wunused-imports and -Wmissing-signatures, preventing CI failures when
+-- cabal test compiles the exported Spec.hs with -Wall.
+testExportOptionsGhcPragma :: IO Bool
+testExportOptionsGhcPragma =
+  let rendered = QcExport.renderTestFile []
+  in pure ("{-# OPTIONS_GHC -Wno-unused-imports -Wno-missing-signatures #-}"
+           `T.isInfixOf` rendered)
+
 -- Issue #198 — stale tool name + missing type signatures
 --------------------------------------------------------------------------------
 
