@@ -42,6 +42,8 @@
 module HaskellFlows.Refactor.Extract
   ( extractBinding
   , ExtractResult (..)
+    -- * Pure helpers (exported for unit tests)
+  , isGuardBranch
   ) where
 
 import Data.Char (isSpace)
@@ -89,6 +91,13 @@ extractBinding newName startLine endLine raw
               -- '='). Tell the agent how to recover.
               if indent == 0 && hasNonBlank body
                 then Left (topLevelRefusal startLine endLine body)
+                -- #227: refuse guard branches (first non-blank line
+                -- starts with '|'). Extracting a whole guard branch
+                -- produces broken code ('| cond' with no '=' at the
+                -- call site). The user should select only the RHS
+                -- expression after the '=' in the guard.
+                else if isGuardBranch body
+                then Left (guardBranchRefusal startLine endLine)
                 else do
                   let spaces     = T.replicate indent " "
                       callLine   = spaces <> newName
@@ -167,6 +176,33 @@ topLevelRefusal startLine endLine body =
      <> "scope_line_end to the indented body expression you actually "
      <> "want to lift (the right-hand side of the equation, a sub-"
      <> "expression of a let/where/do, etc.)."
+
+-- | #227: True when the first non-blank selected line is a Haskell
+-- guard branch, i.e. starts with @|@ (after stripping leading
+-- whitespace). Extracting a whole guard branch produces broken
+-- Haskell: the call site loses the @= rhs@ part and the appended
+-- binding gets the literal @| cond = rhs@ text as its body.
+isGuardBranch :: [Text] -> Bool
+isGuardBranch lns =
+  let nonBlank = filter (not . T.null . T.strip) lns
+  in case nonBlank of
+       (l:_) -> case T.uncons (T.stripStart l) of
+                  Just ('|', _) -> True
+                  _             -> False
+       []    -> False
+
+-- | Refusal message for a guard-branch range.
+guardBranchRefusal :: Int -> Int -> Text
+guardBranchRefusal startLine endLine =
+  "extract_binding cannot extract a guard branch as a unit. "
+  <> "Lines " <> tshow startLine <> "-" <> tshow endLine
+  <> " start with '|', which is a Haskell guard. "
+  <> "Extracting the whole branch would remove the '| condition =' "
+  <> "at the call site and embed it verbatim inside the new binding — "
+  <> "both are invalid Haskell. "
+  <> "To extract from a guarded equation, narrow your selection to "
+  <> "the expression that follows the '=' in the guard you want to "
+  <> "lift (e.g. just 'n * factorial (n - 1)', not '| otherwise = ...')."
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show

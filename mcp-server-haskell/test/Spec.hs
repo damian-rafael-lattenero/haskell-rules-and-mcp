@@ -225,6 +225,7 @@ import qualified HaskellFlows.Tool.Deps as DepsTool
 import HaskellFlows.Refactor.Extract
   ( ExtractResult (..)
   , extractBinding
+  , isGuardBranch
   )
 import HaskellFlows.Refactor.Rename
   ( RenameResult (..)
@@ -568,6 +569,9 @@ main = do
       , test "extractBinding refuses class decl"    testExtractRefusesClassDecl
       , test "extractBinding refuses instance decl" testExtractRefusesInstanceDecl
       , test "extractBinding refuses pragma"        testExtractRefusesPragma
+      , test "#227: extractBinding refuses guard branch"       testExtractRefusesGuardBranch
+      , test "#227: isGuardBranch detects | pattern"          testIsGuardBranch
+      , test "#227: isGuardBranch ignores non-guard"          testIsGuardBranchNeg
       , test "extractBinding refuses operator def"  testExtractRefusesOperatorDef
       , test "extractBinding refuses multiline eq"  testExtractRefusesMultilineEquation
       , test "extractBinding refuses mixed range"   testExtractRefusesMixedRange
@@ -3690,6 +3694,38 @@ testExtractRefusesPragma =
   in pure $ case extractBinding "newName" 1 1 src of
        Left msg -> "expression range" `T.isInfixOf` msg
        Right _  -> False
+
+-- | #227: selecting a whole guard branch (line starts with '|') must
+-- be refused with a clear message, not allowed to produce broken Haskell.
+testExtractRefusesGuardBranch :: IO Bool
+testExtractRefusesGuardBranch =
+  let src = T.unlines
+        [ "module Demo where"
+        , ""
+        , "factorial :: Int -> Int"
+        , "factorial n"
+        , "  | n <= 0    = 1"
+        , "  | otherwise = n * factorial (n - 1)"
+        ]
+  in pure $ case extractBinding "recurse" 6 6 src of
+       Left msg -> "guard" `T.isInfixOf` msg || "guard branch" `T.isInfixOf` msg
+       Right _  -> False
+
+-- | #227: 'isGuardBranch' detects guard-branch lines correctly.
+testIsGuardBranch :: IO Bool
+testIsGuardBranch = pure $
+     isGuardBranch ["  | n <= 0    = 1"]
+  && isGuardBranch ["  | otherwise = n * factorial (n - 1)"]
+  && isGuardBranch ["    | True = go"]
+  && isGuardBranch ["  | n <= 0    = 1", "  | otherwise = n * factorial (n - 1)"]
+
+-- | #227: 'isGuardBranch' correctly ignores normal expression lines.
+testIsGuardBranchNeg :: IO Bool
+testIsGuardBranchNeg = pure $
+     not (isGuardBranch ["  n * factorial (n - 1)"])
+  && not (isGuardBranch ["  let x = 1"])
+  && not (isGuardBranch [])
+  && not (isGuardBranch [""])
 
 -- | An operator definition like @(+++) :: ...@ or @(+++) x y = ...@
 -- starts at column 0 too — same refusal.
