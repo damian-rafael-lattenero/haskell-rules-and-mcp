@@ -468,7 +468,14 @@ enumerateHaskellSources = fmap concat . traverse enumerateOne
 -- * 'Deferred' — enables @-fdefer-type-errors -fdefer-typed-holes@ so
 --   the module still loads and hole/deferred-error warnings show up in
 --   the captured diagnostic list.
-data LoadFlavour = Strict | Deferred
+-- | #232: 'StrictFresh' is like 'Strict' but adds 'Opt_ForceRecomp'
+-- so 'ghc_check_module' always sees a fresh compile. The cached-.hi
+-- shortcut that 'Strict' preserves is safe for 'ghc_load' (user
+-- explicitly asked to compile), but wrong for 'ghc_check_module'
+-- (user expects an honest warning gate). Only use 'StrictFresh' for
+-- check_module; other tools use 'Strict' to keep the warm-project
+-- ~5 s speedup.
+data LoadFlavour = Strict | StrictFresh | Deferred
   deriving stock (Eq, Show)
 
 -- | Install a diagnostic-capture log hook, run @setTargets + load@
@@ -1378,6 +1385,15 @@ applyFlavour flavour = do
           -- package-id resolution bug observed with ForceRecomp +
           -- -hide-all-packages + cabal stanza flags.
           dflags
+            `gopt_unset` Opt_DeferTypeErrors
+            `gopt_unset` Opt_DeferTypedHoles
+            `gopt_unset` Opt_DeferOutOfScopeVariables
+        -- #232: ForceRecomp for ghc_check_module so cached .hi files
+        -- never suppress warnings. Strict path kept separate to
+        -- preserve the warm-project speedup for ghc_load etc.
+        StrictFresh ->
+          dflags
+            `gopt_set`   Opt_ForceRecomp
             `gopt_unset` Opt_DeferTypeErrors
             `gopt_unset` Opt_DeferTypedHoles
             `gopt_unset` Opt_DeferOutOfScopeVariables

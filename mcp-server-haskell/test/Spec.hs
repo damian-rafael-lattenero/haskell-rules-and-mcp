@@ -262,6 +262,7 @@ import HaskellFlows.Types
   )
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
+  , LoadFlavour (..)
   , captureStdout
   , evalIOString
   , evalIOUnitCapture
@@ -1559,6 +1560,9 @@ main = do
                                                               testLoadSpecificFileIgnoresStray
       , test "#166: loadSpecificFileForTarget exported from ApiSession"
                                                               testLoadSpecificFileExported
+      -- Issue #232 — ghc_check_module stale-cache warning gap
+      , test "#232: StrictFresh is distinct from Strict and Deferred"
+                                                              testStrictFreshIsDistinct
       -- Issue #181 — session left broken after ghc_load with compile errors
       , test "#181: resetHscEnvInPlace clears loaded flag"    testResetHscEnvInPlaceClearsLoaded
       , test "#181: resetHscEnvInPlace is no-op on fresh session" testResetHscEnvInPlaceFreshSession
@@ -15567,6 +15571,12 @@ testLoadSpecificFileExported :: IO Bool
 testLoadSpecificFileExported = do
   src <- TIO.readFile "src/HaskellFlows/Ghc/ApiSession.hs"
   pure $ "loadSpecificFileForTarget" `T.isInfixOf` src
+
+-- | #232: 'StrictFresh' must be a third distinct variant so
+-- 'applyFlavour' applies 'Opt_ForceRecomp' only for check_module.
+testStrictFreshIsDistinct :: IO Bool
+testStrictFreshIsDistinct =
+  pure (StrictFresh /= Strict && StrictFresh /= Deferred && Strict /= Deferred)
 
 --------------------------------------------------------------------------------
 -- #181 — session left broken after ghc_load with compile errors

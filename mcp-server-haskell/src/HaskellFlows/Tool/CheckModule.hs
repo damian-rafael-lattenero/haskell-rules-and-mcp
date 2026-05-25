@@ -136,7 +136,11 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
           -- whenever any unregistered broken file existed in src/, even if
           -- the checked module itself was clean.
           let absFile = unModulePath mp
-          eStrict <- try (loadSpecificFileForTarget ghcSess tgt Strict absFile)
+          -- #232: StrictFresh forces recompilation so GHC never skips
+          -- diagnostics due to a cached .hi file. ghc_load uses plain
+          -- Strict for the warm-project speedup; check_module needs an
+          -- honest warning gate.
+          eStrict <- try (loadSpecificFileForTarget ghcSess tgt StrictFresh absFile)
           case eStrict :: Either SomeException (Bool, [GhcError]) of
             Left ex ->
               pure (subprocessResult
