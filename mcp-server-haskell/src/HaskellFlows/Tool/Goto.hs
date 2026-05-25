@@ -15,6 +15,8 @@ module HaskellFlows.Tool.Goto
   , Location (..)
     -- * Issue #117 — exposed for unit tests
   , locationPayload
+    -- * Issue #224 — exposed for unit tests
+  , qualifiedPreloadPayload
   ) where
 
 import Control.Exception (SomeException, try)
@@ -113,25 +115,36 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
       pure (Env.toolResponseToResult (Env.mkRefused (Env.sanitizeRejection "name" e)))
     Right safe -> do
       eRes <- try (withGhcSession ghcSess (queryLocation safe))
-      pure $ Env.toolResponseToResult $ case eRes of
+      case eRes of
         Left (se :: SomeException) ->
-          Env.mkFailed
+          pure $ Env.toolResponseToResult $ Env.mkFailed
             ((Env.mkErrorEnvelope Env.InternalError
                 (T.pack ("GHC API error: " <> show se)))
                   { Env.eeCause = Just (T.pack (show se)) })
-        Right Nothing ->
-          -- Issue #90 §3 + §4: name not in scope is a 'no_match'
-          -- (the question was well-formed, the answer is the
-          -- empty set), NOT a 'failed'. The result echoes the
-          -- name + the search context so the agent can pivot.
-          Env.mkNoMatch (notInScopePayload safe)
+        Right Nothing -> do
+          -- #224: before emitting the generic remediation, check if the
+          -- name is qualified (contains '.') and try the unqualified
+          -- suffix. If that matches a session preload, give a targeted hint
+          -- rather than "run ghc_load".
+          let unqual = T.takeWhileEnd (/= '.') safe
+          unqualRes <-
+            if T.length unqual < T.length safe && not (T.null unqual)
+              then try (withGhcSession ghcSess (queryLocation unqual))
+                     :: IO (Either SomeException (Maybe Location))
+              else pure (Right Nothing)
+          pure $ Env.toolResponseToResult $ case unqualRes of
+            Right (Just loc) ->
+              Env.mkNoMatch (qualifiedPreloadPayload safe unqual loc)
+            _ ->
+              Env.mkNoMatch (notInScopePayload safe)
         -- Issue #117: file locations → ok (can jump); library/unknown
         -- module locations → no_match (name found but no source to
         -- jump to). The payload still carries module + has_location so
         -- the agent knows *why* there is no file path.
-        Right (Just loc) -> case loc of
-          InFile {} -> Env.mkOk (locationPayload safe loc)
-          InModule {} -> Env.mkNoMatch (locationPayload safe loc)
+        Right (Just loc) ->
+          pure $ Env.toolResponseToResult $ case loc of
+            InFile {} -> Env.mkOk (locationPayload safe loc)
+            InModule {} -> Env.mkNoMatch (locationPayload safe loc)
 
 -- | Discriminate the FromJSON failure shape — same heuristic as
 -- the other Phase-B migrations.
@@ -261,6 +274,33 @@ locationPayload nm = \case
           "Name is defined in module '" <> m <> "' but was compiled — \
           \source location is not available in compiled mode. \
           \Use ghc_info for its type or ghc_doc for Haddock documentation."
+
+-- | #224: payload when a qualified name fails but the unqualified suffix
+-- IS in scope. Tells the agent the name is available without the qualifier.
+qualifiedPreloadPayload :: Text -> Text -> Location -> Value
+qualifiedPreloadPayload qualName unqualName loc =
+  let modPart = T.dropEnd (T.length unqualName + 1) qualName
+      locFields = case loc of
+        InFile f l c ->
+          [ "has_location" .= True
+          , "file"         .= f
+          , "line"         .= l
+          , "column"       .= c
+          ]
+        InModule m ->
+          [ "has_location" .= False
+          , "module"       .= m
+          ]
+  in object $
+       [ "name"        .= qualName
+       , "searched_in" .= ("interactive scope" :: Text)
+       , "remediation" .= ("'" <> unqualName <> "' is in scope via the '"
+                           <> modPart <> "' preload (unqualified). "
+                           <> "For a qualified import use "
+                           <> "'import qualified " <> modPart <> "', "
+                           <> "or query with the unqualified name '" <> unqualName
+                           <> "' to get the source location." :: Text)
+       ] <> locFields
 
 -- | Result payload for the no-match (name-not-in-scope) path.
 -- Carries the searched name + a remediation pointer so the agent

@@ -238,6 +238,7 @@ import HaskellFlows.Tool.Goto
   ( Location (..)
   , parseDefinedAt
   , locationPayload
+  , qualifiedPreloadPayload
   )
 import HaskellFlows.Tool.Hoogle
   ( HoogleHit (..)
@@ -1531,6 +1532,9 @@ main = do
       , test "#117: goto InFile gives ok + has_location=true"              testGotoFileHasLocation
       -- Issue #214 — remediation must not claim "no local source file"
       , test "#214: goto InModule remediation says compiled not no-source"  testGotoCompiledModuleRemediation
+      -- Issue #224 — qualified preload gives misleading remediation
+      , test "#224: qualifiedPreloadPayload names unqualified form and module prefix"
+                                                               testGotoQualifiedPreloadPayload
       -- Issue #208 — gate nextStep text must reflect actual steps run
       , test "#208: gate nextStep text uses payload summary not hardcoded names" testGateNextStepTextFromSummary
       -- Issue #118 — removeDep drops blank continuation lines
@@ -15254,6 +15258,23 @@ testGotoCompiledModuleRemediation =
              let hasCompiled   = "was compiled" `T.isInfixOf` t
                  noFalseSource = not ("no local source file" `T.isInfixOf` t)
              in pure (hasCompiled && noFalseSource)
+           _ -> pure False
+       _ -> pure False
+
+-- | #224: qualifiedPreloadPayload names the unqualified form and the
+-- module prefix so the agent knows how to retry without the qualifier.
+testGotoQualifiedPreloadPayload :: IO Bool
+testGotoQualifiedPreloadPayload =
+  let loc = GotoTool.InModule "GHC.Internal.Data.OldList"
+      payload = qualifiedPreloadPayload "Data.List.sort" "sort" loc
+  in case payload of
+       A.Object o ->
+         case AKM.lookup "remediation" o of
+           Just (A.String t) ->
+             let mentionsSort = "'sort'" `T.isInfixOf` t
+                 mentionsMod  = "'Data.List'" `T.isInfixOf` t
+                 mentionsQual = "qualified" `T.isInfixOf` t
+             in pure (mentionsSort && mentionsMod && mentionsQual)
            _ -> pure False
        _ -> pure False
 
