@@ -1214,6 +1214,9 @@ main = do
       , test "#218: ghc_arbitrary wired-in type gives clear message" testArbitraryWiredInMessage
       -- Issue #219 — hasUnboxedConstructor detects I#/C#/W# primops
       , test "#219: hasUnboxedConstructor detects I#/C#/W#"         testArbitraryHasUnboxedConstructor
+      -- Issue #226 — renderTyThing tries all names (not just first)
+      , test "#226: renderTyThing uses firstJust over all parseName results" testArbitraryFirstJustSource
+      , test "#226: parseTypeParams two-param type"                  testArbitraryTwoParamTemplate
       -- Issue #217 — ghc_goto descriptor mentions compiled-mode limitation
       , test "#217: ghc_goto descriptor acknowledges compiled-mode"  testGhcGotoDescriptorAccurate
       , test "remove_modules: tool registered"        testRemoveModulesRegistered
@@ -7349,6 +7352,32 @@ testArbitraryHasUnboxedConstructor = pure $
   && not (hasUnboxedConstructor (Constructor { cName = "Just",  cArgs = ["a"] }))
   && not (hasUnboxedConstructor (Constructor { cName = "False", cArgs = [] }))
   && not (hasUnboxedConstructor (Constructor { cName = "PathNotAbsolute", cArgs = ["Text"] }))
+
+-- | #226: 'renderTyThing' must try all names returned by 'parseName'
+-- rather than blindly taking the first one.  When an external-package
+-- type shares an unqualified name with a home-module type, taking only
+-- the first name causes getInfo to return Nothing → "wired-in primitive"
+-- message.  Verified by checking the source uses the multi-name loop.
+testArbitraryFirstJustSource :: IO Bool
+testArbitraryFirstJustSource = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Arbitrary.hs"
+  let usesMapM    = "mapM tryName" `T.isInfixOf` src
+      hasFirstJust = "firstJust"   `T.isInfixOf` src
+      noNilTail   = not ("n :| _ <- parseName" `T.isInfixOf` src)
+  pure (usesMapM && hasFirstJust && noNilTail)
+
+-- | #226: the pure template path correctly handles two-param types.
+-- renderTemplate with params ["a","b"] produces the right instance header.
+testArbitraryTwoParamTemplate :: IO Bool
+testArbitraryTwoParamTemplate =
+  let raw = T.unlines
+        [ "data Tagged a b = Tagged a b"
+        ]
+      params = parseTypeParams raw
+      ctors  = parseConstructors raw
+      tmpl   = renderTemplate "Tagged" params ctors
+  in pure $ params == ["a", "b"]
+         && "(Arbitrary a, Arbitrary b) => Arbitrary (Tagged a b)" `T.isInfixOf` tmpl
 
 -- | Issue #217: 'ghc_goto' descriptor must acknowledge that source
 -- locations are only available for interpreted modules and that most

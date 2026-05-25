@@ -33,7 +33,7 @@ import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAlphaNum)
-import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.List.NonEmpty (NonEmpty ((:|)), toList)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -245,14 +245,28 @@ compileFailedErr n =
 -- constructor \`T\'"@ — useless for parseConstructors. Instead we
 -- walk the 'TyCon' directly: tyConTyVars for the header, then
 -- tyConDataCons + dataConOrigArgTys for each constructor.
+--
+-- #226: 'parseName' can return multiple names when an external-package
+-- type shares the same unqualified name as the user's home-module type.
+-- Taking only the first name (which is often the external one) causes
+-- 'getInfo' to return Nothing for it, triggering the misleading
+-- "wired-in primitive" error.  We now try each name in order and
+-- return the first ATyCon result we find.
 renderTyThing :: Text -> Ghc (Maybe Text)
 renderTyThing nm = do
-  n :| _ <- parseName (T.unpack nm)
-  info <- getInfo True n
-  pure $ case info of
-    Just (ATyCon tc, _fixity, _clsInsts, _famInsts, _doc) ->
-      Just (renderTyConAsDataDecl tc)
-    _ -> Nothing
+  names <- parseName (T.unpack nm)
+  let tryName n = do
+        info <- getInfo True n
+        pure $ case info of
+          Just (ATyCon tc, _, _, _, _) -> Just (renderTyConAsDataDecl tc)
+          _                            -> Nothing
+  results <- mapM tryName (toList names)
+  pure (firstJust results)
+  where
+    firstJust [] = Nothing
+    firstJust (x:xs) = case x of
+      Just _  -> x
+      Nothing -> firstJust xs
 
 -- | Render a 'TyCon' as a GHCi-style @data T a b = C1 Int | C2 Bool a@
 -- declaration. Covers newtypes identically (single-constructor data).
