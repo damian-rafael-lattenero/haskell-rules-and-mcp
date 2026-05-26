@@ -1011,6 +1011,12 @@ main = do
       , test "#235: patchPrecedingTypeSig skips blank+comment lines"    testPatchPrecedingTypeSigSkips235
       , test "#235: patchPrecedingTypeSig no-op when no sig found"      testPatchPrecedingTypeSigNoOp235
       , test "#235: writePatched GHC-40910 binding also patches type sig" testWritePatchedAlsoFixesSig235
+      , test "#238: renderStored emits module_hint when module=Nothing" testRenderStoredNullModuleHint238
+      , test "#238: renderStored no module_hint when module=Just"       testRenderStoredJustModuleNoHint238
+      , test "#238: listResult emits null_module_count and hint"        testListResultNullModuleCount238
+      , test "#238: listResult no null_module fields when all have modules" testListResultNoNullFields238
+      , test "#238: enhanceNullModuleDetail appends hint when null+skipped" testEnhanceNullModuleDetail238
+      , test "#238: enhanceNullModuleDetail no-op when both have modules"   testEnhanceNullModuleDetailNoOp238
       , test "remove_modules: scanImportersInBody plain (#41)" testRMScanImportPlain
       , test "remove_modules: scanImportersInBody respects hierarchy (#41)" testRMScanRespectsHierarchy
       , test "remove_modules: scanImportersInBody quiet on no match (#41)" testRMScanQuietOnNoMatch
@@ -10422,6 +10428,101 @@ testWritePatchedAlsoFixesSig235 = do
            && T.isPrefixOf "_listSum ="  (lns !! 4)
   removePathForcibly dir
   pure result
+
+-- | #238: renderStored should emit a 'module_hint' field when spModule is Nothing.
+testRenderStoredNullModuleHint238 :: IO Bool
+testRenderStoredNullModuleHint238 = pure $
+  let sp = StoredProperty
+             { spExpression = "\\x -> x == x"
+             , spModule     = Nothing
+             , spPassed     = 3
+             , spUpdated    = 1_000_000
+             }
+      A.Object km = RegTool.renderStored sp
+  in AKM.member "module_hint" km
+
+-- | #238: renderStored should NOT emit a 'module_hint' field when spModule is Just.
+testRenderStoredJustModuleNoHint238 :: IO Bool
+testRenderStoredJustModuleNoHint238 = pure $
+  let sp = StoredProperty
+             { spExpression = "\\x -> x == x"
+             , spModule     = Just "src/Foo.hs"
+             , spPassed     = 3
+             , spUpdated    = 1_000_000
+             }
+      A.Object km = RegTool.renderStored sp
+  in not (AKM.member "module_hint" km)
+
+-- | #238: listResult should emit null_module_count and null_module_hint fields
+-- when the property store contains at least one null-module property.
+testListResultNullModuleCount238 :: IO Bool
+testListResultNullModuleCount238 = do
+  let spNull = StoredProperty
+                 { spExpression = "\\x -> x >= 0"
+                 , spModule     = Nothing
+                 , spPassed     = 1
+                 , spUpdated    = 1_000_000
+                 }
+      spOk   = StoredProperty
+                 { spExpression = "\\x -> x == x"
+                 , spModule     = Just "src/Foo.hs"
+                 , spPassed     = 5
+                 , spUpdated    = 1_000_000
+                 }
+      tr     = RegTool.listResult [spNull, spOk]
+  case trContent tr of
+    [TextContent body] ->
+      case A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)) of
+        Right env ->
+          case Env.reResult env of
+            Just (A.Object km) ->
+              pure $ AKM.member "null_module_count" km
+                  && AKM.member "null_module_hint"  km
+                  && AKM.lookup "null_module_count" km == Just (A.Number 1)
+            _ -> pure False
+        Left _ -> pure False
+    _ -> pure False
+
+-- | #238: listResult should NOT emit null_module_count/hint when all props have modules.
+testListResultNoNullFields238 :: IO Bool
+testListResultNoNullFields238 = do
+  let sp = StoredProperty
+             { spExpression = "\\x -> x == x"
+             , spModule     = Just "src/Foo.hs"
+             , spPassed     = 2
+             , spUpdated    = 1_000_000
+             }
+      tr = RegTool.listResult [sp]
+  case trContent tr of
+    [TextContent body] ->
+      case A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)) of
+        Right env ->
+          case Env.reResult env of
+            Just (A.Object km) ->
+              pure $ not (AKM.member "null_module_count" km)
+                  && not (AKM.member "null_module_hint"  km)
+            _ -> pure False
+        Left _ -> pure False
+    _ -> pure False
+
+-- | #238: enhanceNullModuleDetail appends a hint when status=skipped,
+-- detail starts with "probe load/parse failure", and p1 has no module.
+testEnhanceNullModuleDetail238 :: IO Bool
+testEnhanceNullModuleDetail238 = pure $
+  let result = PropertyAuditTool.enhanceNullModuleDetail
+                 True False
+                 "skipped"
+                 "probe load/parse failure: (no GHCi output)"
+  in "re-run it via" `T.isInfixOf` result
+  && "module: null" `T.isInfixOf` result
+
+-- | #238: enhanceNullModuleDetail is a no-op when both properties have modules.
+testEnhanceNullModuleDetailNoOp238 :: IO Bool
+testEnhanceNullModuleDetailNoOp238 = pure $
+  let original = "probe load/parse failure: (no GHCi output)"
+      result   = PropertyAuditTool.enhanceNullModuleDetail
+                   False False "skipped" original
+  in result == original
 
 -- | Phase 11i: warning categorizer buckets common messages into
 -- the 5 coarse classes the agent can prioritise on.

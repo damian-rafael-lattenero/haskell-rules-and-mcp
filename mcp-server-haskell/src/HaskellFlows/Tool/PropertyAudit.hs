@@ -34,12 +34,14 @@ module HaskellFlows.Tool.PropertyAudit
   , isVacuousResult
     -- * #230 (exported for unit tests)
   , kindFor
+    -- * #238 (exported for unit tests)
+  , enhanceNullModuleDetail
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -198,11 +200,14 @@ runPairProbe ghcSess _args (p1, p2) = do
             }
         Right (out, _err) ->
           let (status, detail) = interpretProbeResult (parseQuickCheckOutput probe out)
+              detail' = enhanceNullModuleDetail
+                          (isNothing (spModule p1)) (isNothing (spModule p2))
+                          status detail
           in PairFinding
                { pfP1     = p1
                , pfP2     = p2
                , pfStatus = status
-               , pfDetail = detail
+               , pfDetail = detail'
                }
 
 --------------------------------------------------------------------------------
@@ -356,6 +361,27 @@ interpretProbeResult = \case
     ( "skipped"
     , "QuickCheck gave up (too many discards)"
     )
+
+-- | #238: when a probe returns 'QcUnparsed' (\"probe load/parse failure\")
+-- AND at least one of the pair has no recorded module path, augment the
+-- detail string with a remediation hint so the agent knows what to do.
+-- Pure — exported for unit tests.
+enhanceNullModuleDetail
+  :: Bool   -- ^ p1 has no module (isNothing (spModule p1))
+  -> Bool   -- ^ p2 has no module (isNothing (spModule p2))
+  -> Text   -- ^ status from interpretProbeResult
+  -> Text   -- ^ detail from interpretProbeResult
+  -> Text
+enhanceNullModuleDetail p1Null p2Null status detail
+  | status == "skipped"
+  , "probe load/parse failure" `T.isPrefixOf` detail
+  , p1Null || p2Null
+  = detail
+      <> " — at least one property has no recorded module path \
+         \(module: null); re-run it via \
+         \ghc_quickcheck(property=..., module=\"src/X.hs\") \
+         \to restore replay context."
+  | otherwise = detail
 
 --------------------------------------------------------------------------------
 -- Issue #77 / cascade of #74 — defensive deduplication

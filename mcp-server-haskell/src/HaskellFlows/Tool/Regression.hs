@@ -21,12 +21,15 @@ module HaskellFlows.Tool.Regression
   , formatIso8601
     -- * Issue #216 — exported so Gate.hs can compute a dynamic budget
   , replayTimeoutMicros
+    -- * Issue #238 — exported for unit tests
+  , listResult
+  , renderStored
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time (defaultTimeLocale, formatTime)
@@ -240,11 +243,24 @@ parseShowModulesPaths raw =
 -- of the on-disk property store.
 listResult :: [StoredProperty] -> ToolResult
 listResult props =
-  Env.toolResponseToResult (Env.mkOk (object
-    [ "action"     .= ("list" :: Text)
-    , "count"      .= length props
-    , "properties" .= map renderStored props
-    ]))
+  let nullCount = length (filter (isNothing . spModule) props)
+      nullHint  = T.pack (show nullCount)
+                    <> " properties have no recorded module path — \
+                       \re-run them via ghc_quickcheck(property=..., \
+                       \module=\"src/X.hs\") or ghc_lab(module_path=\"src/X.hs\") \
+                       \to improve replay reliability."
+      baseFields =
+        [ "action"     .= ("list" :: Text)
+        , "count"      .= length props
+        , "properties" .= map renderStored props
+        ]
+      extraFields
+        | nullCount > 0 =
+            [ "null_module_count" .= nullCount
+            , "null_module_hint"  .= nullHint
+            ]
+        | otherwise = []
+  in Env.toolResponseToResult (Env.mkOk (object (baseFields <> extraFields)))
 
 -- | Issue #90 Phase C: replay run → status='ok' iff every stored
 -- property re-played green. Any regression OR any property whose
@@ -312,15 +328,23 @@ summarise total regressed lf =
 
 renderStored :: StoredProperty -> Value
 renderStored sp =
-  object
-    [ "expression" .= spExpression sp
-    , "module"     .= spModule sp
-    , "passed"     .= spPassed sp
-    -- #119: render as ISO-8601 instead of a float POSIX timestamp.
-    -- Agents and humans can read "2026-04-15T14:55:27Z" directly;
-    -- 1.777046127140673e9 is opaque.
-    , "updated"    .= formatIso8601 (spUpdated sp)
-    ]
+  let baseFields =
+        [ "expression" .= spExpression sp
+        , "module"     .= spModule sp
+        , "passed"     .= spPassed sp
+        -- #119: render as ISO-8601 instead of a float POSIX timestamp.
+        -- Agents and humans can read "2026-04-15T14:55:27Z" directly;
+        -- 1.777046127140673e9 is opaque.
+        , "updated"    .= formatIso8601 (spUpdated sp)
+        ]
+      -- #238: hint the caller when module path is missing so they know
+      -- how to fix replay unreliability without having to read docs.
+      moduleHint = case spModule sp of
+        Nothing -> [ "module_hint" .= ("module path not recorded; re-run via \
+                                       \ghc_quickcheck(property=..., \
+                                       \module=\"src/X.hs\") to fix" :: Text) ]
+        Just _  -> []
+  in object (baseFields <> moduleHint)
 
 -- | Format a POSIX 'Double' (seconds since epoch) as ISO-8601 UTC.
 -- Used by 'renderStored' to make timestamps human-readable (#119).
