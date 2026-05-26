@@ -334,7 +334,7 @@ data PropertyOutcome = PropertyOutcome
   , poCategory   :: !Text
   , poConfidence :: !Confidence
   , poExpression :: !Text
-  , poStatus     :: !Text        -- "passed" | "failed" | "skipped"
+  , poStatus     :: !Text        -- "passed" | "failed" | "exception" | "gave_up" | "unparsed"
   , poDetail     :: !Text        -- extra info from quickcheck
   , poStability  :: !(Maybe Text)
     -- ^ Phase 2: @Nothing@ = not checked (determinism_runs=0 or status≠passed).
@@ -403,17 +403,30 @@ qcResultStatus (QcPassed _ _)    = "passed"
 qcResultStatus QcFailed {}       = "failed"
 qcResultStatus (QcException _ _) = "exception"
 qcResultStatus QcGaveUp {}       = "gave_up"
-qcResultStatus (QcUnparsed _ _)  = "unparsed"
+-- #237: distinguish identifiable runtime failures in the raw output
+-- from genuine "couldn't parse QuickCheck output" failures.
+-- 'runBatchPropertiesViaCabalRepl' stores 'summariseStderr' in the
+-- raw field when the repl exits non-zero, so stack overflows and
+-- similar crashes surface here as recognisable substrings.
+qcResultStatus (QcUnparsed _ raw)
+  | any (`T.isInfixOf` T.toLower raw)
+        [ "stack space overflow", "heap overflow", "out of memory"
+        , "stack overflow",       "rts error" ] = "exception"
+  | otherwise = "unparsed"
 
 -- | Detail string for a 'QuickCheckResult' (#201). Surfaces the
 -- counterexample for 'QcFailed' so the agent can read it directly
--- instead of digging into the @raw@ field. Empty for all other
--- outcomes.
+-- instead of digging into the @raw@ field.
+-- #237: also surfaces the raw output for 'QcUnparsed' so the agent
+-- can see the actual error (e.g. \"Stack space overflow\") instead
+-- of a silent empty string.
 qcResultDetail :: QuickCheckResult -> Text
 qcResultDetail (QcFailed _ n shr cex) =
   "counterexample: " <> cex
     <> " (after " <> T.pack (show n) <> " passes, "
     <> T.pack (show shr) <> " shrinks)"
+qcResultDetail (QcUnparsed _ raw)
+  | not (T.null (T.strip raw)) = T.take 400 raw
 qcResultDetail _ = ""
 
 -- | Distribute the flat batch result triples back into per-binding

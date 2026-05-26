@@ -1492,6 +1492,11 @@ main = do
       , test "#201: qcResultDetail formats counterexample for QcFailed"        testQcResultDetailFailed
       , test "#201: qcResultDetail returns empty for QcPassed"                 testQcResultDetailPassed
       , test "#201: qcResultStatus covers all five constructors"               testQcResultStatusAll
+      , test "#237: qcResultStatus QcUnparsed stack-overflow → exception"     testQcResultStatusStackOverflow237
+      , test "#237: qcResultStatus QcUnparsed heap-overflow → exception"      testQcResultStatusHeapOverflow237
+      , test "#237: qcResultStatus QcUnparsed other raw → unparsed"           testQcResultStatusOtherUnparsed237
+      , test "#237: qcResultDetail QcUnparsed non-empty raw → surfaces raw"   testQcResultDetailUnparsedNonEmpty237
+      , test "#237: qcResultDetail QcUnparsed empty raw → empty string"       testQcResultDetailUnparsedEmpty237
       , test "#106/F-31: perf renderResult with all errors returns failed" testPerfAllSamplesErrored
       , test "#162: perf renderResult exposes warmup_ns field"            testPerfWarmupNsInPayload
       , test "#162: perf warm samples exclude warmup from mean"           testPerfWarmSamplesNotSkewed
@@ -16460,6 +16465,39 @@ testQcResultStatusAll =
       && LabTool.qcResultStatus (QcException "p" "err")       == "exception"
       && LabTool.qcResultStatus (QcGaveUp    "p" 0 0)         == "gave_up"
       && LabTool.qcResultStatus (QcUnparsed  "p" "raw")       == "unparsed"
+
+-- | #237: QcUnparsed with "Stack space overflow" raw → status = "exception"
+testQcResultStatusStackOverflow237 :: IO Bool
+testQcResultStatusStackOverflow237 = pure $
+  LabTool.qcResultStatus
+    (QcUnparsed "fibonacci 40" "Stack space overflow: current size 33624 bytes.")
+  == "exception"
+
+-- | #237: QcUnparsed with "heap overflow" raw → status = "exception"
+testQcResultStatusHeapOverflow237 :: IO Bool
+testQcResultStatusHeapOverflow237 = pure $
+  LabTool.qcResultStatus
+    (QcUnparsed "prop" "out of memory (requested 1048576 bytes)")
+  == "exception"
+
+-- | #237: QcUnparsed with unrecognised raw → status still = "unparsed"
+testQcResultStatusOtherUnparsed237 :: IO Bool
+testQcResultStatusOtherUnparsed237 = pure $
+  LabTool.qcResultStatus
+    (QcUnparsed "prop" "some random unrecognised output")
+  == "unparsed"
+
+-- | #237: qcResultDetail for QcUnparsed with non-empty raw returns the raw text.
+testQcResultDetailUnparsedNonEmpty237 :: IO Bool
+testQcResultDetailUnparsedNonEmpty237 =
+  let raw    = "Stack space overflow: current size 33624 bytes."
+      detail = LabTool.qcResultDetail (QcUnparsed "prop" raw)
+  in pure (T.isInfixOf "Stack space overflow" detail)
+
+-- | #237: qcResultDetail for QcUnparsed with empty raw returns empty string.
+testQcResultDetailUnparsedEmpty237 :: IO Bool
+testQcResultDetailUnparsedEmpty237 = pure $
+  LabTool.qcResultDetail (QcUnparsed "prop" "") == ""
 
 -- | #215 (GHC-18042 type-default fix): regression for the
 -- 'go 0 [] []' call in 'splitAtDepthZeroSpaces'.  Adding
