@@ -1043,6 +1043,7 @@ main = do
       , test "#228: collectModuleHeader multi-line"                          testCollectModuleHeaderMulti
       , test "#228: removeFromSourceExportList multi-line header"            testMoveRemoveExportMultiLine
       , test "#228: addToDestinationExportList multi-line header"            testMoveAddDestExportMultiLine
+      , test "#236: move sequence: multi-line header + correct slice deletion" testMoveSequenceMultilineHeader236
       , test "#206: hasBareImportOf detects bare import"                    testHasBareImportOfDetects
       , test "#206: hasBareImportOf detects qualified bare import"          testHasBareImportOfQualified
       , test "#206: hasBareImportOf misses selective import"                testHasBareImportOfSelectiveMiss
@@ -9356,6 +9357,41 @@ testMoveAddDestExportMultiLine =
         ]
       out = MoveTool.addToDestinationExportList "double" body
   in pure $ "module Dest (foo, bar, double) where" `T.isInfixOf` out
+
+-- | #236 fix: the correct sequence uses a fresh slice from the
+-- export-stripped body, ensuring line numbers are consistent.
+testMoveSequenceMultilineHeader236 :: IO Bool
+testMoveSequenceMultilineHeader236 = pure $
+  let body = T.unlines
+        [ "module Src"
+        , "  ( add"
+        , "  , safeDiv"
+        , "  , listSum"
+        , "  ) where"
+        , ""
+        , "add :: Int -> Int -> Int"
+        , "add x y = x + y"
+        , ""
+        , "safeDiv :: Int -> Int -> Maybe Int"
+        , "safeDiv _ 0 = Nothing"
+        , "safeDiv x y = Just x"
+        , ""
+        , "listSum :: [Int] -> Int"
+        , "listSum = foldr add 0"
+        ]
+      stripped = MoveTool.removeFromSourceExportList "safeDiv" body
+      -- Fix: re-slice from stripped body to get correct line numbers
+      mSliced  = MoveTool.sliceTopLevelBinding "safeDiv" stripped
+      result   = case mSliced of
+                   Nothing -> stripped  -- symbol not found (would be a bug)
+                   Just s  -> MoveTool.removeSliceFromBody s stripped
+  in -- safeDiv should be gone
+     not ("safeDiv" `T.isInfixOf` result)
+     -- listSum should survive
+  && "listSum :: [Int] -> Int" `T.isInfixOf` result
+  && "listSum = foldr add 0"   `T.isInfixOf` result
+     -- add should also survive
+  && "add :: Int -> Int -> Int" `T.isInfixOf` result
 
 -- | Issue #206: 'hasBareImportOf' detects a plain @import Foo@ line.
 testHasBareImportOfDetects :: IO Bool

@@ -153,7 +153,17 @@ proceedMove sess pd args fromAbs toAbs fromBody toBody sliced = do
   -- post-move load fails with \"Not in scope\" on the export list.
   -- An open export ('module Foo where') is left untouched.
   let fromExportStripped = removeFromSourceExportList (maSymbol args) fromBody
-      fromBody'          = removeSliceFromBody sliced fromExportStripped
+      -- #236: re-slice from the export-stripped body to get correct
+      -- line numbers. When the source has a multi-line header (e.g.
+      -- a 5-line export list), removeFromSourceExportList collapses
+      -- it to a single line — shifting every subsequent line up by
+      -- (N-1). The original `sliced` (computed from fromBody before
+      -- the collapse) now points at the WRONG lines in the stripped
+      -- body, causing removeSliceFromBody to delete the definition
+      -- immediately AFTER the moved symbol instead of the symbol itself.
+      sliced' = fromMaybe sliced
+                  (sliceTopLevelBinding (maSymbol args) fromExportStripped)
+      fromBody'          = removeSliceFromBody sliced' fromExportStripped
       -- Issue #76: when the destination module declares an
       -- explicit export list ("module Foo (a, b) where"), the
       -- moved symbol must be added to it — otherwise the slice
