@@ -38,12 +38,15 @@ import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAlphaNum, isAsciiLower, isAsciiUpper, isDigit, toUpper)
+import Data.List (isSuffixOf)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import System.Directory
   ( createDirectoryIfMissing
   , doesFileExist
+  , listDirectory
+  , removeFile
   )
 import System.FilePath ((</>), takeDirectory)
 
@@ -163,6 +166,15 @@ validateName raw
       Left ("package name '" <> raw
               <> "' must be lowercase by Hackage convention; \
                  \use hyphens between segments rather than CamelCase")
+    -- #233: cabal treats an all-digit component (e.g. "2026" in
+    -- "dogfood-2026-05-25-b") as a version number and fails with
+    -- "unexpected Empty component".  Reject such names early.
+  | any (T.all isDigit) (T.splitOn "-" raw) =
+      Left ("package name '" <> raw
+              <> "' may not contain an all-digit component between hyphens \
+                 \(cabal would confuse it with a version number); \
+                 \use a letter-prefixed segment instead \
+                 \(e.g. \"v2026\" rather than \"2026\")")
   | otherwise = Right raw
   where
     firstIsLowerLetter t = case T.uncons t of
@@ -243,7 +255,14 @@ scaffold root pkg modName overwrite write = do
                    <> ". Pass overwrite=true to replace."))
                       { Env.eeRemediation =
                           Just "Pass overwrite=true to replace existing files, or remove them first." })))
-    else writeAll root plans pkg modName
+    else do
+      -- #234: when overwrite=True the caller may have previously
+      -- created a project with a *different* name in the same dir.
+      -- The old <old-name>.cabal must be removed before writing the
+      -- new one, otherwise cabal finds two .cabal files and errors
+      -- with "Multiple cabal files found".
+      removeStaleCalabFiles root (T.unpack pkg <> ".cabal")
+      writeAll root plans pkg modName
 
 filterExistingM :: FilePath -> [FilePlan] -> IO [FilePlan]
 filterExistingM root = filterM
@@ -254,6 +273,19 @@ filterExistingM root = filterM
         e  <- doesFileExist (root </> fpRelPath x)
         rs <- filterM xs
         pure (if e then x : rs else rs)
+
+-- | #234: Remove every @.cabal@ file in @root@ whose base name does NOT
+-- match @keepFile@.  Silently ignores files that have already been
+-- deleted (race-safe).  Errors from individual removes are swallowed so
+-- a stale read-only file in @root@ doesn't abort the whole scaffold.
+removeStaleCalabFiles :: FilePath -> FilePath -> IO ()
+removeStaleCalabFiles root keepFile = do
+  entries <- listDirectory root `catchSilently` const (pure [])
+  let stale = filter (\e -> ".cabal" `isSuffixOf` e && e /= keepFile) entries
+  mapM_ (\e -> removeFile (root </> e) `catchSilently` const (pure ())) stale
+  where
+    catchSilently :: IO a -> (SomeException -> IO a) -> IO a
+    catchSilently = \action handler -> try action >>= either handler pure
 
 writeAll :: FilePath -> [FilePlan] -> Text -> Text -> IO ToolResult
 writeAll root plans pkg modName = do

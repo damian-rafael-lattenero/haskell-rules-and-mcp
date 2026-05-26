@@ -252,7 +252,7 @@ import qualified System.FilePath
 import Control.Monad (unless, when)
 import Control.Concurrent.MVar
   ( newEmptyMVar, putMVar, takeMVar, newMVar, readMVar )
-import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, removePathForcibly)
+import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, listDirectory, removePathForcibly)
 import System.FilePath ((</>))
 import qualified HaskellFlows.Types
 import HaskellFlows.Types
@@ -915,6 +915,11 @@ main = do
       , test "create_project: scaffold cabal file is shippable green-by-default (#69)"
                                                                  testCreateProjectScaffoldGreenCabal
       , test "create_project: validateName error names violation (#58)" testCreateValidateErrorMsg
+      -- Issue #233 — all-digit component validation
+      , test "#233: validateName rejects date-like all-digit components" testCreateValidateAllDigitComponent
+      , test "#233: validateName accepts v-prefixed numeric segments"   testCreateValidateVPrefixedOk
+      -- Issue #234 — overwrite=true removes stale .cabal files
+      , test "#234: scaffold overwrite=true removes stale .cabal"       testCreateOverwriteRemovesStaleCalab
       -- Issue #126 — path + write fixes
       , test "#126A: scaffold write=false never fails (preview mode)"  testCreateWriteFalseIsPreview
       , test "#126A: scaffold write=false returns preview content"      testCreateWriteFalseContent
@@ -1000,6 +1005,12 @@ main = do
       , test "fix_warning: underscorePrefix idempotent on _name (#55)" testUnderscorePrefixIdempotent
       , test "fix_warning: patchTailBindings renames binding equations (#202)" testPatchTailBindings202
       , test "#221: fix_warning out-of-bounds line returns validation error"  testFixWarningOutOfBounds
+      -- Issue #235 — patchPrecedingTypeSig
+      , test "#235: isTypeSigLine detects type sig correctly"           testIsTypeSigLine235
+      , test "#235: patchPrecedingTypeSig renames type sig"             testPatchPrecedingTypeSig235
+      , test "#235: patchPrecedingTypeSig skips blank+comment lines"    testPatchPrecedingTypeSigSkips235
+      , test "#235: patchPrecedingTypeSig no-op when no sig found"      testPatchPrecedingTypeSigNoOp235
+      , test "#235: writePatched GHC-40910 binding also patches type sig" testWritePatchedAlsoFixesSig235
       , test "remove_modules: scanImportersInBody plain (#41)" testRMScanImportPlain
       , test "remove_modules: scanImportersInBody respects hierarchy (#41)" testRMScanRespectsHierarchy
       , test "remove_modules: scanImportersInBody quiet on no match (#41)" testRMScanQuietOnNoMatch
@@ -8154,8 +8165,10 @@ testCreateValidateAccept :: IO Bool
 testCreateValidateAccept = pure $ and
   [ CreateProject.validateName "haskell-flows-mcp" == Right "haskell-flows-mcp"
   , CreateProject.validateName "x"                 == Right "x"
-  , CreateProject.validateName "abc-123-def"       == Right "abc-123-def"
+  -- "abc-123-def" removed: segment '123' is all-digit → now rejected by #233 rule
   , CreateProject.validateName "single"            == Right "single"
+  , CreateProject.validateName "my-pkg-v2"         == Right "my-pkg-v2"
+  , CreateProject.validateName "lib-core"          == Right "lib-core"
   ]
 
 testCreateValidateEmpty :: IO Bool
@@ -8229,6 +8242,65 @@ testCreateValidateErrorMsg = pure $
       && ("lowercase" `T.isInfixOf` msg
             || "Hackage" `T.isInfixOf` msg)
     Right _ -> False
+
+--------------------------------------------------------------------------------
+-- Issue #233 — validateName: all-digit component rejection
+--------------------------------------------------------------------------------
+
+-- | #233: cabal fails with "unexpected Empty component" when a
+-- hyphen-separated name component is all digits.  Pin that the
+-- validator now rejects such names with an informative message.
+testCreateValidateAllDigitComponent :: IO Bool
+testCreateValidateAllDigitComponent = pure $ and
+  [ isLeft (CreateProject.validateName "dogfood-2026-05-25-b")  -- full repro case
+  , isLeft (CreateProject.validateName "pkg-2026")              -- single trailing digit seg
+  , isLeft (CreateProject.validateName "a-1-b")                 -- digit in middle
+  , case CreateProject.validateName "dogfood-2026-05-25-b" of
+      Left msg -> "all-digit" `T.isInfixOf` msg
+                  || "version" `T.isInfixOf` msg
+      Right _  -> False
+  ]
+  where
+    isLeft (Left _) = True
+    isLeft _        = False
+
+-- | #233: names with letter-prefixed numeric-like segments are fine;
+-- segments that are ENTIRELY digits are not (cabal parses them as
+-- version components, creating a parse ambiguity).
+testCreateValidateVPrefixedOk :: IO Bool
+testCreateValidateVPrefixedOk = pure $ and
+  [ CreateProject.validateName "dogfood-v2026"      == Right "dogfood-v2026"
+  , CreateProject.validateName "pkg-v1"             == Right "pkg-v1"
+  , CreateProject.validateName "lib-r2d2"           == Right "lib-r2d2"
+  , CreateProject.validateName "http2"              == Right "http2"        -- no hyphen, fine
+  , isLeft (CreateProject.validateName "abc-123-def")  -- '123' is all-digit → rejected
+  , isLeft (CreateProject.validateName "lib-42")       -- '42' is all-digit → rejected
+  ]
+  where
+    isLeft (Left _) = True
+    isLeft _        = False
+
+--------------------------------------------------------------------------------
+-- Issue #234 — scaffold overwrite=true removes stale .cabal files
+--------------------------------------------------------------------------------
+
+-- | #234: when overwrite=True and a stale .cabal exists with a
+-- different package name, scaffold removes it before writing.
+testCreateOverwriteRemovesStaleCalab :: IO Bool
+testCreateOverwriteRemovesStaleCalab = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "hf-test234-stale-cabal"
+  removePathForcibly dir
+  createDirectoryIfMissing True dir
+  -- Simulate the stale state: write an old-name.cabal in the dir.
+  TIO.writeFile (dir </> "old-name.cabal") "name: old-name\n"
+  -- Now scaffold with a new name and overwrite=True.
+  _ <- CreateProject.scaffold dir "new-name" "NewName" True True
+  -- The stale .cabal should be gone; only new-name.cabal remains.
+  entries <- listDirectory dir
+  let calabFiles = filter (List.isSuffixOf ".cabal") entries
+  removePathForcibly dir
+  pure (calabFiles == ["new-name.cabal"])
 
 --------------------------------------------------------------------------------
 -- Issue #126 — ghc_project(create): path + write fixes
@@ -10263,6 +10335,91 @@ testFixWarningOutOfBounds = do
                     && T.isInfixOf "out of bounds" (Env.eeMessage e))
                (Env.reError env)
         Left _ -> False
+  removePathForcibly dir
+  pure result
+
+--------------------------------------------------------------------------------
+-- Issue #235 — patchPrecedingTypeSig
+--------------------------------------------------------------------------------
+
+testIsTypeSigLine235 :: IO Bool
+testIsTypeSigLine235 = pure $
+     FixWarning.isTypeSigLine "listSum" "listSum :: [Int] -> Int"
+  && FixWarning.isTypeSigLine "listSum" "listSum :: [Int] -> Int  -- comment"
+  && not (FixWarning.isTypeSigLine "listSum" "listSum = foldr add 0")
+  && not (FixWarning.isTypeSigLine "listSum" "listSumHelper :: Int")
+  && not (FixWarning.isTypeSigLine "listSum" "-- | listSum :: ignored")
+
+-- | #235: patchPrecedingTypeSig renames a type sig in the list.
+testPatchPrecedingTypeSig235 :: IO Bool
+testPatchPrecedingTypeSig235 = pure $
+  FixWarning.patchPrecedingTypeSig "listSum"
+    [ "-- | Sum of a list."
+    , "listSum :: [Int] -> Int"
+    ]
+  == [ "-- | Sum of a list."
+     , "_listSum :: [Int] -> Int"
+     ]
+
+-- | #235: patchPrecedingTypeSig skips blank lines and Haddock comments.
+testPatchPrecedingTypeSigSkips235 :: IO Bool
+testPatchPrecedingTypeSigSkips235 = pure $
+  FixWarning.patchPrecedingTypeSig "foo"
+    [ "foo :: Int -> Int"
+    , ""
+    , "-- inner comment"
+    , ""
+    ]
+  == [ "_foo :: Int -> Int"
+     , ""
+     , "-- inner comment"
+     , ""
+     ]
+
+-- | #235: no-op when no type sig precedes the binding.
+testPatchPrecedingTypeSigNoOp235 :: IO Bool
+testPatchPrecedingTypeSigNoOp235 = pure $
+  FixWarning.patchPrecedingTypeSig "bar"
+    [ "foo = 1"    -- different name — not a type sig for 'bar'
+    , "bar = 2"
+    ]
+  == [ "foo = 1"
+     , "bar = 2"
+     ]
+
+-- | #235: writePatched with GHC-40910 on a binding line must ALSO
+-- rename the preceding type signature to avoid GHC-44432.
+testWritePatchedAlsoFixesSig235 :: IO Bool
+testWritePatchedAlsoFixesSig235 = do
+  tmp <- getTemporaryDirectory
+  let dir  = tmp </> "hf-test235-type-sig"
+      file = dir </> "Fixture.hs"
+  removePathForcibly dir
+  createDirectoryIfMissing True dir
+  -- A module where listSum is defined but unused (no exports/callers).
+  TIO.writeFile file $ T.unlines
+    [ "module Fixture where"
+    , ""
+    , "-- | Sum of a list."
+    , "listSum :: [Int] -> Int"      -- line 4: type sig
+    , "listSum = foldr (+) 0"         -- line 5: binding (GHC warns here)
+    ]
+  result <- case mkProjectDir dir of
+    Left _   -> pure False
+    Right pd -> do
+      let args = A.object
+            [ "module_path" A..= ("Fixture.hs" :: Text)
+            , "line"        A..= (5 :: Int)   -- GHC-40910 reported on binding
+            , "code"        A..= ("GHC-40910" :: Text)
+            , "name"        A..= ("listSum" :: Text)
+            , "apply"       A..= True
+            ]
+      _ <- FixWarning.handle pd args
+      patched <- TIO.readFile file
+      let lns = T.lines patched
+      -- Both type sig (line 4, ix 3) and binding (line 5, ix 4) must be renamed.
+      pure $  T.isPrefixOf "_listSum ::" (lns !! 3)
+           && T.isPrefixOf "_listSum ="  (lns !! 4)
   removePathForcibly dir
   pure result
 

@@ -19,6 +19,9 @@ module HaskellFlows.Tool.FixWarning
   , underscorePrefix
     -- * Issue #202 — binding-tail patch
   , patchTailBindings
+    -- * Issue #235 — preceding type-sig patch
+  , isTypeSigLine
+  , patchPrecedingTypeSig
     -- * Test-only
   , previewResult
   ) where
@@ -280,6 +283,47 @@ patchTailBindings nm = go
     isIdentChar c = isAsciiLower c || isAsciiUpper c
                  || isDigit c || c == '_' || c == '\''
 
+-- | #235: True when @line@ is a type-signature line for @nm@, i.e.
+-- it starts with @nm@ at the beginning of the (stripped) line and is
+-- immediately followed by @::@ (with optional surrounding whitespace).
+-- Used to distinguish \"patching a type sig\" from \"patching a binding\"
+-- so 'writePatched' knows whether to also fix the preceding type sig.
+isTypeSigLine :: Text -> Text -> Bool
+isTypeSigLine nm l =
+  let stripped = T.stripStart l
+  in nm `T.isPrefixOf` stripped
+       && "::" `T.isPrefixOf` T.stripStart (T.drop (T.length nm) stripped)
+
+-- | #235: Scan backward through @ls@ (the lines BEFORE the warning
+-- line) for the type-signature belonging to @nm@.  Skips blank lines
+-- and Haddock / inline comment lines (@-- …@).  Stops — and returns
+-- the original list unchanged — when it encounters a non-blank,
+-- non-comment line that is NOT the expected type sig.
+--
+-- When the type sig is found, renames @nm :: …@ to @_nm :: …@
+-- (preserving indentation and everything after @::@).
+--
+-- Example:
+--
+-- > patchPrecedingTypeSig "listSum"
+-- >   ["-- | Sum of a list.", "listSum :: [Int] -> Int"]
+-- > == ["-- | Sum of a list.", "_listSum :: [Int] -> Int"]
+patchPrecedingTypeSig :: Text -> [Text] -> [Text]
+patchPrecedingTypeSig nm ls = maybe ls id (go (length ls - 1))
+  where
+    go i
+      | i < 0 = Nothing
+      | isTypeSigLine nm (ls !! i) =
+          let before  = take i ls
+              renamed = T.replace (nm <> " ::") ("_" <> nm <> " ::") (ls !! i)
+              after   = drop (i + 1) ls
+          in Just (before <> [renamed] <> after)
+      | isBlankOrComment (ls !! i) = go (i - 1)
+      | otherwise = Nothing   -- hit a non-blank non-comment non-sig; give up
+
+    isBlankOrComment l =
+      T.null (T.strip l) || "--" `T.isPrefixOf` T.stripStart l
+
 writePatched :: FilePath -> FixPlan -> FixWarningArgs -> Text -> IO ToolResult
 writePatched full plan args body = do
   let lns        = T.lines body
@@ -302,12 +346,22 @@ writePatched full plan args body = do
             | Just patched <- fpPatch plan = case rest of
                 []       -> lns
                 -- Issue #202: for GHC-40910 also rename any binding
-                -- equations that immediately follow the sig line.
-                (_ : tl) ->
+                -- equations that immediately follow the patched line.
+                (origLine : tl) ->
                   let fixedTail = case (fwCode args, fwName args) of
                         ("GHC-40910", Just nm) -> patchTailBindings nm tl
                         _                      -> tl
-                  in pre <> [patched] <> fixedTail
+                      -- #235: when patching a BINDING (not a type sig),
+                      -- also rename the type signature that precedes it.
+                      -- Without this, the type sig retains the old name
+                      -- while the binding gains the underscore prefix,
+                      -- causing GHC-44432 "type sig lacks binding".
+                      fixedPre = case (fwCode args, fwName args) of
+                        ("GHC-40910", Just nm)
+                          | not (isTypeSigLine nm origLine) ->
+                              patchPrecedingTypeSig nm pre
+                        _ -> pre
+                  in fixedPre <> [patched] <> fixedTail
             | otherwise = lns  -- defensive: shouldn't reach when fpFixable=True
           newBody = T.unlines newLns
       if T.null (T.strip newBody)
