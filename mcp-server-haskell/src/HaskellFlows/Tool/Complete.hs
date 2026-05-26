@@ -165,6 +165,11 @@ renderCompletions prefix limit candidates =
         , "candidates" .= capped
         , "truncated"  .= (length candidates > limit)
         ]
+      -- #225: extract the module portion of a qualified prefix for the
+      -- remediation message (e.g. "Data.List." → "Data.List").
+      qualModule = T.dropWhileEnd (/= '.') prefix
+                   & T.dropEnd 1  -- drop trailing dot
+        where (&) = flip ($)
       noMatchPayload
         | isQualified =
             object
@@ -172,12 +177,17 @@ renderCompletions prefix limit candidates =
               , "count"       .= (0 :: Int)
               , "candidates"  .= ([] :: [Text])
               , "truncated"   .= False
-              -- #145: explain the missing-import root cause
+              -- #225: session preloads are unqualified; mention that
+              -- explicitly so the user understands why it fails even
+              -- when the module IS imported, and give a concrete alternative.
               , "remediation" .=
-                  ("Qualified completions only work when the module is "
-                   <> "imported into the GHCi interactive scope. "
-                   <> "Use ghc_add_import(name=\"<Module>\") first, then "
-                   <> "retry ghc_complete." :: Text)
+                  ("Qualified completions require 'import qualified "
+                   <> qualModule <> "'. "
+                   <> "Session preloads use unqualified imports — try the bare "
+                   <> "name prefix instead (e.g. drop the \""
+                   <> qualModule <> ".\" prefix), or add a qualified import "
+                   <> "via ghc_add_import(name=\"" <> qualModule
+                   <> "\") then retry." :: Text)
               ]
         | otherwise = basePayload
   in case candidates of

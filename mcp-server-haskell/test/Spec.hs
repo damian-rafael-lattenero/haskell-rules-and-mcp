@@ -687,6 +687,8 @@ main = do
                                                    testCompleteNoMatch
       , test "#145: ghc_complete zero hits + qualified prefix → remediation hint"
                                                    testCompleteQualifiedRemediation
+      , test "#225: ghc_complete qualified remediation names module and suggests bare prefix"
+                                                   testCompleteQualifiedRemediation225
       , test "Envelope #90 Phase B: ghc_complete refuses newline in prefix"
                                                    testCompleteRefusesNewline
       , test "Envelope #90 Phase B: ghc_goto on local name → status=ok"
@@ -5077,6 +5079,21 @@ testCompleteQualifiedRemediation = pure $
           _                 -> False
   in Env.reStatus qualResp  == Env.StatusNoMatch && hasRemediation qualResp
   && Env.reStatus plainResp == Env.StatusNoMatch && not (hasRemediation plainResp)
+
+-- | #225: updated qualified remediation names the module and suggests
+-- bare prefix instead of just "use ghc_add_import first".
+testCompleteQualifiedRemediation225 :: IO Bool
+testCompleteQualifiedRemediation225 = pure $
+  let resp = CompleteTool.renderCompletions "Data.List." 25 []
+  in case Env.reResult resp of
+       Just (A.Object o) ->
+         case AKM.lookup "remediation" o of
+           Just (A.String t) ->
+             "import qualified Data.List" `T.isInfixOf` t
+               && "Data.List" `T.isInfixOf` t
+               && "preload" `T.isInfixOf` t
+           _ -> False
+       _ -> False
 
 -- | A newline-laden prefix → status='refused' with
 -- error.kind='newline_injection'. Issue #90 Phase B: every
