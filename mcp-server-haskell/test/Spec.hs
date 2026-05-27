@@ -736,6 +736,8 @@ main = do
                                                    testCompleteQualifiedRemediation
       , test "#225: ghc_complete qualified remediation names module and suggests bare prefix"
                                                    testCompleteQualifiedRemediation225
+      , test "#252: ghc_complete description documents qualified prefix support"
+                                                   testCompleteDescriptionMentionsQualified
       , test "Envelope #90 Phase B: ghc_complete refuses newline in prefix"
                                                    testCompleteRefusesNewline
       , test "Envelope #90 Phase B: ghc_goto on local name → status=ok"
@@ -1680,6 +1682,10 @@ main = do
       , test "#254: lab no-template-matched reason"  testLabNoTemplateMatchedReason
       , test "#254: lab low-confidence reason"       testLabLowConfidenceReason
       , test "#250: renderRunLine uses module name not path"  testRenderRunLineUsesModuleName
+      , test "#244: findCommonStanzaWithPkg finds stanza containing pkg" testDepsCommonStanzaPkgFound
+      , test "#244: findCommonStanzaWithPkg returns Nothing when pkg absent" testDepsCommonStanzaPkgAbsent
+      , test "#244: findCommonStanzaWithPkg returns Nothing when no common stanzas" testDepsCommonStanzaNoCommon
+      , test "#244: unchangedResult' emits hint field when mHint=Just" testDepsUnchangedResultHintField
       ]
   if and results then exitSuccess else exitFailure
 
@@ -5209,6 +5215,14 @@ testCompleteQualifiedRemediation225 = pure $
                && "preload" `T.isInfixOf` t
            _ -> False
        _ -> False
+
+-- | Issue #252: the ghc_complete tool description must document that
+-- qualified prefixes (e.g. "Data.Map.") are supported.
+testCompleteDescriptionMentionsQualified :: IO Bool
+testCompleteDescriptionMentionsQualified =
+  let desc = tdDescription CompleteTool.descriptor
+  in pure $ "Qualified" `T.isInfixOf` desc
+         || "qualified" `T.isInfixOf` desc
 
 -- | A newline-laden prefix → status='refused' with
 -- error.kind='newline_injection'. Issue #90 Phase B: every
@@ -17608,3 +17622,68 @@ testSplitAtDepthZeroIssue215 =
       == ["(x :: Int)"]
     -- Empty input yields no chunks
     && null (QcExport.splitAtDepthZeroSpaces "")
+
+-- ---------------------------------------------------------------------------
+-- Issue #244 — findCommonStanzaWithPkg + common-stanza hint
+-- ---------------------------------------------------------------------------
+
+-- | #244: 'findCommonStanzaWithPkg' returns the name of the first common
+-- stanza whose build-depends contains the queried package.
+testDepsCommonStanzaPkgFound :: IO Bool
+testDepsCommonStanzaPkgFound =
+  let body = T.unlines
+        [ "common shared-deps"
+        , "  build-depends:"
+        , "    base >= 4.14"
+        , "  , aeson >= 2.0"
+        , ""
+        , "library"
+        , "  import: shared-deps"
+        , "  build-depends:"
+        , "    text"
+        ]
+  in pure $ DepsTool.findCommonStanzaWithPkg "aeson" body == Just "shared-deps"
+
+-- | #244: 'findCommonStanzaWithPkg' returns Nothing when the package is
+-- absent from all common stanzas (even if it appears in another stanza).
+testDepsCommonStanzaPkgAbsent :: IO Bool
+testDepsCommonStanzaPkgAbsent =
+  let body = T.unlines
+        [ "common shared-deps"
+        , "  build-depends:"
+        , "    base >= 4.14"
+        , ""
+        , "library"
+        , "  import: shared-deps"
+        , "  build-depends:"
+        , "    aeson >= 2.0"  -- in library stanza, NOT in common
+        ]
+  in pure $ isNothing (DepsTool.findCommonStanzaWithPkg "aeson" body)
+
+-- | #244: 'findCommonStanzaWithPkg' returns Nothing when the cabal body
+-- contains no common stanza at all.
+testDepsCommonStanzaNoCommon :: IO Bool
+testDepsCommonStanzaNoCommon =
+  let body = T.unlines
+        [ "library"
+        , "  build-depends:"
+        , "    base >= 4.14"
+        , "  , aeson >= 2.0"
+        ]
+  in pure $ isNothing (DepsTool.findCommonStanzaWithPkg "aeson" body)
+
+-- | #244: 'unchangedResult'' with 'Just hint' must include a @\"hint\"@
+-- field in the payload so the agent sees the actionable remediation message.
+testDepsUnchangedResultHintField :: IO Bool
+testDepsUnchangedResultHintField =
+  let tr = DepsTool.unchangedResult' "/tmp/foo.cabal" "aeson" "removed"
+             (Just "aeson is in common stanza 'shared-deps'")
+  in pure $ case trContent tr of
+       [TextContent body_] ->
+         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+           Just (A.Object top) ->
+             case AKM.lookup "result" top of
+               Just (A.Object r) -> AKM.member "hint" r
+               _                 -> False
+           _ -> False
+       _ -> False

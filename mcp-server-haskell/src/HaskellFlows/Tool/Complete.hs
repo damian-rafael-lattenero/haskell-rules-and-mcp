@@ -20,8 +20,8 @@ import Data.Aeson.Types (parseEither)
 import Data.List (isPrefixOf, nub, sort)
 import Data.Text (Text)
 import qualified Data.Text as T
-import GHC (Ghc, getNamesInScope)
-import GHC.Types.Name (nameOccName)
+import GHC (Ghc, getNamesInScope, moduleName, moduleNameString)
+import GHC.Types.Name (nameModule_maybe, nameOccName)
 import GHC.Types.Name.Occurrence (occNameString)
 
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -40,12 +40,15 @@ descriptor =
           <> "prefix, via :complete / GHC API. "
           <> "WHEN: discovering names that match a prefix before drilling "
           <> "in with ghc_info or ghc_type; auto-completion-style lookup "
-          <> "during exploration. "
-          <> "WHEN NOT: you want a specific module's exports — use "
-          <> "ghc_browse; the symbol is off-graph (external lib) — use "
-          <> "hoogle_search. "
+          <> "during exploration. Qualified prefixes (e.g. \"Data.Map.\") "
+          <> "are supported and return fully-qualified candidates — the "
+          <> "module must be loaded or in session imports. "
+          <> "WHEN NOT: you want a specific module's full export surface — "
+          <> "use ghc_browse; the symbol is off-graph (external lib not "
+          <> "yet loaded) — use hoogle_search. "
           <> "PREREQUISITES: a session is loaded (preloads always make "
-          <> "Prelude visible). "
+          <> "Prelude visible); for qualified completions the qualifying "
+          <> "module must be in scope (use ghc_add_import first if not). "
           <> "OUTPUT: {prefix, count, candidates:[name]}; default limit "
           <> "25, hard-capped at 200. "
           <> "SEE ALSO: ghc_info, ghc_type, ghc_browse."
@@ -130,17 +133,42 @@ parseErrorKind err
 -- | Scan every name currently in the interactive context, keep the
 -- ones whose occurrence name starts with the prefix. Sort + dedupe
 -- to match the shape the subprocess @:complete@ produced.
+--
+-- Issue #252: when the prefix is qualified (contains a dot, e.g.
+-- @"Data.Map."@ or @"Data.Map.in"@), split into module qualifier +
+-- name prefix, then filter names by their home module and construct
+-- fully-qualified candidate strings.  Unqualified prefixes fall back
+-- to the original unqualified scan.
 queryCompletions :: Text -> Ghc [Text]
 queryCompletions prefix = do
   names <- getNamesInScope
-  let pfxStr = T.unpack prefix
-      matches =
-        [ s
-        | n <- names
-        , let s = occNameString (nameOccName n)
-        , pfxStr `isPrefixOf` s
-        ]
-  pure (map T.pack (sort (nub matches)))
+  let matches
+        | "." `T.isInfixOf` prefix =
+            -- Split at the LAST dot: everything before is the module
+            -- qualifier, everything after is the (possibly empty) name
+            -- prefix.  "Data.Map." → qual="Data.Map", npfx=""
+            -- "Data.Map.in" → qual="Data.Map", npfx="in"
+            let qual = T.unpack (T.dropWhileEnd (/= '.') prefix
+                                   & \t -> if T.null t then prefix
+                                           else T.dropEnd 1 t)
+                npfx = T.unpack (T.takeWhileEnd (/= '.') prefix)
+            in [ T.pack (qual <> "." <> occStr)
+               | n <- names
+               , let occStr = occNameString (nameOccName n)
+               , npfx `isPrefixOf` occStr
+               , case nameModule_maybe n of
+                   Just m  -> moduleNameString (moduleName m) == qual
+                   Nothing -> False
+               ]
+        | otherwise =
+            [ T.pack s
+            | n <- names
+            , let s = occNameString (nameOccName n)
+            , T.unpack prefix `isPrefixOf` s
+            ]
+  pure (sort (nub matches))
+  where
+    (&) = flip ($)
 
 --------------------------------------------------------------------------------
 -- response shaping (unchanged schema)

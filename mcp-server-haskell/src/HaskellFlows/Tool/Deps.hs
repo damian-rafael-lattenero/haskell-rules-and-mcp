@@ -38,6 +38,9 @@ module HaskellFlows.Tool.Deps
   , allStanzaDeps
     -- * #119 — idempotent-result helper (exported for unit tests)
   , unchangedResult
+    -- * #244 — common stanza hint (exported for unit tests)
+  , findCommonStanzaWithPkg
+  , unchangedResult'
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
@@ -338,13 +341,30 @@ runEdit file pkg mStanza f verb verifyAfter = withCabalLock file $ do
     Right body -> case applyWithinStanza mStanza (f pkg) body of
       Left err -> pure (errorResult err)
       Right newBody
-        | newBody == body ->
+        | newBody == body -> do
             -- Idempotent no-op: the edit is already reflected in the
             -- .cabal. Verb-specific message so the agent doesn't have
             -- to re-parse a remove-shaped error on an add path. Still
             -- a 'success=true' payload — the post-condition the caller
             -- asked for ("pkg is [not] listed in stanza") holds.
-            pure (unchangedResult file pkg verb)
+            --
+            -- Issue #244: on 'remove', if the package was not found in
+            -- the targeted stanza but IS present in a common stanza,
+            -- add a hint so the agent knows where to look.
+            commonHint <- case verb of
+              "removed" -> case mStanza of
+                Nothing  -> pure Nothing
+                Just _   ->
+                  -- Check if the package lives in a common stanza.
+                  case findCommonStanzaWithPkg pkg body of
+                    Nothing -> pure Nothing
+                    Just cn ->
+                      pure (Just ("'" <> pkg <> "' is not in the targeted stanza's "
+                                  <> "own build-depends but appears in common stanza '"
+                                  <> cn <> "'. To remove it, re-run with stanza=\"common:"
+                                  <> cn <> "\"."))
+              _ -> pure Nothing
+            pure (unchangedResult' file pkg verb commonHint)
         | not (editAgreesWithVerb verb pkg mStanza newBody) ->
             -- Post-edit structural check: if the requested verb says
             -- \"added\" but the re-parsed body doesn't list the package
@@ -921,7 +941,13 @@ verifyFailedResult file pkg err =
   in Env.toolResponseToResult response
 
 unchangedResult :: FilePath -> Text -> Text -> ToolResult
-unchangedResult file pkg verb =
+unchangedResult file pkg verb = unchangedResult' file pkg verb Nothing
+
+-- | Issue #244: extended version of 'unchangedResult' that accepts an
+-- optional hint string surfaced when a package is absent from the
+-- targeted stanza but found in a common stanza.
+unchangedResult' :: FilePath -> Text -> Text -> Maybe Text -> ToolResult
+unchangedResult' file pkg verb mHint =
   let note = case verb of
         "added"   -> "'" <> pkg <> "' already present in target stanza — no change written."
         "removed" -> "'" <> pkg <> "' not listed in target stanza — no change written."
@@ -929,13 +955,40 @@ unchangedResult file pkg verb =
       -- #119: remove 'verb' — it contradicts 'action: "unchanged"' when
       -- the verb is "added" (implying something was added when nothing
       -- was written). The 'note' field already explains the outcome.
-      payload = object
+      payload = object $
         [ "action"     .= ("unchanged" :: Text)
         , "cabal_file" .= T.pack file
         , "package"    .= pkg
         , "note"       .= (note :: Text)
         ]
+        <> case mHint of
+             Nothing -> []
+             Just h  -> [ "hint" .= h ]
   in Env.toolResponseToResult (Env.mkOk payload)
+
+-- | Issue #244: scan the whole cabal body for @common@ stanzas and
+-- return the first common stanza name whose build-depends contains
+-- @pkg@. Used to produce an actionable hint when a remove is a no-op
+-- because the package is inherited rather than direct.
+findCommonStanzaWithPkg :: Text -> Text -> Maybe Text
+findCommonStanzaWithPkg pkg body =
+  let lns = T.lines body
+      -- Collect all (stanzaName, stanzaLines) pairs for common stanzas.
+      commonStanzas = go lns
+  in case filter (pkgInStanza pkg) commonStanzas of
+       ((name, _) : _) -> Just name
+       []               -> Nothing
+  where
+    pkgInStanza p (_, stanzaLns) = p `elem` parseBuildDepends (T.unlines stanzaLns)
+
+    go [] = []
+    go (ln : rest) =
+      case T.strip ln of
+        t | "common " `T.isPrefixOf` t || "common\t" `T.isPrefixOf` t ->
+              let name = T.strip (T.drop 6 t)   -- drop "common"
+                  (body_, after) = break isTopLevelStanzaHeader rest
+              in (name, body_) : go after
+          | otherwise -> go rest
 
 -- | Issue #90 Phase C: route the legacy 'errorResult' through the
 -- envelope. Most call sites pass a free-form 'Text' that maps to
