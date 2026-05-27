@@ -25,6 +25,7 @@ module HaskellFlows.Tool.Scratch
   , parseAction
   , renderEntrySummary
   , spliceInto
+  , wrapAsLetBlock
   ) where
 
 import Control.Exception (SomeException, try)
@@ -41,7 +42,7 @@ import GHC.Utils.Outputable (showPprUnsafe)
 import qualified HaskellFlows.Data.Scratchpad as SP
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
-import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
+import HaskellFlows.Ghc.Sanitize (sanitizeDeclarations, sanitizeExpression)
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -144,6 +145,17 @@ descriptor =
                       ("1-based line in target_module where the binding \
                        \should be spliced on promote." :: Text)
                   ]
+              , "binding_name" .= object
+                  [ "type"        .= ("string" :: Text)
+                  , "description" .=
+                      ("Optional, for promote only. When the stored code is \
+                       \a single-line expression rather than a declaration, \
+                       \wraps it as 'binding_name = <code>' before splicing \
+                       \so the result is a valid top-level binding. \
+                       \Example: binding_name=\"myFun\" turns \
+                       \\"(\\\\x -> x + 1) :: Int -> Int\" into \
+                       \\"myFun = (\\\\x -> x + 1) :: Int -> Int\"." :: Text)
+                  ]
               ]
           , "required"             .= ([] :: [Text])
           , "additionalProperties" .= False
@@ -185,6 +197,10 @@ data ScratchArgs = ScratchArgs
   , saConfirm      :: !Bool
   , saTargetModule :: !(Maybe Text)
   , saTargetLine   :: !(Maybe Int)
+  , saBindingName  :: !(Maybe Text)
+  -- ^ F-04: when the stored code is a single-line expression, wrap it
+  -- as @binding_name = code@ before splicing so the result is a valid
+  -- top-level declaration.
   }
   deriving stock (Show)
 
@@ -203,6 +219,7 @@ instance FromJSON ScratchArgs where
     cf <- o .:? "confirm" .!= False
     tm <- o .:? "target_module"
     tl <- o .:? "target_line"
+    bn <- o .:? "binding_name"
     pure ScratchArgs
       { saAction       = act
       , saId           = i
@@ -214,6 +231,7 @@ instance FromJSON ScratchArgs where
       , saConfirm      = cf
       , saTargetModule = tm
       , saTargetLine   = tl
+      , saBindingName  = bn
       }
 
 --------------------------------------------------------------------------------
@@ -240,28 +258,29 @@ handle store ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
     ActPromote -> handlePromote store ghcSess pd args
 
 --------------------------------------------------------------------------------
--- check (#253 Phase 2)
+-- check (#253 Phase 2, F-03 multi-line fix)
 --------------------------------------------------------------------------------
 
 -- | Type-check the stored snippet against the live GHC API session.
 --
--- Steps:
---   1. Require an @id@.
---   2. Look up the entry — return @no_match@ if it doesn't exist.
---   3. Run 'sanitizeExpression' on the stored code (same gate as
---      @ghc_eval@ and @ghc_type@; rejects newlines, sentinel,
---      empty, oversized, large-integer literals).
---   4. Call @exprType TM_Inst@ inside 'withGhcSession'.
---   5. On type_ok: persist 'ScratchVerified' + the inferred type.
---      On type_error: persist the error text, leave status 'ScratchOpen'
---      so the LLM can rewrite and re-check.
+-- Dispatches on whether the stored code is single-line or multi-line:
 --
--- Both outcomes are returned as @status=\"ok\"@ with @kind@ at the
--- top level of the result object so @nextStep@ (which drills one
--- level via @envField \"result\"@) can route: @type_ok@ → promote,
--- @type_error@ → write + re-check.  The full 'SP.ScratchResult' is
--- persisted to the store and visible via @action=show@; the response
--- carries only the fields needed for immediate routing.
+-- * Single-line — sanitized via 'sanitizeExpression' (rejects newlines,
+--   sentinel, oversized, large-int literals) then passed to @exprType
+--   TM_Inst@.  The inferred type is returned as @\"type\"@.
+--
+-- * Multi-line — sanitized via 'sanitizeDeclarations' (same checks
+--   minus the newline rejection), then wrapped in
+--   @let \\n  <decls>\\n in ()@ and passed to @exprType@.  This lets
+--   GHC's layout rule handle guards, multi-equation definitions, and
+--   type signatures naturally.  The returned type is always @()@;
+--   @\"type\"@ is set to @\"declarations type-checked OK\"@ instead so
+--   the caller sees a human-readable confirmation rather than @()@.
+--
+-- Both outcomes surface @kind@ at the top level of the result object
+-- so @nextStep@ can route: @type_ok@ → promote, @type_error@ →
+-- write + re-check.  The full 'SP.ScratchResult' is persisted and
+-- visible via @action=show@.
 handleCheck :: SP.Store -> GhcSession -> ScratchArgs -> IO ToolResult
 handleCheck store ghcSess args = case saId args of
   Nothing ->
@@ -278,63 +297,138 @@ handleCheck store ghcSess args = case saId args of
           , "hint"  .= ("No scratchpad entry with that id. \
                         \Use action=list to see existing ids." :: Text)
           ])))
-      Just entry ->
-        case sanitizeExpression (SP.seCode entry) of
-          Left cmdErr ->
-            pure (Env.toolResponseToResult (Env.mkRefused
-              (Env.sanitizeRejection "code" cmdErr)))
-          Right safe -> do
-            now <- realToFrac <$> getPOSIXTime
-            eRes <- try (withGhcSession ghcSess (queryExprType safe))
-            case eRes :: Either SomeException Text of
-              Right typeText -> do
-                let result  = SP.ScratchResult
-                                { SP.srKind   = "type_ok"
-                                , SP.srDetail = typeText
-                                , SP.srAt     = now
-                                }
-                    updated = entry
-                                { SP.seResult  = Just result
-                                , SP.seStatus  = SP.ScratchVerified
-                                , SP.seUpdated = now
-                                }
-                SP.save store updated
-                -- F-01 fix: 'kind' at the top level of the mkOk payload so
-                -- 'scratchNext' (envField "result" → lookup "kind") routes to
-                -- promote without drilling a second level.
-                pure (Env.toolResponseToResult (Env.mkOk (object
-                  [ "id"     .= i
-                  , "status" .= SP.seStatus updated   -- "verified"
-                  , "kind"   .= SP.srKind result      -- "type_ok"
-                  , "type"   .= typeText
-                  , "hint"   .=
-                      ("Type checks! Use action=promote to splice this \
-                       \code into a real module, or action=show to see \
-                       \the persisted result." :: Text)
-                  ])))
-              Left ex -> do
-                let errText = T.pack (show ex)
-                    result  = SP.ScratchResult
-                                { SP.srKind   = "type_error"
-                                , SP.srDetail = errText
-                                , SP.srAt     = now
-                                }
-                    updated = entry
-                                { SP.seResult  = Just result
-                                , SP.seStatus  = SP.ScratchOpen
-                                , SP.seUpdated = now
-                                }
-                SP.save store updated
-                -- F-01 fix: same pattern — 'kind' at top level for routing.
-                pure (Env.toolResponseToResult (Env.mkOk (object
-                  [ "id"         .= i
-                  , "status"     .= SP.seStatus updated   -- "open"
-                  , "kind"       .= SP.srKind result      -- "type_error"
-                  , "type_error" .= errText
-                  , "hint"       .=
-                      ("Type error. Use action=write to fix the code \
-                       \under the same id, then run action=check again." :: Text)
-                  ])))
+      Just entry -> do
+        now <- realToFrac <$> getPOSIXTime
+        let code = SP.seCode entry
+        if T.any (== '\n') code
+          then checkMultiLine store ghcSess entry i code now
+          else checkSingleLine store ghcSess entry i code now
+
+-- | Single-line path: uses 'sanitizeExpression' + 'exprType' directly.
+-- Returns the inferred type as @\"type\"@ in the response.
+checkSingleLine :: SP.Store -> GhcSession -> SP.ScratchEntry
+                -> Text -> Text -> Double -> IO ToolResult
+checkSingleLine store ghcSess entry i code now =
+  case sanitizeExpression code of
+    Left cmdErr ->
+      pure (Env.toolResponseToResult (Env.mkRefused
+        (Env.sanitizeRejection "code" cmdErr)))
+    Right safe -> do
+      eRes <- try (withGhcSession ghcSess (queryExprType safe))
+      saveAndRespond store entry i now eRes
+        (\typeText -> object
+          [ "id"     .= i
+          , "status" .= SP.ScratchVerified
+          , "kind"   .= ("type_ok" :: Text)
+          , "type"   .= typeText
+          , "hint"   .=
+              ("Type checks! Use action=promote to splice this code \
+               \into a real module, or action=show to see the \
+               \persisted result." :: Text)
+          ])
+        (\errText -> object
+          [ "id"         .= i
+          , "status"     .= SP.ScratchOpen
+          , "kind"       .= ("type_error" :: Text)
+          , "type_error" .= errText
+          , "hint"       .=
+              ("Type error. Use action=write to fix the code under \
+               \the same id, then run action=check again." :: Text)
+          ])
+
+-- | Multi-line path (F-03): uses 'sanitizeDeclarations' + wraps code
+-- in @let ... in ()@ so GHC's layout rule handles guards and
+-- multi-equation definitions.  Returns @\"type\": \"declarations
+-- type-checked OK\"@ on success.
+checkMultiLine :: SP.Store -> GhcSession -> SP.ScratchEntry
+               -> Text -> Text -> Double -> IO ToolResult
+checkMultiLine store ghcSess entry i code now =
+  case sanitizeDeclarations code of
+    Left cmdErr ->
+      pure (Env.toolResponseToResult (Env.mkRefused
+        (Env.sanitizeRejection "code" cmdErr)))
+    Right safe -> do
+      eRes <- try (withGhcSession ghcSess (queryExprType (wrapAsLetBlock safe)))
+      saveAndRespond store entry i now (fmap (const declOkMsg) eRes)
+        (\_ -> object
+          [ "id"     .= i
+          , "status" .= SP.ScratchVerified
+          , "kind"   .= ("type_ok" :: Text)
+          , "type"   .= declOkMsg
+          , "hint"   .=
+              ("Declarations compile. Use action=promote to splice them \
+               \into a target module, or action=show to see the \
+               \persisted result." :: Text)
+          ])
+        (\errText -> object
+          [ "id"         .= i
+          , "status"     .= SP.ScratchOpen
+          , "kind"       .= ("type_error" :: Text)
+          , "type_error" .= errText
+          , "hint"       .=
+              ("Type error in declarations. Use action=write to fix \
+               \the code under the same id, then run action=check again." :: Text)
+          ])
+  where
+    declOkMsg :: Text
+    declOkMsg = "declarations type-checked OK"
+
+-- | Shared logic: persist the check result, return the appropriate
+-- response using the caller-provided payload builders.
+saveAndRespond
+  :: SP.Store
+  -> SP.ScratchEntry
+  -> Text       -- entry id
+  -> Double     -- now (POSIX seconds)
+  -> Either SomeException Text   -- GHC result or exception
+  -> (Text -> Value)             -- success payload builder
+  -> (Text -> Value)             -- failure payload builder
+  -> IO ToolResult
+saveAndRespond store entry i now eRes mkOkPayload mkErrPayload =
+  case eRes of
+    Right typeText -> do
+      let result  = SP.ScratchResult
+                      { SP.srKind   = "type_ok"
+                      , SP.srDetail = typeText
+                      , SP.srAt     = now
+                      }
+          updated = entry
+                      { SP.seResult  = Just result
+                      , SP.seStatus  = SP.ScratchVerified
+                      , SP.seUpdated = now
+                      }
+      SP.save store updated
+      pure (Env.toolResponseToResult (Env.mkOk (mkOkPayload typeText)))
+    Left ex -> do
+      let errText = T.pack (show ex)
+          result  = SP.ScratchResult
+                      { SP.srKind   = "type_error"
+                      , SP.srDetail = errText
+                      , SP.srAt     = now
+                      }
+          updated = entry
+                      { SP.seResult  = Just result
+                      , SP.seStatus  = SP.ScratchOpen
+                      , SP.seUpdated = now
+                      }
+      SP.save store updated
+      pure (Env.toolResponseToResult (Env.mkOk (mkErrPayload errText)))
+
+-- | Wrap a multi-line declaration block in @let ... in ()@ so
+-- 'exprType' can type-check it as a single expression.
+--
+-- Each line of @code@ is indented by two spaces so GHC's layout rule
+-- treats all bindings as siblings at the same indentation level.
+-- The expression in the @in@ clause is @()@; the wrapper always
+-- type-checks as @()@ when the declarations are valid.
+--
+-- Works for: multi-equation bindings, guards, type signatures.
+-- Does not work for: @where@-clauses (not valid inside @let@
+-- in standard Haskell) or @import@ declarations.
+wrapAsLetBlock :: Text -> Text
+wrapAsLetBlock code =
+  let indented = T.unlines (map ("  " <>) (T.lines code))
+  in "let\n" <> indented <> " in ()"
 
 -- | Issue @:t expr@ inside an active 'GhcSession'.  Mirrors
 -- 'HaskellFlows.Tool.Type.queryExprType' — kept local to avoid a
@@ -559,7 +653,12 @@ handlePromote store ghcSess pd args =
                     ])))
                 Just entry -> do
                   now <- realToFrac <$> getPOSIXTime
-                  let spliceCode  = SP.seCode entry
+                  -- F-04: if binding_name is given, wrap single-line
+                  -- expressions as "name = expr" so they splice as
+                  -- valid top-level declarations.
+                  let spliceCode  = case saBindingName args of
+                        Nothing   -> SP.seCode entry
+                        Just name -> name <> " = " <> SP.seCode entry
                       targetLine  = saTargetLine args
                       successBase = object
                         [ "id"            .= i

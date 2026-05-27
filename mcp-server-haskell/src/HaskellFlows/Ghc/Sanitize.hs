@@ -8,6 +8,7 @@
 module HaskellFlows.Ghc.Sanitize
   ( CommandError (..)
   , sanitizeExpression
+  , sanitizeDeclarations
   , sentinel
   , maxEvalBytes
   , maxExpressionBytes
@@ -73,6 +74,30 @@ sanitizeExpression raw
   | hasLargeIntLiteral raw                   = Left OversizedIntegerLiteral
   | hasBigPowExponent raw                    = Left OversizedIntegerLiteral
   | otherwise                                = Right stripped
+  where
+    stripped = T.strip raw
+
+-- | Boundary check for multi-line declaration blocks (e.g. function
+-- definitions with type signatures, guards, or multiple equations).
+--
+-- Identical to 'sanitizeExpression' except newlines are permitted —
+-- they are syntactically meaningful in declaration context.
+--
+-- Still rejects: empty input, sentinel injection, oversized input,
+-- large integer literals.  Newline-injection is not a concern here
+-- because the code goes through 'exprType' (type-check only, no
+-- execution) wrapped in an explicit @let ... in ()@ block, so any
+-- stray @import@ or @:!@ directive is a parse/type error, not an
+-- escape hatch.
+sanitizeDeclarations :: Text -> Either CommandError Text
+sanitizeDeclarations raw
+  | T.null stripped                   = Left EmptyInput
+  | sentinel `T.isInfixOf` raw        = Left ContainsSentinel
+  | T.length raw > maxExpressionBytes =
+      Left (InputTooLarge (T.length raw) maxExpressionBytes)
+  | hasLargeIntLiteral raw            = Left OversizedIntegerLiteral
+  | hasBigPowExponent raw             = Left OversizedIntegerLiteral
+  | otherwise                         = Right stripped
   where
     stripped = T.strip raw
 

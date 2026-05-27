@@ -636,9 +636,16 @@ insertKV k = KeyMap.insert (Key.fromText k)
 -- that parameterised extraction is not yet supported.
 compileFailResult :: Bool -> [GhcError] -> Text -> Text -> ToolResult
 compileFailResult dryRun errs raw restoreMsg =
-  let envErr = (Env.mkErrorEnvelope Env.VerifyFailed
+  let -- F-05: prefer the first structured error's message over a
+      -- raw 400-char truncation.  The raw GHC output often starts
+      -- with unrelated package-version warnings that consume the
+      -- budget before the actual diagnostic.
+      causeText = case filter (\e -> geSeverity e == SevError) errs of
+        (e : _) -> geMessage e
+        []      -> T.take 400 raw
+      envErr = (Env.mkErrorEnvelope Env.VerifyFailed
                  ("Rewrite did not type-check" <> restoreMsg))
-                 { Env.eeCause = Just (T.take 400 raw) }
+               { Env.eeCause = Just causeText }
       freeVars = extractFreeVarNames errs
       noteField = case freeVars of
         [] -> []
