@@ -28,6 +28,7 @@ module HaskellFlows.Tool.Scratch
   ) where
 
 import Control.Exception (SomeException, try)
+import Control.Monad (unless)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Maybe (fromMaybe)
@@ -572,15 +573,13 @@ handlePromote store ghcSess pd args =
                     pure (Right (spliceInto orig spliceCode targetLine, successBase))
                   -- Only promote the entry if the refactor succeeded.
                   -- trIsError=True means the snapshot was rolled back.
-                  if not (trIsError result)
-                    then do
-                      let promoted = entry
-                            { SP.seStatus  = SP.ScratchPromoted
-                            , SP.seModule  = Just rawModule
-                            , SP.seUpdated = now
-                            }
-                      SP.save store promoted
-                    else pure ()
+                  unless (trIsError result) $ do
+                    let promoted = entry
+                          { SP.seStatus  = SP.ScratchPromoted
+                          , SP.seModule  = Just rawModule
+                          , SP.seUpdated = now
+                          }
+                    SP.save store promoted
                   pure result
 
 -- | Splice @code@ into @orig@ at @targetLine@ (1-based, insert after

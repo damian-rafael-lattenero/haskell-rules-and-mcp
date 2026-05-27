@@ -13611,7 +13611,7 @@ testScratchpadFindById = withTempProject $ \pd -> do
   SP.save store entry
   hit  <- SP.findById store "lookup-me"
   miss <- SP.findById store "no-such-id"
-  pure (fmap SP.seId hit == Just "lookup-me" && miss == Nothing)
+  pure (fmap SP.seId hit == Just "lookup-me" && isNothing miss)
 
 -- | parseAction round-trip — covers the default + every named action.
 testScratchParseAction :: IO Bool

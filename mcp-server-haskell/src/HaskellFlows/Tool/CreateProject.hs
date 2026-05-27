@@ -285,7 +285,7 @@ removeStaleCalabFiles root keepFile = do
   mapM_ (\e -> removeFile (root </> e) `catchSilently` const (pure ())) stale
   where
     catchSilently :: IO a -> (SomeException -> IO a) -> IO a
-    catchSilently = \action handler -> try action >>= either handler pure
+    catchSilently action handler = try action >>= either handler pure
 
 writeAll :: FilePath -> [FilePlan] -> Text -> Text -> IO ToolResult
 writeAll root plans pkg modName = do

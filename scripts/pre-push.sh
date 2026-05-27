@@ -25,8 +25,9 @@ set -euo pipefail
 # macOS non-login shells (Dock/Finder launches) skip .zprofile.
 export PATH="$HOME/.ghcup/bin:$HOME/.cabal/bin:$PATH"
 
-# Resolve repo root regardless of where the script is invoked from.
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Resolve repo root regardless of where the script is invoked from
+# (works whether run from scripts/ or as a .git/hooks/ hook).
+REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
 # -----------------------------------------------------------------------

@@ -28,7 +28,7 @@ module HaskellFlows.Tool.FixWarning
 
 import Control.Exception (SomeException, try)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
@@ -309,7 +309,7 @@ isTypeSigLine nm l =
 -- >   ["-- | Sum of a list.", "listSum :: [Int] -> Int"]
 -- > == ["-- | Sum of a list.", "_listSum :: [Int] -> Int"]
 patchPrecedingTypeSig :: Text -> [Text] -> [Text]
-patchPrecedingTypeSig nm ls = maybe ls id (go (length ls - 1))
+patchPrecedingTypeSig nm ls = fromMaybe ls (go (length ls - 1))
   where
     go i
       | i < 0 = Nothing
