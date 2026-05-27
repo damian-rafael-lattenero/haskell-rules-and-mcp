@@ -34,6 +34,8 @@ module HaskellFlows.Tool.Lab
   , confidenceAtLeast
   , qcResultStatus   -- #201
   , qcResultDetail   -- #201
+    -- * Issue #254 — compute suggest (exported for unit tests)
+  , computeSuggest
   ) where
 
 import Control.Exception (SomeException, try)
@@ -355,14 +357,25 @@ data FunctionReport = FunctionReport
 -- Returns @Left reason@ when the binding has no runnable laws, or
 -- @Right sugs@ when at least one suggestion passes the confidence
 -- threshold.
+--
+-- Issue #254: disambiguate the empty-result reason so callers can
+-- distinguish \"no rule template applies to this shape\"
+-- (@"no-template-matched"@) from \"rules matched but all fell below
+-- the confidence threshold\" (@"low-confidence"@). The old catch-all
+-- @"no-laws-matched"@ lumped both into one opaque code.
 computeSuggest :: LabArgs -> Binding -> Either Text [Suggestion]
 computeSuggest args bind = case parseSignature (bSignature bind) of
   Nothing -> Left "signature-parse-failed"
   Just sig ->
-    let sugs = filter
-          (confidenceAtLeast (laMinConfidence args) . sConfidence)
-          (applyRules (bName bind) sig)
-    in if null sugs then Left "no-laws-matched" else Right sugs
+    let allSugs = applyRules (bName bind) sig
+        sugs    = filter
+                    (confidenceAtLeast (laMinConfidence args) . sConfidence)
+                    allSugs
+    in if null allSugs
+         then Left "no-template-matched"  -- no rule applies to this shape at all
+         else if null sugs
+           then Left "low-confidence"     -- rules matched but fell below threshold
+           else Right sugs
 
 -- | Pure: build a 'FunctionReport' from a binding and its pre-computed
 -- QC result triples @(suggestion, qcResult, stability)@.

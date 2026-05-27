@@ -1676,6 +1676,10 @@ main = do
       , test "#129: renderResult overall=false when any module timed out" testRenderResultTimedOutOverallFalse
       , test "#151: timeout summary does not claim 'N/N green' when only k<N checked"
                                                               testRenderResultTimedOutSummary
+      , test "#255: check_project mixed results -> status:partial"  testCheckProjectPartialStatus
+      , test "#254: lab no-template-matched reason"  testLabNoTemplateMatchedReason
+      , test "#254: lab low-confidence reason"       testLabLowConfidenceReason
+      , test "#250: renderRunLine uses module name not path"  testRenderRunLineUsesModuleName
       ]
   if and results then exitSuccess else exitFailure
 
@@ -17100,6 +17104,74 @@ testRenderResultTimedOutOverallFalse = do
     Just (A.Object r) ->
       AKM.lookup "overall" r == Just (A.Bool False)
     _ -> False
+
+-- | Issue #255: when some modules pass and some fail,
+-- 'renderResult' must return status='partial', not status='failed'.
+testCheckProjectPartialStatus :: IO Bool
+testCheckProjectPartialStatus =
+  let passTr = Env.toolResponseToResult (Env.mkOk (A.object []))
+      failTr = Env.toolResponseToResult
+                 (Env.mkFailed (Env.mkErrorEnvelope Env.Validation "err"))
+      outcomes = [MoChecked "Foo.Ok" passTr, MoChecked "Foo.Bad" failTr]
+      tr = renderResult outcomes False
+      -- Decode the full outer envelope (not just the inner payload) so
+      -- we can inspect the top-level "status" field.
+      mTopEnv = case trContent tr of
+        (TextContent body : _) ->
+          case A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)) of
+            Right (A.Object top) -> Just top
+            _                    -> Nothing
+        _ -> Nothing
+  in pure $ case mTopEnv of
+       Just top ->
+            AKM.lookup "status" top == Just (A.String "partial")
+         && case AKM.lookup "result" top of
+              Just (A.Object r) ->
+                AKM.lookup "overall" r == Just (A.Bool False)
+              _ -> False
+       Nothing -> False
+
+-- | Issue #254: when no rule template applies to the signature shape,
+-- 'computeSuggest' must return @Left "no-template-matched"@.
+testLabNoTemplateMatchedReason :: IO Bool
+testLabNoTemplateMatchedReason = do
+  let args = LabTool.LabArgs
+               { LabTool.laModulePath      = ""
+               , LabTool.laMinConfidence   = Medium
+               , LabTool.laDeterminismRuns = 0
+               }
+  -- A plain @IO ()@ signature has no pure QuickCheck laws.
+  let bind = LabTool.Binding "runSomething" "IO ()"
+  pure $ LabTool.computeSuggest args bind == Left "no-template-matched"
+
+-- | Issue #254: when templates matched but all fall below the
+-- minimum confidence, 'computeSuggest' returns @Left "low-confidence"@.
+testLabLowConfidenceReason :: IO Bool
+testLabLowConfidenceReason = do
+  -- Use High min_confidence so Medium/Low matches are filtered out.
+  let args = LabTool.LabArgs
+               { LabTool.laModulePath      = ""
+               , LabTool.laMinConfidence   = High
+               , LabTool.laDeterminismRuns = 0
+               }
+  -- A [a] -> [a] signature matches Idempotent at Low, which fails High threshold.
+  let bind = LabTool.Binding "sortList" "[a] -> [a]"
+  pure $ LabTool.computeSuggest args bind == Left "low-confidence"
+
+-- | Issue #250: 'renderRunLine' must use the properly-formatted
+-- module name (Foo.Bar) as the display prefix, not the raw path
+-- (src_Foo_Bar_hs).
+testRenderRunLineUsesModuleName :: IO Bool
+testRenderRunLineUsesModuleName =
+  let sp = StoredProperty
+             { spExpression = "\\x -> x + 0 == x"
+             , spModule     = Just "src/Foo/Bar.hs"
+             , spPassed     = 1
+             , spUpdated    = 0
+             }
+      line = QcExport.renderRunLine 1 sp
+  in pure $  "Foo_Bar_prop_1" `T.isInfixOf` line
+          && not ("src_Foo_Bar_hs" `T.isInfixOf` line)
 
 -- | #199: 'isPrimitiveBuckets' returns True when > 80% of ctor labels
 -- are numeric (digits or leading minus).

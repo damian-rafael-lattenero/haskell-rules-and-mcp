@@ -342,10 +342,8 @@ runChecks ghcSess store pd ff wb mDeadline ((nm, mp) : rest) = do
 --------------------------------------------------------------------------------
 
 -- | Issue #90 Phase C: every-module-passed → status='ok'. Any
--- module fails or 'not_found' → status='failed', kind='validation'
--- (compile errors are already aggregated through ghc_check_module's
--- envelope under 'per_module[i].result'; the project-level
--- envelope just summarises).
+-- module fails or 'not_found' → status='failed' (all fail) or
+-- status='partial' (some pass, some fail) per issue #255.
 --
 -- #129: when 'timedOut=True', adds @timed_out=true@ and @checked@
 -- count so the agent knows partial results were returned. Status is
@@ -361,6 +359,10 @@ renderResult outcomes timedOut =
       overall   = null failing && null notFound && not timedOut
       total     = length outcomes
       nChecked  = length checked
+      okCount   = length (filter (not . trIsError . snd) checked)
+      errCount  = length failing + length notFound
+      -- #255: true when some modules passed and some failed (mixed result).
+      isMixed   = not overall && okCount > 0 && errCount > 0 && not timedOut
       -- #151: use a timeout-aware summary that only counts actually-
       -- evaluated modules. The old code passed 'total' to summarise
       -- even when only nChecked modules were examined, producing the
@@ -373,7 +375,7 @@ renderResult outcomes timedOut =
           [ "overall"       .= overall
           , "total"         .= total
           , "checked"       .= nChecked
-          , "passed"        .= length (filter (not . trIsError . snd) checked)
+          , "passed"        .= okCount
           , "failed"        .= length failing
           , "not_found"     .= length notFound
           , "skipped"       .= length skipped
@@ -386,14 +388,18 @@ renderResult outcomes timedOut =
                then [ "timed_out"         .= True
                     , "timed_out_modules" .= timedOutMs ]
                else []
+      envErr = Env.mkErrorEnvelope
+                 (if timedOut then Env.InnerTimeout else Env.GateFailure)
+                 summaryText
   in if overall
        then Env.toolResponseToResult (Env.mkOk payload)
-       else
-         let envErr   = Env.mkErrorEnvelope
-                          (if timedOut then Env.InnerTimeout else Env.Validation)
-                          summaryText
-             response = (Env.mkFailed envErr) { Env.reResult = Just payload }
-         in Env.toolResponseToResult response
+       else if isMixed
+         -- #255: mixed results → status='partial' so callers can
+         -- distinguish "project partially clean" from "project broken".
+         then Env.toolResponseToResult
+                ((Env.mkPartial payload) { Env.reError = Just envErr })
+         else Env.toolResponseToResult
+                ((Env.mkFailed envErr) { Env.reResult = Just payload })
 
 renderOutcome :: ModuleOutcome -> Value
 renderOutcome (MoChecked nm tr) =

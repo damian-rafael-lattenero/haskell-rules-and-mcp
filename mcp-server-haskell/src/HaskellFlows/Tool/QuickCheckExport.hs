@@ -41,6 +41,9 @@ module HaskellFlows.Tool.QuickCheckExport
   , generatedHeader
   , scaffoldTestFileHeader
   , exportGuard
+    -- * Issue #250 — run-line rendering (exported for unit tests)
+  , renderRunLine
+  , renderPropBinding
   ) where
 
 import Control.Exception (SomeException, try)
@@ -451,10 +454,27 @@ injectTypeAnnotations expr =
 renderRunLine :: Int -> StoredProperty -> Text
 renderRunLine i sp =
   let label = "prop_" <> T.pack (show i)
-      displayName = case spModule sp of
-        Just m | not (T.null m) -> sanitizeLabel (m <> "_" <> label)
-        _                       -> label
+      -- Issue #250: derive display name from properly-formatted module
+      -- name (Foo.Bar) rather than the raw path (src_Foo_Bar_hs).
+      -- Falls back to the sequence label when no module is stored or
+      -- the path does not follow the src/Mod/Name.hs convention.
+      displayName = case spModule sp >>= modulePathToModule of
+        Just modName -> sanitizeLabel (modName <> "_prop_" <> T.pack (show i))
+        Nothing      -> case spModule sp of
+          Just m | not (T.null m) ->
+            -- Non-standard path: strip leading dir + extension and
+            -- use as best-effort prefix so users still get context.
+            let stripped = T.dropEnd 3 $   -- drop .hs
+                           last' m $        -- last path segment
+                           T.splitOn "/" m
+            in sanitizeLabel (stripped <> "_prop_" <> T.pack (show i))
+          _           -> label
   in "runProp \"" <> displayName <> "\" " <> label
+  where
+    -- Safe version of 'last' that returns the whole text on an empty list.
+    last' fallback xs = case xs of
+      [] -> fallback
+      _  -> last xs
 
 -- | Sanitise a label for safe embedding in a Haskell string literal.
 -- Rules:
