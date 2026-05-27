@@ -231,10 +231,14 @@ buildInstrumentedProperty prop runs =
 -- | Phase 2: synthesise an instrumented property that labels each
 -- input by the leading constructor name extracted from @show args@.
 --
--- @head (words (show args))@ gives the constructor name for any
--- algebraic @Show@ instance: @show (Just 5)@ → @\"Just 5\"@,
--- @head (words ...)@ → @\"Just\"@. For numeric scalars this
--- gives the number itself, which is still useful.
+-- #239: For list types, @show [1,2,3]@ → @\"[1,2,3]\"@ (no spaces),
+-- so @head (words (show args))@ would give the full repr as a single
+-- word — one bucket per unique list. We detect the list case specially:
+-- if the show output starts with @\"[]\"@ it is an empty list (@[]@
+-- constructor), otherwise it starts with @[@ → non-empty list (@(:)@
+-- constructor). For all other ADTs, @head (words (show args))@
+-- extracts the leading constructor name (e.g. @show (Just 5)@ →
+-- @\"Just 5\"@ → @\"Just\"@).
 --
 -- Label format: @"ctor:X"@ (parallel to Phase 1's @"size:Y"@).
 buildConstructorProperty :: Text -> Int -> Text
@@ -243,9 +247,22 @@ buildConstructorProperty prop runs =
     [ "Test.QuickCheck.withMaxSuccess "
     , T.pack (show runs)
     , " (\\args -> Test.QuickCheck.collect "
-    , "(\"ctor:\" ++ head (words (show args))) "
+    , "(\"ctor:\" ++ "
+    , ctorExtractFn
+    , " (show args)) "
     , "((", T.strip prop, ") args))"
     ]
+  where
+    -- Inline helper that detects the leading constructor from show output.
+    -- For list show-output (starts with '['), return "[]" or "(:)".
+    -- For all other types, take the first word (up to first space).
+    -- This avoids the #239 bug where show [1,2,3] = "[1,2,3]" (no spaces)
+    -- causing one bucket per unique list representation.
+    ctorExtractFn =
+      "(\\s -> case s of \
+      \  []      -> \"()\"; \
+      \  ('[':_) -> if s == \"[]\" then \"[]\" else \"(:)\"; \
+      \  _       -> takeWhile (\\c -> c /= ' ' && c /= '(') s)"
 
 -- | Issue #65: parse QuickCheck's label histogram. Lines look like
 -- @"35.5% size:0-1"@ or @"100.0% size:>20"@. We tolerate both

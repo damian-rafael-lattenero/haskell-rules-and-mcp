@@ -1156,6 +1156,8 @@ main = do
                                                                  testWitCountsEmpty
       , test "witness: buildConstructorProperty wraps with ctor label (#65 Phase2)"
                                                                  testWitBuildConstructorProperty
+      , test "#239: buildConstructorProperty uses list-aware extraction"
+                                                                 testWitConstructorListAware
       , test "witness: descriptor mentions 'deferred' field (#171)"
                                                                  testWitDeferredDocumented
       , test "witness: timer starts after property build (#171)"
@@ -10098,8 +10100,22 @@ testWitBuildConstructorProperty :: IO Bool
 testWitBuildConstructorProperty =
   let built = WitnessTool.buildConstructorProperty "\\x -> x > 0" 500
   in pure ("ctor:" `T.isInfixOf` built
-        && "head (words (show args))" `T.isInfixOf` built
-        && "withMaxSuccess 500" `T.isInfixOf` built)
+        && "withMaxSuccess 500" `T.isInfixOf` built
+        && "show args" `T.isInfixOf` built)
+
+-- | #239: buildConstructorProperty uses list-aware extraction.
+-- For list inputs show gives "[1,2,3]" (no spaces), so the old
+-- "head (words (show args))" gave one bucket per unique list.
+-- The fix detects '[' prefix and returns "[]" or "(:)".
+testWitConstructorListAware :: IO Bool
+testWitConstructorListAware =
+  let built = WitnessTool.buildConstructorProperty "\\xs -> length xs >= 0" 500
+  -- Must NOT use the old "head (words (show args))" pattern
+  -- Must contain the list-detection logic: "(:)" and "[]"
+  in pure (not ("head (words (show args))" `T.isInfixOf` built)
+        && "(:)" `T.isInfixOf` built
+        && "[]" `T.isInfixOf` built
+        && "'['" `T.isInfixOf` built)
 
 -- | #171: The @deferred@ field in the witness response lists features
 -- not yet implemented. The descriptor's description must mention it
