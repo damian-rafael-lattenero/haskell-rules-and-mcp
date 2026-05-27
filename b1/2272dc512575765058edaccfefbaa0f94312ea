@@ -1,0 +1,45 @@
+mcp-server-haskell/src/HaskellFlows/Tool/RemoveModules.hs
+  s_5a1a3bf347e8f7::t_5b4babb219e2fd 121-125
+  s_5a1a3bf347e8f7::t_6b7c109ae656ac 408-409,413-414,420-423,426-427,430-434,439-441
+mcp-server-haskell/src/HaskellFlows/Tool/Batch.hs
+  s_5a1a3bf347e8f7::t_2e84ac0dcaf490 134-143
+  s_5a1a3bf347e8f7::t_0e327fbfa7179f 182-195
+mcp-server-haskell/src/HaskellFlows/Tool/FixWarning.hs
+  s_5a1a3bf347e8f7::t_3e12f34c5994f1 242-250,252-260
+  s_5a1a3bf347e8f7::t_0563e7ec430c02 251
+mcp-server-haskell/src/HaskellFlows/Mcp/NextStep.hs
+  s_5a1a3bf347e8f7::t_1f4014cc2d03b1 703-705,707-711
+mcp-server-haskell/test/Spec.hs
+  s_5a1a3bf347e8f7::t_82d1445fd61bd8 11311-11315,11318
+  s_5a1a3bf347e8f7::t_89b5ec34cc1ffe 10232-10237
+  s_5a1a3bf347e8f7::t_055444ecdba6e9 906
+  s_5a1a3bf347e8f7::t_a403bc32bd1d81 1320
+  s_5a1a3bf347e8f7::t_342bc0c738028f 850
+  s_5a1a3bf347e8f7::t_621dce64d971fa 7735-7736
+  s_5a1a3bf347e8f7::t_7f9d189e8add7f 468
+  s_5a1a3bf347e8f7::t_7c90014a9ef492 14390-14413
+  s_5a1a3bf347e8f7::t_366720171a7d79 132
+  s_5a1a3bf347e8f7::t_9e685da3c70160 1192-1193
+  s_5a1a3bf347e8f7::t_c78f8d0f7c0ed1 6307-6326
+  s_5a1a3bf347e8f7::t_10e8ef059d2a00 10226-10231,10238
+  s_5a1a3bf347e8f7::t_198c332b2de070 7702-7734,7737-7742
+mcp-server-haskell/src/HaskellFlows/Tool/Format.hs
+  s_5a1a3bf347e8f7::t_0249bbdd706467 116-135
+  s_5a1a3bf347e8f7::t_907a1c1ea63d90 24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b12272dc512575765058edaccfefbaa0f94312ea",
+  "prompts": {},
+  "sessions": {
+    "s_5a1a3bf347e8f7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "32bafca0-95de-485a-b61f-c02d185f4171",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
