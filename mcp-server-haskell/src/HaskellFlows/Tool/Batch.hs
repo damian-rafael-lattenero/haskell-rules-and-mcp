@@ -131,9 +131,16 @@ handle :: (ToolCall -> IO ToolResult) -> Value -> IO ToolResult
 handle dispatch rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
-  Right args -> do
-    results <- runActions dispatch (baFailFast args) (baActions args)
-    pure (renderResult (baFailFast args) results)
+  Right args ->
+    -- Issue #249: empty actions list is almost certainly a caller error.
+    -- Return status='ok' so the batch itself didn't fail, but add a
+    -- 'warning' key so callers can detect the no-op without parsing
+    -- 'total: 0' themselves.
+    if null (baActions args)
+      then pure (emptyActionsResult (baFailFast args))
+      else do
+        results <- runActions dispatch (baFailFast args) (baActions args)
+        pure (renderResult (baFailFast args) results)
 
 
 --------------------------------------------------------------------------------
@@ -171,6 +178,20 @@ runActions dispatch ff (c:cs)
           then pure (map (AoSkipped . tcName) cs)
           else runActions dispatch ff cs
       pure (this : rest)
+
+-- | Issue #249: caller passed an empty actions list — return ok but
+-- add a 'warning' field so callers can detect the no-op.
+emptyActionsResult :: Bool -> ToolResult
+emptyActionsResult ff =
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "fail_fast" .= ff
+    , "total"     .= (0 :: Int)
+    , "ok"        .= (0 :: Int)
+    , "failed"    .= (0 :: Int)
+    , "skipped"   .= (0 :: Int)
+    , "results"   .= ([] :: [Value])
+    , "warning"   .= ("actions: [] — no actions were provided; this is likely a caller error. Pass at least one tool call in the actions list." :: Text)
+    ]))
 
 outcomeIsError :: ActionOutcome -> Bool
 outcomeIsError = \case

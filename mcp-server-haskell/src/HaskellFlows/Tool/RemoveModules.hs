@@ -118,7 +118,11 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
                     deleted <- if deleteFiles
                                  then deleteSourceFiles pd removedFromCabal
                                  else pure []
-                    pure (successResult removedFromCabal deleted importers)
+                    -- Issue #248: surface modules that were requested
+                    -- but not found in any cabal section so callers
+                    -- can distinguish "removed" from "never existed".
+                    let notFound = filter (`notElem` removedFromCabal) validated
+                    pure (successResult removedFromCabal deleted importers notFound)
 
 parseErrorKindRM :: String -> Env.ErrorKind
 parseErrorKindRM err
@@ -401,29 +405,40 @@ findCabalFile pd = do
 -- response shaping
 --------------------------------------------------------------------------------
 
-successResult :: [Text] -> [FilePath] -> [Importer] -> ToolResult
-successResult removedFromCabal deletedFiles importers =
+successResult :: [Text] -> [FilePath] -> [Importer] -> [Text] -> ToolResult
+successResult removedFromCabal deletedFiles importers notFound =
   let payload = object $
         [ "cabal_removed" .= removedFromCabal
         , "deleted_files" .= map T.pack deletedFiles
-        , "hint"          .= mkHint importers
-        ] <> warnsField
+        , "hint"          .= mkHint importers notFound
+        ] <> warnsField <> notFoundField
       warnsField
         | null importers = []
         | otherwise =
             [ "warnings" .= object
                 [ "downstream_imports" .= map renderImporter importers ] ]
+      -- Issue #248: surface modules that were not found in cabal.
+      notFoundField
+        | null notFound = []
+        | otherwise     = [ "not_found" .= notFound ]
   in Env.toolResponseToResult (Env.mkOk payload)
   where
-    mkHint :: [Importer] -> Text
-    mkHint [] =
+    mkHint :: [Importer] -> [Text] -> Text
+    mkHint [] [] =
       "Modules were de-registered from exposed-modules. The next \
       \ghc_load picks up the new surface."
-    mkHint _ =
+    mkHint [] nf =
+      "No modules were de-registered — " <> tshow (length nf) <> " name"
+      <> (if length nf == 1 then " was" else "s were")
+      <> " not found in any cabal section. Check the not_found list."
+    mkHint _ [] =
       "Forced removal completed but downstream files still import \
       \the removed module(s). See warnings.downstream_imports for \
       \(file, line, module) tuples — fix each before the next \
       \ghc_load."
+    mkHint _ _ =
+      "Forced removal completed with some modules not found in cabal. \
+      \See not_found and warnings.downstream_imports for details."
 
 -- | Issue #41 + #90: refusal when downstream importers exist
 -- and force=false. status='failed' (this is a hard refusal, not

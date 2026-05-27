@@ -239,14 +239,25 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
           -- Issue #55: refine the static plan with the source line
           -- + binding name so we can promote the GHC-40910 case
           -- from advice-only to concrete-patch.
-          let lns      = T.lines body
-              ix       = fwLine args - 1
-              srcLine  = if ix >= 0 && ix < length lns then lns !! ix else ""
-              plan     = planForCodeWithName (fwCode args)
-                           (fwName args) srcLine
-          if fwApply args && fpFixable plan
-            then writePatched full plan args body
-            else pure (previewResult full plan args)
+          let lns = T.lines body
+              ix  = fwLine args - 1
+          -- Issue #247: validate line number before proceeding.
+          -- An out-of-bounds line previously silently yielded
+          -- srcLine="" which produced fixable:false with no
+          -- indication the input was wrong.
+          if ix < 0 || ix >= length lns
+            then pure (errorResult
+                   ("Line " <> T.pack (show (fwLine args))
+                    <> " is out of bounds — the file has "
+                    <> T.pack (show (length lns)) <> " line"
+                    <> (if length lns == 1 then "" else "s") <> "."))
+            else do
+              let srcLine = lns !! ix
+                  plan    = planForCodeWithName (fwCode args)
+                              (fwName args) srcLine
+              if fwApply args && fpFixable plan
+                then writePatched full plan args body
+                else pure (previewResult full plan args)
 
 -- | Issue #202: after renaming a GHC-40910 type-sig line, scan
 -- subsequent lines and rename every binding equation whose first

@@ -700,12 +700,15 @@ dispatch name payload = case name of
 
   -- Source location returned → browse the module's surface to find
   -- siblings related to the symbol you jumped to.
-  -- On no_match, the name is not in scope: redirect to hoogle_search. (#185)
+  -- On no_match: for project-local symbols the session may not have
+  -- loaded the containing module — ghc_load is the right first step.
+  -- Only fall back to hoogle_search for Hackage-hosted names. (#251)
   GhcGoto
-    | statusNoMatch_ payload -> Just (simple HoogleSearch
-        "Name not found in the loaded session — hoogle_search discovers \
-        \names across Hackage and surfaces the module to import."
-        (Just (object [ "query" .= ("<the name you looked up>" :: Text) ])))
+    | statusNoMatch_ payload -> Just (simple GhcLoad
+        "Name not found in the loaded session — load the module that \
+        \defines it with ghc_load, then retry ghc_goto. If the name is \
+        \from an external package, use hoogle_search instead."
+        (Just (object [ "module_path" .= ("<path/to/Module.hs>" :: Text) ])))
     | otherwise -> Just (simple GhcBrowse
         "You located the definition. Browse the module to discover sibling \
         \bindings — common patterns + alternative entry points."

@@ -21,7 +21,7 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import System.Directory (findExecutable)
+import System.Directory (doesFileExist, findExecutable)
 import System.Exit (ExitCode (..))
 import System.IO (hClose, hGetContents)
 import System.Process
@@ -113,13 +113,26 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
       case canonResult of
         Left e -> pure (pathTraversalResult (formatPathError e))
         Right () -> do
-          mFormatter <- resolveFormatter
-          case mFormatter of
-            Nothing ->
-              pure (unavailableResult "Neither fourmolu nor ormolu was found on PATH")
-            Just f -> do
-              outcome <- runFormatter pd f mp (faWrite args)
-              pure (renderResult f mp (faWrite args) outcome)
+          -- Issue #246: check the file exists before invoking the
+          -- subprocess. A missing file produces a raw fourmolu/ormolu
+          -- backtrace; we surface a clean validation error instead.
+          exists <- doesFileExist (unModulePath mp)
+          if not exists
+            then pure (Env.toolResponseToResult
+                    (Env.mkFailed
+                      ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
+                          ("Module file does not exist: "
+                            <> T.pack (unModulePath mp)))
+                        { Env.eeRemediation =
+                            Just "Verify the path is correct. Use ghc_modules(action=\"list\") to see registered modules." })))
+            else do
+              mFormatter <- resolveFormatter
+              case mFormatter of
+                Nothing ->
+                  pure (unavailableResult "Neither fourmolu nor ormolu was found on PATH")
+                Just f -> do
+                  outcome <- runFormatter pd f mp (faWrite args)
+                  pure (renderResult f mp (faWrite args) outcome)
 
 -- | Issue #90 Phase C: caller-side parse failure → status='failed'
 -- with kind='missing_arg' (missing key) or 'type_mismatch'.

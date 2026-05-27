@@ -129,6 +129,7 @@ import HaskellFlows.Mcp.PermissiveJSON
   ( BoolField (..)
   , IntField (..)
   )
+import qualified HaskellFlows.Tool.Batch as Batch
 import HaskellFlows.Tool.Batch (BatchArgs (..), unwrapResult)
 import qualified HaskellFlows.Tool.Coverage as CoverageTool
 import qualified HaskellFlows.Tool.Gate as Gate
@@ -464,6 +465,7 @@ main = do
                                                    testFixWarningRejectsTraversal
       , test "#100C: ghc_format rejects traversal path"
                                                    testFormatRejectsTraversal
+      , test "#246: ghc_format missing file returns clean error" testFormatMissingFile
       , test "#100C: ghc_check_module rejects traversal path"
                                                    testCheckModuleRejectsTraversal
       , test "#150: ghc_check_module non-existent file → module_path_does_not_exist"
@@ -845,6 +847,7 @@ main = do
       , test "batch parses documented {tool,args}"  testBatchParsesToolArgs
       , test "batch accepts MCP {name,arguments}"   testBatchParsesNameArgs
       , test "batch result not double-wrapped (#175)" testBatchResultNotDoubleWrapped
+      , test "#249: batch empty actions returns warning"  testBatchEmptyActionsWarning
       , test "suggest reverse Idempotent is Low"    testSuggestReverseIdempotentLow
       , test "suggest normalize Idempotent Medium"  testSuggestNormalizeIdempotentMedium
       , test "workflow tool names match tools/list" testWorkflowToolsParity
@@ -900,7 +903,7 @@ main = do
       , test "nextStep: exploratory -> no suggestion" testNextStepExploratoryNothing
       , test "#185: ghc_info no_match -> hoogle_search"  testNextStepInfoNoMatchIsHoogle
       , test "#185: ghc_doc no_match -> hoogle_search"   testNextStepDocNoMatchIsHoogle
-      , test "#185: ghc_goto no_match -> hoogle_search"  testNextStepGotoNoMatchIsHoogle
+      , test "#251: ghc_goto no_match -> ghc_load"       testNextStepGotoNoMatchIsGhcLoad
       , test "#185: ghc_info found -> ghc_doc (not hoogle)" testNextStepInfoFoundIsDoc
       , test "nextStep: coverage exhaustive (PR-3)"   testNextStepCoverageExhaustive
       , test "nextStep: action-discriminated coverage" testNextStepActionCoverage
@@ -1186,6 +1189,8 @@ main = do
                                                                  testPAIsVacuousGaveUp
       , test "property_audit: isVacuousResult false for QcPassed (#64 Phase2)"
                                                                  testPAIsVacuousNotPassed
+      , test "#241: PropertyAudit.hs uses runQuickCheckWithLabelsInProcess for probe"
+                                                                 testAuditUsesInProcessProbe
       , test "#230: renderFinding kind=contradictory-pair for contradictory status"
                                                                  testPARenderFindingKindContradictory
       , test "#230: renderFinding kind=skipped-pair for skipped status"
@@ -1312,6 +1317,7 @@ main = do
       , test "#157: remove_modules strips other-modules entry"    testRemoveModulesOtherModules
       , test "#157: remove_modules other-modules idempotent"      testRemoveModulesOtherModulesIdempotent
       , test "#157: remove_modules finds both sections"           testRemoveModulesBothSections
+      , test "#248: remove_modules not_found for non-existent module" testRemoveModulesNotFoundField
       , test "nextStep: remove_modules -> check+load" testNextStepRemoveModules
       , test "gate: runStep catches exceptions"       testGateRunStepCatchesExceptions
       , test "gate: cabalStep uses bracket + partial safe" testGateCabalStepBracket
@@ -6298,6 +6304,26 @@ testBatchResultNotDoubleWrapped = do
          && not (AKM.member (AKey.fromString "content") obj))
     _ -> pure False
 
+-- | Issue #249: 'ghc_batch' with an empty actions list must return
+-- status='ok' AND a non-empty 'warning' field — the empty list is
+-- valid input but almost certainly a caller error.
+testBatchEmptyActionsWarning :: IO Bool
+testBatchEmptyActionsWarning = do
+  let noopDispatch _ = pure (Env.toolResponseToResult (Env.mkOk (A.object [])))
+      args = A.object [ "actions" .= ([] :: [A.Value]) ]
+  tr <- Batch.handle noopDispatch args
+  pure $ case decodeToolResult tr of
+    Right env ->
+         Env.reStatus env == Env.StatusOk
+      && case Env.reResult env of
+           Just (A.Object obj) ->
+             AKM.member (AKey.fromText "warning") obj
+             && case AKM.lookup (AKey.fromText "total") obj of
+                  Just (A.Number 0) -> True
+                  _                 -> False
+           _ -> False
+    Left _ -> False
+
 -- | Issue #23: @reverse :: [a] -> [a]@ fits the @a -> a@ shape that
 -- 'ruleIdempotent' used to blindly promote to 'Medium'. Dampened
 -- heuristic should either skip it or mark it 'Low' for a name with
@@ -7672,6 +7698,47 @@ testRemoveModulesBothSections =
   in pure $ "Shared.Util" `elem` removed
          && T.isInfixOf "Shared.Core"     newCabal
          && not ("Shared.Util" `T.isInfixOf` newCabal)
+
+-- | Issue #248: 'ghc_modules remove' must surface a 'not_found' list
+-- when a requested module does not appear in any cabal section,
+-- rather than silently returning an empty 'cabal_removed' list.
+testRemoveModulesNotFoundField :: IO Bool
+testRemoveModulesNotFoundField = do
+  tmp <- getTemporaryDirectory
+  let dir      = tmp </> "haskell-flows-rm-notfound"
+      cabalFile = dir </> "pkg.cabal"
+  removePathForcibly dir
+  createDirectoryIfMissing True dir
+  TIO.writeFile cabalFile $ T.unlines
+    [ "cabal-version: 3.0"
+    , "name:          pkg"
+    , "version:       0.1.0.0"
+    , "library"
+    , "  exposed-modules:  Existing.Module"
+    , "  build-depends:    base"
+    , "  default-language: Haskell2010"
+    ]
+  result <- case mkProjectDir dir of
+    Left _   -> pure False
+    Right pd -> do
+      let args = A.object
+            [ "modules"      A..= (["Never.Existed"] :: [Text])
+            , "delete_files" A..= False
+            ]
+      tr <- RM.handle pd args
+      pure $ case decodeToolResult tr of
+        Right env ->
+             Env.reStatus env == Env.StatusOk
+          && case Env.reResult env of
+               Just (A.Object obj) ->
+                 case AKM.lookup (AKey.fromText "not_found") obj of
+                   Just (A.Array arr) ->
+                     A.String "Never.Existed" `elem` arr
+                   _                  -> False
+               _ -> False
+        Left _ -> False
+  removePathForcibly dir
+  pure result
 
 -- | BUG-01 — static source check that 'runStep' catches
 -- synchronous exceptions from a step's body. If someone removes
@@ -10156,6 +10223,19 @@ testPAIsVacuousNotPassed =
   let qcr = QcPassed "\\x -> True" 100
   in pure (not (PropertyAuditTool.isVacuousResult qcr))
 
+-- | #241: PropertyAudit.hs uses runQuickCheckWithLabelsInProcess for both
+-- the contradiction probe and the vacuous check — not the cabal-repl
+-- subprocess (which was producing "no GHCi output" for every probe).
+testAuditUsesInProcessProbe :: IO Bool
+testAuditUsesInProcessProbe = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/PropertyAudit.hs"
+  -- Must use the in-process path; the old subprocess call must not appear
+  -- as a live call (only possibly in comments, which we check by verifying
+  -- the number of in-process calls exceeds the number of cabal-repl calls).
+  let inProcessCount = T.count "runQuickCheckWithLabelsInProcess" src
+      cabalReplCount = T.count "Qc.runQuickCheckViaCabalRepl" src
+  pure (inProcessCount >= 2 && cabalReplCount == 0)
+
 -- | #230: kindFor contradictory → "contradictory-pair".
 testPARenderFindingKindContradictory :: IO Bool
 testPARenderFindingKindContradictory =
@@ -11228,13 +11308,14 @@ testNextStepDocNoMatchIsHoogle =
        Just ns -> nsTool ns == HoogleSearch
        Nothing -> False
 
--- | #185: ghc_goto on a name not found (status=no_match) must route to
--- hoogle_search.
-testNextStepGotoNoMatchIsHoogle :: IO Bool
-testNextStepGotoNoMatchIsHoogle =
+-- | #251: ghc_goto on a name not found (status=no_match) must route to
+-- ghc_load (so the user loads the module containing the symbol), not
+-- hoogle_search (which searches Hackage and is wrong for project-local names).
+testNextStepGotoNoMatchIsGhcLoad :: IO Bool
+testNextStepGotoNoMatchIsGhcLoad =
   let payload = A.object [ "status" .= ("no_match" :: Text), "name" .= ("unknownXYZ" :: Text) ]
   in pure $ case suggestNext GhcGoto True payload of
-       Just ns -> nsTool ns == HoogleSearch
+       Just ns -> nsTool ns == GhcLoad
        Nothing -> False
 
 -- | #185: ghc_info on a name FOUND (status=ok) must still route to ghc_doc,
@@ -14305,6 +14386,30 @@ testFormatRejectsTraversal = do
             [ "module_path" A..= ("../../etc/passwd" :: Text) ]
       tr <- FormatTool.handle pd args
       pure (isTraversalRefused (decodeToolResult tr))
+
+-- | Issue #246: 'ghc_format' on a non-existent file must return
+-- status='failed' with kind='module_path_does_not_exist', not a raw
+-- subprocess backtrace from fourmolu/ormolu.
+testFormatMissingFile :: IO Bool
+testFormatMissingFile = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "haskell-flows-format-missing"
+  removePathForcibly dir
+  createDirectoryIfMissing True dir
+  case mkProjectDir dir of
+    Left _ -> pure False
+    Right pd -> do
+      let args = A.object
+            [ "module_path" A..= ("src/DoesNotExist.hs" :: Text) ]
+      tr <- FormatTool.handle pd args
+      let result = decodeToolResult tr
+      pure $ case result of
+        Right env ->
+             Env.reStatus env == Env.StatusFailed
+          && maybe False
+               (\e -> Env.eeKind e == Env.ModulePathDoesNotExist)
+               (Env.reError env)
+        Left _ -> False
 
 -- | #100C: 'ghc_check_module' must refuse traversal paths.
 -- 'mkModulePath' fires before the GhcSession or Store are touched.
