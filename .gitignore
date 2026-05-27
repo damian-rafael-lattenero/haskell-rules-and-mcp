@@ -29,6 +29,9 @@ mcp-server-haskell/app/Main
 # under playground/ — they're ephemeral scaffolds used to dogfood
 # the MCP against a realistic Haskell project.
 playground/*/
+# Exceptions: real tracked playground projects
+!playground/arithmetic-expr/
+!playground/arithmetic-expr/**
 
 # Property store (generated at runtime by ghc_quickcheck)
 **/.haskell-flows/

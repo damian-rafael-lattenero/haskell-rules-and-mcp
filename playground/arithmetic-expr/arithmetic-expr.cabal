@@ -1,0 +1,43 @@
+cabal-version:      3.0
+name:               arithmetic-expr
+version:            0.1.0.0
+synopsis:           (describe here)
+category:           Development
+maintainer:         you@example.com
+description:        TODO: describe arithmetic-expr in one line.
+license:            BSD-3-Clause
+build-type:         Simple
+
+common shared
+    default-language:   GHC2024
+    ghc-options:        -Wall -Wcompat -Widentities
+                        -Wincomplete-record-updates
+                        -Wincomplete-uni-patterns
+                        -Wpartial-fields
+                        -Wredundant-constraints
+                        -Wunused-packages
+    default-extensions: OverloadedStrings
+                        DerivingStrategies
+                        LambdaCase
+
+library
+    import:           shared
+    hs-source-dirs:   src
+    exposed-modules:  ArithmeticExpr
+                      Expr.Syntax
+                      Expr.Eval
+                      Expr.Simplify
+                      Expr.Pretty
+    build-depends:    base >= 4.20 && < 5
+                    , parsec
+                    , containers
+
+test-suite arithmetic-expr-test
+    import:           shared
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Spec.hs
+    build-depends:    base >= 4.20 && < 5
+                    , arithmetic-expr
+                    , QuickCheck
+                    , containers
