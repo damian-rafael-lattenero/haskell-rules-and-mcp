@@ -26,17 +26,20 @@ module HaskellFlows.Tool.Scratch
   , renderEntrySummary
   ) where
 
+import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import qualified Data.Aeson.KeyMap as KeyMap
-import Data.Aeson.Key (fromText)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import GHC (Ghc, TcRnExprMode (TM_Inst), exprType)
+import GHC.Utils.Outputable (showPprUnsafe)
 
 import qualified HaskellFlows.Data.Scratchpad as SP
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
+import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -209,25 +212,128 @@ instance FromJSON ScratchArgs where
 -- Handler
 --------------------------------------------------------------------------------
 
-handle :: SP.Store -> Value -> IO ToolResult
-handle store rawArgs = case parseEither parseJSON rawArgs of
+-- | Phase 1 threaded only the 'SP.Store'. Phase 2 adds 'GhcSession'
+-- so 'action=check' can call @exprType@ against the live GHC API
+-- session. The session is lazy in all non-check branches so callers
+-- may safely pass 'undefined' when they know check will not run
+-- (unit tests for write/list/show/clear).
+handle :: SP.Store -> GhcSession -> Value -> IO ToolResult
+handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> case saAction args of
     ActWrite   -> handleWrite store args
     ActList    -> handleList store
     ActShow    -> handleShow store args
     ActClear   -> handleClear store args
-    ActCheck   -> notImplemented "check"
+    ActCheck   -> handleCheck store ghcSess args
     ActPromote -> notImplemented "promote"
 
--- | Phase-1 placeholder for actions that need the live GHC session or
--- the refactor pipeline. Returning a structured @failed@ keeps the
--- envelope stable; the next phase fills these in.
+-- | Placeholder for actions that need the refactor pipeline.
+-- Returning a structured @failed@ keeps the envelope stable; the
+-- next phase fills these in.
 notImplemented :: Text -> IO ToolResult
 notImplemented act =
   pure (Env.toolResponseToResult (Env.mkFailed
     (Env.mkErrorEnvelope Env.Validation
       ("action=" <> act <> " not implemented yet — landing in the next phase"))))
+
+--------------------------------------------------------------------------------
+-- check (#253 Phase 2)
+--------------------------------------------------------------------------------
+
+-- | Type-check the stored snippet against the live GHC API session.
+--
+-- Steps:
+--   1. Require an @id@.
+--   2. Look up the entry — return @no_match@ if it doesn't exist.
+--   3. Run 'sanitizeExpression' on the stored code (same gate as
+--      @ghc_eval@ and @ghc_type@; rejects newlines, sentinel,
+--      empty, oversized, large-integer literals).
+--   4. Call @exprType TM_Inst@ inside 'withGhcSession'.
+--   5. On type_ok: persist 'ScratchVerified' + the inferred type.
+--      On type_error: persist the error text, leave status 'ScratchOpen'
+--      so the LLM can rewrite and re-check.
+--
+-- Both outcomes are returned as @status=\"ok\"@ with a nested
+-- @result.kind@ so @nextStep@ can route: @type_ok@ → promote,
+-- @type_error@ → write + re-check.
+handleCheck :: SP.Store -> GhcSession -> ScratchArgs -> IO ToolResult
+handleCheck store ghcSess args = case saId args of
+  Nothing ->
+    pure (Env.toolResponseToResult (Env.mkFailed
+      (Env.mkErrorEnvelope Env.MissingArg
+        "action=check requires 'id'")))
+  Just i -> do
+    mEntry <- SP.findById store i
+    case mEntry of
+      Nothing ->
+        pure (Env.toolResponseToResult (Env.mkNoMatch (object
+          [ "id"    .= i
+          , "found" .= False
+          , "hint"  .= ("No scratchpad entry with that id. \
+                        \Use action=list to see existing ids." :: Text)
+          ])))
+      Just entry ->
+        case sanitizeExpression (SP.seCode entry) of
+          Left cmdErr ->
+            pure (Env.toolResponseToResult (Env.mkRefused
+              (Env.sanitizeRejection "code" cmdErr)))
+          Right safe -> do
+            now <- realToFrac <$> getPOSIXTime
+            eRes <- try (withGhcSession ghcSess (queryExprType safe))
+            case eRes :: Either SomeException Text of
+              Right typeText -> do
+                let result  = SP.ScratchResult
+                                { SP.srKind   = "type_ok"
+                                , SP.srDetail = typeText
+                                , SP.srAt     = now
+                                }
+                    updated = entry
+                                { SP.seResult  = Just result
+                                , SP.seStatus  = SP.ScratchVerified
+                                , SP.seUpdated = now
+                                }
+                SP.save store updated
+                pure (Env.toolResponseToResult (Env.mkOk (object
+                  [ "id"     .= i
+                  , "status" .= SP.seStatus updated
+                  , "result" .= SP.seResult updated
+                  , "type"   .= typeText
+                  , "hint"   .=
+                      ("Type checks! Use action=promote to splice this \
+                       \code into a real module, or action=write to \
+                       \refine it further." :: Text)
+                  ])))
+              Left ex -> do
+                let errText = T.pack (show ex)
+                    result  = SP.ScratchResult
+                                { SP.srKind   = "type_error"
+                                , SP.srDetail = errText
+                                , SP.srAt     = now
+                                }
+                    updated = entry
+                                { SP.seResult  = Just result
+                                , SP.seStatus  = SP.ScratchOpen
+                                , SP.seUpdated = now
+                                }
+                SP.save store updated
+                pure (Env.toolResponseToResult (Env.mkOk (object
+                  [ "id"         .= i
+                  , "status"     .= SP.seStatus updated
+                  , "result"     .= SP.seResult updated
+                  , "type_error" .= errText
+                  , "hint"       .=
+                      ("Type error. Use action=write to fix the code \
+                       \under the same id, then run action=check again." :: Text)
+                  ])))
+
+-- | Issue @:t expr@ inside an active 'GhcSession'.  Mirrors
+-- 'HaskellFlows.Tool.Type.queryExprType' — kept local to avoid a
+-- cross-tool import dependency.
+queryExprType :: Text -> Ghc Text
+queryExprType safe = do
+  ty <- exprType TM_Inst (T.unpack safe)
+  pure (T.pack (showPprUnsafe ty))
 
 --------------------------------------------------------------------------------
 -- write

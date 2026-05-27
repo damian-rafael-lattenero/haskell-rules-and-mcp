@@ -550,7 +550,10 @@ main = do
       , test "Scratch clear w/o confirm refused"   testScratchHandleClearNoConfirm
       , test "Scratch clear by id removes one"     testScratchHandleClearById
       , test "Scratch clear confirm=true truncates" testScratchHandleClearAll
-      , test "Scratch check stubbed in Phase 1"    testScratchCheckIsNotImplementedYet
+      , test "Scratch check missing id → failed"   testScratchCheckMissingId
+      , test "Scratch check unknown id → no_match" testScratchCheckUnknownId
+      , test "Scratch check sanitize rejects"      testScratchCheckSanitizeReject
+      , test "ScratchResult JSON round-trip"       testScratchResultRoundTrip
       , test "validatePackageName accepts normal"  testPkgAccepts
       , test "validatePackageName rejects symbol"  testPkgRejectsSymbol
       , test "validatePackageName rejects empty"   testPkgRejectsEmpty
@@ -13483,7 +13486,7 @@ testScratchHandleWrite = withTempProject $ \pd -> do
         , "id"     A..= ("user-id" :: Text)
         , "code"   A..= ("1 + 1 :: Int" :: Text)
         ]
-  result <- ScratchTool.handle store args
+  result <- ScratchTool.handle store undefined args
   case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> case AKM.lookup "status" top of
@@ -13501,7 +13504,7 @@ testScratchHandleWriteMissingCode :: IO Bool
 testScratchHandleWriteMissingCode = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("write" :: Text) ]
-  result <- ScratchTool.handle store args
+  result <- ScratchTool.handle store undefined args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "failed")
@@ -13516,8 +13519,8 @@ testScratchHandleWriteAutoId = withTempProject $ \pd -> do
         [ "action" A..= ("write" :: Text)
         , "code"   A..= ("a" :: Text)
         ]
-  _ <- ScratchTool.handle store args
-  _ <- ScratchTool.handle store args
+  _ <- ScratchTool.handle store undefined args
+  _ <- ScratchTool.handle store undefined args
   loaded <- SP.loadAll store
   let ids = map SP.seId loaded
   pure (ids == ["scratch-1", "scratch-2"])
@@ -13527,7 +13530,7 @@ testScratchHandleListEmpty :: IO Bool
 testScratchHandleListEmpty = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("list" :: Text) ]
-  result <- ScratchTool.handle store args
+  result <- ScratchTool.handle store undefined args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> case AKM.lookup "result" top of
@@ -13541,7 +13544,7 @@ testScratchHandleShowMissing :: IO Bool
 testScratchHandleShowMissing = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("show" :: Text), "id" A..= ("ghost" :: Text) ]
-  result <- ScratchTool.handle store args
+  result <- ScratchTool.handle store undefined args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "no_match")
@@ -13553,7 +13556,7 @@ testScratchHandleClearNoConfirm :: IO Bool
 testScratchHandleClearNoConfirm = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("clear" :: Text) ]
-  result <- ScratchTool.handle store args
+  result <- ScratchTool.handle store undefined args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "refused")
@@ -13573,7 +13576,7 @@ testScratchHandleClearById = withTempProject $ \pd -> do
   SP.save store (mk "a" "a")
   SP.save store (mk "b" "b")
   let args = A.object [ "action" A..= ("clear" :: Text), "id" A..= ("a" :: Text) ]
-  _ <- ScratchTool.handle store args
+  _ <- ScratchTool.handle store undefined args
   loaded <- SP.loadAll store
   pure (map SP.seId loaded == ["b"])
 
@@ -13591,22 +13594,79 @@ testScratchHandleClearAll = withTempProject $ \pd -> do
   SP.save store (mk "b")
   SP.save store (mk "c")
   let args = A.object [ "action" A..= ("clear" :: Text), "confirm" A..= True ]
-  _ <- ScratchTool.handle store args
+  _ <- ScratchTool.handle store undefined args
   loaded <- SP.loadAll store
   pure (null loaded)
 
--- | check and promote are stubbed in Phase 1 — they must return a
--- structured failed envelope, not crash or silently succeed.
-testScratchCheckIsNotImplementedYet :: IO Bool
-testScratchCheckIsNotImplementedYet = withTempProject $ \pd -> do
+-- #253 Phase 2: ghc_scratch action=check — boundary / data-layer tests.
+-- GHC-session-requiring tests (type_ok / type_error from live GHCi)
+-- are covered by the FlowScratchpad E2E scenario; the unit tests here
+-- pin the sanitize-gate, missing-id, and unknown-id paths that do not
+-- need a live session (undefined is safe because check returns early).
+
+-- | action=check without 'id' → MissingArg (failed).
+testScratchCheckMissingId :: IO Bool
+testScratchCheckMissingId = withTempProject $ \pd -> do
   store <- SP.openStore pd
-  let args = A.object [ "action" A..= ("check" :: Text), "id" A..= ("x" :: Text) ]
-  result <- ScratchTool.handle store args
+  let args = A.object [ "action" A..= ("check" :: Text) ]
+  result <- ScratchTool.handle store undefined args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "failed")
       _ -> False
     _ -> False
+
+-- | action=check with an id that doesn't exist → no_match.
+testScratchCheckUnknownId :: IO Bool
+testScratchCheckUnknownId = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let args = A.object [ "action" A..= ("check" :: Text), "id" A..= ("ghost" :: Text) ]
+  result <- ScratchTool.handle store undefined args
+  pure $ case trContent result of
+    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "no_match")
+      _ -> False
+    _ -> False
+
+-- | action=check on an entry whose code fails sanitization → refused.
+-- The write action does NOT sanitize (so the entry is stored as-is);
+-- check applies sanitizeExpression before touching the GHC API.
+testScratchCheckSanitizeReject :: IO Bool
+testScratchCheckSanitizeReject = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  -- write stores the code without sanitizing
+  let writeArgs = A.object
+        [ "action" A..= ("write" :: Text)
+        , "id"     A..= ("nl" :: Text)
+        , "code"   A..= ("x = 1\ny = 2" :: Text)  -- literal newline
+        ]
+  _ <- ScratchTool.handle store undefined writeArgs
+  -- check should refuse the newline-containing code before calling GHC
+  let checkArgs = A.object
+        [ "action" A..= ("check" :: Text)
+        , "id"     A..= ("nl" :: Text)
+        ]
+  result <- ScratchTool.handle store undefined checkArgs
+  pure $ case trContent result of
+    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "refused")
+      _ -> False
+    _ -> False
+
+-- | 'ScratchResult' ToJSON / FromJSON round-trip.
+testScratchResultRoundTrip :: IO Bool
+testScratchResultRoundTrip =
+  let r = SP.ScratchResult
+        { SP.srKind   = "type_ok"
+        , SP.srDetail = "Int -> Int"
+        , SP.srAt     = 1.0
+        }
+  in pure $ case A.fromJSON (A.toJSON r) of
+       A.Success r' ->
+         SP.srKind   r' == SP.srKind   r
+         && SP.srDetail r' == SP.srDetail r
+         && SP.srAt    r' == SP.srAt    r
+       A.Error _ -> False
 
 -- | Helper: create a fresh temp directory and delete it after the test.
 -- Passes a validated 'ProjectDir' (absolute + normalised) to the body.

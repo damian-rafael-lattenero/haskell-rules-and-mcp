@@ -629,11 +629,13 @@ dispatchByName srv args = \case
     -- nesting; this arm exists to keep the case exhaustive.
     BatchTool.handle (dispatchTool srv) args
   GhcScratch -> do
-    -- #253 Phase 1: data-bound actions (write/list/show/clear) only.
-    -- The check/promote arms return a structured 'not_implemented'
-    -- until the next phase wires the GHC API and Refactor pipeline.
-    scratch <- readIORef (srvScratchpad srv)
-    ScratchTool.handle scratch args
+    -- #253 Phase 2: action=check is live. The check arm uses the GHC
+    -- API session (exprType) for boundary-sanitised type inference;
+    -- write/list/show/clear still touch only the store. promote is
+    -- still stubbed and lands in the next phase.
+    scratch  <- readIORef (srvScratchpad srv)
+    ghcSess  <- getOrStartGhcSession srv
+    ScratchTool.handle scratch ghcSess args
 
 -- | Synthesize an error 'ToolResult' for an unknown tool name.
 -- Pulled out so 'handleToolCall' and 'dispatchTool' produce the
