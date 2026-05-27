@@ -18,6 +18,8 @@ module HaskellFlows.Tool.Eval
   , selectMissingExtras
   , ioUnitResult
   , importRedirectResult
+    -- * Session helper — exported so other tools can share the preload context
+  , augmentEvalContext
   ) where
 
 import Control.Exception

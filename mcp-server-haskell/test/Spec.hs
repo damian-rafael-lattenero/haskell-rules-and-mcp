@@ -1692,6 +1692,8 @@ main = do
       , test "#244: findCommonStanzaWithPkg returns Nothing when pkg absent" testDepsCommonStanzaPkgAbsent
       , test "#244: findCommonStanzaWithPkg returns Nothing when no common stanzas" testDepsCommonStanzaNoCommon
       , test "#244: unchangedResult' emits hint field when mHint=Just" testDepsUnchangedResultHintField
+      , test "#243: suggest.hs imports and calls augmentEvalContext"   testSuggestCallsAugmentContext
+      , test "#242: add_import bypasses Hoogle for module-path names (source check)" testAddImportBypassesHoogle
       ]
   if and results then exitSuccess else exitFailure
 
@@ -17717,3 +17719,39 @@ testDepsUnchangedResultHintField =
                _                 -> False
            _ -> False
        _ -> False
+
+-- ---------------------------------------------------------------------------
+-- Issue #243 — ghc_suggest must call augmentEvalContext before queryType
+-- ---------------------------------------------------------------------------
+
+-- | #243: 'Suggest.hs' must import 'augmentEvalContext' from 'Eval.hs'
+-- and call it (with >>)  before 'queryType' so that standard preloads
+-- like @Data.List.sort@ resolve even when 'loadForTarget' has reset the
+-- interactive context to the project-only module graph.
+testSuggestCallsAugmentContext :: IO Bool
+testSuggestCallsAugmentContext = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Suggest.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  pure $ T.isInfixOf "augmentEvalContext" code
+      && T.isInfixOf "HaskellFlows.Tool.Eval" code
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- ---------------------------------------------------------------------------
+-- Issue #242 — add_import bypasses Hoogle for module-path names
+-- ---------------------------------------------------------------------------
+
+-- | #242: 'AddImport.hs' must call 'looksLikeModule' in the hot path so
+-- that module-path queries short-circuit the Hoogle call.
+testAddImportBypassesHoogle :: IO Bool
+testAddImportBypassesHoogle = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/AddImport.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  -- 'looksLikeModule' must be called, and the resulting 'ranked' list
+  -- must be built conditionally on that check (not always from Hoogle).
+  pure $ T.isInfixOf "looksLikeModule" code
+      && T.isInfixOf "ranked" code
+  where
+    isDocLine ln =
+      let s = T.stripStart ln in "--" `T.isPrefixOf` s

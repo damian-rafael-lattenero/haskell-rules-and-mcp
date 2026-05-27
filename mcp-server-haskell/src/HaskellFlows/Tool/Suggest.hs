@@ -70,6 +70,7 @@ import HaskellFlows.Ghc.ApiSession
 import HaskellFlows.Ghc.Sanitize
   ( sanitizeExpression
   )
+import HaskellFlows.Tool.Eval (augmentEvalContext)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -144,7 +145,15 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
           pure (subprocessResult
                   ("loadForTarget failed: " <> T.pack (show ex)))
         Right _ -> do
-          eType <- try (withGhcSession ghcSess (queryType safe))
+          -- Issue #243: loadForTarget resets the interactive context to
+          -- 'preludeImport : homeImports ++ projImports'. If the function
+          -- the user is querying comes from a session preload (Data.List,
+          -- Data.Map, etc.) rather than the project source, it won't be
+          -- in scope after the reset. augmentEvalContext re-adds the
+          -- standard preload modules (same list ghc_eval uses) before
+          -- calling exprType so that names like 'sort', 'nub',
+          -- 'intercalate' resolve correctly.
+          eType <- try (withGhcSession ghcSess (augmentEvalContext >> queryType safe))
           case eType :: Either SomeException Text of
             Left ex ->
               pure (outOfScopeResult safe (T.pack (show ex)))
