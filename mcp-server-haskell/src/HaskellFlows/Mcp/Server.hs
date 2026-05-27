@@ -629,13 +629,13 @@ dispatchByName srv args = \case
     -- nesting; this arm exists to keep the case exhaustive.
     BatchTool.handle (dispatchTool srv) args
   GhcScratch -> do
-    -- #253 Phase 2: action=check is live. The check arm uses the GHC
-    -- API session (exprType) for boundary-sanitised type inference;
-    -- write/list/show/clear still touch only the store. promote is
-    -- still stubbed and lands in the next phase.
+    -- #253 Phase 4: action=promote is live. check/promote use the GHC
+    -- session; promote also needs the project dir to build a ModulePath.
+    -- write/list/show/clear still touch only the store.
     scratch  <- readIORef (srvScratchpad srv)
     ghcSess  <- getOrStartGhcSession srv
-    ScratchTool.handle scratch ghcSess args
+    pd       <- readIORef (srvProjectDir srv)
+    ScratchTool.handle scratch ghcSess pd args
 
 -- | Synthesize an error 'ToolResult' for an unknown tool name.
 -- Pulled out so 'handleToolCall' and 'dispatchTool' produce the

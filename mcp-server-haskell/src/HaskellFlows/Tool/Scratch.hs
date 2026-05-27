@@ -24,6 +24,7 @@ module HaskellFlows.Tool.Scratch
     -- * Internals (exported for unit tests)
   , parseAction
   , renderEntrySummary
+  , spliceInto
   ) where
 
 import Control.Exception (SomeException, try)
@@ -43,6 +44,12 @@ import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import qualified HaskellFlows.Tool.Refactor as Refactor
+import HaskellFlows.Types
+  ( PathError (..)
+  , ProjectDir
+  , mkModulePath
+  )
 
 --------------------------------------------------------------------------------
 -- Tool descriptor (canonical 6-field shape per docs/TOOL_DESCRIPTION_TEMPLATE.md)
@@ -214,11 +221,14 @@ instance FromJSON ScratchArgs where
 
 -- | Phase 1 threaded only the 'SP.Store'. Phase 2 adds 'GhcSession'
 -- so 'action=check' can call @exprType@ against the live GHC API
--- session. The session is lazy in all non-check branches so callers
--- may safely pass 'undefined' when they know check will not run
--- (unit tests for write/list/show/clear).
-handle :: SP.Store -> GhcSession -> Value -> IO ToolResult
-handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
+-- session. Phase 4 adds 'ProjectDir' so 'action=promote' can build
+-- a 'ModulePath' for the splice target.
+--
+-- The session and pd are lazy in all non-check / non-promote branches
+-- so callers may safely pass 'undefined' when they know neither
+-- 'check' nor 'promote' will run (unit tests for write/list/show/clear).
+handle :: SP.Store -> GhcSession -> ProjectDir -> Value -> IO ToolResult
+handle store ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> case saAction args of
     ActWrite   -> handleWrite store args
@@ -226,16 +236,7 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
     ActShow    -> handleShow store args
     ActClear   -> handleClear store args
     ActCheck   -> handleCheck store ghcSess args
-    ActPromote -> notImplemented "promote"
-
--- | Placeholder for actions that need the refactor pipeline.
--- Returning a structured @failed@ keeps the envelope stable; the
--- next phase fills these in.
-notImplemented :: Text -> IO ToolResult
-notImplemented act =
-  pure (Env.toolResponseToResult (Env.mkFailed
-    (Env.mkErrorEnvelope Env.Validation
-      ("action=" <> act <> " not implemented yet — landing in the next phase"))))
+    ActPromote -> handlePromote store ghcSess pd args
 
 --------------------------------------------------------------------------------
 -- check (#253 Phase 2)
@@ -505,3 +506,105 @@ handleClear store args = case (saId args, saConfirm args) of
     pure (Env.toolResponseToResult (Env.mkRefused
       (Env.mkErrorEnvelope Env.Validation
         "action=clear without 'id' requires confirm=true to drop the whole scratchpad")))
+
+--------------------------------------------------------------------------------
+-- promote (#253 Phase 4)
+--------------------------------------------------------------------------------
+
+-- | Splice the stored code into 'target_module' at 'target_line' (or
+-- the end of the file when 'target_line' is omitted), then verify
+-- the module still compiles via 'Refactor.withSnapshot'.
+--
+-- On success   : entry status → 'SP.ScratchPromoted' + module recorded.
+-- On compile fail: 'Refactor.withSnapshot' restores the original file
+--   atomically; entry stays 'SP.ScratchOpen'; the GHC error text is
+--   surfaced so the LLM can fix the snippet.
+--
+-- Prerequisites:
+--   * 'id' — required; lookup fails with no_match if not found.
+--   * 'target_module' — required; must be in-project (path-traversal guard).
+--   * 'target_line' — optional; inserts after that line (1-based) when given,
+--     appends to end of file otherwise.
+--   * A loaded GHC session (caller must have run ghc_load first).
+handlePromote :: SP.Store -> GhcSession -> ProjectDir -> ScratchArgs -> IO ToolResult
+handlePromote store ghcSess pd args =
+  case saId args of
+    Nothing ->
+      pure (Env.toolResponseToResult (Env.mkFailed
+        (Env.mkErrorEnvelope Env.MissingArg
+          "action=promote requires 'id'")))
+    Just i ->
+      case saTargetModule args of
+        Nothing ->
+          pure (Env.toolResponseToResult (Env.mkFailed
+            (Env.mkErrorEnvelope Env.MissingArg
+              "action=promote requires 'target_module' \
+              \(e.g. \"src/Foo.hs\") — the file where the code will be spliced.")))
+        Just rawModule ->
+          case mkModulePath pd (T.unpack rawModule) of
+            Left pe ->
+              pure (Env.toolResponseToResult (Env.mkRefused
+                (Env.mkErrorEnvelope Env.PathTraversal
+                  (renderPathErr pe))))
+            Right mp -> do
+              mEntry <- SP.findById store i
+              case mEntry of
+                Nothing ->
+                  pure (Env.toolResponseToResult (Env.mkNoMatch (object
+                    [ "id"    .= i
+                    , "found" .= False
+                    , "hint"  .= ("No scratchpad entry with that id. \
+                                  \Use action=list to see existing ids." :: Text)
+                    ])))
+                Just entry -> do
+                  now <- realToFrac <$> getPOSIXTime
+                  let spliceCode  = SP.seCode entry
+                      targetLine  = saTargetLine args
+                      successBase = object
+                        [ "id"            .= i
+                        , "target_module" .= rawModule
+                        , "kind"          .= ("promoted" :: Text)
+                        , "hint"          .=
+                            ("Code spliced and verified. \
+                             \Entry status is now 'promoted'." :: Text)
+                        ]
+                  result <- Refactor.withSnapshot ghcSess mp False $ \orig ->
+                    pure (Right (spliceInto orig spliceCode targetLine, successBase))
+                  -- Only promote the entry if the refactor succeeded.
+                  -- trIsError=True means the snapshot was rolled back.
+                  if not (trIsError result)
+                    then do
+                      let promoted = entry
+                            { SP.seStatus  = SP.ScratchPromoted
+                            , SP.seModule  = Just rawModule
+                            , SP.seUpdated = now
+                            }
+                      SP.save store promoted
+                    else pure ()
+                  pure result
+
+-- | Splice @code@ into @orig@ at @targetLine@ (1-based, insert after
+-- that line) or append to the end when 'Nothing'.
+--
+-- Exported for unit tests so the splice logic can be verified
+-- independently of the GHC compile step.
+spliceInto :: Text  -- ^ original file content
+           -> Text  -- ^ code to insert
+           -> Maybe Int  -- ^ 1-based line number to insert after (Nothing = append)
+           -> Text
+spliceInto orig code Nothing =
+  -- Append at end with a blank-line separator so the new binding
+  -- starts on its own visual paragraph.
+  T.stripEnd orig <> "\n\n" <> code <> "\n"
+spliceInto orig code (Just lineN) =
+  let ls           = T.lines orig
+      n            = max 0 (min lineN (length ls))
+      (before, after) = splitAt n ls
+  in T.unlines before <> "\n" <> code <> "\n" <> T.unlines after
+
+-- | Render a 'PathError' as a human-readable refusal message.
+renderPathErr :: PathError -> Text
+renderPathErr = \case
+  PathNotAbsolute p      -> "target_module must be a relative path under the project, got: " <> p
+  PathEscapesProject a p _ -> "target_module escapes the project root: '" <> a
+                               <> "' is not under '" <> p <> "'"

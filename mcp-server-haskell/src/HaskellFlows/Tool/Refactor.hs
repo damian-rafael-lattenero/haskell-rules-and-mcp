@@ -35,6 +35,8 @@ module HaskellFlows.Tool.Refactor
     -- * Exposed for unit tests
   , compileFailResult
   , extractFreeVarNames  -- #205
+    -- * Exposed for ghc_scratch(action="promote")
+  , withSnapshot
   ) where
 
 import Control.Exception (SomeException, try)
