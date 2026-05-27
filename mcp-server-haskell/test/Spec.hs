@@ -1473,6 +1473,12 @@ main = do
       , test "#204: filterInternal keeps public modules"              testFilterInternalKeeps
       , test "#204: prioritizeModuleMatch exact match first"          testPrioritizeExactFirst
       , test "#204: prioritizeModuleMatch no-op for non-dotted query" testPrioritizeNoDotNoOp
+      -- Issue #242 — looksLikeModule bypasses Hoogle for module-path names
+      , test "#242: looksLikeModule true for Data.Map"               testLooksLikeModuleTrue
+      , test "#242: looksLikeModule false for bare name"             testLooksLikeModuleFalse
+      , test "#242: looksLikeModule false for qualified function"    testLooksLikeModuleQualFun
+      , test "#242: looksLikeModule false for single-component"      testLooksLikeModuleSingle
+      , test "#242: looksLikeModule true for 3-component path"       testLooksLikeModuleThree
       -- Issue #104c: injectTypeAnnotations safety-net
       , test "#104c: injectTypeAnnotations annotates bare x"          testInjectAnnotateBareX
       , test "#104c: injectTypeAnnotations annotates xs as list"      testInjectAnnotateXs
@@ -17451,6 +17457,30 @@ testPrioritizeNoDotNoOp =
   let q    = "fromMaybe"
       mods = ["Data.Maybe", "Prelude"]
   in pure (AddImport.prioritizeModuleMatch q mods == mods)
+
+-- ---------------------------------------------------------------------------
+-- Issue #242 — looksLikeModule: module-path detection for Hoogle bypass
+-- ---------------------------------------------------------------------------
+
+-- | #242: "Data.Map" — 2 components, both uppercase-starting → True.
+testLooksLikeModuleTrue :: IO Bool
+testLooksLikeModuleTrue = pure $ AddImport.looksLikeModule "Data.Map"
+
+-- | #242: "fromMaybe" — bare lowercase name → False.
+testLooksLikeModuleFalse :: IO Bool
+testLooksLikeModuleFalse = pure $ not (AddImport.looksLikeModule "fromMaybe")
+
+-- | #242: "Map.lookup" — 2 components, but "lookup" is lowercase → False.
+testLooksLikeModuleQualFun :: IO Bool
+testLooksLikeModuleQualFun = pure $ not (AddImport.looksLikeModule "Map.lookup")
+
+-- | #242: "Data" — single component only (no dot) → False (require ≥2).
+testLooksLikeModuleSingle :: IO Bool
+testLooksLikeModuleSingle = pure $ not (AddImport.looksLikeModule "Data")
+
+-- | #242: "Data.Map.Strict" — 3 components, all uppercase-starting → True.
+testLooksLikeModuleThree :: IO Bool
+testLooksLikeModuleThree = pure $ AddImport.looksLikeModule "Data.Map.Strict"
 
 -- | #205 Bug 2: 'compileFailResult' with @dryRun=True@ must set
 -- @dry_run: true@ in the result payload — it was hardcoded @false@

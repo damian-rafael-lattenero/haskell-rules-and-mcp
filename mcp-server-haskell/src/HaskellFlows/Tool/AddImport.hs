@@ -19,6 +19,7 @@ module HaskellFlows.Tool.AddImport
     -- * Pure helpers (exported for unit tests)
   , filterInternal         -- #204
   , prioritizeModuleMatch  -- #204
+  , looksLikeModule        -- #242
     -- * Session helper (exported for unit tests)
   , addImportToSession
   ) where
@@ -27,6 +28,7 @@ import Control.Exception (SomeException, try)
 import Data.Aeson
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (parseEither)
+import Data.Char (isAlphaNum, isUpper)
 import qualified Data.Foldable as F
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -111,17 +113,27 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
     case mPath of
       Nothing -> pure unavailableHoogle
       Just _  -> do
-        let hoogleArgs = object
-              [ "query" .= aiName args
-              , "count" .= (10 :: Int)
-              ]
-        hoogleRes <- Hoogle.handle hoogleArgs
-        let candidates = extractModules hoogleRes
-            -- #204: strip .Internal modules then bring the closest
-            -- name/module match to the front of the candidate list.
-            ranked  = prioritizeModuleMatch (aiName args)
-                        (filterInternal candidates)
-            imports = map (renderImportLine (aiQualified args))
+        -- Issue #242: when the name looks like a fully-qualified module
+        -- path (e.g. "Data.Map", "Data.Map.Strict"), bypass Hoogle
+        -- entirely. Hoogle searches by *symbol*, so "Data.Map" returns
+        -- the Map type-family from Data.List.NonEmpty.Singletons rather
+        -- than the containers module. We can generate the import line
+        -- directly from the module name.
+        ranked <-
+          if looksLikeModule (aiName args)
+            then pure [aiName args]
+            else do
+              let hoogleArgs = object
+                    [ "query" .= aiName args
+                    , "count" .= (10 :: Int)
+                    ]
+              hoogleRes <- Hoogle.handle hoogleArgs
+              let candidates = extractModules hoogleRes
+              -- #204: strip .Internal modules then bring the closest
+              -- name/module match to the front of the candidate list.
+              pure (prioritizeModuleMatch (aiName args)
+                      (filterInternal candidates))
+        let imports = map (renderImportLine (aiQualified args))
                         (uniqueTop 5 ranked)
         -- #146: inject the top candidate into the live GHCi session so
         -- subsequent ghc_eval calls can use the imported name
@@ -282,4 +294,24 @@ uniqueTop n = take n . dedupe
   where
     dedupe []       = []
     dedupe (x:xs)   = x : dedupe (filter (/= x) xs)
+
+-- | Issue #242: return True when every dot-separated component of the
+-- query starts with an uppercase letter — these are qualified module
+-- paths like @Data.Map@, @Data.Map.Strict@, @Control.Monad@. Hoogle
+-- treats them as symbol queries and returns type-family or constructor
+-- hits from unrelated modules, so callers should bypass Hoogle and use
+-- the name directly as the import target.
+--
+-- Returns False for bare names (@fromMaybe@), qualified function refs
+-- (@Map.lookup@, @Data.Map.lookup@), and operator-only names (@(<>)@).
+looksLikeModule :: Text -> Bool
+looksLikeModule q =
+  let parts = T.splitOn "." q
+  in length parts >= 2
+  && all isModuleComponent parts
+  where
+    isModuleComponent p =
+      not (T.null p)
+      && isUpper (T.head p)
+      && T.all (\c -> isAlphaNum c || c == '_' || c == '\'') p
 
