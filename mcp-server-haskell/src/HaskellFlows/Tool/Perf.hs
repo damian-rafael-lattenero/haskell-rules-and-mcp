@@ -75,7 +75,10 @@ descriptor =
           <> "compare_baseline=true to detect regressions. Default "
           <> "threshold is 30% slower (tunable via threshold_pct). Use "
           <> "a tighter threshold only when Criterion warmup is implemented; "
-          <> "GHCi wall-clock timings vary ±20% on sub-ms expressions. "
+          <> "GHCi wall-clock timings vary ±30% for expressions above 1ms; "
+          <> "sub-millisecond expressions fall inside the ~100µs–1ms eval "
+          <> "overhead and may see 100x+ variance — a low_precision_warning "
+          <> "is added to the payload when mean_ns < 1ms. "
           <> "Both flags may be combined: comparison runs first, then the "
           <> "new measurement is saved as the updated baseline. "
           <> "Criterion warmup, Core dump, and allocation tracking remain "
@@ -446,6 +449,32 @@ renderResult args nss stats errs mBaseline warmupNs =
       -- F-26: gate per-sample array behind verbose=true to avoid
       -- sending thousands of integers for large 'runs' values.
       samplesField = [ "samples" .= nss | paVerbose args ]
+      -- Issue #245: warn when mean_ns is below 1ms — the GHCi eval
+      -- overhead (~100µs–1ms) dominates, making regression comparisons
+      -- unreliable for sub-millisecond expressions.
+      lowPrecisionFields
+        | sMean stats < 1_000_000, sCount stats > 0 =
+            [ "low_precision_warning" .=
+                ("mean_ns < 1ms: expression is faster than the GHCi eval "
+                 <> "overhead (~100µs–1ms). Sub-millisecond measurements are "
+                 <> "noise-dominated and unsuitable for regression comparison."
+                 :: Text)
+            ]
+        | otherwise = []
+      -- Issue #245: warn when warmup is >10x mean, suggesting the first
+      -- run captured a cold-compile event. Warmup is NOT included in
+      -- mean/regression — this is informational only.
+      warmupWarningFields
+        | sCount stats > 0
+        , sMean stats > 0
+        , warmupNs > 10 * (round (sMean stats) :: Word64) =
+            [ "warmup_warning" .=
+                ("warmup_ns is >10x mean_ns: the first run likely captured "
+                 <> "a GHCi recompile event. Warmup is excluded from "
+                 <> "mean/median and baseline comparison."
+                 :: Text)
+            ]
+        | otherwise = []
       payload = object $
         [ "expression"    .= paExpression args
         , "runs_request"  .= paRuns args
@@ -481,6 +510,8 @@ renderResult args nss stats errs mBaseline warmupNs =
         -- this flag; the response shape is identical regardless.
         , "baseline_saved" .= paSaveBaseline args
         ] <> baselineFields
+          <> lowPrecisionFields
+          <> warmupWarningFields
       -- F-32: cause is a human-readable summary, not a stringified JSON blob.
       regressionMsg = case mRegression of
         Just (pct, _) -> "Regression: " <> T.pack (show (round pct :: Int))

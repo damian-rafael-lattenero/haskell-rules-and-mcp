@@ -1694,6 +1694,9 @@ main = do
       , test "#244: unchangedResult' emits hint field when mHint=Just" testDepsUnchangedResultHintField
       , test "#243: suggest.hs imports and calls augmentEvalContext"   testSuggestCallsAugmentContext
       , test "#242: add_import bypasses Hoogle for module-path names (source check)" testAddImportBypassesHoogle
+      , test "#245: renderResult emits low_precision_warning when mean < 1ms" testPerfLowPrecisionWarning
+      , test "#245: renderResult emits warmup_warning when warmup >10x mean"  testPerfWarmupWarning
+      , test "#245: renderResult no warnings for healthy 5ms mean"            testPerfNoWarningHealthy
       ]
   if and results then exitSuccess else exitFailure
 
@@ -17755,3 +17758,71 @@ testAddImportBypassesHoogle = do
   where
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s
+
+-- ---------------------------------------------------------------------------
+-- Issue #245 — ghc_perf: low_precision_warning + warmup_warning
+-- ---------------------------------------------------------------------------
+
+mkPerfArgs :: Text -> PerfTool.PerfArgs
+mkPerfArgs expr = PerfTool.PerfArgs
+  { PerfTool.paExpression      = expr
+  , PerfTool.paRuns            = 5
+  , PerfTool.paSaveBaseline    = False
+  , PerfTool.paCompareBaseline = False
+  , PerfTool.paVerbose         = False
+  , PerfTool.paThresholdPct    = 30.0
+  }
+
+extractPerfResult :: ToolResult -> Maybe A.Object
+extractPerfResult tr = case trContent tr of
+  [TextContent body_] ->
+    case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
+      Just (A.Object top) ->
+        case AKM.lookup "result" top of
+          Just (A.Object r) -> Just r
+          _                 -> Nothing
+      _ -> Nothing
+  _ -> Nothing
+
+-- | #245: when mean_ns < 1_000_000 (< 1ms), payload must include
+-- 'low_precision_warning'.
+testPerfLowPrecisionWarning :: IO Bool
+testPerfLowPrecisionWarning =
+  let args   = mkPerfArgs "length []"
+      -- All samples well below 1ms: mean ≈ 600µs
+      nss    = [500_000, 600_000, 700_000] :: [Word64]
+      stats  = PerfTool.aggregate nss
+      warmup = 800_000 :: Word64
+      result = PerfTool.renderResult args nss stats [] Nothing warmup
+  in pure $ case extractPerfResult result of
+       Just r  -> AKM.member "low_precision_warning" r
+       Nothing -> False
+
+-- | #245: when warmup_ns > 10 * mean_ns, payload must include
+-- 'warmup_warning'.
+testPerfWarmupWarning :: IO Bool
+testPerfWarmupWarning =
+  let args   = mkPerfArgs "length [1..100]"
+      -- mean ≈ 5.5ms; warmup = 200ms (>10x)
+      nss    = [5_000_000, 6_000_000] :: [Word64]
+      stats  = PerfTool.aggregate nss
+      warmup = 200_000_000 :: Word64   -- 200 ms
+      result = PerfTool.renderResult args nss stats [] Nothing warmup
+  in pure $ case extractPerfResult result of
+       Just r  -> AKM.member "warmup_warning" r
+       Nothing -> False
+
+-- | #245: for a healthy measurement (mean=5ms, warmup=6ms), neither
+-- warning should appear.
+testPerfNoWarningHealthy :: IO Bool
+testPerfNoWarningHealthy =
+  let args   = mkPerfArgs "length [1..1000]"
+      -- mean ≈ 5ms; warmup ≈ 6ms (just above mean — normal)
+      nss    = [5_000_000, 5_100_000, 4_900_000] :: [Word64]
+      stats  = PerfTool.aggregate nss
+      warmup = 6_000_000 :: Word64
+      result = PerfTool.renderResult args nss stats [] Nothing warmup
+  in pure $ case extractPerfResult result of
+       Just r  -> not (AKM.member "low_precision_warning" r)
+               && not (AKM.member "warmup_warning" r)
+       Nothing -> False
