@@ -18,7 +18,7 @@
 
 ---
 
-## Primitives (36)
+## Primitives (27)
 
 ### Read / inspect
 
@@ -71,6 +71,12 @@
 | `GhcWitness` | `ghc_witness` | Report input-distribution witness for a property |
 | `GhcExplainError` | `ghc_explain_error` | Explain + verify a patch for a GHC error |
 
+### Pair-programming canvas
+
+| Tool | Wire name | Notes |
+|---|---|---|
+| `GhcScratch` | `ghc_scratch` | Persistent LLM code canvas: `action=write` records a Haskell hypothesis under an id; `action=check` type-checks it; `action=list`/`show` introspect; `action=clear` deletes; `action=promote` splices verified code into a target module via `ghc_refactor`'s snapshot-and-compile-verify (#253) |
+
 ---
 
 ## Composites (4)
@@ -107,11 +113,11 @@
 
 | Category | Count |
 |---|---|
-| Primitive | 26 |
+| Primitive | 27 |
 | Composite | 4 |
 | Gate | 3 |
 | Control-plane | 2 |
-| **Total** | **35** |
+| **Total** | **36** |
 
 * Phase B retrofit: `GhcModules` replaced `GhcAddModules` +
   `GhcRemoveModules` outright (47 → 45 — two less, one new).
@@ -130,6 +136,8 @@
 * Phase C step 6: `GhcPropertyStore action="list"|"run"|"export"|"audit"`
   replaced `GhcPropertyLifecycle` + `GhcRegression` + `GhcQuickCheckExport` +
   `GhcPropertyAudit` outright (38 → 35 — four less, one new).
+* #253: `GhcScratch` added as a new primitive — persistent LLM code
+  canvas / pair-programming surface (35 → 36 — one new).
 
 With a single internal consumer there was no deprecation cost to
 honour, so the legacy wire surface was removed in the same commit as

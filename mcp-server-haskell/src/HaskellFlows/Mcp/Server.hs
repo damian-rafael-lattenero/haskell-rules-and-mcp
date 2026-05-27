@@ -46,6 +46,7 @@ import System.Environment (getExecutablePath, lookupEnv)
 import System.Timeout (timeout)
 
 import HaskellFlows.Data.PropertyStore (Store, openStore)
+import qualified HaskellFlows.Data.Scratchpad as Scratchpad
 import HaskellFlows.Mcp.Logging
   ( LogContext (..)
   , logInternalEvent
@@ -143,6 +144,7 @@ import qualified HaskellFlows.Tool.ValidateCabal   as ValidateCabalTool
 import qualified HaskellFlows.Tool.Workflow        as WorkflowTool
 import qualified HaskellFlows.Tool.Project         as ProjectTool
 import qualified HaskellFlows.Tool.PropertyStore   as PropertyStoreTool
+import qualified HaskellFlows.Tool.Scratch         as ScratchTool
 
 -- | All mutable server state.
 --
@@ -189,6 +191,10 @@ data Server = Server
     -- a plain @Bool@ because the flag must be writeable from the
     -- 'ghc_project(action="switch")' handler — same single-writer
     -- shape as 'srvProjectDir'.
+  , srvScratchpad    :: !(IORef Scratchpad.Store)
+    -- ^ #253: persistent LLM code canvas — the pizarra. Same
+    -- 'IORef' shape as 'srvStore' because 'ghc_project(action="switch")'
+    -- must be able to reopen the scratchpad against the new project root.
   }
 
 -- | Build a server whose project directory is sourced from
@@ -234,6 +240,9 @@ serverForRaw raw = do
       ghcSess  <- newMVar Nothing
       store    <- openStore pd
       storeRef <- newIORef store
+      -- #253: scratchpad store, same shape as the property store.
+      scratch  <- Scratchpad.openStore pd
+      scratchR <- newIORef scratch
       ws       <- newWorkflowStateRef
       bootPos  <- realToFrac <$> getPOSIXTime
       binPath  <- getExecutablePath
@@ -251,6 +260,7 @@ serverForRaw raw = do
         , srvBootPosix     = bootPos
         , srvBinaryPath    = binPath
         , srvIsSelfProject = isSelfR
+        , srvScratchpad    = scratchR
         }
 
 -- | Dispatch a single parsed request. 'Nothing' means the input was a
@@ -618,6 +628,12 @@ dispatchByName srv args = \case
     -- ever recursed into the dispatcher). 'BatchTool' itself rejects
     -- nesting; this arm exists to keep the case exhaustive.
     BatchTool.handle (dispatchTool srv) args
+  GhcScratch -> do
+    -- #253 Phase 1: data-bound actions (write/list/show/clear) only.
+    -- The check/promote arms return a structured 'not_implemented'
+    -- until the next phase wires the GHC API and Refactor pipeline.
+    scratch <- readIORef (srvScratchpad srv)
+    ScratchTool.handle scratch args
 
 -- | Synthesize an error 'ToolResult' for an unknown tool name.
 -- Pulled out so 'handleToolCall' and 'dispatchTool' produce the
@@ -892,6 +908,7 @@ allToolDescriptors =
   , ModulesTool.descriptor       -- #94 Phase B: action-discriminated 'modules' primitive
   , ProjectTool.descriptor       -- #94 Phase C step 5: action-discriminated 'project' primitive
   , PropertyStoreTool.descriptor -- #94 Phase C step 6: action-discriminated 'property_store' primitive
+  , ScratchTool.descriptor       -- #253: persistent LLM code canvas
   ]
 
 -- 'allToolNames :: [ToolName]' / 'allToolNameTexts :: [Text]' both

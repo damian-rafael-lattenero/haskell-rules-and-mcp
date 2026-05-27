@@ -739,6 +739,15 @@ dispatch name payload = case name of
         \you're clear to commit + push."
         Nothing)
 
+  -- #253: ghc_scratch — action-discriminated. The dispatcher picks the
+  -- next step based on which action just ran (read off the @action@
+  -- field in the payload). Phase 1 ships data-bound actions (write /
+  -- list / show / clear); check + promote return a structured
+  -- not_implemented for now but the nextStep arms still exist so the
+  -- LLM gets directed at the right next call once the next phase
+  -- lands.
+  GhcScratch -> scratchNext payload
+
 -- | #94 Phase C step 5: pick the right next-step based on which
 -- 'ghc_project' action ran. We discriminate by payload shape:
 --
@@ -914,6 +923,90 @@ propertyStoreNext payload = case regressionAction payload of
     hasField k v = case envField k v of
       Just _  -> True
       Nothing -> False
+
+-- | #253: action-discriminated nextStep for ghc_scratch.
+--
+-- We discriminate on:
+--   * 'id' present in payload + ('result' present) → check just ran.
+--   * 'cleared' = true                              → bulk clear ran.
+--   * 'removed' present                             → single-id clear ran.
+--   * 'count' + 'entries' field                     → list ran.
+--   * Single-entry shape (no 'count', has 'id' + 'code') → show or write.
+--
+-- The hints route the LLM into the pair-programming flow:
+--   write → check (verify the type)
+--   check (type_ok) → promote (or quickcheck if it's a property)
+--   check (type_error) → write (corrected hypothesis)
+--   show → check (still the natural verification step)
+--   list → write (when empty) or show (when non-empty)
+--   clear → write (start fresh)
+scratchNext :: Value -> Maybe NextStep
+scratchNext payload
+  -- Bulk clear → invite a fresh write.
+  | Just (Bool True) <- envField "cleared" payload =
+      Just (simple GhcScratch
+        "Scratchpad truncated. Record your next hypothesis with \
+        \action=write(code=\"...\")."
+        (Just (object
+            [ "action" .= ("write" :: Text)
+            , "code"   .= ("<your Haskell snippet>" :: Text)
+            ])))
+  -- Single-id clear → invite the next write.
+  | Just _ <- envField "removed" payload =
+      Just (simple GhcScratch
+        "Entry removed. Use action=list to see what's left, or \
+        \action=write to record the next hypothesis."
+        (Just (object [ "action" .= ("list" :: Text) ])))
+  -- Check ran (result field carries the kind).
+  | Just (Object r) <- envField "result" payload
+  , Just (String k) <- KeyMap.lookup "kind" r =
+      case k of
+        "type_ok"    -> Just (simple GhcScratch
+          "Type-check passed. action=promote splices this entry into \
+          \a target module (snapshot-and-compile-verify; atomic rollback \
+          \on failure)."
+          (Just (object
+              [ "action"        .= ("promote" :: Text)
+              , "id"            .= scratchEntryId payload
+              , "target_module" .= ("<src/Foo.hs>" :: Text)
+              , "target_line"   .= (1 :: Int)
+              ])))
+        "type_error" -> Just (simple GhcScratch
+          "Type-check failed. Write a corrected hypothesis under the \
+          \same id; action=check will re-verify."
+          (Just (object
+              [ "action" .= ("write" :: Text)
+              , "id"     .= scratchEntryId payload
+              , "code"   .= ("<corrected snippet>" :: Text)
+              ])))
+        _ -> Nothing
+  -- list ran (count + entries shape).
+  | Just (Number 0) <- envField "count" payload =
+      Just (simple GhcScratch
+        "Scratchpad is empty. Record your first hypothesis with \
+        \action=write."
+        (Just (object
+            [ "action" .= ("write" :: Text)
+            , "code"   .= ("<your Haskell snippet>" :: Text)
+            ])))
+  | Just _ <- envField "entries" payload =
+      Just (simple GhcScratch
+        "Pick an entry from the list and inspect it with action=show, \
+        \or run action=check to type-check an Open one."
+        (Just (object [ "action" .= ("show" :: Text), "id" .= ("<one of the ids>" :: Text) ])))
+  -- Write or show landed on a single entry (carries 'id' + 'kind').
+  | Just _ <- envField "id" payload =
+      Just (simple GhcScratch
+        "Entry persisted / shown. Type-check it with action=check."
+        (Just (object
+            [ "action" .= ("check" :: Text)
+            , "id"     .= scratchEntryId payload
+            ])))
+  | otherwise = Nothing
+  where
+    scratchEntryId v = case stringField "id" v of
+      Just t  -> toJSON t
+      Nothing -> String "<entry-id>"
 
 --------------------------------------------------------------------------------
 -- payload probes (small, hand-written, no lens-aeson dep)

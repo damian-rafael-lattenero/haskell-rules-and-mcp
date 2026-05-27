@@ -66,6 +66,7 @@ library
                       HaskellFlows.Ghc.CabalBootstrap
                       HaskellFlows.Ghc.Sanitize
                       HaskellFlows.Data.PropertyStore
+                      HaskellFlows.Data.Scratchpad
                       HaskellFlows.Parser.Coverage
                       HaskellFlows.Parser.Error
                       HaskellFlows.Parser.Hole
@@ -112,6 +113,7 @@ library
                       HaskellFlows.Tool.Project
                       HaskellFlows.Tool.PropertyAudit
                       HaskellFlows.Tool.PropertyStore
+                      HaskellFlows.Tool.Scratch
                       HaskellFlows.Tool.QuickCheck
                       HaskellFlows.Tool.QuickCheckExport
                       HaskellFlows.Tool.Refactor

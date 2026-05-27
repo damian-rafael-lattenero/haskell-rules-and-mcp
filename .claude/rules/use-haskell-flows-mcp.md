@@ -111,6 +111,9 @@ displacement.
 | Format check / write | `ghc_format(write=true \| false)` | fourmolu (preferred) or ormolu; reports `unavailable` if neither is on PATH. |
 | Sequence multiple tools in one round-trip | `ghc_batch(actions=[…])` | Accepts both `{tool, args}` and `{name, arguments}`; `fail_fast=true` is default. |
 | Lost / unsure | `ghc_workflow(action="help")` | State-aware nudge based on current phase + history; pairs with `nextStep` (§4). |
+| Want to verify a snippet before touching real source | `ghc_scratch(action="write", code="…")` then `(action="check", id="…")` | Persistent + visible to the user; `ghc_eval` drops the state and offers no rollback path. The pizarra del LLM (#253). |
+| Promote a verified hypothesis into a real module | `ghc_scratch(action="promote", id="…", target_module="src/Foo.hs", target_line=N)` | Atomic snapshot-and-compile-verify via `ghc_refactor`; falls back to Open on compile fail. (Lands fully in #253 Phase 4.) |
+| Inspect the LLM's reasoning trail | `ghc_scratch(action="list")` then `(action="show", id="…")` | Shows every hypothesis the LLM has been carrying — readable mid-session by the user. |
 
 ---
 

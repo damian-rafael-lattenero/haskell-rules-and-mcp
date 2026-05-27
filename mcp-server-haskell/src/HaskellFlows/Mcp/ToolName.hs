@@ -79,6 +79,11 @@ data ToolName
   | GhcToolchain
   | GhcProject
   | GhcPropertyStore
+  | GhcScratch
+    -- ^ #253: persistent LLM code canvas. Action-discriminated:
+    -- @action="write"|"check"|"list"|"show"|"clear"|"promote"@.
+    -- Pair-programming surface — lets the LLM type-check + persist
+    -- hypotheses before mutating real source.
     -- ^ #94 Phase C step 5: action-discriminated 'project'
     -- primitive (action: "create" \| "switch" \| "validate" \|
     -- "bootstrap"). Replaced the per-verb 'GhcCreateProject' +
@@ -143,6 +148,7 @@ toolNameText = \case
   GhcPerf              -> "ghc_perf"
   GhcWitness           -> "ghc_witness"
   GhcModules           -> "ghc_modules"
+  GhcScratch           -> "ghc_scratch"
 
 -- | Parse a wire-format tool name back to its constructor. Returns
 -- 'Nothing' for any unknown string — used by the dispatcher to emit
@@ -234,6 +240,7 @@ toolCategory = \case
   GhcPropertyStore     -> CatPrimitive   -- #94 Phase C step 6: action-discriminated successor
                                          -- to ghc_property_lifecycle / ghc_regression /
                                          -- ghc_quickcheck_export / ghc_property_audit
+  GhcScratch           -> CatPrimitive   -- #253: persistent LLM code canvas
   -- Phase-2 advanced
   GhcPerf              -> CatPrimitive
   GhcWitness           -> CatPrimitive
@@ -303,6 +310,7 @@ toolVersion = \case
   GhcQuickCheck        -> "1.0.0"
   GhcSuggest           -> "1.0.0"
   GhcPropertyStore     -> "1.0.0"   -- #94 Phase C step 6: action-discriminated successor
+  GhcScratch           -> "1.0.0"   -- #253: persistent LLM code canvas (Phase 1 MVP)
   -- ── Phase-2 advanced ────────────────────────────────────────────
   GhcPerf              -> "1.0.0"
   GhcWitness           -> "1.0.0"

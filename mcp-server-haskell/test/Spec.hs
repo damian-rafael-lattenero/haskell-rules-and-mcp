@@ -201,6 +201,8 @@ import HaskellFlows.Data.PropertyStore
   , openStore
   , save
   )
+import qualified HaskellFlows.Data.Scratchpad as SP
+import qualified HaskellFlows.Tool.Scratch as ScratchTool
 import HaskellFlows.Parser.Coverage
   ( CoverageReport (..)
   , Metric (..)
@@ -535,6 +537,20 @@ main = do
                                                    testNextStepChainStepsCarryObjectArgs
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
+      -- #253 Phase 1: ghc_scratch
+      , test "Scratchpad data roundtrip"           testScratchpadRoundtrip
+      , test "Scratchpad upsert by id"             testScratchpadUpsertById
+      , test "Scratchpad findById"                 testScratchpadFindById
+      , test "Scratch parseAction round-trip"      testScratchParseAction
+      , test "Scratch action=write persists entry" testScratchHandleWrite
+      , test "Scratch write requires 'code'"       testScratchHandleWriteMissingCode
+      , test "Scratch write auto-generates id"     testScratchHandleWriteAutoId
+      , test "Scratch list empty returns count=0"  testScratchHandleListEmpty
+      , test "Scratch show unknown id → no_match"  testScratchHandleShowMissing
+      , test "Scratch clear w/o confirm refused"   testScratchHandleClearNoConfirm
+      , test "Scratch clear by id removes one"     testScratchHandleClearById
+      , test "Scratch clear confirm=true truncates" testScratchHandleClearAll
+      , test "Scratch check stubbed in Phase 1"    testScratchCheckIsNotImplementedYet
       , test "validatePackageName accepts normal"  testPkgAccepts
       , test "validatePackageName rejects symbol"  testPkgRejectsSymbol
       , test "validatePackageName rejects empty"   testPkgRejectsEmpty
@@ -7855,6 +7871,11 @@ testNextStepFullCoverage = pure $
                                      -- bootstrap; per-action shape
                                      -- distinguishers test each branch
         , "ghc_quickcheck"           -- state = passed/failed
+        , "ghc_scratch"              -- #253: write / check / list / show
+                                     -- / clear / promote; per-action shape
+                                     -- distinguishers (id, count, entries,
+                                     -- cleared, removed) covered by
+                                     -- dedicated branches above.
         ]
       -- A wholly-generic success payload. Intentionally omits
       -- @action@/@state@ so action-conditional tools show up as
@@ -11154,6 +11175,10 @@ testNextStepCoverageExhaustive = do
       GhcPropertyStore -> A.object [ "action" .= ("list" :: Text) ]
       GhcProject     -> A.object [ "scaffolded" .= True ]
       GhcGate        -> A.object [ "status" .= ("ok" :: Text) ]
+      -- #253: ghc_scratch action-discriminated by payload shape. Use the
+      -- write/show single-entry shape (carries 'id').
+      GhcScratch     -> A.object [ "id" .= ("scratch-1" :: Text)
+                                 , "kind" .= ("hypothesis" :: Text) ]
       -- everything else: bare success envelope is enough.
       _              -> defaultPayload
 
@@ -13359,6 +13384,230 @@ testGhcSessionBoots = case mkProjectDir "/tmp" of
     killGhcSession sess
     pure (not (null result) && "->" `T.isInfixOf` T.pack result)
 
+--------------------------------------------------------------------------------
+-- #253 Phase 1: ghc_scratch — data layer + write/list/show/clear actions
+--------------------------------------------------------------------------------
+
+-- | Round-trip a ScratchEntry through the on-disk scratchpad.
+testScratchpadRoundtrip :: IO Bool
+testScratchpadRoundtrip = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let entry = SP.ScratchEntry
+        { SP.seId       = "t1"
+        , SP.seKind     = SP.ScratchHypothesis
+        , SP.seCode     = "\\x -> x + 1 :: Int -> Int"
+        , SP.seModule   = Just "src/Foo.hs"
+        , SP.seImports  = ["Data.List"]
+        , SP.seNote     = Just "verify roundtrip"
+        , SP.seResult   = Nothing
+        , SP.seStatus   = SP.ScratchOpen
+        , SP.seCreated  = 1_000_000
+        , SP.seUpdated  = 1_000_000
+        }
+  SP.save store entry
+  loaded <- SP.loadAll store
+  pure $ case loaded of
+    [e] -> SP.seId e == "t1"
+        && SP.seCode e == "\\x -> x + 1 :: Int -> Int"
+        && SP.seModule e == Just "src/Foo.hs"
+        && SP.seImports e == ["Data.List"]
+        && SP.seStatus e == SP.ScratchOpen
+        && SP.seKind e == SP.ScratchHypothesis
+    _   -> False
+
+-- | save with the same id should replace, not append.
+testScratchpadUpsertById :: IO Bool
+testScratchpadUpsertById = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let mk c = SP.ScratchEntry
+        { SP.seId       = "dup"
+        , SP.seKind     = SP.ScratchHypothesis
+        , SP.seCode     = c
+        , SP.seModule   = Nothing
+        , SP.seImports  = []
+        , SP.seNote     = Nothing
+        , SP.seResult   = Nothing
+        , SP.seStatus   = SP.ScratchOpen
+        , SP.seCreated  = 1_000_000
+        , SP.seUpdated  = 1_000_000
+        }
+  SP.save store (mk "v1")
+  SP.save store (mk "v2")
+  SP.save store (mk "v3")
+  loaded <- SP.loadAll store
+  pure $ case loaded of
+    [e] -> SP.seCode e == "v3"
+    _   -> False
+
+-- | findById should resolve an id, return Nothing when absent.
+testScratchpadFindById :: IO Bool
+testScratchpadFindById = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let entry = SP.ScratchEntry
+        { SP.seId       = "lookup-me"
+        , SP.seKind     = SP.ScratchHypothesis
+        , SP.seCode     = "True"
+        , SP.seModule   = Nothing
+        , SP.seImports  = []
+        , SP.seNote     = Nothing
+        , SP.seResult   = Nothing
+        , SP.seStatus   = SP.ScratchOpen
+        , SP.seCreated  = 1
+        , SP.seUpdated  = 1
+        }
+  SP.save store entry
+  hit  <- SP.findById store "lookup-me"
+  miss <- SP.findById store "no-such-id"
+  pure (fmap SP.seId hit == Just "lookup-me" && miss == Nothing)
+
+-- | parseAction round-trip — covers the default + every named action.
+testScratchParseAction :: IO Bool
+testScratchParseAction = pure $
+  ScratchTool.parseAction Nothing            == Right ScratchTool.ActList
+  && ScratchTool.parseAction (Just "write")  == Right ScratchTool.ActWrite
+  && ScratchTool.parseAction (Just "check")  == Right ScratchTool.ActCheck
+  && ScratchTool.parseAction (Just "list")   == Right ScratchTool.ActList
+  && ScratchTool.parseAction (Just "show")   == Right ScratchTool.ActShow
+  && ScratchTool.parseAction (Just "clear")  == Right ScratchTool.ActClear
+  && ScratchTool.parseAction (Just "promote") == Right ScratchTool.ActPromote
+  && case ScratchTool.parseAction (Just "nope") of
+       Left _  -> True
+       Right _ -> False
+
+-- | action=write creates the entry on disk and returns its id.
+testScratchHandleWrite :: IO Bool
+testScratchHandleWrite = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let args = A.object
+        [ "action" A..= ("write" :: Text)
+        , "id"     A..= ("user-id" :: Text)
+        , "code"   A..= ("1 + 1 :: Int" :: Text)
+        ]
+  result <- ScratchTool.handle store args
+  case trContent result of
+    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+      Just (A.Object top) -> case AKM.lookup "status" top of
+        Just (A.String "ok") -> do
+          loaded <- SP.loadAll store
+          pure $ case loaded of
+            [e] -> SP.seId e == "user-id" && SP.seCode e == "1 + 1 :: Int"
+            _   -> False
+        _ -> pure False
+      _ -> pure False
+    _ -> pure False
+
+-- | action=write without code returns status=failed kind=missing_arg.
+testScratchHandleWriteMissingCode :: IO Bool
+testScratchHandleWriteMissingCode = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let args = A.object [ "action" A..= ("write" :: Text) ]
+  result <- ScratchTool.handle store args
+  pure $ case trContent result of
+    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "failed")
+      _ -> False
+    _ -> False
+
+-- | action=write without an id auto-generates scratch-1, scratch-2, ...
+testScratchHandleWriteAutoId :: IO Bool
+testScratchHandleWriteAutoId = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let args = A.object
+        [ "action" A..= ("write" :: Text)
+        , "code"   A..= ("a" :: Text)
+        ]
+  _ <- ScratchTool.handle store args
+  _ <- ScratchTool.handle store args
+  loaded <- SP.loadAll store
+  let ids = map SP.seId loaded
+  pure (ids == ["scratch-1", "scratch-2"])
+
+-- | action=list with no entries returns count=0.
+testScratchHandleListEmpty :: IO Bool
+testScratchHandleListEmpty = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let args = A.object [ "action" A..= ("list" :: Text) ]
+  result <- ScratchTool.handle store args
+  pure $ case trContent result of
+    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+      Just (A.Object top) -> case AKM.lookup "result" top of
+        Just (A.Object r) -> AKM.lookup "count" r == Just (A.Number 0)
+        _ -> False
+      _ -> False
+    _ -> False
+
+-- | action=show on an unknown id returns status=no_match.
+testScratchHandleShowMissing :: IO Bool
+testScratchHandleShowMissing = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let args = A.object [ "action" A..= ("show" :: Text), "id" A..= ("ghost" :: Text) ]
+  result <- ScratchTool.handle store args
+  pure $ case trContent result of
+    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "no_match")
+      _ -> False
+    _ -> False
+
+-- | action=clear without id and without confirm=true is refused.
+testScratchHandleClearNoConfirm :: IO Bool
+testScratchHandleClearNoConfirm = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let args = A.object [ "action" A..= ("clear" :: Text) ]
+  result <- ScratchTool.handle store args
+  pure $ case trContent result of
+    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "refused")
+      _ -> False
+    _ -> False
+
+-- | action=clear with id removes only that entry.
+testScratchHandleClearById :: IO Bool
+testScratchHandleClearById = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let mk i c = SP.ScratchEntry
+        { SP.seId       = i, SP.seKind = SP.ScratchHypothesis, SP.seCode = c
+        , SP.seModule   = Nothing, SP.seImports = [], SP.seNote = Nothing
+        , SP.seResult   = Nothing, SP.seStatus = SP.ScratchOpen
+        , SP.seCreated  = 1, SP.seUpdated = 1
+        }
+  SP.save store (mk "a" "a")
+  SP.save store (mk "b" "b")
+  let args = A.object [ "action" A..= ("clear" :: Text), "id" A..= ("a" :: Text) ]
+  _ <- ScratchTool.handle store args
+  loaded <- SP.loadAll store
+  pure (map SP.seId loaded == ["b"])
+
+-- | action=clear with confirm=true (no id) truncates everything.
+testScratchHandleClearAll :: IO Bool
+testScratchHandleClearAll = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let mk i = SP.ScratchEntry
+        { SP.seId       = i, SP.seKind = SP.ScratchHypothesis, SP.seCode = "x"
+        , SP.seModule   = Nothing, SP.seImports = [], SP.seNote = Nothing
+        , SP.seResult   = Nothing, SP.seStatus = SP.ScratchOpen
+        , SP.seCreated  = 1, SP.seUpdated = 1
+        }
+  SP.save store (mk "a")
+  SP.save store (mk "b")
+  SP.save store (mk "c")
+  let args = A.object [ "action" A..= ("clear" :: Text), "confirm" A..= True ]
+  _ <- ScratchTool.handle store args
+  loaded <- SP.loadAll store
+  pure (null loaded)
+
+-- | check and promote are stubbed in Phase 1 — they must return a
+-- structured failed envelope, not crash or silently succeed.
+testScratchCheckIsNotImplementedYet :: IO Bool
+testScratchCheckIsNotImplementedYet = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let args = A.object [ "action" A..= ("check" :: Text), "id" A..= ("x" :: Text) ]
+  result <- ScratchTool.handle store args
+  pure $ case trContent result of
+    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "failed")
+      _ -> False
+    _ -> False
+
 -- | Helper: create a fresh temp directory and delete it after the test.
 -- Passes a validated 'ProjectDir' (absolute + normalised) to the body.
 withTempProject :: (ProjectDir -> IO Bool) -> IO Bool
@@ -13914,7 +14163,7 @@ testEveryToolHasCategory = pure $
 -- Current breakdown: 36 primitives, 4 composites, 3 gates, 3 control-plane.
 testCategoryCountsMatchTaxonomy :: IO Bool
 testCategoryCountsMatchTaxonomy = pure $
-  countCat CatPrimitive    == 26
+  countCat CatPrimitive    == 27
   -- ^ #94 Phase B retrofit: GhcModules replaces GhcAddModules +
   -- GhcRemoveModules (36 → 35).
   -- #94 Phase C step 1: GhcDeps action="explain" replaces
@@ -13932,6 +14181,7 @@ testCategoryCountsMatchTaxonomy = pure $
   -- |audit) replaces GhcPropertyLifecycle + GhcRegression +
   -- GhcQuickCheckExport + GhcPropertyAudit outright (29 → 26 —
   -- four removed, one added).
+  -- #253: GhcScratch — persistent LLM code canvas (26 → 27).
   && countCat CatComposite    ==  4
   && countCat CatGate         ==  3
   && countCat CatControlPlane ==  2

@@ -173,6 +173,14 @@ allBudgets = Map.fromList
     , ToolBudget 100  300   Nothing
         "#94 Phase B: action-discriminated successor to ghc_add_modules / \
         \ghc_remove_modules; budgets match the underlying handlers")
+  , ( GhcScratch
+    , ToolBudget 100  300   Nothing
+        "#253: persistent LLM code canvas. Phase 1 ships data-bound \
+        \actions only (write / list / show / clear) — pure JSON I/O \
+        \through the scratchpad store; budgets mirror ghc_property_store's \
+        \list/run profile. The 'check' / 'promote' actions land in later \
+        \phases and will need higher budgets when they engage the GHC \
+        \API + refactor pipeline.")
   ]
 
 -- | Look up the budget for a specific tool.
