@@ -682,6 +682,8 @@ main = do
                                                    testValidateCabalBackcompatIssues
       , test "Envelope #90 Phase B: ghc_workflow status emits envelope"
                                                    testWorkflowStatusEnvelope
+      , test "Phase 5: workflow status carries scratchpad section"
+                                                   testWorkflowStatusHasScratchpad
       , test "Envelope #90 Phase B: ghc_workflow help emits envelope"
                                                    testWorkflowHelpEnvelope
       , test "Envelope #90 Phase B: ghc_workflow next emits envelope"
@@ -870,7 +872,7 @@ main = do
       , test "nextStep: deps(add) -> load"          testNextStepDepsAdd
       , test "nextStep: load clean -> suggest"      testNextStepLoadClean
       , test "nextStep: load w/ warnings -> hole"   testNextStepLoadWarnings
-      , test "nextStep: suggest -> quickcheck"      testNextStepSuggest
+      , test "nextStep: suggest -> scratch(write)"   testNextStepSuggest
       , test "nextStep: qc passed -> check_module"  testNextStepQcPassed
       , test "nextStep: qc failed -> eval"          testNextStepQcFailed
       , test "nextStep: regression list -> run"     testNextStepRegressionList
@@ -878,6 +880,13 @@ main = do
       , test "nextStep: check_module -> project"   testNextStepCheckModule
       , test "nextStep: check_project -> coverage" testNextStepCheckProject
       , test "nextStep: errors -> no suggestion"   testNextStepErrorsSuppressed
+      -- Phase 5: cross-tool nextStep arms
+      , test "Phase 5: hole nextStep → scratch(write) chain"
+                                                   testNextStepFromHoleRoutesToScratch
+      , test "Phase 5: explain_error nextStep → scratch(write) chain"
+                                                   testNextStepFromExplainErrorRoutesToScratch
+      , test "Phase 5: scratch check chain has quickcheck after suggest"
+                                                   testNextStepSuggestChainHasQuickCheck
       , test "nextStep: exploratory -> no suggestion" testNextStepExploratoryNothing
       , test "#185: ghc_info no_match -> hoogle_search"  testNextStepInfoNoMatchIsHoogle
       , test "#185: ghc_doc no_match -> hoogle_search"   testNextStepDocNoMatchIsHoogle
@@ -4746,7 +4755,10 @@ runWorkflow args = do
       toolNames = ["ghc_load", "ghc_type", "ghc_workflow"]
   -- PR-4: workflow handler gained an isSelfProject arg. Tests run
   -- against /tmp, never the MCP source tree, so the flag is False.
-  result <- WorkflowTool.handle pdRef sessRef toolNames ws staleness False args
+  -- #253 Phase 5: workflow handler gained scratchRef for status section.
+  scratch    <- SP.openStore pd
+  scratchRef <- newIORef scratch
+  result <- WorkflowTool.handle pdRef sessRef toolNames ws staleness False scratchRef args
   case trContent result of
     [TextContent body] ->
       pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
@@ -4769,6 +4781,27 @@ testWorkflowStatusEnvelope = do
             && AKM.member (AKey.fromText "toolsActive") payload
             && AKM.member (AKey.fromText "phase") payload
             && AKM.member (AKey.fromText "staleness") payload
+    _ -> False
+
+-- | #253 Phase 5: 'ghc_workflow {action: status}' result carries
+-- a 'scratchpad' section with entries/open/verified/promoted/hint.
+testWorkflowStatusHasScratchpad :: IO Bool
+testWorkflowStatusHasScratchpad = do
+  decoded <- runWorkflow (A.object [ "action" A..= ("status" :: Text) ])
+  pure $ case decoded of
+    Right env
+      | Env.reStatus env == Env.StatusOk
+      , Just (A.Object payload) <- Env.reResult env ->
+          case AKM.lookup (AKey.fromText "scratchpad") payload of
+            Just (A.Object sp) ->
+              AKM.member (AKey.fromText "entries")  sp
+                && AKM.member (AKey.fromText "open")     sp
+                && AKM.member (AKey.fromText "verified") sp
+                && AKM.member (AKey.fromText "promoted") sp
+                && AKM.member (AKey.fromText "hint")     sp
+                -- fresh scratchpad has 0 entries
+                && AKM.lookup (AKey.fromText "entries") sp == Just (A.Number 0)
+            _ -> False
     _ -> False
 
 -- | 'ghc_workflow {action: help}' status='ok' carrying a help view.
@@ -10997,11 +11030,13 @@ testNextStepLoadWarnings =
        Nothing -> False
 
 -- | Suggest → quickcheck.
+-- #253 Phase 5: GhcSuggest now routes to GhcScratch first (record law
+-- candidate in scratchpad before quickchecking it).
 testNextStepSuggest :: IO Bool
 testNextStepSuggest =
   let payload = A.object [ "success" .= True, "count" .= (3 :: Int) ]
   in pure $ case suggestNext GhcSuggest True payload of
-       Just ns -> nsTool ns == GhcQuickCheck
+       Just ns -> nsTool ns == GhcScratch
        Nothing -> False
 
 -- | QuickCheck passed → check_module.
@@ -11037,6 +11072,37 @@ testNextStepRefactor =
   let payload = A.object [ "success" .= True, "compile" .= ("ok" :: Text) ]
   in pure $ case suggestNext GhcRefactor True payload of
        Just ns -> nsTool ns == GhcLoad
+       Nothing -> False
+
+-- #253 Phase 5: cross-tool nextStep arms ─────────────────────────────────
+
+-- | GhcHole now routes to GhcScratch (write the hole-filler hypothesis
+-- before implementing it).
+testNextStepFromHoleRoutesToScratch :: IO Bool
+testNextStepFromHoleRoutesToScratch =
+  let payload = A.object [ "success" .= True, "holes" .= ([] :: [Value]) ]
+  in pure $ case suggestNext GhcHole True payload of
+       Just ns -> nsTool ns == GhcScratch
+       Nothing -> False
+
+-- | GhcExplainError now routes to GhcScratch (record the proposed fix
+-- before applying verify_patch to source).
+testNextStepFromExplainErrorRoutesToScratch :: IO Bool
+testNextStepFromExplainErrorRoutesToScratch =
+  let payload = A.object [ "success" .= True, "error_text" .= ("..." :: Text) ]
+  in pure $ case suggestNext GhcExplainError True payload of
+       Just ns -> nsTool ns == GhcScratch
+       Nothing -> False
+
+-- | GhcSuggest chains to ghc_quickcheck after the scratch write + check
+-- steps — verify the chain carries quickcheck as a follow-up.
+testNextStepSuggestChainHasQuickCheck :: IO Bool
+testNextStepSuggestChainHasQuickCheck =
+  let payload = A.object [ "success" .= True, "count" .= (3 :: Int) ]
+  in pure $ case suggestNext GhcSuggest True payload of
+       Just ns ->
+         let chainTools = maybe [] (map csTool) (nsChain ns)
+         in GhcQuickCheck `elem` chainTools
        Nothing -> False
 
 -- | Module gate → project gate.
@@ -14421,9 +14487,9 @@ goldenDispatchTable =
   [ ("project(create default) → deps chain", GhcProject,         object [],    Just GhcDeps)
   , ("deps(no-action) → suppressed",     GhcDeps,               object [],    Nothing)
   , ("load(clean) → suggest",            GhcLoad,               object [],    Just GhcSuggest)
-  , ("hole → load",                      GhcHole,               object [],    Just GhcLoad)
+  , ("hole → scratch(write) chain",      GhcHole,               object [],    Just GhcScratch)
   , ("arbitrary → load",                 GhcArbitrary,          object [],    Just GhcLoad)
-  , ("suggest → quickcheck",             GhcSuggest,            object [],    Just GhcQuickCheck)
+  , ("suggest → scratch(write) chain",   GhcSuggest,            object [],    Just GhcScratch)
   , ("quickcheck(no-state) → suppress",  GhcQuickCheck,         object [],    Nothing)
   , ("property_store(no-action) → suppress", GhcPropertyStore,  object [],    Nothing)
   , ("refactor → load",                  GhcRefactor,           object [],    Just GhcLoad)
@@ -14439,7 +14505,7 @@ goldenDispatchTable =
   , ("quickcheck(runs=3,fail) → quickcheck",  GhcQuickCheck,    object [ "runs" .= (3 :: Int), "success" .= False ],  Just GhcQuickCheck)
   , ("property_store(audit) → list",    GhcPropertyStore,      object [ "findings" .= ([] :: [Value]) ],   Just GhcPropertyStore)
   , ("perf → perf",                      GhcPerf,               object [],    Just GhcPerf)
-  , ("explain_error → explain_error",    GhcExplainError,       object [],    Just GhcExplainError)
+  , ("explain_error → scratch(write) chain", GhcExplainError,   object [],    Just GhcScratch)
   -- PR-3: lab promoted to a chain whose primary is property_store(audit),
   -- followed by check_project. Catches contradictions before replay.
   , ("lab → property_store(audit) chain", GhcLab,               object [],    Just GhcPropertyStore)
@@ -15513,7 +15579,7 @@ testWorkflowNextHistoryAware =
              , WS.wsToolHistory         = [GhcSuggest]
              }
       pd     = case mkProjectDir "/tmp" of Right p -> p; Left _ -> error "bad pd"
-      result = WorkflowTool.render WorkflowTool.ActNext pd True [] ws dummyStaleness [] Nothing False
+      result = WorkflowTool.render WorkflowTool.ActNext pd True [] ws dummyStaleness [] Nothing False Nothing
   in pure $ case trContent result of
        [TextContent body_] ->
          case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of

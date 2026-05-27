@@ -362,14 +362,26 @@ dispatch name payload = case name of
       (Just (object
           [ "function_name" .= ("<pick one from the module>" :: Text) ])))
 
-  -- Typed holes listed → implementation work, then reload.
-  GhcHole -> Just (simple GhcLoad
-    "Implement the holes using the fits listed above, then reload \
-    \with diagnostics=true to confirm the types now line up."
+  -- Typed holes listed → scratch the hole-filler hypothesis, type-check
+  -- it against the live session, then reload. Writing to scratch first
+  -- lets the LLM verify the fill compiles before touching source and
+  -- leaves a record of the reasoning the user can read mid-session.
+  GhcHole -> Just (chained GhcScratch
+    "Write the hole-filler to the scratchpad, type-check it with \
+    \action=check, then use action=promote (or paste manually) once \
+    \the type is confirmed. The attached chain bundles all three steps."
     (Just (object
+        [ "action" .= ("write" :: Text)
+        , "code"   .= ("<fill expression for the hole>" :: Text)
+        , "note"   .= ("hole-filler hypothesis" :: Text)
+        ]))
+    [ step GhcScratch (object
+        [ "action" .= ("check" :: Text)
+        , "id"     .= ("<id from the write above>" :: Text) ])
+    , step GhcLoad (object
         [ "module_path" .= ("<same module you just inspected>" :: Text)
-        , "diagnostics" .= True
-        ])))
+        , "diagnostics" .= True ])
+    ])
 
   -- Arbitrary template generated → paste + import QC + reload + first
   -- law in a single batchable plan. The instance is dead until imported,
@@ -389,20 +401,25 @@ dispatch name payload = case name of
         , "module_path" .= ("<same module>" :: Text) ])
     ])
 
-  -- Suggestions → run the highest-confidence one via quickcheck, then
-  -- immediately replay the full persisted store. The chain ensures a
-  -- pass + auto-persist is followed by a regression replay, catching
-  -- silent collisions with previously-stored laws.
-  GhcSuggest -> Just (chained GhcQuickCheck
-    "Feed the highest-confidence suggestion into ghc_quickcheck. \
-    \Passing properties auto-persist; the chained ghc_property_store \
-    \run replays the full set so collisions with prior laws surface \
-    \in the same round-trip."
+  -- Suggestions → record the law in the scratchpad first (for
+  -- posterity and user visibility), type-check it, then quickcheck.
+  -- The chain bundles write → check → quickcheck → replay so the LLM
+  -- can drive the full flow in one ghc_batch round-trip.
+  GhcSuggest -> Just (chained GhcScratch
+    "Write the law candidate to the scratchpad before running it — \
+    \the entry records the reasoning and the type-check confirms \
+    \the property expression is well-formed. The chain continues \
+    \to ghc_quickcheck and a full regression replay."
     (Just (object
-        [ "property"    .= ("<copy from suggestion.property>" :: Text)
-        , "module_path" .= ("<module defining the function>" :: Text)
+        [ "action" .= ("write" :: Text)
+        , "code"   .= ("<copy from suggestion.property>" :: Text)
+        , "kind"   .= ("note" :: Text)
+        , "note"   .= ("law candidate from ghc_suggest" :: Text)
         ]))
-    [ step GhcQuickCheck (object
+    [ step GhcScratch (object
+        [ "action" .= ("check" :: Text)
+        , "id"     .= ("<id from the write above>" :: Text) ])
+    , step GhcQuickCheck (object
         [ "property"    .= ("<copy from suggestion.property>" :: Text)
         , "module_path" .= ("<module defining the function>" :: Text) ])
     , step GhcPropertyStore (object
@@ -526,22 +543,32 @@ dispatch name payload = case name of
         ])))
 
   -- Issue #59 Phase 2: verify_patch is live.
-  -- The canonical flow: agent uses its LLM to propose a patch,
-  -- feeds it as verify_patch, tool applies/recompiles/restores,
-  -- and reports error_resolved. Then ghc_load to confirm.
-  GhcExplainError -> Just (simple GhcExplainError
-    "Phase 2: feed a candidate fix as verify_patch={line, old, new} \
-    \to let the tool apply it, recompile, check error_resolved, then \
-    \restore the file. Iterate until error_resolved=true, then \
-    \ghc_load to confirm the final state."
+  -- Error explained → record the proposed fix in the scratchpad so
+  -- the user can see the reasoning and the LLM can type-check the
+  -- hypothesis before touching source. The chain continues to
+  -- verify_patch (apply-and-recompile) once the fix is confirmed.
+  GhcExplainError -> Just (chained GhcScratch
+    "Write the proposed fix to the scratchpad first — the entry \
+    \records the reasoning and action=check confirms it's well-typed \
+    \before touching source. Then feed it as verify_patch to apply, \
+    \recompile, and check error_resolved."
     (Just (object
+        [ "action" .= ("write" :: Text)
+        , "code"   .= ("<proposed fix>" :: Text)
+        , "note"   .= ("fix hypothesis from ghc_explain_error" :: Text)
+        ]))
+    [ step GhcScratch (object
+        [ "action" .= ("check" :: Text)
+        , "id"     .= ("<id from the write above>" :: Text) ])
+    , step GhcExplainError (object
         [ "module_path"  .= ("<same module>" :: Text)
         , "verify_patch" .= object
             [ "line" .= (0 :: Int)
             , "old"  .= ("<old text>" :: Text)
             , "new"  .= ("<new text>" :: Text)
             ]
-        ])))
+        ])
+    ])
 
   -- Issue #60 + chain: the audit just persisted a new batch of
   -- properties. A pairwise audit catches contradictions with the

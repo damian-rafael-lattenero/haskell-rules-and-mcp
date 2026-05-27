@@ -36,6 +36,7 @@ import qualified System.Directory
 import System.Directory (findExecutable)
 import System.FilePath ((</>))
 
+import qualified HaskellFlows.Data.Scratchpad as SP
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Mcp.Protocol
@@ -115,9 +116,10 @@ handle
   -> WorkflowState
   -> StalenessReport
   -> Bool                  -- ^ PR-4 Phase 1: is the active project the MCP itself?
+  -> IORef SP.Store        -- ^ #253 Phase 5: scratchpad store for status section
   -> Value
   -> IO ToolResult
-handle pdRef sessMVar toolNames ws staleness isSelfProject rawArgs =
+handle pdRef sessMVar toolNames ws staleness isSelfProject scratchRef rawArgs =
   case parseEither parseJSON rawArgs of
     Left err ->
       pure (Env.toolResponseToResult (Env.mkFailed
@@ -138,7 +140,15 @@ handle pdRef sessMVar toolNames ws staleness isSelfProject rawArgs =
       entryMod  <- case a of
         ActHelp -> suggestEntryModule pd
         _       -> pure Nothing
-      pure (render a pd sessAlive toolNames ws staleness missing entryMod isSelfProject)
+      -- #253 Phase 5: compute scratchpad summary only for status view.
+      -- loadAll is read-only and cheap (one file stat + JSON decode).
+      scratchSection <- case a of
+        ActStatus -> do
+          scratch  <- readIORef scratchRef
+          entries  <- SP.loadAll scratch
+          pure (Just (scratchpadSection entries))
+        _ -> pure Nothing
+      pure (render a pd sessAlive toolNames ws staleness missing entryMod isSelfProject scratchSection)
 
 probeMissingOptionals :: IO [Text]
 probeMissingOptionals =
@@ -197,20 +207,21 @@ render
   -> [Text]
   -> Maybe Text       -- ^ F-02: suggested entry module (help view only)
   -> Bool             -- ^ PR-4 Phase 1: is the active project the MCP itself?
+  -> Maybe Value      -- ^ #253 Phase 5: pre-computed scratchpad section (status only)
   -> ToolResult
-render a pd alive toolNames ws staleness missingOpt mEntry isSelfProject =
+render a pd alive toolNames ws staleness missingOpt mEntry isSelfProject mScratch =
   let phase      = classifyPhase ws
       stateHints = renderHelp ws
       payload    = case a of
-        ActStatus -> statusPayload pd alive toolNames staleness phase missingOpt isSelfProject
+        ActStatus -> statusPayload pd alive toolNames staleness phase missingOpt isSelfProject mScratch
         ActHelp   -> helpPayload pd alive stateHints staleness phase mEntry
         ActNext   -> nextPayload pd alive ws
   in Env.toolResponseToResult (Env.mkOk payload)
 
 statusPayload
   :: ProjectDir -> Bool -> [Text] -> StalenessReport -> SessionPhase
-  -> [Text] -> Bool -> Value
-statusPayload pd alive toolNames staleness phase missingOpt isSelfProject =
+  -> [Text] -> Bool -> Maybe Value -> Value
+statusPayload pd alive toolNames staleness phase missingOpt isSelfProject mScratch =
   object $
     [ "view"        .= ("status" :: Text)
     , "projectDir"  .= T.pack (unProjectDir pd)
@@ -227,12 +238,40 @@ statusPayload pd alive toolNames staleness phase missingOpt isSelfProject =
       -- repo root) can use this to switch into the dogfood-fix
       -- flow without checking paths themselves.
     , "selfProject" .= isSelfProject
+      -- #253 Phase 5: scratchpad summary — always present in status.
+    , "scratchpad"  .= mScratch
     ]
     -- Only emit the 'optionalBinaries' field when something is
     -- missing.  Happy path stays clean — the nudge only appears
     -- when there's something to nudge about.
     <> [ "optionalBinaries" .= optionalBinariesPayload missingOpt
        | not (null missingOpt)
+       ]
+
+-- | #253 Phase 5: compact scratchpad summary for the status view.
+scratchpadSection :: [SP.ScratchEntry] -> Value
+scratchpadSection entries =
+  let total    = length entries
+      open     = length (filter ((== SP.ScratchOpen)      . SP.seStatus) entries)
+      verified = length (filter ((== SP.ScratchVerified)  . SP.seStatus) entries)
+      promoted = length (filter ((== SP.ScratchPromoted)  . SP.seStatus) entries)
+      hint :: Text
+      hint
+        | total == 0 =
+            "Use ghc_scratch(action='write') to record a Haskell hypothesis \
+            \you want to type-check before touching source."
+        | open > 0  =
+            T.pack (show open) <> " open entr" <> (if open == 1 then "y" else "ies")
+            <> " — run ghc_scratch(action='check', id='<id>') to type-check."
+        | otherwise =
+            "All entries verified or promoted. Use action='clear' with \
+            \confirm=true to reset the scratchpad."
+  in object
+       [ "entries"  .= total
+       , "open"     .= open
+       , "verified" .= verified
+       , "promoted" .= promoted
+       , "hint"     .= hint
        ]
 
 -- | Render the missing-optional-binaries payload — used by the agent

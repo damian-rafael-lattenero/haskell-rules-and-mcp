@@ -474,6 +474,7 @@ dispatchByName srv args = \case
       ws
       staleness
       isSelf
+      (srvScratchpad srv)    -- #253 Phase 5: scratchpad summary in status
       args
   GhcCheckModule -> do
     -- Wave-5 full GhcSession: compile/warnings/holes + in-process
