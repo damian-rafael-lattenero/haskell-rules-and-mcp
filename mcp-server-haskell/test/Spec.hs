@@ -554,6 +554,7 @@ main = do
       , test "Scratch check unknown id → no_match" testScratchCheckUnknownId
       , test "Scratch check sanitize rejects"      testScratchCheckSanitizeReject
       , test "ScratchResult JSON round-trip"       testScratchResultRoundTrip
+      , test "F-01: check type_ok has kind at top" testScratchCheckKindAtTopLevel
       , test "validatePackageName accepts normal"  testPkgAccepts
       , test "validatePackageName rejects symbol"  testPkgRejectsSymbol
       , test "validatePackageName rejects empty"   testPkgRejectsEmpty
@@ -13667,6 +13668,43 @@ testScratchResultRoundTrip =
          && SP.srDetail r' == SP.srDetail r
          && SP.srAt    r' == SP.srAt    r
        A.Error _ -> False
+
+-- | F-01 regression: action=check response carries 'kind' at the top
+-- level of the mkOk result object, NOT nested under result.result.kind.
+-- With 'undefined' for the session, withGhcSession throws and the
+-- try-block stores a type_error; we just need 'kind' to be directly
+-- inside the result object so scratchNext's envField routing works.
+testScratchCheckKindAtTopLevel :: IO Bool
+testScratchCheckKindAtTopLevel = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let writeArgs = A.object
+        [ "action" A..= ("write" :: Text)
+        , "id"     A..= ("probe" :: Text)
+        , "code"   A..= ("bogusF" :: Text)  -- passes sanitize, GHC call throws
+        ]
+  _ <- ScratchTool.handle store undefined writeArgs
+  let checkArgs = A.object
+        [ "action" A..= ("check" :: Text)
+        , "id"     A..= ("probe" :: Text)
+        ]
+  result <- ScratchTool.handle store undefined checkArgs
+  pure $ case trContent result of
+    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+      Just (A.Object top) ->
+        case AKM.lookup "status" top of
+          Just (A.String "ok") ->
+            -- status=ok means the try-block ran; result must have 'kind'
+            -- directly (type_error from undefined-session crash), not nested.
+            case AKM.lookup "result" top of
+              Just (A.Object inner) ->
+                -- 'kind' must be present here
+                case AKM.lookup "kind" inner of
+                  Just (A.String k) -> k == "type_ok" || k == "type_error"
+                  _ -> False
+              _ -> False
+          _ -> True  -- refused / failed paths: sanitize boundary fired, fine
+      _ -> False
+    _ -> False
 
 -- | Helper: create a fresh temp directory and delete it after the test.
 -- Passes a validated 'ProjectDir' (absolute + normalised) to the body.

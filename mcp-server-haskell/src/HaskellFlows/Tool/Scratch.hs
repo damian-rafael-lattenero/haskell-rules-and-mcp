@@ -254,9 +254,12 @@ notImplemented act =
 --      On type_error: persist the error text, leave status 'ScratchOpen'
 --      so the LLM can rewrite and re-check.
 --
--- Both outcomes are returned as @status=\"ok\"@ with a nested
--- @result.kind@ so @nextStep@ can route: @type_ok@ → promote,
--- @type_error@ → write + re-check.
+-- Both outcomes are returned as @status=\"ok\"@ with @kind@ at the
+-- top level of the result object so @nextStep@ (which drills one
+-- level via @envField \"result\"@) can route: @type_ok@ → promote,
+-- @type_error@ → write + re-check.  The full 'SP.ScratchResult' is
+-- persisted to the store and visible via @action=show@; the response
+-- carries only the fields needed for immediate routing.
 handleCheck :: SP.Store -> GhcSession -> ScratchArgs -> IO ToolResult
 handleCheck store ghcSess args = case saId args of
   Nothing ->
@@ -294,15 +297,18 @@ handleCheck store ghcSess args = case saId args of
                                 , SP.seUpdated = now
                                 }
                 SP.save store updated
+                -- F-01 fix: 'kind' at the top level of the mkOk payload so
+                -- 'scratchNext' (envField "result" → lookup "kind") routes to
+                -- promote without drilling a second level.
                 pure (Env.toolResponseToResult (Env.mkOk (object
                   [ "id"     .= i
-                  , "status" .= SP.seStatus updated
-                  , "result" .= SP.seResult updated
+                  , "status" .= SP.seStatus updated   -- "verified"
+                  , "kind"   .= SP.srKind result      -- "type_ok"
                   , "type"   .= typeText
                   , "hint"   .=
                       ("Type checks! Use action=promote to splice this \
-                       \code into a real module, or action=write to \
-                       \refine it further." :: Text)
+                       \code into a real module, or action=show to see \
+                       \the persisted result." :: Text)
                   ])))
               Left ex -> do
                 let errText = T.pack (show ex)
@@ -317,10 +323,11 @@ handleCheck store ghcSess args = case saId args of
                                 , SP.seUpdated = now
                                 }
                 SP.save store updated
+                -- F-01 fix: same pattern — 'kind' at top level for routing.
                 pure (Env.toolResponseToResult (Env.mkOk (object
                   [ "id"         .= i
-                  , "status"     .= SP.seStatus updated
-                  , "result"     .= SP.seResult updated
+                  , "status"     .= SP.seStatus updated   -- "open"
+                  , "kind"       .= SP.srKind result      -- "type_error"
                   , "type_error" .= errText
                   , "hint"       .=
                       ("Type error. Use action=write to fix the code \
