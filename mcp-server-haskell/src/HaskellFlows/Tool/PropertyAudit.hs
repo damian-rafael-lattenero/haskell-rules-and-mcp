@@ -51,7 +51,7 @@ import HaskellFlows.Data.PropertyStore
   , StoredProperty (..)
   , loadAll
   )
-import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
+import HaskellFlows.Ghc.ApiSession (GhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -183,13 +183,17 @@ runPairProbe ghcSess _args (p1, p2) = do
       -- named property. Loading P1's source module often fails when the
       -- probe body doesn't reference project symbols at all, and using a
       -- single module context is wrong when P1 and P2 come from different
-      -- stanzas. Pass Nothing → the repl gets `:m + <exposed modules>`
-      -- (all library modules) which covers self-contained lambdas and
-      -- standard-library terms. Probes that genuinely need a project module
-      -- will fall to QcUnparsed → "skipped" (honest signal).
+      -- stanzas. Pass Nothing → the in-process GHC API session (augmented
+      -- with Test.QuickCheck/Data.Map/Data.List) covers self-contained
+      -- lambdas and standard-library terms.
+      --
+      -- #241: switched from runQuickCheckViaCabalRepl (subprocess) to
+      -- runQuickCheckWithLabelsInProcess (live GHC API session), mirroring
+      -- what action="run" uses via Regression.handle. The subprocess path
+      -- was producing "(no GHCi output)" for every probe because the cabal
+      -- repl had no stable QuickCheck context for synthetic lambdas.
       res <- try @SomeException $
-        Qc.runQuickCheckViaCabalRepl (gsProject ghcSess)
-          Nothing probe
+        Qc.runQuickCheckWithLabelsInProcess ghcSess Nothing probe
       pure $ case res of
         Left e ->
           PairFinding
@@ -198,7 +202,7 @@ runPairProbe ghcSess _args (p1, p2) = do
             , pfStatus = "skipped"
             , pfDetail = T.pack ("subprocess error: " <> show e)
             }
-        Right (out, _err) ->
+        Right (out, _labelsBlock, _err) ->
           let (status, detail) = interpretProbeResult (parseQuickCheckOutput probe out)
               detail' = enhanceNullModuleDetail
                           (isNothing (spModule p1)) (isNothing (spModule p2))
@@ -219,12 +223,14 @@ runPairProbe ghcSess _args (p1, p2) = do
 -- Returns @Just expression@ when vacuous, @Nothing@ otherwise.
 runVacuousCheck :: GhcSession -> StoredProperty -> IO (Maybe StoredProperty)
 runVacuousCheck ghcSess sp = do
+  -- #241: use in-process GHC API (same as runPairProbe) instead of
+  -- cabal repl subprocess for consistency and reliability.
   res <- try @SomeException $
-    Qc.runQuickCheckViaCabalRepl (gsProject ghcSess)
+    Qc.runQuickCheckWithLabelsInProcess ghcSess
       (spModule sp) (spExpression sp)
   pure $ case res of
-    Left  _ -> Nothing  -- subprocess failure: can't classify
-    Right (out, _) ->
+    Left  _ -> Nothing  -- session failure: can't classify
+    Right (out, _labelsBlock, _err) ->
       let qcr = parseQuickCheckOutput (spExpression sp) out
       in if isVacuousResult qcr then Just sp else Nothing
 
