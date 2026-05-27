@@ -60,6 +60,7 @@ import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath (takeExtension)
 
 import HaskellFlows.Data.PropertyStore (Store, openStore)
+import qualified HaskellFlows.Data.Scratchpad as Scratchpad
 import HaskellFlows.Ghc.ApiSession (GhcSession, killGhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
@@ -160,15 +161,22 @@ validateSwitchTarget raw =
 -- after a switch would still consult the previous project's
 -- stored properties — the surprising behaviour that motivated
 -- the bug report.
+--
+-- F-02: the fourth parameter ('IORef Scratchpad.Store') is the
+-- scratchpad handle. Same reasoning applies — without swapping it,
+-- post-switch 'ghc_scratch' calls silently write to the old
+-- project's @.haskell-flows/scratchpad.json@, mixing entries across
+-- projects and causing data-loss on the next 'list' or 'clear'.
 handle
   :: IORef ProjectDir
   -> MVar (Maybe GhcSession)
   -> IORef Store
-  -> IORef Bool        -- ^ PR-4 Phase 1: srvIsSelfProject — recomputed
-                       --   against the new root after a successful switch.
+  -> IORef Scratchpad.Store  -- ^ F-02: swapped atomically with storeRef
+  -> IORef Bool              -- ^ PR-4 Phase 1: srvIsSelfProject — recomputed
+                             --   against the new root after a successful switch.
   -> Value
   -> IO ToolResult
-handle pdRef sessRef storeRef selfRef rawArgs = case parseEither parseJSON rawArgs of
+handle pdRef sessRef storeRef scratchRef selfRef rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right (SwitchProjectArgs raw) -> do
     res <- validateSwitchTarget raw
@@ -183,23 +191,25 @@ handle pdRef sessRef storeRef selfRef rawArgs = case parseEither parseJSON rawAr
         -- create_project\" instead of always pointing at status.
         entries <- listDirectory (unProjectDir newPd)
         let scaffolded = any ((".cabal" ==) . takeExtension) entries
-        -- Open the new project's store BEFORE we take the session
-        -- lock. 'openStore' is a stat + IORef new-MVar — quick and
-        -- never throws — so doing it outside the critical section
-        -- keeps the swap window tight. Then serialise the
-        -- (kill-session, swap-pdRef, swap-storeRef) trio under the
-        -- session MVar so concurrent tool handlers either see the
-        -- complete old triple or the complete new one.
-        newStore <- openStore newPd
+        -- Open both fresh stores BEFORE we take the session lock.
+        -- 'openStore'/'Scratchpad.openStore' are stat + IORef new-MVar
+        -- — quick and never throw — so doing them outside the critical
+        -- section keeps the swap window tight. Then serialise the
+        -- (kill-session, swap-pdRef, swap-storeRef, swap-scratchRef)
+        -- quartet under the session MVar so concurrent tool handlers
+        -- either see the complete old quartet or the complete new one.
+        newStore   <- openStore           newPd
+        newScratch <- Scratchpad.openStore newPd
         -- PR-4 Phase 1: recompute the self-project flag against the
         -- new root. 'detectSelfProject' is read-only IO that swallows
         -- exceptions — it can't fail the swap.
         newSelf <- detectSelfProject newPd
         modifyMVar_ sessRef $ \mSess -> do
           mapM_ killGhcSession mSess
-          atomicWriteIORef pdRef    newPd
-          atomicWriteIORef storeRef newStore
-          atomicWriteIORef selfRef  newSelf
+          atomicWriteIORef pdRef       newPd
+          atomicWriteIORef storeRef    newStore
+          atomicWriteIORef scratchRef  newScratch
+          atomicWriteIORef selfRef     newSelf
           pure Nothing
         pure (successResult oldPd newPd scaffolded)
 

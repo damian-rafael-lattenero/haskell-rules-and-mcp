@@ -1306,6 +1306,8 @@ main = do
                                                                  testSwitchHandleSwaps
       , test "switch_project: handle reopens store at new root (#39)"
                                                                  testSwitchHandleReopensStore
+      , test "F-02: switch_project reopens scratchpad at new root"
+                                                                 testSwitchHandleReopensScratchpad
       , test "switch_project: empty dir accepted (scaffold-ready)"
                                                                  testSwitchAcceptsEmpty
       , test "PR-4: parseCabalNameField handles canonical input" testParseCabalNameField
@@ -12182,9 +12184,12 @@ testSwitchHandleSwaps = do
       sessRef' <- newMVar (Just primed)
       -- PR-4: SwitchProject.handle gained an IORef Bool for the
       -- self-project flag. Synthetic /tmp targets are never self.
-      selfRef  <- newIORef False
+      -- F-02: SwitchProject.handle also gained an IORef Scratchpad.Store.
+      scratchA   <- SP.openStore pdA
+      scratchRef <- newIORef scratchA
+      selfRef    <- newIORef False
       let args = A.object [ "path" A..= T.pack dirB ]
-      result  <- SwitchProject.handle pdRef sessRef' storeRef selfRef args
+      result  <- SwitchProject.handle pdRef sessRef' storeRef scratchRef selfRef args
       newPd   <- readIORef pdRef
       mSess   <- readMVar sessRef'
       removePathForcibly dirA
@@ -12230,9 +12235,12 @@ testSwitchHandleReopensStore = do
       storeRef <- newIORef storeA
       -- PR-4: SwitchProject.handle gained an IORef Bool for the
       -- self-project flag. Synthetic /tmp targets are never self.
-      selfRef  <- newIORef False
+      -- F-02: SwitchProject.handle also gained an IORef Scratchpad.Store.
+      scratchA   <- SP.openStore pdA
+      scratchRef <- newIORef scratchA
+      selfRef    <- newIORef False
       let args = A.object [ "path" A..= T.pack dirB ]
-      _ <- SwitchProject.handle pdRef sessRef storeRef selfRef args
+      _ <- SwitchProject.handle pdRef sessRef storeRef scratchRef selfRef args
       storeAfter  <- readIORef storeRef
       postProps   <- loadAll storeAfter
       -- After the swap, the OLD Store handle should still point
@@ -12244,6 +12252,68 @@ testSwitchHandleReopensStore = do
       pure
         ( length preProps  == 1
             && null postProps
+            && length stillInA == 1
+        )
+    _ -> do
+      removePathForcibly dirA
+      removePathForcibly dirB
+      pure False
+
+-- | F-02 regression: a successful 'switch_project' must atomically
+-- swap the scratchpad IORef so subsequent 'ghc_scratch' calls go
+-- against the NEW project's @.haskell-flows/scratchpad.json@.
+-- Pre-fix the ref kept pointing at the boot-time scratchpad, so
+-- scratch entries saved into project A leaked into project B's list.
+--
+-- Setup:
+--   * Project A scaffolded + a single scratch entry saved to its store.
+--   * Project B scaffolded with NO scratch entries.
+--   * SwitchProject.handle (A → B).
+-- Assertion:
+--   * The post-switch scratchRef opened against B reads as empty.
+--   * The pre-switch scratchA handle still reads A's entry (immutability
+--     invariant — we returned a new Store, not mutated the old one).
+testSwitchHandleReopensScratchpad :: IO Bool
+testSwitchHandleReopensScratchpad = do
+  dirA <- scaffoldTmpProject "scratch-from"
+  dirB <- scaffoldTmpProject "scratch-to"
+  case (mkProjectDir dirA, mkProjectDir dirB) of
+    (Right pdA, Right pdB) -> do
+      pdRef      <- newIORef pdA
+      sessRef    <- newMVar Nothing
+      storeA     <- openStore pdA
+      storeRef   <- newIORef storeA
+      scratchA   <- SP.openStore pdA
+      scratchRef <- newIORef scratchA
+      selfRef    <- newIORef False
+      -- Save one entry into project A's scratchpad
+      let entry = SP.ScratchEntry
+            { SP.seId      = "f02-probe"
+            , SP.seKind    = SP.ScratchHypothesis
+            , SP.seCode    = "1 + 1"
+            , SP.seModule  = Nothing
+            , SP.seImports = []
+            , SP.seNote    = Nothing
+            , SP.seResult  = Nothing
+            , SP.seStatus  = SP.ScratchOpen
+            , SP.seCreated = 0
+            , SP.seUpdated = 0
+            }
+      SP.save scratchA entry
+      preEntries <- SP.loadAll scratchA
+      -- Switch to project B
+      let args = A.object [ "path" A..= T.pack dirB ]
+      _ <- SwitchProject.handle pdRef sessRef storeRef scratchRef selfRef args
+      -- Read the new scratchpad via the swapped ref
+      scratchAfter  <- readIORef scratchRef
+      postEntries   <- SP.loadAll scratchAfter
+      -- A's scratch still intact (immutability invariant)
+      stillInA      <- SP.loadAll scratchA
+      removePathForcibly dirA
+      removePathForcibly dirB
+      pure
+        ( length preEntries  == 1
+            && null postEntries
             && length stillInA == 1
         )
     _ -> do

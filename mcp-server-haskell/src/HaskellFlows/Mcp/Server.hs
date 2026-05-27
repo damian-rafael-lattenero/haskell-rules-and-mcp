@@ -711,6 +711,7 @@ dispatchProject srv rawArgs = case projectActionField rawArgs of
              (srvProjectDir srv)
              (srvGhcSession srv)
              (srvStore srv)
+             (srvScratchpad srv)    -- F-02: also swap scratchpad on switch
              (srvIsSelfProject srv)
              inner
          "validate" -> do
