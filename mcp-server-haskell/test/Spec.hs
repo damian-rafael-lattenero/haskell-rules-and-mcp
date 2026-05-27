@@ -555,6 +555,10 @@ main = do
       , test "Scratch check sanitize rejects"      testScratchCheckSanitizeReject
       , test "ScratchResult JSON round-trip"       testScratchResultRoundTrip
       , test "F-01: check type_ok has kind at top" testScratchCheckKindAtTopLevel
+      -- Phase 3: show full detail + seResult round-trip
+      , test "Phase 3: show returns full entry detail"   testScratchShowFullDetail
+      , test "Phase 3: seResult survives loadAll"        testScratchResultRoundTripViaLoadAll
+      , test "Phase 3: show after check carries result"  testScratchShowAfterCheckHasResult
       , test "validatePackageName accepts normal"  testPkgAccepts
       , test "validatePackageName rejects symbol"  testPkgRejectsSymbol
       , test "validatePackageName rejects empty"   testPkgRejectsEmpty
@@ -12301,8 +12305,8 @@ testSwitchHandleReopensScratchpad = do
             }
       SP.save scratchA entry
       preEntries <- SP.loadAll scratchA
-      -- Switch to project B
-      let args = A.object [ "path" A..= T.pack dirB ]
+      -- Switch to project B (use pdB-derived path to suppress unused-match)
+      let args = A.object [ "path" A..= T.pack (HaskellFlows.Types.unProjectDir pdB) ]
       _ <- SwitchProject.handle pdRef sessRef storeRef scratchRef selfRef args
       -- Read the new scratchpad via the swapped ref
       scratchAfter  <- readIORef scratchRef
@@ -13773,6 +13777,131 @@ testScratchCheckKindAtTopLevel = withTempProject $ \pd -> do
                   _ -> False
               _ -> False
           _ -> True  -- refused / failed paths: sanitize boundary fired, fine
+      _ -> False
+    _ -> False
+
+-- #253 Phase 3: ghc_scratch action=show — full detail + seResult round-trip.
+
+-- | action=show returns the complete entry: all fields present, code
+-- intact, status correct, seResult=null initially.
+testScratchShowFullDetail :: IO Bool
+testScratchShowFullDetail = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  -- Write an entry with a note and module context
+  let writeArgs = A.object
+        [ "action" A..= ("write" :: Text)
+        , "id"     A..= ("full-e1" :: Text)
+        , "code"   A..= ("\\x -> x + 1" :: Text)
+        , "module" A..= ("src/Foo.hs" :: Text)
+        , "note"   A..= ("hypothesis: this is a plain increment" :: Text)
+        ]
+  _ <- ScratchTool.handle store undefined writeArgs
+  let showArgs = A.object
+        [ "action" A..= ("show" :: Text)
+        , "id"     A..= ("full-e1" :: Text)
+        ]
+  result <- ScratchTool.handle store undefined showArgs
+  pure $ case trContent result of
+    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+      Just (A.Object top) ->
+        -- Outer envelope: status=ok
+        case AKM.lookup "status" top of
+          Just (A.String "ok") ->
+            case AKM.lookup "result" top of
+              Just (A.Object inner) ->
+                -- All required fields must be present
+                AKM.lookup "id"     inner == Just (A.String "full-e1")
+                && AKM.lookup "code"   inner == Just (A.String "\\x -> x + 1")
+                && AKM.lookup "status" inner == Just (A.String "open")
+                -- note field forwarded correctly
+                && AKM.lookup "note" inner   == Just (A.String "hypothesis: this is a plain increment")
+                -- result is null before any check
+                && AKM.lookup "result" inner == Just A.Null
+                -- module field forwarded
+                && AKM.lookup "module" inner == Just (A.String "src/Foo.hs")
+              _ -> False
+          _ -> False
+      _ -> False
+    _ -> False
+
+-- | 'seResult' survives a save → loadAll round-trip. After calling
+-- SP.save with a non-Nothing result, loadAll must return the same
+-- 'ScratchResult' value byte-for-byte.
+testScratchResultRoundTripViaLoadAll :: IO Bool
+testScratchResultRoundTripViaLoadAll = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  let result = SP.ScratchResult
+        { SP.srKind   = "type_ok"
+        , SP.srDetail = "Int -> Int"
+        , SP.srAt     = 1234567.0
+        }
+      entry = SP.ScratchEntry
+        { SP.seId      = "rt-entry"
+        , SP.seKind    = SP.ScratchHypothesis
+        , SP.seCode    = "\\x -> x + 1"
+        , SP.seModule  = Nothing
+        , SP.seImports = []
+        , SP.seNote    = Nothing
+        , SP.seResult  = Just result
+        , SP.seStatus  = SP.ScratchVerified
+        , SP.seCreated = 100.0
+        , SP.seUpdated = 200.0
+        }
+  SP.save store entry
+  loaded <- SP.loadAll store
+  pure $ case loaded of
+    [e] ->
+      SP.seId e == "rt-entry"
+      && SP.seStatus e == SP.ScratchVerified
+      && case SP.seResult e of
+           Just r  ->
+             SP.srKind   r == "type_ok"
+             && SP.srDetail r == "Int -> Int"
+             && SP.srAt    r == 1234567.0
+           Nothing -> False
+    _ -> False
+
+-- | action=show after action=check (undefined session → type_error) carries
+-- the persisted ScratchResult in the response's result.result.
+-- This verifies the full pipeline: check persists the result, show
+-- reads it back, and the outer toJSON round-trip is intact.
+testScratchShowAfterCheckHasResult :: IO Bool
+testScratchShowAfterCheckHasResult = withTempProject $ \pd -> do
+  store <- SP.openStore pd
+  -- Write a simple entry (undefined session means check will catch a
+  -- SomeException and persist kind=type_error)
+  let writeArgs = A.object
+        [ "action" A..= ("write" :: Text)
+        , "id"     A..= ("chk-then-show" :: Text)
+        , "code"   A..= ("badIdent" :: Text)
+        ]
+  _ <- ScratchTool.handle store undefined writeArgs
+  -- check — undefined session throws, type_error is persisted
+  let checkArgs = A.object
+        [ "action" A..= ("check" :: Text)
+        , "id"     A..= ("chk-then-show" :: Text)
+        ]
+  _ <- ScratchTool.handle store undefined checkArgs
+  -- show — must return the persisted result
+  let showArgs = A.object
+        [ "action" A..= ("show" :: Text)
+        , "id"     A..= ("chk-then-show" :: Text)
+        ]
+  result <- ScratchTool.handle store undefined showArgs
+  pure $ case trContent result of
+    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
+      Just (A.Object top) ->
+        case AKM.lookup "status" top of
+          Just (A.String "ok") ->
+            case AKM.lookup "result" top of
+              Just (A.Object inner) ->
+                -- result.result must be a non-null object with kind=type_error
+                case AKM.lookup "result" inner of
+                  Just (A.Object r) ->
+                    AKM.lookup "kind" r == Just (A.String "type_error")
+                  _ -> False
+              _ -> False
+          _ -> False
       _ -> False
     _ -> False
 
