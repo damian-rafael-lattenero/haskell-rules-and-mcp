@@ -36,6 +36,10 @@ module HaskellFlows.Tool.PropertyAudit
   , kindFor
     -- * #238 (exported for unit tests)
   , enhanceNullModuleDetail
+    -- * #241 (exported for unit tests)
+  , enhanceCrossModuleDetail
+  , appendReplStderr
+  , allPairsSkipped
   ) where
 
 import Control.Exception (SomeException, try)
@@ -202,16 +206,23 @@ runPairProbe ghcSess _args (p1, p2) = do
             , pfStatus = "skipped"
             , pfDetail = T.pack ("subprocess error: " <> show e)
             }
-        Right (out, _labelsBlock, _err) ->
+        Right (out, _labelsBlock, err) ->
+          -- #241: chain three enhancers so the agent sees the REAL reason
+          -- a probe was skipped instead of the generic "no GHCi output"
+          -- placeholder. The pipeline is additive — each enhancer only
+          -- augments the detail when its precondition holds.
           let (status, detail) = interpretProbeResult (parseQuickCheckOutput probe out)
-              detail' = enhanceNullModuleDetail
-                          (isNothing (spModule p1)) (isNothing (spModule p2))
-                          status detail
+              d1 = enhanceNullModuleDetail
+                     (isNothing (spModule p1)) (isNothing (spModule p2))
+                     status detail
+              d2 = enhanceCrossModuleDetail
+                     (spModule p1) (spModule p2) status d1
+              d3 = appendReplStderr err status d2
           in PairFinding
                { pfP1     = p1
                , pfP2     = p2
                , pfStatus = status
-               , pfDetail = detail'
+               , pfDetail = d3
                }
 
 --------------------------------------------------------------------------------
@@ -248,8 +259,16 @@ isVacuousResult _           = False
 
 -- | The audit report is informational — even when contradictions
 -- exist, this is data the agent uses to act on, not a hard failure.
--- status='ok' always; the structured 'pairs_inconsistent' / 'findings'
+-- status='ok' when at least one pair actually ran (contradictory
+-- or compatible); the structured 'pairs_inconsistent' / 'findings'
 -- fields under 'result' carry the verdict.
+--
+-- #241: when there were pairs to check but EVERY one was skipped,
+-- the audit was effectively non-functional — return status='partial'
+-- instead of 'ok' so the agent knows the report is degraded, not
+-- a clean bill of health. The payload shape is identical so existing
+-- consumers can still drill into 'skipped_pairs' for the reasons.
+--
 -- Phase 2: when 'paCheckVacuous' is set, also includes
 -- 'vacuous_properties' count + details.
 renderReport
@@ -281,7 +300,27 @@ renderReport args nProps nPairs findings vacuousFindings wallMs =
                , "vacuous_details"    .= map renderVacuous vacuous
                ]
           else []
-  in Env.toolResponseToResult (Env.mkOk payload)
+      -- #241: honest status — 'partial' when nothing actually ran
+      -- despite there being pairs to check.
+      response
+        | allPairsSkipped nPairs findings =
+            (Env.mkPartial payload)
+              { Env.reError = Just (Env.mkErrorEnvelope
+                  Env.SubprocessError
+                  "audit ran but every pair was skipped — see skipped_pairs[].counterexample for per-pair reasons")
+              }
+        | otherwise = Env.mkOk payload
+  in Env.toolResponseToResult response
+
+-- | #241: True when there were pairs to check but every one was
+-- skipped. The audit produced no actual evidence of compatibility
+-- or contradiction — the response should signal 'partial' so the
+-- agent does not treat it as a clean bill of health.
+allPairsSkipped :: Int -> [PairFinding] -> Bool
+allPairsSkipped nPairs findings =
+  nPairs > 0
+  && length findings == nPairs
+  && all ((== "skipped") . pfStatus) findings
 
 kindFor :: Text -> Text
 kindFor "contradictory" = "contradictory-pair"
@@ -387,6 +426,60 @@ enhanceNullModuleDetail p1Null p2Null status detail
          \(module: null); re-run it via \
          \ghc_quickcheck(property=..., module=\"src/X.hs\") \
          \to restore replay context."
+  | otherwise = detail
+
+-- | #241: when both pair members have a module path but they DIFFER,
+-- the contradiction probe combines symbols from two unrelated stanzas
+-- into one expression. The in-process runner loads only the first
+-- test-suite stanza, so cross-stanza names typically miss the
+-- interactive context and the probe fails to compile.
+--
+-- Augment the skip detail so the agent knows this is an architectural
+-- limitation, not a transient REPL hiccup. Pure — exported for unit
+-- tests.
+enhanceCrossModuleDetail
+  :: Maybe Text   -- ^ p1 module
+  -> Maybe Text   -- ^ p2 module
+  -> Text         -- ^ status from interpretProbeResult
+  -> Text         -- ^ detail from interpretProbeResult (possibly already enhanced)
+  -> Text
+enhanceCrossModuleDetail (Just m1) (Just m2) status detail
+  | m1 /= m2
+  , status == "skipped"
+  , "probe load/parse failure" `T.isPrefixOf` detail
+  = detail
+      <> " — cross-module pair (P1 ∈ "
+      <> m1 <> ", P2 ∈ " <> m2
+      <> "): the audit currently loads only the first test-suite \
+         \stanza, so symbols defined in only one of the two modules \
+         \are not simultaneously in scope. Same-module pairs are \
+         \audited correctly; for cross-module pairs run \
+         \ghc_quickcheck on each individually and compare \
+         \counterexamples by hand."
+enhanceCrossModuleDetail _ _ _ detail = detail
+
+-- | #241: when a probe is skipped because the REPL produced no output,
+-- the subprocess fallback may still have captured useful stderr (a
+-- compile error, a missing-import diagnostic, …). Surface the first
+-- 500 characters so the agent has something actionable to feed back
+-- into 'ghc_explain_error' or 'ghc_check_project' instead of a bare
+-- "(no GHCi output)" placeholder.
+--
+-- No-op when status is not "skipped", when the detail does not look
+-- like a load failure, or when the stderr is empty. Pure — exported
+-- for unit tests.
+appendReplStderr
+  :: Text   -- ^ stderr captured from the runner
+  -> Text   -- ^ status from interpretProbeResult
+  -> Text   -- ^ detail (possibly already enhanced)
+  -> Text
+appendReplStderr err status detail
+  | status == "skipped"
+  , "probe load/parse failure" `T.isPrefixOf` detail
+  , not (T.null (T.strip err))
+  = detail
+      <> " — REPL stderr (first 500 chars): "
+      <> T.take 500 (T.strip err)
   | otherwise = detail
 
 --------------------------------------------------------------------------------
