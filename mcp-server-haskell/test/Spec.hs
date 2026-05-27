@@ -738,6 +738,16 @@ main = do
                                                    testCompleteQualifiedRemediation225
       , test "#252: ghc_complete description documents qualified prefix support"
                                                    testCompleteDescriptionMentionsQualified
+      , test "#252: splitQualifiedPrefix splits at LAST dot — name suffix"
+                                                   testSplitQualifiedPrefixWithName
+      , test "#252: splitQualifiedPrefix splits at LAST dot — empty suffix"
+                                                   testSplitQualifiedPrefixEmptySuffix
+      , test "#252: splitQualifiedPrefix returns Nothing for unqualified"
+                                                   testSplitQualifiedPrefixUnqualified
+      , test "#252: splitQualifiedPrefix handles deep modules (Data.Map.Strict.X)"
+                                                   testSplitQualifiedPrefixDeep
+      , test "#252: Complete.hs imports lookupModule for fallback"
+                                                   testCompleteImportsLookupModule
       , test "Envelope #90 Phase B: ghc_complete refuses newline in prefix"
                                                    testCompleteRefusesNewline
       , test "Envelope #90 Phase B: ghc_goto on local name → status=ok"
@@ -5254,6 +5264,44 @@ testCompleteDescriptionMentionsQualified =
   let desc = tdDescription CompleteTool.descriptor
   in pure $ "Qualified" `T.isInfixOf` desc
          || "qualified" `T.isInfixOf` desc
+
+-- | #252: splitQualifiedPrefix splits "Data.Map.lookup" into
+-- ("Data.Map", "lookup").
+testSplitQualifiedPrefixWithName :: IO Bool
+testSplitQualifiedPrefixWithName =
+  pure $ CompleteTool.splitQualifiedPrefix "Data.Map.lookup"
+       == Just ("Data.Map", "lookup")
+
+-- | #252: splitQualifiedPrefix splits "Data.Map." (trailing dot) into
+-- ("Data.Map", "") — the empty name prefix means "all exports".
+testSplitQualifiedPrefixEmptySuffix :: IO Bool
+testSplitQualifiedPrefixEmptySuffix =
+  pure $ CompleteTool.splitQualifiedPrefix "Data.Map."
+       == Just ("Data.Map", "")
+
+-- | #252: splitQualifiedPrefix returns Nothing for bare prefixes
+-- with no dot.
+testSplitQualifiedPrefixUnqualified :: IO Bool
+testSplitQualifiedPrefixUnqualified =
+  pure (isNothing (CompleteTool.splitQualifiedPrefix "fold"))
+
+-- | #252: splitQualifiedPrefix handles multi-dot module paths —
+-- "Data.Map.Strict.lookup" should split into
+-- ("Data.Map.Strict", "lookup"), not ("Data.Map", "Strict.lookup").
+testSplitQualifiedPrefixDeep :: IO Bool
+testSplitQualifiedPrefixDeep =
+  pure $ CompleteTool.splitQualifiedPrefix "Data.Map.Strict.lookup"
+       == Just ("Data.Map.Strict", "lookup")
+
+-- | #252: structural source check — Complete.hs must reference
+-- @lookupModule@ so the qualified-prefix fallback path is wired in.
+-- Catches regressions where someone removes the fallback while
+-- leaving 'splitQualifiedPrefix' as a dead helper.
+testCompleteImportsLookupModule :: IO Bool
+testCompleteImportsLookupModule = do
+  src <- TIO.readFile "src/HaskellFlows/Tool/Complete.hs"
+  pure $ "lookupModule" `T.isInfixOf` src
+      && "queryQualifiedFallback" `T.isInfixOf` src
 
 -- | A newline-laden prefix → status='refused' with
 -- error.kind='newline_injection'. Issue #90 Phase B: every

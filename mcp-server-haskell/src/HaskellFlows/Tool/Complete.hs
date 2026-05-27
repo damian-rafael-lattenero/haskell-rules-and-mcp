@@ -12,6 +12,8 @@ module HaskellFlows.Tool.Complete
   , handle
   , CompleteArgs (..)
   , renderCompletions
+    -- * #252 (exported for unit tests)
+  , splitQualifiedPrefix
   ) where
 
 import Control.Exception (SomeException, try)
@@ -20,7 +22,16 @@ import Data.Aeson.Types (parseEither)
 import Data.List (isPrefixOf, nub, sort)
 import Data.Text (Text)
 import qualified Data.Text as T
-import GHC (Ghc, getNamesInScope, moduleName, moduleNameString)
+import GHC
+  ( Ghc
+  , getModuleInfo
+  , getNamesInScope
+  , lookupModule
+  , mkModuleName
+  , modInfoExports
+  , moduleName
+  , moduleNameString
+  )
 import GHC.Types.Name (nameModule_maybe, nameOccName)
 import GHC.Types.Name.Occurrence (occNameString)
 
@@ -108,13 +119,33 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
         pure (Env.toolResponseToResult (Env.mkRefused (Env.sanitizeRejection "prefix" e)))
       Right safe -> do
         eRes <- try (withGhcSession ghcSess (queryCompletions safe))
-        pure $ Env.toolResponseToResult $ case eRes of
+        case eRes of
           Left (se :: SomeException) ->
-            Env.mkFailed
-              ((Env.mkErrorEnvelope Env.InternalError
-                  (T.pack ("GHC API error: " <> show se)))
-                    { Env.eeCause = Just (T.pack (show se)) })
-          Right cands -> renderCompletions prefix limit cands
+            pure $ Env.toolResponseToResult $
+              Env.mkFailed
+                ((Env.mkErrorEnvelope Env.InternalError
+                    (T.pack ("GHC API error: " <> show se)))
+                      { Env.eeCause = Just (T.pack (show se)) })
+          Right cands
+            -- #252: if the in-scope path produced no matches AND the
+            -- prefix is qualified (e.g. "Data.Map.lookup"), the module
+            -- almost certainly isn't currently imported. Fall back to
+            -- 'lookupModule' + 'modInfoExports' so we can answer from
+            -- the loaded module graph / package environment without
+            -- forcing the caller to `import` the module first.
+            | null cands
+            , Just (qual, npfx) <- splitQualifiedPrefix safe -> do
+                eFbk <- try (withGhcSession ghcSess
+                               (queryQualifiedFallback qual npfx))
+                          :: IO (Either SomeException [Text])
+                let fallbackCands = case eFbk of
+                      Right xs -> xs
+                      Left _   -> []   -- module unknown → empty list
+                pure $ Env.toolResponseToResult
+                     $ renderCompletions prefix limit fallbackCands
+            | otherwise ->
+                pure $ Env.toolResponseToResult
+                     $ renderCompletions prefix limit cands
 
 -- | Discriminate the FromJSON failure shape — a missing required
 -- field maps to 'MissingArg'; everything else falls back to
@@ -142,33 +173,77 @@ parseErrorKind err
 queryCompletions :: Text -> Ghc [Text]
 queryCompletions prefix = do
   names <- getNamesInScope
-  let matches
-        | "." `T.isInfixOf` prefix =
-            -- Split at the LAST dot: everything before is the module
-            -- qualifier, everything after is the (possibly empty) name
-            -- prefix.  "Data.Map." → qual="Data.Map", npfx=""
-            -- "Data.Map.in" → qual="Data.Map", npfx="in"
-            let qual = T.unpack (T.dropWhileEnd (/= '.') prefix
-                                   & \t -> if T.null t then prefix
-                                           else T.dropEnd 1 t)
-                npfx = T.unpack (T.takeWhileEnd (/= '.') prefix)
-            in [ T.pack (qual <> "." <> occStr)
-               | n <- names
-               , let occStr = occNameString (nameOccName n)
-               , npfx `isPrefixOf` occStr
-               , case nameModule_maybe n of
-                   Just m  -> moduleNameString (moduleName m) == qual
-                   Nothing -> False
-               ]
-        | otherwise =
-            [ T.pack s
-            | n <- names
-            , let s = occNameString (nameOccName n)
-            , T.unpack prefix `isPrefixOf` s
-            ]
+  let matches = case splitQualifiedPrefix prefix of
+        Just (qual, npfx) ->
+          [ T.pack (T.unpack qual <> "." <> occStr)
+          | n <- names
+          , let occStr = occNameString (nameOccName n)
+          , T.unpack npfx `isPrefixOf` occStr
+          , case nameModule_maybe n of
+              Just m  -> moduleNameString (moduleName m) == T.unpack qual
+              Nothing -> False
+          ]
+        Nothing ->
+          [ T.pack s
+          | n <- names
+          , let s = occNameString (nameOccName n)
+          , T.unpack prefix `isPrefixOf` s
+          ]
   pure (sort (nub matches))
-  where
-    (&) = flip ($)
+
+-- | #252: parse a qualified prefix string into (moduleQualifier, namePrefix).
+-- Returns 'Nothing' for unqualified prefixes (no dot at all).
+--
+-- Examples:
+--
+-- >>> splitQualifiedPrefix "Data.Map."
+-- Just ("Data.Map", "")
+--
+-- >>> splitQualifiedPrefix "Data.Map.lookup"
+-- Just ("Data.Map", "lookup")
+--
+-- >>> splitQualifiedPrefix "fold"
+-- Nothing
+--
+-- The split is at the LAST dot — everything before is the module
+-- qualifier, everything after is the (possibly empty) name prefix.
+-- Pure — exported for unit tests.
+splitQualifiedPrefix :: Text -> Maybe (Text, Text)
+splitQualifiedPrefix prefix
+  | "." `T.isInfixOf` prefix =
+      let beforeDot = T.dropWhileEnd (/= '.') prefix
+          qual      = if T.null beforeDot then prefix else T.dropEnd 1 beforeDot
+          npfx      = T.takeWhileEnd (/= '.') prefix
+      in Just (qual, npfx)
+  | otherwise = Nothing
+
+-- | #252: lookup-based fallback for qualified prefixes whose module is
+-- NOT currently imported into the interactive context. Resolves the
+-- qualifier via 'lookupModule' (which consults the loaded module graph
+-- + the package environment), enumerates the module's exports via
+-- 'modInfoExports', and filters by the name prefix.
+--
+-- This mirrors the same path 'ghc_browse' uses to surface exports of
+-- off-graph modules (see 'HaskellFlows.Tool.Browse.queryBrowseFallback').
+--
+-- Throws 'SourceError' when the module is completely unknown — caller
+-- catches at the IO level via 'try'.
+queryQualifiedFallback :: Text -> Text -> Ghc [Text]
+queryQualifiedFallback qual npfx = do
+  let modName = mkModuleName (T.unpack qual)
+  m  <- lookupModule modName Nothing
+  mi <- getModuleInfo m
+  case mi of
+    Nothing   -> pure []
+    Just info ->
+      let exports = modInfoExports info
+          matches =
+            [ T.pack (T.unpack qual <> "." <> occStr)
+            | n <- exports
+            , let occStr = occNameString (nameOccName n)
+            , T.unpack npfx `isPrefixOf` occStr
+            ]
+      in pure (sort (nub matches))
 
 --------------------------------------------------------------------------------
 -- response shaping (unchanged schema)
