@@ -1180,6 +1180,8 @@ main = do
                                                                  testWitnessUsesInProcessPath
       , test "#220: runQuickCheckWithLabelsInProcess has subprocess fallback"
                                                                  testWitnessInProcessFallback
+      , test "#240: compileErrorResult returns status=failed kind=compile_error"
+                                                                 testWitnessCompileErrorResult
       , test "property_audit: isVacuousResult true for QcGaveUp (#64 Phase2)"
                                                                  testPAIsVacuousGaveUp
       , test "property_audit: isVacuousResult false for QcPassed (#64 Phase2)"
@@ -17149,6 +17151,17 @@ testWitnessInProcessFallback = do
        && T.isInfixOf "runQuickCheckWithLabelsViaCabalRepl (gsProject ghcSess)" src
           -- Right (no-sentinel) branch also falls back
        && T.isInfixOf "__QC_OUTPUT_START__" src
+
+-- | #240: 'compileErrorResult' returns a failed ToolResult with
+-- kind=compile_error so agents distinguish "0 samples" from "compile error".
+testWitnessCompileErrorResult :: IO Bool
+testWitnessCompileErrorResult =
+  let result = WitnessTool.compileErrorResult "\\x -> notAFunction x" "Not in scope: notAFunction"
+  in case decodeToolResult result of
+    Left _  -> pure False
+    Right r ->
+      pure $  Env.reStatus r == Env.StatusFailed
+           && maybe False ((== Env.CompileError) . Env.eeKind) (Env.reError r)
 
 -- | #197: 'ruleMaybeReturn' fires for a 2-argument Maybe-returning
 -- signature and the generated property uses @maybe True (const True)@

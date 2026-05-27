@@ -33,6 +33,7 @@ module HaskellFlows.Tool.Witness
   , biasWarnings
   , isPrimitiveBuckets        -- #199: exported for unit tests
   , renderReport              -- #199: exported for unit tests
+  , compileErrorResult        -- #240: exported for unit tests
   ) where
 
 import Control.Exception (SomeException, try)
@@ -44,9 +45,11 @@ import qualified Data.Ord
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import GHC (TcRnExprMode (TM_Inst), exprType)
+import GHC.Utils.Outputable (showPprUnsafe)
 import Text.Read (readMaybe)
 
-import HaskellFlows.Ghc.ApiSession (GhcSession)
+import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -152,7 +155,7 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
     case res of
       Left e -> pure (subprocessResult
                         (T.pack ("subprocess error: " <> show e)))
-      Right (out, labelsBlock, _err) ->
+      Right (out, labelsBlock, _err) -> do
         let qcResult = parseQuickCheckOutput (waProperty args) out
             -- Issue #78: prefer the structured labels block over
             -- the formatted-output histogram. The latter only
@@ -168,8 +171,31 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
             -- the structured parser ate (or didn't).
             rawForResponse =
               if T.null labelsBlock then out else labelsBlock
-        in pure (renderReport args qcResult dist warnings rawForResponse
-                              (truncate ((t1 - t0) * 1000)))
+            (passed, failed, _) = qcCounts qcResult
+        -- #240: If 0 tests ran and 0 failures recorded, the property
+        -- expression may have failed to compile. Use exprType to check.
+        -- Distinguish "vacuously true with 0 samples" (valid) from
+        -- "compile error" (should be reported as failed/compile_error).
+        if passed == 0 && failed == 0
+          then do
+            eType <- try @SomeException $
+              withGhcSession ghcSess $
+                exprType TM_Inst (T.unpack (waProperty args))
+            case eType of
+              Left compileErr ->
+                -- exprType failed → property didn't compile
+                pure (compileErrorResult (waProperty args)
+                        (T.pack (show compileErr)))
+              Right ty ->
+                -- exprType succeeded → property compiles (just 0 samples)
+                -- Include the type in the response for transparency
+                let tyText = T.pack (showPprUnsafe ty)
+                in pure (renderReport args qcResult dist warnings
+                          (rawForResponse <> "\n-- type: " <> tyText)
+                          (truncate ((t1 - t0) * 1000)))
+          else
+            pure (renderReport args qcResult dist warnings rawForResponse
+                                (truncate ((t1 - t0) * 1000)))
 
 --------------------------------------------------------------------------------
 -- pure helpers
@@ -462,3 +488,14 @@ subprocessResult :: Text -> ToolResult
 subprocessResult msg =
   Env.toolResponseToResult
     (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
+
+-- | #240: property expression failed to compile.
+-- Returns a structured failed response with kind=compile_error so
+-- agents can distinguish "0 samples (vacuously true)" from "compile error".
+compileErrorResult :: Text -> Text -> ToolResult
+compileErrorResult prop errMsg =
+  Env.toolResponseToResult $
+    Env.mkFailed $
+      (Env.mkErrorEnvelope Env.CompileError
+        ("Property did not compile: " <> prop))
+          { Env.eeCause = Just errMsg }
