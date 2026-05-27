@@ -706,7 +706,23 @@ dispatchProject srv rawArgs = case projectActionField rawArgs of
            pd <- readIORef (srvProjectDir srv)
            r  <- CreateProjectTool.handle pd inner
            invalidateStanzaFlagsIfPresent srv
-           pure r
+           -- Issue #256: auto-switch to the newly created project so
+           -- subsequent calls (ghc_deps, ghc_modules, etc.) operate on
+           -- the right project without requiring an explicit switch.
+           -- Only fires when: (a) create succeeded, (b) write=True
+           -- (not a preview), and (c) an explicit 'path' was supplied
+           -- (when no path is given the scaffold lands in the current pd).
+           if trIsError r
+             then pure r
+             else case createAutoSwitchPath inner of
+               Nothing      -> pure r
+               Just newPath -> do
+                 _ <- SwitchProjectTool.handle
+                   (srvProjectDir srv) (srvGhcSession srv)
+                   (srvStore srv) (srvScratchpad srv)
+                   (srvIsSelfProject srv)
+                   (object ["path" .= T.pack newPath])
+                 pure r
          "switch" ->
            SwitchProjectTool.handle
              (srvProjectDir srv)
@@ -745,6 +761,25 @@ projectActionField _ = Nothing
 stripProjectAction :: Value -> Value
 stripProjectAction (Object o) = Object (KeyMap.delete "action" o)
 stripProjectAction v          = v
+
+-- | Issue #256: extract the target path for the auto-switch that
+-- follows a successful @ghc_project(action=\"create\")@ call.
+-- Returns @Just path@ only when:
+--   * @write@ is absent or @True@ (not a dry-run preview), AND
+--   * @path@ is a non-empty string (explicit target was supplied).
+-- When no explicit path is given the scaffold lands in the current
+-- project directory — no switch needed.
+createAutoSwitchPath :: Value -> Maybe FilePath
+createAutoSwitchPath (Object o) =
+  let writeDisk = case KeyMap.lookup "write" o of
+                    Just (Bool b) -> b
+                    _             -> True   -- default is write=True
+  in if writeDisk
+       then case KeyMap.lookup "path" o of
+              Just (String p) | not (T.null (T.strip p)) -> Just (T.unpack p)
+              _                                           -> Nothing
+       else Nothing
+createAutoSwitchPath _ = Nothing
 
 -- | #94 Phase C step 6: dispatch a 'ghc_property_store' call to the
 -- right legacy handler based on the @action@ discriminator.

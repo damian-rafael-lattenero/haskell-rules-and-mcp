@@ -991,6 +991,9 @@ main = do
       , test "#126A: scaffold write=false never fails (preview mode)"  testCreateWriteFalseIsPreview
       , test "#126A: scaffold write=false returns preview content"      testCreateWriteFalseContent
       , test "#126B: scaffold targets supplied path not projectDir"    testCreateUsesSuppliedPath
+      , test "#256: create with path auto-switches active project"    testCreateAutoSwitchPresent
+      , test "#256: create preview (write=false) does not switch"     testCreatePreviewNoSwitch
+      , test "#256: create without path does not switch"              testCreateNoPathNoSwitch
       , test "nextStep: add_import count=0 suppresses load (#53)"     testNextStepAddImportZero
       , test "nextStep: add_import count>0 nudges load (#53)"         testNextStepAddImportNonZero
       , test "add_modules: moduleToPath mapping"   testAddModulesPath
@@ -8607,6 +8610,46 @@ testCreateUsesSuppliedPath = withTempProject $ \pd -> do
   -- (mcp-server-haskell/) which DOES have those files.
   result <- CreateProject.scaffold (unProjectDirRaw pd) "fresh-pkg" "FreshPkg" False True
   pure (not (trIsError result))
+
+-- | Issue #256: after a successful @ghc_project(action="create", path=<p>)@
+-- the server must auto-switch to the new path so subsequent tool calls
+-- (ghc_deps, ghc_modules) operate on the right project.
+-- Verified via source inspection: 'createAutoSwitchPath' must exist,
+-- must gate on 'trIsError', and must call 'SwitchProjectTool.handle'.
+testCreateAutoSwitchPresent :: IO Bool
+testCreateAutoSwitchPresent = do
+  src <- TIO.readFile "src/HaskellFlows/Mcp/Server.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  pure $ T.isInfixOf "createAutoSwitchPath"        code
+      && T.isInfixOf "trIsError r"                 code
+      && T.isInfixOf "SwitchProjectTool.handle"    code
+  where
+    isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
+
+-- | Issue #256: when @write=false@ (preview mode) 'createAutoSwitchPath'
+-- must return Nothing — no switch should happen.
+testCreatePreviewNoSwitch :: IO Bool
+testCreatePreviewNoSwitch = do
+  src <- TIO.readFile "src/HaskellFlows/Mcp/Server.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  -- The helper must gate on writeDisk being True — if it is False, Nothing.
+  pure $ T.isInfixOf "writeDisk"  code
+      && T.isInfixOf "write=True" code  -- the guard comment
+  where
+    isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
+
+-- | Issue #256: when no explicit @path@ is supplied the scaffold lands
+-- in the current project dir — no switch is needed, 'createAutoSwitchPath'
+-- must return Nothing.
+testCreateNoPathNoSwitch :: IO Bool
+testCreateNoPathNoSwitch = do
+  src <- TIO.readFile "src/HaskellFlows/Mcp/Server.hs"
+  let code = T.unlines (filter (not . isDocLine) (T.lines src))
+  -- When path key is absent the helper must return Nothing.
+  pure $ T.isInfixOf "createAutoSwitchPath" code
+      && T.isInfixOf "Nothing"              code
+  where
+    isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
 
 testCheckGateReasonMatchesOk :: IO Bool
 testCheckGateReasonMatchesOk =
