@@ -1,0 +1,27 @@
+mcp-server-haskell/test-e2e/Scenarios/FlowWorkflowHelp.hs
+  s_5ac5babd034a90::t_3395afd51e703f 1,4,9-10
+  s_5ac5babd034a90::t_c8804d11871906 118-119,121-122,124-126,128-130
+.claude/rules/use-haskell-flows-mcp.md
+  s_5ac5babd034a90::t_2b7dbd218cc644 150-153
+mcp-server-haskell/src/HaskellFlows/Tool/Workflow.hs
+  s_5ac5babd034a90::t_92a944ed5b4fff 77-80
+  s_5ac5babd034a90::t_ec63268456a4dc 105
+  s_5ac5babd034a90::t_8f10ef0becbebe 96
+  s_5ac5babd034a90::t_7dce1a015aa0f8 86-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b2f824251c3fffefbc233a528d7c002bad2ae0c8",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
