@@ -20,6 +20,7 @@ module HaskellFlows.Tool.Load
   , parseHsSourceDirs
   , isUnderAnySourceDir
   , dropCoveredModuleWarnings
+  , suggestedImportsFor
   ) where
 
 import Control.Exception (SomeException, try)
@@ -239,16 +240,18 @@ countHaskellSources pd = do
 -- output unchanged.
 okResult :: Bool -> [GhcError] -> ToolResult
 okResult ok diags =
-  let errs  = filter ((== SevError)   . geSeverity) diags
-      warns = filter ((== SevWarning) . geSeverity) diags
-      succ_ = ok && null errs
+  let errs      = filter ((== SevError)   . geSeverity) diags
+      warns     = filter ((== SevWarning) . geSeverity) diags
+      succ_     = ok && null errs
+      suggested = suggestedImportsFor errs   -- #259
       payload =
-        object
+        object $
           [ "errors"   .= errs
           , "warnings" .= warns
           , "summary"  .= summarise ok errs warns
           , "raw"      .= renderGhciStyle diags
           ]
+          <> [ "suggested_fixes" .= suggested | not (null suggested) ]
   in if succ_
        then Env.toolResponseToResult (Env.mkOk payload)
        else
@@ -311,6 +314,44 @@ moduleListFromWarning msg =
                 , let toks = T.words (T.strip ln)
                 , not (null toks)
                 , all looksLikeModule toks ]
+
+--------------------------------------------------------------------------------
+-- #259: suggested_fix for GHC-76037 (qualified-name not exported), via a
+-- curated submodule-split table (parsec / aeson / lens / mtl / vector / text).
+--------------------------------------------------------------------------------
+
+-- | (real module, identifier) -> the import line that actually exports it.
+submoduleImportTable :: [((Text, Text), Text)]
+submoduleImportTable =
+  [ (("Text.Parsec", "Parser"),         "import Text.Parsec.String (Parser)")
+  , (("Data.Aeson", "Parser"),          "import Data.Aeson.Types (Parser)")
+  , (("Data.Aeson", "Pair"),            "import Data.Aeson.Types (Pair)")
+  , (("Control.Lens", "Lens"),          "import Control.Lens.Type (Lens)")
+  , (("Control.Lens", "Lens'"),         "import Control.Lens.Type (Lens')")
+  , (("Control.Lens", "Iso'"),          "import Control.Lens.Iso (Iso')")
+  , (("Control.Monad.State", "evalStateT"), "import Control.Monad.State.Strict (evalStateT)")
+  , (("Control.Monad.State", "execStateT"), "import Control.Monad.State.Strict (execStateT)")
+  , (("Data.Vector", "MVector"),        "import Data.Vector.Mutable (MVector)")
+  , (("Data.Text", "Builder"),          "import Data.Text.Lazy.Builder (Builder)")
+  ]
+
+-- | #259: for each GHC-76037 ("not in scope / module does not export Y")
+-- error, surface the corrected import when the curated table has an entry
+-- whose (module, identifier) both appear in the message — the agent can
+-- pipe it straight into ghc_add_import. Conservative: no table hit, no
+-- field. (Real-world matching depends on GHC's "does not export" wording,
+-- which names the real module + identifier.)
+suggestedImportsFor :: [GhcError] -> [Value]
+suggestedImportsFor errs =
+  [ object [ "line"             .= geLine e
+           , "identifier"       .= ident
+           , "suggested_import" .= fix ]
+  | e <- errs
+  , geCode e == Just "GHC-76037"
+  , ((m, ident), fix) <- submoduleImportTable
+  , m     `T.isInfixOf` geMessage e
+  , ident `T.isInfixOf` geMessage e
+  ]
 
 -- | Issue #90 Phase C: caller-side parse failure → 'missing_arg'
 -- or 'type_mismatch'.

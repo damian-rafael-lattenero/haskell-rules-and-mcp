@@ -1257,6 +1257,7 @@ main = do
       , test "#264: plan low-confidence lists alternatives" testPlanLowConfidenceListsAlternatives
       , test "#258: GHC-32850 suppressed when modules registered" testLoad32850Suppressed
       , test "#258: GHC-32850 retained when module missing" testLoad32850RetainedWhenMissing
+      , test "#259: GHC-76037 surfaces submodule suggested_import" testSuggestedImportGhc76037
       , test "resources: rules workflow URI resolves" testResourcesRulesRead
       , test "resources: unknown URI returns Nothing" testResourcesUnknown
       , test "baja bundle: 4 tools registered"      testBajaRegistered
@@ -8203,6 +8204,19 @@ testSessionActivityUnusedCount = do
   let total  = length allToolNameTexts
       unused = total - Set.size (WS.wsEverCalled s)
   pure $ total == 36 && unused == 34
+
+-- | #259: a GHC-76037 (qualified-name not exported) error matching the
+-- curated submodule table surfaces the corrected import.
+testSuggestedImportGhc76037 :: IO Bool
+testSuggestedImportGhc76037 =
+  let e = GhcError "Pretty.hs" 7 14 SevError (Just "GHC-76037")
+            "Not in scope: type constructor or class 'P.Parser'\n\
+            \The module 'Text.Parsec' does not export 'Parser'."
+  in pure $ case LoadTool.suggestedImportsFor [e] of
+       (A.Object o : _) ->
+         AKM.lookup "suggested_import" o
+           == Just (A.String "import Text.Parsec.String (Parser)")
+       _ -> False
 
 -- | #258: a GHC-32850 warning whose modules are all registered in the
 -- cabal (exposed-modules) is suppressed as the known false positive.
