@@ -19,13 +19,16 @@ module HaskellFlows.Tool.Load
   , mergeDiags
   , parseHsSourceDirs
   , isUnderAnySourceDir
+  , dropCoveredModuleWarnings
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import Data.Char (isSpace)
+import Data.Char (isAlphaNum, isSpace, isUpper)
 import Data.List (isPrefixOf, nub)
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -179,6 +182,12 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
         -- Strict first gives agents the canonical error set.
         -- diagnostics=true merges a Deferred pass so typed holes
         -- and deferred-type-errors also show up as warnings.
+        -- #258: read the project's declared module set so we can drop
+        -- the spurious GHC-32850 ("not listed in other-modules") warning
+        -- for modules that ARE registered (in exposed-modules) — the
+        -- in-process GHC API doesn't treat exposed-modules as equivalent.
+        cabalMods <- cabalModuleSet pd
+        let mkResult o ds = okResult o (dropCoveredModuleWarnings cabalMods ds)
         eStrict <- try (doLoad Strict)
         case eStrict :: Either SomeException (Bool, [GhcError]) of
           Left ex ->
@@ -189,11 +198,11 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
               then do
                 eDef <- try (doLoad Deferred)
                 case eDef :: Either SomeException (Bool, [GhcError]) of
-                  Left _  -> pure (okResult strictOk strictDiags)
+                  Left _  -> pure (mkResult strictOk strictDiags)
                   Right (deferredOk, deferredDiags) ->
                     let merged = mergeDiags strictDiags deferredDiags
-                    in pure (okResult deferredOk merged)
-              else pure (okResult strictOk strictDiags)
+                    in pure (mkResult deferredOk merged)
+              else pure (mkResult strictOk strictDiags)
 
 -- | Issue #84: pre-flight signal for the no-args target path.
 -- 'EmptyProject' is the case the issue closes; the path-error
@@ -247,6 +256,61 @@ okResult ok diags =
                           (summarise ok errs warns)
              response = (Env.mkFailed envErr) { Env.reResult = Just payload }
          in Env.toolResponseToResult response
+
+--------------------------------------------------------------------------------
+-- #258: suppress the spurious GHC-32850 "needed but not in other-modules"
+-- warning for modules already registered in the .cabal exposed-modules.
+--------------------------------------------------------------------------------
+
+-- | The set of module names the project's .cabal declares anywhere
+-- (exposed-modules + other-modules; over-inclusive by design — a
+-- genuinely-missing module never appears, so its warning is kept).
+-- Degrades to the empty set on any read failure.
+cabalModuleSet :: ProjectDir -> IO (Set Text)
+cabalModuleSet pd = do
+  let dir = unProjectDir pd
+  eFiles <- try (Dir.listDirectory dir) :: IO (Either SomeException [FilePath])
+  case eFiles of
+    Left _      -> pure Set.empty
+    Right files -> case filter ((== ".cabal") . takeExtension) files of
+      []       -> pure Set.empty
+      (cf : _) -> do
+        eBody <- try (TIO.readFile (dir </> cf))
+                   :: IO (Either SomeException Text)
+        pure $ case eBody of
+          Left _     -> Set.empty
+          Right body -> Set.fromList
+            [ tok | ln  <- T.lines body
+                  , tok <- T.words (fst (T.breakOn "--" ln))
+                  , looksLikeModule tok ]
+
+-- | A module-shaped token: starts uppercase, only @[A-Za-z0-9_.]@.
+looksLikeModule :: Text -> Bool
+looksLikeModule w = case T.uncons w of
+  Just (c, _) -> isUpper c && T.all (\x -> isAlphaNum x || x == '.' || x == '_') w
+  Nothing     -> False
+
+-- | #258: drop a GHC-32850 warning iff every module it names is in the
+-- project's declared set (the known false positive). A warning naming
+-- an unregistered module is retained; errors + other warnings untouched.
+dropCoveredModuleWarnings :: Set Text -> [GhcError] -> [GhcError]
+dropCoveredModuleWarnings cabalMods = filter (not . isCovered)
+  where
+    isCovered e =
+      geSeverity e == SevWarning
+        && geCode e == Just "GHC-32850"
+        && let mods = moduleListFromWarning (geMessage e)
+           in not (null mods) && all (`Set.member` cabalMods) mods
+
+-- | Extract the module names a GHC-32850 message lists: they sit on
+-- indented continuation lines that are ENTIRELY module-shaped tokens;
+-- the prose lines ("These modules are needed…") are skipped.
+moduleListFromWarning :: Text -> [Text]
+moduleListFromWarning msg =
+  concat [ toks | ln <- T.lines msg
+                , let toks = T.words (T.strip ln)
+                , not (null toks)
+                , all looksLikeModule toks ]
 
 -- | Issue #90 Phase C: caller-side parse failure → 'missing_arg'
 -- or 'type_mismatch'.

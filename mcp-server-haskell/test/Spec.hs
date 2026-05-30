@@ -1255,6 +1255,8 @@ main = do
       , test "#270: chain resolves <same module> from payload" testNextStepResolvesSameModule
       , test "#264: plan matches module-with-qc template" testPlanMatchesModuleQc
       , test "#264: plan low-confidence lists alternatives" testPlanLowConfidenceListsAlternatives
+      , test "#258: GHC-32850 suppressed when modules registered" testLoad32850Suppressed
+      , test "#258: GHC-32850 retained when module missing" testLoad32850RetainedWhenMissing
       , test "resources: rules workflow URI resolves" testResourcesRulesRead
       , test "resources: unknown URI returns Nothing" testResourcesUnknown
       , test "baja bundle: 4 tools registered"      testBajaRegistered
@@ -8201,6 +8203,27 @@ testSessionActivityUnusedCount = do
   let total  = length allToolNameTexts
       unused = total - Set.size (WS.wsEverCalled s)
   pure $ total == 36 && unused == 34
+
+-- | #258: a GHC-32850 warning whose modules are all registered in the
+-- cabal (exposed-modules) is suppressed as the known false positive.
+testLoad32850Suppressed :: IO Bool
+testLoad32850Suppressed =
+  let w = GhcError "X.hs" 0 0 SevWarning (Just "GHC-32850")
+            "These modules are needed for compilation but not listed\n\
+            \in your .cabal file's other-modules for 'pkg':\n\
+            \    Expr.Eval Expr.Pretty"
+      cabalMods = Set.fromList ["Expr.Eval", "Expr.Pretty", "Expr.Syntax"]
+  in pure $ null (LoadTool.dropCoveredModuleWarnings cabalMods [w])
+
+-- | #258: a GHC-32850 warning naming an unregistered module is retained.
+testLoad32850RetainedWhenMissing :: IO Bool
+testLoad32850RetainedWhenMissing =
+  let w = GhcError "X.hs" 0 0 SevWarning (Just "GHC-32850")
+            "These modules are needed for compilation but not listed\n\
+            \in your .cabal file's other-modules for 'pkg':\n\
+            \    Expr.Missing"
+      cabalMods = Set.fromList ["Expr.Eval"]
+  in pure $ length (LoadTool.dropCoveredModuleWarnings cabalMods [w]) == 1
 
 -- | #264: a concrete goal matches the right template + yields a chain.
 testPlanMatchesModuleQc :: IO Bool
