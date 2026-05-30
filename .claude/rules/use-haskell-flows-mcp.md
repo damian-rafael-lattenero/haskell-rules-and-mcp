@@ -34,8 +34,9 @@ Before writing any Haskell code, always run these three:
    (blocking gates) plus `fourmolu`/`ormolu`/`hoogle`/`hls` (degrade
    gracefully). Any blocking gate down → stop and report.
 3. `ghc_workflow(action="help")` — state-aware nudges based on phase
-   (PreScaffold / Scaffolded / Loaded / Tested). Replaces guessing
-   "what do I do next?" with a runtime-grounded suggestion.
+   (the `phase` field is one of PhasePreScaffold / PhaseBootstrap /
+   PhaseDeveloping / PhaseTestingLaws / PhaseReadyToPush). Replaces
+   guessing "what do I do next?" with a runtime-grounded suggestion.
 
 If any of the three fails, stop and report — do not work around a
 broken MCP by writing Haskell code by hand.

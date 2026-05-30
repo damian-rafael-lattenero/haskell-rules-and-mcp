@@ -1492,6 +1492,7 @@ main = do
       , test "#94A: tool count ≤ 50 (surface-bloat cap)"              testToolCountWithinCap
       , test "#94A: every ToolName has a category"                     testEveryToolHasCategory
       , test "#94A: category counts match taxonomy"                    testCategoryCountsMatchTaxonomy
+      , test "#268: TOOL_TAXONOMY.md lists every registered tool"      testTaxonomyDocListsAllTools
       -- Issue #99 Phase B · per-tool version surface
       , test "#99B: every ToolName has a non-empty version"           testEveryToolHasVersion
       , test "#99B: every tool version is valid semver triple"        testToolVersionIsSemverTriple
@@ -15119,6 +15120,31 @@ testNextStepGoldenDispatch = do
   pure (null failures)
 
 ------------------------------------------------------------------------
+-- Issue #268 — doc-truth: TOOL_TAXONOMY.md stays in sync with the registry
+------------------------------------------------------------------------
+
+-- | #268: doc-truth guard. Fails if docs/TOOL_TAXONOMY.md omits any
+-- registered wire name or states the wrong tool total. The hand-prose
+-- header used to drift (it claimed "46 registered tools" while the
+-- machine count was 36); this keeps the canonical doc honest against
+-- the code. Read relative to the package dir (../docs), matching the
+-- existing @TIO.readFile "src/..."@ convention in this suite.
+testTaxonomyDocListsAllTools :: IO Bool
+testTaxonomyDocListsAllTools = do
+  doc <- TIO.readFile "../docs/TOOL_TAXONOMY.md"
+  let names   = allToolNameTexts
+      missing = [ t | t <- names, not (("`" <> t <> "`") `T.isInfixOf` doc) ]
+      total   = length names
+      totalOk = ("**" <> T.pack (show total) <> "**") `T.isInfixOf` doc
+  unless (null missing) $ do
+    putStrLn "TOOL_TAXONOMY.md omits registered wire names:"
+    mapM_ (putStrLn . ("  " ++) . T.unpack) missing
+  unless totalOk $
+    putStrLn ("TOOL_TAXONOMY.md does not state the live tool total (**"
+                ++ show total ++ "**).")
+  pure (null missing && totalOk)
+
+------------------------------------------------------------------------
 -- Issue #94 Phase A — tool taxonomy invariants
 ------------------------------------------------------------------------
 
@@ -15126,7 +15152,7 @@ testNextStepGoldenDispatch = do
 -- documented cap of 50.  The cap is bumped only via an explicit PR
 -- with rationale — this prevents silent surface-bloat regressions.
 --
--- Current count: 46 tools.  Cap: 50 (4 slots of headroom).
+-- Current count: 36 tools.  Cap: 50 (14 slots of headroom).
 testToolCountWithinCap :: IO Bool
 testToolCountWithinCap = do
   let n   = length allToolNames
@@ -15145,7 +15171,7 @@ testEveryToolHasCategory = pure $
 
 -- | Invariant 3: the count per category must match the taxonomy
 -- published in @docs/TOOL_TAXONOMY.md@ (issue #94 §2).
--- Current breakdown: 36 primitives, 4 composites, 3 gates, 3 control-plane.
+-- Current breakdown: 27 primitives, 4 composites, 3 gates, 2 control-plane.
 testCategoryCountsMatchTaxonomy :: IO Bool
 testCategoryCountsMatchTaxonomy = pure $
   countCat CatPrimitive    == 27

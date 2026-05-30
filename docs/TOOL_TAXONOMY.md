@@ -1,9 +1,11 @@
 # haskell-flows MCP — Tool Taxonomy
 
-> Issue #94 Phase A.  The canonical classification of all 46 registered tools.
-> The four-category breakdown is **CI-enforced** by `testCategoryCountsMatchTaxonomy`
-> in `test/Spec.hs`; any change here must be accompanied by a matching change
-> in `toolCategory :: ToolName -> ToolCategory` in `src/HaskellFlows/Mcp/ToolName.hs`.
+> Issue #94 Phase A.  The canonical classification of all 36 registered tools.
+> The four-category breakdown is **CI-enforced** by `testCategoryCountsMatchTaxonomy`,
+> and `testTaxonomyDocListsAllTools` (#268) fails CI if this file omits any
+> registered wire name or states the wrong total — both in `test/Spec.hs`.
+> Any change here must be accompanied by a matching change in
+> `toolCategory :: ToolName -> ToolCategory` in `src/HaskellFlows/Mcp/ToolName.hs`.
 
 ---
 
@@ -83,8 +85,8 @@
 
 | Tool | Wire name | What it composes |
 |---|---|---|
-| `GhcGate` | `ghc_gate` | `ghc_regression` + `cabal test` + `cabal build` |
-| `GhcLab` | `ghc_lab` | `ghc_browse` + `ghc_suggest` + `ghc_quickcheck` per binding + optional `ghc_property_audit` |
+| `GhcGate` | `ghc_gate` | property-store replay + `cabal test` + `cabal build` |
+| `GhcLab` | `ghc_lab` | `ghc_browse` + `ghc_suggest` + `ghc_quickcheck` per binding + optional `ghc_property_store` audit |
 | `GhcCoverage` | `ghc_coverage` | `cabal test --enable-coverage` + HPC report parse |
 | `GhcBatch` | `ghc_batch` | N sequential tool calls with `fail_fast` control |
 
@@ -100,7 +102,7 @@
 
 ---
 
-## Control-plane (3)
+## Control-plane (2)
 
 | Tool | Wire name | What it does |
 |---|---|---|
@@ -148,19 +150,18 @@ Bumping the cap requires an explicit PR with rationale.
 
 ---
 
-## Planned consolidation (issue #94 Phases B–F)
+## Consolidation history (issue #94 — all landed)
 
-The "future:" notes above indicate tools that will be merged into
-action-discriminated primitives in later phases:
+Every merge below shipped; the action-discriminated successor is now the
+only wire surface. The live total is **36 tools** (see Totals above),
+CI-enforced by `testCategoryCountsMatchTaxonomy` + `testTaxonomyDocListsAllTools`.
 
-| Today (4 tools) | Replacement |
+| Retired wire tools | Action-discriminated successor |
 |---|---|
-| ~~`ghc_add_modules` + `ghc_remove_modules`~~ | ✅ landed: `modules { action: "add" \| "remove" }` (#94 Phase B) |
-| ~~`ghc_deps_explain`~~ | ✅ landed: `deps { action: "explain" }` (#94 Phase C) |
-| ~~`ghc_create_project` + `ghc_switch_project` + `ghc_validate_cabal` + `ghc_bootstrap`~~ | ✅ landed: `project { action: "create" \| "switch" \| "validate" \| "bootstrap" }` (#94 Phase C step 5) |
-| ~~`ghc_property_lifecycle` + `ghc_regression` + `ghc_quickcheck_export` + `ghc_property_audit`~~ | ✅ landed: `property_store { action: "list" \| "run" \| "export" \| "audit" }` (#94 Phase C step 6) |
-| ~~`ghc_toolchain_warmup` + `ghc_toolchain_status`~~ | ✅ landed: `ghc_toolchain { action: "status" \| "warmup" }` (#94 Phase C) |
-| ~~`ghc_move`~~ | ✅ landed: `refactor { action: "move_symbol" }` (#94 Phase C) |
-| ~~`ghc_determinism`~~ | ✅ landed: `quickcheck { runs: N }` (#94 Phase C) |
-
-Post-consolidation: **31 tools**, ~**22 distinct concepts**.
+| `ghc_add_modules` + `ghc_remove_modules` | `ghc_modules { action: "add" \| "remove" }` (Phase B) |
+| `ghc_deps_explain` | `ghc_deps { action: "explain" }` (Phase C) |
+| `ghc_create_project` + `ghc_switch_project` + `ghc_validate_cabal` + `ghc_bootstrap` | `ghc_project { action: "create" \| "switch" \| "validate" \| "bootstrap" }` (Phase C) |
+| `ghc_property_lifecycle` + `ghc_regression` + `ghc_quickcheck_export` + `ghc_property_audit` | `ghc_property_store { action: "list" \| "run" \| "export" \| "audit" }` (Phase C) |
+| `ghc_toolchain_warmup` + `ghc_toolchain_status` | `ghc_toolchain { action: "status" \| "warmup" }` (Phase C) |
+| `ghc_move` | `ghc_refactor { action: "move_symbol" }` (Phase C) |
+| `ghc_determinism` | `ghc_quickcheck { runs: N }` (Phase C) |

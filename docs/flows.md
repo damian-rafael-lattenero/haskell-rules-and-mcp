@@ -1,7 +1,7 @@
 # MCP Flow Diagrams
 
-Visual map of the four most important flows across the 20 tools shipped
-in Phases 1-8. GitHub renders the Mermaid blocks inline — no tooling
+Visual map of the four most important flows across the 36 tools shipped
+to date. GitHub renders the Mermaid blocks inline — no tooling
 needed to read this file.
 
 Conventions used across every diagram:
@@ -58,19 +58,18 @@ to `.cabal`, no manual scaffolding.
 
 ```mermaid
 flowchart LR
-    empty([Empty directory]) --> create[ghc_create_project<br/>name=mypkg]
+    empty([Empty directory]) --> create[ghc_project<br/>action=create<br/>name=mypkg]
     create --> files[/.cabal<br/>cabal.project<br/>src/Mypkg.hs<br/>test/Spec.hs/]
 
     files --> deps[ghc_deps<br/>action=add<br/>package=text]
-    deps --> restart[ghc_session<br/>action=restart]
-    restart --> first[ghc_load<br/>src/Mypkg.hs]
+    deps --> first[ghc_load<br/>src/Mypkg.hs]
 
     first --> types[Agent defines<br/>data types]
     types --> arb[ghc_arbitrary<br/>type_name=...]
     arb --> paste[Agent pastes<br/>Arbitrary instance]
     paste --> devloop((property-first<br/>dev loop))
 
-    devloop --> allgreen[ghc_regression<br/>action=run]
+    devloop --> allgreen[ghc_property_store<br/>action=run]
     allgreen --> coverage[ghc_coverage]
     coverage --> ship([Shippable])
 
@@ -182,11 +181,10 @@ stateDiagram-v2
 | `ghc_doc`             | 1          |
 | `ghc_quickcheck`      | 1          |
 | `ghc_check_module`    | 1          |
-| `ghc_create_project`  | 2          |
+| `ghc_project`         | 2          |
 | `ghc_deps`            | 2          |
-| `ghc_session`         | 2, 4       |
 | `ghc_arbitrary`       | 2          |
-| `ghc_regression`      | 2          |
+| `ghc_property_store`  | 2          |
 | `ghc_coverage`        | 2          |
 | `ghc_refactor`        | 3          |
 
