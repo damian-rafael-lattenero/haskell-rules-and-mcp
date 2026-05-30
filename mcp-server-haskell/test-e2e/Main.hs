@@ -99,6 +99,7 @@ import qualified Scenarios.FlowBrowseInteractive  as FlowBI
 import qualified Scenarios.FlowSuggestSelfInverseDampening as FlowSSID
 import qualified Scenarios.FlowCrossClientStringification as FlowXCS
 import qualified Scenarios.FlowDogfoodReplay    as FlowDFR
+import qualified Scenarios.FlowScratchPromote   as FlowSP
 import qualified Scenarios.FlowEvalContextDedup  as FlowECD
 import qualified Scenarios.FlowTypeAfterLoadDeps as FlowTAL
 import qualified Scenarios.FlowTypeBreakage      as FlowTB
@@ -240,6 +241,8 @@ scenarios =
     , False, FlowPA.runFlow )
   , ( "Flow: Witness distribution surface (#65 · cabal-repl harness)"
     , True, FlowWit.runFlow )
+  , ( "Flow: Scratch promote (write → check → promote round-trip, #253/#272)"
+    , True, FlowSP.runFlow )
   , ( "Flow: CheckModule properties gate finds module-name entries (#74)"
     , False, FlowCMP.runFlow )
   , ( "Flow: ghc_gate survives noisy cabal_test failure (#75)"
