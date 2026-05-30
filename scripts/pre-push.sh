@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # pre-push.sh — minimal safety net before pushing to master.
 #
-# Catches the two most common CI failures in ~60-90 s:
+# Runs the single cheapest, highest-value gate in ~5 s:
 #
 #   [1] hlint        ~5 s   — #1 cause of CI reds (style hints = hard fail)
-#   [2] build        ~30 s  — catches compile errors before they hit GHA
-#   [3] unit tests   ~45 s  — all unit assertions in test/Spec.hs
 #
-# What it intentionally skips:
+# What it intentionally skips (validated by GitHub Actions CI, and on
+# demand via scripts/ci-local.sh):
+#   * build          — was a pre-push step; dropped 2026-05-30 for a fast push
+#   * unit tests     — was a pre-push step; dropped 2026-05-30 for a fast push
 #   * E2E suite      (~200 s, matrix-sharded in CI, not a pre-push gate)
 #   * haddock/sdist  (package-quality CI job, slow, low pre-push value)
 #
@@ -75,19 +76,10 @@ run_step "hlint mcp-server-haskell/" \
   bash -c 'hlint mcp-server-haskell/ && echo "No hints"'
 
 # -----------------------------------------------------------------------
-# [2] build — compiles library + all test suites (deps reused from store)
+# build + unit tests intentionally removed (2026-05-30): the pre-push
+# gate is now hlint-only for a fast push. Compile + unit-test validation
+# happens in GitHub Actions CI (and on demand via scripts/ci-local.sh).
 # -----------------------------------------------------------------------
-run_step "cabal build all" \
-  bash -c 'cd mcp-server-haskell && cabal build all --disable-documentation -j 2>&1'
-
-# -----------------------------------------------------------------------
-# [3] unit tests — haskell-flows-mcp-test (Spec.hs)
-#     --test-show-details=direct so failures are visible inline
-# -----------------------------------------------------------------------
-run_step "unit tests (haskell-flows-mcp-test)" \
-  bash -c 'cd mcp-server-haskell && cabal test haskell-flows-mcp-test \
-    --test-show-details=direct \
-    --disable-documentation 2>&1'
 
 # -----------------------------------------------------------------------
 # summary
