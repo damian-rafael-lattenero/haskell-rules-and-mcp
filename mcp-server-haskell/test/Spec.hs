@@ -1251,6 +1251,7 @@ main = do
       , test "#263: discover ranks phase-relevant"      testDiscoverPhaseRelevance
       , test "#266: post-mortem flags missed scratch"  testPostMortemMissedScratch
       , test "#266: post-mortem reports counts"         testPostMortemCounts
+      , test "#262: modules(add) -> design-first scratch" testNextStepModulesCreatedScratch
       , test "resources: rules workflow URI resolves" testResourcesRulesRead
       , test "resources: unknown URI returns Nothing" testResourcesUnknown
       , test "baja bundle: 4 tools registered"      testBajaRegistered
@@ -8197,6 +8198,20 @@ testSessionActivityUnusedCount = do
   let total  = length allToolNameTexts
       unused = total - Set.size (WS.wsEverCalled s)
   pure $ total == 36 && unused == 34
+
+-- | #262: ghc_modules(add) with created_files routes nextStep to a
+-- design-first ghc_scratch chain (one scratch per created file + a
+-- closing ghc_load on the first, with concrete paths).
+testNextStepModulesCreatedScratch :: IO Bool
+testNextStepModulesCreatedScratch =
+  let payload = A.object
+        [ "action"        A..= ("add" :: Text)
+        , "created_files" A..= (["src/Expr/Pretty.hs", "src/Expr/Eval.hs"] :: [Text])
+        ]
+  in pure $ case suggestNext GhcModules True payload of
+       Just ns -> nsTool ns == GhcScratch
+                    && fmap length (nsChain ns) == Just 3
+       Nothing -> False
 
 -- | #263: discover excludes tools already called this session.
 testDiscoverExcludesCalled :: IO Bool

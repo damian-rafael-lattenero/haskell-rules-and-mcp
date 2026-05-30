@@ -53,6 +53,8 @@ import Data.Aeson
 import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.Aeson.Key as Key
 import qualified Data.ByteString.Lazy as BL
+import Data.Foldable (toList)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -619,16 +621,7 @@ dispatch name payload = case name of
   -- cares about the post-condition (modules just changed), not which
   -- surface point produced it.  Always recommend a project-wide gate;
   -- both add and remove can dangle imports or break loaders.
-  GhcModules -> Just (chained GhcCheckProject
-    "Modules registry changed in the .cabal (add or remove). Run \
-    \ghc_check_project to surface any compile errors the change \
-    \introduced; chained ghc_load follows so the entry module is \
-    \live in the GHCi session afterwards."
-    Nothing
-    [ step GhcCheckProject (object [])
-    , step GhcLoad (object
-        [ "module_path" .= ("<your entry module>" :: Text) ])
-    ])
+  GhcModules -> Just (modulesNext payload)
 
   -- Applied an export list — reload confirms nothing external broke.
   GhcApplyExports -> Just (simple GhcLoad
@@ -789,6 +782,65 @@ dispatch name payload = case name of
 --                                   single field is reliably
 --                                   discriminative; we treat 'create'
 --                                   as the catch-all).
+-- | #262: design-first routing for ghc_modules. When action="add"
+-- scaffolded new module stubs (payload carries a non-empty
+-- @created_files@), nudge the agent to sketch + type-check each
+-- module's design in the scratchpad BEFORE populating source — the
+-- round-trip is faster and reversible. The chain carries concrete
+-- file paths (not placeholders), so it is genuinely ghc_batch-ready.
+-- When nothing was created (remove, or an idempotent add), fall back
+-- to the project-wide gate.
+modulesNext :: Value -> NextStep
+modulesNext payload = case createdFilesField payload of
+  files@(f0 : _) ->
+    chained GhcScratch
+      "New module stubs were scaffolded. Sketch each module's design in \
+      \the scratchpad and type-check it before populating source — the \
+      \round-trip is faster and reversible than editing blind. The chain \
+      \scratches each new file, then loads the first."
+      (Just (object
+          [ "action" .= ("write" :: Text)
+          , "id"     .= scratchIdFor f0
+          , "code"   .= ("-- sketch the types / grammar for this module" :: Text)
+          ]))
+      ( [ step GhcScratch (object
+            [ "action" .= ("write" :: Text)
+            , "id"     .= scratchIdFor f
+            , "code"   .= ("-- sketch the types / grammar for this module" :: Text)
+            ])
+        | f <- files
+        ]
+        <> [ step GhcLoad (object
+               [ "module_path" .= f0, "diagnostics" .= True ]) ]
+      )
+  [] ->
+    chained GhcCheckProject
+      "Modules registry changed in the .cabal (remove, or an idempotent \
+      \add). Run ghc_check_project to surface any compile errors the \
+      \change introduced; the chained ghc_load keeps the entry module \
+      \live in the GHCi session afterwards."
+      Nothing
+      [ step GhcCheckProject (object [])
+      , step GhcLoad (object
+          [ "module_path" .= ("<your entry module>" :: Text) ])
+      ]
+
+-- | Read the @created_files@ array of path strings from a
+-- ghc_modules(add) payload. Empty when absent or on remove.
+createdFilesField :: Value -> [Text]
+createdFilesField v = case envField "created_files" v of
+  Just (Array xs) -> [ s | String s <- toList xs ]
+  _               -> []
+
+-- | #262: a stable scratchpad id for a created file, e.g.
+-- @src/Expr/Pretty.hs@ → @design-Expr-Pretty@. Re-runs reuse the id so
+-- duplicate entries don't pile up.
+scratchIdFor :: Text -> Text
+scratchIdFor path =
+  let noSrc = fromMaybe path (T.stripPrefix "src/" path)
+      noExt = fromMaybe noSrc (T.stripSuffix ".hs" noSrc)
+  in "design-" <> T.replace "/" "-" noExt
+
 projectNext :: Value -> Maybe NextStep
 projectNext payload
   -- switch
