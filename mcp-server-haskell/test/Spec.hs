@@ -1260,6 +1260,7 @@ main = do
       , test "#264: plan low-confidence lists alternatives" testPlanLowConfidenceListsAlternatives
       , test "#258: GHC-32850 suppressed when modules registered" testLoad32850Suppressed
       , test "#258: GHC-32850 retained when module missing" testLoad32850RetainedWhenMissing
+      , test "#258: non-GHC-32850 warning never dropped (CI regression)" testLoadNon32850Retained
       , test "#259: GHC-76037 surfaces submodule suggested_import" testSuggestedImportGhc76037
       , test "#260: importsMatchingPackage detects cross-stanza dep" testDepsCrossStanzaMatch
       , test "#261: pathToModule derives module from path" testArbitraryPathToModule
@@ -8274,6 +8275,20 @@ testLoad32850RetainedWhenMissing =
             \in your .cabal file's other-modules for 'pkg':\n\
             \    Expr.Missing"
       cabalMods = Set.fromList ["Expr.Eval"]
+  in pure $ length (LoadTool.dropCoveredModuleWarnings cabalMods [w]) == 1
+
+-- | #258 (CI regression, 2026-05-30): a warning whose code is NOT
+-- GHC-32850 must NEVER be dropped — even when its message text happens
+-- to name a registered module. This is the invariant FlowDogfoodReplay
+-- leaned on: a genuine -Wtype-defaults hint has to survive so 'ghc_load'
+-- still classifies the module as LWFixable and routes nextStep to
+-- ghc_fix_warning. Guards the filter against widening past GHC-32850.
+testLoadNon32850Retained :: IO Bool
+testLoadNon32850Retained =
+  let w = GhcError "X.hs" 0 0 SevWarning (Just "GHC-18042")
+            "Defaulting the type variable to type 'Integer'\n\
+            \    Expr.Pretty"
+      cabalMods = Set.fromList ["Expr.Eval", "Expr.Pretty", "Expr.Syntax"]
   in pure $ length (LoadTool.dropCoveredModuleWarnings cabalMods [w]) == 1
 
 -- | #264: a concrete goal matches the right template + yields a chain.

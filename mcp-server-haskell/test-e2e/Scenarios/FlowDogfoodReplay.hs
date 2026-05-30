@@ -210,6 +210,37 @@ prettySrc = T.unlines
   , "               in if null n then Nothing else Just (Var n, r)"
   ]
 
+-- | 'prettySrc' re-authored to carry exactly ONE genuine, non-spurious
+-- warning that single-file 'ghc_load' RELIABLY surfaces: 'depthClamp'
+-- has a deliberately redundant clause, tripping @-Woverlapping-patterns@.
+--
+-- Why this specific warning (the subtle part, learned the hard way):
+--   * It is ON BY DEFAULT — no @-Wall@ needed, so it does not depend on
+--     the API session inheriting the cabal's @-Wall@.
+--   * It is a per-module desugar warning that RE-FIRES on every actual
+--     recompile — unlike @-Wtype-defaults@, which a cached @.hi@ swallows.
+--   * It is NOT GHC-32850, so #258's covered-module suppression (which
+--     correctly drops the spurious @-Wmissing-home-modules@ hint that
+--     ghc_load used to lean on) leaves it untouched.
+-- The content also DIFFERS from 'prettySrc', so writing it just before
+-- step 10 forces 'ghc_load' (Strict, no ForceRecomp) to recompile and
+-- re-emit the warning. (CI green-up, 2026-05-30.)
+prettyWarnSrc :: Text
+prettyWarnSrc =
+  T.replace
+    "module Expr.Pretty (pretty, parseExpr) where"
+    "module Expr.Pretty (pretty, parseExpr, depthClamp) where"
+    prettySrc
+    <> T.unlines
+         [ ""
+         , "-- The second clause is unreachable, tripping the default-on"
+         , "-- -Woverlapping-patterns (a genuine, non-spurious fixable hint)."
+         , "depthClamp :: Int -> Int"
+         , "depthClamp 0 = 0"
+         , "depthClamp 0 = 1"
+         , "depthClamp n = n"
+         ]
+
 --------------------------------------------------------------------------------
 -- flow
 --------------------------------------------------------------------------------
@@ -399,8 +430,9 @@ runFlow c projectDir = do
 
   ----------------------------------------------------------------
   -- (8) check_project warnings_block: strict vs informational.
-  -- Induce a type-defaults warning in Pretty.hs (harmless but
-  -- matches -Wall), then prove:
+  -- The scaffold's -Wall set means the per-module re-loads carry
+  -- warnings (e.g. -Wunused-packages fires per-component), so we
+  -- can prove:
   --   * warnings_block=true  → 'overall' = false (strict gate)
   --   * warnings_block=false → 'overall' = true  (warnings
   --     surface in diagnostics but don't block)
@@ -456,12 +488,17 @@ runFlow c projectDir = do
   stepFooter 8 t8
 
   ----------------------------------------------------------------
-  -- (10) ghc_load on a file with a type-defaults warning — the
-  -- response's nextStep must now propose ghc_fix_warning (not
-  -- ghc_hole, which was the pre-fix catch-all). BUG-PLUS-
-  -- mediocre-3 coverage.
+  -- (10) ghc_load on a file with a genuine, default-on warning
+  -- (-Woverlapping-patterns; see 'prettyWarnSrc') — the response's
+  -- nextStep must propose ghc_fix_warning (not ghc_hole, the pre-fix
+  -- catch-all). We re-author Pretty.hs here so its content DIFFERS
+  -- from what step 5/8 compiled, forcing ghc_load (Strict, no
+  -- ForceRecomp) to recompile and re-emit the warning rather than
+  -- reuse a clean cached .hi. Post-#258 we can no longer lean on the
+  -- spurious GHC-32850 hint, hence a real warning. BUG-PLUS-mediocre-3.
   ----------------------------------------------------------------
   t9 <- stepHeader 10 "ghc_load warnings → nextStep = ghc_fix_warning"
+  TIO.writeFile (src </> "Expr" </> "Pretty.hs") prettyWarnSrc
   loadForWarnR <- Client.callTool c GhcLoad
                     (object [ "module_path" .= ("src/Expr/Pretty.hs" :: Text) ])
   cNextStepFixWarn <- liveCheck $ checkPure
