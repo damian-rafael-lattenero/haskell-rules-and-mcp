@@ -1251,6 +1251,8 @@ main = do
       , test "#263: discover excludes called tools"    testDiscoverExcludesCalled
       , test "#263: discover returns at most 5"         testDiscoverAtMostFive
       , test "#263: discover ranks phase-relevant"      testDiscoverPhaseRelevance
+      , test "#266: post-mortem flags missed scratch"  testPostMortemMissedScratch
+      , test "#266: post-mortem reports counts"         testPostMortemCounts
       , test "resources: rules workflow URI resolves" testResourcesRulesRead
       , test "resources: unknown URI returns Nothing" testResourcesUnknown
       , test "baja bundle: 4 tools registered"      testBajaRegistered
@@ -8234,6 +8236,28 @@ testDiscoverPhaseRelevance = do
   ref <- WS.newWorkflowStateRef
   s <- WS.readState ref
   pure (GhcGate `elem` WorkflowTool.discoverRanked s WS.PhaseReadyToPush)
+
+-- | #266: post-mortem flags "never used ghc_scratch" after enough calls.
+testPostMortemMissedScratch :: IO Bool
+testPostMortemMissedScratch = do
+  base <- WS.readState =<< WS.newWorkflowStateRef
+  let ws = base { WS.wsToolCalls  = 10
+                , WS.wsEverCalled = Set.fromList [GhcLoad, GhcType] }
+  pure (any (T.isInfixOf "ghc_scratch") (WS.sessionMissedOpportunities ws))
+
+-- | #266: post-mortem payload reports cumulative counts (unique + unused).
+testPostMortemCounts :: IO Bool
+testPostMortemCounts = do
+  base <- WS.readState =<< WS.newWorkflowStateRef
+  let now = posixSecondsToUTCTime 0
+      ws  = base { WS.wsToolCalls  = 7
+                 , WS.wsEverCalled = Set.fromList [GhcLoad, GhcSuggest, GhcQuickCheck] }
+  case WorkflowTool.postMortemPayload ws now of
+    A.Object o ->
+      pure $ AKM.lookup "tools_called" o == Just (A.Number 7)
+          && AKM.lookup "tools_unique" o == Just (A.Number 3)
+          && AKM.lookup "tools_unused" o == Just (A.Number 33)
+    _ -> pure False
 
 -- | Phase 11j: all 5 Code tools registered in the inventory.
 testCodeToolsRegistered :: IO Bool

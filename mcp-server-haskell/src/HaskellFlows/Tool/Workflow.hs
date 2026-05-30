@@ -21,6 +21,7 @@ module HaskellFlows.Tool.Workflow
   , pickModuleLine
   , render
   , discoverRanked
+  , postMortemPayload
   ) where
 
 import Control.Concurrent.MVar (MVar, readMVar)
@@ -32,6 +33,7 @@ import Data.IORef (IORef, readIORef)
 import Data.List (sortBy)
 import Data.Maybe (isNothing, listToMaybe, mapMaybe)
 import Data.Ord (Down (..), comparing)
+import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -59,6 +61,7 @@ import HaskellFlows.Mcp.WorkflowState
   , classifyPhase
   , renderHelp
   , renderPhaseHint
+  , sessionMissedOpportunities
   )
 import qualified HaskellFlows.Tool.ToolchainStatus as TC
 import HaskellFlows.Types (ProjectDir, unProjectDir)
@@ -73,14 +76,17 @@ descriptor =
           <> "WHEN: session-start handshake (action='status'); when unsure "
           <> "what to do next (action='help'); action='next' for a single "
           <> "suggestion; action='discover' ranks tools you have NOT used "
-          <> "this session by relevance to the current phase. "
+          <> "this session by relevance to the current phase; "
+          <> "action='post-mortem' gives a session retro (counts + missed "
+          <> "opportunities). "
           <> "WHEN NOT: ghc_toolchain to probe external binaries; the "
           <> "per-response nextStep already covers most next-step moments. "
           <> "PREREQUISITES: none — never spawns or mutates a GHCi session. "
           <> "OUTPUT: per-action view — status {projectDir, phase, "
           <> "toolsActive, staleness, session_activity}; help {steps, "
           <> "phaseHint}; next {tool, why}; discover {unused:[{tool, "
-          <> "category, why_now}]}. "
+          <> "category, why_now}]}; post-mortem {session_duration_ms, "
+          <> "tools_called, missed_opportunities, ...}. "
           <> "SEE ALSO: ghc_toolchain, ghc_check_project."
     , tdInputSchema =
         object
@@ -88,7 +94,7 @@ descriptor =
           , "properties" .= object
               [ "action" .= object
                   [ "type"        .= ("string" :: Text)
-                  , "enum"        .= (["status", "help", "next", "discover"] :: [Text])
+                  , "enum"        .= (["status", "help", "next", "discover", "post-mortem"] :: [Text])
                   , "description" .=
                       ("Which view to return. Default: 'status'." :: Text)
                   ]
@@ -97,7 +103,7 @@ descriptor =
           ]
     }
 
-data Action = ActStatus | ActHelp | ActNext | ActDiscover
+data Action = ActStatus | ActHelp | ActNext | ActDiscover | ActPostMortem
   deriving stock (Eq, Show)
 
 newtype WorkflowArgs = WorkflowArgs
@@ -114,6 +120,7 @@ instance FromJSON WorkflowArgs where
       Just "help"     -> pure ActHelp
       Just "next"     -> pure ActNext
       Just "discover" -> pure ActDiscover
+      Just "post-mortem" -> pure ActPostMortem
       Just other     -> fail ("unknown action: " <> T.unpack other)
     pure (WorkflowArgs a)
 
@@ -148,6 +155,12 @@ handle pdRef sessMVar toolNames ws staleness isSelfProject scratchRef rawArgs =
         ((Env.mkErrorEnvelope (parseErrorKind err)
             (T.pack ("Invalid arguments: " <> err)))
               { Env.eeCause = Just (T.pack err) })))
+    Right (WorkflowArgs ActPostMortem) ->
+      -- #266: post-mortem needs wall-clock 'now' for the session
+      -- duration, so it is handled here (IO) rather than in the pure
+      -- 'render'. Reads only the WorkflowState the Server threads in.
+      Env.toolResponseToResult . Env.mkOk . postMortemPayload ws
+        <$> getCurrentTime
     Right (WorkflowArgs a) -> do
       pd        <- readIORef pdRef
       sessAlive <- isAlive sessMVar
@@ -313,6 +326,28 @@ discoverPayload ws phase =
        , "phase"        .= T.pack (show phase)
        , "unused"       .= map entry ranked
        , "unused_total" .= total
+       ]
+
+-- | #266: render the post-mortem retro. Pure (given 'now') + exported
+-- for unit tests. Cumulative counts come from the #257 fields; the
+-- missed-opportunity list reuses 'sessionMissedOpportunities'. Finer
+-- sequence patterns + cross-session persistence are deferred.
+postMortemPayload :: WorkflowState -> UTCTime -> Value
+postMortemPayload ws now =
+  let durationMs =
+        round (realToFrac (diffUTCTime now (wsStarted ws)) * 1000 :: Double) :: Int
+      unique = Set.size (wsEverCalled ws)
+  in object
+       [ "view"                 .= ("post-mortem" :: Text)
+       , "session_duration_ms"  .= max 0 durationMs
+       , "tools_called"         .= wsToolCalls ws
+       , "tools_unique"         .= unique
+       , "tools_unused"         .= max 0 (length allToolNames - unique)
+       , "passed_properties"    .= wsPassedProperties ws
+       , "error_streak"         .= wsErrorStreak ws
+       , "phase"                .= T.pack (show (classifyPhase ws))
+       , "recent_tools"         .= map toolNameText (wsToolHistory ws)
+       , "missed_opportunities" .= sessionMissedOpportunities ws
        ]
 
 statusPayload

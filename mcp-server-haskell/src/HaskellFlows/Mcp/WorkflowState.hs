@@ -23,6 +23,8 @@ module HaskellFlows.Mcp.WorkflowState
   , renderPhaseHint
     -- * BUG-08 — history-pattern nudges (exported for testing)
   , historyNudges
+    -- * #266 — post-mortem missed-opportunity list (exported for testing)
+  , sessionMissedOpportunities
   ) where
 
 import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
@@ -311,3 +313,33 @@ renderPhaseHint p = case p of
     \replays the full set; ghc_property_store(action=\"export\") \
     \materialises them as test/Spec.hs; ghc_gate runs regression + \
     \cabal test + cabal build in one call — if green, push is safe."
+
+--------------------------------------------------------------------------------
+-- #266 — post-mortem missed-opportunity list
+--------------------------------------------------------------------------------
+
+-- | #266: a bounded, human-friendly list of missed opportunities for the
+-- @ghc_workflow(action="post-mortem")@ view. Reuses the live
+-- history-pattern nudges (BUG-08) and adds session-cumulative ones
+-- derived from the counters + the ever-called set (#257). Bounded to 5.
+sessionMissedOpportunities :: WorkflowState -> [Text]
+sessionMissedOpportunities s = take 5 $ concat
+  [ historyNudges (wsToolHistory s)
+  , [ "You hit " <> tshow (wsErrorStreak s) <> " failures in a row — try \
+      \ghc_explain_error on the failure, or ghc_scratch to test a fix \
+      \reversibly before touching source."
+    | wsErrorStreak s >= 3
+    ]
+  , [ "You persisted passing properties but never ran ghc_witness — the \
+      \input distribution may be trivially biased; a green QC run can lie."
+    | wsPassedProperties s > 0, GhcWitness `Set.notMember` wsEverCalled s
+    ]
+  , [ "You've made " <> tshow (wsToolCalls s) <> " tool calls but never \
+      \reached for ghc_scratch — type-checking a hypothesis there is \
+      \faster and reversible than edit/reload."
+    | wsToolCalls s >= 8, GhcScratch `Set.notMember` wsEverCalled s
+    ]
+  ]
+  where
+    tshow :: Int -> Text
+    tshow = T.pack . show
