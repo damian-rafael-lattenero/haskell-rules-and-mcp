@@ -1252,6 +1252,7 @@ main = do
       , test "#266: post-mortem flags missed scratch"  testPostMortemMissedScratch
       , test "#266: post-mortem reports counts"         testPostMortemCounts
       , test "#262: modules(add) -> design-first scratch" testNextStepModulesCreatedScratch
+      , test "#270: chain resolves <same module> from payload" testNextStepResolvesSameModule
       , test "resources: rules workflow URI resolves" testResourcesRulesRead
       , test "resources: unknown URI returns Nothing" testResourcesUnknown
       , test "baja bundle: 4 tools registered"      testBajaRegistered
@@ -8198,6 +8199,23 @@ testSessionActivityUnusedCount = do
   let total  = length allToolNameTexts
       unused = total - Set.size (WS.wsEverCalled s)
   pure $ total == 36 && unused == 34
+
+-- | #270: a nextStep example's module_path is resolved to the payload's
+-- concrete module (not a "<same module>" placeholder) when the tool
+-- echoes module_path (ghc_refactor does) — so the chain is ghc_batch-ready.
+testNextStepResolvesSameModule :: IO Bool
+testNextStepResolvesSameModule =
+  let payload = A.object
+        [ "status"      A..= ("ok" :: Text)
+        , "action"      A..= ("rename_local" :: Text)
+        , "module_path" A..= ("src/Calc.hs" :: Text)
+        ]
+  in pure $ case suggestNext GhcRefactor True payload of
+       Just ns -> case nsExample ns of
+         Just (A.Object o) ->
+           AKM.lookup "module_path" o == Just (A.String "src/Calc.hs")
+         _ -> False
+       Nothing -> False
 
 -- | #262: ghc_modules(add) with created_files routes nextStep to a
 -- design-first ghc_scratch chain (one scratch per created file + a

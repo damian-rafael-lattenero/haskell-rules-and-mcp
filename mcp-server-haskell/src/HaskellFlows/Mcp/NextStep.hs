@@ -356,7 +356,7 @@ dispatch name payload = case name of
       \file+line+hint in; it returns the rewritten file as a patch \
       \the agent reviews before writing."
       (Just (object
-          [ "module_path" .= ("<same module you just loaded>" :: Text) ])))
+          [ "module_path" .= sameModule payload ])))
     (LWNone,       False) -> Just (simple GhcSuggest
       "Module compiles clean. Ask 'ghc_suggest' for QuickCheck \
       \laws its type signatures imply; feed the High-confidence \
@@ -381,7 +381,7 @@ dispatch name payload = case name of
         [ "action" .= ("check" :: Text)
         , "id"     .= ("<id from the write above>" :: Text) ])
     , step GhcLoad (object
-        [ "module_path" .= ("<same module you just inspected>" :: Text)
+        [ "module_path" .= sameModule payload
         , "diagnostics" .= True ])
     ])
 
@@ -400,7 +400,7 @@ dispatch name payload = case name of
         , "diagnostics" .= True ])
     , step GhcQuickCheck (object
         [ "property"    .= ("\\x -> roundtrip x === x" :: Text)
-        , "module_path" .= ("<same module>" :: Text) ])
+        , "module_path" .= sameModule payload ])
     ])
 
   -- Suggestions → record the law in the scratchpad first (for
@@ -440,7 +440,7 @@ dispatch name payload = case name of
           "Law holds. Either run 'ghc_suggest' for the next candidate, \
           \or roll up into a per-module gate. For flakiness confidence, \
           \re-run ghc_quickcheck with runs>=3."
-          (Just (object [ "module_path" .= ("<same module>" :: Text) ])))
+          (Just (object [ "module_path" .= sameModule payload ])))
         Just "failed" -> Just (simple GhcEval
           "Property failed. Evaluate the reported counter-example with \
           \'ghc_eval' to see intermediate values before editing."
@@ -472,7 +472,7 @@ dispatch name payload = case name of
       "Refactor was snapshot-and-compile-verified, but a reload with \
       \diagnostics=true surfaces new holes or warnings in one shot."
       (Just (object
-          [ "module_path" .= ("<same module>" :: Text)
+          [ "module_path" .= sameModule payload
           , "diagnostics" .= True
           ])))
 
@@ -563,7 +563,7 @@ dispatch name payload = case name of
         [ "action" .= ("check" :: Text)
         , "id"     .= ("<id from the write above>" :: Text) ])
     , step GhcExplainError (object
-        [ "module_path"  .= ("<same module>" :: Text)
+        [ "module_path"  .= sameModule payload
         , "verify_patch" .= object
             [ "line" .= (0 :: Int)
             , "old"  .= ("<old text>" :: Text)
@@ -614,7 +614,7 @@ dispatch name payload = case name of
       "Pick one of the candidate imports above and paste it at the \
       \top of your .hs file, then reload to confirm the \
       \\"not in scope\" error is gone."
-      (Just (object [ "module_path" .= ("<same module>" :: Text) ])))
+      (Just (object [ "module_path" .= sameModule payload ])))
     _              -> Nothing
 
   -- #94 Phase B: action-discriminated successor.  The dispatcher
@@ -628,14 +628,14 @@ dispatch name payload = case name of
     "Module export list was rewritten. Reload to confirm the new \
     \export set still type-checks and every consumer can still \
     \see what it needs."
-    (Just (object [ "module_path" .= ("<same module>" :: Text) ])))
+    (Just (object [ "module_path" .= sameModule payload ])))
 
   -- Fix-warning emitted a plan — apply it, then reload to confirm.
   GhcFixWarning -> Just (simple GhcLoad
     "The fix plan has been written to disk (apply=true) or returned \
     \as a diff (apply=false — inspect before applying). Reload to \
     \confirm the warning is gone and nothing downstream broke."
-    (Just (object [ "module_path" .= ("<same module>" :: Text) ])))
+    (Just (object [ "module_path" .= sameModule payload ])))
 
   -- Browse listed bindings — pick one and suggest laws for it.
   GhcBrowse -> Just (simple GhcSuggest
@@ -1116,6 +1116,15 @@ stringField :: Text -> Value -> Maybe Text
 stringField k v = case envField k v of
   Just (String s) -> Just s
   _               -> Nothing
+
+-- | #270: resolve the "<same module>" placeholder family to the
+-- concrete @module_path@ the current tool's payload carries (ghc_load,
+-- ghc_hole, ghc_refactor, ghc_fix_warning, ghc_apply_exports all echo
+-- it), so the emitted chain is genuinely ghc_batch-ready. Falls back to
+-- the placeholder when the payload has no module_path (tools that don't
+-- take one) — an honest agent-fill slot.
+sameModule :: Value -> Text
+sameModule payload = fromMaybe "<same module>" (stringField "module_path" payload)
 
 -- | Extract an integer field. Auto-drills through @result@.
 intField :: Text -> Value -> Maybe Int
