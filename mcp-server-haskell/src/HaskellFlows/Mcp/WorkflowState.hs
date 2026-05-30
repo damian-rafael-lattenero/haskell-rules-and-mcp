@@ -30,8 +30,11 @@ import Data.Aeson
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Maybe (isNothing)
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Time.Clock (UTCTime, getCurrentTime)
 
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 
@@ -51,6 +54,16 @@ data WorkflowState = WorkflowState
   , wsLastLoadWarnings   :: !Int
   , wsPassedProperties   :: !Int
   , wsToolHistory        :: ![ToolName]   -- ^ most recent first, bounded at 'historyLimit'
+  , wsEverCalled         :: !(Set ToolName)
+    -- ^ #257: cumulative set of every tool called this session.
+    -- Distinct from 'wsToolHistory' (capped at 'historyLimit') — this
+    -- never forgets, so @allToolNames \\ wsEverCalled@ is the basis for
+    -- @ghc_workflow(action="discover")@ (#263).
+  , wsErrorStreak        :: !Int
+    -- ^ #257: consecutive failed tool calls; reset to 0 on any success.
+    -- Drives the post-mortem error-streak detector (#266).
+  , wsStarted            :: !UTCTime
+    -- ^ #257: session start time, for post-mortem duration.
   }
   deriving stock (Eq, Show)
 
@@ -62,6 +75,9 @@ instance ToJSON WorkflowState where
     , "lastLoadWarnings"   .= wsLastLoadWarnings s
     , "passedProperties"   .= wsPassedProperties s
     , "toolHistory"        .= map toolNameText (wsToolHistory s)
+    , "everCalled"         .= map toolNameText (Set.toList (wsEverCalled s))
+    , "errorStreak"        .= wsErrorStreak s
+    , "startedAt"          .= wsStarted s
     ]
 
 -- | Handle used by the Server layer to mutate the state from
@@ -69,16 +85,20 @@ instance ToJSON WorkflowState where
 newtype WorkflowStateRef = WorkflowStateRef (MVar WorkflowState)
 
 newWorkflowStateRef :: IO WorkflowStateRef
-newWorkflowStateRef = WorkflowStateRef <$> newMVar initial
-  where
-    initial = WorkflowState
-      { wsToolCalls          = 0
-      , wsEditsSinceLastLoad = 0
-      , wsLastLoadSuccess    = Nothing
-      , wsLastLoadWarnings   = 0
-      , wsPassedProperties   = 0
-      , wsToolHistory        = []
-      }
+newWorkflowStateRef = do
+  now <- getCurrentTime
+  let initial = WorkflowState
+        { wsToolCalls          = 0
+        , wsEditsSinceLastLoad = 0
+        , wsLastLoadSuccess    = Nothing
+        , wsLastLoadWarnings   = 0
+        , wsPassedProperties   = 0
+        , wsToolHistory        = []
+        , wsEverCalled         = Set.empty
+        , wsErrorStreak        = 0
+        , wsStarted            = now
+        }
+  WorkflowStateRef <$> newMVar initial
 
 historyLimit :: Int
 historyLimit = 20
@@ -92,7 +112,13 @@ trackTool (WorkflowStateRef ref) toolName ok payload =
   modifyMVar_ ref $ \s ->
     let calls  = wsToolCalls s + 1
         hist   = take historyLimit (toolName : wsToolHistory s)
-        base   = s { wsToolCalls = calls, wsToolHistory = hist }
+        ever   = Set.insert toolName (wsEverCalled s)
+        streak = if ok then 0 else wsErrorStreak s + 1
+        base   = s { wsToolCalls   = calls
+                   , wsToolHistory = hist
+                   , wsEverCalled  = ever
+                   , wsErrorStreak = streak
+                   }
     in pure (applyToolUpdate base toolName ok payload)
 
 -- The catch-all @_ -> s@ keeps this O(1) for the bulk of tools that

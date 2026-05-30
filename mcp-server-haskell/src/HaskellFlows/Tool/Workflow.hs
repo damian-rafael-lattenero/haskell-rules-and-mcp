@@ -29,6 +29,7 @@ import qualified Data.Aeson.Key as Key
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, readIORef)
 import Data.Maybe (isNothing, listToMaybe, mapMaybe)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -220,16 +221,26 @@ render
 render a pd alive toolNames ws staleness missingOpt mEntry isSelfProject mScratch =
   let phase      = classifyPhase ws
       stateHints = renderHelp ws
+      -- #257: per-session activity surfaced for #263 (discover) and
+      -- #266 (post-mortem). 'unused_count' is the registry size minus
+      -- the cumulative ever-called set.
+      sessionActivity = object
+        [ "tools_called"  .= wsToolCalls ws
+        , "unique_called" .= Set.size (wsEverCalled ws)
+        , "unused_count"  .= max 0 (length toolNames - Set.size (wsEverCalled ws))
+        , "error_streak"  .= wsErrorStreak ws
+        , "started_at"    .= wsStarted ws
+        ]
       payload    = case a of
-        ActStatus -> statusPayload pd alive toolNames staleness phase missingOpt isSelfProject mScratch
+        ActStatus -> statusPayload pd alive toolNames staleness phase missingOpt isSelfProject mScratch sessionActivity
         ActHelp   -> helpPayload pd alive stateHints staleness phase mEntry
         ActNext   -> nextPayload pd alive ws
   in Env.toolResponseToResult (Env.mkOk payload)
 
 statusPayload
   :: ProjectDir -> Bool -> [Text] -> StalenessReport -> SessionPhase
-  -> [Text] -> Bool -> Maybe Value -> Value
-statusPayload pd alive toolNames staleness phase missingOpt isSelfProject mScratch =
+  -> [Text] -> Bool -> Maybe Value -> Value -> Value
+statusPayload pd alive toolNames staleness phase missingOpt isSelfProject mScratch sessionActivity =
   object $
     [ "view"        .= ("status" :: Text)
     , "projectDir"  .= T.pack (unProjectDir pd)
@@ -248,6 +259,9 @@ statusPayload pd alive toolNames staleness phase missingOpt isSelfProject mScrat
     , "selfProject" .= isSelfProject
       -- #253 Phase 5: scratchpad summary — always present in status.
     , "scratchpad"  .= mScratch
+      -- #257: per-session activity (tools_called / unique_called /
+      -- unused_count / error_streak / started_at) for discover + post-mortem.
+    , "session_activity" .= sessionActivity
     ]
     -- Only emit the 'optionalBinaries' field when something is
     -- missing.  Happy path stays clean — the nudge only appears

@@ -24,7 +24,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing)
-import Data.Time.Clock.POSIX (getPOSIXTime)
+import Data.Time.Clock.POSIX (getPOSIXTime, posixSecondsToUTCTime)
 import Data.Word (Word64)
 import System.Exit (exitFailure, exitSuccess)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
@@ -1245,6 +1245,9 @@ main = do
       , test "workflow-state: initial empty"       testWorkflowStateInitial
       , test "workflow-state: tracks load + edits" testWorkflowStateTracks
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
+      , test "#257: session activity ever-called set"  testSessionActivityEverCalled
+      , test "#257: session activity error streak"      testSessionActivityErrorStreak
+      , test "#257: session activity unused count"       testSessionActivityUnusedCount
       , test "resources: rules workflow URI resolves" testResourcesRulesRead
       , test "resources: unknown URI returns Nothing" testResourcesUnknown
       , test "baja bundle: 4 tools registered"      testBajaRegistered
@@ -8157,12 +8160,55 @@ testWorkflowStateTracks = do
 -- editsSinceLastLoad crosses the 3-edit threshold.
 testWorkflowStateHelp :: IO Bool
 testWorkflowStateHelp =
-  let lowEdits  = WS.WorkflowState 0 2 Nothing 0 0 []
-      highEdits = WS.WorkflowState 0 5 Nothing 0 0 []
+  let lowEdits  = WS.WorkflowState 0 2 Nothing 0 0 [] Set.empty 0 (posixSecondsToUTCTime 0)
+      highEdits = WS.WorkflowState 0 5 Nothing 0 0 [] Set.empty 0 (posixSecondsToUTCTime 0)
       nudgeLow  = WS.renderHelp lowEdits
       nudgeHigh = WS.renderHelp highEdits
   in pure $ null nudgeLow
          && any (T.isInfixOf "edits since the last ghc_load") nudgeHigh
+
+-- | #257: trackTool accumulates the ever-called set — it never forgets
+-- (unlike the capped wsToolHistory), so it is the basis for the
+-- "unused tools" count in ghc_workflow(status) and for #263 discover.
+testSessionActivityEverCalled :: IO Bool
+testSessionActivityEverCalled = do
+  ref <- WS.newWorkflowStateRef
+  WS.trackTool ref GhcLoad    True (A.object [])
+  WS.trackTool ref GhcLoad    True (A.object [])   -- repeat: set stays size 1
+  WS.trackTool ref GhcSuggest True (A.object [])
+  s <- WS.readState ref
+  let ever = WS.wsEverCalled s
+  pure $ GhcLoad       `Set.member`    ever
+      && GhcSuggest    `Set.member`    ever
+      && GhcQuickCheck `Set.notMember` ever
+      && Set.size ever == 2
+
+-- | #257: error streak increments on each failure and resets to 0 on
+-- the next success. Drives the post-mortem error-streak detector (#266).
+testSessionActivityErrorStreak :: IO Bool
+testSessionActivityErrorStreak = do
+  ref <- WS.newWorkflowStateRef
+  WS.trackTool ref GhcLoad False (A.object [])
+  s1 <- WS.readState ref
+  WS.trackTool ref GhcLoad False (A.object [])
+  s2 <- WS.readState ref
+  WS.trackTool ref GhcLoad True  (A.object [])
+  s3 <- WS.readState ref
+  pure $ WS.wsErrorStreak s1 == 1
+      && WS.wsErrorStreak s2 == 2
+      && WS.wsErrorStreak s3 == 0
+
+-- | #257: the registry size minus the ever-called set is the
+-- "unused_count" that ghc_workflow(status).session_activity exposes.
+testSessionActivityUnusedCount :: IO Bool
+testSessionActivityUnusedCount = do
+  ref <- WS.newWorkflowStateRef
+  WS.trackTool ref GhcLoad    True (A.object [])
+  WS.trackTool ref GhcSuggest True (A.object [])
+  s <- WS.readState ref
+  let total  = length allToolNameTexts
+      unused = total - Set.size (WS.wsEverCalled s)
+  pure $ total == 36 && unused == 34
 
 -- | Phase 11j: all 5 Code tools registered in the inventory.
 testCodeToolsRegistered :: IO Bool
@@ -16103,6 +16149,9 @@ testWorkflowNextHistoryAware =
              , WS.wsLastLoadWarnings    = 0
              , WS.wsPassedProperties    = 0
              , WS.wsToolHistory         = [GhcSuggest]
+             , WS.wsEverCalled          = Set.empty
+             , WS.wsErrorStreak         = 0
+             , WS.wsStarted             = posixSecondsToUTCTime 0
              }
       pd     = case mkProjectDir "/tmp" of Right p -> p; Left _ -> error "bad pd"
       result = WorkflowTool.render WorkflowTool.ActNext pd True [] ws dummyStaleness [] Nothing False Nothing
