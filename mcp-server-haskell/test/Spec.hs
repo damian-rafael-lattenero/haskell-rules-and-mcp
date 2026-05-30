@@ -1248,6 +1248,9 @@ main = do
       , test "#257: session activity ever-called set"  testSessionActivityEverCalled
       , test "#257: session activity error streak"      testSessionActivityErrorStreak
       , test "#257: session activity unused count"       testSessionActivityUnusedCount
+      , test "#263: discover excludes called tools"    testDiscoverExcludesCalled
+      , test "#263: discover returns at most 5"         testDiscoverAtMostFive
+      , test "#263: discover ranks phase-relevant"      testDiscoverPhaseRelevance
       , test "resources: rules workflow URI resolves" testResourcesRulesRead
       , test "resources: unknown URI returns Nothing" testResourcesUnknown
       , test "baja bundle: 4 tools registered"      testBajaRegistered
@@ -8209,6 +8212,28 @@ testSessionActivityUnusedCount = do
   let total  = length allToolNameTexts
       unused = total - Set.size (WS.wsEverCalled s)
   pure $ total == 36 && unused == 34
+
+-- | #263: discover excludes tools already called this session.
+testDiscoverExcludesCalled :: IO Bool
+testDiscoverExcludesCalled = do
+  ref <- WS.newWorkflowStateRef
+  WS.trackTool ref GhcScratch True (A.object [])
+  s <- WS.readState ref
+  pure (GhcScratch `notElem` WorkflowTool.discoverRanked s WS.PhaseDeveloping)
+
+-- | #263: discover returns at most 5 suggestions (fresh session).
+testDiscoverAtMostFive :: IO Bool
+testDiscoverAtMostFive = do
+  ref <- WS.newWorkflowStateRef
+  s <- WS.readState ref
+  pure (length (WorkflowTool.discoverRanked s WS.PhaseDeveloping) == 5)
+
+-- | #263: phase-relevant tools rank in — ghc_gate in PhaseReadyToPush.
+testDiscoverPhaseRelevance :: IO Bool
+testDiscoverPhaseRelevance = do
+  ref <- WS.newWorkflowStateRef
+  s <- WS.readState ref
+  pure (GhcGate `elem` WorkflowTool.discoverRanked s WS.PhaseReadyToPush)
 
 -- | Phase 11j: all 5 Code tools registered in the inventory.
 testCodeToolsRegistered :: IO Bool

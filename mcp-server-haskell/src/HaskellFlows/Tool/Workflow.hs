@@ -20,6 +20,7 @@ module HaskellFlows.Tool.Workflow
     -- * Exposed for unit tests
   , pickModuleLine
   , render
+  , discoverRanked
   ) where
 
 import Control.Concurrent.MVar (MVar, readMVar)
@@ -28,7 +29,9 @@ import Data.Aeson
 import qualified Data.Aeson.Key as Key
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, readIORef)
+import Data.List (sortBy)
 import Data.Maybe (isNothing, listToMaybe, mapMaybe)
+import Data.Ord (Down (..), comparing)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -41,10 +44,17 @@ import qualified HaskellFlows.Data.Scratchpad as SP
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Mcp.ToolName
+  ( ToolName (..)
+  , ToolCategory (..)
+  , allToolNames
+  , toolCategory
+  , toolCategoryText
+  , toolNameText
+  )
 import HaskellFlows.Mcp.Staleness (StalenessReport (..))
 import HaskellFlows.Mcp.WorkflowState
-  ( SessionPhase
+  ( SessionPhase (..)
   , WorkflowState (..)
   , classifyPhase
   , renderHelp
@@ -62,13 +72,15 @@ descriptor =
           <> "action; read-only. "
           <> "WHEN: session-start handshake (action='status'); when unsure "
           <> "what to do next (action='help'); action='next' for a single "
-          <> "suggestion. "
+          <> "suggestion; action='discover' ranks tools you have NOT used "
+          <> "this session by relevance to the current phase. "
           <> "WHEN NOT: ghc_toolchain to probe external binaries; the "
           <> "per-response nextStep already covers most next-step moments. "
           <> "PREREQUISITES: none — never spawns or mutates a GHCi session. "
           <> "OUTPUT: per-action view — status {projectDir, phase, "
-          <> "toolsActive, staleness}; help {steps, phaseHint}; next "
-          <> "{tool, why}. "
+          <> "toolsActive, staleness, session_activity}; help {steps, "
+          <> "phaseHint}; next {tool, why}; discover {unused:[{tool, "
+          <> "category, why_now}]}. "
           <> "SEE ALSO: ghc_toolchain, ghc_check_project."
     , tdInputSchema =
         object
@@ -76,7 +88,7 @@ descriptor =
           , "properties" .= object
               [ "action" .= object
                   [ "type"        .= ("string" :: Text)
-                  , "enum"        .= (["status", "help", "next"] :: [Text])
+                  , "enum"        .= (["status", "help", "next", "discover"] :: [Text])
                   , "description" .=
                       ("Which view to return. Default: 'status'." :: Text)
                   ]
@@ -85,7 +97,7 @@ descriptor =
           ]
     }
 
-data Action = ActStatus | ActHelp | ActNext
+data Action = ActStatus | ActHelp | ActNext | ActDiscover
   deriving stock (Eq, Show)
 
 newtype WorkflowArgs = WorkflowArgs
@@ -99,8 +111,9 @@ instance FromJSON WorkflowArgs where
     a    <- case mAct :: Maybe Text of
       Nothing        -> pure ActStatus
       Just "status"  -> pure ActStatus
-      Just "help"    -> pure ActHelp
-      Just "next"    -> pure ActNext
+      Just "help"     -> pure ActHelp
+      Just "next"     -> pure ActNext
+      Just "discover" -> pure ActDiscover
       Just other     -> fail ("unknown action: " <> T.unpack other)
     pure (WorkflowArgs a)
 
@@ -232,10 +245,75 @@ render a pd alive toolNames ws staleness missingOpt mEntry isSelfProject mScratc
         , "started_at"    .= wsStarted ws
         ]
       payload    = case a of
-        ActStatus -> statusPayload pd alive toolNames staleness phase missingOpt isSelfProject mScratch sessionActivity
-        ActHelp   -> helpPayload pd alive stateHints staleness phase mEntry
-        ActNext   -> nextPayload pd alive ws
+        ActStatus   -> statusPayload pd alive toolNames staleness phase missingOpt isSelfProject mScratch sessionActivity
+        ActHelp     -> helpPayload pd alive stateHints staleness phase mEntry
+        ActNext     -> nextPayload pd alive ws
+        ActDiscover -> discoverPayload ws phase
   in Env.toolResponseToResult (Env.mkOk payload)
+
+-- | #263: the ranked top-5 unused tools for the current phase. Pure +
+-- exported so the ranking heuristic is unit-testable without going
+-- through the JSON envelope. Excludes every tool already called this
+-- session ('wsEverCalled', #257).
+discoverRanked :: WorkflowState -> SessionPhase -> [ToolName]
+discoverRanked ws phase =
+  take 5
+    (sortBy (comparing (Down . scoreTool phase))
+       [ t | t <- allToolNames, t `Set.notMember` wsEverCalled ws ])
+
+-- | Relevance score: a per-phase boost for the tools that matter in
+-- that phase, plus a small category tiebreak (primitive > composite >
+-- gate > control-plane).
+scoreTool :: SessionPhase -> ToolName -> Int
+scoreTool phase t = phaseScore + catScore
+  where
+    catScore = case toolCategory t of
+      CatPrimitive    -> 3
+      CatComposite    -> 2
+      CatGate         -> 1
+      CatControlPlane -> 0
+    boost xs = if t `elem` xs then 10 else 0
+    phaseScore = case phase of
+      PhasePreScaffold -> boost [GhcProject, GhcLoad, GhcToolchain]
+      PhaseBootstrap   -> boost [GhcDeps, GhcModules, GhcAddImport, GhcLoad]
+      PhaseDeveloping  -> boost [GhcScratch, GhcHole, GhcSuggest, GhcType, GhcInfo, GhcComplete]
+      PhaseTestingLaws -> boost [GhcSuggest, GhcQuickCheck, GhcWitness, GhcLab, GhcArbitrary]
+      PhaseReadyToPush -> boost [GhcGate, GhcCoverage, GhcPropertyStore, GhcCheckProject, GhcLint, GhcPerf]
+
+-- | A short "why this matters now" line per tool, with a
+-- category-derived fallback. Kept compact — the goal is to nudge.
+whyNow :: ToolName -> Text
+whyNow t = case t of
+  GhcScratch      -> "Type-check a hypothesis before editing source — faster and reversible."
+  GhcLab          -> "Discover + run QuickCheck laws for every binding in a module in one call."
+  GhcSuggest      -> "Derive candidate QuickCheck laws from a function's type signature."
+  GhcWitness      -> "Sanity-check a property's input distribution — catch trivial-input bias."
+  GhcPerf         -> "Wall-clock baseline for an expression; compare later to catch regressions."
+  GhcComplete     -> "Prefix-complete in-scope identifiers when you half-remember a name."
+  GhcExplainError -> "Decode a confusing type error and verify a candidate patch."
+  GhcCoverage     -> "Find untested code paths via HPC before pushing."
+  GhcGate         -> "One-shot pre-push gate: regression + cabal test + cabal build."
+  GhcHole         -> "List a stub's typed holes with expected types + in-scope fits."
+  _               -> "Unused this session — a "
+                       <> toolCategoryText (toolCategory t) <> " tool worth a look."
+
+-- | #263: render the discover view — top-5 unused tools, ranked, each
+-- with a category + a why_now nudge, plus the total unused count.
+discoverPayload :: WorkflowState -> SessionPhase -> Value
+discoverPayload ws phase =
+  let ranked  = discoverRanked ws phase
+      total   = length [ t | t <- allToolNames, t `Set.notMember` wsEverCalled ws ]
+      entry t = object
+        [ "tool"     .= toolNameText t
+        , "category" .= toolCategoryText (toolCategory t)
+        , "why_now"  .= whyNow t
+        ]
+  in object
+       [ "view"         .= ("discover" :: Text)
+       , "phase"        .= T.pack (show phase)
+       , "unused"       .= map entry ranked
+       , "unused_total" .= total
+       ]
 
 statusPayload
   :: ProjectDir -> Bool -> [Text] -> StalenessReport -> SessionPhase
