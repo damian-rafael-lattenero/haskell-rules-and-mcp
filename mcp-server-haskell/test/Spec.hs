@@ -222,6 +222,7 @@ import HaskellFlows.Parser.ModuleName
 import HaskellFlows.Tool.Deps
   ( addDep
   , extractErrorSummary
+  , importsMatchingPackage
   , parseStanzaSelector
   , validatePackageName
   , validateVersionConstraint
@@ -1258,6 +1259,7 @@ main = do
       , test "#258: GHC-32850 suppressed when modules registered" testLoad32850Suppressed
       , test "#258: GHC-32850 retained when module missing" testLoad32850RetainedWhenMissing
       , test "#259: GHC-76037 surfaces submodule suggested_import" testSuggestedImportGhc76037
+      , test "#260: importsMatchingPackage detects cross-stanza dep" testDepsCrossStanzaMatch
       , test "resources: rules workflow URI resolves" testResourcesRulesRead
       , test "resources: unknown URI returns Nothing" testResourcesUnknown
       , test "baja bundle: 4 tools registered"      testBajaRegistered
@@ -8204,6 +8206,19 @@ testSessionActivityUnusedCount = do
   let total  = length allToolNameTexts
       unused = total - Set.size (WS.wsEverCalled s)
   pure $ total == 36 && unused == 34
+
+-- | #260: importsMatchingPackage finds sibling-stanza imports of a
+-- module the added package owns (curated map), ignoring unrelated ones.
+testDepsCrossStanzaMatch :: IO Bool
+testDepsCrossStanzaMatch =
+  let body = T.unlines
+        [ "module Spec where"
+        , "import Data.Map.Strict (Map)"
+        , "import Data.Maybe (fromMaybe)"
+        , "import Test.QuickCheck"
+        ]
+  in pure $ importsMatchingPackage "containers" body == ["import Data.Map.Strict (Map)"]
+         && null (importsMatchingPackage "aeson" body)
 
 -- | #259: a GHC-76037 (qualified-name not exported) error matching the
 -- curated submodule table surfaces the corrected import.

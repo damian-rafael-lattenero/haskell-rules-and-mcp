@@ -41,6 +41,8 @@ module HaskellFlows.Tool.Deps
     -- * #244 — common stanza hint (exported for unit tests)
   , findCommonStanzaWithPkg
   , unchangedResult'
+    -- * #260 — cross-stanza dep hint (exported for unit tests)
+  , importsMatchingPackage
   ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
@@ -48,7 +50,8 @@ import Control.Exception (SomeException, bracket, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAlphaNum, isDigit, isSpace)
-import Data.List (sortOn)
+import Data.List (nub, sortOn)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -304,7 +307,12 @@ handleAction file args = case daAction args of
           -- 'verifyAfter=True' on add: spawn `cabal v2-build --dry-run`
           -- after the edit to confirm the new dep set is solvable;
           -- rollback the .cabal if cabal refuses (#48).
-          Right mSel -> runEdit file safePkg mSel (addDep safeVer) "added" True
+          Right mSel -> do
+            -- #260: warn if a sibling stanza's sources already import a
+            -- module this package owns, so the agent adds it there too
+            -- before a later gate fails on the missing dep.
+            mHint <- crossStanzaHint file safePkg mSel
+            runEdit mHint file safePkg mSel (addDep safeVer) "added" True
   ActRemove -> case daPackage args of
     Nothing  -> pure (errorResult "'package' is required for remove")
     Just pkg -> case validatePackageName pkg of
@@ -317,7 +325,7 @@ handleAction file args = case daAction args of
         -- package (a downstream issue surfaced by ghc_load, not by
         -- the resolver). Skip verify on remove to keep the call
         -- cheap.
-        Right mSel -> runEdit file safePkg mSel removeDep "removed" False
+        Right mSel -> runEdit Nothing file safePkg mSel removeDep "removed" False
 
 -- | Resolve a stanza selector at @list@ time by scoping the body to
 -- that stanza's lines. Errors (unknown selector / stanza not found)
@@ -331,14 +339,15 @@ resolveStanza (Just raw) body = do
     Just (_, stanzaLns, _) -> Right (T.unlines stanzaLns)
 
 runEdit
-  :: FilePath
+  :: Maybe Value                             -- #260: cross-stanza hint (add only)
+  -> FilePath
   -> Text                                    -- validated package name
   -> Maybe (Text, Maybe Text)                -- parsed stanza selector, if any
   -> (Text -> Text -> Text)                  -- (pkg -> body -> newBody)
   -> Text                                    -- verb for the success message
   -> Bool                                    -- verifyAfter: run cabal dry-run + rollback
   -> IO ToolResult
-runEdit file pkg mStanza f verb verifyAfter = withCabalLock file $ do
+runEdit mHint file pkg mStanza f verb verifyAfter = withCabalLock file $ do
   res <- try (TIO.readFile file) :: IO (Either SomeException Text)
   case res of
     Left e -> pure (errorResult (T.pack ("Could not read cabal file: " <> show e)))
@@ -385,8 +394,8 @@ runEdit file pkg mStanza f verb verifyAfter = withCabalLock file $ do
             case wres of
               Left e  -> pure (errorResult (T.pack ("Could not write cabal file: " <> show e)))
               Right _
-                | verifyAfter -> verifyAndCommit file body pkg verb
-                | otherwise   -> pure (editResult file pkg verb)
+                | verifyAfter -> verifyAndCommit mHint file body pkg verb
+                | otherwise   -> pure (editResult mHint file pkg verb)
 
 -- | Post-write verification step (#48): run @cabal v2-build all
 -- --dry-run --only-dependencies@ in the project root. If cabal
@@ -398,11 +407,11 @@ runEdit file pkg mStanza f verb verifyAfter = withCabalLock file $ do
 -- Held inside 'withCabalLock' (caller's responsibility) so the
 -- subprocess sees the version we just wrote, and so a rollback
 -- can't race with a concurrent add.
-verifyAndCommit :: FilePath -> Text -> Text -> Text -> IO ToolResult
-verifyAndCommit file originalBody pkg verb = do
+verifyAndCommit :: Maybe Value -> FilePath -> Text -> Text -> Text -> IO ToolResult
+verifyAndCommit mHint file originalBody pkg verb = do
   verified <- verifyResolvable file pkg
   case verified of
-    Right () -> pure (editResult file pkg verb)
+    Right () -> pure (editResult mHint file pkg verb)
     Left err -> do
       -- Roll back the .cabal to its pre-edit state.
       rbres <- try (TIO.writeFile file originalBody)
@@ -910,9 +919,9 @@ listResult file deps =
         ]
   in Env.toolResponseToResult (Env.mkOk payload)
 
-editResult :: FilePath -> Text -> Text -> ToolResult
-editResult file pkg verb =
-  let payload = object
+editResult :: Maybe Value -> FilePath -> Text -> Text -> ToolResult
+editResult mHint file pkg verb =
+  let payload = object $
         [ "action"     .= verb
         , "cabal_file" .= T.pack file
         , "package"    .= pkg
@@ -922,6 +931,7 @@ editResult file pkg verb =
                             \restart tool is needed."
                           :: Text )
         ]
+        <> maybe [] (\h -> [ "cross_stanza_hint" .= h ]) mHint
   in Env.toolResponseToResult (Env.mkOk payload)
 
 -- | #48 + #90: cabal-rejected dep maps to status='failed' with
@@ -974,6 +984,104 @@ unchangedResult' file pkg verb mHint =
 -- return the first common stanza name whose build-depends contains
 -- @pkg@. Used to produce an actionable hint when a remove is a no-op
 -- because the package is inherited rather than direct.
+--------------------------------------------------------------------------------
+-- #260: cross-stanza dependency hint. After adding a package to one
+-- stanza, warn when a sibling stanza's sources import a module the
+-- package owns (curated map + conventional-layout scan).
+--------------------------------------------------------------------------------
+
+-- | Curated package -> module-prefix map: the common packages whose
+-- modules a sibling stanza frequently also imports.
+packageModulePrefixes :: [(Text, [Text])]
+packageModulePrefixes =
+  [ ("containers",           ["Data.Map", "Data.Set", "Data.IntMap", "Data.IntSet", "Data.Sequence", "Data.Tree", "Data.Graph"])
+  , ("unordered-containers", ["Data.HashMap", "Data.HashSet"])
+  , ("text",                 ["Data.Text"])
+  , ("bytestring",           ["Data.ByteString"])
+  , ("aeson",                ["Data.Aeson"])
+  , ("vector",               ["Data.Vector"])
+  , ("mtl",                  ["Control.Monad.State", "Control.Monad.Reader", "Control.Monad.Writer", "Control.Monad.Except", "Control.Monad.RWS"])
+  , ("QuickCheck",           ["Test.QuickCheck"])
+  , ("hspec",                ["Test.Hspec"])
+  , ("time",                 ["Data.Time"])
+  ]
+
+-- | Import lines in a source body that pull a module owned by @pkg@
+-- (per the curated map). Empty when @pkg@ isn't mapped. Pure + tested.
+importsMatchingPackage :: Text -> Text -> [Text]
+importsMatchingPackage pkg body =
+  case lookup pkg packageModulePrefixes of
+    Nothing       -> []
+    Just prefixes ->
+      [ T.strip ln
+      | ln <- T.lines body
+      , "import " `T.isPrefixOf` T.stripStart ln
+      , let modTok = importedModule ln
+      , any (\p -> p == modTok || (p <> ".") `T.isPrefixOf` modTok) prefixes
+      ]
+  where
+    importedModule ln =
+      let afterImp  = T.stripStart (T.drop 6 (T.stripStart ln))   -- drop "import"
+          afterQual = fromMaybe afterImp (T.stripPrefix "qualified " afterImp)
+      in T.takeWhile (\c -> isAlphaNum c || c == '.' || c == '_') (T.stripStart afterQual)
+
+-- | Conventional stanza -> source dir mapping (custom hs-source-dirs are
+-- not parsed; this is a best-effort layout heuristic).
+conventionalStanzaDirs :: [(Text, FilePath)]
+conventionalStanzaDirs =
+  [ ("library", "src"), ("test-suite", "test")
+  , ("executable", "app"), ("benchmark", "benchmarks") ]
+
+-- | Recursively list @.hs@ files under a directory (empty if absent).
+enumerateHsFiles :: FilePath -> IO [FilePath]
+enumerateHsFiles dir = do
+  exists <- doesDirectoryExist dir
+  if not exists
+    then pure []
+    else do
+      entries <- listDirectory dir
+      concat <$> mapM (\e -> do
+        let p = dir </> e
+        isDir <- doesDirectoryExist p
+        if isDir
+          then enumerateHsFiles p
+          else pure [ p | takeExtension p == ".hs" ]) entries
+
+-- | #260: build the cross-stanza hint Value, or Nothing when the added
+-- package isn't curated or no sibling stanza imports a module it owns.
+crossStanzaHint :: FilePath -> Text -> Maybe (Text, Maybe Text) -> IO (Maybe Value)
+crossStanzaHint cabalFile pkg mSel
+  | pkg `notElem` map fst packageModulePrefixes = pure Nothing
+  | otherwise = do
+      let added  = maybe "library" fst mSel
+          root   = takeDirectory cabalFile
+          others = [ sd | sd@(s, _) <- conventionalStanzaDirs, s /= added ]
+      evidence <- concat <$> mapM (scanStanza root) others
+      pure $ case evidence of
+        [] -> Nothing
+        _  ->
+          let stanzas = nub [ s | (s, _, _) <- evidence ]
+          in Just $ object
+               [ "package"        .= pkg
+               , "also_needed_in" .= stanzas
+               , "evidence"       .= [ object [ "file" .= f, "import" .= imp ]
+                                     | (_, f, imp) <- take 8 evidence ]
+               , "suggested_call" .= object
+                   [ "action"  .= ("add" :: Text)
+                   , "package" .= pkg
+                   , "stanza"  .= headOr "test-suite" stanzas ]
+               ]
+  where
+    headOr d xs = case xs of { (x : _) -> x; [] -> d }
+    scanStanza root (stanza, d) = do
+      files <- enumerateHsFiles (root </> d)
+      concat <$> mapM (\f -> do
+        eBody <- try (TIO.readFile f) :: IO (Either SomeException Text)
+        pure $ case eBody of
+          Left _     -> []
+          Right body -> [ (stanza, T.pack f, imp)
+                        | imp <- importsMatchingPackage pkg body ]) files
+
 findCommonStanzaWithPkg :: Text -> Text -> Maybe Text
 findCommonStanzaWithPkg pkg body =
   let lns = T.lines body
