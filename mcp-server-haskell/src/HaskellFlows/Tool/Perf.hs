@@ -68,21 +68,19 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcPerf
     , tdDescription =
-        "Wall-clock perf harness. Evaluates a Haskell expression N "
-          <> "times in-process and returns aggregate statistics "
-          <> "(mean/median/min/max ns). Phase 2: set save_baseline=true "
-          <> "to persist the mean to .haskell-flows/perf.json, or "
-          <> "compare_baseline=true to detect regressions. Default "
-          <> "threshold is 30% slower (tunable via threshold_pct). Use "
-          <> "a tighter threshold only when Criterion warmup is implemented; "
-          <> "GHCi wall-clock timings vary ±30% for expressions above 1ms; "
-          <> "sub-millisecond expressions fall inside the ~100µs–1ms eval "
-          <> "overhead and may see 100x+ variance — a low_precision_warning "
-          <> "is added to the payload when mean_ns < 1ms. "
-          <> "Both flags may be combined: comparison runs first, then the "
-          <> "new measurement is saved as the updated baseline. "
-          <> "Criterion warmup, Core dump, and allocation tracking remain "
-          <> "deferred."
+        "PURPOSE: Wall-clock perf harness — evaluate an expression N times "
+          <> "and report mean/median/min/max ns. "
+          <> "WHEN: profiling an expression; save_baseline=true persists the "
+          <> "mean to .haskell-flows/perf.json; compare_baseline=true detects "
+          <> "regressions (default 30% slower, tunable via threshold_pct; "
+          <> "both flags may be combined). "
+          <> "WHEN NOT: ghc_eval for a one-shot evaluation; not a Criterion "
+          <> "replacement (warmup, Core dump, allocation tracking deferred). "
+          <> "PREREQUISITES: a loaded session; sub-millisecond means are "
+          <> "noisy — a low_precision_warning is added when mean_ns < 1ms. "
+          <> "OUTPUT: {mean_ns, median_ns, min_ns, max_ns}; a regression "
+          <> "verdict when compare_baseline=true. "
+          <> "SEE ALSO: ghc_eval, ghc_witness."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

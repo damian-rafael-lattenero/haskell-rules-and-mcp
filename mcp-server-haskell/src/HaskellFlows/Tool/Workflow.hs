@@ -57,10 +57,18 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcWorkflow
     , tdDescription =
-        "Query the server's workflow state. Actions: 'status' (server "
-          <> "inventory), 'help' (what to do next, context-aware), 'next' "
-          <> "(single most likely next tool call). Read-only; never spawns "
-          <> "or mutates a GHCi session."
+        "PURPOSE: Report MCP / session state and the context-aware next "
+          <> "action; read-only. "
+          <> "WHEN: session-start handshake (action='status'); when unsure "
+          <> "what to do next (action='help'); action='next' for a single "
+          <> "suggestion. "
+          <> "WHEN NOT: ghc_toolchain to probe external binaries; the "
+          <> "per-response nextStep already covers most next-step moments. "
+          <> "PREREQUISITES: none — never spawns or mutates a GHCi session. "
+          <> "OUTPUT: per-action view — status {projectDir, phase, "
+          <> "toolsActive, staleness}; help {steps, phaseHint}; next "
+          <> "{tool, why}. "
+          <> "SEE ALSO: ghc_toolchain, ghc_check_project."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

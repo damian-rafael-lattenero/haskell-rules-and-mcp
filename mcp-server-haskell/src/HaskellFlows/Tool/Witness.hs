@@ -65,20 +65,19 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcWitness
     , tdDescription =
-        "Property-witness explorer. Runs the property through QuickCheck "
-          <> "with distribution instrumentation, then surfaces the input "
-          <> "histogram and flags biased buckets (< 1 %% of total runs). "
-          <> "Useful when '+++ OK, passed N tests' looks suspicious. "
-          <> "classify_by='size' (default) buckets by show-length. "
-          <> "classify_by='constructor' extracts the leading constructor "
-          <> "name from show-output — useful for Maybe/Either/list inputs. "
-          <> "OUTPUT: distribution (by_size or by_constructor), warnings "
-          <> "(biased-bucket entries), wall_time_ms (subprocess time only), "
-          <> "deferred (list of features not yet implemented: "
-          <> "uncovered-branches, smallest-witness). "
-          <> "NOTE: instrumentation adds ~55 ms over a plain ghc_quickcheck "
-          <> "run because each of the N test cases executes a collect call. "
-          <> "Uses the in-process GHC API session (#220) — no subprocess overhead."
+        "PURPOSE: Run a property under QuickCheck with distribution "
+          <> "instrumentation and flag biased input buckets. "
+          <> "WHEN: a '+++ OK, passed N tests' looks suspicious; "
+          <> "classify_by='size' (default) buckets by show-length, "
+          <> "classify_by='constructor' by leading constructor "
+          <> "(Maybe/Either/list inputs). "
+          <> "WHEN NOT: ghc_quickcheck for the plain pass/fail; ghc_suggest "
+          <> "to derive the property itself. "
+          <> "PREREQUISITES: the property's module loaded (in-process GHC "
+          <> "session, #220 — no subprocess). "
+          <> "OUTPUT: {distribution (by_size|by_constructor), warnings "
+          <> "(biased buckets < 1% of runs), wall_time_ms, deferred}. "
+          <> "SEE ALSO: ghc_quickcheck, ghc_suggest."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

@@ -12897,16 +12897,44 @@ testWithDogfoodHintNotFiresOnReadTool = pure $
 -- tool at once (out of scope for PR-5).
 --
 -- Failures are reported by tool name so the offender is obvious.
+-- | #267: the description-shape lint now enforces the full 6-field
+-- template (PURPOSE / WHEN / WHEN NOT / PREREQUISITES / OUTPUT /
+-- SEE ALSO) documented in 'docs/TOOL_DESCRIPTION_TEMPLATE.md', not
+-- just a 200-char minimum. The 'WHEN NOT' marker is the disambiguator
+-- that stops an LLM picking the wrong sibling tool; 'SEE ALSO' (plus
+-- the ghc_/hoogle_ cross-reference check) gives it a routing anchor.
+-- Pre-#267 only 14/36 descriptors carried these markers and the lint
+-- silently passed the other 22 on length alone.
 testDescriptionsMeetTemplate :: IO Bool
 testDescriptionsMeetTemplate = do
-  let bad =
-        [ tdName d
+  let requiredMarkers :: [Text]
+      requiredMarkers =
+        [ "PURPOSE:", "WHEN:", "WHEN NOT:"
+        , "PREREQUISITES:", "OUTPUT:", "SEE ALSO:"
+        ]
+      missingMarkers d =
+        [ m | m <- requiredMarkers, not (m `T.isInfixOf` tdDescription d) ]
+      -- At least one sibling-tool cross-reference so the agent has a
+      -- routing anchor (every SEE ALSO names a ghc_/hoogle_ tool).
+      hasCrossRef d =
+        "ghc_" `T.isInfixOf` tdDescription d
+          || "hoogle_" `T.isInfixOf` tdDescription d
+      problems d =
+        [ "length < 200" | T.length (tdDescription d) < 200 ]
+          <> [ "missing " <> m | m <- missingMarkers d ]
+          <> [ "no ghc_/hoogle_ cross-reference" | not (hasCrossRef d) ]
+      bad =
+        [ (tdName d, problems d)
         | d <- allToolDescriptors
-        , T.length (tdDescription d) < 200
+        , not (null (problems d))
         ]
   unless (null bad) $ do
-    putStrLn "description-shape lint hits (length < 200):"
-    mapM_ (\name -> putStrLn ("  " <> T.unpack name)) bad
+    putStrLn "description-template lint hits (6-field template, #267):"
+    mapM_
+      (\(name, ps) ->
+         putStrLn ("  " <> T.unpack name <> ": "
+                    <> T.unpack (T.intercalate ", " ps)))
+      bad
   pure (null bad)
 
 --------------------------------------------------------------------------------

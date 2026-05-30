@@ -56,12 +56,18 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcBatch
     , tdDescription =
-        "Run a list of tool invocations sequentially in one request. "
-          <> "Each action is `{tool: string, args: object}`. Returns "
-          <> "an array of results in the same order. With fail_fast=true "
-          <> "(default) stops on the first error; with fail_fast=false "
-          <> "runs every action. Nesting ghc_batch inside itself is "
-          <> "refused."
+        "PURPOSE: Run a list of tool invocations sequentially in one "
+          <> "request. "
+          <> "WHEN: collapsing a known multi-step plan (e.g. a nextStep "
+          <> "chain) into one round-trip; fail_fast=true (default) stops on "
+          <> "the first error, false runs every action. "
+          <> "WHEN NOT: single tool calls when each step depends on "
+          <> "inspecting the previous result. "
+          <> "PREREQUISITES: each action is {tool, args}; nesting ghc_batch "
+          <> "inside itself is refused. "
+          <> "OUTPUT: {results:[...]} in input order; partial results when "
+          <> "fail_fast=false. "
+          <> "SEE ALSO: ghc_workflow."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

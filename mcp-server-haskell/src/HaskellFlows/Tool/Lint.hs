@@ -68,11 +68,15 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcLint
     , tdDescription =
-        "Run HLint. Accepts either `path` (directory, recursive) or "
-          <> "`module_path` (single file). `path` is the default form "
-          <> "and matches CI's behaviour exactly — no more author/CI "
-          <> "drift. Returns structured suggestions with severity and "
-          <> "location."
+        "PURPOSE: Run HLint over the project (or a single file) with "
+          <> "structured suggestions. "
+          <> "WHEN: before pushing use path (recursive, matches CI exactly); "
+          <> "module_path for a faster single-file inner loop. "
+          <> "WHEN NOT: ghc_format for style / layout; ghc_check_module for "
+          <> "compile + warnings. "
+          <> "PREREQUISITES: hlint on PATH. "
+          <> "OUTPUT: {hints:[{severity, location, hint}], count}. "
+          <> "SEE ALSO: ghc_format, ghc_fix_warning."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

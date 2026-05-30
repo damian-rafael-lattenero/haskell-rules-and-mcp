@@ -64,13 +64,17 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcCheckModule
     , tdDescription =
-        "Aggregate all module-health gates into one report: compiles? "
-          <> "no errors? no warnings? no typed holes? stored properties "
-          <> "still pass? Returns per-gate pass/fail plus a single "
-          <> "'overall' boolean. Use after editing a module to confirm "
-          <> "it is clean before moving on. For whole-project health use "
-          <> "ghc_check_project instead. SEE ALSO: ghc_check_project "
-          <> "(all modules), ghc_lint (style hints), ghc_gate (pre-push)."
+        "PURPOSE: Aggregate every module-health gate (compiles? errors? "
+          <> "warnings? typed holes? stored properties pass?) into one "
+          <> "pass/fail report. "
+          <> "WHEN: after editing a module, to confirm it is clean before "
+          <> "moving on. "
+          <> "WHEN NOT: ghc_check_project for whole-project health; ghc_gate "
+          <> "for the tests + build pre-push composite. "
+          <> "PREREQUISITES: a module path in the active project. "
+          <> "OUTPUT: {gates:{compiles, warnings, holes, properties}, "
+          <> "overall}. "
+          <> "SEE ALSO: ghc_check_project, ghc_lint, ghc_gate."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

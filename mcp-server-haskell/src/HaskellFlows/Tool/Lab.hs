@@ -79,14 +79,18 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcLab
     , tdDescription =
-        "Module-wide property-first audit. For every top-level "
-          <> "binding in the supplied module, propose candidate "
-          <> "QuickCheck laws via the same engine 'ghc_suggest' uses, "
-          <> "filter by min_confidence, and run each via "
-          <> "'ghc_quickcheck'. Passing properties auto-persist to "
-          <> "the regression store. Set determinism_runs>0 to re-run "
-          <> "each passing property N times and flag unstable ones. "
-          <> "Arbitrary-template generation is still deferred."
+        "PURPOSE: Module-wide property-first audit — suggest and run "
+          <> "QuickCheck laws for every top-level binding. "
+          <> "WHEN: discovering laws across a whole module in one call; "
+          <> "filter by min_confidence; determinism_runs>0 re-runs each "
+          <> "passing property N times to flag unstable ones. "
+          <> "WHEN NOT: ghc_suggest for a single function; ghc_quickcheck "
+          <> "to run one property you already have. "
+          <> "PREREQUISITES: the module loaded; QuickCheck in a stanza. "
+          <> "OUTPUT: {bindings:[{name, suggestions, results}]}; passing "
+          <> "properties auto-persist (Arbitrary-template generation is "
+          <> "still deferred). "
+          <> "SEE ALSO: ghc_suggest, ghc_quickcheck, ghc_property_store."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

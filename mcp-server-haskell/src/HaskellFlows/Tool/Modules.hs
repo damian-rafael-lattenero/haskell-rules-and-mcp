@@ -47,14 +47,18 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcModules
     , tdDescription =
-        "Manage exposed-modules / other-modules in the project's \
-        \.cabal (and the matching .hs source files). \
-        \action='add' registers new modules + scaffolds empty stubs; \
-        \action='remove' de-registers and (with delete_files=true) \
-        \removes the .hs files. Stanza selector controls which \
-        \stanza is touched (default: library). Idempotent on add. \
-        \Phase B successor to ghc_add_modules + ghc_remove_modules \
-        \(issue #94)."
+        "PURPOSE: Manage exposed-modules / other-modules in the .cabal \
+        \and the matching .hs files. \
+        \WHEN: action='add' registers modules + scaffolds stubs; \
+        \action='remove' de-registers (delete_files=true also removes \
+        \the .hs). \
+        \WHEN NOT: ghc_deps for build-depends; ghc_apply_exports to \
+        \change a module's export list. \
+        \PREREQUISITES: a .cabal in the active project; stanza selector \
+        \defaults to library. Idempotent on add. \
+        \OUTPUT: {action, modules, created_files|removed}. \
+        \SEE ALSO: ghc_deps, ghc_apply_exports. \
+        \(Phase B successor to ghc_add_modules + ghc_remove_modules, #94.)"
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

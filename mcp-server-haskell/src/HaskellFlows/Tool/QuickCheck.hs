@@ -102,13 +102,18 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcQuickCheck
     , tdDescription =
-        "Run a QuickCheck property against the current session. "
-          <> "The property is passed directly to quickCheckWithResult, "
-          <> "so it must be a value of type Testable (e.g. "
-          <> "`\\x -> reverse (reverse x) == x`). Returns structured "
-          <> "pass/fail/gave-up/exception output. Pass `runs` >= 2 to "
-          <> "run the same property N times for flakiness detection "
-          <> "(#94 Phase C: subsumes the retired ghc_determinism)."
+        "PURPOSE: Run a QuickCheck property against the current session "
+          <> "and auto-persist it on pass. "
+          <> "WHEN: checking a law (a Testable value, e.g. "
+          <> "`\\x -> reverse (reverse x) == x`); pass runs>=2 for flakiness "
+          <> "detection (subsumes the retired ghc_determinism). "
+          <> "WHEN NOT: ghc_suggest to derive candidate laws first; "
+          <> "ghc_witness to inspect the input distribution. "
+          <> "PREREQUISITES: the property's module loaded; QuickCheck in a "
+          <> "stanza. "
+          <> "OUTPUT: {state: passed|failed|gave_up|exception, ...}; passes "
+          <> "persist to .haskell-flows/properties.json. "
+          <> "SEE ALSO: ghc_suggest, ghc_witness, ghc_property_store."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

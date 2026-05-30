@@ -55,15 +55,17 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcCoverage
     , tdDescription =
-        "Run 'cabal test --enable-coverage' and parse the HPC report "
-          <> "into 8 structured HPC metrics (expressions, alternatives, "
-          <> "local bindings, top-level bindings, literals, module "
-          <> "coverage, alternatives tried, local-binding use). "
-          <> "Requires cabal on PATH. Coverage runs are slow; hard "
-          <> "timeout at 5 minutes. Use after tests pass to identify "
-          <> "untested code paths before pushing. Not a substitute for "
-          <> "ghc_gate — run coverage separately. SEE ALSO: ghc_gate "
-          <> "(pre-push composite), ghc_quickcheck (property testing)."
+        "PURPOSE: Run 'cabal test --enable-coverage' and parse the HPC "
+          <> "report into 8 structured metrics. "
+          <> "WHEN: after tests pass, to find untested code paths before "
+          <> "pushing. "
+          <> "WHEN NOT: ghc_gate for the pre-push composite; ghc_quickcheck "
+          <> "for property testing itself. "
+          <> "PREREQUISITES: cabal on PATH and a test-suite; runs are slow "
+          <> "(hard 5-minute timeout). "
+          <> "OUTPUT: {metrics:{expressions, alternatives, local_bindings, "
+          <> "top_level, literals, module, ...}}. "
+          <> "SEE ALSO: ghc_gate, ghc_quickcheck."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

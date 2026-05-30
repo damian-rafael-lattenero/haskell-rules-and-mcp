@@ -23,14 +23,12 @@ gets the gist.
 
 ## Reference exemplars
 
-The HIGH-tier descriptors that already meet the template (read these
-before writing a new one):
-
-- `ghc_lab` — `mcp-server-haskell/src/HaskellFlows/Tool/Lab.hs:75-83`
-- `ghc_perf` — `mcp-server-haskell/src/HaskellFlows/Tool/Perf.hs:60-67`
-- `ghc_explain_error` — `mcp-server-haskell/src/HaskellFlows/Tool/ExplainError.hs:60-67`
-- `ghc_witness` — `mcp-server-haskell/src/HaskellFlows/Tool/Witness.hs:61-68`
-- `ghc_modules` — `mcp-server-haskell/src/HaskellFlows/Tool/Modules.hs:45-95`
+As of #267 **every** registered tool's `tdDescription` conforms to this
+template — enforced by `testDescriptionsMeetTemplate`, which now checks
+for all six markers plus a `ghc_`/`hoogle_` cross-reference, not just a
+length floor. Read any `mcp-server-haskell/src/HaskellFlows/Tool/*.hs`
+descriptor as an exemplar; `ghc_toolchain`, `ghc_project`, and
+`ghc_browse` are good ones to start from.
 
 ## Canonical shape (literal example)
 

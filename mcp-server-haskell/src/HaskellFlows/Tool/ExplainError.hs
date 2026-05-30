@@ -66,13 +66,16 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcExplainError
     , tdDescription =
-        "Build a structured explanation context for a type error. "
-          <> "Phase 1: returns {diagnostic, context} where 'context' "
-          <> "packages the module source + imports + the diagnostic's "
-          <> "enclosing line range. The agent uses its own LLM to "
-          <> "propose fix candidates. Phase 2 (planned): a separate "
-          <> "verify endpoint applies each candidate to a snapshot "
-          <> "and returns ranked verified candidates."
+        "PURPOSE: Build a structured explanation context for a GHC type "
+          <> "error, and optionally verify a candidate patch. "
+          <> "WHEN: decoding a confusing type error; pass verify_patch to "
+          <> "apply a candidate to a snapshot and recompile. "
+          <> "WHEN NOT: ghc_fix_warning for warnings (not type errors); "
+          <> "ghc_hole when the issue is an unfilled stub. "
+          <> "PREREQUISITES: the failing module in the active project. "
+          <> "OUTPUT: {diagnostic, context:{source, imports, "
+          <> "enclosing_range}}; verify_patch adds {error_resolved}. "
+          <> "SEE ALSO: ghc_fix_warning, ghc_hole."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

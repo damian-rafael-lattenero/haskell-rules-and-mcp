@@ -57,11 +57,17 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcLoad
     , tdDescription =
-        "Load or reload Haskell modules via the in-process GHC API. "
-          <> "Returns structured compilation errors and warnings. Pass "
-          <> "diagnostics=true to additionally run a deferred pass "
-          <> "(-fdefer-type-errors -fdefer-typed-holes) and surface typed "
-          <> "holes discovered that way."
+        "PURPOSE: Load or reload Haskell modules via the in-process GHC "
+          <> "API and return structured errors + warnings. "
+          <> "WHEN: after editing a module; the first call boots GHCi; "
+          <> "diagnostics=true adds a deferred pass that surfaces typed holes. "
+          <> "WHEN NOT: ghc_check_module for the aggregate pass/fail gate; "
+          <> "ghc_explain_error to decode a specific type error. "
+          <> "PREREQUISITES: a module path in the active project (omit to "
+          <> "reload the current set). "
+          <> "OUTPUT: {errors, warnings, loaded}; diagnostics=true adds "
+          <> "typed-hole warnings. "
+          <> "SEE ALSO: ghc_check_module, ghc_hole, ghc_explain_error."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

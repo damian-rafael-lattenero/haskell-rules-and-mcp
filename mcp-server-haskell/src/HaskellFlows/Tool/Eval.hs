@@ -75,12 +75,17 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcEval
     , tdDescription =
-        "Evaluate a Haskell expression in-process via the GHC API. "
-          <> "Tries @show@-wrapped compileExpr first (for pure expressions), "
-          <> "falls back to an IO String interpretation (for actions that "
-          <> "already return a string, or expressions in the IO monad). "
-          <> "Output capped at "
-          <> T.pack (show maxEvalBytes) <> " characters."
+        "PURPOSE: Evaluate a single Haskell expression in-process via the "
+          <> "GHC API. "
+          <> "WHEN: checking a value, a pure function result, or an IO "
+          <> "action's output mid-session. "
+          <> "WHEN NOT: ghc_quickcheck to test a property over many inputs; "
+          <> "ghc_type for just the type. "
+          <> "PREREQUISITES: a loaded session (auto-boots on first use). "
+          <> "OUTPUT: {result} — show-wrapped for pure exprs, IO String "
+          <> "otherwise; capped at "
+          <> T.pack (show maxEvalBytes) <> " characters. "
+          <> "SEE ALSO: ghc_type, ghc_quickcheck."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

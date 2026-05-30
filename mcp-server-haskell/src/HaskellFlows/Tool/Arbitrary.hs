@@ -89,12 +89,19 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcArbitrary
     , tdDescription =
-        "Generate a QuickCheck Arbitrary instance template for a user-defined "
-          <> "data type. Returns the instance text for the agent to paste — does "
-          <> "not modify files. Polymorphic types are handled: the template "
-          <> "includes an Arbitrary constraint for every type variable. Complex "
-          <> "types (GADTs, existentials, constrained constructors) may still "
-          <> "need hand-editing after paste."
+        "PURPOSE: Generate a QuickCheck Arbitrary instance template for a "
+          <> "user-defined data type. "
+          <> "WHEN: a new data/newtype needs an Arbitrary before property "
+          <> "testing; polymorphic types get an Arbitrary constraint per "
+          <> "type variable. "
+          <> "WHEN NOT: ghc_quickcheck once the instance exists; hand-edit "
+          <> "GADTs / existentials / constrained constructors the template "
+          <> "cannot fully express. "
+          <> "PREREQUISITES: the type's module loaded so its constructors "
+          <> "resolve. "
+          <> "OUTPUT: {instance} text for the agent to paste — does not "
+          <> "modify files. "
+          <> "SEE ALSO: ghc_quickcheck, ghc_suggest."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

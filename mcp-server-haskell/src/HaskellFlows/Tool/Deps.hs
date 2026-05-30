@@ -114,14 +114,18 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcDeps
     , tdDescription =
-        "Manage build-depends in the project's .cabal file. Actions: "
-          <> "'list' (current deps), 'add' (insert pkg + optional "
-          <> "version constraint), 'remove' (delete by name), "
-          <> "'explain' (show which stanzas declare package X and "
-          <> "which source files import its modules — pass package=X). "
-          <> "After "
-          <> "add/remove, the next ghc_load picks up the new "
-          <> "package graph — no explicit session restart needed."
+        "PURPOSE: Manage build-depends in the project's .cabal "
+          <> "(list / add / remove / explain). "
+          <> "WHEN: action='add'/'remove' a dependency; action='list' the "
+          <> "current set; action='explain' which stanzas + source imports "
+          <> "use package=X. "
+          <> "WHEN NOT: ghc_modules for exposed-modules / other-modules; "
+          <> "ghc_add_import to add a source import line. "
+          <> "PREREQUISITES: a .cabal in the active project; never hand-edit "
+          <> "build-depends — the post-edit invariant guards this tool. "
+          <> "OUTPUT: per-action {action, stanzas|added|removed|explanation}; "
+          <> "the next ghc_load picks up the new package graph. "
+          <> "SEE ALSO: ghc_modules, ghc_add_import."
     , tdInputSchema = schema
     }
 

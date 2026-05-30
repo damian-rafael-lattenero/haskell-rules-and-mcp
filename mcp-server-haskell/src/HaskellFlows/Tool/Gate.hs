@@ -72,10 +72,16 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcGate
     , tdDescription =
-        "Pre-push finalizer: runs regression + cabal test + cabal build "
-          <> "in one call, returns per-step durations + pass/fail/skip + "
-          <> "consolidated summary. Use before 'git push' — if this is "
-          <> "green, the CI job is very likely to be green too."
+        "PURPOSE: Pre-push finalizer — run regression + cabal test + cabal "
+          <> "build in one call. "
+          <> "WHEN: just before git commit / push; green here means CI is "
+          <> "very likely green too. "
+          <> "WHEN NOT: ghc_check_module / ghc_check_project for the faster "
+          <> "compile-only gates during iteration. "
+          <> "PREREQUISITES: cabal on PATH and a test-suite (steps are "
+          <> "skippable via skip_* flags). "
+          <> "OUTPUT: {steps:[{name, status, duration}], summary, overall}. "
+          <> "SEE ALSO: ghc_check_project, ghc_coverage."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

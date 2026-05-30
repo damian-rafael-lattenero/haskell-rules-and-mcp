@@ -40,14 +40,17 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcHole
     , tdDescription =
-        "Load a module under -fdefer-typed-holes and return every typed "
-          <> "hole with its expected type, in-scope candidates that fit, "
-          <> "and relevant local bindings. Use when implementing a stub "
-          <> "whose type is known but the correct expression is not — "
-          <> "the fits list narrows the search space immediately. Not "
-          <> "for resolving type errors (use ghc_explain_error). "
-          <> "SEE ALSO: ghc_explain_error (type errors), ghc_check_module "
-          <> "(full module health)."
+        "PURPOSE: List every typed hole in a module with its expected "
+          <> "type, in-scope fits, and relevant local bindings. "
+          <> "WHEN: implementing a stub whose type is known but the "
+          <> "expression is not — the fits list narrows the search space "
+          <> "immediately. "
+          <> "WHEN NOT: ghc_explain_error for an actual type error; "
+          <> "ghc_check_module for full module health. "
+          <> "PREREQUISITES: a module path in the active project (loaded "
+          <> "under -fdefer-typed-holes). "
+          <> "OUTPUT: {holes:[{type, fits, bindings}]}. "
+          <> "SEE ALSO: ghc_explain_error, ghc_check_module."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

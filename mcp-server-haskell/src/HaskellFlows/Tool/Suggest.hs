@@ -90,11 +90,17 @@ descriptor =
   ToolDescriptor
     { tdName        = toolNameText GhcSuggest
     , tdDescription =
-        "Given a function name, propose QuickCheck properties that "
-          <> "the function's type signature suggests. Each suggestion "
-          <> "includes a ready-to-run property expression, a rationale, "
-          <> "and a confidence score. Feed the property straight into "
-          <> "ghc_quickcheck."
+        "PURPOSE: Propose QuickCheck properties a function's type "
+          <> "signature implies, each with a confidence score. "
+          <> "WHEN: you have a function and want candidate laws to test; "
+          <> "feed the highest-confidence property straight into "
+          <> "ghc_quickcheck. "
+          <> "WHEN NOT: ghc_lab to audit a whole module at once; "
+          <> "ghc_quickcheck when you already have the property. "
+          <> "PREREQUISITES: the function's module loaded so its signature "
+          <> "resolves. "
+          <> "OUTPUT: {suggestions:[{property, rationale, confidence}]}. "
+          <> "SEE ALSO: ghc_quickcheck, ghc_lab."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
