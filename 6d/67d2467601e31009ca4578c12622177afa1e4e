@@ -1,0 +1,19 @@
+mcp-server-haskell/src/HaskellFlows/Tool/Arbitrary.hs
+  s_5ac5babd034a90::t_271f0bc551830a 36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "6d67d2467601e31009ca4578c12622177afa1e4e",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
