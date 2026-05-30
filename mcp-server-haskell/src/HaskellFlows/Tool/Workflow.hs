@@ -74,19 +74,18 @@ descriptor =
         "PURPOSE: Report MCP / session state and the context-aware next "
           <> "action; read-only. "
           <> "WHEN: session-start handshake (action='status'); when unsure "
-          <> "what to do next (action='help'); action='next' for a single "
-          <> "suggestion; action='discover' ranks tools you have NOT used "
-          <> "this session by relevance to the current phase; "
-          <> "action='post-mortem' gives a session retro (counts + missed "
-          <> "opportunities). "
+          <> "what to do next (action='help'); action='discover' ranks the "
+          <> "tools you have NOT used this session by relevance to the "
+          <> "current phase; action='post-mortem' gives a session retro "
+          <> "(counts + missed opportunities). "
           <> "WHEN NOT: ghc_toolchain to probe external binaries; the "
           <> "per-response nextStep already covers most next-step moments. "
           <> "PREREQUISITES: none — never spawns or mutates a GHCi session. "
           <> "OUTPUT: per-action view — status {projectDir, phase, "
           <> "toolsActive, staleness, session_activity}; help {steps, "
-          <> "phaseHint}; next {tool, why}; discover {unused:[{tool, "
-          <> "category, why_now}]}; post-mortem {session_duration_ms, "
-          <> "tools_called, missed_opportunities, ...}. "
+          <> "phaseHint}; discover {unused:[{tool, category, why_now}]}; "
+          <> "post-mortem {session_duration_ms, tools_called, "
+          <> "missed_opportunities, ...}. "
           <> "SEE ALSO: ghc_toolchain, ghc_check_project."
     , tdInputSchema =
         object
@@ -94,7 +93,7 @@ descriptor =
           , "properties" .= object
               [ "action" .= object
                   [ "type"        .= ("string" :: Text)
-                  , "enum"        .= (["status", "help", "next", "discover", "post-mortem"] :: [Text])
+                  , "enum"        .= (["status", "help", "discover", "post-mortem"] :: [Text])
                   , "description" .=
                       ("Which view to return. Default: 'status'." :: Text)
                   ]
@@ -103,7 +102,7 @@ descriptor =
           ]
     }
 
-data Action = ActStatus | ActHelp | ActNext | ActDiscover | ActPostMortem
+data Action = ActStatus | ActHelp | ActDiscover | ActPostMortem
   deriving stock (Eq, Show)
 
 newtype WorkflowArgs = WorkflowArgs
@@ -118,7 +117,6 @@ instance FromJSON WorkflowArgs where
       Nothing        -> pure ActStatus
       Just "status"  -> pure ActStatus
       Just "help"     -> pure ActHelp
-      Just "next"     -> pure ActNext
       Just "discover" -> pure ActDiscover
       Just "post-mortem" -> pure ActPostMortem
       Just other     -> fail ("unknown action: " <> T.unpack other)
@@ -260,7 +258,6 @@ render a pd alive toolNames ws staleness missingOpt mEntry isSelfProject mScratc
       payload    = case a of
         ActStatus   -> statusPayload pd alive toolNames staleness phase missingOpt isSelfProject mScratch sessionActivity
         ActHelp     -> helpPayload pd alive stateHints staleness phase mEntry
-        ActNext     -> nextPayload pd alive ws
         ActDiscover -> discoverPayload ws phase
   in Env.toolResponseToResult (Env.mkOk payload)
 
@@ -484,51 +481,6 @@ helpPayload _pd alive stateHints staleness phase mEntry =
              \want to work on — every other tool will auto-boot on first \
              \use anyway, but ghc_load gives you the cleanest error \
              \surface."
-
--- | F-03: 'nextPayload' is now history-aware. If the most recent
--- tool call was already 'ghc_load', recommending 'ghc_load' again
--- is a static no-op. Look at the sliding history and suggest a
--- more useful next step.
-nextPayload :: ProjectDir -> Bool -> WorkflowState -> Value
-nextPayload _pd alive ws =
-  object
-    [ "view"   .= ("next" :: Text)
-    , "tool"   .= tool
-    , "why"    .= why
-    ]
-  where
-    hist = wsToolHistory ws
-    (tool :: Text, why :: Text) =
-      case hist of
-        -- Just called ghc_load successfully → suggest diagnostics pass.
-        (GhcLoad : _) | alive ->
-          ( "ghc_load"
-          , "Run with diagnostics=true to surface typed holes and \
-            \deferred warnings alongside regular errors." )
-        -- Just called ghc_type / ghc_info → suggest a property.
-        (GhcType : _) | alive ->
-          ( "ghc_quickcheck"
-          , "You typed an expression — if it has a useful law, check \
-            \it now before moving on." )
-        -- Just called ghc_suggest → feed result to quickcheck.
-        (GhcSuggest : _) ->
-          ( "ghc_quickcheck"
-          , "You generated property candidates from ghc_suggest — pick \
-            \the highest-confidence one and check it." )
-        -- Already ran quickcheck → export to Spec.hs.
-        (GhcQuickCheck : _) | wsPassedProperties ws >= 3 ->
-          ( "ghc_property_store"
-          , "You have " <> T.pack (show (wsPassedProperties ws))
-            <> " passing properties — run action=\"export\" to materialise \
-               \them as test/Spec.hs." )
-        _ ->
-          if alive
-            then ( "ghc_load"
-                 , "Re-check with diagnostics=true to surface any new holes \
-                   \or warnings introduced by the last edit." )
-            else ( "ghc_load"
-                 , "No active session. ghc_load boots GHCi and is the \
-                   \cheapest way to learn the project's current compile state." )
 
 --------------------------------------------------------------------------------
 -- F-02: entry-module suggestion

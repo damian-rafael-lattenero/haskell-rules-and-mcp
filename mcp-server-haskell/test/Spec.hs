@@ -698,8 +698,6 @@ main = do
                                                    testWorkflowStatusHasScratchpad
       , test "Envelope #90 Phase B: ghc_workflow help emits envelope"
                                                    testWorkflowHelpEnvelope
-      , test "Envelope #90 Phase B: ghc_workflow next emits envelope"
-                                                   testWorkflowNextEnvelope
       , test "Envelope #90 Phase B: ghc_workflow rejects unknown action"
                                                    testWorkflowRejectsUnknownAction
       , test "Envelope #90 Phase B: ghc_bootstrap host=claude-code preview emits envelope"
@@ -1595,7 +1593,6 @@ main = do
       , test "#106/F-09: parseRejections splits comma-separated versions" testDepsExplainRejectionSplit
       , test "#106/F-06: gitRootOf walks up to .git directory" testBootstrapGitRoot
       , test "#106/F-02: pickModuleLine extracts exposed-modules" testWorkflowPickModuleLine
-      , test "#106/F-03: nextPayload suggests quickcheck after suggest" testWorkflowNextHistoryAware
       , test "#106/F-10: importsPayload has session_preloads field" testImportsHasSessionPreloads
       , test "#106/F-21: compileFailResult has status=failed and dry_run=false" testRefactorCompileFailShape
       , test "#205: compileFailResult dry_run=true propagates to result field"  testRefactorCompileFailDryRunTrue
@@ -4898,20 +4895,6 @@ testWorkflowHelpEnvelope = do
           AKM.lookup (AKey.fromText "view") payload == Just (A.String "help")
             && AKM.member (AKey.fromText "phaseHint") payload
             && AKM.member (AKey.fromText "steps") payload
-    _ -> False
-
--- | 'ghc_workflow {action: next}' status='ok' carrying a single
--- next-tool recommendation.
-testWorkflowNextEnvelope :: IO Bool
-testWorkflowNextEnvelope = do
-  decoded <- runWorkflow (A.object [ "action" A..= ("next" :: Text) ])
-  pure $ case decoded of
-    Right env
-      | Env.reStatus env == Env.StatusOk
-      , Just (A.Object payload) <- Env.reResult env ->
-          AKM.lookup (AKey.fromText "view") payload == Just (A.String "next")
-            && AKM.member (AKey.fromText "tool") payload
-            && AKM.member (AKey.fromText "why") payload
     _ -> False
 
 -- | An unknown action lands as status='failed' with
@@ -16187,35 +16170,6 @@ testWorkflowPickModuleLine =
   in pure $ WorkflowTool.pickModuleLine cabal
          == Just "src/MyLib/Core.hs"
 
--- | F-03: 'render' with action=next must recommend 'ghc_quickcheck'
--- (not ghc_load) when the last history entry is 'GhcSuggest'.
-testWorkflowNextHistoryAware :: IO Bool
-testWorkflowNextHistoryAware =
-  let ws = WS.WorkflowState
-             { WS.wsToolCalls          = 5
-             , WS.wsEditsSinceLastLoad  = 0
-             , WS.wsLastLoadSuccess     = Just True
-             , WS.wsLastLoadWarnings    = 0
-             , WS.wsPassedProperties    = 0
-             , WS.wsToolHistory         = [GhcSuggest]
-             , WS.wsEverCalled          = Set.empty
-             , WS.wsErrorStreak         = 0
-             , WS.wsStarted             = posixSecondsToUTCTime 0
-             }
-      pd     = case mkProjectDir "/tmp" of Right p -> p; Left _ -> error "bad pd"
-      result = WorkflowTool.render WorkflowTool.ActNext pd True [] ws dummyStaleness [] Nothing False Nothing
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "result" top of
-               Just (A.Object r) ->
-                 AKM.lookup "tool" r == Just (A.String "ghc_quickcheck")
-               _ -> False
-           _ -> False
-       _ -> False
-  where
-    dummyStaleness = StalenessReport { srStale = False, srBinaryOlderBySec = Nothing, srMessage = Nothing }
 
 -- | F-10: 'importsPayload' must include a 'session_preloads' field
 -- containing the MCP's own injected modules, separate from source

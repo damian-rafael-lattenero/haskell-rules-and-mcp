@@ -1,12 +1,13 @@
--- | Flow: @ghc_workflow(help|next)@ — state-aware guidance.
+-- | Flow: @ghc_workflow(help|discover)@ — state-aware guidance.
 --
 -- Drives the server through a sequence of state-changing tool
--- calls, then asks @ghc_workflow(help)@ + @ghc_workflow(next)@
+-- calls, then asks @ghc_workflow(help)@ + @ghc_workflow(discover)@
 -- for a state-aware nudge. Pins that:
 --
 --   * 'help' carries a non-empty @steps@ list + a 'phase' field
 --     (BUG-24 phase classifier).
---   * 'next' returns a single concrete tool name.
+--   * 'discover' ranks tools not yet used this session (#263; the
+--     retired action=next was removed in #269).
 --   * After ≥3 passing quickcheck calls, the 'help' payload's
 --     'stateHints' mentions 'regression' (BUG-08's history-aware
 --     nudge — "you've persisted N passing properties, consider
@@ -114,18 +115,19 @@ runFlow c projectDir = do
   stepFooter 3 t2
 
   ----------------------------------------------------------------
-  -- next — single tool recommendation
+  -- discover — ranked unused-tool suggestions (#263; replaces the
+  -- retired action=next, #269)
   ----------------------------------------------------------------
-  t3 <- stepHeader 4 "workflow(next) — single next tool"
-  rNext <- Client.callTool c GhcWorkflow (object [ "action" .= ("next" :: Text) ])
+  t3 <- stepHeader 4 "workflow(discover) — ranked unused tools"
+  rDisc <- Client.callTool c GhcWorkflow (object [ "action" .= ("discover" :: Text) ])
   c5 <- liveCheck $ checkJsonFieldMatches
-          "next · payload carries a 'tool' string"
-          rNext "tool" isString
-          "next should be a concrete tool name, not a structured object"
+          "discover · payload carries a non-empty 'unused' array"
+          rDisc "unused" isNonEmptyArray
+          "discover ranks tools not yet used this session"
   c6 <- liveCheck $ checkJsonFieldMatches
-          "next · payload carries a 'why' rationale"
-          rNext "why" isString
-          "every nextStep-shaped recommendation must justify itself"
+          "discover · payload carries a 'phase' string"
+          rDisc "phase" isString
+          "discover is phase-aware"
   stepFooter 4 t3
 
   pure [c1, c2, c3, c4, c5, c6]

@@ -147,8 +147,10 @@ payload:
 
 - Follow `nextStep` when it fits. Ignore it (and pick your own path)
   when you have stronger context.
-- It replaces the need to call `ghc_workflow(action="next")` after
-  every successful tool.
+- It supersedes the retired `ghc_workflow(action="next")` (removed in
+  #269): the per-response hint fires automatically after every tool, and
+  `ghc_workflow(action="discover")` covers on-demand "what should I reach
+  for next" by ranking unused tools.
 - Errors suppress the hint — when `success: false`, read the error and
   decide. Don't look for a `nextStep` that isn't there.
 - A few tools deliberately suppress `nextStep`: `ghc_workflow` (would
