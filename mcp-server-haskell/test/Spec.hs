@@ -1253,6 +1253,8 @@ main = do
       , test "#266: post-mortem reports counts"         testPostMortemCounts
       , test "#262: modules(add) -> design-first scratch" testNextStepModulesCreatedScratch
       , test "#270: chain resolves <same module> from payload" testNextStepResolvesSameModule
+      , test "#264: plan matches module-with-qc template" testPlanMatchesModuleQc
+      , test "#264: plan low-confidence lists alternatives" testPlanLowConfidenceListsAlternatives
       , test "resources: rules workflow URI resolves" testResourcesRulesRead
       , test "resources: unknown URI returns Nothing" testResourcesUnknown
       , test "baja bundle: 4 tools registered"      testBajaRegistered
@@ -8199,6 +8201,28 @@ testSessionActivityUnusedCount = do
   let total  = length allToolNameTexts
       unused = total - Set.size (WS.wsEverCalled s)
   pure $ total == 36 && unused == 34
+
+-- | #264: a concrete goal matches the right template + yields a chain.
+testPlanMatchesModuleQc :: IO Bool
+testPlanMatchesModuleQc =
+  pure $ case WorkflowTool.planPayload "set up Expr.Foo with a QC roundtrip property" of
+    A.Object o ->
+      AKM.lookup "matched_template" o == Just (A.String "module-with-qc-property")
+        && case AKM.lookup "chain" o of
+             Just (A.Array a) -> not (null a)
+             _                -> False
+    _ -> False
+
+-- | #264: a vague goal yields no match but lists alternatives.
+testPlanLowConfidenceListsAlternatives :: IO Bool
+testPlanLowConfidenceListsAlternatives =
+  pure $ case WorkflowTool.planPayload "do the thing with stuff zzz" of
+    A.Object o ->
+      AKM.lookup "matched_template" o == Just A.Null
+        && case AKM.lookup "alternative_templates" o of
+             Just (A.Array a) -> not (null a)
+             _                -> False
+    _ -> False
 
 -- | #270: a nextStep example's module_path is resolved to the payload's
 -- concrete module (not a "<same module>" placeholder) when the tool

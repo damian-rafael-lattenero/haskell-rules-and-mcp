@@ -22,6 +22,7 @@ module HaskellFlows.Tool.Workflow
   , render
   , discoverRanked
   , postMortemPayload
+  , planPayload
   ) where
 
 import Control.Concurrent.MVar (MVar, readMVar)
@@ -30,8 +31,9 @@ import Data.Aeson
 import qualified Data.Aeson.Key as Key
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, readIORef)
-import Data.List (sortBy)
-import Data.Maybe (isNothing, listToMaybe, mapMaybe)
+import Data.List (find, sortBy)
+import Data.Char (isAlphaNum, isUpper)
+import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
 import Data.Ord (Down (..), comparing)
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import qualified Data.Set as Set
@@ -77,7 +79,8 @@ descriptor =
           <> "what to do next (action='help'); action='discover' ranks the "
           <> "tools you have NOT used this session by relevance to the "
           <> "current phase; action='post-mortem' gives a session retro "
-          <> "(counts + missed opportunities). "
+          <> "(counts + missed opportunities); action='plan' (goal=...) "
+          <> "turns a one-line goal into a ghc_batch-ready chain. "
           <> "WHEN NOT: ghc_toolchain to probe external binaries; the "
           <> "per-response nextStep already covers most next-step moments. "
           <> "PREREQUISITES: none — never spawns or mutates a GHCi session. "
@@ -85,7 +88,8 @@ descriptor =
           <> "toolsActive, staleness, session_activity}; help {steps, "
           <> "phaseHint}; discover {unused:[{tool, category, why_now}]}; "
           <> "post-mortem {session_duration_ms, tools_called, "
-          <> "missed_opportunities, ...}. "
+          <> "missed_opportunities, ...}; plan {matched_template, chain, "
+          <> "confidence, alternative_templates}. "
           <> "SEE ALSO: ghc_toolchain, ghc_check_project."
     , tdInputSchema =
         object
@@ -93,16 +97,23 @@ descriptor =
           , "properties" .= object
               [ "action" .= object
                   [ "type"        .= ("string" :: Text)
-                  , "enum"        .= (["status", "help", "discover", "post-mortem"] :: [Text])
+                  , "enum"        .= (["status", "help", "discover", "post-mortem", "plan"] :: [Text])
                   , "description" .=
                       ("Which view to return. Default: 'status'." :: Text)
+                  ]
+              , "goal" .= object
+                  [ "type"        .= ("string" :: Text)
+                  , "description" .=
+                      ("For action='plan': a one-line goal to turn into a \
+                       \ghc_batch-ready chain, e.g. 'set up Expr.Foo with a \
+                       \QC roundtrip'." :: Text)
                   ]
               ]
           , "additionalProperties" .= False
           ]
     }
 
-data Action = ActStatus | ActHelp | ActDiscover | ActPostMortem
+data Action = ActStatus | ActHelp | ActDiscover | ActPostMortem | ActPlan Text
   deriving stock (Eq, Show)
 
 newtype WorkflowArgs = WorkflowArgs
@@ -119,6 +130,7 @@ instance FromJSON WorkflowArgs where
       Just "help"     -> pure ActHelp
       Just "discover" -> pure ActDiscover
       Just "post-mortem" -> pure ActPostMortem
+      Just "plan"     -> ActPlan <$> o .:? "goal" .!= ""
       Just other     -> fail ("unknown action: " <> T.unpack other)
     pure (WorkflowArgs a)
 
@@ -259,6 +271,7 @@ render a pd alive toolNames ws staleness missingOpt mEntry isSelfProject mScratc
         ActStatus   -> statusPayload pd alive toolNames staleness phase missingOpt isSelfProject mScratch sessionActivity
         ActHelp     -> helpPayload pd alive stateHints staleness phase mEntry
         ActDiscover -> discoverPayload ws phase
+        ActPlan goal -> planPayload goal
   in Env.toolResponseToResult (Env.mkOk payload)
 
 -- | #263: the ranked top-5 unused tools for the current phase. Pure +
@@ -346,6 +359,154 @@ postMortemPayload ws now =
        , "recent_tools"         .= map toolNameText (wsToolHistory ws)
        , "missed_opportunities" .= sessionMissedOpportunities ws
        ]
+
+--------------------------------------------------------------------------------
+-- #264 — ghc_workflow(action="plan"): NL goal -> ghc_batch-ready chain
+--------------------------------------------------------------------------------
+
+-- | A curated plan template: a name, the lowercase trigger keywords the
+-- matcher scores a goal against, and a builder that turns an optional
+-- module hint (parsed off the goal) into a concrete ghc_batch chain.
+-- Inlined here (not a separate Templates module) to avoid a .cabal edit.
+data PlanTemplate = PlanTemplate
+  { ptName     :: !Text
+  , ptKeywords :: ![Text]
+  , ptBuild    :: Maybe Text -> [Value]
+  }
+
+-- | One chain step in the @ghc_batch@ shape: @{tool, args}@.
+planStep :: ToolName -> Value -> Value
+planStep t args = object [ "tool" .= toolNameText t, "args" .= args ]
+
+planModName :: Maybe Text -> Text
+planModName = fromMaybe "Your.Module"
+
+planModPath :: Maybe Text -> Text
+planModPath mh = "src/" <> T.replace "." "/" planMod <> ".hs"
+  where planMod = planModName mh
+
+-- | The curated catalog (15 templates over the common flows).
+planTemplates :: [PlanTemplate]
+planTemplates =
+  [ PlanTemplate "module-with-qc-property"
+      ["quickcheck", "qc", "property", "roundtrip", "law"]
+      (\mh -> [ planStep GhcModules (object ["action" .= ("add" :: Text), "modules" .= [planModName mh]])
+              , planStep GhcQuickCheck (object ["property" .= ("\\x -> f x === g x" :: Text), "module_path" .= planModPath mh])
+              ])
+  , PlanTemplate "module-only"
+      ["new module", "add module", "exposed-module", "scaffold module"]
+      (\mh -> [ planStep GhcModules (object ["action" .= ("add" :: Text), "modules" .= [planModName mh]]) ])
+  , PlanTemplate "add-dep-then-import"
+      ["dependency", "add package", "build-depends", "add dep"]
+      (const [ planStep GhcDeps (object ["action" .= ("add" :: Text), "package" .= ("<pkg>" :: Text), "stanza" .= ("library" :: Text)])
+             , planStep GhcAddImport (object ["name" .= ("<Module.To.Import>" :: Text)])
+             ])
+  , PlanTemplate "refactor-then-verify"
+      ["refactor", "extract"]
+      (\mh -> [ planStep GhcRefactor (object ["action" .= ("rename_local" :: Text), "module_path" .= planModPath mh, "old_name" .= ("<old>" :: Text), "new_name" .= ("<new>" :: Text), "scope_line_start" .= (1 :: Int), "scope_line_end" .= (1 :: Int)])
+              , planStep GhcCheckModule (object ["module_path" .= planModPath mh])
+              ])
+  , PlanTemplate "property-discovery"
+      ["discover laws", "lab", "audit module", "properties for"]
+      (\mh -> [ planStep GhcLab (object ["module_path" .= planModPath mh])
+              , planStep GhcPropertyStore (object ["action" .= ("run" :: Text)])
+              ])
+  , PlanTemplate "coverage-report"
+      ["coverage", "hpc", "untested"]
+      (const [ planStep GhcCoverage (object [])
+             , planStep GhcPropertyStore (object ["action" .= ("export" :: Text)])
+             ])
+  , PlanTemplate "perf-baseline"
+      ["perf", "benchmark", "baseline", "performance", "profile"]
+      (const [ planStep GhcPerf (object ["expression" .= ("<expr>" :: Text), "save_baseline" .= True]) ])
+  , PlanTemplate "bootstrap-project"
+      ["new project", "create project", "bootstrap", "from scratch"]
+      (\mh -> [ planStep GhcProject (object ["action" .= ("create" :: Text), "name" .= ("<pkg-name>" :: Text)])
+              , planStep GhcDeps (object ["action" .= ("add" :: Text), "package" .= ("QuickCheck" :: Text), "stanza" .= ("test-suite" :: Text)])
+              , planStep GhcLoad (object ["module_path" .= planModPath mh])
+              ])
+  , PlanTemplate "rename-local"
+      ["rename local", "rename binding", "rename variable", "rename"]
+      (\mh -> [ planStep GhcRefactor (object ["action" .= ("rename_local" :: Text), "module_path" .= planModPath mh, "old_name" .= ("<old>" :: Text), "new_name" .= ("<new>" :: Text), "scope_line_start" .= (1 :: Int), "scope_line_end" .= (1 :: Int)])
+              , planStep GhcCheckModule (object ["module_path" .= planModPath mh])
+              ])
+  , PlanTemplate "move-symbol"
+      ["move symbol", "move function", "relocate", "move to"]
+      (const [ planStep GhcRefactor (object ["action" .= ("move_symbol" :: Text), "symbol" .= ("<name>" :: Text), "from" .= ("src/From.hs" :: Text), "to" .= ("src/To.hs" :: Text)])
+             , planStep GhcCheckProject (object [])
+             ])
+  , PlanTemplate "fix-warning-loop"
+      ["fix warning", "warnings", "clean warnings"]
+      (\mh -> [ planStep GhcFixWarning (object ["module_path" .= planModPath mh])
+              , planStep GhcLoad (object ["module_path" .= planModPath mh, "diagnostics" .= True])
+              ])
+  , PlanTemplate "audit-properties"
+      ["audit", "contradiction", "consistency"]
+      (const [ planStep GhcPropertyStore (object ["action" .= ("audit" :: Text)])
+             , planStep GhcPropertyStore (object ["action" .= ("list" :: Text)])
+             ])
+  , PlanTemplate "export-test-suite"
+      ["export", "materialise", "materialize", "spec.hs", "test suite"]
+      (const [ planStep GhcPropertyStore (object ["action" .= ("export" :: Text)])
+             , planStep GhcGate (object [])
+             ])
+  , PlanTemplate "find-via-hoogle"
+      ["hoogle", "find function", "search for", "which function"]
+      (const [ planStep HoogleSearch (object ["query" .= ("<type or name>" :: Text)])
+             , planStep GhcAddImport (object ["name" .= ("<one of the hits>" :: Text)])
+             ])
+  , PlanTemplate "pre-push-gate"
+      ["push", "gate", "ship", "finalize", "ready to push", "pre-push"]
+      (const [ planStep GhcGate (object []) ])
+  ]
+
+-- | Keyword-score a goal against the catalog. Returns the best match
+-- (when at least one keyword hit), a 0..1 confidence (2+ hits = full),
+-- and up to 3 alternative template names.
+matchTemplate :: Text -> (Maybe PlanTemplate, Double, [Text])
+matchTemplate goal =
+  let g      = T.toLower goal
+      scored = sortBy (comparing (Down . snd))
+                 [ (t, length (filter (`T.isInfixOf` g) (ptKeywords t)))
+                 | t <- planTemplates ]
+  in case scored of
+       ((best, bs) : rest) | bs > 0 ->
+         ( Just best
+         , min 1.0 (fromIntegral bs / 2.0)
+         , [ ptName t | (t, s) <- take 3 rest, s > 0 ] )
+       _ -> (Nothing, 0.0, take 3 (map ptName planTemplates))
+
+-- | Pull the first module-ish token (Capitalised, optionally dotted)
+-- out of the goal, e.g. "set up Expr.Foo with QC" -> Just "Expr.Foo".
+extractModule :: Text -> Maybe Text
+extractModule goal = find isModuleToken (T.words goal)
+  where
+    isModuleToken w = case T.uncons w of
+      Just (c, _) -> isUpper c && T.all (\x -> isAlphaNum x || x == '.') w
+      Nothing     -> False
+
+-- | #264: render the plan view — the matched template's concrete chain
+-- (ghc_batch-ready), a confidence, and alternatives. Deterministic.
+planPayload :: Text -> Value
+planPayload goal =
+  let mh                  = extractModule goal
+      (mBest, conf, alts) = matchTemplate goal
+  in object $
+       [ "view"       .= ("plan" :: Text)
+       , "goal"       .= goal
+       , "confidence" .= conf
+       ]
+       <> case mBest of
+            Just t | conf >= 0.5 ->
+              [ "matched_template"      .= ptName t
+              , "chain"                 .= ptBuild t mh
+              , "alternative_templates" .= alts
+              ]
+            _ ->
+              [ "matched_template"      .= Null
+              , "chain"                 .= ([] :: [Value])
+              , "alternative_templates" .= alts
+              ]
 
 statusPayload
   :: ProjectDir -> Bool -> [Text] -> StalenessReport -> SessionPhase
