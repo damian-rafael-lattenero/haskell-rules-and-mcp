@@ -33,7 +33,7 @@ import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAlphaNum)
-import Data.List.NonEmpty (NonEmpty ((:|)), toList)
+import Data.List.NonEmpty (toList)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
