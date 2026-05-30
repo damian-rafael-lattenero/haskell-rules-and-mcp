@@ -1,0 +1,20 @@
+scripts/pre-push.sh
+  s_5ac5babd034a90::t_bcc2c1d74da117 79-81
+  s_5ac5babd034a90::t_5014c6cf915be5 4,8-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "7c61ca08003f9da979b5244dd22b04227244fd81",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
