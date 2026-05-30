@@ -1,0 +1,24 @@
+mcp-server-haskell/test-e2e/Main.hs
+  s_5ac5babd034a90::t_1fbdc9811736cf 244-245
+  s_5ac5babd034a90::t_1799b6c38e47f2 102
+mcp-server-haskell/haskell-flows-mcp.cabal
+  s_5ac5babd034a90::t_80942449f769bb 247
+mcp-server-haskell/test-e2e/Scenarios/FlowScratchPromote.hs
+  s_5ac5babd034a90::t_af9ade01e6925f 1-148
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "948d4e51885296fa5af5437172581caff5ec6da0",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
