@@ -460,7 +460,8 @@ dispatchByName srv args = \case
   GhcArbitrary -> do
     -- Wave-4 full GhcSession: parseName + getInfo + showPprUnsafe.
     ghcSess <- getOrStartGhcSession srv
-    ArbitraryTool.handle ghcSess args
+    pd      <- readIORef (srvProjectDir srv)
+    ArbitraryTool.handle ghcSess pd args
   HoogleSearch ->
     HoogleTool.handle args
   GhcWorkflow -> do

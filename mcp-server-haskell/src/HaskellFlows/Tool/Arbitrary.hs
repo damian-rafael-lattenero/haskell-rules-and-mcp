@@ -27,6 +27,9 @@ module HaskellFlows.Tool.Arbitrary
   , compileFailedErr
     -- * Issue #219 — unboxed-constructor detection (exported for tests)
   , hasUnboxedConstructor
+    -- * #261 — target_module helpers (exported for tests)
+  , pathToModule
+  , renderArbitraryModule
   ) where
 
 import Control.Exception (SomeException, try)
@@ -34,9 +37,13 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAlphaNum)
 import Data.List.NonEmpty (toList)
-import Data.Maybe (mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
+import System.Directory (createDirectoryIfMissing, doesFileExist)
+import System.FilePath (takeDirectory, (</>))
+import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 import GHC
   ( Ghc
@@ -93,14 +100,15 @@ descriptor =
           <> "user-defined data type. "
           <> "WHEN: a new data/newtype needs an Arbitrary before property "
           <> "testing; polymorphic types get an Arbitrary constraint per "
-          <> "type variable. "
+          <> "type variable; pass target_module to write the instance to a "
+          <> "-Wno-orphans module instead of pasting it. "
           <> "WHEN NOT: ghc_quickcheck once the instance exists; hand-edit "
           <> "GADTs / existentials / constrained constructors the template "
           <> "cannot fully express. "
           <> "PREREQUISITES: the type's module loaded so its constructors "
           <> "resolve. "
-          <> "OUTPUT: {instance} text for the agent to paste — does not "
-          <> "modify files. "
+          <> "OUTPUT: {template, constructors}; with target_module also "
+          <> "{instance_written_to, module, next_steps} (writes one file). "
           <> "SEE ALSO: ghc_quickcheck, ghc_suggest."
     , tdInputSchema =
         object
@@ -112,26 +120,35 @@ descriptor =
                       ("Name of the data/newtype to derive Arbitrary for. \
                        \Example: \"Expr\", \"Command\", \"Status\"." :: Text)
                   ]
+              , "target_module" .= object
+                  [ "type"        .= ("string" :: Text)
+                  , "description" .=
+                      ("Optional .hs path to write the instance to as a \
+                       \-Wno-orphans module (e.g. \"src/Foo/Arbitrary.hs\"), \
+                       \avoiding the orphan-instance warning. Omit to return \
+                       \the template inline." :: Text)
+                  ]
               ]
           , "required"             .= ["type_name" :: Text]
           , "additionalProperties" .= False
           ]
     }
 
-newtype ArbitraryArgs = ArbitraryArgs
-  { aaTypeName :: Text
+data ArbitraryArgs = ArbitraryArgs
+  { aaTypeName     :: Text
+  , aaTargetModule :: Maybe Text   -- #261: relative .hs path to write the instance to
   }
   deriving stock (Show)
 
 instance FromJSON ArbitraryArgs where
   parseJSON = withObject "ArbitraryArgs" $ \o ->
-    ArbitraryArgs <$> o .: "type_name"
+    ArbitraryArgs <$> o .: "type_name" <*> o .:? "target_module"
 
-handle :: GhcSession -> Value -> IO ToolResult
-handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
+handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
-  Right (ArbitraryArgs tname) -> case sanitizeExpression tname of
+  Right (ArbitraryArgs tname mTarget) -> case sanitizeExpression tname of
     Left cmdErr ->
       pure (Env.toolResponseToResult
               (Env.mkRefused (Env.sanitizeRejection "type_name" cmdErr)))
@@ -200,8 +217,11 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
                                   <> "'arbitraryBoundedIntegral' for integral "
                                   <> "types or 'arbitraryUnicodeChar' for Char." ))
                       | otherwise ->
-                          pure (successResult safe ctors
-                                  (renderTemplate safe params ctors))
+                          let tmpl = renderTemplate safe params ctors
+                          in case mTarget of
+                               Nothing   -> pure (successResult safe ctors tmpl)
+                               Just path ->
+                                 writeArbitraryModule pd path safe ctors tmpl
 
 -- | Issue #90 Phase C: caller-side parse failure → status='failed'
 -- with kind='missing_arg' or 'type_mismatch' (Aeson FromJSON
@@ -568,6 +588,78 @@ successResult typeName ctors tmpl =
                          \defines '" <> typeName <> "'. If the type is \
                          \polymorphic, add an Arbitrary constraint on \
                          \each type variable." :: Text )
+    ]))
+
+-- | #261: write the generated instance to a dedicated orphan-suppressing
+-- module at the given relative path (idempotent) so the agent avoids the
+-- GHC-90177 orphan-instance warning of pasting into test/Spec.hs. Returns
+-- instance_written_to + next-steps (register via ghc_modules, add
+-- QuickCheck via ghc_deps). Full auto-placement + cabal mutation is
+-- deferred; this is the safe, single-file core.
+writeArbitraryModule
+  :: ProjectDir -> Text -> Text -> [Constructor] -> Text -> IO ToolResult
+writeArbitraryModule pd relPath typeName ctors tmpl
+  | ".." `T.isInfixOf` relPath =
+      pure (validationErr "target_module must be inside the project (no '..').")
+  | not (".hs" `T.isSuffixOf` relPath) =
+      pure (validationErr
+              "target_module must be a .hs path, e.g. \"src/Foo/Arbitrary.hs\".")
+  | otherwise = do
+      let absPath = unProjectDir pd </> T.unpack relPath
+          modName = pathToModule relPath
+          mDefMod = T.stripSuffix ".Arbitrary" modName
+          body    = renderArbitraryModule modName mDefMod tmpl
+      exists  <- doesFileExist absPath
+      already <- if exists
+                   then (("instance Arbitrary " <> typeName) `T.isInfixOf`)
+                          <$> TIO.readFile absPath
+                   else pure False
+      if already
+        then pure (writtenResult typeName ctors tmpl relPath modName True)
+        else do
+          createDirectoryIfMissing True (takeDirectory absPath)
+          TIO.writeFile absPath body
+          pure (writtenResult typeName ctors tmpl relPath modName False)
+
+-- | @"src/Expr/Syntax/Arbitrary.hs"@ -> @"Expr.Syntax.Arbitrary"@,
+-- dropping a leading conventional source dir.
+pathToModule :: Text -> Text
+pathToModule relPath =
+  let noExt = fromMaybe relPath (T.stripSuffix ".hs" relPath)
+      segs  = filter (not . T.null) (T.splitOn "/" noExt)
+      segs' = case segs of
+        (s : rest) | s `elem` ["src", "test", "app", "bench", "benchmarks"] -> rest
+        _ -> segs
+  in T.intercalate "." segs'
+
+-- | Render a stand-alone @-Wno-orphans@ module hosting the instance.
+renderArbitraryModule :: Text -> Maybe Text -> Text -> Text
+renderArbitraryModule modName mDefMod tmpl = T.unlines $
+  [ "{-# OPTIONS_GHC -Wno-orphans #-}"
+  , ""
+  , "module " <> modName <> " where"
+  , ""
+  , "import Test.QuickCheck"
+  ]
+  <> maybe [] (\m -> ["import " <> m]) mDefMod
+  <> [ "", tmpl ]
+
+-- | #261: success payload when the instance was written to a file.
+writtenResult :: Text -> [Constructor] -> Text -> Text -> Text -> Bool -> ToolResult
+writtenResult typeName ctors tmpl relPath modName already =
+  Env.toolResponseToResult (Env.mkOk (object
+    [ "type_name"           .= typeName
+    , "constructors"        .= map renderCtor ctors
+    , "template"            .= tmpl
+    , "instance_written_to" .= relPath
+    , "module"              .= modName
+    , "already_present"     .= already
+    , "next_steps"          .=
+        ( "Register the module with ghc_modules(action=\"add\", modules=[\""
+          <> modName <> "\"]) and add QuickCheck to the relevant stanza via "
+          <> "ghc_deps(action=\"add\", package=\"QuickCheck\", stanza=\"...\"). "
+          <> "The -Wno-orphans pragma suppresses the orphan-instance warning."
+          :: Text )
     ]))
 
 renderCtor :: Constructor -> Value

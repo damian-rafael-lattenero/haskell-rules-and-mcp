@@ -190,6 +190,8 @@ import HaskellFlows.Parser.Type
 import HaskellFlows.Tool.Arbitrary
   ( Constructor (..)
   , compileFailedErr
+  , pathToModule
+  , renderArbitraryModule
   , hasRecursiveConstructor
   , hasUnboxedConstructor
   , isRecursiveArg
@@ -1260,6 +1262,8 @@ main = do
       , test "#258: GHC-32850 retained when module missing" testLoad32850RetainedWhenMissing
       , test "#259: GHC-76037 surfaces submodule suggested_import" testSuggestedImportGhc76037
       , test "#260: importsMatchingPackage detects cross-stanza dep" testDepsCrossStanzaMatch
+      , test "#261: pathToModule derives module from path" testArbitraryPathToModule
+      , test "#261: renderArbitraryModule emits Wno-orphans module" testArbitraryModuleRender
       , test "resources: rules workflow URI resolves" testResourcesRulesRead
       , test "resources: unknown URI returns Nothing" testResourcesUnknown
       , test "baja bundle: 4 tools registered"      testBajaRegistered
@@ -8206,6 +8210,24 @@ testSessionActivityUnusedCount = do
   let total  = length allToolNameTexts
       unused = total - Set.size (WS.wsEverCalled s)
   pure $ total == 36 && unused == 34
+
+-- | #261: pathToModule derives the module name from a target path,
+-- dropping a leading conventional source dir.
+testArbitraryPathToModule :: IO Bool
+testArbitraryPathToModule = pure $
+  pathToModule "src/Expr/Syntax/Arbitrary.hs" == "Expr.Syntax.Arbitrary"
+    && pathToModule "test/Foo.hs" == "Foo"
+
+-- | #261: renderArbitraryModule emits a -Wno-orphans module importing
+-- QuickCheck + the type's defining module.
+testArbitraryModuleRender :: IO Bool
+testArbitraryModuleRender =
+  let out = renderArbitraryModule "Expr.Syntax.Arbitrary" (Just "Expr.Syntax")
+              "instance Arbitrary Expr where arbitrary = pure undefined"
+  in pure $ T.isInfixOf "{-# OPTIONS_GHC -Wno-orphans #-}" out
+         && T.isInfixOf "module Expr.Syntax.Arbitrary where" out
+         && T.isInfixOf "import Test.QuickCheck" out
+         && T.isInfixOf "import Expr.Syntax" out
 
 -- | #260: importsMatchingPackage finds sibling-stanza imports of a
 -- module the added package owns (curated map), ignoring unrelated ones.
