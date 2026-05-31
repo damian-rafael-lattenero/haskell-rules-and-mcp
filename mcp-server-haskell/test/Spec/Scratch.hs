@@ -67,6 +67,11 @@ scratchTests =
                                                         testScratchPromoteBindingName
   , test "F-05: compileFailResult uses first error message"
                                                         testCompileFailResultCause
+  , test "#276: splitImports separates single import"   testSplitImportsSingle
+  , test "#276: splitImports keeps multiple imports"    testSplitImportsMultiple
+  , test "#276: splitImports no imports → empty list"   testSplitImportsNone
+  , test "#276: splitImports groups multi-line import"  testSplitImportsMultiLine
+  , test "#276: splitImports ignores indented import kw" testSplitImportsBodyKeyword
   ]
 
 --------------------------------------------------------------------------------
@@ -727,3 +732,43 @@ testCompileFailResultCause = pure $
           _ -> False
       _ -> False
     _ -> False
+
+-- #276: ghc_scratch(check) used to fail with "parse error on input 'import'"
+-- because import lines were wrapped inside `let … in ()`. 'splitImports' now
+-- peels the leading import section off so it can be added to the interactive
+-- context instead. These cover the pure partitioning logic.
+
+testSplitImportsSingle :: IO Bool
+testSplitImportsSingle = pure $
+  let (imps, body) = ScratchTool.splitImports
+                       "import Data.List (sort)\n\nfoo = sort [3,1,2]"
+   in imps == ["import Data.List (sort)"]
+        && T.strip body == "foo = sort [3,1,2]"
+
+testSplitImportsMultiple :: IO Bool
+testSplitImportsMultiple = pure $
+  let (imps, body) = ScratchTool.splitImports
+                       "import Data.Char (isAlpha)\nimport Data.List\nx = 1"
+   in imps == ["import Data.Char (isAlpha)", "import Data.List"]
+        && T.strip body == "x = 1"
+
+testSplitImportsNone :: IO Bool
+testSplitImportsNone = pure $
+  let (imps, body) = ScratchTool.splitImports "foo :: Int\nfoo = 1"
+   in null imps && T.strip body == "foo :: Int\nfoo = 1"
+
+testSplitImportsMultiLine :: IO Bool
+testSplitImportsMultiLine = pure $
+  let (imps, body) = ScratchTool.splitImports
+                       "import Data.Map\n  ( fromList\n  , toList\n  )\nx = 1"
+   in imps == ["import Data.Map\n  ( fromList\n  , toList\n  )"]
+        && T.strip body == "x = 1"
+
+-- A non-import declaration body that merely *mentions* "import" indented (e.g.
+-- a string) must not be mistaken for the import section.
+testSplitImportsBodyKeyword :: IO Bool
+testSplitImportsBodyKeyword = pure $
+  let (imps, body) = ScratchTool.splitImports
+                       "import Data.List\nmsg = \"please import this\""
+   in imps == ["import Data.List"]
+        && T.strip body == "msg = \"please import this\""

@@ -26,6 +26,7 @@ module HaskellFlows.Tool.Scratch
   , renderEntrySummary
   , spliceInto
   , wrapAsLetBlock
+  , splitImports
   ) where
 
 import Control.Exception (SomeException, try)
@@ -36,7 +37,15 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import GHC (Ghc, TcRnExprMode (TM_Inst), exprType)
+import GHC
+  ( Ghc
+  , InteractiveImport (IIDecl)
+  , TcRnExprMode (TM_Inst)
+  , exprType
+  , getContext
+  , parseImportDecl
+  , setContext
+  )
 import GHC.Utils.Outputable (showPprUnsafe)
 
 import qualified HaskellFlows.Data.Scratchpad as SP
@@ -299,23 +308,32 @@ handleCheck store ghcSess args = case saId args of
           ])))
       Just entry -> do
         now <- realToFrac <$> getPOSIXTime
-        let code = SP.seCode entry
-        if T.any (== '\n') code
-          then checkMultiLine store ghcSess entry i code now
-          else checkSingleLine store ghcSess entry i code now
+        -- #276: split inline `import …` lines out of the snippet. They can't
+        -- live inside the `let … in ()` wrapper (parse error on `import`), so
+        -- we parse them into the interactive context instead. Per-entry
+        -- 'seImports' (previously ignored by check) are honoured here too.
+        let code                   = SP.seCode entry
+            (inlineImports, body)  = splitImports code
+            imports                = SP.seImports entry ++ inlineImports
+            decl                   = T.strip body
+        if T.null decl
+          then checkImportsOnly store ghcSess entry i imports now
+          else if T.any (== '\n') body
+            then checkMultiLine store ghcSess entry i imports body now
+            else checkSingleLine store ghcSess entry i imports body now
 
 -- | Single-line path: uses 'sanitizeExpression' + 'exprType' directly.
 -- Returns the inferred type as @\"type\"@ in the response.
 checkSingleLine :: SP.Store -> GhcSession -> SP.ScratchEntry
-                -> Text -> Text -> Double -> IO ToolResult
-checkSingleLine store ghcSess entry i code now =
+                -> Text -> [Text] -> Text -> Double -> IO ToolResult
+checkSingleLine store ghcSess entry i imports code now =
   case sanitizeExpression code of
     Left cmdErr ->
       pure (Env.toolResponseToResult (Env.mkRefused
         (Env.sanitizeRejection "code" cmdErr)))
     Right safe -> do
-      eRes <- try (withGhcSession ghcSess (queryExprType safe))
-      saveAndRespond store entry i now eRes
+      eRes <- try (withGhcSession ghcSess (queryExprTypeWithImports imports safe))
+      saveAndRespond store entry now eRes
         (\typeText -> object
           [ "id"     .= i
           , "status" .= SP.ScratchVerified
@@ -341,15 +359,16 @@ checkSingleLine store ghcSess entry i code now =
 -- multi-equation definitions.  Returns @\"type\": \"declarations
 -- type-checked OK\"@ on success.
 checkMultiLine :: SP.Store -> GhcSession -> SP.ScratchEntry
-               -> Text -> Text -> Double -> IO ToolResult
-checkMultiLine store ghcSess entry i code now =
+               -> Text -> [Text] -> Text -> Double -> IO ToolResult
+checkMultiLine store ghcSess entry i imports code now =
   case sanitizeDeclarations code of
     Left cmdErr ->
       pure (Env.toolResponseToResult (Env.mkRefused
         (Env.sanitizeRejection "code" cmdErr)))
     Right safe -> do
-      eRes <- try (withGhcSession ghcSess (queryExprType (wrapAsLetBlock safe)))
-      saveAndRespond store entry i now (fmap (const declOkMsg) eRes)
+      eRes <- try (withGhcSession ghcSess
+                     (queryExprTypeWithImports imports (wrapAsLetBlock safe)))
+      saveAndRespond store entry now (fmap (const declOkMsg) eRes)
         (\_ -> object
           [ "id"     .= i
           , "status" .= SP.ScratchVerified
@@ -378,13 +397,12 @@ checkMultiLine store ghcSess entry i code now =
 saveAndRespond
   :: SP.Store
   -> SP.ScratchEntry
-  -> Text       -- entry id
   -> Double     -- now (POSIX seconds)
   -> Either SomeException Text   -- GHC result or exception
   -> (Text -> Value)             -- success payload builder
   -> (Text -> Value)             -- failure payload builder
   -> IO ToolResult
-saveAndRespond store entry i now eRes mkOkPayload mkErrPayload =
+saveAndRespond store entry now eRes mkOkPayload mkErrPayload =
   case eRes of
     Right typeText -> do
       let result  = SP.ScratchResult
@@ -437,6 +455,112 @@ queryExprType :: Text -> Ghc Text
 queryExprType safe = do
   ty <- exprType TM_Inst (T.unpack safe)
   pure (T.pack (showPprUnsafe ty))
+
+-- | Like 'queryExprType', but first splices the given @import …@ statements
+-- into the interactive context so the expression can reference names they
+-- bring into scope (#276).  The original context is always restored
+-- afterwards (via 'gfinally') so a scratch check never pollutes later evals.
+--
+-- An import that fails to parse / resolve propagates as an exception, which
+-- the caller's 'try' surfaces as a @type_error@ — the same path a bad
+-- declaration takes.
+queryExprTypeWithImports :: [Text] -> Text -> Ghc Text
+queryExprTypeWithImports [] expr = queryExprType expr
+queryExprTypeWithImports imports expr = do
+  saved  <- getContext
+  idecls <- mapM (parseImportDecl . T.unpack) imports
+  setContext (map IIDecl idecls ++ saved)
+  ty <- queryExprType expr
+  -- Restore on the happy path. On exception, 'withGhcSession' never writes the
+  -- mutated env back to its IORef (it only persists the session after the
+  -- action returns), so the added imports are discarded — no pollution either
+  -- way, no exception-handling combinator needed.
+  setContext saved
+  pure ty
+
+-- | Verify that a scratch entry consisting only of @import …@ lines resolves,
+-- by splicing the imports into the context and type-checking @()@ against it.
+-- Restores the context afterwards.
+checkImportsOnly :: SP.Store -> GhcSession -> SP.ScratchEntry
+                 -> Text -> [Text] -> Double -> IO ToolResult
+checkImportsOnly store ghcSess entry i imports now = do
+  eRes <- try (withGhcSession ghcSess
+                 (queryExprTypeWithImports imports "()"))
+  saveAndRespond store entry now (fmap (const importsOkMsg) eRes)
+    (\_ -> object
+      [ "id"     .= i
+      , "status" .= SP.ScratchVerified
+      , "kind"   .= ("type_ok" :: Text)
+      , "type"   .= importsOkMsg
+      , "hint"   .=
+          ("Imports resolve. Add a declaration or expression under the same \
+           \id and re-check, or action=promote." :: Text)
+      ])
+    (\errText -> object
+      [ "id"         .= i
+      , "status"     .= SP.ScratchOpen
+      , "kind"       .= ("type_error" :: Text)
+      , "type_error" .= errText
+      , "hint"       .=
+          ("An import failed to resolve. Check the module name / that the \
+           \package is a dependency, then action=check again." :: Text)
+      ])
+  where
+    importsOkMsg :: Text
+    importsOkMsg = "imports resolve"
+
+-- | Partition a scratch snippet into its leading @import …@ statements and the
+-- remaining declaration/expression body (#276).
+--
+-- Haskell requires every import to precede all declarations, so the import
+-- section is the maximal prefix of lines up to the first line that starts a
+-- non-import top-level declaration (column 0, non-blank, not @import@).
+-- Multi-line import lists (continuation lines are indented) are rejoined into
+-- a single statement so 'parseImportDecl' sees the whole declaration.
+--
+-- Returns @(importStatements, bodyText)@.  @bodyText@ preserves the original
+-- line layout of everything after the import section.
+splitImports :: Text -> ([Text], Text)
+splitImports code =
+  let ls                 = T.lines code
+      (impSection, rest) = break isDeclStart ls
+   in (groupImports impSection, T.unlines rest)
+  where
+    -- A line that starts a top-level declaration: column 0, non-blank, and not
+    -- the keyword @import@. This is where the import section ends.
+    isDeclStart :: Text -> Bool
+    isDeclStart l =
+      let s = T.stripStart l
+       in not (T.null s)
+            && not (isIndented l)
+            && not (importHead s)
+
+    isIndented :: Text -> Bool
+    isIndented l = case T.uncons l of
+      Just (c, _) -> c == ' ' || c == '\t'
+      Nothing     -> False
+
+    importHead :: Text -> Bool
+    importHead s = s == "import" || T.isPrefixOf "import " s
+
+-- | Group a run of import-section lines into whole import statements: each line
+-- beginning with @import@ starts a new statement; indented continuation lines
+-- (e.g. a multi-line import list) attach to the current one; blank lines are
+-- dropped.
+groupImports :: [Text] -> [Text]
+groupImports = finish . foldl step []
+  where
+    step :: [[Text]] -> Text -> [[Text]]
+    step groups l
+      | importHead (T.stripStart l) = [l] : groups          -- new statement
+      | T.null (T.strip l)          = groups                -- skip blanks
+      | otherwise = case groups of
+          (g : gs) -> (l : g) : gs                          -- continuation
+          []       -> groups                                -- stray pre-import line
+    finish :: [[Text]] -> [Text]
+    finish = reverse . map (T.intercalate "\n" . reverse)
+    importHead :: Text -> Bool
+    importHead s = s == "import" || T.isPrefixOf "import " s
 
 --------------------------------------------------------------------------------
 -- write
