@@ -1,0 +1,27 @@
+mcp-server-haskell/test/Spec.hs
+  s_5ac5babd034a90::t_33745f15d40d73 145
+  s_5ac5babd034a90::t_ad7f961e4158c2 1320-1322
+  s_5ac5babd034a90::t_667c2eb88a0f9f 7235-7253
+mcp-server-haskell/src/HaskellFlows/Tool/Determinism.hs
+  s_5ac5babd034a90::t_6098539f36a6eb 14-15
+  s_5ac5babd034a90::t_a3900cbfd775d3 53-66
+  s_5ac5babd034a90::t_3de6e73abaeafd 75-77,82,87-92,94-97
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheck.hs
+  s_5ac5babd034a90::t_c48248bb54c118 139-145,147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "d8bc9a05d9f29d2638ffcc65f7174672af100f16",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
