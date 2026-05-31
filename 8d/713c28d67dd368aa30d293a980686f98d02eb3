@@ -1,0 +1,24 @@
+mcp-server-haskell/test/Spec.hs
+  s_5ac5babd034a90::t_7d20020f0e5caa 1758
+  s_5ac5babd034a90::t_5d68b9dbeb8143 326-327
+mcp-server-haskell/haskell-flows-mcp.cabal
+  s_5ac5babd034a90::t_1516d57efca766 180
+mcp-server-haskell/test/Spec/Harness.hs
+  s_5ac5babd034a90::t_0d9a1774d58389 1-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "8d713c28d67dd368aa30d293a980686f98d02eb3",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
