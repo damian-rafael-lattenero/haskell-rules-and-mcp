@@ -178,6 +178,8 @@ test-suite haskell-flows-mcp-test
     main-is:          Spec.hs
     other-modules:    PathTraversal
                       Spec.Harness
+                      Spec.Helpers
+                      Spec.Scratch
     build-depends:    base              >= 4.20 && < 5
                     , haskell-flows-mcp
                     , aeson             >= 2.2  && < 2.3
