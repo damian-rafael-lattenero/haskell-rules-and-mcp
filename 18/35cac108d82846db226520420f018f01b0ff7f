@@ -1,0 +1,38 @@
+mcp-server-haskell/src/HaskellFlows/Mcp/Progress.hs
+  s_5ac5babd034a90::t_7ed127437ee9c3 1-117
+mcp-server-haskell/test/Spec.hs
+  s_5ac5babd034a90::t_b3b57f01ad84d0 7421-7478
+  s_5ac5babd034a90::t_08f459f181e26b 303-310
+  s_5ac5babd034a90::t_424adbc0ddcde0 317
+  s_5ac5babd034a90::t_b1f126507d43b5 11554
+  s_5ac5babd034a90::t_76aed2194213c6 1357-1361
+mcp-server-haskell/src/HaskellFlows/Mcp/Server.hs
+  s_5ac5babd034a90::t_e8f747471b8420 394-396
+  s_5ac5babd034a90::t_9e6269f36e0237 418-419
+  s_5ac5babd034a90::t_118ace6ff6c05b 410-412
+  s_5ac5babd034a90::t_86b7a025899df1 593-594
+  s_5ac5babd034a90::t_d38a985dab1e02 341-343
+  s_5ac5babd034a90::t_5a3d2c828cb8ec 354-355
+  s_5ac5babd034a90::t_2ab1d3af6c9fe1 69-74
+mcp-server-haskell/src/HaskellFlows/Tool/Gate.hs
+  s_5ac5babd034a90::t_6275860f5cb7b1 64-67
+  s_5ac5babd034a90::t_1450b3afd10096 165-166,175-189,193,200-202,205-207,209
+mcp-server-haskell/haskell-flows-mcp.cabal
+  ai_agent 134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "1835cac108d82846db226520420f018f01b0ff7f",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
