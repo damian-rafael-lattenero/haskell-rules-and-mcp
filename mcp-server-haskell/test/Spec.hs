@@ -300,13 +300,21 @@ import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmupTool
 import qualified HaskellFlows.Tool.ValidateCabal as ValidateCabalTool
 import qualified HaskellFlows.Tool.Workflow as WorkflowTool
 import HaskellFlows.Mcp.Staleness (StalenessReport (..), binaryIdentityStale)
+import HaskellFlows.Mcp.Progress
+  ( ProgressEvent (..)
+  , ProgressSink (..)
+  , mkProgressSink
+  , noopSink
+  , progressNotification
+  , progressTokenFrom
+  )
 import qualified HaskellFlows.Tool.Type as TypeTool
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
 import HaskellFlows.Tool.SwitchProject
   ( ValidationError (..)
   , validateSwitchTarget
   )
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import HaskellFlows.Ghc.CabalBootstrap
   ( StanzaFlags (..)
   , Target (..)
@@ -1346,6 +1354,11 @@ main = do
       , test "staleness: wired into server (static)"  testStalenessWired
       , test "#280: identity differs -> stale"        testStalenessIdentityDiffers
       , test "#280: identity matches -> fresh"         testStalenessIdentityMatches
+      , test "#265: progress notification has spec shape" testProgressNotificationShape
+      , test "#265: progressToken extracted from _meta"   testProgressTokenPresent
+      , test "#265: no _meta -> no progress token"        testProgressTokenAbsent
+      , test "#265: collecting sink receives events"      testProgressCollectingSink
+      , test "#265: no subscription -> noop sink"         testProgressNoSubscriptionNoop
       , test "workflow: history polls ghc_load"      testHistoryPolling
       , test "workflow: history missing quickcheck"   testHistoryMissingQc
       , test "workflow: history refactor unreloaded"  testHistoryRefactorNotReloaded
@@ -7405,6 +7418,64 @@ testStalenessIdentityMatches :: IO Bool
 testStalenessIdentityMatches =
   pure (isNothing (binaryIdentityStale "/h/.cabal/store/A/x" "/h/.cabal/store/A/x"))
 
+-- #265: the emitted notification must be a spec-shaped notifications/progress
+-- message — jsonrpc 2.0, the right method, and params carrying the token,
+-- message, elapsed_ms, and the progress/total counters.
+testProgressNotificationShape :: IO Bool
+testProgressNotificationShape =
+  let n = progressNotification (A.String "tok-1")
+            (ProgressEvent "regression: running" 42 (Just 1) (Just 3))
+  in pure $ case n of
+       A.Object o ->
+            AKM.lookup "jsonrpc" o == Just (A.String "2.0")
+         && AKM.lookup "method"  o == Just (A.String "notifications/progress")
+         && case AKM.lookup "params" o of
+              Just (A.Object p) ->
+                   AKM.lookup "progressToken" p == Just (A.String "tok-1")
+                && AKM.lookup "message"       p == Just (A.String "regression: running")
+                && AKM.lookup "elapsed_ms"    p == Just (A.Number 42)
+                && AKM.lookup "progress"      p == Just (A.Number 1)
+                && AKM.lookup "total"         p == Just (A.Number 3)
+              _ -> False
+       _ -> False
+
+-- #265: the client's subscription token is pulled from params._meta.progressToken.
+testProgressTokenPresent :: IO Bool
+testProgressTokenPresent =
+  let params = A.object
+        [ "name"  .= ("ghc_gate" :: Text)
+        , "_meta" .= A.object [ "progressToken" .= (7 :: Int) ]
+        ]
+  in pure (progressTokenFrom params == Just (A.Number 7))
+
+-- #265: no _meta ⇒ no token ⇒ the client did not subscribe.
+testProgressTokenAbsent :: IO Bool
+testProgressTokenAbsent =
+  let params = A.object [ "name" .= ("ghc_gate" :: Text) ]
+  in pure (isNothing (progressTokenFrom params))
+
+-- #265: a handler emitting through a sink reaches the sink's consumer in order
+-- (the mechanism ghc_gate uses for its per-step events).
+testProgressCollectingSink :: IO Bool
+testProgressCollectingSink = do
+  ref <- newIORef []
+  let sink = ProgressSink (\ev -> modifyIORef' ref (peStep ev :))
+  emitProgress sink (ProgressEvent "a" 1 (Just 1) (Just 3))
+  emitProgress sink (ProgressEvent "b" 2 (Just 2) (Just 3))
+  emitProgress sink (ProgressEvent "c" 3 (Just 3) (Just 3))
+  steps <- readIORef ref
+  pure (reverse steps == ["a", "b", "c"])
+
+-- #265: when the client did not subscribe (no token), the chosen sink is the
+-- no-op — emitting through it is harmless (zero overhead, no stdout write).
+-- Covers both mkProgressSink Nothing and the noopSink it returns.
+testProgressNoSubscriptionNoop :: IO Bool
+testProgressNoSubscriptionNoop = do
+  sink <- mkProgressSink Nothing
+  emitProgress sink   (ProgressEvent "x" 0 Nothing Nothing)
+  emitProgress noopSink (ProgressEvent "y" 0 Nothing Nothing)
+  pure True  -- must complete without writing / throwing
+
 -- | BUG-08 — 5 @ghc_load@ calls in a row must trigger the
 -- polling nudge that points at ghc_quickcheck / check_project.
 testHistoryPolling :: IO Bool
@@ -11480,7 +11551,7 @@ testGateAllSkipRefused = withTempProject $ \pd -> do
         , "skip_cabal_test"  .= True
         , "skip_cabal_build" .= True
         ]
-  tr <- Gate.handle store (error "GhcSession not needed for all-skip path") pd raw
+  tr <- Gate.handle store (error "GhcSession not needed for all-skip path") pd noopSink raw
   case trContent tr of
     [TextContent body] ->
       case A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)) of

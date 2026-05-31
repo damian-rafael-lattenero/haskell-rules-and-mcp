@@ -66,6 +66,12 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ErrorKind (ErrorKind (..))
 import HaskellFlows.Mcp.Guidance (sessionInstructionsText, workflowRulesMarkdown)
 import HaskellFlows.Mcp.NextStep (injectNextStep, suggestNext, withDogfoodHint)
+import HaskellFlows.Mcp.Progress
+  ( ProgressSink
+  , mkProgressSink
+  , noopSink
+  , progressTokenFrom
+  )
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ResourceUri (ResourceUri (..), parseResourceUri)
 import HaskellFlows.Mcp.Resources (allResources)
@@ -332,7 +338,9 @@ dispatch _ ResourcesRead Nothing rid =
 dispatch srv ToolsCall (Just params) rid =
   case parseEither parseJSON params of
     Left err -> pure (err_ rid (invalidParamsErr (T.pack err)))
-    Right call -> handleToolCall srv call rid
+    -- #265: the client's progress subscription (params._meta.progressToken)
+    -- is extracted from the raw params here — ToolCall itself doesn't carry it.
+    Right call -> handleToolCall srv call rid (progressTokenFrom params)
 dispatch _ ToolsCall Nothing rid =
   pure (err_ rid (invalidParamsErr "tools/call requires params"))
 -- Notifications should never reach 'dispatch' (filtered by 'handleRequest'
@@ -343,8 +351,8 @@ dispatch _ Initialized _ rid =
 dispatch _ NotificationsCancelled _ rid =
   pure (err_ rid (invalidParamsErr "'notifications/cancelled' is a notification and must not carry an id"))
 
-handleToolCall :: Server -> ToolCall -> RequestId -> IO Response
-handleToolCall srv call rid = case parseToolName (tcName call) of
+handleToolCall :: Server -> ToolCall -> RequestId -> Maybe Value -> IO Response
+handleToolCall srv call rid mProgressToken = case parseToolName (tcName call) of
   Nothing ->
     -- Wire sent a tool name we don't have a constructor for. Synthesize
     -- the same shape 'dispatchTool' would have emitted via its old
@@ -383,7 +391,9 @@ handleToolCall srv call rid = case parseToolName (tcName call) of
     ctx  <- newLogContext (toolNameText tn)
     logToolStart ctx (redactArgs (tcArguments call))
     t0   <- getPOSIXTime
-    resp <- runTool srv tn rid (dispatchByName srv (tcArguments call) tn)
+    -- #265: a real sink only when the flag is on AND the client subscribed.
+    sink <- mkProgressSink mProgressToken
+    resp <- runTool srv tn rid (dispatchByName srv sink (tcArguments call) tn)
     t1   <- getPOSIXTime
     logToolEnd ctx (extractResponseStatus resp)
                (round ((t1 - t0) * 1000) :: Int)
@@ -397,14 +407,16 @@ handleToolCall srv call rid = case parseToolName (tcName call) of
 dispatchTool :: Server -> ToolCall -> IO ToolResult
 dispatchTool srv call = case parseToolName (tcName call) of
   Nothing -> pure (unknownToolResult (tcName call))
-  Just tn -> dispatchByName srv (tcArguments call) tn
+  -- #265: batch sub-calls don't stream individually (noopSink) — the batch
+  -- envelope is the unit of work the client sees.
+  Just tn -> dispatchByName srv noopSink (tcArguments call) tn
 
 -- | Exhaustive dispatch from 'ToolName' to the corresponding handler.
 -- @-Wincomplete-patterns@ guarantees that adding a constructor to
 -- 'ToolName' without wiring its handler is a compile error — pre-ADT
 -- the same omission silently fell through to "Unknown tool".
-dispatchByName :: Server -> Value -> ToolName -> IO ToolResult
-dispatchByName srv args = \case
+dispatchByName :: Server -> ProgressSink -> Value -> ToolName -> IO ToolResult
+dispatchByName srv sink args = \case
   GhcLoad -> do
     -- Wave-2 full GhcSession: cabal-aware stanza compile via
     -- loadForTarget, diagnostics captured from the logger hook,
@@ -578,7 +590,8 @@ dispatchByName srv args = \case
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
     store   <- readIORef (srvStore srv)
-    GateTool.handle store ghcSess pd args
+    -- #265: pass the progress sink so ghc_gate streams per-step events.
+    GateTool.handle store ghcSess pd sink args
   GhcAddImport -> do
     -- #146: AddImportTool now needs the session to inject the top
     -- candidate directly into the interactive context. We do NOT
