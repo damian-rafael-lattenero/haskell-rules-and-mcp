@@ -1,0 +1,21 @@
+.claude/rules/use-haskell-flows-mcp.md
+  s_5ac5babd034a90::t_53e2f3f401e796 209-257
+scripts/install-mcp.sh
+  s_5ac5babd034a90::t_e7e326610ab4e3 2-3,5-14,16-24,27-30,38,40-43,48-130,134-140,144-148,150-156,158-171,174,182,186-187,189-191,193,196-198,201-203,205-206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "446ccf389d83fbf407fc642f93fc6390e8f39d54",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
