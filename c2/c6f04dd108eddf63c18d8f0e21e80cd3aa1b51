@@ -1,0 +1,28 @@
+mcp-server-haskell/src/HaskellFlows/Tool/PropertyStore.hs
+  s_5ac5babd034a90::t_c51699d7197243 23-27,34,38-39,42-44,48-51
+  s_5ac5babd034a90::t_966e73a2620634 53-99
+mcp-server-haskell/src/HaskellFlows/Tool/Project.hs
+  s_5ac5babd034a90::t_c0bbf9834175eb 32,35,37-38,40,42-45,49-53
+  s_5ac5babd034a90::t_87896771e809f8 55-137
+mcp-server-haskell/src/HaskellFlows/Mcp/Server.hs
+  s_5ac5babd034a90::t_384fcaf484ee18 560-566
+  s_5ac5babd034a90::t_9cb2654864fce7 619-622
+mcp-server-haskell/test/Spec.hs
+  s_5ac5babd034a90::t_efa7d481134c78 8877,8880,8889,8892,8894-8896,8902,8905
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "c2c6f04dd108eddf63c18d8f0e21e80cd3aa1b51",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
