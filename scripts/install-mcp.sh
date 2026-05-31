@@ -1,44 +1,36 @@
 #!/usr/bin/env bash
-# install-mcp.sh — rebuild the haskell-flows-mcp binary and put it where
-# the MCP client (Claude Code) expects to find it.
+# install-mcp.sh — rebuild the haskell-flows-mcp binary the active MCP
+# config actually launches, then remind you to relaunch the client.
 #
-# Why this exists: `cabal install exe:haskell-flows-mcp` lands the
-# binary in `~/.cabal/bin`, but `.mcp.json` at the repo root points
-# at `~/.local/bin/haskell-flows-mcp` (a copy, not a hardlink — the
-# original setup put it there to keep cabal's bin dir reorderable).
-# Running cabal install alone leaves the running MCP unchanged
-# because Claude is still launching the OLD copy. This script closes
-# that gap with one command.
+# The active config (.mcp.json at the repo root) sets
+#   "command": "~/.cabal/bin/haskell-flows-mcp"
+# i.e. the symlink that `cabal install exe:haskell-flows-mcp` updates
+# atomically on every build. So a single `cabal install` is all that's
+# needed — this script just wraps it with the PATH dance, a staleness
+# check, and a restart reminder.
 #
-# Steps:
-#   1. cabal install exe:haskell-flows-mcp --overwrite-policy=always
-#   2. cp  ~/.cabal/bin/haskell-flows-mcp  ~/.local/bin/haskell-flows-mcp
-#   3. strip the copied binary (#101 Phase B: ~30% size reduction;
-#      symbol table + debug info are not used at runtime by the
-#      MCP — verified in docs/BINARY_SIZE.md §3).
-#      Pass --no-strip to skip if the user wants debug symbols.
-#   4. print a reminder to restart Claude Code so the next invocation
-#      picks up the fresh build.
+# History (why this script shrank): it used to also `cp` the binary to
+# ~/.local/bin and `strip` that copy. The config was since moved to
+# ~/.cabal/bin precisely because a stale ~/.local/bin copy shadowed the
+# fresh build and made the Claude API reject the old schema (see the
+# .mcp.json comment). The cp+strip steps then operated on a path nobody
+# launches — so they were removed. (~/.cabal/bin is a symlink into the
+# immutable cabal store, so it must NOT be stripped in place anyway.)
 #
 # Usage:
-#   scripts/install-mcp.sh            # rebuild + install (stripped)
-#   scripts/install-mcp.sh --no-strip # rebuild + install, keep symbols
-#   scripts/install-mcp.sh --check    # just print whether the on-disk
-#                                     # binary is older than the source
-#   scripts/install-mcp.sh -h         # this help block
+#   scripts/install-mcp.sh          # rebuild + install (the only path the config uses)
+#   scripts/install-mcp.sh --check  # print whether the installed binary is older than src
+#   scripts/install-mcp.sh -h       # this help block
 set -euo pipefail
 
-STRIP=1   # default: strip the copied binary (Phase B savings).
-
-# Same PATH dance as ci-local.sh — non-login shells on macOS don't
-# source .zprofile, so cabal/ghc/hlint/fourmolu need to be made
-# discoverable here.
+# Same PATH dance as ci-local.sh — non-login shells on macOS don't source
+# .zprofile, so cabal/ghc need to be made discoverable here.
 export PATH="$HOME/.ghcup/bin:$HOME/.cabal/bin:$PATH"
 
 cd "$(dirname "$0")/.."
 
+# The path the active .mcp.json launches (cabal-install-managed symlink).
 CABAL_BIN="$HOME/.cabal/bin/haskell-flows-mcp"
-LOCAL_BIN="$HOME/.local/bin/haskell-flows-mcp"
 
 step() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 ok()   { printf '\033[1;32m✓\033[0m %s\n' "$*"; }
@@ -46,18 +38,15 @@ warn() { printf '\033[1;33m!\033[0m %s\n' "$*"; }
 
 case "${1:-}" in
   -h|--help)
-    sed -n '1,30p' "$0"
+    sed -n '1,24p' "$0"
     exit 0
     ;;
-  --no-strip)
-    STRIP=0
-    ;;
   --check)
-    if [[ ! -x "$LOCAL_BIN" ]]; then
-      warn "no binary at $LOCAL_BIN — run scripts/install-mcp.sh"
+    if [[ ! -x "$CABAL_BIN" ]]; then
+      warn "no binary at $CABAL_BIN — run scripts/install-mcp.sh"
       exit 1
     fi
-    binary_mtime=$(stat -f %m "$LOCAL_BIN" 2>/dev/null || stat -c %Y "$LOCAL_BIN")
+    binary_mtime=$(stat -f %m "$CABAL_BIN" 2>/dev/null || stat -c %Y "$CABAL_BIN")
     newest_src=$(find mcp-server-haskell/src mcp-server-haskell/app -name '*.hs' -type f \
                    -exec stat -f %m {} \; 2>/dev/null \
                  | sort -nr | head -1)
@@ -67,7 +56,7 @@ case "${1:-}" in
                    | sort -nr | head -1)
     fi
     if [[ "$binary_mtime" -ge "$newest_src" ]]; then
-      ok "binary is up-to-date (mtime $binary_mtime ≥ newest src $newest_src)"
+      ok "binary up-to-date (mtime $binary_mtime ≥ newest src $newest_src)"
       exit 0
     else
       delta=$((newest_src - binary_mtime))
@@ -84,43 +73,25 @@ case "${1:-}" in
 esac
 
 pushd mcp-server-haskell > /dev/null
-
-step "[1/3] cabal install exe:haskell-flows-mcp"
+step "cabal install exe:haskell-flows-mcp  (updates $CABAL_BIN)"
 cabal install exe:haskell-flows-mcp --overwrite-policy=always
-
 popd > /dev/null
 
-step "[2/3] copy → $LOCAL_BIN"
-mkdir -p "$(dirname "$LOCAL_BIN")"
-cp "$CABAL_BIN" "$LOCAL_BIN"
-ok "copied: $(stat -f '%z bytes' "$LOCAL_BIN" 2>/dev/null \
-                 || stat -c '%s bytes' "$LOCAL_BIN")"
+ok "installed: $(stat -f '%Sm  %z bytes' "$CABAL_BIN" 2>/dev/null \
+                 || stat -c '%y  %s bytes' "$CABAL_BIN")"
 
-if [[ "$STRIP" -eq 1 ]]; then
-  step "[3/3] strip $LOCAL_BIN (#101 Phase B)"
-  before=$(stat -f %z "$LOCAL_BIN" 2>/dev/null || stat -c %s "$LOCAL_BIN")
-  # `strip` is in /usr/bin on macOS + every Linux distro; no need to
-  # probe PATH. -x on macOS = strip non-global symbols (what we want);
-  # -S on Linux strips debug-info-only. Use the lowest-common-denominator
-  # invocation: bare `strip` defaults are conservative on both.
-  strip "$LOCAL_BIN"
-  after=$(stat -f %z "$LOCAL_BIN" 2>/dev/null || stat -c %s "$LOCAL_BIN")
-  saved=$(( before - after ))
-  ok "stripped: $after bytes (saved $saved bytes / $((saved * 100 / before))%)"
-else
-  step "[3/3] strip skipped (--no-strip)"
+# Heads-up if the abandoned ~/.local/bin copy still exists — it's no
+# longer launched, but leaving a stale one around invites confusion.
+if [[ -e "$HOME/.local/bin/haskell-flows-mcp" ]]; then
+  warn "a stale copy still exists at ~/.local/bin/haskell-flows-mcp — unused by the current .mcp.json; safe to 'rm' it."
 fi
-
-ok "installed: $(stat -f '%Sm  %z bytes' "$LOCAL_BIN" 2>/dev/null \
-                 || stat -c '%y  %s bytes' "$LOCAL_BIN")"
 
 cat <<'NOTE'
 
 ==> next step
-The fresh binary is in place but the running Claude Code session is
-still talking to the OLD subprocess. Restart Claude Code (quit and
-relaunch) so it spawns the new haskell-flows-mcp. To confirm after
-relaunch, run inside Claude:
+The fresh binary is in place, but the running Claude session is still
+talking to the OLD subprocess. Restart Claude (quit + relaunch) so it
+spawns the new haskell-flows-mcp. To confirm after relaunch, run:
 
-  ghc_workflow(action="status")   # 'staleness.stale' should be false
+  ghc_workflow(action="status")
 NOTE
