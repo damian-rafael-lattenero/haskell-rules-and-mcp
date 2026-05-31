@@ -1,0 +1,29 @@
+mcp-server-haskell/src/HaskellFlows/Mcp/Staleness.hs
+  s_5ac5babd034a90::t_b825b5d7425903 21
+  s_5ac5babd034a90::t_eba34780927ce5 80
+  s_5ac5babd034a90::t_5bd5f98fea13e2 26-28
+  s_5ac5babd034a90::t_22281e25864458 61-69,72-79,81-116
+  s_5ac5babd034a90::t_2909a11e91b6b8 16
+  s_5ac5babd034a90::t_22cb2aa4a8acbf 117-126
+mcp-server-haskell/test/Spec.hs
+  s_5ac5babd034a90::t_1aa20f1c7deb77 7391-7401,7403
+  s_5ac5babd034a90::t_c30feca7f24ed7 1343-1344
+  s_5ac5babd034a90::t_8f0189871c24ec 7402
+  s_5ac5babd034a90::t_fd21a6cc585b47 302
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "7240022937dc9345fa458e25bc629ca137e4f6cf",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
