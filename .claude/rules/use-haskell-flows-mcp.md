@@ -206,6 +206,55 @@ PATH="$HOME/.ghcup/bin:$HOME/.cabal/bin:$PATH" \
   hlint mcp-server-haskell/
 ```
 
+### Binary pickup: every MCP config must launch the cabal symlink
+
+Claude Code reads MCP server defs from **two** places, and the global
+one wins at launch:
+
+1. the project `.mcp.json` (repo root), and
+2. the global `~/.claude.json` — top-level `mcpServers` **and** any
+   per-project `projects[<dir>].mcpServers`.
+
+The canonical command for both is the cabal-install-managed **symlink**:
+
+```
+~/.cabal/bin/haskell-flows-mcp   →  ../store/.../<hash>/bin/haskell-flows-mcp
+```
+
+`cabal install exe:haskell-flows-mcp` repoints that symlink atomically
+on every build, so **install + restart follows the symlink to the
+newest binary with zero per-release config edits**. This only works if
+the config launches the *symlink*, not a copy.
+
+**The drift that bit us (2026-05-31):** the global `~/.claude.json`
+entry pointed at a frozen **copy** in `~/.local/bin/haskell-flows-mcp`
+(an old install step `cp`'d it there). `cabal install` refreshed the
+symlink, but Claude kept launching the stale copy — so new tools /
+`ghc_workflow` actions (`discover`, `post-mortem`, `plan`) showed up as
+`"unknown action"` right after a green install. `getExecutablePath`
+inside `ghc_eval` is the smoking-gun probe: it printed
+`~/.local/bin/...` while the project `.mcp.json` said `~/.cabal/bin/...`,
+proving the global config was the one in force.
+
+**The fix is automated in `scripts/install-mcp.sh`:**
+
+- the default run rebuilds **and** reconciles both configs to the
+  symlink (surgical string-replace, timestamped backup);
+- `scripts/install-mcp.sh --reconcile` fixes configs **without** a
+  rebuild — run it with Claude fully quit if a restart still launches a
+  stale binary (a live session can rewrite `~/.claude.json` on quit);
+- `scripts/install-mcp.sh --check` exits non-zero if the binary is
+  stale **or** either config's command ≠ the symlink. This is the
+  script's regression guard — run it after any install to confirm
+  pickup will work.
+
+Staleness caveat: `ghc_workflow(status)` reports `stale=false` by
+comparing on-disk mtimes — it does **not** know the *running process*
+is an old binary (tracked as #280). The authoritative check is
+`ghc_workflow(action="discover")`: if it succeeds, the new binary is
+live; `"unknown action"` means Claude is still on the old subprocess →
+restart (and `--reconcile` if needed).
+
 ### Run hlint full-repo before every push
 
 GitHub's `Haskell CI` job runs `hlint mcp-server-haskell/` recursively
