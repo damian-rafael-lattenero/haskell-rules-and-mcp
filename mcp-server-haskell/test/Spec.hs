@@ -1250,6 +1250,8 @@ main = do
       , test "#270: chain resolves <same module> from payload" testNextStepResolvesSameModule
       , test "#264: plan matches module-with-qc template" testPlanMatchesModuleQc
       , test "#264: plan low-confidence lists alternatives" testPlanLowConfidenceListsAlternatives
+      , test "#284: plan scaffolds all named modules"  testPlanMultiModule
+      , test "#284: plan caps confidence on complex goal" testPlanComplexGoalCapped
       , test "#258: GHC-32850 suppressed when modules registered" testLoad32850Suppressed
       , test "#258: GHC-32850 retained when module missing" testLoad32850RetainedWhenMissing
       , test "#258: non-GHC-32850 warning never dropped (CI regression)" testLoadNon32850Retained
@@ -8303,6 +8305,43 @@ testPlanLowConfidenceListsAlternatives =
         && case AKM.lookup "alternative_templates" o of
              Just (A.Array a) -> not (null a)
              _                -> False
+    _ -> False
+
+-- | #284: a goal naming several modules scaffolds them ALL in one ghc_modules
+-- step (matched_template = multi-module-scaffold) instead of collapsing to the
+-- first, and carries a clarifying note.
+testPlanMultiModule :: IO Bool
+testPlanMultiModule =
+  pure $ case WorkflowTool.planPayload
+               "build modules Expr.Syntax, Expr.Eval, Expr.Pretty with QC" of
+    A.Object o ->
+      AKM.lookup "matched_template" o == Just (A.String "multi-module-scaffold")
+        && AKM.member "note" o
+        && case AKM.lookup "chain" o of
+             Just (A.Array a) -> case Vector.toList a of
+               (step1 : _) -> case step1 of
+                 A.Object s -> case AKM.lookup "args" s of
+                   Just (A.Object args) -> case AKM.lookup "modules" args of
+                     Just (A.Array ms) -> length ms == 3
+                     _                  -> False
+                   _ -> False
+                 _ -> False
+               _ -> False
+             _ -> False
+    _ -> False
+
+-- | #284: a long / multi-faceted goal that still maps to a single template has
+-- its confidence capped (<= 0.5) and gains a note, so the agent treats the
+-- chain as a starting slice rather than a complete plan.
+testPlanComplexGoalCapped :: IO Bool
+testPlanComplexGoalCapped =
+  pure $ case WorkflowTool.planPayload
+               "build an arithmetic expression evaluator with eval, algebraic \
+               \simplify, and pretty-print parse roundtrip, all property-tested" of
+    A.Object o ->
+      case AKM.lookup "confidence" o of
+        Just (A.Number n) -> n <= 0.5 && AKM.member "note" o
+        _                 -> False
     _ -> False
 
 -- | #270: a nextStep example's module_path is resolved to the payload's

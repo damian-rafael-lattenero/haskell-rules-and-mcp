@@ -31,7 +31,7 @@ import Data.Aeson
 import qualified Data.Aeson.Key as Key
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, readIORef)
-import Data.List (find, sortBy)
+import Data.List (find, nub, sortBy)
 import Data.Char (isAlphaNum, isUpper)
 import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
 import Data.Ord (Down (..), comparing)
@@ -276,6 +276,14 @@ render a pd alive toolNames ws staleness missingOpt mEntry isSelfProject mScratc
         ActHelp     -> helpPayload pd alive stateHints staleness phase mEntry
         ActDiscover -> discoverPayload ws phase
         ActPlan goal -> planPayload goal
+        -- #274: ActPostMortem is dispatched on the IO path above (it needs
+        -- 'getCurrentTime' + the on-disk lifetime ledger), so it never reaches
+        -- this pure case. This defensive arm keeps the match exhaustive
+        -- (-Wincomplete-patterns clean) and degrades clearly if ever reached.
+        ActPostMortem -> object
+          [ "view"  .= ("post-mortem" :: Text)
+          , "error" .= ("internal: post-mortem is handled on the IO path" :: Text)
+          ]
   in Env.toolResponseToResult (Env.mkOk payload)
 
 -- | #263: the ranked top-5 unused tools for the current phase. Pure +
@@ -485,37 +493,104 @@ matchTemplate goal =
          , [ ptName t | (t, s) <- take 3 rest, s > 0 ] )
        _ -> (Nothing, 0.0, take 3 (map ptName planTemplates))
 
--- | Pull the first module-ish token (Capitalised, optionally dotted)
--- out of the goal, e.g. "set up Expr.Foo with QC" -> Just "Expr.Foo".
+-- | A Capitalised, optionally-dotted token — a plausible module name
+-- (e.g. @Expr.Foo@, @Main@). Used by 'extractModule' / 'extractModules'.
+isModuleToken :: Text -> Bool
+isModuleToken w = case T.uncons w of
+  Just (c, _) -> isUpper c && T.all (\x -> isAlphaNum x || x == '.') w
+  Nothing     -> False
+
+-- | Pull the first module-ish token out of the goal, e.g.
+-- "set up Expr.Foo with QC" -> Just "Expr.Foo".
 extractModule :: Text -> Maybe Text
 extractModule goal = find isModuleToken (T.words goal)
-  where
-    isModuleToken w = case T.uncons w of
-      Just (c, _) -> isUpper c && T.all (\x -> isAlphaNum x || x == '.') w
-      Nothing     -> False
+
+-- | #284: pull EVERY distinct QUALIFIED module name from the goal
+-- (order-preserving), so "modules Expr.Syntax, Expr.Eval, Expr.Pretty" yields
+-- all three rather than collapsing to the first. Only dotted names qualify —
+-- a bare capitalised word ("QC", "Expr") is too ambiguous with an ordinary
+-- noun to treat as a module for the multi-module decision. Trailing
+-- punctuation (commas / semicolons) is stripped first.
+extractModules :: Text -> [Text]
+extractModules goal =
+  nub [ tok | w <- T.words goal
+            , let tok = T.dropAround (\c -> c == ',' || c == ';') w
+            , isModuleToken tok
+            , T.any (== '.') tok ]
+
+-- | #284: a goal that names two or more modules, or is long enough to clearly
+-- describe a multi-step build, is only coarsely served by a single 2-step
+-- template — we cap its confidence and attach a clarifying note.
+isComplexGoal :: Text -> Bool
+isComplexGoal goal =
+  length (extractModules goal) >= 2 || length (T.words goal) > 12
 
 -- | #264: render the plan view — the matched template's concrete chain
 -- (ghc_batch-ready), a confidence, and alternatives. Deterministic.
 planPayload :: Text -> Value
 planPayload goal =
   let mh                  = extractModule goal
-      (mBest, conf, alts) = matchTemplate goal
-  in object $
-       [ "view"       .= ("plan" :: Text)
-       , "goal"       .= goal
-       , "confidence" .= conf
-       ]
-       <> case mBest of
-            Just t | conf >= 0.5 ->
+      mods                = extractModules goal
+      (mBest, conf0, alts) = matchTemplate goal
+      complex             = isComplexGoal goal
+      -- #284: a single 2-step template can't fully serve a multi-module /
+      -- multi-step build — cap the confidence so the agent treats the chain as
+      -- a starting slice, not a complete plan.
+      conf | complex   = min conf0 0.5
+           | otherwise = conf0
+      base =
+        [ "view"       .= ("plan" :: Text)
+        , "goal"       .= goal
+        , "confidence" .= conf
+        ]
+  in object $ base <>
+       if length mods >= 2
+         -- #284: the goal names several modules → scaffold them ALL in one
+         -- ghc_modules step rather than collapsing to the first, then load the
+         -- first so the agent can iterate. Beats the single-module template.
+         then
+           [ "matched_template"      .= ("multi-module-scaffold" :: Text)
+           , "chain"                 .= multiModuleChain mods
+           , "alternative_templates" .= maybe alts (\t -> ptName t : alts) mBest
+           , "note"                  .=
+               ( "Goal names " <> T.pack (show (length mods))
+                 <> " modules — scaffolding all of them first. Treat this as the \
+                    \opening step, then re-plan per module (e.g. ghc_suggest + \
+                    \ghc_quickcheck on each)." :: Text )
+           ]
+         else case mBest of
+            Just t | conf0 >= 0.5 ->
               [ "matched_template"      .= ptName t
               , "chain"                 .= ptBuild t mh
               , "alternative_templates" .= alts
               ]
+              <> [ "note" .= planScaffoldNote | complex ]
             _ ->
               [ "matched_template"      .= Null
               , "chain"                 .= ([] :: [Value])
               , "alternative_templates" .= alts
+              , "note"                  .=
+                  ( "No template strongly matched. Pick the closest alternative, \
+                    \or break the goal into smaller steps and re-plan." :: Text )
               ]
+  where
+    planScaffoldNote :: Text
+    planScaffoldNote =
+      "This goal looks multi-step; the chain is a starting scaffold from the \
+      \closest single template (confidence capped). Run it, then re-plan the \
+      \next slice or pick an alternative_template."
+
+-- | #284: scaffold every named module in one ghc_modules step, then load the
+-- first so the agent has a compile surface to iterate on.
+multiModuleChain :: [Text] -> [Value]
+multiModuleChain mods =
+  [ planStep GhcModules (object ["action" .= ("add" :: Text), "modules" .= mods])
+  ]
+  <> case mods of
+       (m : _) -> [ planStep GhcLoad (object ["module_path" .= modPath m]) ]
+       []      -> []
+  where
+    modPath m = "src/" <> T.replace "." "/" m <> ".hs"
 
 statusPayload
   :: ProjectDir -> Bool -> [Text] -> StalenessReport -> SessionPhase
