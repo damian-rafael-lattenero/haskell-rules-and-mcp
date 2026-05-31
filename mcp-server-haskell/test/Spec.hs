@@ -888,6 +888,8 @@ main = do
       , test "#A5: unrouted error kind suppresses" testSuggestOnErrorUnroutedKind
       , test "#266 xsession: ledger round-trips"   testSessionLedgerRoundtrip
       , test "#266 xsession: empty ledger reads empty" testSessionLedgerEmpty
+      , test "#A4: info nextStep resolves name from payload" testNextStepInfoNameResolved
+      , test "#A4: echoField falls back to placeholder"      testNextStepEchoFieldFallback
       -- Phase 5: cross-tool nextStep arms
       , test "Phase 5: hole nextStep → scratch(write) chain"
                                                    testNextStepFromHoleRoutesToScratch
@@ -11669,6 +11671,31 @@ testSessionLedgerEmpty :: IO Bool
 testSessionLedgerEmpty = withTempProject $ \pd -> do
   m <- WS.loadLifetime pd
   pure (Map.null m)
+
+-- | #A4 residual: ghc_info's nextStep example resolves the name from the
+-- payload it echoes (ghc_batch-ready) instead of a "<placeholder>".
+testNextStepInfoNameResolved :: IO Bool
+testNextStepInfoNameResolved =
+  let payload = A.object [ "status" .= ("ok" :: Text), "name" .= ("reverse" :: Text) ]
+  in pure $ case suggestNext GhcInfo True payload of
+       Just ns -> case nsExample ns of
+         Just (A.Object o) ->
+           AKM.lookup (AKey.fromText "name") o == Just (A.String "reverse")
+         _ -> False
+       Nothing -> False
+
+-- | #A4 residual: echoField is safe — when the payload does NOT echo the
+-- field, the example keeps the honest "<placeholder>" agent-fill slot.
+testNextStepEchoFieldFallback :: IO Bool
+testNextStepEchoFieldFallback =
+  let payload = A.object [ "status" .= ("ok" :: Text) ]  -- no 'name' echoed
+  in pure $ case suggestNext GhcInfo True payload of
+       Just ns -> case nsExample ns of
+         Just (A.Object o) ->
+           AKM.lookup (AKey.fromText "name") o
+             == Just (A.String "<same name you just inspected>")
+         _ -> False
+       Nothing -> False
 
 -- | Per PR-3 of the integrated MCP improvements: exploratory tools
 -- (type/info/goto/doc) now DO carry a forward-chaining hint — the

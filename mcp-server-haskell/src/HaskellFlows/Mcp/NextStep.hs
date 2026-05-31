@@ -699,12 +699,12 @@ dispatch name payload = case name of
     | statusNoMatch_ payload -> Just (simple HoogleSearch
         "Name not found in interactive scope — hoogle_search discovers \
         \names across Hackage and surfaces the module to import."
-        (Just (object [ "query" .= ("<the name you looked up>" :: Text) ])))
+        (Just (object [ "query" .= echoField "name" "<the name you looked up>" payload ])))
     | otherwise -> Just (simple GhcDoc
         "Definition + kind + instances are in. ghc_doc retrieves the \
         \Haddock block (if any) for the contract / corner-cases the \
         \author documented."
-        (Just (object [ "name" .= ("<same name you just inspected>" :: Text) ])))
+        (Just (object [ "name" .= echoField "name" "<same name you just inspected>" payload ])))
 
   -- Expression evaluated → if it was a property, lift to QC harness.
   -- Suppressed on degraded status (a failed eval has its error, no
@@ -734,7 +734,7 @@ dispatch name payload = case name of
     | otherwise -> Just (simple GhcBrowse
         "You located the definition. Browse the module to discover sibling \
         \bindings — common patterns + alternative entry points."
-        (Just (object [ "module" .= ("<location.module from the result>" :: Text) ])))
+        (Just (object [ "module" .= echoField "module" "<location.module from the result>" payload ])))
 
   -- Doc read → browse the module for siblings with similar contracts.
   -- On no_match, the name is not in scope at all: redirect to hoogle_search. (#185)
@@ -745,12 +745,12 @@ dispatch name payload = case name of
     | statusNoMatch_ payload -> Just (simple HoogleSearch
         "Name not found in Haddock — hoogle_search discovers names \
         \across Hackage and surfaces the module to import."
-        (Just (object [ "query" .= ("<the name you looked up>" :: Text) ])))
+        (Just (object [ "query" .= echoField "name" "<the name you looked up>" payload ])))
     | hasDocFalse payload -> Just (simple GhcInfo
         "Name is in scope but has no doc string. ghc_info returns the \
         \type, definition site, and instances in one call — more useful \
         \than hoogle_search for a locally-defined name."
-        (Just (object [ "name" .= ("<same name>" :: Text) ])))
+        (Just (object [ "name" .= echoField "name" "<same name>" payload ])))
     | otherwise -> Just (simple GhcBrowse
         "Doc read. Browse the same module's full export surface to spot \
         \siblings whose contracts likely follow the same shape."
@@ -1166,6 +1166,15 @@ errorMessage p = fromMaybe "" (stringField "message" =<< envField "error" p)
 -- take one) — an honest agent-fill slot.
 sameModule :: Value -> Text
 sameModule payload = fromMaybe "<same module>" (stringField "module_path" payload)
+
+-- | #A4 (residual): resolve a placeholder from a field the CURRENT payload
+-- echoes (generalises 'sameModule'). ghc_info / ghc_doc echo @name@,
+-- ghc_goto echoes @module@ — so the canonical follow-up example can carry
+-- the concrete value instead of a @\<placeholder\>@, making it
+-- copy-paste / ghc_batch ready. Falls back to the placeholder when the
+-- field is absent, so it is always safe to apply (only ever upgrades).
+echoField :: Text -> Text -> Value -> Text
+echoField fld placeholder payload = fromMaybe placeholder (stringField fld payload)
 
 -- | Extract an integer field. Auto-drills through @result@.
 intField :: Text -> Value -> Maybe Int
