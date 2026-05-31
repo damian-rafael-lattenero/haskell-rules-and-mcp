@@ -313,8 +313,17 @@ suggestOnError toolName payload = case errorKind payload of
           "The code failed to compile. 'ghc_explain_error' decodes the GHC \
           \diagnostic and proposes a verifiable patch (missing import, \
           \signature, or scope fix) — feed it the error text below."
-          (Just (object [ "error_text" .= errorMessage payload ])))
+          (Just (object explainArgs)))
   _ -> Nothing
+  where
+    -- #282: ghc_explain_error needs module_path for enclosing context, but the
+    -- example used to pass only error_text — so following the hint verbatim
+    -- failed with missing_arg. Echo the failing call's module when the payload
+    -- carries it (most tools echo 'module_path' or 'module'); otherwise omit
+    -- it and let ghc_explain_error fall back to text-only decode.
+    explainArgs =
+      ("error_text" .= errorMessage payload)
+        : maybe [] (\m -> ["module_path" .= m]) (payloadModulePath payload)
 
 -- The exhaustive case below makes adding a new 'ToolName'
 -- constructor a compile error here until you've decided whether it
@@ -1157,6 +1166,14 @@ errorKind p = stringField "kind" =<< envField "error" p
 -- @error_text@. Empty when absent.
 errorMessage :: Value -> Text
 errorMessage p = fromMaybe "" (stringField "message" =<< envField "error" p)
+
+-- | #282: the module a failing call referenced, for the A5 ghc_explain_error
+-- route. Most tools echo it as @module_path@; ghc_quickcheck echoes @module@.
+-- 'Nothing' → no module available, route degrades to text-only decode.
+payloadModulePath :: Value -> Maybe Text
+payloadModulePath p = case stringField "module_path" p of
+  Just m  -> Just m
+  Nothing -> stringField "module" p
 
 -- | #270: resolve the "<same module>" placeholder family to the
 -- concrete @module_path@ the current tool's payload carries (ghc_load,

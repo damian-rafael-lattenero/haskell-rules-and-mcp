@@ -887,6 +887,9 @@ main = do
       , test "#A5: not_in_scope -> explain_error"  testSuggestOnErrorNotInScope
       , test "#A5: explain_error no self-loop"     testSuggestOnErrorNoSelfLoop
       , test "#A5: unrouted error kind suppresses" testSuggestOnErrorUnroutedKind
+      , test "#282: A5 echoes module_path from payload" testSuggestOnErrorEchoesModule
+      , test "#282: A5 omits module_path when absent"   testSuggestOnErrorNoModule
+      , test "#282: explain_error parses w/o module_path" testExplainErrorOptionalModule
       , test "#266 xsession: ledger round-trips"   testSessionLedgerRoundtrip
       , test "#266 xsession: empty ledger reads empty" testSessionLedgerEmpty
       , test "#A4: info nextStep resolves name from payload" testNextStepInfoNameResolved
@@ -11676,6 +11679,58 @@ testSuggestOnErrorUnroutedKind =
   in pure $ case suggestNext GhcScratch False payload of
        Nothing -> True
        Just _  -> False
+
+-- | #282: when the failing payload carries a module (here ghc_quickcheck's
+-- echoed 'module'), the A5 route includes it as module_path so the agent can
+-- follow ghc_explain_error in one hop without hitting missing_arg.
+testSuggestOnErrorEchoesModule :: IO Bool
+testSuggestOnErrorEchoesModule =
+  let payload = A.object
+        [ "status" .= ("failed" :: Text)
+        , "error"  .= A.object
+            [ "kind" .= ("not_in_scope" :: Text), "message" .= ("evaluate" :: Text) ]
+        , "result" .= A.object [ "module" .= ("src/ExprEval.hs" :: Text) ]
+        ]
+  in pure $ case suggestNext GhcQuickCheck False payload of
+       Just ns -> nsTool ns == GhcExplainError
+               && case nsExample ns of
+                    Just (A.Object o) ->
+                      AKM.lookup (AKey.fromText "module_path") o
+                        == Just (A.String "src/ExprEval.hs")
+                    _ -> False
+       Nothing -> False
+
+-- | #282: when no module is in the payload, the A5 example omits module_path
+-- (ghc_explain_error then falls back to text-only decode) — it must NOT emit a
+-- placeholder that would fail validation.
+testSuggestOnErrorNoModule :: IO Bool
+testSuggestOnErrorNoModule =
+  let payload = A.object
+        [ "status" .= ("failed" :: Text)
+        , "error"  .= A.object
+            [ "kind" .= ("compile_error" :: Text), "message" .= ("e" :: Text) ]
+        ]
+  in pure $ case suggestNext GhcLoad False payload of
+       Just ns -> case nsExample ns of
+         Just (A.Object o) ->
+           AKM.member (AKey.fromText "error_text") o
+             && not (AKM.member (AKey.fromText "module_path") o)
+         _ -> False
+       Nothing -> False
+
+-- | #282: ghc_explain_error now accepts a payload with NO module_path (text-only
+-- mode), and still accepts one with module_path. Proves the arg is optional.
+testExplainErrorOptionalModule :: IO Bool
+testExplainErrorOptionalModule =
+  let withoutMod = A.eitherDecode "{\"error_text\":\"oops\"}"
+                     :: Either String ExplainError.ExplainErrorArgs
+      withMod    = A.eitherDecode "{\"module_path\":\"src/X.hs\"}"
+                     :: Either String ExplainError.ExplainErrorArgs
+  in pure $ case (withoutMod, withMod) of
+       (Right a, Right b) ->
+         isNothing (ExplainError.eaModulePath a)
+           && ExplainError.eaModulePath b == Just "src/X.hs"
+       _ -> False
 
 -- | #266 cross-session: recordCallToDisk accumulates lifetime call counts
 -- on disk; loadLifetime reads them back. Round-trips via a temp project.

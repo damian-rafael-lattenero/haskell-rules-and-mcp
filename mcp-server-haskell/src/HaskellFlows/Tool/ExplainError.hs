@@ -80,14 +80,21 @@ descriptor =
         object
           [ "type"       .= ("object" :: Text)
           , "properties" .= object
-              [ "module_path"      .= obj "string"
+              [ "module_path"      .= object
+                  [ "type"        .= ("string" :: Text)
+                  , "description" .=
+                      ("Optional: module whose file supplies the enclosing-code \
+                       \context. Omit it to decode a diagnostic from error_text \
+                       \alone (text-only mode — no enclosing slice). At least \
+                       \one of module_path / error_text must be given." :: Text)
+                  ]
               , "error_text"       .= object
                   [ "type"        .= ("string" :: Text)
                   , "description" .=
                       ("The GHC error message to explain. When supplied, the \
                        \tool uses this text directly instead of recompiling \
-                       \module_path. Useful when explaining a diagnostic from \
-                       \a prior compilation pass." :: Text)
+                       \module_path. Works without module_path for a text-only \
+                       \decode — this is the failure-path route (#282)." :: Text)
                   ]
               , "diagnostic_index" .= obj "integer"
               , "verify_patch"     .= object
@@ -100,7 +107,7 @@ descriptor =
                   , "required" .= (["line", "old", "new"] :: [Text])
                   ]
               ]
-          , "required"             .= (["module_path"] :: [Text])
+          , "required"             .= ([] :: [Text])
           , "additionalProperties" .= False
           ]
     }
@@ -126,7 +133,9 @@ instance FromJSON PatchSpec where
       <*> o .: "new"
 
 data ExplainErrorArgs = ExplainErrorArgs
-  { eaModulePath      :: !Text
+  { eaModulePath      :: !(Maybe Text)
+    -- ^ #282: optional. When absent, the tool runs in text-only mode and
+    -- decodes 'eaErrorText' without reading a module file.
   , eaErrorText       :: !(Maybe Text)
     -- ^ #153: when set, use this text as the diagnostic instead of
     -- recompiling. Lets callers explain a prior diagnostic without
@@ -141,7 +150,7 @@ data ExplainErrorArgs = ExplainErrorArgs
 instance FromJSON ExplainErrorArgs where
   parseJSON = withObject "ExplainErrorArgs" $ \o ->
     ExplainErrorArgs
-      <$> o .:  "module_path"
+      <$> o .:? "module_path"
       <*> o .:? "error_text"
       <*> o .:? "diagnostic_index"
       <*> o .:? "verify_patch"
@@ -149,47 +158,72 @@ instance FromJSON ExplainErrorArgs where
 handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
 handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
-  Right args -> case mkModulePath pd (T.unpack (eaModulePath args)) of
-    Left e   -> pure (pathTraversalResult (T.pack (show e)))
-    Right mp -> do
-      let full = unModulePath mp
-      eBody <- try (TIO.readFile full)
-                 :: IO (Either SomeException Text)
-      case eBody of
-        Left e -> pure (subprocessResult
-          (T.pack ("Could not read module: " <> show e)))
-        Right body -> do
-          -- #153: when error_text is supplied, use it directly as the
-          -- diagnostic rather than recompiling the module. This is the
-          -- intended use-case for explaining a diagnostic from a prior
-          -- compilation pass even when the module now compiles cleanly.
-          case eaErrorText args of
-            Just errTxt -> do
-              let syntheticDiag = syntheticError (eaModulePath args) errTxt
-              mVerify <- case eaVerifyPatch args of
-                Nothing    -> pure Nothing
-                Just patch -> Just <$> runVerifyPatch ghcSess mp body syntheticDiag patch
-              pure (renderContext (eaModulePath args) body syntheticDiag
-                      [syntheticDiag] mVerify)
-            Nothing -> do
-              (_, diags) <- loadAndCaptureDiagnostics ghcSess Strict
-              -- Filter to OWN-module errors so a sibling's failure
-              -- doesn't drag the agent off-target.
-              let ownDiags = filter (ownsThisModule (eaModulePath args)) diags
-                  ownErrs  = filter ((== SevError) . geSeverity) ownDiags
-              -- Issue #203: distinguish "no errors" from "index out of range"
-              -- so callers get a useful message instead of "No errors detected".
-              case (eaDiagnosticIndex args, pickDiagnostic (eaDiagnosticIndex args) ownDiags) of
-                (Just i, Nothing) | not (null ownErrs) ->
-                  pure (renderIndexOutOfRange (eaModulePath args) i (length ownErrs) ownDiags)
-                (_, Nothing) ->
-                  pure (renderNoErrors (eaModulePath args) ownDiags)
-                (_, Just diag) -> do
-                  -- Phase 2: optional patch verification.
-                  mVerify <- case eaVerifyPatch args of
-                    Nothing    -> pure Nothing
-                    Just patch -> Just <$> runVerifyPatch ghcSess mp body diag patch
-                  pure (renderContext (eaModulePath args) body diag ownDiags mVerify)
+  Right args -> case eaModulePath args of
+    -- #282: text-only mode — no module to read, decode error_text directly.
+    -- This is the failure-path (A5) route: a tool fails, nextStep hands the
+    -- diagnostic to ghc_explain_error with just error_text (no module is
+    -- available for, e.g., a lambda-property quickcheck error).
+    Nothing -> pure (explainTextOnly args)
+    Just modPathTxt -> case mkModulePath pd (T.unpack modPathTxt) of
+      Left e   -> pure (pathTraversalResult (T.pack (show e)))
+      Right mp -> do
+        let full = unModulePath mp
+        eBody <- try (TIO.readFile full)
+                   :: IO (Either SomeException Text)
+        case eBody of
+          Left e -> pure (subprocessResult
+            (T.pack ("Could not read module: " <> show e)))
+          Right body -> do
+            -- #153: when error_text is supplied, use it directly as the
+            -- diagnostic rather than recompiling the module. This is the
+            -- intended use-case for explaining a diagnostic from a prior
+            -- compilation pass even when the module now compiles cleanly.
+            case eaErrorText args of
+              Just errTxt -> do
+                let syntheticDiag = syntheticError modPathTxt errTxt
+                mVerify <- case eaVerifyPatch args of
+                  Nothing    -> pure Nothing
+                  Just patch -> Just <$> runVerifyPatch ghcSess mp body syntheticDiag patch
+                pure (renderContext modPathTxt body syntheticDiag
+                        [syntheticDiag] mVerify)
+              Nothing -> do
+                (_, diags) <- loadAndCaptureDiagnostics ghcSess Strict
+                -- Filter to OWN-module errors so a sibling's failure
+                -- doesn't drag the agent off-target.
+                let ownDiags = filter (ownsThisModule modPathTxt) diags
+                    ownErrs  = filter ((== SevError) . geSeverity) ownDiags
+                -- Issue #203: distinguish "no errors" from "index out of range"
+                -- so callers get a useful message instead of "No errors detected".
+                case (eaDiagnosticIndex args, pickDiagnostic (eaDiagnosticIndex args) ownDiags) of
+                  (Just i, Nothing) | not (null ownErrs) ->
+                    pure (renderIndexOutOfRange modPathTxt i (length ownErrs) ownDiags)
+                  (_, Nothing) ->
+                    pure (renderNoErrors modPathTxt ownDiags)
+                  (_, Just diag) -> do
+                    -- Phase 2: optional patch verification.
+                    mVerify <- case eaVerifyPatch args of
+                      Nothing    -> pure Nothing
+                      Just patch -> Just <$> runVerifyPatch ghcSess mp body diag patch
+                    pure (renderContext modPathTxt body diag ownDiags mVerify)
+
+-- | #282: decode a diagnostic with no module context. Requires error_text
+-- (there is nothing to recompile without a module). 'renderContext' is reused
+-- with an empty body, so the response still carries the decoded 'diagnostic'
+-- (line/col parsed from the text) — just an empty enclosing slice. verify_patch
+-- is ignored here (it needs a module to apply + recompile).
+explainTextOnly :: ExplainErrorArgs -> ToolResult
+explainTextOnly args = case eaErrorText args of
+  Nothing ->
+    Env.toolResponseToResult (Env.mkFailed
+      (Env.mkErrorEnvelope Env.MissingArg
+        "ghc_explain_error needs either module_path (to read enclosing context) \
+        \or error_text (to decode a diagnostic without a module)."))
+  Just errTxt ->
+    let diag = syntheticError noModuleLabel errTxt
+    in renderContext noModuleLabel "" diag [diag] Nothing
+  where
+    noModuleLabel :: Text
+    noModuleLabel = "(no module — text-only)"
 
 ownsThisModule :: Text -> GhcError -> Bool
 ownsThisModule rel diag = rel `T.isSuffixOf` geFile diag
