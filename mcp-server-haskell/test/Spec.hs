@@ -323,6 +323,8 @@ import GHC
   )
 import GHC.Utils.Outputable (showPprUnsafe)
 
+import Spec.Harness (test, testTimeoutMicros)
+
 main :: IO ()
 main = do
   results <-
@@ -1753,24 +1755,7 @@ main = do
       ]
   if and results then exitSuccess else exitFailure
 
--- | Per-test defensive timeout. Any unit test that doesn't complete in
--- 60 s is reported as a hard failure with a TIMEOUT prefix rather than
--- hanging the whole suite. Protects CI from the class of hazards that
--- land when a test uses forkIO/takeMVar or spawns a subprocess that
--- stops emitting without closing its pipe.
-testTimeoutMicros :: Int
-testTimeoutMicros = 60 * 1000 * 1000
-
-test :: String -> IO Bool -> IO Bool
-test name action = do
-  mok <- timeout testTimeoutMicros action
-  let ok = fromMaybe False mok
-      prefix
-        | Nothing <- mok = "TIMEOUT "
-        | ok             = "PASS    "
-        | otherwise      = "FAIL    "
-  putStrLn (prefix <> name)
-  pure ok
+-- 'test' + 'testTimeoutMicros' now live in 'Spec.Harness' (#271 split).
 
 testRejectsRelativeProject :: IO Bool
 testRejectsRelativeProject =

@@ -177,6 +177,7 @@ test-suite haskell-flows-mcp-test
     hs-source-dirs:   test
     main-is:          Spec.hs
     other-modules:    PathTraversal
+                      Spec.Harness
     build-depends:    base              >= 4.20 && < 5
                     , haskell-flows-mcp
                     , aeson             >= 2.2  && < 2.3
