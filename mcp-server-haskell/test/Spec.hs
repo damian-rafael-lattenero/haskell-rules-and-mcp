@@ -324,8 +324,14 @@ import GHC
 import GHC.Utils.Outputable (showPprUnsafe)
 
 import Spec.Harness (test, testTimeoutMicros)
-import Spec.Helpers (getTestTimestamp, withTempProject)
+import Spec.Helpers (decodeToolResult, getTestTimestamp, withTempProject)
 import Spec.Scratch (scratchTests)
+import Spec.Witness
+  ( testWitnessCompileErrorResult
+  , testWitnessEvalExprStructure
+  , testWitnessInProcessFallback
+  , testWitnessUsesInProcessPath
+  )
 
 main :: IO ()
 main = do
@@ -14096,13 +14102,6 @@ testGhcSessionBoots = case mkProjectDir "/tmp" of
 -- store access.
 --------------------------------------------------------------------------------
 
--- | Shared helper: decode a 'ToolResult' to 'Env.ToolResponse'.
-decodeToolResult :: ToolResult -> Either String Env.ToolResponse
-decodeToolResult tr = case trContent tr of
-  [TextContent body] ->
-    A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body))
-  _ -> Left "expected exactly one TextContent"
-
 -- | Assert that the response is status='refused', kind='path_traversal'.
 isTraversalRefused :: Either String Env.ToolResponse -> Bool
 isTraversalRefused (Right env) =
@@ -17044,58 +17043,6 @@ testWitNoRawTruncatedWhenShort = do
                _ -> False
            _ -> False
 
--- | #220: 'witnessEvalExpr' must produce a well-formed in-process
--- expression that contains the QC sentinel markers, the
--- 'quickCheckWithResult' call, and the 'Data.Map.toList' + 'labels r'
--- extraction needed for the structured labels path.
-testWitnessEvalExprStructure :: IO Bool
-testWitnessEvalExprStructure =
-  let expr = T.pack (QcTool.witnessEvalExpr "\\x -> x > 0")
-  in pure $  T.isInfixOf "quickCheckWithResult"   expr
-          && T.isInfixOf "Data.Map.toList"         expr
-          && T.isInfixOf "labels r"                expr
-          && T.isInfixOf "__QC_OUTPUT_START__"     expr
-          && T.isInfixOf "__QC_LABELS_START__"     expr
-          && T.isInfixOf "__QC_OUTPUT_END__"       expr
-          && T.isInfixOf "__QC_LABELS_END__"       expr
-          && T.isInfixOf "stdArgs"                 expr
-
--- | #220: 'Witness.hs' must call 'runQuickCheckWithLabelsInProcess'
--- (in-process path) rather than 'runQuickCheckWithLabelsViaCabalRepl'
--- (subprocess path) in its 'handle' function.
-testWitnessUsesInProcessPath :: IO Bool
-testWitnessUsesInProcessPath = do
-  src <- TIO.readFile "src/HaskellFlows/Tool/Witness.hs"
-  pure $ T.isInfixOf "runQuickCheckWithLabelsInProcess ghcSess" src
-
--- | #220: 'runQuickCheckWithLabelsInProcess' must fall back to the
--- cabal-repl subprocess path when 'evalIOString' fails (e.g. the
--- user's project has no QuickCheck in its build-depends, so the
--- loaded stanza's package environment excludes Test.QuickCheck).
---
--- The cabal-repl fallback injects @--build-depends=QuickCheck@
--- automatically, so it always works regardless of the project's deps.
--- The fallback is triggered both on Left (compile/runtime exception)
--- and on Right with no sentinel markers (silent type-mismatch).
-testWitnessInProcessFallback :: IO Bool
-testWitnessInProcessFallback = do
-  src <- TIO.readFile "src/HaskellFlows/Tool/QuickCheck.hs"
-  pure $  -- Left (exception) branch triggers subprocess fallback
-          T.isInfixOf "Left _ex ->" src
-       && T.isInfixOf "runQuickCheckWithLabelsViaCabalRepl (gsProject ghcSess)" src
-          -- Right (no-sentinel) branch also falls back
-       && T.isInfixOf "__QC_OUTPUT_START__" src
-
--- | #240: 'compileErrorResult' returns a failed ToolResult with
--- kind=compile_error so agents distinguish "0 samples" from "compile error".
-testWitnessCompileErrorResult :: IO Bool
-testWitnessCompileErrorResult =
-  let result = WitnessTool.compileErrorResult "\\x -> notAFunction x" "Not in scope: notAFunction"
-  in case decodeToolResult result of
-    Left _  -> pure False
-    Right r ->
-      pure $  Env.reStatus r == Env.StatusFailed
-           && maybe False ((== Env.CompileError) . Env.eeKind) (Env.reError r)
 
 -- | #197: 'ruleMaybeReturn' fires for a 2-argument Maybe-returning
 -- signature and the generated property uses @maybe True (const True)@

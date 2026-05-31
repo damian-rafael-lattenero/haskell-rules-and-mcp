@@ -180,6 +180,7 @@ test-suite haskell-flows-mcp-test
                       Spec.Harness
                       Spec.Helpers
                       Spec.Scratch
+                      Spec.Witness
     build-depends:    base              >= 4.20 && < 5
                     , haskell-flows-mcp
                     , aeson             >= 2.2  && < 2.3

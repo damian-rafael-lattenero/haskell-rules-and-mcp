@@ -8,12 +8,18 @@
 module Spec.Helpers
   ( withTempProject
   , getTestTimestamp
+  , decodeToolResult
   ) where
 
+import qualified Data.Aeson as A
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
+import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Types (ProjectDir, mkProjectDir)
 
 -- | Create a fresh temp directory and delete it after the test.
@@ -35,3 +41,12 @@ getTestTimestamp :: IO Int
 getTestTimestamp = do
   t <- getPOSIXTime
   pure (floor (t * 1_000_000))
+
+-- | Decode the JSON body inside a wire-level 'ToolResult' into the
+-- structured 'Env.ToolResponse' envelope (or a string-shaped failure).
+-- Shared by ~16 tests across domains.
+decodeToolResult :: ToolResult -> Either String Env.ToolResponse
+decodeToolResult tr = case trContent tr of
+  [TextContent body] ->
+    A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body))
+  _ -> Left "expected exactly one TextContent"
