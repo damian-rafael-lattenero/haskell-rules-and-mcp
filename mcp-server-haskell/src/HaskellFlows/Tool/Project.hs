@@ -29,14 +29,112 @@
 -- time before the runtime sees them.
 module HaskellFlows.Tool.Project
   ( descriptor
+  , handle
   ) where
 
+import Control.Concurrent.MVar (MVar)
 import Data.Aeson
+import qualified Data.Aeson.KeyMap as KeyMap
+import Data.IORef (IORef, readIORef)
 import Data.Text (Text)
+import qualified Data.Text as T
 
+import qualified HaskellFlows.Data.Scratchpad as Scratchpad
+import HaskellFlows.Data.PropertyStore (Store)
+import HaskellFlows.Ghc.ApiSession (GhcSession)
+import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Schema as Schema
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
+import qualified HaskellFlows.Tool.CreateProject as CreateProjectTool
+import qualified HaskellFlows.Tool.SwitchProject as SwitchProjectTool
+import qualified HaskellFlows.Tool.ValidateCabal as ValidateCabalTool
+import HaskellFlows.Types (ProjectDir)
+
+-- | #275: dispatch a @ghc_project@ call to the right delegate based on the
+-- @action@ discriminator (moved here from @Server.dispatchProject@ so the
+-- action-discrimination lives next to the tool — consistent with the other
+-- action-tools). Server state is injected as parameters: the project-dir /
+-- session / store / scratchpad / self-project refs, an @invalidate-stanza@
+-- callback to run after a create, and the tool-descriptor catalog for
+-- bootstrap.
+handle
+  :: IORef ProjectDir
+  -> MVar (Maybe GhcSession)
+  -> IORef Store
+  -> IORef Scratchpad.Store
+  -> IORef Bool
+  -> IO ()              -- ^ invalidate cached stanza flags (post-create)
+  -> [ToolDescriptor]   -- ^ allToolDescriptors (for bootstrap)
+  -> Value
+  -> IO ToolResult
+handle pdRef sessRef storeRef scratchRef selfRef invalidateStanza descriptors rawArgs =
+  case actionField rawArgs of
+    Nothing ->
+      pure (Env.toolResponseToResult
+        (Env.mkRefused
+          (Env.mkErrorEnvelope Env.MissingArg
+            "ghc_project requires an 'action' field \
+            \(one of 'create', 'switch', 'validate', 'bootstrap').")))
+    Just action ->
+      let inner = stripAction rawArgs
+      in case action of
+           "create" -> do
+             pd <- readIORef pdRef
+             r  <- CreateProjectTool.handle pd inner
+             invalidateStanza
+             -- #256: auto-switch to the freshly created project (only when
+             -- create succeeded, write=True, and an explicit path was given).
+             if trIsError r
+               then pure r
+               else case createAutoSwitchPath inner of
+                 Nothing      -> pure r
+                 Just newPath -> do
+                   _ <- SwitchProjectTool.handle pdRef sessRef storeRef scratchRef selfRef
+                          (object ["path" .= T.pack newPath])
+                   pure r
+           "switch" ->
+             SwitchProjectTool.handle pdRef sessRef storeRef scratchRef selfRef inner
+           "validate" -> do
+             pd <- readIORef pdRef
+             ValidateCabalTool.handle pd inner
+           "bootstrap" -> do
+             pd <- readIORef pdRef
+             BootstrapTool.handle pd descriptors inner
+           other ->
+             pure (Env.toolResponseToResult
+               (Env.mkRefused
+                 (Env.mkErrorEnvelope Env.Validation
+                   ("Unknown ghc_project action: '" <> other
+                    <> "' (expected 'create', 'switch', 'validate', \
+                       \or 'bootstrap')."))))
+
+-- | Peek at the @action@ string without committing to a FromJSON parser.
+actionField :: Value -> Maybe Text
+actionField (Object o) = case KeyMap.lookup "action" o of
+  Just (String s) -> Just s
+  _               -> Nothing
+actionField _ = Nothing
+
+-- | Drop @action@ before delegating to handlers that reject unknown fields.
+stripAction :: Value -> Value
+stripAction (Object o) = Object (KeyMap.delete "action" o)
+stripAction v          = v
+
+-- | #256: target path for the auto-switch after a successful create — only
+-- when write=True (or absent) and a non-empty explicit @path@ was given.
+createAutoSwitchPath :: Value -> Maybe FilePath
+createAutoSwitchPath (Object o) =
+  let writeDisk = case KeyMap.lookup "write" o of
+                    Just (Bool b) -> b
+                    _             -> True
+  in if writeDisk
+       then case KeyMap.lookup "path" o of
+              Just (String p) | not (T.null (T.strip p)) -> Just (T.unpack p)
+              _                                          -> Nothing
+       else Nothing
+createAutoSwitchPath _ = Nothing
 
 descriptor :: ToolDescriptor
 descriptor =

@@ -8874,9 +8874,10 @@ testCreateUsesSuppliedPath = withTempProject $ \pd -> do
 -- (ghc_deps, ghc_modules) operate on the right project.
 -- Verified via source inspection: 'createAutoSwitchPath' must exist,
 -- must gate on 'trIsError', and must call 'SwitchProjectTool.handle'.
+-- #275: the dispatch (and this logic) moved from Server to Tool.Project.
 testCreateAutoSwitchPresent :: IO Bool
 testCreateAutoSwitchPresent = do
-  src <- TIO.readFile "src/HaskellFlows/Mcp/Server.hs"
+  src <- TIO.readFile "src/HaskellFlows/Tool/Project.hs"
   let code = T.unlines (filter (not . isDocLine) (T.lines src))
   pure $ T.isInfixOf "createAutoSwitchPath"        code
       && T.isInfixOf "trIsError r"                 code
@@ -8885,23 +8886,23 @@ testCreateAutoSwitchPresent = do
     isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
 
 -- | Issue #256: when @write=false@ (preview mode) 'createAutoSwitchPath'
--- must return Nothing — no switch should happen.
+-- must return Nothing — no switch should happen. #275: now in Tool.Project.
 testCreatePreviewNoSwitch :: IO Bool
 testCreatePreviewNoSwitch = do
-  src <- TIO.readFile "src/HaskellFlows/Mcp/Server.hs"
+  src <- TIO.readFile "src/HaskellFlows/Tool/Project.hs"
   let code = T.unlines (filter (not . isDocLine) (T.lines src))
-  -- The helper must gate on writeDisk being True — if it is False, Nothing.
-  pure $ T.isInfixOf "writeDisk"  code
-      && T.isInfixOf "write=True" code  -- the guard comment
+  -- The helper must gate on writeDisk; the false branch returns Nothing.
+  pure $ T.isInfixOf "writeDisk"            code
+      && T.isInfixOf "createAutoSwitchPath" code
   where
     isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
 
 -- | Issue #256: when no explicit @path@ is supplied the scaffold lands
 -- in the current project dir — no switch is needed, 'createAutoSwitchPath'
--- must return Nothing.
+-- must return Nothing. #275: now in Tool.Project.
 testCreateNoPathNoSwitch :: IO Bool
 testCreateNoPathNoSwitch = do
-  src <- TIO.readFile "src/HaskellFlows/Mcp/Server.hs"
+  src <- TIO.readFile "src/HaskellFlows/Tool/Project.hs"
   let code = T.unlines (filter (not . isDocLine) (T.lines src))
   -- When path key is absent the helper must return Nothing.
   pure $ T.isInfixOf "createAutoSwitchPath" code

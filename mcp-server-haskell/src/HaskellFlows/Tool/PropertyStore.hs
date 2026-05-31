@@ -20,24 +20,83 @@
 -- this surface but is kept exported because some unit tests still
 -- exercise it directly.)
 --
--- This module exports only the schema 'descriptor' — dispatch lives
--- in 'HaskellFlows.Mcp.Server.dispatchPropertyStore' because each
--- underlying handler has a different signature with respect to
--- server state ('Store', 'GhcSession', 'ProjectDir').
+-- #275: dispatch now lives HERE in 'handle' (next to the tool it
+-- discriminates, consistent with ghc_deps / ghc_modules / ghc_workflow)
+-- rather than in 'Server.dispatchPropertyStore'. The differing per-handler
+-- dependencies ('Store', 'GhcSession', 'ProjectDir') are injected as
+-- parameters, exactly as 'ghc_workflow' already threads its server state.
 --
 -- Schema is per-action @oneOf@-discriminated (issue #92): each
 -- action declares its own required-field set (which, for these
 -- four, is empty — 'action' is the only field).
 module HaskellFlows.Tool.PropertyStore
   ( descriptor
+  , handle
   ) where
 
 import Data.Aeson
+import qualified Data.Aeson.KeyMap as KeyMap
+import Data.IORef (IORef, readIORef)
 import Data.Text (Text)
 
+import HaskellFlows.Data.PropertyStore (Store)
+import HaskellFlows.Ghc.ApiSession (GhcSession)
+import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Schema as Schema
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
+import qualified HaskellFlows.Tool.QuickCheckExport as QcExportTool
+import qualified HaskellFlows.Tool.Regression as RegressionTool
+import HaskellFlows.Types (ProjectDir)
+
+-- | #275: dispatch a @ghc_property_store@ call to the right delegate based on
+-- the @action@ discriminator. Dependencies are injected: @startSession@ lazily
+-- boots the GHC session (list / run / audit need it; export does not),
+-- @storeRef@ + @pdRef@ are the server's refs. @list@ / @run@ keep the @action@
+-- field (Regression parses it); @export@ / @audit@ strip it.
+handle :: IO GhcSession -> IORef Store -> IORef ProjectDir -> Value -> IO ToolResult
+handle startSession storeRef pdRef rawArgs = case actionField rawArgs of
+  Nothing ->
+    pure (Env.toolResponseToResult
+      (Env.mkRefused
+        (Env.mkErrorEnvelope Env.MissingArg
+          "ghc_property_store requires an 'action' field \
+          \(one of 'list', 'run', 'export', 'audit').")))
+  Just action -> case action of
+    "list"   -> regression
+    "run"    -> regression
+    "export" -> do
+      pd    <- readIORef pdRef
+      store <- readIORef storeRef
+      QcExportTool.handle store pd (stripAction rawArgs)
+    "audit"  -> do
+      sess  <- startSession
+      store <- readIORef storeRef
+      PropertyAuditTool.handle store sess (stripAction rawArgs)
+    other ->
+      pure (Env.toolResponseToResult
+        (Env.mkRefused
+          (Env.mkErrorEnvelope Env.Validation
+            ("Unknown ghc_property_store action: '" <> other
+             <> "' (expected 'list', 'run', 'export', or 'audit')."))))
+  where
+    regression = do
+      sess  <- startSession
+      store <- readIORef storeRef
+      RegressionTool.handle store sess rawArgs
+
+-- | Peek at the @action@ string without committing to a FromJSON parser.
+actionField :: Value -> Maybe Text
+actionField (Object o) = case KeyMap.lookup "action" o of
+  Just (String s) -> Just s
+  _               -> Nothing
+actionField _ = Nothing
+
+-- | Drop @action@ before delegating to handlers that reject unknown fields.
+stripAction :: Value -> Value
+stripAction (Object o) = Object (KeyMap.delete "action" o)
+stripAction v          = v
 
 descriptor :: ToolDescriptor
 descriptor =

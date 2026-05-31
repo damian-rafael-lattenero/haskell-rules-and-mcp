@@ -96,8 +96,6 @@ import qualified HaskellFlows.Tool.Modules         as ModulesTool
 import qualified HaskellFlows.Tool.ApplyExports    as ApplyExportsTool
 import qualified HaskellFlows.Tool.Arbitrary       as ArbitraryTool
 import qualified HaskellFlows.Tool.Batch           as BatchTool
-import qualified HaskellFlows.Tool.Bootstrap       as BootstrapTool
-  -- ^ #94 Phase C step 5: invoked indirectly via ProjectTool dispatch.
 import qualified HaskellFlows.Tool.Browse          as BrowseTool
 import qualified HaskellFlows.Tool.Determinism     as DeterminismTool
 -- HaskellFlows.Tool.PropertyLifecycle is no longer registered:
@@ -111,8 +109,6 @@ import qualified HaskellFlows.Tool.CheckModule     as CheckModuleTool
 import qualified HaskellFlows.Tool.CheckProject    as CheckProjectTool
 import qualified HaskellFlows.Tool.Complete        as CompleteTool
 import qualified HaskellFlows.Tool.Coverage        as CoverageTool
-import qualified HaskellFlows.Tool.CreateProject   as CreateProjectTool
-  -- ^ #94 Phase C step 5: invoked indirectly via ProjectTool dispatch.
 import qualified HaskellFlows.Tool.Deps            as DepsTool
 import qualified HaskellFlows.Tool.Doc             as DocTool
 import qualified HaskellFlows.Tool.Eval            as EvalTool
@@ -127,21 +123,14 @@ import qualified HaskellFlows.Tool.Info            as InfoTool
 import qualified HaskellFlows.Tool.Lint            as LintTool
 import qualified HaskellFlows.Tool.Load            as Load
 import qualified HaskellFlows.Tool.QuickCheck      as QcTool
-import qualified HaskellFlows.Tool.QuickCheckExport as QcExportTool
 import qualified HaskellFlows.Tool.Refactor        as RefactorTool
 import qualified HaskellFlows.Tool.Lab              as LabTool
 import qualified HaskellFlows.Tool.ExplainError     as ExplainErrorTool
 import qualified HaskellFlows.Tool.Perf             as PerfTool
-import qualified HaskellFlows.Tool.PropertyAudit    as PropertyAuditTool
 import qualified HaskellFlows.Tool.Witness          as WitnessTool
-import qualified HaskellFlows.Tool.Regression      as RegressionTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
 import qualified HaskellFlows.Mcp.PathBootstrap    as PathBootstrap
-import qualified HaskellFlows.Tool.SwitchProject   as SwitchProjectTool
-  -- ^ #94 Phase C step 5: invoked indirectly via ProjectTool dispatch.
 import qualified HaskellFlows.Tool.Type            as TypeTool
-import qualified HaskellFlows.Tool.ValidateCabal   as ValidateCabalTool
-  -- ^ #94 Phase C step 5: invoked indirectly via ProjectTool dispatch.
 import qualified HaskellFlows.Tool.Workflow        as WorkflowTool
 import qualified HaskellFlows.Tool.Project         as ProjectTool
 import qualified HaskellFlows.Tool.PropertyStore   as PropertyStoreTool
@@ -568,7 +557,13 @@ dispatchByName srv args = \case
     -- handler (we do NOT pre-read the project dir for it because the
     -- handler tears the session down against the OLD path before
     -- repointing).
-    dispatchProject srv args
+    -- #275: dispatch now lives in Tool.Project.handle (DI: the project-dir /
+    -- session / store / scratchpad / self refs + an invalidate-stanza callback
+    -- + the descriptor catalog).
+    ProjectTool.handle
+      (srvProjectDir srv) (srvGhcSession srv) (srvStore srv)
+      (srvScratchpad srv) (srvIsSelfProject srv)
+      (invalidateStanzaFlagsIfPresent srv) allToolDescriptors args
   GhcCheckProject -> do
     -- Wave-5 full GhcSession (delegates to check_module per file).
     ghcSess <- getOrStartGhcSession srv
@@ -621,11 +616,10 @@ dispatchByName srv args = \case
   GhcPropertyStore ->
     -- #94 Phase C step 6: action-discriminated successor to
     -- GhcPropertyLifecycle + GhcRegression + GhcQuickCheckExport +
-    -- GhcPropertyAudit. Dispatch lives here (not inside
-    -- Tool.PropertyStore) because each underlying handler has a
-    -- different signature with respect to server state ('Store',
-    -- 'GhcSession', 'ProjectDir').
-    dispatchPropertyStore srv args
+    -- GhcPropertyAudit. #275: dispatch now lives in Tool.PropertyStore.handle
+    -- (DI: a session-starter + the store / project-dir refs).
+    PropertyStoreTool.handle
+      (getOrStartGhcSession srv) (srvStore srv) (srvProjectDir srv) args
   GhcBatch ->
     -- Reachable only via 'dispatchTool' (e.g. when 'BatchTool.handle'
     -- ever recursed into the dispatcher). 'BatchTool' itself rejects
@@ -673,164 +667,6 @@ quickCheckRuns v = case v of
     Just (Number n) -> Just (round n)
     _               -> Nothing
   _ -> Nothing
-
--- | #94 Phase C step 5: dispatch a 'ghc_project' call to the
--- right legacy handler based on the @action@ discriminator.
---
--- We strip the @action@ field before delegating because each
--- legacy handler enforces @additionalProperties: false@ via its
--- own schema; leaving the field in place would surface as
--- "unknown field" at parse time.
---
--- Side-effects per branch:
---
---   * @create@    — invalidates stanza flags (new project = new
---     stanza set).
---   * @switch@    — handler mutates the project-dir / session /
---     store refs directly; we do NOT pre-read the project dir
---     because the handler tears the session down against the OLD
---     path before repointing.
---   * @validate@  — read-only; no invalidation.
---   * @bootstrap@ — read-only writes to a sidecar rules file; no
---     invalidation.
-dispatchProject :: Server -> Value -> IO ToolResult
-dispatchProject srv rawArgs = case projectActionField rawArgs of
-  Nothing ->
-    pure (Env.toolResponseToResult
-      (Env.mkRefused
-        (Env.mkErrorEnvelope Env.MissingArg
-          "ghc_project requires an 'action' field \
-          \(one of 'create', 'switch', 'validate', 'bootstrap').")))
-  Just action ->
-    let inner = stripProjectAction rawArgs
-    in case action of
-         "create" -> do
-           pd <- readIORef (srvProjectDir srv)
-           r  <- CreateProjectTool.handle pd inner
-           invalidateStanzaFlagsIfPresent srv
-           -- Issue #256: auto-switch to the newly created project so
-           -- subsequent calls (ghc_deps, ghc_modules, etc.) operate on
-           -- the right project without requiring an explicit switch.
-           -- Only fires when: (a) create succeeded, (b) write=True
-           -- (not a preview), and (c) an explicit 'path' was supplied
-           -- (when no path is given the scaffold lands in the current pd).
-           if trIsError r
-             then pure r
-             else case createAutoSwitchPath inner of
-               Nothing      -> pure r
-               Just newPath -> do
-                 _ <- SwitchProjectTool.handle
-                   (srvProjectDir srv) (srvGhcSession srv)
-                   (srvStore srv) (srvScratchpad srv)
-                   (srvIsSelfProject srv)
-                   (object ["path" .= T.pack newPath])
-                 pure r
-         "switch" ->
-           SwitchProjectTool.handle
-             (srvProjectDir srv)
-             (srvGhcSession srv)
-             (srvStore srv)
-             (srvScratchpad srv)    -- F-02: also swap scratchpad on switch
-             (srvIsSelfProject srv)
-             inner
-         "validate" -> do
-           pd <- readIORef (srvProjectDir srv)
-           ValidateCabalTool.handle pd inner
-         "bootstrap" -> do
-           pd <- readIORef (srvProjectDir srv)
-           BootstrapTool.handle pd allToolDescriptors inner
-         other ->
-           pure (Env.toolResponseToResult
-             (Env.mkRefused
-               (Env.mkErrorEnvelope Env.Validation
-                 ("Unknown ghc_project action: '" <> other
-                  <> "' (expected 'create', 'switch', 'validate', \
-                     \or 'bootstrap')."))))
-
--- | Peek at the @action@ string of a 'ghc_project' payload without
--- committing to a FromJSON parser. Returns 'Nothing' if the payload
--- is not an object, the field is missing, or its value is not a
--- string.
-projectActionField :: Value -> Maybe Text
-projectActionField (Object o) = case KeyMap.lookup "action" o of
-  Just (String s) -> Just s
-  _               -> Nothing
-projectActionField _ = Nothing
-
--- | Drop the 'action' key from a 'ghc_project' payload before
--- delegating to the legacy handler. Non-objects pass through so the
--- delegate's own parser produces the canonical error.
-stripProjectAction :: Value -> Value
-stripProjectAction (Object o) = Object (KeyMap.delete "action" o)
-stripProjectAction v          = v
-
--- | Issue #256: extract the target path for the auto-switch that
--- follows a successful @ghc_project(action=\"create\")@ call.
--- Returns @Just path@ only when:
---   * @write@ is absent or @True@ (not a dry-run preview), AND
---   * @path@ is a non-empty string (explicit target was supplied).
--- When no explicit path is given the scaffold lands in the current
--- project directory — no switch needed.
-createAutoSwitchPath :: Value -> Maybe FilePath
-createAutoSwitchPath (Object o) =
-  let writeDisk = case KeyMap.lookup "write" o of
-                    Just (Bool b) -> b
-                    _             -> True   -- default is write=True
-  in if writeDisk
-       then case KeyMap.lookup "path" o of
-              Just (String p) | not (T.null (T.strip p)) -> Just (T.unpack p)
-              _                                           -> Nothing
-       else Nothing
-createAutoSwitchPath _ = Nothing
-
--- | #94 Phase C step 6: dispatch a 'ghc_property_store' call to the
--- right legacy handler based on the @action@ discriminator.
---
--- Routing:
---
---   * @list@   — 'Regression.handle' with @action=list@ (chosen over
---     the legacy 'PropertyLifecycle.handle' so the response shape
---     keeps the @action@ field that downstream NextStep / payload
---     probes expect; bytes are equivalent — both emit @{count,
---     properties}@ over the same store).
---   * @run@    — 'Regression.handle' with @action=run@.
---   * @export@ — 'QuickCheckExport.handle'.
---   * @audit@  — 'PropertyAudit.handle'.
---
--- The @action@ field is preserved (not stripped) for @list@\/@run@
--- because 'Regression.handle' parses it; for @export@\/@audit@ it
--- gets stripped because those handlers reject unknown fields.
-dispatchPropertyStore :: Server -> Value -> IO ToolResult
-dispatchPropertyStore srv rawArgs = case projectActionField rawArgs of
-  Nothing ->
-    pure (Env.toolResponseToResult
-      (Env.mkRefused
-        (Env.mkErrorEnvelope Env.MissingArg
-          "ghc_property_store requires an 'action' field \
-          \(one of 'list', 'run', 'export', 'audit').")))
-  Just action -> case action of
-    "list" -> do
-      ghcSess <- getOrStartGhcSession srv
-      store   <- readIORef (srvStore srv)
-      RegressionTool.handle store ghcSess rawArgs
-    "run" -> do
-      ghcSess <- getOrStartGhcSession srv
-      store   <- readIORef (srvStore srv)
-      RegressionTool.handle store ghcSess rawArgs
-    "export" -> do
-      pd    <- readIORef (srvProjectDir srv)
-      store <- readIORef (srvStore srv)
-      QcExportTool.handle store pd (stripProjectAction rawArgs)
-    "audit" -> do
-      ghcSess <- getOrStartGhcSession srv
-      store   <- readIORef (srvStore srv)
-      PropertyAuditTool.handle store ghcSess (stripProjectAction rawArgs)
-    other ->
-      pure (Env.toolResponseToResult
-        (Env.mkRefused
-          (Env.mkErrorEnvelope Env.Validation
-            ("Unknown ghc_property_store action: '" <> other
-             <> "' (expected 'list', 'run', 'export', or 'audit')."))))
 
 extractResponseStatus :: Response -> Text
 extractResponseStatus resp = fromMaybe "ok" $ do
