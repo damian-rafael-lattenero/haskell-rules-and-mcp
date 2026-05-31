@@ -9,6 +9,7 @@ module Spec.Helpers
   ( withTempProject
   , getTestTimestamp
   , decodeToolResult
+  , runToolEnvelope
   ) where
 
 import qualified Data.Aeson as A
@@ -50,3 +51,19 @@ decodeToolResult tr = case trContent tr of
   [TextContent body] ->
     A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body))
   _ -> Left "expected exactly one TextContent"
+
+-- | Helper for Phase B tool-migration tests: drive the tool's
+-- handler, decode the JSON body inside the wire-level 'ToolResult',
+-- return the parsed 'Env.ToolResponse' (or a string-shaped failure
+-- describing why the decode failed).
+runToolEnvelope
+  :: (A.Value -> IO ToolResult)
+  -> A.Value
+  -> IO (Either String Env.ToolResponse)
+runToolEnvelope h args = do
+  result <- h args
+  case trContent result of
+    [TextContent body] ->
+      pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
+    _ ->
+      pure (Left "expected exactly one TextContent in trContent")

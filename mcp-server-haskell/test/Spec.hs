@@ -294,7 +294,6 @@ import qualified HaskellFlows.Tool.Hole as HoleTool
 import qualified HaskellFlows.Tool.Hoogle as HoogleTool
 import qualified HaskellFlows.Tool.Goto as GotoTool
 import qualified HaskellFlows.Tool.Imports as ImportsTool
-import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
 import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmupTool
 import qualified HaskellFlows.Tool.ValidateCabal as ValidateCabalTool
 import qualified HaskellFlows.Tool.Workflow as WorkflowTool
@@ -324,8 +323,14 @@ import GHC
 import GHC.Utils.Outputable (showPprUnsafe)
 
 import Spec.Harness (test, testTimeoutMicros)
-import Spec.Helpers (decodeToolResult, getTestTimestamp, withTempProject)
+import Spec.Helpers (decodeToolResult, getTestTimestamp, runToolEnvelope, withTempProject)
 import Spec.Scratch (scratchTests)
+import Spec.Toolchain
+  ( testToolchainStatusBackcompatFields
+  , testToolchainStatusEnvelopeShape
+  , testToolchainWarmupEnvelopeShape
+  , testToolchainWarmupPartialWarnings
+  )
 import Spec.Witness
   ( testWitnessCompileErrorResult
   , testWitnessEvalExprStructure
@@ -4537,86 +4542,6 @@ prop_envelopeWarningKindTotal = QC.forAll (QC.elements [minBound..maxBound]) $ \
     A.Success w' -> w' === w
     A.Error e    -> QC.counterexample e (QC.property False)
 
--- | Helper for Phase B tool-migration tests: drive the tool's
--- handler, decode the JSON body inside the wire-level 'ToolResult',
--- return the parsed 'Env.ToolResponse' (or a string-shaped failure
--- describing why the decode failed).
-runToolEnvelope
-  :: (A.Value -> IO ToolResult)
-  -> A.Value
-  -> IO (Either String Env.ToolResponse)
-runToolEnvelope h args = do
-  result <- h args
-  case trContent result of
-    [TextContent body] ->
-      pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
-    _ ->
-      pure (Left "expected exactly one TextContent in trContent")
-
--- | Phase B oracle: 'ghc_toolchain_status' emits an envelope-shaped
--- response whose status is one of @ok | partial | failed@. The exact
--- status depends on the host's installed binaries — on a dev box
--- with cabal/ghc/hlint present and (typically) fourmolu/hoogle
--- absent, we'd see @partial@. CI may have different binaries; the
--- test stays host-independent by accepting any of the three valid
--- statuses.
-testToolchainStatusEnvelopeShape :: IO Bool
-testToolchainStatusEnvelopeShape = do
-  decoded <- runToolEnvelope ToolchainStatusTool.handle (A.object [])
-  pure $ case decoded of
-    Right env ->
-      Env.reStatus env
-        `elem` [Env.StatusOk, Env.StatusPartial, Env.StatusFailed]
-    Left _ -> False
-
--- | The migrated tool keeps the @tools@ + @blocking_gates@ + @summary@
--- fields inside @result@ so any consumer keying on them via the
--- legacy shape continues to function during the dual-shape window.
-testToolchainStatusBackcompatFields :: IO Bool
-testToolchainStatusBackcompatFields = do
-  decoded <- runToolEnvelope ToolchainStatusTool.handle (A.object [])
-  pure $ case decoded of
-    Right env -> case Env.reResult env of
-      Just (A.Object payload) ->
-        AKM.member (AKey.fromText "tools")          payload
-          && AKM.member (AKey.fromText "blocking_gates") payload
-          && AKM.member (AKey.fromText "summary")        payload
-      _ -> False
-    Left _ -> False
-
--- | 'ghc_toolchain_warmup' is the simpler analogue of toolchain_status —
--- it only probes optional binaries. After Phase B the response is
--- 'ok' when every probed binary is present, 'partial' when one or
--- more are missing. The host-independent assertion: the response
--- decodes as an envelope with status ∈ {ok, partial}.
-testToolchainWarmupEnvelopeShape :: IO Bool
-testToolchainWarmupEnvelopeShape = do
-  decoded <- runToolEnvelope ToolchainWarmupTool.handle (A.object [])
-  pure $ case decoded of
-    Right env -> Env.reStatus env `elem` [Env.StatusOk, Env.StatusPartial]
-              && case Env.reResult env of
-                   Just (A.Object payload) ->
-                     AKM.member (AKey.fromText "tools") payload
-                   _ -> False
-    Left _ -> False
-
--- | When the warmup status is 'partial' (i.e. ≥1 optional binary is
--- missing), the response MUST carry a non-empty 'warnings' array
--- with one entry per missing binary. This is the contract that
--- lets an agent know *which* downstream tool surfaces are about to
--- start returning status='unavailable'.
-testToolchainWarmupPartialWarnings :: IO Bool
-testToolchainWarmupPartialWarnings = do
-  decoded <- runToolEnvelope ToolchainWarmupTool.handle (A.object [])
-  pure $ case decoded of
-    Right env
-      | Env.reStatus env == Env.StatusPartial ->
-          not (null (Env.reWarnings env))
-            && all (\w -> Env.wKind w == Env.SlowPath) (Env.reWarnings env)
-      | Env.reStatus env == Env.StatusOk ->
-          null (Env.reWarnings env)  -- ok ⇒ no missing binaries ⇒ no warnings
-      | otherwise -> False  -- only ok or partial expected
-    Left _ -> False
 
 -- | Helper: stage a tmpdir with the given .cabal-file body and run
 -- 'ValidateCabalTool.handle' against it. Returns the parsed
