@@ -206,6 +206,7 @@ import HaskellFlows.Data.PropertyStore
   , loadAll
   , openStore
   , save
+  , saveCases
   )
 import qualified HaskellFlows.Data.Scratchpad as SP
 import qualified HaskellFlows.Tool.Scratch as ScratchTool
@@ -560,6 +561,9 @@ main = do
                                                    testNextStepChainStepsCarryObjectArgs
       , test "PropertyStore save+load roundtrip"   testStoreRoundtrip
       , test "PropertyStore increments pass count" testStoreIncrement
+      , test "#283: saveCases records + keeps max cases" testStoreRecordsCases
+      , test "#283: 3-arg save defaults cases to 0"      testStoreSaveDefaultsCasesZero
+      , test "#283: qcMaxSuccess raised above 100"       testQcMaxSuccessRaised
       , test "validatePackageName accepts normal"  testPkgAccepts
       , test "validatePackageName rejects symbol"  testPkgRejectsSymbol
       , test "validatePackageName rejects empty"   testPkgRejectsEmpty
@@ -3425,6 +3429,35 @@ testStoreIncrement = withTempProject $ \pd -> do
   pure $ case props of
     [p] -> spPassed p == 3
     _   -> False
+
+-- | #283: saveCases persists the QuickCheck case count behind a law, and on
+-- re-save keeps the HIGHEST confidence ever observed (a later weaker run must
+-- not lower it).
+testStoreRecordsCases :: IO Bool
+testStoreRecordsCases = withTempProject $ \pd -> do
+  store <- openStore pd
+  saveCases store "prop_c" (Just "src/Foo.hs") 300
+  saveCases store "prop_c" (Just "src/Foo.hs") 100  -- weaker — must not lower
+  props <- loadAll store
+  pure $ case props of
+    [p] -> spCases p == 300 && spPassed p == 2
+    _   -> False
+
+-- | #283: the backward-compatible 3-arg save records cases=0 ("unknown"), so
+-- pre-#283 call sites and old on-disk entries stay valid.
+testStoreSaveDefaultsCasesZero :: IO Bool
+testStoreSaveDefaultsCasesZero = withTempProject $ \pd -> do
+  store <- openStore pd
+  save store "prop_legacy" Nothing
+  props <- loadAll store
+  pure $ case props of
+    [p] -> spCases p == 0
+    _   -> False
+
+-- | #283: the per-check QuickCheck case count was raised above the stdArgs
+-- default of 100 so a single check is more likely to surface a false law.
+testQcMaxSuccessRaised :: IO Bool
+testQcMaxSuccessRaised = pure (QcTool.qcMaxSuccess > 100)
 
 --------------------------------------------------------------------------------
 -- Phase 7: Deps validators + Goto parser
@@ -6783,6 +6816,7 @@ testExportRenderValidImports = do
             , spModule     = Just "test/Gen.hs"
             , spPassed     = 1
             , spUpdated    = 0
+            , spCases     = 0
             }
         ]
       rendered = QcExport.renderTestFile props
@@ -6803,6 +6837,7 @@ testExportRenderDropsSelfImport = do
             , spModule     = Just "test/Spec.hs"
             , spPassed     = 1
             , spUpdated    = 0
+            , spCases     = 0
             }
         ]
       -- The output will live at @test/Spec.hs@ → module hint "Spec".
@@ -6824,6 +6859,7 @@ testExportRenderUnionsLibMods = do
             , spModule     = Just "test/Spec.hs"
             , spPassed     = 1
             , spUpdated    = 0
+            , spCases     = 0
             }
         ]
       libMods = ["Expr.Syntax", "Expr.Simplify", "Expr.Eval"]
@@ -6844,6 +6880,7 @@ testExportRenderDedupesLibAndProps = do
             , spModule     = Just "src/Expr/Simplify.hs"
             , spPassed     = 1
             , spUpdated    = 0
+            , spCases     = 0
             }
         ]
       libMods  = ["Expr.Simplify"]  -- already covered by spModule
@@ -10301,6 +10338,7 @@ testPADedupByExpression =
                  , spModule     = Just m
                  , spPassed     = 1
                  , spUpdated    = 0
+                 , spCases     = 0
                  }
       input = [ mk "expr-A" "Foo.Bar"
               , mk "expr-A" "src/Foo/Bar.hs"   -- duplicate, dropped
@@ -10322,6 +10360,7 @@ testPADedupSingletons =
                , spModule     = Just "Foo"
                , spPassed     = 1
                , spUpdated    = 0
+               , spCases     = 0
                }
       input = [mk "p1", mk "p2", mk "p3"]
       out   = PropertyAuditTool.dedupByExpression input
@@ -11034,6 +11073,7 @@ testRenderStoredNullModuleHint238 = pure $
              , spModule     = Nothing
              , spPassed     = 3
              , spUpdated    = 1_000_000
+             , spCases     = 0
              }
       A.Object km = RegTool.renderStored sp
   in AKM.member "module_hint" km
@@ -11046,6 +11086,7 @@ testRenderStoredJustModuleNoHint238 = pure $
              , spModule     = Just "src/Foo.hs"
              , spPassed     = 3
              , spUpdated    = 1_000_000
+             , spCases     = 0
              }
       A.Object km = RegTool.renderStored sp
   in not (AKM.member "module_hint" km)
@@ -11059,12 +11100,14 @@ testListResultNullModuleCount238 = do
                  , spModule     = Nothing
                  , spPassed     = 1
                  , spUpdated    = 1_000_000
+                 , spCases     = 0
                  }
       spOk   = StoredProperty
                  { spExpression = "\\x -> x == x"
                  , spModule     = Just "src/Foo.hs"
                  , spPassed     = 5
                  , spUpdated    = 1_000_000
+                 , spCases     = 0
                  }
       tr     = RegTool.listResult [spNull, spOk]
   case trContent tr of
@@ -11088,6 +11131,7 @@ testListResultNoNullFields238 = do
              , spModule     = Just "src/Foo.hs"
              , spPassed     = 2
              , spUpdated    = 1_000_000
+             , spCases     = 0
              }
       tr = RegTool.listResult [sp]
   case trContent tr of
@@ -11176,12 +11220,14 @@ testQcExportRenderShape =
             , spModule     = Just "src/DogfoodRle.hs"
             , spPassed     = 1
             , spUpdated    = 0
+            , spCases     = 0
             }
         , StoredProperty
             { spExpression = "\\(xs :: [Int]) -> length xs >= 0"
             , spModule     = Nothing
             , spPassed     = 1
             , spUpdated    = 0
+            , spCases     = 0
             }
         ]
       body = QcExport.renderTestFile props
@@ -14984,6 +15030,7 @@ testRenderPropNoLambda =
               , spModule     = Just "src/Scratch.hs"
               , spPassed     = 1
               , spUpdated    = 0
+              , spCases     = 0
               }
       -- Access via renderTestFile so we test the full pipeline.
       out = QcExport.renderTestFile [sp]
@@ -14997,15 +15044,15 @@ testRenderTestFileNoLambdaAssign =
         [ StoredProperty
             { spExpression = "\\x -> double (double x) == (4 * x :: Int)"
             , spModule     = Just "src/Scratch.hs"
-            , spPassed     = 1, spUpdated = 0 }
+            , spPassed     = 1, spUpdated = 0, spCases = 0 }
         , StoredProperty
             { spExpression = "\\(x :: Int) -> safeDiv (x :: Int) 0 == Nothing"
             , spModule     = Just "src/Scratch.hs"
-            , spPassed     = 1, spUpdated = 0 }
+            , spPassed     = 1, spUpdated = 0, spCases = 0 }
         , StoredProperty
             { spExpression = "\\(xs :: [Int]) -> reverse (reverse xs) == xs"
             , spModule     = Nothing
-            , spPassed     = 1, spUpdated = 0 }
+            , spPassed     = 1, spUpdated = 0, spCases = 0 }
         ]
       out    = QcExport.renderTestFile props
       lines_ = T.lines out
@@ -15062,7 +15109,7 @@ testRenderTestFileSigPresent =
              { spExpression = "\\(xs :: [Int]) -> reverse (reverse xs) == xs"
              , spModule     = Nothing
              , spPassed     = 1
-             , spUpdated    = 0 }
+             , spUpdated    = 0, spCases = 0 }
       out   = QcExport.renderTestFile [sp]
       lns   = T.lines out
       -- The sig line must appear directly before the binding line
@@ -17036,6 +17083,7 @@ testRenderRunLineUsesModuleName =
              , spModule     = Just "src/Foo/Bar.hs"
              , spPassed     = 1
              , spUpdated    = 0
+             , spCases     = 0
              }
       line = QcExport.renderRunLine 1 sp
   in pure $  "Foo_Bar_prop_1" `T.isInfixOf` line

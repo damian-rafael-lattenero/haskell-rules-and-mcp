@@ -26,6 +26,7 @@ module HaskellFlows.Data.PropertyStore
   , StoredProperty (..)
   , openStore
   , save
+  , saveCases
   , loadAll
   , remove
   , storePath
@@ -101,6 +102,11 @@ data StoredProperty = StoredProperty
   , spModule     :: !(Maybe Text)
   , spPassed     :: !Int
   , spUpdated    :: !Double  -- POSIX seconds
+  , spCases      :: !Int
+    -- ^ #283: the QuickCheck case count (maxSuccess) the property has passed
+    -- at — the confidence behind the law. The highest count ever observed is
+    -- kept. 0 means "unknown" (a pre-#283 entry written before this field
+    -- existed).
   }
   deriving stock (Eq, Show)
 
@@ -111,6 +117,7 @@ instance ToJSON StoredProperty where
       , "module"     .= spModule p
       , "passed"     .= spPassed p
       , "updated"    .= spUpdated p
+      , "cases"      .= spCases p
       ]
 
 instance FromJSON StoredProperty where
@@ -119,11 +126,13 @@ instance FromJSON StoredProperty where
     m <- o .:? "module"
     p <- o .:? "passed"  .!= 0
     u <- o .:? "updated" .!= 0
+    c <- o .:? "cases"   .!= 0   -- #283: backward-compatible — old entries → 0
     pure StoredProperty
       { spExpression = e
       , spModule     = m
       , spPassed     = p
       , spUpdated    = u
+      , spCases      = c
       }
 
 -- | The canonical on-disk path for a project's property store.
@@ -166,8 +175,16 @@ loadAll s = withGlobalStoreLock (sFile s) $ withMVar (sLock s) $ \_ -> do
 -- save. An unconditional @createDirectoryIfMissing True@ is
 -- O(stat) + cheap on the happy path and turns a crash into a
 -- silent no-op on the bad path.
+-- | Backward-compatible save: records the property with an unknown case count
+-- (@cases = 0@). Prefer 'saveCases' from the QuickCheck path so the confidence
+-- behind a law is persisted (#283).
 save :: Store -> Text -> Maybe Text -> IO ()
-save s expr mModule = withGlobalStoreLock (sFile s) $ withMVar (sLock s) $ \_ -> do
+save s expr mModule = saveCases s expr mModule 0
+
+-- | #283: like 'save', but records @cases@ — the QuickCheck maxSuccess the
+-- property passed at. The store keeps the highest count ever seen per entry.
+saveCases :: Store -> Text -> Maybe Text -> Int -> IO ()
+saveCases s expr mModule cases = withGlobalStoreLock (sFile s) $ withMVar (sLock s) $ \_ -> do
   now  <- realToFrac <$> getPOSIXTime
   curr <- loadCurrent
   let updated = upsert curr now
@@ -193,13 +210,18 @@ save s expr mModule = withGlobalStoreLock (sFile s) $ withMVar (sLock s) $ \_ ->
     upsert curr now =
       case break keyMatches curr of
         (pre, p : suf) ->
-          pre <> [ p { spPassed = spPassed p + 1, spUpdated = now } ] <> suf
+          pre <> [ p { spPassed  = spPassed p + 1
+                     , spUpdated = now
+                       -- #283: keep the highest confidence ever observed.
+                     , spCases   = max (spCases p) cases
+                     } ] <> suf
         (pre, []) ->
           pre <> [ StoredProperty
                      { spExpression = expr
                      , spModule     = mModule
                      , spPassed     = 1
                      , spUpdated    = now
+                     , spCases      = cases
                      }
                  ]
 

@@ -40,4 +40,5 @@ handle store _rawArgs = do
       , "module"     .= spModule p
       , "passed"     .= spPassed p
       , "updated"    .= spUpdated p
+      , "cases"      .= spCases p   -- #283: confidence (QC maxSuccess passed at)
       ]

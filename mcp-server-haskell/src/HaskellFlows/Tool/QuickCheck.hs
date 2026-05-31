@@ -32,6 +32,8 @@ module HaskellFlows.Tool.QuickCheck
   , extractNotInScopeSymbol
     -- * Issue #211 — result renderer exposed for envelope-shape tests
   , renderResult
+    -- * #283 — the QuickCheck case count a single check runs at
+  , qcMaxSuccess
     -- * Cabal library introspection (re-used by 'Tool.QuickCheckExport')
   , libraryExposedModules
   , scanLibraryExposedModules
@@ -56,7 +58,7 @@ import qualified Data.Text.IO as TIO
 
 import qualified HaskellFlows.Tool.Deps as Deps
 
-import HaskellFlows.Data.PropertyStore (Store, save)
+import HaskellFlows.Data.PropertyStore (Store, saveCases)
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
   , LoadFlavour (..)
@@ -177,6 +179,21 @@ instance FromJSON QuickCheckArgs where
 quickCheckTimeoutMicros :: Int
 quickCheckTimeoutMicros = 30_000_000
 
+-- | #283: QuickCheck cases per single check. Raised from the stdArgs default
+-- of 100 to 300 so a single ghc_quickcheck is markedly more likely to surface a
+-- false law before it is auto-persisted (the dogfood counterexample was missed
+-- at 100 by seed luck). The value is recorded in the property store as the
+-- confidence ('spCases') behind each persisted law.
+qcMaxSuccess :: Int
+qcMaxSuccess = 300
+
+-- | The QuickCheck @Args@ line shared by every cabal-repl template: silent
+-- ('chatty=False') and using 'qcMaxSuccess' cases.
+qcArgsLine :: String
+qcArgsLine =
+  "do { let qcArgs = stdArgs { chatty = False, maxSuccess = "
+    <> show qcMaxSuccess <> " }"
+
 handle :: Store -> GhcSession -> Value -> IO ToolResult
 handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
@@ -211,7 +228,7 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
         Just (Right (out, stderrText)) -> do
           let qr = parseQuickCheckOutput prop out
           case qr of
-            QcPassed _ _ -> save store prop loadHint
+            QcPassed _ _ -> saveCases store prop loadHint qcMaxSuccess
             _            -> pure ()
           -- Surface stderr on parse-failure so the caller sees
           -- 'Variable not in scope: …' instead of a silent
@@ -322,7 +339,7 @@ runQuickCheckViaCabalRepl pd mModule safeProp = do
         -- variant inside a record update).
         [ "import Test.QuickCheck"
         , ":{"
-        , "do { let qcArgs = stdArgs { chatty = False }"
+        , qcArgsLine
         , "   ; r <- quickCheckWithResult qcArgs (" <> T.unpack safeProp <> ")"
         , "   ; putStrLn \"__QC_OUTPUT_START__\""
         , "   ; putStr (output r)"
@@ -410,7 +427,7 @@ runQuickCheckWithLabelsViaCabalRepl pd mModule safeProp = do
         , "import qualified Data.Map as M"
         , "import Data.List (intercalate)"
         , ":{"
-        , "do { let qcArgs = stdArgs { chatty = False }"
+        , qcArgsLine
         , "   ; r <- quickCheckWithResult qcArgs (" <> T.unpack safeProp <> ")"
         , "   ; putStrLn \"__QC_OUTPUT_START__\""
         , "   ; putStr (output r)"
@@ -508,7 +525,7 @@ runBatchPropertiesViaCabalRepl pd mModule props = do
         moduleImport <>
         [ "import Test.QuickCheck"
         , ":{"
-        , "do { let qcArgs = stdArgs { chatty = False }"
+        , qcArgsLine
         ] <>
         concatMap (uncurry propBlock) (zip [0 :: Int ..] props) <>
         [ "   }"
@@ -635,7 +652,7 @@ runQuickCheckWithLabelsInProcess ghcSess mModule safeProp = do
 -- 'extractQcOutput' and 'extractLabelsBlock' parse the result unchanged.
 witnessEvalExpr :: Text -> String
 witnessEvalExpr safeProp = concat
-  [ "do { let qcArgs = stdArgs { chatty = False }"
+  [ qcArgsLine
   , "; r <- quickCheckWithResult qcArgs ("
   , T.unpack safeProp
   , ")"

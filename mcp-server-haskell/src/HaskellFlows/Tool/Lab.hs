@@ -53,7 +53,7 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Directory (doesFileExist)
 
-import HaskellFlows.Data.PropertyStore (Store, save)
+import HaskellFlows.Data.PropertyStore (Store, saveCases)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
@@ -203,7 +203,7 @@ runLab ghcSess store pd args modulePath body = do
   -- Persist passing properties to the regression store.
   mapM_ (\((_, sug), qr) ->
            case qr of
-             QcPassed _ _ -> save store (sProperty sug) (Just modulePath)
+             QcPassed _ _ -> saveCases store (sProperty sug) (Just modulePath) Qc.qcMaxSuccess
              _            -> pure ())
          (zip flatWork batchQc)
   -- Phase 2: determinism (per-property, only on passing; still individual runs).
