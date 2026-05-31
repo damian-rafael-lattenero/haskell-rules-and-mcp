@@ -299,7 +299,7 @@ import qualified HaskellFlows.Tool.Imports as ImportsTool
 import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmupTool
 import qualified HaskellFlows.Tool.ValidateCabal as ValidateCabalTool
 import qualified HaskellFlows.Tool.Workflow as WorkflowTool
-import HaskellFlows.Mcp.Staleness (StalenessReport (..))
+import HaskellFlows.Mcp.Staleness (StalenessReport (..), binaryIdentityStale)
 import qualified HaskellFlows.Tool.Type as TypeTool
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
 import HaskellFlows.Tool.SwitchProject
@@ -1340,6 +1340,8 @@ main = do
       , test "nextStep: create_project carries chain" testNextStepCreateProjectChain
       , test "nextStep: every tool covered or whitelisted" testNextStepFullCoverage
       , test "staleness: wired into server (static)"  testStalenessWired
+      , test "#280: identity differs -> stale"        testStalenessIdentityDiffers
+      , test "#280: identity matches -> fresh"         testStalenessIdentityMatches
       , test "workflow: history polls ghc_load"      testHistoryPolling
       , test "workflow: history missing quickcheck"   testHistoryMissingQc
       , test "workflow: history refactor unreloaded"  testHistoryRefactorNotReloaded
@@ -7385,6 +7387,19 @@ testStalenessWired = do
       && T.isInfixOf "srvBinaryPath"           src
       && T.isInfixOf "checkStaleness (srvBinaryPath" src
       && T.isInfixOf "getExecutablePath"       src
+
+-- | #280: when the running binary's real path differs from the installed
+-- canonical target, the process is on a stale subprocess — flag it (returning
+-- the installed path) rather than the old mtime-only false-negative.
+testStalenessIdentityDiffers :: IO Bool
+testStalenessIdentityDiffers =
+  pure ( binaryIdentityStale "/h/.local/bin/x" "/h/.cabal/store/NEW/x"
+           == Just "/h/.cabal/store/NEW/x" )
+
+-- | #280: when the running binary IS the installed target, it's fresh.
+testStalenessIdentityMatches :: IO Bool
+testStalenessIdentityMatches =
+  pure (isNothing (binaryIdentityStale "/h/.cabal/store/A/x" "/h/.cabal/store/A/x"))
 
 -- | BUG-08 — 5 @ghc_load@ calls in a row must trigger the
 -- polling nudge that points at ghc_quickcheck / check_project.

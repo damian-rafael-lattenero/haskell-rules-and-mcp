@@ -13,15 +13,19 @@ module HaskellFlows.Mcp.Staleness
   ( StalenessReport (..)
   , checkStaleness
   , thresholdMinutes
+  , binaryIdentityStale
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import System.Directory (getModificationTime)
+import System.Directory (canonicalizePath, getModificationTime)
+import System.Environment (lookupEnv)
+import System.FilePath (takeFileName, (</>))
 
 -- | Minimum binary-vs-boot age gap before we flag stale (minutes).
 -- One minute covers clock skew + install-time noise without
@@ -54,31 +58,69 @@ checkStaleness
   -> Double     -- ^ process boot time, POSIX seconds
   -> IO StalenessReport
 checkStaleness binaryPath bootPosix = do
+  -- #280: the primary signal is binary IDENTITY, not mtime. The running
+  -- process's own file (binaryPath = getExecutablePath, already symlink-
+  -- resolved) never changes after boot, so its mtime is useless for detecting
+  -- "a newer binary was installed". Instead, compare the running binary's real
+  -- path against what the canonical cabal-install symlink points at NOW: if
+  -- they differ, a fresh binary is installed and the client is on a stale
+  -- subprocess (the exact dogfood papercut — running ~/.local/bin while
+  -- ~/.cabal/bin was rebuilt).
+  mIdentity <- checkBinaryIdentity binaryPath
   eMtime <- try (getModificationTime binaryPath)
               :: IO (Either SomeException UTCTime)
-  case eMtime of
-    Left e -> pure StalenessReport
-      { srStale = False
-      , srBinaryOlderBySec = Nothing
-      , srMessage = Just (T.pack ("stat failed: " <> show e))
-      }
-    Right mtime -> do
-      let bootUtc = posixSecondsToUTCTime (realToFrac bootPosix)
-          deltaS  = realToFrac (diffUTCTime mtime bootUtc) :: Double
-          stale   = deltaS >= thresholdMinutes * 60
-      now <- getCurrentTime
-      let msg
-            | stale =
-                Just (T.pack
-                  ("Binary on disk is "
-                   <> show (round (deltaS / 60) :: Int)
-                   <> " min newer than the running process. "
-                   <> "Restart Claude Desktop (or your MCP client) "
-                   <> "to pick up the fresh build."))
-            | otherwise = Nothing
-          _ = now  -- timestamp unused except for potential future logging
-      pure StalenessReport
-        { srStale = stale
-        , srBinaryOlderBySec = Just deltaS
-        , srMessage = msg
-        }
+  now <- getCurrentTime
+  let mtimeReport = case eMtime of
+        Left _      -> (False, Nothing)
+        Right mtime ->
+          let bootUtc = posixSecondsToUTCTime (realToFrac bootPosix)
+              deltaS  = realToFrac (diffUTCTime mtime bootUtc) :: Double
+          in (deltaS >= thresholdMinutes * 60, Just deltaS)
+      (mtimeStale, deltaMaybe) = mtimeReport
+      stale = mtimeStale || isJust mIdentity
+      msg
+        | Just installed <- mIdentity =
+            Just (T.pack
+              ("Running process is a DIFFERENT binary than the one installed at "
+               <> installed <> ". A fresh build is in place — restart your MCP "
+               <> "client (quit + relaunch) to pick it up."))
+        | mtimeStale =
+            Just (T.pack
+              ("Binary on disk is "
+               <> show (round (maybe 0 (/ 60) deltaMaybe) :: Int)
+               <> " min newer than the running process. "
+               <> "Restart Claude Desktop (or your MCP client) "
+               <> "to pick up the fresh build."))
+        | otherwise = Nothing
+      _ = now  -- reserved for future logging
+  pure StalenessReport
+    { srStale = stale
+    , srBinaryOlderBySec = deltaMaybe
+    , srMessage = msg
+    }
+
+-- | #280: compare the running binary's real path with the file the canonical
+-- @~/.cabal/bin/<name>@ symlink currently resolves to. Returns @Just target@
+-- when they differ (a newer binary is installed and the process is stale),
+-- @Nothing@ when they match or the comparison can't be made (no HOME, stat
+-- failure, canonical path absent). Best-effort and read-only.
+checkBinaryIdentity :: FilePath -> IO (Maybe FilePath)
+checkBinaryIdentity runningExe = do
+  mHome <- lookupEnv "HOME"
+  case mHome of
+    Nothing   -> pure Nothing
+    Just home -> do
+      let canonical = home </> ".cabal" </> "bin" </> takeFileName runningExe
+      eRunning   <- try (canonicalizePath runningExe) :: IO (Either SomeException FilePath)
+      eInstalled <- try (canonicalizePath canonical)  :: IO (Either SomeException FilePath)
+      pure $ case (eRunning, eInstalled) of
+        (Right rp, Right ip) -> binaryIdentityStale rp ip
+        _                    -> Nothing
+
+-- | Pure core of the identity check (exported for tests): when the running
+-- real path differs from the installed real path, the process is stale and we
+-- return the installed path; otherwise 'Nothing'.
+binaryIdentityStale :: FilePath -> FilePath -> Maybe FilePath
+binaryIdentityStale running installed
+  | running /= installed = Just installed
+  | otherwise            = Nothing
