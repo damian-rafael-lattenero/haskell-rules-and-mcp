@@ -1,0 +1,13 @@
+mcp-server-haskell/test/Spec.hs
+  ai_agent 890-892,11683-11733
+mcp-server-haskell/src/HaskellFlows/Mcp/NextStep.hs
+  ai_agent 316,318-326,1170-1176
+mcp-server-haskell/src/HaskellFlows/Tool/ExplainError.hs
+  ai_agent 83-90,96-97,110,136-138,153,161-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "9799e6ddfcfe716dae668c08d7c32bf70ae34bb0",
+  "prompts": {}
+}
