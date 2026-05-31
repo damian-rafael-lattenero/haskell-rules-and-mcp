@@ -181,6 +181,7 @@ test-suite haskell-flows-mcp-test
                       Spec.Format
                       Spec.Harness
                       Spec.Helpers
+                      Spec.Lint
                       Spec.Scratch
                       Spec.Toolchain
                       Spec.Witness
