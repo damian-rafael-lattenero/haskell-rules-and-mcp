@@ -10,6 +10,7 @@ module Spec.Helpers
   , getTestTimestamp
   , decodeToolResult
   , runToolEnvelope
+  , isTraversalRefused
   ) where
 
 import qualified Data.Aeson as A
@@ -67,3 +68,12 @@ runToolEnvelope h args = do
       pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
     _ ->
       pure (Left "expected exactly one TextContent in trContent")
+
+-- | #100C shared assertion: a decoded envelope is a path-traversal refusal —
+-- status='refused' with error kind=PathTraversal. Used by the ghc_format /
+-- ghc_fix_warning / ghc_check_module traversal-guard tests across domains.
+isTraversalRefused :: Either String Env.ToolResponse -> Bool
+isTraversalRefused (Right env) =
+  Env.reStatus env == Env.StatusRefused
+    && maybe False ((== Env.PathTraversal) . Env.eeKind) (Env.reError env)
+isTraversalRefused _ = False

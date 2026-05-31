@@ -291,7 +291,6 @@ import qualified HaskellFlows.Tool.Complete as CompleteTool
 import qualified HaskellFlows.Tool.Doc as DocTool
 import qualified HaskellFlows.Tool.Eval as EvalTool
 import qualified HaskellFlows.Tool.AddImport as AddImportTool
-import qualified HaskellFlows.Tool.Format as FormatTool
 import qualified HaskellFlows.Tool.Hole as HoleTool
 import qualified HaskellFlows.Tool.Hoogle as HoogleTool
 import qualified HaskellFlows.Tool.Goto as GotoTool
@@ -333,8 +332,9 @@ import GHC
 import GHC.Utils.Outputable (showPprUnsafe)
 
 import Spec.Harness (test, testTimeoutMicros)
-import Spec.Helpers (decodeToolResult, getTestTimestamp, runToolEnvelope, withTempProject)
+import Spec.Helpers (decodeToolResult, getTestTimestamp, isTraversalRefused, runToolEnvelope, withTempProject)
 import Spec.Scratch (scratchTests)
+import Spec.Format
 import Spec.Toolchain
   ( testToolchainStatusBackcompatFields
   , testToolchainStatusEnvelopeShape
@@ -14452,11 +14452,6 @@ testGhcSessionBoots = case mkProjectDir "/tmp" of
 --------------------------------------------------------------------------------
 
 -- | Assert that the response is status='refused', kind='path_traversal'.
-isTraversalRefused :: Either String Env.ToolResponse -> Bool
-isTraversalRefused (Right env) =
-  Env.reStatus env == Env.StatusRefused &&
-  maybe False ((== Env.PathTraversal) . Env.eeKind) (Env.reError env)
-isTraversalRefused _ = False
 
 -- | #100C: 'ghc_apply_exports' must refuse traversal paths.
 -- No GhcSession needed — 'mkModulePath' guard fires before any filesystem access.
@@ -14485,41 +14480,6 @@ testFixWarningRejectsTraversal = do
             ]
       tr <- FixWarning.handle pd args
       pure (isTraversalRefused (decodeToolResult tr))
-
--- | #100C: 'ghc_format' must refuse traversal paths.
-testFormatRejectsTraversal :: IO Bool
-testFormatRejectsTraversal = do
-  case mkProjectDir "/tmp/project" of
-    Left _ -> pure False
-    Right pd -> do
-      let args = A.object
-            [ "module_path" A..= ("../../etc/passwd" :: Text) ]
-      tr <- FormatTool.handle pd args
-      pure (isTraversalRefused (decodeToolResult tr))
-
--- | Issue #246: 'ghc_format' on a non-existent file must return
--- status='failed' with kind='module_path_does_not_exist', not a raw
--- subprocess backtrace from fourmolu/ormolu.
-testFormatMissingFile :: IO Bool
-testFormatMissingFile = do
-  tmp <- getTemporaryDirectory
-  let dir = tmp </> "haskell-flows-format-missing"
-  removePathForcibly dir
-  createDirectoryIfMissing True dir
-  case mkProjectDir dir of
-    Left _ -> pure False
-    Right pd -> do
-      let args = A.object
-            [ "module_path" A..= ("src/DoesNotExist.hs" :: Text) ]
-      tr <- FormatTool.handle pd args
-      let result = decodeToolResult tr
-      pure $ case result of
-        Right env ->
-             Env.reStatus env == Env.StatusFailed
-          && maybe False
-               (\e -> Env.eeKind e == Env.ModulePathDoesNotExist)
-               (Env.reError env)
-        Left _ -> False
 
 -- | #100C: 'ghc_check_module' must refuse traversal paths.
 -- 'mkModulePath' fires before the GhcSession or Store are touched.
