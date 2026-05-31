@@ -898,6 +898,8 @@ main = do
       , test "#266 xsession: empty ledger reads empty" testSessionLedgerEmpty
       , test "#A4: info nextStep resolves name from payload" testNextStepInfoNameResolved
       , test "#A4: echoField falls back to placeholder"      testNextStepEchoFieldFallback
+      , test "#274: scratch promote resolves target_module"  testNextStepScratchTargetResolved
+      , test "#274: scratch promote keeps placeholder w/o module" testNextStepScratchTargetPlaceholder
       -- Phase 5: cross-tool nextStep arms
       , test "Phase 5: hole nextStep → scratch(write) chain"
                                                    testNextStepFromHoleRoutesToScratch
@@ -11898,6 +11900,43 @@ testNextStepEchoFieldFallback =
          Just (A.Object o) ->
            AKM.lookup (AKey.fromText "name") o
              == Just (A.String "<same name you just inspected>")
+         _ -> False
+       Nothing -> False
+
+-- | #274: a scratch type_ok check now echoes the entry's module, so the
+-- promote follow-up's target_module is concrete instead of "<src/Foo.hs>".
+testNextStepScratchTargetResolved :: IO Bool
+testNextStepScratchTargetResolved =
+  let payload = A.object
+        [ "status" .= ("ok" :: Text)
+        , "result" .= A.object
+            [ "id"     .= ("scratch-1" :: Text)
+            , "kind"   .= ("type_ok" :: Text)
+            , "module" .= ("src/Expr/Eval.hs" :: Text)
+            ]
+        ]
+  in pure $ case suggestNext GhcScratch True payload of
+       Just ns -> case nsExample ns of
+         Just (A.Object o) ->
+           AKM.lookup (AKey.fromText "target_module") o
+             == Just (A.String "src/Expr/Eval.hs")
+         _ -> False
+       Nothing -> False
+
+-- | #274: when the scratch entry has no module, the promote example keeps the
+-- honest placeholder rather than inventing a path.
+testNextStepScratchTargetPlaceholder :: IO Bool
+testNextStepScratchTargetPlaceholder =
+  let payload = A.object
+        [ "status" .= ("ok" :: Text)
+        , "result" .= A.object
+            [ "id" .= ("scratch-1" :: Text), "kind" .= ("type_ok" :: Text) ]
+        ]
+  in pure $ case suggestNext GhcScratch True payload of
+       Just ns -> case nsExample ns of
+         Just (A.Object o) ->
+           AKM.lookup (AKey.fromText "target_module") o
+             == Just (A.String "<src/Foo.hs>")
          _ -> False
        Nothing -> False
 

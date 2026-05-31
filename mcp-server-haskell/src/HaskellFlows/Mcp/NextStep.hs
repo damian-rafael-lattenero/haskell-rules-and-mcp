@@ -1088,7 +1088,10 @@ scratchNext payload
           (Just (object
               [ "action"        .= ("promote" :: Text)
               , "id"            .= scratchEntryId payload
-              , "target_module" .= ("<src/Foo.hs>" :: Text)
+                -- #274: resolve the entry's own module when the check echoed it
+                -- (Scratch now includes 'module'); fall back to the honest
+                -- placeholder only when the entry has no associated module.
+              , "target_module" .= echoField "module" "<src/Foo.hs>" payload
               , "target_line"   .= (1 :: Int)
               ])))
         "type_error" -> Just (simple GhcScratch

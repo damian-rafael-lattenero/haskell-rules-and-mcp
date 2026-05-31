@@ -457,7 +457,10 @@ renderReport args qc dist warnings rawForResponse wallMs =
           , "distribution" .= distObj
           , "warnings"     .= allWarningObjs
           , "wall_time_ms" .= wallMs
-          , "phase"        .= ("2-constructor" :: Text)
+            -- #274: reflect the ACTUAL classification mode rather than
+            -- hardcoding "2-constructor" on every run (misleading next to
+            -- classify_by=size).
+          , "phase"        .= (if effectiveCtor then "2-constructor" else "1-size" :: Text)
           , "deferred"     .= ([ "uncovered-branches"
                                , "smallest-witness"
                                ] :: [Text])

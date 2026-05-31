@@ -5,8 +5,9 @@
 --   * The tool runs against an existing project and returns a
 --     'success: true' payload with the expected fields
 --     (passed, distribution.by_size, warnings, wall_time_ms).
---   * The 'phase' marker is the documented '2-constructor' string
---     (Phase 2 constructor-classify shipped in commit 106eda1 — #93).
+--   * The 'phase' marker reflects the ACTUAL classify mode (#274): this call
+--     uses the default classify_by=size, so phase is '1-size'. A
+--     classify_by=constructor run reports '2-constructor'.
 --   * The 'deferred' field lists the remaining Phase 3 follow-ups
 --     (uncovered-branches, smallest-witness).
 --
@@ -54,7 +55,7 @@ runFlow c _projectDir = do
               ])
   let okShape =
            statusOk rOk == Just True
-        && fieldText "phase" rOk == Just "2-constructor"
+        && fieldText "phase" rOk == Just "1-size"   -- #274: size is the default mode
         && hasField "distribution" rOk
         && hasField "warnings" rOk
         && hasField "wall_time_ms" rOk
