@@ -1,0 +1,46 @@
+mcp-server-haskell/src/HaskellFlows/Data/PropertyStore.hs
+  s_5ac5babd034a90::t_bd4b1b69c738d7 178-180,182-187
+  s_5ac5babd034a90::t_b7ca0fc4842f31 105-109,120,129,135
+  s_5ac5babd034a90::t_4b0ef18db78f90 29
+  s_5ac5babd034a90::t_5459d4a4b7bc66 213-217,224
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheck.hs
+  s_5ac5babd034a90::t_379e1a315287e6 61
+  s_5ac5babd034a90::t_7fe984d87a6b2b 182-196
+  s_5ac5babd034a90::t_d35abf1c0c8255 35-36
+  s_5ac5babd034a90::t_62e564a43aa50b 342,430,528,655
+  s_5ac5babd034a90::t_b1ff991af2248a 231
+mcp-server-haskell/src/HaskellFlows/Tool/Lab.hs
+  s_5ac5babd034a90::t_11255bc0e37fc5 206
+  s_5ac5babd034a90::t_836016ace37393 56
+mcp-server-haskell/src/HaskellFlows/Tool/PropertyLifecycle.hs
+  s_5ac5babd034a90::t_6bc42a035e974d 43
+mcp-server-haskell/test/Spec.hs
+  s_5ac5babd034a90::t_40ca71fea7d2b3 564-566
+  s_5ac5babd034a90::t_745def05a64aee 3433-3461
+  s_5ac5babd034a90::t_45f971bc8c09dd 6819,6840,6862,6883,11223,11230
+  s_5ac5babd034a90::t_9bd45009a48f92 11103,11110
+  s_5ac5babd034a90::t_bddfb93a3aff88 15033
+  s_5ac5babd034a90::t_7b582e91df92fc 10341
+  s_5ac5babd034a90::t_ae00f38ffbad6b 11076,11089,11134
+  s_5ac5babd034a90::t_2c8b636867aff5 15047,15051,15055
+  s_5ac5babd034a90::t_12076c2a9c3aed 10363
+  s_5ac5babd034a90::t_83d1d4bf1bb6b1 209
+  s_5ac5babd034a90::t_3f097558471353 15112
+  s_5ac5babd034a90::t_b5a4c4f580f88f 17086
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "c1eacb7c2f4318e17da2be9f5154a1b32e7c559e",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
