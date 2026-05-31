@@ -1253,6 +1253,9 @@ main = do
       , test "#258: GHC-32850 suppressed when modules registered" testLoad32850Suppressed
       , test "#258: GHC-32850 retained when module missing" testLoad32850RetainedWhenMissing
       , test "#258: non-GHC-32850 warning never dropped (CI regression)" testLoadNon32850Retained
+      , test "#278: test-stanza path detected as non-library"  testLoadNonLibStanzaPath
+      , test "#278: library path not flagged as non-library"   testLoadLibStanzaPath
+      , test "#278: load failure message points at ghc_gate"   testLoadFailureMessageGate
       , test "#259: GHC-76037 surfaces submodule suggested_import" testSuggestedImportGhc76037
       , test "#260: importsMatchingPackage detects cross-stanza dep" testDepsCrossStanzaMatch
       , test "#261: pathToModule derives module from path" testArbitraryPathToModule
@@ -8206,6 +8209,29 @@ testSuggestedImportGhc76037 =
          AKM.lookup "suggested_import" o
            == Just (A.String "import Text.Parsec.String (Parser)")
        _ -> False
+
+-- | #278: a test-suite path is recognised as a non-library stanza so the
+-- opaque "GHC reported failure" becomes an actionable ghc_gate hint.
+testLoadNonLibStanzaPath :: IO Bool
+testLoadNonLibStanzaPath = pure $
+     LoadTool.isNonLibraryStanzaPath "test/Spec.hs"
+  && LoadTool.isNonLibraryStanzaPath "/abs/proj/test/Foo/Bar.hs"
+  && LoadTool.isNonLibraryStanzaPath "app/Main.hs"
+  && LoadTool.isNonLibraryStanzaPath "bench/Bench.hs"
+
+-- | #278: a library path under src/ is NOT flagged (the load should proceed
+-- normally and any failure has a different cause).
+testLoadLibStanzaPath :: IO Bool
+testLoadLibStanzaPath = pure $
+     not (LoadTool.isNonLibraryStanzaPath "src/Expr/Eval.hs")
+  && not (LoadTool.isNonLibraryStanzaPath "/abs/proj/src/Foo.hs")
+
+-- | #278: the failure message for a test-stanza module names ghc_gate, instead
+-- of the old opaque "Compilation produced no errors but GHC reported failure."
+testLoadFailureMessageGate :: IO Bool
+testLoadFailureMessageGate =
+  let msg = LoadTool.loadFailureMessage (Just "test/Spec.hs")
+  in pure (T.isInfixOf "ghc_gate" msg && not (T.isInfixOf "no errors but GHC" msg))
 
 -- | #258: a GHC-32850 warning whose modules are all registered in the
 -- cabal (exposed-modules) is suppressed as the known false positive.

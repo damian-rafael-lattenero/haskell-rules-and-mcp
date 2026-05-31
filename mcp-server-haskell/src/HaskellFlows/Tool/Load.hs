@@ -21,12 +21,14 @@ module HaskellFlows.Tool.Load
   , isUnderAnySourceDir
   , dropCoveredModuleWarnings
   , suggestedImportsFor
+  , isNonLibraryStanzaPath
+  , loadFailureMessage
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import Data.Char (isAlphaNum, isSpace, isUpper)
+import Data.Char (isAlphaNum, isSpace, isUpper, toLower)
 import Data.List (isPrefixOf, nub)
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -34,7 +36,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified System.Directory as Dir
-import System.FilePath (takeExtension, (</>))
+import System.FilePath (splitDirectories, takeExtension, (</>))
 
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
@@ -188,7 +190,7 @@ handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
         -- for modules that ARE registered (in exposed-modules) — the
         -- in-process GHC API doesn't treat exposed-modules as equivalent.
         cabalMods <- cabalModuleSet pd
-        let mkResult o ds = okResult o (dropCoveredModuleWarnings cabalMods ds)
+        let mkResult o ds = okResult mSpecificFile o (dropCoveredModuleWarnings cabalMods ds)
         eStrict <- try (doLoad Strict)
         case eStrict :: Either SomeException (Bool, [GhcError]) of
           Left ex ->
@@ -238,27 +240,62 @@ countHaskellSources pd = do
 -- diagnostic detail ('errors', 'warnings', 'summary', 'raw')
 -- stays under 'result' so callers can render the GHCi-style
 -- output unchanged.
-okResult :: Bool -> [GhcError] -> ToolResult
-okResult ok diags =
+okResult :: Maybe FilePath -> Bool -> [GhcError] -> ToolResult
+okResult mFile ok diags =
   let errs      = filter ((== SevError)   . geSeverity) diags
       warns     = filter ((== SevWarning) . geSeverity) diags
       succ_     = ok && null errs
       suggested = suggestedImportsFor errs   -- #259
+      -- #278: "not ok, no errors" used to surface the opaque "Compilation
+      -- produced no errors but GHC reported failure." Give an actionable
+      -- message instead — most often the module is in a non-library stanza
+      -- the library session can't compile.
+      summaryMsg
+        | null errs && not ok = loadFailureMessage mFile
+        | otherwise           = summarise ok errs warns
       payload =
         object $
           [ "errors"   .= errs
           , "warnings" .= warns
-          , "summary"  .= summarise ok errs warns
+          , "summary"  .= summaryMsg
           , "raw"      .= renderGhciStyle diags
           ]
           <> [ "suggested_fixes" .= suggested | not (null suggested) ]
   in if succ_
        then Env.toolResponseToResult (Env.mkOk payload)
        else
-         let envErr   = Env.mkErrorEnvelope Env.CompileError
-                          (summarise ok errs warns)
+         let envErr   = Env.mkErrorEnvelope Env.CompileError summaryMsg
              response = (Env.mkFailed envErr) { Env.reResult = Just payload }
          in Env.toolResponseToResult response
+
+-- | #278: actionable message for a load that failed with no error diagnostics.
+-- The library-stanza GHC session can't compile test-suite / executable /
+-- benchmark modules, which is the usual cause; detect those paths and point at
+-- ghc_gate. Falls back to a generic explanation otherwise.
+loadFailureMessage :: Maybe FilePath -> Text
+loadFailureMessage mFile
+  | maybe False isNonLibraryStanzaPath mFile =
+      "GHC reported a load failure with no error diagnostics. This module is \
+      \under a test-suite / executable / benchmark directory, which ghc_load's \
+      \library session does not compile. Use ghc_gate() to build and run it \
+      \(cabal build + test), or move it under the library stanza's \
+      \hs-source-dirs."
+  | otherwise =
+      "GHC reported a load failure with no error diagnostics. This usually \
+      \means the module belongs to a non-library cabal stanza (test-suite / \
+      \executable) that ghc_load does not compile, or a -Wall warning was \
+      \escalated. For test or executable modules, use ghc_gate()."
+
+-- | Heuristic: does this path live under a conventional non-library stanza
+-- directory? Covers the common cabal layouts (test/, app/, bench/, …).
+isNonLibraryStanzaPath :: FilePath -> Bool
+isNonLibraryStanzaPath f =
+  any ((`elem` nonLibDirs) . lower) (splitDirectories f)
+  where
+    nonLibDirs =
+      ["test", "tests", "spec", "app", "exe", "executable"
+      , "bench", "benchmark", "benchmarks"]
+    lower = map toLower
 
 --------------------------------------------------------------------------------
 -- #258: suppress the spurious GHC-32850 "needed but not in other-modules"
