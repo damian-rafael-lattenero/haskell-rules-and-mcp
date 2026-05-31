@@ -142,6 +142,7 @@ import qualified HaskellFlows.Tool.ExplainError as ExplainError
 import qualified HaskellFlows.Tool.Perf as PerfTool
 import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
 import qualified HaskellFlows.Tool.Witness as WitnessTool
+import qualified HaskellFlows.Tool.Determinism as DeterminismTool
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import qualified HaskellFlows.Tool.Regression as RegTool
@@ -1316,6 +1317,9 @@ main = do
       , test "nextStep: qcexport -> gate"           testNextStepQcExport
       , test "nextStep: determinism pass -> regression" testNextStepDeterminismPass
       , test "nextStep: determinism fail -> quickcheck" testNextStepDeterminismFail
+      , test "#281: clampRuns caps at maxRuns"      testClampRunsCapsHigh
+      , test "#281: clampRuns floors at 1"          testClampRunsFloorsLow
+      , test "#281: clampRuns passes through normal" testClampRunsPassThrough
       , test "nextStep: add_import -> load"         testNextStepAddImport
       , test "nextStep: add_modules carries chain"  testNextStepAddModulesChain
       , test "nextStep: apply_exports -> load"      testNextStepApplyExports
@@ -7227,6 +7231,25 @@ testNextStepDeterminismFail :: IO Bool
 testNextStepDeterminismFail =
   let payload = A.object [ "success" .= False, "runs" .= (3 :: Int) ]
   in pure (assertNext GhcQuickCheck payload GhcQuickCheck)
+
+-- #281: an absurd 'runs' value (e.g. mistaking it for maxSuccess) used to
+-- spawn that many cabal-repl subprocesses and crash the MCP. 'clampRuns' now
+-- caps the count.
+testClampRunsCapsHigh :: IO Bool
+testClampRunsCapsHigh =
+  pure (DeterminismTool.clampRuns 2000 == DeterminismTool.maxRuns
+          && DeterminismTool.maxRuns <= 20)
+
+testClampRunsFloorsLow :: IO Bool
+testClampRunsFloorsLow =
+  pure (DeterminismTool.clampRuns 0 == 1
+          && DeterminismTool.clampRuns (-5) == 1)
+
+testClampRunsPassThrough :: IO Bool
+testClampRunsPassThrough =
+  pure (DeterminismTool.clampRuns 3 == 3
+          && DeterminismTool.clampRuns DeterminismTool.maxRuns
+               == DeterminismTool.maxRuns)
 
 testNextStepAddImport :: IO Bool
 testNextStepAddImport =

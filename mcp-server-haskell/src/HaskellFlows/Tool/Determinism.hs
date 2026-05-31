@@ -11,6 +11,8 @@
 module HaskellFlows.Tool.Determinism
   ( handle
   , DeterminismArgs (..)
+  , clampRuns
+  , maxRuns
   ) where
 
 import Control.Exception (SomeException, try)
@@ -48,6 +50,20 @@ instance FromJSON DeterminismArgs where
 runTimeoutMicros :: Int
 runTimeoutMicros = 30_000_000
 
+-- | Upper bound on flakiness re-runs (#281). Each run repeats the WHOLE
+-- property check in a fresh @cabal repl@ subprocess, so an unbounded value —
+-- e.g. a caller mistaking @runs@ for QuickCheck's @maxSuccess@ and passing
+-- 2000 — spawns thousands of subprocesses and exhausts the machine, killing
+-- the MCP ("Connection closed") rather than returning a clean result.
+-- Flakiness is observable well within this many repeats; requests above it are
+-- clamped (and the original value surfaced as @requested_runs@).
+maxRuns :: Int
+maxRuns = 20
+
+-- | Clamp a requested run count into @[1, maxRuns]@.
+clampRuns :: Int -> Int
+clampRuns = max 1 . min maxRuns
+
 handle :: GhcSession -> Value -> IO ToolResult
 handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
@@ -56,21 +72,29 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
       pure (Env.toolResponseToResult
               (Env.mkRefused (Env.sanitizeRejection "property" e)))
     Right safe -> do
-      results <- replicateM (daRuns args)
+      let requested = daRuns args
+          n         = clampRuns requested
+      results <- replicateM n
                    (runOnce ghcSess (daProperty args) safe (daModule args))
       let allPassed = all isPassed results
           summaryTxt
             | allPassed =
-                "All " <> T.pack (show (daRuns args))
+                "All " <> T.pack (show n)
                   <> " runs passed — no flakiness observed."
             | otherwise =
                 "At least one run did not pass — property is flaky \
                 \or broken."
+          clampNote
+            | requested /= n =
+                [ "requested_runs" .= requested
+                , "clamped_to_max" .= maxRuns
+                ]
+            | otherwise = []
           payload = object
-            [ "runs"    .= daRuns args
-            , "states"  .= map stateText results
-            , "summary" .= summaryTxt
-            ]
+            ([ "runs"    .= n
+             , "states"  .= map stateText results
+             , "summary" .= summaryTxt
+             ] ++ clampNote)
       -- Issue #90 Phase C: every run passed → status='ok'. Any
       -- non-pass → status='failed' kind='validation' (the property
       -- is flaky). Per-run states stay under 'result.states' so

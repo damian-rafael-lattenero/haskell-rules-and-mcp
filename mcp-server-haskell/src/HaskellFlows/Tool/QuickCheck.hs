@@ -136,11 +136,15 @@ descriptor =
               , "runs" .= object
                   [ "type"        .= ("integer" :: Text)
                   , "description" .=
-                      ("Optional: number of runs. Default 1 (single QC run). \
-                       \Pass >= 2 to run the same property N times and report \
-                       \flakiness — the determinism mode that used to be \
-                       \exposed as the separate ghc_determinism tool." :: Text)
+                      ("Optional flakiness repeat-count, NOT QuickCheck's \
+                       \maxSuccess. Default 1 (single check, each check is \
+                       \already 100 generated cases). Pass >= 2 to re-run the \
+                       \WHOLE property N times (each a fresh subprocess) and \
+                       \report flakiness — the old ghc_determinism mode. \
+                       \Capped at 20: a single check already explores 100 \
+                       \inputs, so large values only waste subprocesses." :: Text)
                   , "minimum"     .= (1 :: Int)
+                  , "maximum"     .= (20 :: Int)
                   ]
               ]
           , "required"             .= ["property" :: Text]
