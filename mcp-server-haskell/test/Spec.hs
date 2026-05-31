@@ -882,6 +882,10 @@ main = do
       , test "nextStep: check_module -> project"   testNextStepCheckModule
       , test "nextStep: check_project -> coverage" testNextStepCheckProject
       , test "nextStep: errors -> no suggestion"   testNextStepErrorsSuppressed
+      , test "#A5: compile_error -> explain_error" testSuggestOnErrorCompileError
+      , test "#A5: not_in_scope -> explain_error"  testSuggestOnErrorNotInScope
+      , test "#A5: explain_error no self-loop"     testSuggestOnErrorNoSelfLoop
+      , test "#A5: unrouted error kind suppresses" testSuggestOnErrorUnroutedKind
       -- Phase 5: cross-tool nextStep arms
       , test "Phase 5: hole nextStep → scratch(write) chain"
                                                    testNextStepFromHoleRoutesToScratch
@@ -11579,12 +11583,70 @@ testNextStepCheckProject =
               Nothing -> False
        Nothing -> False
 
--- | Errors suppress the suggestion — the agent should read the error
--- before being nudged forward.
+-- | UNSTRUCTURED errors (an 'error' that's a bare string, no 'kind')
+-- suppress the suggestion — the agent reads the message. Curated error
+-- KINDS route via 'suggestOnError' instead (plan A5 — see the
+-- testSuggestOnError* tests below).
 testNextStepErrorsSuppressed :: IO Bool
 testNextStepErrorsSuppressed =
   let payload = A.object [ "success" .= False, "error" .= ("oops" :: Text) ]
   in pure $ case suggestNext GhcLoad False payload of
+       Nothing -> True
+       Just _  -> False
+
+-- | #A5 failure-path routing: a structured compile_error routes the agent
+-- to ghc_explain_error, with the error message threaded in as error_text.
+testSuggestOnErrorCompileError :: IO Bool
+testSuggestOnErrorCompileError =
+  let payload = A.object
+        [ "status" .= ("failed" :: Text)
+        , "error"  .= A.object
+            [ "kind"    .= ("compile_error" :: Text)
+            , "message" .= ("Couldn't match type Int with Bool" :: Text)
+            ]
+        ]
+  in pure $ case suggestNext GhcLoad False payload of
+       Just ns -> nsTool ns == GhcExplainError
+               && case nsExample ns of
+                    Just (A.Object o) -> AKM.member (AKey.fromText "error_text") o
+                    _                 -> False
+       Nothing -> False
+
+-- | #A5: not_in_scope also routes to ghc_explain_error (it can suggest the
+-- missing import / scope fix).
+testSuggestOnErrorNotInScope :: IO Bool
+testSuggestOnErrorNotInScope =
+  let payload = A.object
+        [ "status" .= ("failed" :: Text)
+        , "error"  .= A.object
+            [ "kind" .= ("not_in_scope" :: Text), "message" .= ("foo" :: Text) ]
+        ]
+  in pure $ case suggestNext GhcEval False payload of
+       Just ns -> nsTool ns == GhcExplainError
+       Nothing -> False
+
+-- | #A5: a failing ghc_explain_error must NOT recommend itself (no loop).
+testSuggestOnErrorNoSelfLoop :: IO Bool
+testSuggestOnErrorNoSelfLoop =
+  let payload = A.object
+        [ "status" .= ("failed" :: Text)
+        , "error"  .= A.object
+            [ "kind" .= ("compile_error" :: Text), "message" .= ("e" :: Text) ]
+        ]
+  in pure $ case suggestNext GhcExplainError False payload of
+       Nothing -> True
+       Just _  -> False
+
+-- | #A5: an unrouted error kind (e.g. missing_arg) still suppresses — the
+-- router is conservative, only the curated compile-ish kinds route.
+testSuggestOnErrorUnroutedKind :: IO Bool
+testSuggestOnErrorUnroutedKind =
+  let payload = A.object
+        [ "status" .= ("failed" :: Text)
+        , "error"  .= A.object
+            [ "kind" .= ("missing_arg" :: Text), "message" .= ("requires 'id'" :: Text) ]
+        ]
+  in pure $ case suggestNext GhcScratch False payload of
        Nothing -> True
        Just _  -> False
 

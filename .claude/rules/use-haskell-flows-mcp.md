@@ -151,8 +151,12 @@ payload:
   #269): the per-response hint fires automatically after every tool, and
   `ghc_workflow(action="discover")` covers on-demand "what should I reach
   for next" by ranking unused tools.
-- Errors suppress the hint — when `success: false`, read the error and
-  decide. Don't look for a `nextStep` that isn't there.
+- Errors now route too (plan A5 / failure-path routing): when a tool
+  fails with a *curated* structured error kind (`compile_error`,
+  `type_error`, `not_in_scope`), `nextStep` points you at
+  `ghc_explain_error` with the diagnostic pre-filled as `error_text`.
+  For unstructured / security / arg errors there's still no hint —
+  read the message and decide.
 - A few tools deliberately suppress `nextStep`: `ghc_workflow` (would
   loop on itself) and `ghc_batch` (the sub-actions carry their own
   hints).

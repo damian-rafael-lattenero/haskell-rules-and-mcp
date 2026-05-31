@@ -284,8 +284,37 @@ step tool args = ChainStep { csTool = tool, csArgs = args }
 -- genuinely unsure.
 suggestNext :: ToolName -> Bool -> Value -> Maybe NextStep
 suggestNext toolName ok payload
-  | not ok    = Nothing   -- errors speak for themselves; let the agent parse them
-  | otherwise = dispatch toolName payload
+  | not ok    = suggestOnError toolName payload
+  | otherwise = case dispatch toolName payload of
+      Just ns -> Just ns
+      -- A success arm declined to suggest. If the payload is actually a
+      -- structured failure the arm couldn't route (the common
+      -- isOk=True + status=failed shape), fall through to the
+      -- failure-path router rather than leaving the agent empty-handed.
+      Nothing -> suggestOnError toolName payload
+
+-- | Failure-path routing (plan A5). The pre-A5 contract left every error
+-- with @nextStep = Nothing@ ("errors speak for themselves") — but a
+-- compile/type/scope error is exactly where a fresh agent most needs a
+-- nudge to the recovery tool. This routes the curated, mechanically-
+-- recoverable error KINDS to 'ghc_explain_error' (which decodes the GHC
+-- diagnostic and proposes a verifiable patch — imports, signatures, scope
+-- fixes), feeding it the error message verbatim. Conservative by design:
+-- only the kinds below route; unstructured / security / arg errors return
+-- 'Nothing' so the agent reads the message (the pre-A5 behaviour). The
+-- self-loop guard keeps a failing 'ghc_explain_error' from recommending
+-- itself.
+suggestOnError :: ToolName -> Value -> Maybe NextStep
+suggestOnError toolName payload = case errorKind payload of
+  Just k
+    | k `elem` ["compile_error", "type_error", "not_in_scope"]
+    , toolName /= GhcExplainError ->
+        Just (simple GhcExplainError
+          "The code failed to compile. 'ghc_explain_error' decodes the GHC \
+          \diagnostic and proposes a verifiable patch (missing import, \
+          \signature, or scope fix) — feed it the error text below."
+          (Just (object [ "error_text" .= errorMessage payload ])))
+  _ -> Nothing
 
 -- The exhaustive case below makes adding a new 'ToolName'
 -- constructor a compile error here until you've decided whether it
@@ -1116,6 +1145,18 @@ stringField :: Text -> Value -> Maybe Text
 stringField k v = case envField k v of
   Just (String s) -> Just s
   _               -> Nothing
+
+-- | #A5: the structured error 'kind' (e.g. "compile_error", "type_error",
+-- "not_in_scope") read from the envelope's top-level @error@ object.
+-- Drives 'suggestOnError'. Returns 'Nothing' for an unstructured error
+-- (e.g. @error@ is a bare string), so those keep suppressing the hint.
+errorKind :: Value -> Maybe Text
+errorKind p = stringField "kind" =<< envField "error" p
+
+-- | #A5: the envelope's error 'message', fed to ghc_explain_error as
+-- @error_text@. Empty when absent.
+errorMessage :: Value -> Text
+errorMessage p = fromMaybe "" (stringField "message" =<< envField "error" p)
 
 -- | #270: resolve the "<same module>" placeholder family to the
 -- concrete @module_path@ the current tool's payload carries (ghc_load,
