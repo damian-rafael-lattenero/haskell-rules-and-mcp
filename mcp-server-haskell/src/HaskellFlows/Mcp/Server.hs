@@ -87,6 +87,7 @@ import HaskellFlows.Mcp.WorkflowState
   ( WorkflowStateRef
   , newWorkflowStateRef
   , readState
+  , recordCallToDisk
   , trackTool
   )
 import HaskellFlows.Types (ProjectDir, mkProjectDir, unProjectDir)
@@ -1014,6 +1015,9 @@ runTool srv toolName rid action = do
     Right (Just tr) -> do
       let payload = firstJsonContent tr
       trackTool (srvWorkflowState srv) toolName (not (trIsError tr)) payload
+      -- #266 cross-session: persist the call into the per-project lifetime
+      -- ledger so post-mortem can surface cumulative usage across restarts.
+      readIORef (srvProjectDir srv) >>= \pd -> recordCallToDisk pd toolName
       isSelf <- readIORef (srvIsSelfProject srv)
       pure (ok rid (toJSON (enrichWithNextStep isSelf toolName tr)))
 

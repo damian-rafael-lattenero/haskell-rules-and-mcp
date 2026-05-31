@@ -61,10 +61,13 @@ import HaskellFlows.Mcp.WorkflowState
   ( SessionPhase (..)
   , WorkflowState (..)
   , classifyPhase
+  , loadLifetime
   , renderHelp
   , renderPhaseHint
   , sessionMissedOpportunities
   )
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import qualified HaskellFlows.Tool.ToolchainStatus as TC
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
@@ -165,11 +168,12 @@ handle pdRef sessMVar toolNames ws staleness isSelfProject scratchRef rawArgs =
         ((Env.mkErrorEnvelope (parseErrorKind err)
             (T.pack ("Invalid arguments: " <> err)))
               { Env.eeCause = Just (T.pack err) })))
-    Right (WorkflowArgs ActPostMortem) ->
-      -- #266: post-mortem needs wall-clock 'now' for the session
-      -- duration, so it is handled here (IO) rather than in the pure
-      -- 'render'. Reads only the WorkflowState the Server threads in.
-      Env.toolResponseToResult . Env.mkOk . postMortemPayload ws
+    Right (WorkflowArgs ActPostMortem) -> do
+      -- #266: post-mortem needs wall-clock 'now' for the session duration
+      -- + the on-disk lifetime ledger for cross-session cumulative usage.
+      pd       <- readIORef pdRef
+      lifetime <- loadLifetime pd
+      Env.toolResponseToResult . Env.mkOk . postMortemPayload ws lifetime
         <$> getCurrentTime
     Right (WorkflowArgs a) -> do
       pd        <- readIORef pdRef
@@ -342,8 +346,8 @@ discoverPayload ws phase =
 -- for unit tests. Cumulative counts come from the #257 fields; the
 -- missed-opportunity list reuses 'sessionMissedOpportunities'. Finer
 -- sequence patterns + cross-session persistence are deferred.
-postMortemPayload :: WorkflowState -> UTCTime -> Value
-postMortemPayload ws now =
+postMortemPayload :: WorkflowState -> Map Text Int -> UTCTime -> Value
+postMortemPayload ws lifetime now =
   let durationMs =
         round (realToFrac (diffUTCTime now (wsStarted ws)) * 1000 :: Double) :: Int
       unique = Set.size (wsEverCalled ws)
@@ -358,6 +362,11 @@ postMortemPayload ws now =
        , "phase"                .= T.pack (show (classifyPhase ws))
        , "recent_tools"         .= map toolNameText (wsToolHistory ws)
        , "missed_opportunities" .= sessionMissedOpportunities ws
+       , "lifetime"             .= object
+           [ "calls_by_tool"   .= lifetime
+           , "total"           .= sum (Map.elems lifetime)
+           , "tools_used_ever" .= Map.size lifetime
+           ]
        ]
 
 --------------------------------------------------------------------------------

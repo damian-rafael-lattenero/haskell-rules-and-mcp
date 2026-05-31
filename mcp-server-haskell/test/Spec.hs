@@ -886,6 +886,8 @@ main = do
       , test "#A5: not_in_scope -> explain_error"  testSuggestOnErrorNotInScope
       , test "#A5: explain_error no self-loop"     testSuggestOnErrorNoSelfLoop
       , test "#A5: unrouted error kind suppresses" testSuggestOnErrorUnroutedKind
+      , test "#266 xsession: ledger round-trips"   testSessionLedgerRoundtrip
+      , test "#266 xsession: empty ledger reads empty" testSessionLedgerEmpty
       -- Phase 5: cross-tool nextStep arms
       , test "Phase 5: hole nextStep → scratch(write) chain"
                                                    testNextStepFromHoleRoutesToScratch
@@ -8265,7 +8267,7 @@ testPostMortemCounts = do
   let now = posixSecondsToUTCTime 0
       ws  = base { WS.wsToolCalls  = 7
                  , WS.wsEverCalled = Set.fromList [GhcLoad, GhcSuggest, GhcQuickCheck] }
-  case WorkflowTool.postMortemPayload ws now of
+  case WorkflowTool.postMortemPayload ws Map.empty now of
     A.Object o ->
       pure $ AKM.lookup "tools_called" o == Just (A.Number 7)
           && AKM.lookup "tools_unique" o == Just (A.Number 3)
@@ -11649,6 +11651,24 @@ testSuggestOnErrorUnroutedKind =
   in pure $ case suggestNext GhcScratch False payload of
        Nothing -> True
        Just _  -> False
+
+-- | #266 cross-session: recordCallToDisk accumulates lifetime call counts
+-- on disk; loadLifetime reads them back. Round-trips via a temp project.
+testSessionLedgerRoundtrip :: IO Bool
+testSessionLedgerRoundtrip = withTempProject $ \pd -> do
+  WS.recordCallToDisk pd GhcLoad
+  WS.recordCallToDisk pd GhcLoad
+  WS.recordCallToDisk pd GhcQuickCheck
+  m <- WS.loadLifetime pd
+  pure ( Map.lookup "ghc_load" m == Just 2
+      && Map.lookup "ghc_quickcheck" m == Just 1 )
+
+-- | #266 cross-session: loadLifetime on a project with no ledger reads as
+-- empty (best-effort — never errors).
+testSessionLedgerEmpty :: IO Bool
+testSessionLedgerEmpty = withTempProject $ \pd -> do
+  m <- WS.loadLifetime pd
+  pure (Map.null m)
 
 -- | Per PR-3 of the integrated MCP improvements: exploratory tools
 -- (type/info/goto/doc) now DO carry a forward-chaining hint — the

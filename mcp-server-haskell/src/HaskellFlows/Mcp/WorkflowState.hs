@@ -25,20 +25,31 @@ module HaskellFlows.Mcp.WorkflowState
   , historyNudges
     -- * #266 — post-mortem missed-opportunity list (exported for testing)
   , sessionMissedOpportunities
+    -- * #266 cross-session — lifetime tool-usage ledger persistence
+  , ledgerPath
+  , loadLifetime
+  , recordCallToDisk
   ) where
 
 import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
+import Control.Exception (SomeException, try)
+import Control.Monad (void)
 import Data.Aeson
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock (UTCTime, getCurrentTime)
+import System.Directory (createDirectoryIfMissing, doesFileExist)
+import System.FilePath (takeDirectory, (</>))
 
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 -- | Observable session counters + sliding history. Kept small so
 -- JSON serialisation is cheap on every @ghc_workflow(status)@
@@ -101,6 +112,44 @@ newWorkflowStateRef = do
         , wsStarted            = now
         }
   WorkflowStateRef <$> newMVar initial
+
+--------------------------------------------------------------------------------
+-- #266 cross-session persistence: a per-project lifetime tool-usage ledger
+-- at .haskell-flows/session-activity.json. The in-memory WorkflowState
+-- resets each session; this ledger does NOT, so 'ghc_workflow(post-mortem)'
+-- can surface cumulative usage across restarts (e.g. "ghc_witness: never
+-- called across N sessions"). Best-effort throughout — persistence never
+-- fails the tool call it accompanies.
+--------------------------------------------------------------------------------
+
+-- | Path to the per-project lifetime tool-usage ledger.
+ledgerPath :: ProjectDir -> FilePath
+ledgerPath pd = unProjectDir pd </> ".haskell-flows" </> "session-activity.json"
+
+-- | Load the cumulative @{tool -> lifetime call count}@ ledger. A missing
+-- or corrupt file reads as empty — callers never see an error.
+loadLifetime :: ProjectDir -> IO (Map Text Int)
+loadLifetime pd = do
+  let f = ledgerPath pd
+  ex <- doesFileExist f
+  if not ex
+    then pure Map.empty
+    else do
+      e <- try (eitherDecodeFileStrict' f)
+             :: IO (Either SomeException (Either String (Map Text Int)))
+      pure (case e of Right (Right m) -> m; _ -> Map.empty)
+
+-- | Increment a tool's lifetime call count on disk. Best-effort: any IO
+-- error is swallowed so persistence never breaks the tool call it follows.
+recordCallToDisk :: ProjectDir -> ToolName -> IO ()
+recordCallToDisk pd toolName =
+  void (try op :: IO (Either SomeException ()))
+  where
+    op = do
+      m <- loadLifetime pd
+      let m' = Map.insertWith (+) (toolNameText toolName) 1 m
+      createDirectoryIfMissing True (takeDirectory (ledgerPath pd))
+      encodeFile (ledgerPath pd) m'
 
 historyLimit :: Int
 historyLimit = 20
