@@ -339,6 +339,7 @@ import Spec.Coverage
 import Spec.Doc
 import Spec.Format
 import Spec.Goto
+import Spec.ParseError
 import Spec.Lint
 import Spec.Perf
 import Spec.Toolchain
@@ -2547,83 +2548,6 @@ testFixWarningPermissiveLine = do
        pure ( show a == show b )
     _ -> pure False
 
--- Issue #85: friendly Aeson parse-error rewriting at the tool boundary
---
--- The interpreter operates on the Aeson 'parseEither' string and
--- categorises it into 'missing_arg' / 'type_mismatch' / 'validation'
--- with an extracted 'field' and a friendly natural-language message.
--- Each test pins one shape — including the unrecognised fall-through.
---------------------------------------------------------------------------------
-
--- | The canonical \"missing required key\" shape from Aeson.
-testParseErrorMissingKey :: IO Bool
-testParseErrorMissingKey =
-  let raw = "Error in $: key \"expression\" not found"
-      ip  = interpretParseError raw
-  in pure ( ipKind    ip == Env.MissingArg
-         && ipField   ip == Just "expression"
-         && T.isInfixOf "expression" (ipMessage ip)
-         && T.isInfixOf "missing"    (ipMessage ip)
-         && ipRaw     ip == T.pack raw )
-
--- | The dotted-path shape: @Error in $.field: <reason>@.
--- Field extracted, kind flagged as type mismatch, raw preserved.
-testParseErrorTypeMismatchDotted :: IO Bool
-testParseErrorTypeMismatchDotted =
-  let raw = "Error in $.line: parsing Int failed, expected Number, but encountered String"
-      ip  = interpretParseError raw
-  in pure ( ipKind    ip == Env.TypeMismatch
-         && ipField   ip == Just "line"
-         && T.isInfixOf "line"  (ipMessage ip)
-         && T.isInfixOf "wrong" (ipMessage ip) )
-
--- | Bracket-quoted field name: @Error in $['delete_files']: ...@.
--- Aeson uses this form when the key name contains characters that
--- would be ambiguous in dotted-path syntax.
-testParseErrorTypeMismatchBracketed :: IO Bool
-testParseErrorTypeMismatchBracketed =
-  let raw = "Error in $['delete_files']: expected Bool, but encountered String"
-      ip  = interpretParseError raw
-  in pure ( ipKind  ip == Env.TypeMismatch
-         && ipField ip == Just "delete_files" )
-
--- | Type-mismatch signal but no field path — the heuristic fall
--- through to a Validation result that surfaces the raw text.
-testParseErrorTypeMismatchNoField :: IO Bool
-testParseErrorTypeMismatchNoField =
-  let raw = "Error in something else: expected Bool, but encountered String"
-      ip  = interpretParseError raw
-  in pure ( ipKind  ip == Env.TypeMismatch
-         && isNothing (ipField ip)
-         && T.isInfixOf "wrong" (ipMessage ip) )
-
--- | A parse-error string we don't recognise must NOT be silently
--- mis-categorised. Falls through to Validation with the original
--- text preserved verbatim — that's the one shape that doesn't get
--- friendly-rewritten because we don't know what it means.
-testParseErrorUnrecognisedFalls :: IO Bool
-testParseErrorUnrecognisedFalls =
-  let raw = "some Aeson shape we never saw before"
-      ip  = interpretParseError raw
-  in pure ( ipKind  ip == Env.Validation
-         && isNothing (ipField ip)
-         && T.isInfixOf (T.pack raw) (ipMessage ip)
-         && ipRaw   ip == T.pack raw )
-
--- | The bug-pinning anchor: the original raw text must always be
--- preserved on 'ipRaw' regardless of which branch fires. A
--- debugging consumer that wants the literal Aeson output can
--- always retrieve it from there.
-testParseErrorRawAlwaysPreserved :: IO Bool
-testParseErrorRawAlwaysPreserved =
-  let cases = [ "Error in $: key \"foo\" not found"
-              , "Error in $.bar: parsing Int failed"
-              , "weird unrecognised shape"
-              ]
-      results = map interpretParseError cases
-  in pure (and (zipWith (\raw r -> ipRaw r == T.pack raw) cases results))
-
---------------------------------------------------------------------------------
 -- Issue #92 Phase A: discriminated schema helpers
 --------------------------------------------------------------------------------
 
