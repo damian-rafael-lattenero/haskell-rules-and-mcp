@@ -60,6 +60,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
 import HaskellFlows.Data.PropertyStore (StoredProperty (..))
+import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..))
 import qualified HaskellFlows.Tool.ExplainError as ExplainError
 import qualified HaskellFlows.Tool.Lab as LabTool
 import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
