@@ -1,0 +1,29 @@
+mcp-server-haskell/test/Spec/Envelope.hs
+  s_5ac5babd034a90::t_df105189d4404d 4-5,23,38-43,99-100,260-261,264-273,276-282
+  s_5ac5babd034a90::t_0dba6a4ced7fbd 1-3,6-22,24-37,44-98,101-259,262-263,274-275,283-307
+mcp-server-haskell/test/Spec.hs
+  s_5ac5babd034a90::t_6737034267b50a 334,342,344
+mcp-server-haskell/test/Spec/Protocol.hs
+  s_5ac5babd034a90::t_4828982a832e90 1-261
+mcp-server-haskell/test/Spec/Harness.hs
+  s_5ac5babd034a90::t_c30ff7eb094de0 15,20-21
+  s_5ac5babd034a90::t_c04094a25219e7 43-58
+mcp-server-haskell/haskell-flows-mcp.cabal
+  s_5ac5babd034a90::t_fa6a02d0e349b9 186,194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e966ec1b49b88b9b20a084bb57c88aaeff4f51a4",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
