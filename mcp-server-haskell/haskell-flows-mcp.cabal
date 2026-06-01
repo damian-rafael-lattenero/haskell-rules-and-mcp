@@ -180,6 +180,7 @@ test-suite haskell-flows-mcp-test
     other-modules:    PathTraversal
                       Spec.Complete
                       Spec.Coverage
+                      Spec.Doc
                       Spec.Format
                       Spec.Goto
                       Spec.Harness
