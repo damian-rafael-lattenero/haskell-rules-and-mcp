@@ -1,0 +1,23 @@
+mcp-server-haskell/test/Spec/Perf.hs
+  s_5ac5babd034a90::t_ce7290ea5d8363 1-87
+mcp-server-haskell/test/Spec.hs
+  s_5ac5babd034a90::t_bfe9f028126815 340
+mcp-server-haskell/haskell-flows-mcp.cabal
+  s_5ac5babd034a90::t_d883704a511308 186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "fb50ef2e8ab8236b340191b30a8a51870301d4b2",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
