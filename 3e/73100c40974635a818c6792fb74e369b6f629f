@@ -1,0 +1,217 @@
+mcp-server-haskell/test/Spec/WorkflowTool.hs
+  s_5ac5babd034a90::t_67a460b87536a8 1-126
+mcp-server-haskell/test/Spec/NextStepFull.hs
+  s_5ac5babd034a90::t_7cc54f26228b04 1-38,40-41,44-47,52-453
+  s_5ac5babd034a90::t_87c207b094dca3 50-51
+  s_5ac5babd034a90::t_e61cb08e3216a7 48
+  s_5ac5babd034a90::t_ea752516ff9369 39,42-43,49
+mcp-server-haskell/test/Spec/ServerUnit.hs
+  s_5ac5babd034a90::t_21748f84c0712b 1-37,40-346
+  s_5ac5babd034a90::t_3b74f020cd7270 38-39
+mcp-server-haskell/test/Spec/ParseQc.hs
+  s_5ac5babd034a90::t_78ecf53fa52eae 1-28,32-34,37-38,40-52,54,56-305
+  s_5ac5babd034a90::t_031e3aa80c8820 53
+  s_5ac5babd034a90::t_21f7723c7b4c46 29-31,35-36,39,55
+mcp-server-haskell/test/Spec/Guidance.hs
+  s_5ac5babd034a90::t_68262783ec09a7 1-266
+mcp-server-haskell/test/Spec/FinalMisc.hs
+  s_5ac5babd034a90::t_cdbb1e0476f37f 1-150,152,154-1366
+  s_5ac5babd034a90::t_f06237ccc643c4 151
+  s_5ac5babd034a90::t_c14e8f389746ff 153
+mcp-server-haskell/test/Spec/SuggestAdvanced.hs
+  s_5ac5babd034a90::t_b79862ea1204e9 27
+  s_5ac5babd034a90::t_240b41a2de69eb 1-26,28-373
+mcp-server-haskell/test/Spec/RegressionUnit.hs
+  s_5ac5babd034a90::t_9904607cf1d7d4 22
+  s_5ac5babd034a90::t_767cf8446280f9 47
+  s_5ac5babd034a90::t_61b4febaaaed85 44
+mcp-server-haskell/test/Spec/Descriptors.hs
+  s_5ac5babd034a90::t_1f718214c9285e 1-210
+mcp-server-haskell/test/Spec/DepsUnit.hs
+  s_5ac5babd034a90::t_a4ed2ed10c89a7 1-86
+mcp-server-haskell/test/Spec/GhcErrorUnit.hs
+  s_5ac5babd034a90::t_3dec718818843b 26
+  s_5ac5babd034a90::t_aef8ed76875de0 43-44,53,58
+  s_5ac5babd034a90::t_96301086d84fd2 67
+  s_5ac5babd034a90::t_6bcc91306e70e3 1-25,27-30,34,41,46-50,52,54-57,59-65,68-348
+  s_5ac5babd034a90::t_0a6d2b4fcc4877 45
+  s_5ac5babd034a90::t_23c92adcb5abaf 66
+  s_5ac5babd034a90::t_03af34dee076d3 33,35-40,51
+  s_5ac5babd034a90::t_ef6f4c644f6997 31-32,42
+mcp-server-haskell/test/Spec/TypeEval.hs
+  s_5ac5babd034a90::t_db2a861edf4c9a 1-234
+mcp-server-haskell/test/Spec/SuggestSig.hs
+  s_5ac5babd034a90::t_080bc51f3065c8 1-135
+mcp-server-haskell/haskell-flows-mcp.cabal
+  s_5ac5babd034a90::t_37f537fa65db27 204
+  s_5ac5babd034a90::t_08e11717b6638f 221
+  s_5ac5babd034a90::t_65f1e00feb08f2 181-185,187,189,192-198,200,203,205,207-208,210-217,222-228,230-231,233,235-237,239-242,247-254,256-258,260-261
+  s_5ac5babd034a90::t_9524e54ffdb42d 234,244
+mcp-server-haskell/test/Spec/Load.hs
+  s_5ac5babd034a90::t_b9ca9a986f5e9f 5-153
+  s_5ac5babd034a90::t_74d100dff03e78 1-4
+mcp-server-haskell/test/Spec/DepsFormat.hs
+  s_5ac5babd034a90::t_92f0aa8e6e83e6 1-11,13-168
+  s_5ac5babd034a90::t_98646e98db783f 12
+mcp-server-haskell/test/Spec/BudgetGate.hs
+  s_5ac5babd034a90::t_0b5823999230a0 1-25,27-297
+  s_5ac5babd034a90::t_c8d374b5aae08f 26
+mcp-server-haskell/test/Spec/HaddockUnit.hs
+  s_5ac5babd034a90::t_f3b57eb4327c45 27,31,37,46,50
+  s_5ac5babd034a90::t_a8a6e207938fc0 30,32,35-36,40,42,45,47
+  s_5ac5babd034a90::t_4959b92e02fd85 1-26,28-29,33,39,41,49,51-52,54-271
+  s_5ac5babd034a90::t_dcf6812c081689 34,38,43-44,48,53
+mcp-server-haskell/test/Spec/TaxonomyUnit.hs
+  s_5ac5babd034a90::t_e26aa39b51d728 52-56
+  s_5ac5babd034a90::t_3f857344b6fbd2 1-51,57-458
+mcp-server-haskell/test/Spec/CreateProject.hs
+  s_5ac5babd034a90::t_a47bf5d704869a 1-323
+mcp-server-haskell/test/Spec/RefactorTool.hs
+  s_5ac5babd034a90::t_aed32393828587 1-30,32-275
+  s_5ac5babd034a90::t_cf69acf7ddcd2d 31
+mcp-server-haskell/test/Spec/HandleApplyRemove.hs
+  s_5ac5babd034a90::t_3b88463bf30490 27
+  s_5ac5babd034a90::t_e3fcc00b9f32a6 1-26,28-169
+mcp-server-haskell/test/Spec/GateUnit.hs
+  s_5ac5babd034a90::t_80698d3f5c7f4c 31
+  s_5ac5babd034a90::t_3235c7e5c2b893 39,41-42
+  s_5ac5babd034a90::t_33252fc322ab14 35-37,40
+  s_5ac5babd034a90::t_feb71d5af57713 1-30,32-34,38,43-47,50-323
+  s_5ac5babd034a90::t_fbe743c459cc76 48-49
+mcp-server-haskell/test/Spec/InfoParse.hs
+  s_5ac5babd034a90::t_6859a458e2972b 1-307
+mcp-server-haskell/test/Spec/SuggestLaws.hs
+  s_5ac5babd034a90::t_590f42bd106939 22-24
+  s_5ac5babd034a90::t_70fafa3afcc483 1-21,25-233
+mcp-server-haskell/test/Spec/DogfoodHint.hs
+  s_5ac5babd034a90::t_e0f7172fbcfba4 1-24,28-315
+  s_5ac5babd034a90::t_de2554acf25cf0 25-27
+mcp-server-haskell/test/Spec/FixWarningUnit.hs
+  s_5ac5babd034a90::t_1559e6b7bbeac1 55
+  s_5ac5babd034a90::t_6d14ac9079b221 1-54,56-420
+mcp-server-haskell/test/Spec/Arbitrary.hs
+  s_5ac5babd034a90::t_c010e21a55ed88 1-26,28-219
+  s_5ac5babd034a90::t_cf0655d4b46331 27
+mcp-server-haskell/test/Spec/HoleTool.hs
+  s_5ac5babd034a90::t_d8675e57929536 1-112
+mcp-server-haskell/test/Spec/RemoveModulesUnit.hs
+  s_5ac5babd034a90::t_3f67d938e7a202 1-242
+mcp-server-haskell/test/Spec/PlanUnit.hs
+  s_5ac5babd034a90::t_1002185d95e6de 1-113
+mcp-server-haskell/test/Spec/AddImportUnit.hs
+  s_5ac5babd034a90::t_9774475c4625cb 1-20,22,24-28,30-39,42-58,61-155
+  s_5ac5babd034a90::t_7190a550012b2b 29
+  s_5ac5babd034a90::t_2c9c96704f9df1 59-60
+  s_5ac5babd034a90::t_f1d8949abb2695 21,23
+  s_5ac5babd034a90::t_77cbc649951051 40-41
+mcp-server-haskell/test/Spec/NextStepLoad.hs
+  s_5ac5babd034a90::t_774d21ae5a0832 17-18
+  s_5ac5babd034a90::t_0e9079c6f94208 27
+  s_5ac5babd034a90::t_65e5808e742c37 1-16,19-26,28-162
+mcp-server-haskell/test/Spec/Store.hs
+  s_5ac5babd034a90::t_d5d9a999378c01 1-72
+mcp-server-haskell/test/Spec/InfoAdvanced.hs
+  s_5ac5babd034a90::t_db53682484ee67 1-229
+mcp-server-haskell/test/Spec/InfoHoogle.hs
+  s_5ac5babd034a90::t_007fdb7d5c8ce8 1-207
+mcp-server-haskell/test/Spec/FilterArtifacts.hs
+  s_5ac5babd034a90::t_6b5ce3cf310108 1-195
+mcp-server-haskell/test/Spec/Progress.hs
+  s_5ac5babd034a90::t_a370aba70cf83c 22-23,25-27,32,35,39
+  s_5ac5babd034a90::t_645e70862e4720 1-21,24,28-31,33-34,36-38,40-178
+mcp-server-haskell/test/Spec/PermissiveJSON.hs
+  s_5ac5babd034a90::t_ccdb6d9701f8be 1-89
+mcp-server-haskell/test/Spec/LoadUnit.hs
+  s_5ac5babd034a90::t_be261ed52fb8e1 1-131
+mcp-server-haskell/test/Spec/Sanitize.hs
+  s_5ac5babd034a90::t_ee685574892d3a 52-54
+  s_5ac5babd034a90::t_24afed7421a48a 41
+  s_5ac5babd034a90::t_b6c556fce182c6 63-67
+  s_5ac5babd034a90::t_809038371c3075 5-30,32-33,35,44-48,50-51,55-56,58-62,69-310
+  s_5ac5babd034a90::t_4ac00e41ded9b5 68
+  s_5ac5babd034a90::t_bafc56968b459b 1-4,31,34,36-40,42-43,49,57
+mcp-server-haskell/test/Spec/AddModulesHandle.hs
+  s_5ac5babd034a90::t_00ad35e18d7299 1-242
+mcp-server-haskell/test/Spec.hs
+  s_5ac5babd034a90::t_c328bc2f9c9c5c 337-341,343,345,348-354,356,359,361,363-364,366-373,375-382,384,387,389-391,393-396,400-407
+  s_5ac5babd034a90::t_bbc46a85281113 414-416,423-427
+  s_5ac5babd034a90::t_def2173798fc0e 374,383,385-386,388,398
+  s_5ac5babd034a90::t_483877d762193b 360
+mcp-server-haskell/test/Spec/DepsExplainLab.hs
+  s_5ac5babd034a90::t_abb9fc15681749 29-30,33-34,36
+  s_5ac5babd034a90::t_dccf14671c6e19 31
+  s_5ac5babd034a90::t_cef3770e02f507 37
+  s_5ac5babd034a90::t_e8a5ede2b66dbb 1-28,32,35,38-305
+mcp-server-haskell/test/Spec/ModuleNameUnit.hs
+  s_5ac5babd034a90::t_17eb531173c89c 1-286
+mcp-server-haskell/test/Spec/SummariseUnit.hs
+  s_5ac5babd034a90::t_c42c99d88260a4 1-177
+mcp-server-haskell/test/Spec/PropertyAuditUnit.hs
+  s_5ac5babd034a90::t_a9e6e23c1c7c80 60,62
+  s_5ac5babd034a90::t_9a1c289b618742 1-59,61,63-571
+mcp-server-haskell/test/Spec/TraversalGuards.hs
+  s_5ac5babd034a90::t_25a41634a00699 26
+  s_5ac5babd034a90::t_f207f46c3b6c0c 38
+  s_5ac5babd034a90::t_7eab16ff36884f 62,76,91,128,142,179,198
+  s_5ac5babd034a90::t_a8a2fc842d668f 44
+  s_5ac5babd034a90::t_03fbcfcbf5dead 109,159
+  s_5ac5babd034a90::t_52cc0b988ae604 1-25,27-37,39-43,45-61,63-75,77-90,92-108,110-127,129-141,143-158,160-178,180-197,199-253
+mcp-server-haskell/test/Spec/NextStepCoverage.hs
+  s_5ac5babd034a90::t_0acab937bebf78 32-33
+  s_5ac5babd034a90::t_5f84d27fe7457a 37
+  s_5ac5babd034a90::t_ac2e7213a4f575 38
+  s_5ac5babd034a90::t_09f91dda3db22d 31
+  s_5ac5babd034a90::t_266a2a37b5f517 23,26-28,36
+  s_5ac5babd034a90::t_3c18f19182e0bf 1-22,24-25,29-30,34-35,39-230
+mcp-server-haskell/test/Spec/MoveUnit.hs
+  s_5ac5babd034a90::t_23752e25409f7f 1-409
+mcp-server-haskell/test/Spec/Deps.hs
+  s_5ac5babd034a90::t_2f10686d9b2e6a 1-81
+mcp-server-haskell/test/Spec/ParseHeaderUnit.hs
+  s_5ac5babd034a90::t_ede30c7818732b 1-209
+mcp-server-haskell/test/Spec/PerfUnit.hs
+  s_5ac5babd034a90::t_faf2a8a55152b9 1-407
+mcp-server-haskell/test/Spec/WorkflowState.hs
+  s_5ac5babd034a90::t_bd0ca1024a0db7 1-49,51-53,55-377
+  s_5ac5babd034a90::t_8dc212138d0773 50,54
+mcp-server-haskell/test/Spec/ValidateCabal.hs
+  s_5ac5babd034a90::t_a613d768332e35 1-191
+mcp-server-haskell/test/Spec/NextStepUnit.hs
+  s_5ac5babd034a90::t_3018f5614266cc 29,33,35,40
+  s_5ac5babd034a90::t_d76d84aa46740c 31
+  s_5ac5babd034a90::t_67beff52ba5026 1-28,30,32,34,36-39,41-211
+mcp-server-haskell/test/Spec/ApplyExports.hs
+  s_5ac5babd034a90::t_a9fe63cb50ce55 204,211-213,219
+  s_5ac5babd034a90::t_eb46393214e893 1-19,21-22,25-28,30-203,205-210,214-218,220-226
+  s_5ac5babd034a90::t_c5a9ecbf7dcda5 20,23-24,29
+mcp-server-haskell/test/Spec/QcExport.hs
+  s_5ac5babd034a90::t_2532fb69b4fbb7 1-305
+mcp-server-haskell/test/Spec/SwitchProjectUnit.hs
+  s_5ac5babd034a90::t_52529fe8809b94 30-31
+  s_5ac5babd034a90::t_332b86a73a5707 1-29,32-357
+mcp-server-haskell/test/Spec/Discover.hs
+  s_5ac5babd034a90::t_35f135f3e37103 1-80
+mcp-server-haskell/test/Spec/HoleParse.hs
+  s_5ac5babd034a90::t_84c668a62cea55 1-273
+mcp-server-haskell/test/Spec/ArbitraryUnit.hs
+  s_5ac5babd034a90::t_07611664911a8d 31
+  s_5ac5babd034a90::t_0db6b9249ed65d 1-30,32-287
+mcp-server-haskell/test/Spec/Bootstrap.hs
+  s_5ac5babd034a90::t_c797a0d17f7ac9 1-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "3e73100c40974635a818c6792fb74e369b6f629f",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
