@@ -178,26 +178,87 @@ test-suite haskell-flows-mcp-test
     hs-source-dirs:   test
     main-is:          Spec.hs
     other-modules:    PathTraversal
+                      Spec.AddImportUnit
+                      Spec.AddModulesHandle
+                      Spec.ApplyExports
+                      Spec.Arbitrary
+                      Spec.ArbitraryUnit
                       Spec.Batch
+                      Spec.Bootstrap
                       Spec.Browse
+                      Spec.BudgetGate
                       Spec.Complete
                       Spec.Coverage
+                      Spec.CreateProject
+                      Spec.Deps
+                      Spec.DepsExplainLab
+                      Spec.DepsFormat
+                      Spec.DepsUnit
+                      Spec.Descriptors
+                      Spec.Discover
                       Spec.Doc
+                      Spec.DogfoodHint
                       Spec.Envelope
                       Spec.Extract
+                      Spec.FilterArtifacts
+                      Spec.FinalMisc
+                      Spec.FixWarningUnit
                       Spec.Format
+                      Spec.GateUnit
+                      Spec.GhcErrorUnit
                       Spec.Goto
+                      Spec.Guidance
+                      Spec.HaddockUnit
+                      Spec.HandleApplyRemove
+                      Spec.HoleParse
+                      Spec.HoleTool
+                      Spec.InfoAdvanced
+                      Spec.InfoHoogle
+                      Spec.InfoParse
                       Spec.Harness
                       Spec.Helpers
                       Spec.Lint
+                      Spec.Load
+                      Spec.LoadUnit
+                      Spec.ModuleNameUnit
+                      Spec.MoveUnit
+                      Spec.NextStepCoverage
+                      Spec.NextStepFull
+                      Spec.NextStepLoad
+                      Spec.NextStepUnit
                       Spec.ParseError
+                      Spec.ParseHeaderUnit
+                      Spec.ParseQc
                       Spec.Perf
+                      Spec.PerfUnit
+                      Spec.PermissiveJSON
+                      Spec.PlanUnit
+                      Spec.Progress
+                      Spec.PropertyAuditUnit
                       Spec.Protocol
+                      Spec.QcExport
+                      Spec.RefactorTool
+                      Spec.RegressionUnit
+                      Spec.RemoveModulesUnit
                       Spec.Rename
+                      Spec.Sanitize
                       Spec.Schema
                       Spec.Scratch
+                      Spec.ServerUnit
+                      Spec.Store
+                      Spec.SuggestAdvanced
+                      Spec.SuggestLaws
+                      Spec.SuggestSig
+                      Spec.SummariseUnit
+                      Spec.SwitchProjectUnit
+                      Spec.TaxonomyUnit
                       Spec.Toolchain
+                      Spec.TraversalGuards
+                      Spec.TypeEval
+                      Spec.ValidateCabal
                       Spec.Witness
+                      Spec.WorkflowState
+                      Spec.WorkflowTool
     build-depends:    base              >= 4.20 && < 5
                     , haskell-flows-mcp
                     , aeson             >= 2.2  && < 2.3
