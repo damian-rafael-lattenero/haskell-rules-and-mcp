@@ -12,10 +12,13 @@
 module Spec.Harness
   ( test
   , testTimeoutMicros
+  , quickTest
   ) where
 
 import Data.Maybe (fromMaybe)
 import System.Timeout (timeout)
+import Test.QuickCheck (Testable, quickCheckWithResult, stdArgs, Args (..))
+import qualified Test.QuickCheck as QC
 
 -- | Per-test defensive timeout. Any unit test that doesn't complete in
 -- 60 s is reported as a hard failure with a TIMEOUT prefix rather than
@@ -35,5 +38,21 @@ test name action = do
         | Nothing <- mok = "TIMEOUT "
         | ok             = "PASS    "
         | otherwise      = "FAIL    "
+  putStrLn (prefix <> name)
+  pure ok
+
+-- | Run a QuickCheck property as a named test with 200 cases and the
+-- defensive per-test timeout from 'testTimeoutMicros'. Plugs directly
+-- into the Bool-returning harness so it can be listed alongside 'test'
+-- entries in the driver's 'sequence' call.
+quickTest :: Testable prop => String -> prop -> IO Bool
+quickTest name prop = do
+  mres <- timeout (2 * testTimeoutMicros)
+            (quickCheckWithResult stdArgs { chatty = False, maxSuccess = 200 } prop)
+  let ok = case mres of Just QC.Success {} -> True; _ -> False
+      prefix
+        | Nothing <- mres = "TIMEOUT "
+        | ok              = "PASS    "
+        | otherwise       = "FAIL    "
   putStrLn (prefix <> name)
   pure ok

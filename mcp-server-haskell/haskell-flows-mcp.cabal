@@ -183,6 +183,7 @@ test-suite haskell-flows-mcp-test
                       Spec.Complete
                       Spec.Coverage
                       Spec.Doc
+                      Spec.Envelope
                       Spec.Format
                       Spec.Goto
                       Spec.Harness
@@ -190,6 +191,7 @@ test-suite haskell-flows-mcp-test
                       Spec.Lint
                       Spec.ParseError
                       Spec.Perf
+                      Spec.Protocol
                       Spec.Schema
                       Spec.Scratch
                       Spec.Toolchain
