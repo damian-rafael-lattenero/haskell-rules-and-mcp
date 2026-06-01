@@ -19,6 +19,7 @@ import qualified Data.Text as T
 import HaskellFlows.Parser.TypeSignature
   ( ParsedSig (..)
   , SigType (..)
+  , isSameTypeThroughout
   , parseSignature
   )
 import HaskellFlows.Suggest.Rules

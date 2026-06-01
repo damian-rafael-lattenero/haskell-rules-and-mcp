@@ -56,11 +56,15 @@ module Spec.PropertyAuditUnit
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
+import Data.Maybe (isNothing)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
 import HaskellFlows.Data.PropertyStore (StoredProperty (..))
+import HaskellFlows.Mcp.Protocol (ToolDescriptor (..))
+import HaskellFlows.Parser.Error (GhcError (..))
 import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..))
+import HaskellFlows.Suggest.Rules (Confidence (..))
 import qualified HaskellFlows.Tool.ExplainError as ExplainError
 import qualified HaskellFlows.Tool.Lab as LabTool
 import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool

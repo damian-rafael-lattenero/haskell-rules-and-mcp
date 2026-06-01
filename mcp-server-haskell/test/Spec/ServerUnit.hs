@@ -36,7 +36,7 @@ import System.Timeout (timeout)
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Guidance as Guidance
-import HaskellFlows.Mcp.Server (allToolDescriptors)
+import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNameTexts)
 import HaskellFlows.Types (mkProjectDir)
 import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Mcp.Server as Server

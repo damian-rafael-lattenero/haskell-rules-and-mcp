@@ -46,7 +46,9 @@ import qualified HaskellFlows.Ghc.ApiSession as ApiSession
 import qualified HaskellFlows.Tool.Type as TypeTool
 import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..))
 import HaskellFlows.Parser.Hole (parseTypedHoles, TypedHole (..))
-import HaskellFlows.Parser.Error (renderGhciStyle)
+import Control.Monad (when)
+import HaskellFlows.Ghc.CabalBootstrap (Target (..))
+import HaskellFlows.Parser.Error (GhcError (..), renderGhciStyle)
 
 -- | Issue #51: a stored property whose recorded module is no
 -- longer in scope (e.g. @ghc_quickcheck_export@ overwrote

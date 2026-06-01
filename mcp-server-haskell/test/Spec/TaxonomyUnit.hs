@@ -53,6 +53,7 @@ import HaskellFlows.Mcp.ToolName
   ( allToolNames, toolCategory, toolVersion
   , ToolCategory (..), ToolName (..), parseToolName, toolCategoryText
   )
+import Control.Monad (unless, when)
 import HaskellFlows.Mcp.Protocol (ToolDescriptor (..), ToolContent (..), ToolResult (..))
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Tool.Modules as Modules

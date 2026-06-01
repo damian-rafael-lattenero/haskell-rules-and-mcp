@@ -351,7 +351,7 @@ import Spec.DepsExplainLab
 import Spec.DepsFormat
 import Spec.DepsUnit
 import Spec.Descriptors
-import Spec.Discover
+import Spec.Discover hiding (testCodeToolsRegistered)
 import Spec.Doc
 import Spec.DogfoodHint
 import Spec.Envelope
