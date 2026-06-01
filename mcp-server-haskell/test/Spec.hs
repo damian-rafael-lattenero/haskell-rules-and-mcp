@@ -334,6 +334,7 @@ import GHC.Utils.Outputable (showPprUnsafe)
 import Spec.Harness (test, testTimeoutMicros)
 import Spec.Helpers (decodeToolResult, getTestTimestamp, isTraversalRefused, runToolEnvelope, withTempProject)
 import Spec.Scratch (scratchTests)
+import Spec.Browse
 import Spec.Complete
 import Spec.Coverage
 import Spec.Doc
@@ -4592,102 +4593,6 @@ testEnvelopeLegacyErrorKindDropped = do
                        >>= lookupField "kind"
   pure $ isNothing topLevelKind
       && nestedKind == Just (A.String "path_traversal")
-
--- | Phase B helper: stage a tmpdir project with a single 'Foo'
--- module, start a fresh GhcSession, drive 'BrowseTool.handle'
--- with the given args. Returns the parsed envelope.
-runBrowse :: A.Value -> IO (Either String Env.ToolResponse)
-runBrowse args = do
-  tmp <- getTemporaryDirectory
-  let dir = tmp </> "haskell-flows-browse-test"
-  removePathForcibly dir
-  createDirectoryIfMissing True (dir </> "src")
-  TIO.writeFile (dir </> "src" </> "Foo.hs")
-    (T.pack "module Foo (foo, bar) where\nfoo :: Int\nfoo = 1\n\
-            \bar :: String -> String\nbar s = s ++ \"!\"\n")
-  result <- case mkProjectDir dir of
-    Left _   -> pure (Left "could not build ProjectDir")
-    Right pd -> do
-      sess <- startGhcSession pd
-      tr   <- BrowseTool.handle sess args
-      killGhcSession sess
-      case trContent tr of
-        [TextContent body] ->
-          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
-        _ -> pure (Left "expected exactly one TextContent")
-  removePathForcibly dir
-  pure result
-
--- | Browsing a module that's in the project's compile graph
--- produces status='ok' with result.{module, count, entries}.
-testBrowseProjectModuleOk :: IO Bool
-testBrowseProjectModuleOk = do
-  decoded <- runBrowse (A.object [ "module" A..= ("Foo" :: Text) ])
-  pure $ case decoded of
-    Right env
-      | Env.reStatus env == Env.StatusOk
-      , Just (A.Object payload) <- Env.reResult env ->
-          AKM.lookup (AKey.fromText "module") payload == Just (A.String "Foo")
-            && AKM.member (AKey.fromText "count")   payload
-            && AKM.member (AKey.fromText "entries") payload
-    _ -> False
-
--- | Browsing a module that is not in the project's compile graph AND
--- not in the GHC package environment returns status='no_match'.
--- Post-#90 / #168: modules like 'Data.Maybe' that ARE in the
--- package environment now return status='ok' via the fallback path
--- (see 'testBrowseFallbackOk').  This test uses a name that is
--- guaranteed to be unknown in any package environment.
-testBrowseExternalModuleNoMatch :: IO Bool
-testBrowseExternalModuleNoMatch = do
-  decoded <- runBrowse (A.object [ "module" A..= ("NonExistent.Module.XYZ999" :: Text) ])
-  pure $ case decoded of
-    Right env
-      | Env.reStatus env == Env.StatusNoMatch
-      , Just (A.Object payload) <- Env.reResult env ->
-          AKM.lookup (AKey.fromText "module") payload
-            == Just (A.String "NonExistent.Module.XYZ999")
-            && AKM.member (AKey.fromText "remediation") payload
-            && case Env.reNextStep env of
-                 Just _  -> True   -- next-step pointer included
-                 Nothing -> False
-    _ -> False
-
--- | #168: modules available in the GHC package environment (e.g.
--- 'Data.Maybe' from base) are now browseable via the fallback path
--- even when they're not part of the project's compile graph.
--- Expects status='ok' with result.{module, count, entries}.
-testBrowseFallbackOk :: IO Bool
-testBrowseFallbackOk = do
-  decoded <- runBrowse (A.object [ "module" A..= ("Data.Maybe" :: Text) ])
-  pure $ case decoded of
-    Right env
-      | Env.reStatus env == Env.StatusOk
-      , Just (A.Object payload) <- Env.reResult env ->
-          AKM.lookup (AKey.fromText "module") payload == Just (A.String "Data.Maybe")
-            && AKM.member (AKey.fromText "count") payload
-            && AKM.member (AKey.fromText "entries") payload
-    _ -> False
-
--- | #168: the descriptor must mention session-preloaded modules so
--- agents know they can browse Prelude/Data.Map/etc after ghc_add_import.
-testBrowseDescriptorMentionsSession :: IO Bool
-testBrowseDescriptorMentionsSession =
-  let desc = BrowseTool.descriptor
-  in pure ( "session" `T.isInfixOf` tdDescription desc
-         || "ghc_add_import" `T.isInfixOf` tdDescription desc )
-
--- | Empty args (missing 'module') → status='failed' with
--- error.kind='missing_arg'.
-testBrowseRejectsMissingArg :: IO Bool
-testBrowseRejectsMissingArg = do
-  decoded <- runBrowse (A.object [])
-  pure $ case decoded of
-    Right env
-      | Env.reStatus env == Env.StatusFailed
-      , Just err <- Env.reError env ->
-          Env.eeKind err == Env.MissingArg
-    _ -> False
 
 -- | Phase B helper: stage a tmpdir project + drive 'TypeTool.handle'.
 runType :: A.Value -> IO (Either String Env.ToolResponse)
