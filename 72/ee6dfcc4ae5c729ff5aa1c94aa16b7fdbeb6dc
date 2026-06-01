@@ -1,0 +1,23 @@
+mcp-server-haskell/test/Spec.hs
+  s_5ac5babd034a90::t_b0b84848238c98 337
+mcp-server-haskell/test/Spec/Coverage.hs
+  s_5ac5babd034a90::t_78d9e935257202 1-242
+mcp-server-haskell/haskell-flows-mcp.cabal
+  s_5ac5babd034a90::t_b84ae6ddc0a325 181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "72ee6dfcc4ae5c729ff5aa1c94aa16b7fdbeb6dc",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
