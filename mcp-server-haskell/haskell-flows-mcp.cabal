@@ -188,6 +188,7 @@ test-suite haskell-flows-mcp-test
                       Spec.Lint
                       Spec.ParseError
                       Spec.Perf
+                      Spec.Schema
                       Spec.Scratch
                       Spec.Toolchain
                       Spec.Witness
