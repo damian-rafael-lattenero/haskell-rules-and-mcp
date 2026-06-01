@@ -334,6 +334,7 @@ import GHC.Utils.Outputable (showPprUnsafe)
 import Spec.Harness (test, testTimeoutMicros)
 import Spec.Helpers (decodeToolResult, getTestTimestamp, isTraversalRefused, runToolEnvelope, withTempProject)
 import Spec.Scratch (scratchTests)
+import Spec.Batch
 import Spec.Browse
 import Spec.Complete
 import Spec.Coverage
@@ -5371,91 +5372,6 @@ testSuggestNoMatch =
       in pure (null suggestions)
 
 --------------------------------------------------------------------------------
--- Phase 12 regression tests: dogfood findings #22 / #23 / #24
---------------------------------------------------------------------------------
-
--- | Issue #22: @ghc_batch@ advertises @{tool, args}@ via its
--- @inputSchema@ — parsing must accept that shape. This pins the
--- documented contract; a future regression flips this red instead
--- of silently misleading agents following the tool's own schema.
-testBatchParsesToolArgs :: IO Bool
-testBatchParsesToolArgs =
-  let raw = object
-        [ "actions" .=
-            [ object
-                [ "tool" .= ("ghc_type" :: Text)
-                , "args" .= object [ "expression" .= ("reverse" :: Text) ]
-                ]
-            ]
-        ]
-  in case A.fromJSON raw :: A.Result BatchArgs of
-       A.Success ba -> case baActions ba of
-         [tc] -> pure
-           ( tcName tc == "ghc_type"
-           && tcArguments tc
-                == object [ "expression" .= ("reverse" :: Text) ]
-           )
-         _ -> pure False
-       A.Error _ -> pure False
-
--- | Issue #22 continued: clients that were relying on the MCP-native
--- shape @{name, arguments}@ (what @tools/call@ uses) keep working.
--- Accepting both shapes costs nothing — each routes through the
--- same dispatcher and per-tool validator downstream.
-testBatchParsesNameArgs :: IO Bool
-testBatchParsesNameArgs =
-  let raw = object
-        [ "actions" .=
-            [ object
-                [ "name"      .= ("ghc_eval" :: Text)
-                , "arguments" .= object [ "expression" .= ("1+1" :: Text) ]
-                ]
-            ]
-        ]
-  in case A.fromJSON raw :: A.Result BatchArgs of
-       A.Success ba -> case baActions ba of
-         [tc] -> pure (tcName tc == "ghc_eval")
-         _    -> pure False
-       A.Error _ -> pure False
-
--- | Issue #175: @ghc_batch@ sub-results were double-wrapped in the
--- MCP content-block envelope (@{content:[{type:\"text\",text:\"…\"}],
--- isError:bool}@) instead of returning the domain JSON directly.
--- 'unwrapResult' must peel off that wrapper so agents see
--- @{status,result,…}@ at @results[i].result@.
-testBatchResultNotDoubleWrapped :: IO Bool
-testBatchResultNotDoubleWrapped = do
-  -- Build a ToolResult the same way every tool handler does.
-  let innerPayload = object [ "value" .= ("42" :: Text) ]
-      tr           = Env.toolResponseToResult (Env.mkOk innerPayload)
-  -- unwrapResult should return the domain JSON, not the wire wrapper.
-  case unwrapResult tr of
-    A.Object obj ->
-      -- Must have "status" (domain field), must NOT have "content" (wire field).
-      pure (AKM.member (AKey.fromString "status") obj
-         && not (AKM.member (AKey.fromString "content") obj))
-    _ -> pure False
-
--- | Issue #249: 'ghc_batch' with an empty actions list must return
--- status='ok' AND a non-empty 'warning' field — the empty list is
--- valid input but almost certainly a caller error.
-testBatchEmptyActionsWarning :: IO Bool
-testBatchEmptyActionsWarning = do
-  let noopDispatch _ = pure (Env.toolResponseToResult (Env.mkOk (A.object [])))
-      args = A.object [ "actions" .= ([] :: [A.Value]) ]
-  tr <- Batch.handle noopDispatch args
-  pure $ case decodeToolResult tr of
-    Right env ->
-         Env.reStatus env == Env.StatusOk
-      && case Env.reResult env of
-           Just (A.Object obj) ->
-             AKM.member (AKey.fromText "warning") obj
-             && case AKM.lookup (AKey.fromText "total") obj of
-                  Just (A.Number 0) -> True
-                  _                 -> False
-           _ -> False
-    Left _ -> False
-
 -- | Issue #23: @reverse :: [a] -> [a]@ fits the @a -> a@ shape that
 -- 'ruleIdempotent' used to blindly promote to 'Medium'. Dampened
 -- heuristic should either skip it or mark it 'Low' for a name with
