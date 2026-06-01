@@ -1,0 +1,30 @@
+mcp-server-haskell/test/Spec/SuggestSig.hs
+  s_5ac5babd034a90::t_927d8c7425e43f 22
+mcp-server-haskell/test/Spec/ServerUnit.hs
+  s_5ac5babd034a90::t_1f7f5b70abeaae 39
+mcp-server-haskell/test/Spec/PropertyAuditUnit.hs
+  s_5ac5babd034a90::t_766890ade0fbce 64
+  s_5ac5babd034a90::t_db5b202309fa1d 59,65,67
+mcp-server-haskell/test/Spec/TaxonomyUnit.hs
+  s_5ac5babd034a90::t_8c21fdc978818f 56
+mcp-server-haskell/test/Spec/RegressionUnit.hs
+  s_5ac5babd034a90::t_3c052eac481055 49-51
+mcp-server-haskell/test/Spec.hs
+  s_5ac5babd034a90::t_25544a155a930a 354
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b41adb9b2d371869bc18fd98102a5d07e4360962",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
