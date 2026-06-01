@@ -178,6 +178,7 @@ test-suite haskell-flows-mcp-test
     hs-source-dirs:   test
     main-is:          Spec.hs
     other-modules:    PathTraversal
+                      Spec.Complete
                       Spec.Coverage
                       Spec.Format
                       Spec.Harness
