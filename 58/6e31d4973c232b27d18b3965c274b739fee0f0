@@ -1,0 +1,19 @@
+mcp-server-haskell/test/Spec/PropertyAuditUnit.hs
+  s_5ac5babd034a90::t_5001df7deab9c7 63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "586e31d4973c232b27d18b3965c274b739fee0f0",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
