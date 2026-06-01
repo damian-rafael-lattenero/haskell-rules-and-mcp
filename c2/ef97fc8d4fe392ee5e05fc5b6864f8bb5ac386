@@ -1,0 +1,23 @@
+mcp-server-haskell/test/Spec.hs
+  s_5ac5babd034a90::t_1e0ac17322dfdb 342
+mcp-server-haskell/haskell-flows-mcp.cabal
+  s_5ac5babd034a90::t_df41431e0cf879 189
+mcp-server-haskell/test/Spec/ParseError.hs
+  s_5ac5babd034a90::t_952205afcfa277 1-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "c2ef97fc8d4fe392ee5e05fc5b6864f8bb5ac386",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
