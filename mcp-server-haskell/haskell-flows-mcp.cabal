@@ -181,6 +181,7 @@ test-suite haskell-flows-mcp-test
                       Spec.Complete
                       Spec.Coverage
                       Spec.Format
+                      Spec.Goto
                       Spec.Harness
                       Spec.Helpers
                       Spec.Lint
