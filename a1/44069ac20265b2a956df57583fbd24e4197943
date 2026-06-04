@@ -1,0 +1,56 @@
+playground/lambda-hm/test/Spec.hs
+  s_615fea0e7bf9e4::t_45c16faf88ff77 3-34,39-99,101-103,105-110,114-159
+  s_615fea0e7bf9e4::t_9fbfbe95f58485 100,104
+  s_615fea0e7bf9e4::t_13244e90036f2f 111-113
+  s_615fea0e7bf9e4::t_c22bfa96488490 35-38
+playground/lambda-hm/dist-newstyle-mcp/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/t/lambda-hm-test/build/lambda-hm-test/autogen/Paths_lambda_hm.hs
+  ai_agent 1-77
+playground/lambda-hm/src/LambdaHM/Syntax.hs
+  s_615fea0e7bf9e4::t_2ec9dd8df1b8f3 3-34
+playground/lambda-hm/src/LambdaHM.hs
+  s_615fea0e7bf9e4::t_cdc8ae14bf8643 1-29
+playground/lambda-hm/dist-newstyle-mcp/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/build/autogen/cabal_macros.h
+  ai_agent 1-133
+playground/lambda-hm/lambda-hm.cabal
+  ai_agent 1-42
+playground/lambda-hm/dist-newstyle-mcp/cache/plan.json
+  ai_agent 1
+playground/lambda-hm/dist-newstyle-mcp/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/build/autogen/Paths_lambda_hm.hs
+  ai_agent 1-77
+playground/lambda-hm/.haskell-flows/shim/ghc-shim.sh
+  ai_agent 1-18
+playground/lambda-hm/src/LambdaHM/Infer.hs
+  s_615fea0e7bf9e4::t_348162b0f00d21 120-121
+  s_615fea0e7bf9e4::t_8a193c66d66f59 1-119,122-182
+playground/lambda-hm/dist-newstyle-mcp/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/t/lambda-hm-test/build/lambda-hm-test/autogen/cabal_macros.h
+  ai_agent 1-130
+playground/lambda-hm/src/LambdaHM/Eval.hs
+  s_615fea0e7bf9e4::t_5fb6e009c0c160 1-27,29-110
+  s_615fea0e7bf9e4::t_615064c34b644d 28
+playground/lambda-hm/dist-newstyle-mcp/packagedb/ghc-9.12.2/lambda-hm-0.1.0.0-inplace.conf
+  ai_agent 1-38
+playground/lambda-hm/dist-newstyle-mcp/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/t/lambda-hm-test/build/lambda-hm-test/autogen/PackageInfo_lambda_hm.hs
+  ai_agent 1-25
+playground/lambda-hm/cabal.project
+  ai_agent 1
+playground/lambda-hm/dist-newstyle-mcp/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/build/autogen/PackageInfo_lambda_hm.hs
+  ai_agent 1-25
+playground/lambda-hm/src/LambdaHM/Pretty.hs
+  s_615fea0e7bf9e4::t_64ea823f02e7f3 1-47
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "a144069ac20265b2a956df57583fbd24e4197943",
+  "prompts": {},
+  "sessions": {
+    "s_615fea0e7bf9e4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d1deb60d-22c2-4a43-a37d-715d7870c7d9",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "dlattenero_meli <damian.lattenero@mercadolibre.com>"
+    }
+  }
+}
