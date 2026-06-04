@@ -1,0 +1,40 @@
+CHANGELOG.md
+  s_5ac5babd034a90::t_11cbf0b7779c33 10-76,86,89,92,96
+docs/install.md
+  s_5ac5babd034a90::t_a7410c9ca0d11c 108,111-113,116-118,120
+  s_5ac5babd034a90::t_cad5c56af83ceb 87
+SECURITY.md
+  s_5ac5babd034a90::t_5f58ea97d86fe3 163
+docs/flows.md
+  s_5ac5babd034a90::t_57f0d5948e8e5d 172-202,221-222,226-227
+  s_5ac5babd034a90::t_e0bbba37061383 3
+CONTRIBUTING.md
+  s_5ac5babd034a90::t_d10547950d1f60 121-135
+  s_5ac5babd034a90::t_3cb2f99643c839 48,50-61,63-64
+README.md
+  s_5ac5babd034a90::t_994c9feac75193 88,100
+  s_5ac5babd034a90::t_62d571d32ae0c4 144-145,147
+  s_5ac5babd034a90::t_ca1adee0c3325e 186-187,189-191
+  s_5ac5babd034a90::t_500e9e9ec618d8 213,218-219
+  s_5ac5babd034a90::t_d99ea15d5947d0 52,54-56,59-65,68-84
+  s_5ac5babd034a90::t_c24b0fe1093f43 106-109
+  s_5ac5babd034a90::t_37e56454be3ae2 13-14
+  s_5ac5babd034a90::t_d0b2b1b2a265b1 26
+  s_5ac5babd034a90::t_b0e0abfe88f81c 142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "696b570d8471f5986372d7fe541332478255eee1",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
