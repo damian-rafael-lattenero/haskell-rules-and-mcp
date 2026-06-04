@@ -1,0 +1,76 @@
+playground/lambda-hm/src/Lambda/Arbitrary.hs
+  s_5ac5babd034a90::t_34ff7da88c4166 8-10
+  s_5ac5babd034a90::t_aca5e43efd8e8d 3-7,11-31,62-71
+  s_5ac5babd034a90::t_094bd9073a287b 35-61
+playground/lambda-hm/dist-newstyle-mcp/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/build/autogen/PackageInfo_lambda_hm.hs
+  ai_agent 1-25
+playground/lambda-hm/src/LambdaHm.hs
+  s_5ac5babd034a90::t_c5450206ff7c4b 1-18
+playground/lambda-hm/lambda-hm.cabal
+  ai_agent 1-45
+playground/lambda-hm/src/Lambda/Syntax.hs
+  s_5ac5babd034a90::t_7dc69916f3b732 1-24
+.gitignore
+  ai_agent 51-52
+playground/lambda-hm/src/Lambda/Eval.hs
+  s_5ac5babd034a90::t_78705d725e358f 1-46
+playground/lambda-hm/dist-newstyle-mcp/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/build/autogen/cabal_macros.h
+  ai_agent 1-143
+playground/lambda-hm/cabal.project
+  ai_agent 1
+playground/lambda-hm/.haskell-flows/properties.json
+  ai_agent 1
+playground/lambda-hm/src/Lambda/Infer.hs
+  s_5ac5babd034a90::t_cf9ac2aefe01db 1,12,18,26,29,36,43,48,51,55,62,68,70,73,76,80,86-87,89
+  s_5ac5babd034a90::t_0d5beec2568262 2-11,13-17,19-25,27-28,30-35,37-42,44-47,49-50,52-54,56-61,63-67,69,71-72,74-75,77-79,81-85,88,90-93
+playground/lambda-hm/src/Lambda/Pretty.hs
+  s_5ac5babd034a90::t_69325c473fbdfd 1-17,19-84,87-88,91-92,94,98
+  s_5ac5babd034a90::t_78fea00eed3072 18
+  s_5ac5babd034a90::t_2f41789a4a6715 85-86,89-90,93,95-97
+playground/lambda-hm/.haskell-flows/shim/ghc-shim.sh
+  ai_agent 1-18
+playground/lambda-hm/dist-newstyle-mcp/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/t/lambda-hm-test/build/lambda-hm-test/autogen/PackageInfo_lambda_hm.hs
+  ai_agent 1-25
+playground/lambda-hm/dist-newstyle-mcp/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/t/lambda-hm-test/build/lambda-hm-test/autogen/Paths_lambda_hm.hs
+  ai_agent 1-77
+playground/lambda-hm/dist-newstyle-mcp/packagedb/ghc-9.12.2/lambda-hm-0.1.0.0-inplace.conf
+  ai_agent 1-41
+playground/lambda-hm/dist-newstyle-mcp/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/build/autogen/Paths_lambda_hm.hs
+  ai_agent 1-77
+playground/lambda-hm/src/Lambda/Unify.hs
+  s_5ac5babd034a90::t_ec67b21ef61e5d 1-36
+playground/lambda-hm/src/Lambda/Subst.hs
+  s_5ac5babd034a90::t_3ac4db89a43935 1-76
+playground/lambda-hm/.haskell-flows/session-activity.json
+  ai_agent 1
+playground/lambda-hm/dist-newstyle-mcp/cache/plan.json
+  ai_agent 1
+playground/lambda-hm/dist-newstyle/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/build/autogen/PackageInfo_lambda_hm.hs
+  ai_agent 1-25
+playground/lambda-hm/dist-newstyle/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/build/autogen/Paths_lambda_hm.hs
+  ai_agent 1-77
+playground/lambda-hm/dist-newstyle/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/build/autogen/cabal_macros.h
+  ai_agent 1-143
+playground/lambda-hm/test/Spec.hs
+  ai_agent 1-13
+playground/lambda-hm/dist-newstyle-mcp/build/aarch64-osx/ghc-9.12.2/lambda-hm-0.1.0.0/t/lambda-hm-test/build/lambda-hm-test/autogen/cabal_macros.h
+  ai_agent 1-120
+playground/lambda-hm/dist-newstyle/cache/plan.json
+  ai_agent 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "297c09bb22f725298d874d9e615c595b65c745a8",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "dlattenero_meli <damian.lattenero@mercadolibre.com>"
+    }
+  }
+}
