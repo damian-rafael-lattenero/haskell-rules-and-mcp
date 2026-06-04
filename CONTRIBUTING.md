@@ -45,15 +45,23 @@ workflow end-to-end.
 
 ## Test expectations
 
-Every change must leave `cabal test all` green. Current baseline: 89
-tests on `master`; your PR should add or adjust tests rather than lower
-coverage.
+Every change must leave `cabal test all` green. The test suite has three tiers:
 
-Dogfooding against a fresh scratch project is the highest-signal way to
-validate a new tool or a non-trivial behaviour change. See
+- **Unit tests** (`test/Spec.hs` driver + 80+ domain modules under `test/Spec/`) —
+  700+ pure-logic and in-process tests. Every parser, validator, and tool response
+  shape has a unit test. Add one for any new boundary or invariant.
+- **QuickCheck properties** — `Spec.PathTraversal` fuzzes `mkModulePath`; `Spec.Protocol`
+  fuzzes ADT bijections; per-domain modules add property tests for their invariants.
+- **E2E scenarios** (`test-e2e/`) — 72 scenarios drive the full JSON-RPC surface
+  in-process against a real GHCi session. Add a scenario for any new tool or action.
+
+Your PR should add or adjust tests at the right tier rather than lower overall coverage.
+
+Dogfooding against a fresh scratch project is the highest-signal way to validate a
+new tool or a non-trivial behaviour change. See
 [`docs/dogfood-2026-04-19.md`](docs/dogfood-2026-04-19.md) and
-[`docs/dogfood-2026-04-19-rle.md`](docs/dogfood-2026-04-19-rle.md) for
-the log format (F-## findings, W-## wins as anti-regression markers).
+[`docs/dogfood-2026-05-25-full-audit.md`](docs/dogfood-2026-05-25-full-audit.md)
+for the log format (F-## findings, W-## wins as anti-regression markers).
 
 ---
 
@@ -110,17 +118,21 @@ be reverted and the contributor asked to redo the PR with the trailer.
 If you want to contribute but don't have a specific idea, these are the
 areas I'd most like help with:
 
-- **Cross-platform verification**: the MCP targets darwin-arm64 primarily.
-  Linux + Windows + darwin-x64 need smoke tests against real projects.
-- **Nix flake**: declarative dev shell pinned to the tool versions the
-  MCP expects (`flake.nix` is scaffolded but untested).
-- **More law-suggestion engines**: Monoid laws, Applicative laws,
-  Traversable laws. Add a new `Rule` to
-  `HaskellFlows.Suggest.Rules.allRules` with a unit test covering the
-  match shape and a false-positive counter-example.
-- **HLS integration**: `ghc_hls` is a stub. A real hover / goto /
-  rename implementation via the LSP protocol would close a
-  significant gap against `cross-module precision`.
+- **Cross-platform verification**: the MCP targets `darwin-arm64` primarily.
+  Linux (`linux-x64`) and `darwin-x64` need smoke tests against real projects.
+  Windows is entirely untested.
+- **Nix flake**: `flake.nix` is scaffolded but untested. A working dev shell
+  pinned to the exact GHC + cabal + toolchain versions would make onboarding
+  reproducible.
+- **More law-suggestion engines**: Monoid laws, Applicative laws, Traversable
+  laws. Add a `Rule` to `HaskellFlows.Suggest.Rules.allRules` with a unit test
+  covering the match shape and a false-positive counter-example.
+- **`ghc_scratch` promote end-to-end**: the `action=promote` path uses
+  `ghc_refactor`'s snapshot-and-compile-verify under the hood. More E2E
+  coverage for the multi-module promote case is welcome.
+- **Streaming progress** (#265): `ghc_gate` (which runs `cabal build` + `cabal test`)
+  is the longest-running tool. A streaming `progress` channel that surfaces
+  `[N of M] Compiling Foo` lines would make long builds observable.
 
 ---
 

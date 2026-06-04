@@ -160,7 +160,7 @@ Two external trust decisions are explicit:
    install path is [`ghcup`](https://www.haskell.org/ghcup/), the
    canonical Haskell toolchain manager, which carries its own
    integrity guarantees (signed metadata + per-release checksums).
-   `ghc_toolchain_status` surfaces the resolved path + version of
+   `ghc_toolchain(action="status")` surfaces the resolved path + version of
    every tool so auditors can inspect the chain of trust at runtime.
 2. **GHCi** runs as a local subprocess via `cabal repl
    --build-depends QuickCheck`. Any untrusted Haskell expression you

@@ -84,7 +84,7 @@ and edit paths:
 
 **Claude Code (CLI).** Save the config as `.mcp.json` at your repo
 root; Claude Code auto-discovers it. Verify with `/mcp` in the REPL
-and run `ghc_session(action="status")` to confirm the server is
+and run `ghc_workflow(action="status")` to confirm the server is
 alive.
 
 **Cursor / VS Code MCP extensions.** Config path depends on the
@@ -105,21 +105,21 @@ Code.
 
 ## Verifying the install
 
-Once the client is wired, ask the agent to run:
+Once the client is wired, ask the agent to run the three-step session handshake:
 
 ```
-ghc_toolchain_status
+ghc_workflow(action="status")     -- confirms MCP alive + 36 tools + projectDir
+ghc_toolchain(action="status")    -- inventories ghc / cabal / hlint / fourmolu / hoogle
+ghc_workflow(action="help")       -- state-aware nudges for the current session phase
 ```
 
-That returns a structured inventory of every external binary the
-server can delegate to (ghc, cabal, hlint, fourmolu, ormolu, hoogle,
-hls). Missing tools are reported as `available: false`; install them
-as needed with `cabal install <tool>`.
+`ghc_toolchain(action="status")` returns a structured inventory of every external binary
+the server can delegate to. Missing tools are reported as `available: false`; install them
+with `cabal install <tool>` (or via `ghcup` for `ghc` / `cabal` themselves).
 
-For a deeper smoke test:
+For a quick first load:
 
 ```
-ghc_session(action="status")
 ghc_load(module_path="src/Main.hs")    # replace with a real module
 ```
 

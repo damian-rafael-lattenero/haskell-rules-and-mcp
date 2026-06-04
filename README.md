@@ -10,8 +10,8 @@
 [![Nix flake](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/nix-flake.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/nix-flake.yml)
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
 
-[![MCP tools](https://img.shields.io/badge/MCP%20tools-35-blue?logo=anthropic)](mcp-server-haskell/src/HaskellFlows/Tool)
-[![Unit tests](https://img.shields.io/badge/unit%20tests-680%20passing-brightgreen)](mcp-server-haskell/test/Spec.hs)
+[![MCP tools](https://img.shields.io/badge/MCP%20tools-36-blue?logo=anthropic)](mcp-server-haskell/src/HaskellFlows/Tool)
+[![Unit tests](https://img.shields.io/badge/unit%20tests-700%2B%20passing-brightgreen)](mcp-server-haskell/test/Spec.hs)
 [![E2E scenarios](https://img.shields.io/badge/e2e%20scenarios-72-brightgreen)](mcp-server-haskell/test-e2e/Scenarios)
 [![GHC](https://img.shields.io/badge/GHC-9.10%20%7C%209.12-8a5aa0?logo=haskell)](https://www.haskell.org/ghc/)
 [![Runtime](https://img.shields.io/badge/runtime-in--process%20GHC%20API-orange)](mcp-server-haskell/src/HaskellFlows/Ghc/ApiSession.hs)
@@ -23,7 +23,7 @@
 
 ## ⚡ The 30-second story
 
-Plug into Claude Code, Cursor, or any MCP host. Your agent gets **35 tools** that share **one in-process GHC session** and **one normative response envelope** — every call answers with the same structured shape, every gate is honest, every refactor verifies-or-rolls-back.
+Plug into Claude Code, Cursor, or any MCP host. Your agent gets **36 tools** that share **one in-process GHC session** and **one normative response envelope** — every call answers with the same structured shape, every gate is honest, every refactor verifies-or-rolls-back.
 
 ```text
 ghc_project(create) ─▶ ghc_modules ─▶ ghc_load
@@ -49,21 +49,43 @@ ghc_project(create) ─▶ ghc_modules ─▶ ghc_load
 
 ---
 
-## 💡 The "aha" moment
+## 💡 Two bugs. One session. Zero tests written by hand.
 
-Building a 5-module arithmetic-expression evaluator, a `simplify` annihilation rewrite (`Mul 0 x ⇒ Lit 0`) passed `ghc_quickcheck` 100/100 — but `ghc_quickcheck(runs=5)` caught the bug:
+Building a 5-module arithmetic-expression evaluator, `ghc_suggest` proposed two laws and `ghc_quickcheck` found two real bugs automatically:
+
+**Bug 1 — unsound zero-annihilator (case 245 of 300):**
 
 ```haskell
-Mul (Lit 0) (Var unbound)
-  -- eval . simplify  →  Right 0   (error swallowed)
-  -- eval             →  Left (UnboundVar …)
+-- prop_semanticPreservation: ∀ e env. eval env (simplify e) == eval env e
+
+-- counterexample found:
+e = Mul (Lit 0) (Neg (Mul (Lit 0) (Var "a")))
+
+eval env  e          = Left (UnboundVariable "a")   -- correct
+eval env (simplify e) = Right 0                     -- WRONG: error silently swallowed
 ```
 
-**5 extra seconds of determinism checking is the difference between "passed the tests" and "the property really holds."**
+The rule `0 * x → 0` dropped the right operand without checking it evaluates successfully. Fix: restrict to `Lit 0 * Lit _ → Lit 0` — never discard a subexpression that could fail.
+
+**Bug 2 — parser ambiguity (case 13 of 300):**
+
+```haskell
+-- prop_parsePrettyRoundtrip: ∀ e. parse (pretty e) == Just e
+
+-- counterexample found:
+e = Add (Lit (-8)) (Lit 0)
+
+pretty e = "(-8 + 0)"         -- looks fine
+parse it = Nothing             -- parser read "(-" as start of negation, not negative literal
+```
+
+Fix: change negation syntax from `(-e)` to `(~ e)` — lexically unambiguous with negative integer literals.
+
+**`ghc_suggest` + `ghc_quickcheck` caught what a type-checker alone never could: semantic soundness violations.** These are the properties you forget to write; the MCP finds and runs them automatically.
 
 ---
 
-## 🛠 The tool surface — 35 in 7 phases
+## 🛠 The tool surface — 36 in 7 phases
 
 <div align="center">
 
@@ -75,11 +97,15 @@ Mul (Lit 0) (Var unbound)
 | 🧪 **Property-first** | 4 | `ghc_suggest` · `ghc_quickcheck` · `ghc_property_store` (list/run/export/audit) · `ghc_arbitrary` |
 | 🛡 **Gates** | 7 | `ghc_check_module` · `ghc_check_project` · `ghc_gate` · `ghc_lint` · `ghc_fix_warning` · `ghc_format` · `ghc_coverage` |
 | ✏️ **Refactor** | 1 | `ghc_refactor` — snapshot + compile-verify + rollback |
-| 🧠 **Advanced** | 5 | `ghc_lab` · `ghc_witness` · `ghc_explain_error` · `ghc_perf` · `ghc_batch` |
+| 🧠 **Advanced** | 6 | `ghc_lab` · `ghc_witness` · `ghc_explain_error` · `ghc_perf` · `ghc_batch` · `ghc_scratch` |
 
 </div>
 
 Every response carries a `nextStep` pointer at the most-likely follow-up call, plus an optional multi-step `chain` your agent can `ghc_batch` in one round-trip.
+
+`ghc_scratch` is the LLM's shared whiteboard — hypothesis code that persists between turns, type-checks in isolation, and can be promoted into a real module via `ghc_refactor`'s snapshot-and-compile-verify when the idea is proven.
+
+`ghc_workflow(action=discover)` ranks unused tools by relevance to the current session phase, so your agent doesn't get stuck in its 10 favourite tools. `action=post-mortem` delivers a session retro — what ran, what was missed, what properties are persisted. `action=plan` turns a natural-language goal into a concrete, batchable tool chain.
 
 ---
 
@@ -113,12 +139,12 @@ Point your MCP host at `~/.local/bin/haskell-flows-mcp`. **No rules file needed*
 └──────────────────────────────┬───────────────────────────────────────┘
                                │  newline-delimited JSON-RPC 2.0
 ┌──────────────────────────────┴───────────────────────────────────────┐
-│  Mcp.Server  ·  35-tool dispatch  ·  10-min outer timeout            │
+│  Mcp.Server  ·  36-tool dispatch  ·  10-min outer timeout            │
 │  Mcp.Envelope  ·  status × result × error × warnings × nextStep      │
-│  Mcp.NextStep  ·  per-tool routing (envelope-aware)                  │
-│  Mcp.WorkflowState  ·  history-aware help                            │
+│  Mcp.NextStep  ·  per-tool routing (envelope-aware, failure-path)    │
+│  Mcp.WorkflowState  ·  session memory (ever-called set, call log)    │
 ├──────────────────────────────────────────────────────────────────────┤
-│  Tool handlers  (35 modules, one per tool, all envelope-emitting)    │
+│  Tool handlers  (36 modules, one per tool, all envelope-emitting)    │
 ├──────────────────────────────────────────────────────────────────────┤
 │  Ghc.ApiSession  ·  MVar-guarded HscEnv  ·  evict-on-exception       │
 │   · runGhc · compileExpr · exprType · getInfo                        │
@@ -157,11 +183,12 @@ Point your MCP host at `~/.local/bin/haskell-flows-mcp`. **No rules file needed*
 
 | | |
 |---|---|
-| 🏷 **Release** | `v0.1.0` — first tagged release, experimental but heavily test-covered |
-| 🧪 **Test coverage** | **680** unit-test functions · **72** E2E scenarios driving the full JSON-RPC surface in-process |
+| 🏷 **Release** | `v0.1.0` tagged; `v0.2.0` unreleased on `master` — 36 tools, 47→36 consolidation + `ghc_scratch` + session intelligence |
+| 🧪 **Test coverage** | **700+** unit-test functions across 80+ domain modules · **72** E2E scenarios · QuickCheck property fuzzing on all boundary validators |
 | ✅ **CI matrix** | 4 cells: `{ubuntu-latest, macos-latest} × {GHC 9.10.1, 9.12.2}` |
-| 🛡 **Closed enum** | `ErrorKind` is **26 constructors** — every error path on the wire is enumerable |
-| 📜 **Wire contract** | **#90 closed end-to-end** — single envelope, no dual-shape, structured `status` + nested `error.kind` |
+| 🛡 **Closed enum** | `ErrorKind` is **26 constructors** — every error path on the wire is enumerable; `ToolName` ADT gates all dispatch |
+| 📜 **Wire contract** | **#90 closed** — single envelope, `status` discriminator, structured `error.kind`, `nextStep` on every success (and curated errors) |
+| 🧠 **Session intelligence** | `ghc_workflow(discover)` ranks unused tools by phase · `post-mortem` retros the session · `plan` turns NL goals into batchable chains |
 | 🏗 **Platforms** | `darwin-arm64` ✅ · `linux-x64` ✅ · `darwin-x64` ⚠️ build-from-source · others ❌ untested |
 
 </div>
@@ -183,11 +210,13 @@ Point your MCP host at `~/.local/bin/haskell-flows-mcp`. **No rules file needed*
 |---|---|
 | 📘 **Tool reference (PDF)** | [`docs/haskell-flows-mcp.pdf`](docs/haskell-flows-mcp.pdf) |
 | 🧭 **Flow diagrams** | [`docs/flows.md`](docs/flows.md) |
+| 🗂 **Tool taxonomy** | [`docs/TOOL_TAXONOMY.md`](docs/TOOL_TAXONOMY.md) |
 | 🚀 **Install guide** | [`docs/install.md`](docs/install.md) |
 | 📝 **Changelog** | [CHANGELOG.md](CHANGELOG.md) |
 | 🤝 **Contributing** | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | 🛡 **Security** | [SECURITY.md](SECURITY.md) |
-| 🗂 **Dogfood logs** | [`docs/dogfood-2026-04-19.md`](docs/dogfood-2026-04-19.md) |
+| 🗒 **Dogfood — first session** | [`docs/dogfood-2026-04-19.md`](docs/dogfood-2026-04-19.md) |
+| 🗒 **Dogfood — full audit** | [`docs/dogfood-2026-05-25-full-audit.md`](docs/dogfood-2026-05-25-full-audit.md) |
 
 ---
 

@@ -7,9 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The headline of `0.2.0` (planned) is **a smaller, more orthogonal tool
-surface**: 47 wire surfaces collapsed to 31 via six action-discriminated
-primitives. Every action that existed in 0.1.0 still exists; the verb
+Post-`0.2.0` additions on `master`. The headline is **session intelligence** —
+the MCP now has memory of what's been called, can rank the 26 tools the agent
+hasn't discovered yet, deliver a session retrospective, and turn natural-language
+goals into concrete, batchable tool chains.
+
+### Added
+
+- **`ghc_scratch` — persistent LLM code canvas** (#253). Write a Haskell hypothesis
+  under an id (`action=write`); type-check it in isolation (`action=check`); inspect
+  or list all hypotheses (`action=show` / `action=list`); promote a verified snippet
+  directly into a target module via `ghc_refactor`'s snapshot-and-compile-verify
+  (`action=promote`). Survives across tool calls; visible to the user at any time.
+
+- **`ghc_workflow(action=discover)`** (#263). Ranks tools the agent hasn't called yet,
+  scored by `category × phase_relevance × recency`, top-5 with a `why_now` note
+  referencing current session state. Directly addresses the "26 invisible tools" problem.
+
+- **`ghc_workflow(action=post-mortem)`** (#266). End-of-session retrospective: call
+  counts, duration histogram, `missed_opportunities` based on patterns in the call log
+  (e.g. "used `ghc_quickcheck` but never `ghc_witness` to check input distribution").
+  Results persist to `.haskell-flows/` for cross-session review.
+
+- **`ghc_workflow(action=plan)`** (#264). Converts a natural-language development goal
+  into a concrete, ordered list of tool calls ready to pass to `ghc_batch` — no
+  placeholders. Fifteen built-in templates cover the most common workflows; matcher is
+  deterministic (no LLM call inside the MCP).
+
+- **Failure-path routing in `nextStep`** (A5). For curated GHC error kinds
+  (`compile_error`, `type_error`, `not_in_scope`), a failed tool call now emits a
+  `nextStep` pointing at `ghc_explain_error` with the diagnostic pre-filled. Previously,
+  only successful calls got a `nextStep` hint.
+
+- **Concrete `nextStep` chains** (A4). The `chain` field in `nextStep` now resolves
+  placeholders from session state (entry module, last-loaded module, last-declared type).
+  Chains are genuinely `ghc_batch`-ready without editing.
+
+- **`WorkflowState` session memory** (#257). `wsEverCalled :: Set ToolName` accumulates
+  all tools called this session (distinct from the capped 20-item recency history).
+  `wsCallLog` is a FIFO-200 of `{tool, ok, durationMs, ts}` entries. Powers
+  `discover` / `post-mortem` and is exposed in `ghc_workflow(status)` as `session_activity`.
+
+- **Test suite domain split** (#271). `test/Spec.hs` (was 18 k lines in one file) is now
+  a thin driver importing 80+ domain modules under `test/Spec/`. Each domain is a separate
+  file following the function-export shape; the driver just imports and calls them.
+  Total coverage unchanged; navigation and compile times improved.
+
+### Fixed
+
+- **`ghc_scratch(action=check)` rejected bare imports** (#276). Module-level `import`
+  declarations are now wrapped in a temp module skeleton before type-checking.
+- **`ghc_quickcheck` crashed on large `runs` values** (#281). The 30 s per-call budget
+  is now enforced even when `runs` is very high; partial results are reported instead
+  of an unhandled exception.
+- **`ghc_load` gave opaque error for test-stanza modules** (#278). The error now names
+  the stanza and suggests `stanza="test-suite"` explicitly.
+- **`ghc_workflow(post-mortem)` run count was always 0** (#283). `wsCallLog` now
+  increments a per-tool run counter that `post-mortem` reads.
+- **Failure-path `nextStep` omitted `module_path`** (#282). The A5 route now threads
+  `module_path` from the originating call into the `ghc_explain_error` hint args.
+
+---
+
+## [0.2.0] — unreleased on `master`
+
+The headline is **a smaller, more orthogonal tool surface**: 47 wire surfaces
+consolidated to 35 via six action-discriminated primitives (`ghc_scratch` then
+brought the total to 36). Every action that existed in 0.1.0 still exists; the verb
 moved into an `action` field instead of a separate tool name.
 
 ### Changed (BREAKING — wire surface consolidation, issue #94)
@@ -19,20 +83,17 @@ project — no deprecation period). Migrate by inlining the verb into an
 `action` field on the consolidated tool. Behaviour is byte-identical: the
 new tool's dispatcher forwards to the same handler.
 
-| Before (0.1.0)                                                                | After (`0.2.0`)                                                                  | Issue        |
+| Before (0.1.0)                                                                | After (0.2.0)                                                                    | Issue        |
 |-------------------------------------------------------------------------------|----------------------------------------------------------------------------------|--------------|
 | `ghc_add_modules` + `ghc_remove_modules`                                      | `ghc_modules { action: "add" \| "remove" }`                                      | #94 Phase B  |
-| `ghc_deps_explain`                                                            | `ghc_deps { action: "explain", cabal_output }`                                   | #94 Phase C₁ |
+| `ghc_deps_explain`                                                            | `ghc_deps { action: "explain" }`                                                 | #94 Phase C₁ |
 | `ghc_toolchain_status` + `ghc_toolchain_warmup`                               | `ghc_toolchain { action: "status" \| "warmup" }` (defaults to status)            | #94 Phase C₂ |
 | `ghc_determinism`                                                             | `ghc_quickcheck { runs: N }` — pass `runs >= 2` for flakiness detection          | #94 Phase C₃ |
-| `ghc_move`                                                                    | `ghc_refactor { action: "move_symbol", from, to, symbol }`                       | #94 Phase C₄ |
+| `ghc_move`                                                                    | `ghc_refactor { action: "move_symbol" }`                                         | #94 Phase C₄ |
 | `ghc_create_project` + `ghc_switch_project` + `ghc_validate_cabal` + `ghc_bootstrap` | `ghc_project { action: "create" \| "switch" \| "validate" \| "bootstrap" }` | #94 Phase C₅ |
 | `ghc_property_lifecycle` + `ghc_regression` + `ghc_quickcheck_export` + `ghc_property_audit` | `ghc_property_store { action: "list" \| "run" \| "export" \| "audit" }` | #94 Phase C₆ |
 
-Tool count: **47 → 31** (16 fewer wire surfaces, six new
-action-discriminated primitives). Concept count drops from ~38 to ~22 —
-the agent now memorises one tool per verb-cluster rather than four.
-
+Tool count: **47 → 35** (via consolidation) **→ 36** (after `ghc_scratch` added in #253).
 The four-category taxonomy in `docs/TOOL_TAXONOMY.md`
 (Primitive / Composite / Gate / Control-plane) is now CI-enforced via
 `testCategoryCountsMatchTaxonomy` so future drift between the taxonomy

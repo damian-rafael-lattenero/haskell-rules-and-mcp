@@ -1,6 +1,6 @@
 # MCP Flow Diagrams
 
-Visual map of the four most important flows across the 36 tools shipped
+Visual map of the five most important flows across the 36 tools shipped
 to date. GitHub renders the Mermaid blocks inline — no tooling
 needed to read this file.
 
@@ -169,6 +169,37 @@ stateDiagram-v2
 
 ---
 
+## 5. Session intelligence loop
+
+`ghc_workflow` has three orientation sub-commands that together prevent agents from
+getting stuck in their 10 favourite tools:
+
+```mermaid
+flowchart TD
+    start([Agent begins session]) --> status[ghc_workflow\naction=status]
+    status --> help[ghc_workflow\naction=help]
+    help --> work((dev loop\nflows 1–4))
+
+    work --> discover[ghc_workflow\naction=discover]
+    discover --> ranked[Top-5 unused tools\nranked by phase relevance]
+    ranked --> branch{agent uses\na new tool?}
+    branch -->|yes| work
+    branch -->|no, done| postmortem[ghc_workflow\naction=post-mortem]
+
+    postmortem --> retro[Stats + missed opportunities\n+ persisted properties]
+    retro --> done([Session complete])
+
+    style discover fill:#fcf,stroke:#939
+    style postmortem fill:#fd9,stroke:#a73
+    style done fill:#9f9,stroke:#383,stroke-width:2px
+```
+
+`action=plan` converts a natural-language goal into a concrete, `ghc_batch`-ready chain:
+the agent describes what it wants in English and gets back an ordered list of tool calls
+it can inspect and execute in one round-trip.
+
+---
+
 ## Tool coverage
 
 | Tool                   | Appears in |
@@ -187,7 +218,10 @@ stateDiagram-v2
 | `ghc_property_store`  | 2          |
 | `ghc_coverage`        | 2          |
 | `ghc_refactor`        | 3          |
+| `ghc_workflow`        | 5          |
+| `ghc_scratch`         | 5 (design-first canvas, promote into flow 2) |
 
 Not shown because they're auxiliary / meta tools that don't anchor a
 distinct flow: `ghc_eval`, `ghc_complete`, `ghc_goto`, `ghc_format`,
-`ghc_workflow`.
+`ghc_suggest`, `ghc_lab`, `ghc_witness`, `ghc_explain_error`,
+`ghc_perf`, `ghc_batch`.
