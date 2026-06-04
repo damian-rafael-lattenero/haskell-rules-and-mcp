@@ -1,0 +1,45 @@
+cabal-version:      3.0
+name:               lambda-hm
+version:            0.1.0.0
+synopsis:           (describe here)
+category:           Development
+maintainer:         you@example.com
+description:        TODO: describe lambda-hm in one line.
+license:            BSD-3-Clause
+build-type:         Simple
+
+common shared
+    default-language:   GHC2024
+    ghc-options:        -Wall -Wcompat -Widentities
+                        -Wincomplete-record-updates
+                        -Wincomplete-uni-patterns
+                        -Wpartial-fields
+                        -Wredundant-constraints
+                        -Wunused-packages
+    default-extensions: OverloadedStrings
+                        DerivingStrategies
+                        LambdaCase
+
+library
+    import:           shared
+    hs-source-dirs:   src
+    exposed-modules:  LambdaHm
+                      Lambda.Syntax
+                      Lambda.Subst
+                      Lambda.Unify
+                      Lambda.Infer
+                      Lambda.Pretty
+                      Lambda.Eval
+                      Lambda.Arbitrary
+    build-depends:    base >= 4.20 && < 5
+                    , containers
+                    , QuickCheck
+                    , mtl
+
+test-suite lambda-hm-test
+    import:           shared
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Spec.hs
+    build-depends:    base >= 4.20 && < 5
+                    , lambda-hm

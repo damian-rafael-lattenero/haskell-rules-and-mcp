@@ -48,3 +48,5 @@ playground/*/
 # (samples vary with hardware); the nightly CI workflow uploads it
 # as an artifact, but we never commit it.
 **/bench-results.json
+!playground/lambda-hm/
+!playground/lambda-hm/**
