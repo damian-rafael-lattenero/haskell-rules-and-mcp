@@ -1,0 +1,33 @@
+playground/arithmetic-expr/src/Expr/Eval.hs
+  s_5ac5babd034a90::t_bd83903df8e1d4 1-4,8-15,17-21
+  s_5ac5babd034a90::t_5baa554771602c 6-7,16
+playground/arithmetic-expr/src/ArithmeticExpr.hs
+  s_5ac5babd034a90::t_7fa6c9d4d573f4 1-13
+playground/arithmetic-expr/src/Expr/Simplify.hs
+  s_5ac5babd034a90::t_571a771f233d71 3,5-6,8-12,34-37,40-43,45-50
+  s_5ac5babd034a90::t_d1eb7d148fb95f 1-2,4,7,13-33,38-39,44,51-56
+playground/arithmetic-expr/src/Expr/Pretty.hs
+  s_5ac5babd034a90::t_cc1c17f72e007a 16,32,42,50-52,54-57,59,62-68,70-84,86-98
+  s_5ac5babd034a90::t_0039e131ffad48 1-2,11-14,17-19,21-24,28-31,33-34,36,38,41,43-46,48-49
+  s_5ac5babd034a90::t_8d624fda84307d 3-10,20,25-27,35,37,39-40,47,53,58,60-61,69,85
+playground/arithmetic-expr/src/Expr/Syntax.hs
+  s_5ac5babd034a90::t_d09f986ab8823f 1-26
+playground/arithmetic-expr/src/Expr/Arbitrary.hs
+  s_5ac5babd034a90::t_61997e53a92be4 7-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "91b3d99de250ed73a1225bc4a06f9949e7429031",
+  "prompts": {},
+  "sessions": {
+    "s_5ac5babd034a90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10ab9eec-96d5-4af5-a727-6e0ea277acb4",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "dlattenero_meli <damian.lattenero@mercadolibre.com>"
+    }
+  }
+}
