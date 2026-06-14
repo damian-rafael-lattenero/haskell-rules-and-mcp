@@ -15,26 +15,15 @@ module HaskellFlows.Tool.Format
   , FormatArgs (..)
   ) where
 
-import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 import System.Directory (doesFileExist, findExecutable)
 import System.Exit (ExitCode (..))
-import System.IO (hClose, hGetContents)
-import System.Process
-  ( CreateProcess (..)
-  , StdStream (..)
-  , createProcess
-  , proc
-  , terminateProcess
-  , waitForProcess
-  )
-import System.Timeout (timeout)
 
-import HaskellFlows.Config (Limits, formatTimeout, unMicros)
+import HaskellFlows.Config (Limits, formatTimeout)
+import HaskellFlows.Util.Process (SubprocessOutcome (..), SubprocessResult (..), runArgv)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -183,31 +172,14 @@ runFormatter lim pd f mp write = do
   -- directly; --mode inplace rewrites in place, --mode stdout returns
   -- the formatted text without touching disk.
   let mode = if write then "inplace" else "stdout"
-      args = ["--mode", mode, unModulePath mp]
-      cp   = (proc (T.unpack (fName f)) args)
-               { cwd     = Just (unProjectDir pd)
-               , std_in  = NoStream
-               , std_out = CreatePipe
-               , std_err = CreatePipe
-               }
-  (_, Just hOut, Just hErr, ph) <- createProcess cp
-  outVar <- newEmptyMVar
-  errVar <- newEmptyMVar
-  _ <- forkIO (hGetContents hOut >>= putMVar outVar)
-  _ <- forkIO (hGetContents hErr >>= putMVar errVar)
-  exited <- timeout (unMicros (formatTimeout lim)) (waitForProcess ph)
-  case exited of
-    Nothing -> do
-      terminateProcess ph
-      hClose hOut
-      hClose hErr
-      pure FmtTimeout
-    Just ExitSuccess -> do
-      o <- takeMVar outVar
-      pure (FmtOk (T.pack o))
-    Just (ExitFailure code) -> do
-      e <- takeMVar errVar
-      pure (FmtFailure code (T.pack e))
+      fargs = ["--mode", mode, unModulePath mp]
+  outcome <- runArgv (formatTimeout lim) (Just (unProjectDir pd))
+               (T.unpack (fName f)) fargs
+  pure $ case outcome of
+    TimedOut    -> FmtTimeout
+    Completed r -> case srExit r of
+      ExitSuccess   -> FmtOk (srStdout r)
+      ExitFailure c -> FmtFailure c (srStderr r)
 
 --------------------------------------------------------------------------------
 -- response shaping

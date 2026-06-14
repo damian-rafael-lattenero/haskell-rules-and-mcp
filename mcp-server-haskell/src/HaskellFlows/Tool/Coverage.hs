@@ -19,7 +19,6 @@ module HaskellFlows.Tool.Coverage
   ) where
 
 import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Monad (void)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
@@ -30,16 +29,17 @@ import HaskellFlows.Mcp.ParseError (formatParseError)
 import System.Directory (findExecutable)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
-import System.IO (hClose, hGetContents)
+import System.IO (hGetContents)
 import System.Process
   ( CreateProcess (..)
   , StdStream (..)
   , createProcess
   , proc
-  , terminateProcess
   , waitForProcess
   )
-import System.Timeout (timeout)
+
+import HaskellFlows.Config (Micros (..))
+import HaskellFlows.Util.Process (SubprocessOutcome (..), SubprocessResult (..), runArgv)
 
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -144,39 +144,23 @@ data CovOutcome
 
 runCoverage :: Int -> ProjectDir -> IO CovOutcome
 runCoverage timeoutMicros pd = do
-  let cp = (proc "cabal" ["test", "--enable-coverage"])
-             { cwd     = Just (unProjectDir pd)
-             , std_in  = NoStream
-             , std_out = CreatePipe
-             , std_err = CreatePipe
-             }
-  (_, Just hOut, Just hErr, ph) <- createProcess cp
-  outVar <- newEmptyMVar
-  errVar <- newEmptyMVar
-  _ <- forkIO (hGetContents hOut >>= putMVar outVar)
-  _ <- forkIO (hGetContents hErr >>= putMVar errVar)
-  exited <- timeout timeoutMicros (waitForProcess ph)
-  case exited of
-    Nothing -> do
-      terminateProcess ph
-      hClose hOut
-      hClose hErr
-      pure CovTimeout
-    Just ExitSuccess -> do
-      o <- takeMVar outVar
-      -- Modern cabal + HPC only write HTML to disk; the stdout that
-      -- used to carry the "NN% expressions used (X/Y)" summary lines
-      -- is now just a list of "Writing: …html" paths. Post-process by
-      -- locating the .tix and mix dir produced by the coverage run
-      -- and asking `hpc report` for the text summary. If anything in
-      -- the post-processing chain fails we fall back to the raw
-      -- cabal output — the parser will just emit "no metrics" as
-      -- before, with no regression risk.
-      enriched <- enrichWithHpcReport pd (T.pack o)
-      pure (CovSuccess enriched)
-    Just (ExitFailure code) -> do
-      e <- takeMVar errVar
-      pure (CovFailure code (T.pack e))
+  outcome <- runArgv (Micros timeoutMicros) (Just (unProjectDir pd))
+               "cabal" ["test", "--enable-coverage"]
+  case outcome of
+    TimedOut    -> pure CovTimeout
+    Completed r -> case srExit r of
+      ExitSuccess -> do
+        -- Modern cabal + HPC only write HTML to disk; the stdout that
+        -- used to carry the "NN% expressions used (X/Y)" summary lines
+        -- is now just a list of "Writing: …html" paths. Post-process by
+        -- locating the .tix and mix dir produced by the coverage run
+        -- and asking `hpc report` for the text summary. If anything in
+        -- the post-processing chain fails we fall back to the raw
+        -- cabal output — the parser will just emit "no metrics" as
+        -- before, with no regression risk.
+        enriched <- enrichWithHpcReport pd (srStdout r)
+        pure (CovSuccess enriched)
+      ExitFailure code -> pure (CovFailure code (srStderr r))
 
 -- | Look for the .tix file cabal produced, then ask `hpc report` for
 -- the text summary. Append the result to the cabal stdout so

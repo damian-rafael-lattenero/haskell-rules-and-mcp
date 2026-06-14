@@ -439,6 +439,11 @@ import Spec.RegistryUnit
   , testToolCategoryTotalOverToolName
   , testToolCategoryAgreesWithToolName
   )
+import Spec.ProcessUnit
+  ( testRunArgvCompletes
+  , testRunArgvTimeout
+  , testRunArgvNonZeroExit
+  )
 
 main :: IO ()
 main = do
@@ -1913,6 +1918,10 @@ main = do
       , test "#286: Registry.allBudgets keys agree with Budget.allBudgets" testRegistryBudgetKeysAgree
       , test "#286: toolCategory is total over every ToolName"             testToolCategoryTotalOverToolName
       , test "#286: Registry.toolCategory agrees with ToolName.toolCategory" testToolCategoryAgreesWithToolName
+      -- Issue #288 — shared runArgv subprocess combinator
+      , test "#288: runArgv completes — echo exits 0 with expected stdout" testRunArgvCompletes
+      , test "#288: runArgv timeout — sleep 5 killed within 100ms budget"  testRunArgvTimeout
+      , test "#288: runArgv non-zero — false exits with ExitFailure"       testRunArgvNonZeroExit
       ]
       ++ scratchTests
   if and results then exitSuccess else exitFailure

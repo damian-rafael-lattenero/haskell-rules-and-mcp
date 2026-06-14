@@ -30,8 +30,6 @@ module HaskellFlows.Tool.Hoogle
   , splitModule
   ) where
 
-import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.List (nubBy, unsnoc)
@@ -40,18 +38,9 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import System.Directory (findExecutable)
 import System.Exit (ExitCode (..))
-import System.IO (hClose, hGetContents)
-import System.Process
-  ( CreateProcess (..)
-  , StdStream (..)
-  , createProcess
-  , proc
-  , terminateProcess
-  , waitForProcess
-  )
-import System.Timeout (timeout)
 
-import HaskellFlows.Config (Limits, hoogleTimeout, unMicros)
+import HaskellFlows.Config (Limits, hoogleTimeout)
+import HaskellFlows.Util.Process (SubprocessOutcome (..), SubprocessResult (..), runArgv)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -191,34 +180,13 @@ data HoogleOutcome
 -- stdout. Argv-form only; the query is passed as a single argument.
 runHoogle :: Limits -> Text -> Int -> IO HoogleOutcome
 runHoogle lim q limit = do
-  let cp = (proc "hoogle"
-              [ "--count=" <> show limit
-              , T.unpack q
-              ])
-             { std_in  = NoStream
-             , std_out = CreatePipe
-             , std_err = CreatePipe
-             }
-  (_, Just hOut, Just hErr, ph) <- createProcess cp
-  -- Pull the streams on worker threads so a slow child doesn't block
-  -- the waiter. We want hard-cap both the wall time AND the bytes.
-  outVar <- newEmptyMVar
-  errVar <- newEmptyMVar
-  _ <- forkIO (hGetContents hOut >>= \s -> putMVar outVar s)
-  _ <- forkIO (hGetContents hErr >>= \s -> putMVar errVar s)
-  exited <- timeout (unMicros (hoogleTimeout lim)) (waitForProcess ph)
-  case exited of
-    Nothing -> do
-      terminateProcess ph
-      hClose hOut
-      hClose hErr
-      pure HoTimeout
-    Just ExitSuccess -> do
-      out <- takeMVar outVar
-      pure (HoSuccess (parseHoogleOutput (T.pack out)))
-    Just (ExitFailure code) -> do
-      err <- takeMVar errVar
-      pure (HoFailure code (T.pack err))
+  outcome <- runArgv (hoogleTimeout lim) Nothing "hoogle"
+               ["--count=" <> show limit, T.unpack q]
+  pure $ case outcome of
+    TimedOut    -> HoTimeout
+    Completed r -> case srExit r of
+      ExitSuccess   -> HoSuccess (parseHoogleOutput (srStdout r))
+      ExitFailure c -> HoFailure c (srStderr r)
 
 --------------------------------------------------------------------------------
 -- plain-text hoogle output parser

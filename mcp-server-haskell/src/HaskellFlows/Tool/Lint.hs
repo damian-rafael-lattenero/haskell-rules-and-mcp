@@ -27,8 +27,6 @@ module HaskellFlows.Tool.Lint
   , stripProjectDirPrefix
   ) where
 
-import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Maybe (fromMaybe)
@@ -48,18 +46,9 @@ import System.FilePath
   , splitDirectories
   , (</>)
   )
-import System.IO (hClose, hGetContents)
-import System.Process
-  ( CreateProcess (..)
-  , StdStream (..)
-  , createProcess
-  , proc
-  , terminateProcess
-  , waitForProcess
-  )
-import System.Timeout (timeout)
 
-import HaskellFlows.Config (Limits, hlintTimeout, unMicros)
+import HaskellFlows.Config (Limits, hlintTimeout)
+import HaskellFlows.Util.Process (SubprocessOutcome (..), SubprocessResult (..), runArgv)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Tool.Env (ToolEnv (..))
@@ -229,12 +218,6 @@ data HlintOutcome
 
 runHlint :: Limits -> ProjectDir -> FilePath -> IO HlintOutcome
 runHlint lim pd target = do
-  let cp = (proc "hlint" ["--json", target])
-             { cwd     = Just (unProjectDir pd)
-             , std_in  = NoStream
-             , std_out = CreatePipe
-             , std_err = CreatePipe
-             }
   -- Pre-flight: hlint on a missing target prints an opaque error.
   -- Check existence up front for a cleaner message.
   existsDir  <- doesDirectoryExist target
@@ -242,25 +225,14 @@ runHlint lim pd target = do
   if not (existsDir || existsFile)
     then pure HlMissingTarget
     else do
-      (_, Just hOut, Just hErr, ph) <- createProcess cp
-      outVar <- newEmptyMVar
-      errVar <- newEmptyMVar
-      _ <- forkIO (hGetContents hOut >>= putMVar outVar)
-      _ <- forkIO (hGetContents hErr >>= putMVar errVar)
-      exited <- timeout (unMicros (hlintTimeout lim)) (waitForProcess ph)
-      case exited of
-        Nothing -> do
-          terminateProcess ph
-          hClose hOut
-          hClose hErr
-          pure HlTimeout
-        Just _ -> do
+      outcome <- runArgv (hlintTimeout lim) (Just (unProjectDir pd)) "hlint" ["--json", target]
+      pure $ case outcome of
+        TimedOut    -> HlTimeout
+        Completed r ->
           -- hlint exits 1 when it finds hints (not an error for us).
-          o <- takeMVar outVar
-          e <- takeMVar errVar
-          if null o && not (null e)
-            then pure (HlFailure 1 (T.pack e))
-            else pure (HlOk (T.pack o))
+          if T.null (srStdout r) && not (T.null (srStderr r))
+            then HlFailure 1 (srStderr r)
+            else HlOk (srStdout r)
 
 --------------------------------------------------------------------------------
 -- parser

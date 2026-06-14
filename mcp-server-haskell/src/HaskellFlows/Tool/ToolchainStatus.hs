@@ -27,27 +27,15 @@ module HaskellFlows.Tool.ToolchainStatus
   , optionalBinaryNames
   ) where
 
-import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
-import Control.Monad (void)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 import System.Directory (findExecutable)
 import System.Exit (ExitCode (..))
-import System.IO (hClose, hGetContents)
-import System.Process
-  ( CreateProcess (..)
-  , StdStream (..)
-  , createProcess
-  , proc
-  , terminateProcess
-  , waitForProcess
-  )
-import System.Timeout (timeout)
 
-import HaskellFlows.Config (Limits, versionTimeout, unMicros)
+import HaskellFlows.Config (Limits, versionTimeout)
+import HaskellFlows.Util.Process (SubprocessOutcome (..), SubprocessResult (..), runArgv)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 
@@ -128,27 +116,12 @@ probeOne lim (name, verFlag, category) = do
 -- available, we just didn't manage to extract a version string.
 getVersion :: Limits -> FilePath -> String -> IO (Maybe Text)
 getVersion lim bin verFlag = do
-  let cp = (proc bin [verFlag])
-             { std_in  = NoStream
-             , std_out = CreatePipe
-             , std_err = CreatePipe
-             }
-  (_, Just hOut, Just hErr, ph) <- createProcess cp
-  outVar <- newEmptyMVar
-  _ <- forkIO (hGetContents hOut >>= putMVar outVar)
-  _ <- forkIO (void (hGetContents hErr))
-  exited <- timeout (unMicros (versionTimeout lim)) (waitForProcess ph)
-  case exited of
-    Nothing -> do
-      terminateProcess ph
-      hClose hOut
-      hClose hErr
-      pure Nothing
-    Just ExitSuccess -> do
-      o <- takeMVar outVar
-      pure (firstLine (T.pack o))
-    Just _ ->
-      pure Nothing
+  outcome <- runArgv (versionTimeout lim) Nothing bin [verFlag]
+  pure $ case outcome of
+    TimedOut    -> Nothing
+    Completed r -> case srExit r of
+      ExitSuccess -> firstLine (srStdout r)
+      _           -> Nothing
 
 firstLine :: Text -> Maybe Text
 firstLine t = case T.lines (T.strip t) of

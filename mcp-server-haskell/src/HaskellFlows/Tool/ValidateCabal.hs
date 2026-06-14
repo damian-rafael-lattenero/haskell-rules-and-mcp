@@ -22,8 +22,6 @@ module HaskellFlows.Tool.ValidateCabal
   , renderResult
   ) where
 
-import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
@@ -35,18 +33,9 @@ import qualified Data.Text.IO as TIO
 import System.Directory (doesDirectoryExist, doesFileExist, findExecutable, listDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeExtension, (</>))
-import System.IO (hClose, hGetContents)
-import System.Process
-  ( CreateProcess (..)
-  , StdStream (..)
-  , createProcess
-  , proc
-  , terminateProcess
-  , waitForProcess
-  )
-import System.Timeout (timeout)
 
-import HaskellFlows.Config (Limits, cabalCheckTimeout, unMicros)
+import HaskellFlows.Config (Limits, cabalCheckTimeout)
+import HaskellFlows.Util.Process (SubprocessOutcome (..), SubprocessResult (..), runArgv)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Types (ProjectDir, unProjectDir)
@@ -352,26 +341,14 @@ runCabalCheck lim pd = do
       [ Issue CabalSevWarn "cabal-unavailable"
           "cabal binary not on PATH; skipped 'cabal check'" ]
     Just _ -> do
-      let cp = (proc "cabal" ["check"])
-                 { cwd = Just (unProjectDir pd)
-                 , std_in = NoStream, std_out = CreatePipe, std_err = CreatePipe }
-      (_, Just hOut, Just hErr, ph) <- createProcess cp
-      outVar <- newEmptyMVar
-      errVar <- newEmptyMVar
-      _ <- forkIO (hGetContents hOut >>= putMVar outVar)
-      _ <- forkIO (hGetContents hErr >>= putMVar errVar)
-      exited <- timeout (unMicros (cabalCheckTimeout lim)) (waitForProcess ph)
-      case exited of
-        Nothing -> do
-          terminateProcess ph
-          hClose hOut >> hClose hErr
+      outcome <- runArgv (cabalCheckTimeout lim) (Just (unProjectDir pd)) "cabal" ["check"]
+      case outcome of
+        TimedOut ->
           pure [ Issue CabalSevError "cabal-check-timeout"
                    "cabal check did not finish within 30s" ]
-        Just code -> do
-          o <- takeMVar outVar
-          e <- takeMVar errVar
-          let sev = case code of { ExitSuccess -> CabalSevWarn; _ -> CabalSevError }
-              combined = T.strip (T.pack (o <> e))
+        Completed r -> do
+          let sev = case srExit r of { ExitSuccess -> CabalSevWarn; _ -> CabalSevError }
+              combined = T.strip (srStdout r <> srStderr r)
               -- Issue #69: 'cabal check' emits a positive
               -- confirmation line on success — "No errors or
               -- warnings could be found in the package." Wrapping
