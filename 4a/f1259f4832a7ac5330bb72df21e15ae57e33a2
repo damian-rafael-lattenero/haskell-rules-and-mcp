@@ -1,0 +1,65 @@
+mcp-server-haskell/test/Spec/WorkflowTool.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 56
+mcp-server-haskell/test/Spec/InfoHoogle.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 37,53,118,136
+mcp-server-haskell/test/Spec/HoleTool.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 29,42
+mcp-server-haskell/test/Spec/TaxonomyUnit.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 64,212
+mcp-server-haskell/test/Spec/Load.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 30,119
+mcp-server-haskell/test/Spec/Complete.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 36,76
+mcp-server-haskell/test/Spec/AddImportUnit.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 37,55
+mcp-server-haskell/test/Spec/Browse.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 31,50
+mcp-server-haskell/test/Spec/TypeEval.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 38,53,131
+mcp-server-haskell/test/Spec/Bootstrap.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 30,147
+mcp-server-haskell/test/Spec/Doc.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 29,52
+mcp-server-haskell/test/Spec/FixWarningUnit.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 55,180,268
+mcp-server-haskell/test/Spec/ApplyExports.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 35,98,115,132,149,169
+mcp-server-haskell/test/Spec/Goto.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 33,53
+mcp-server-haskell/test/Spec/GateUnit.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 47,248
+mcp-server-haskell/test/Spec/TraversalGuards.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 38,60,74,86,101,118,129,143,161,178
+mcp-server-haskell/test/Spec/Batch.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 86
+mcp-server-haskell/test/Spec/Scratch.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 176,194,209-210,220,234,246,266,284,299,311,333,338,373,378,412,417,492,498,504,532,548,550,566,582,588,681,691
+mcp-server-haskell/test/Spec/HandleApplyRemove.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 32,107,129
+mcp-server-haskell/test/Spec/Format.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 22,32,49
+mcp-server-haskell/test/Spec/RefactorTool.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 39,225,249
+mcp-server-haskell/test/Spec/ValidateCabal.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 27,41,158
+mcp-server-haskell/test/Spec/Toolchain.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 22,35,47
+mcp-server-haskell/test/Spec/ServerUnit.hs
+  s_d23a82140bf8e8::t_e57bb9c31bcea5 116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "4af1259f4832a7ac5330bb72df21e15ae57e33a2",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "dlattenero_meli <damian.lattenero@mercadolibre.com>"
+    }
+  }
+}
