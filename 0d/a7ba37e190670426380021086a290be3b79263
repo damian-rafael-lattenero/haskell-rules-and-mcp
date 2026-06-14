@@ -1,0 +1,28 @@
+mcp-server-haskell/test/Spec.hs
+  s_d23a82140bf8e8::t_3d9bf0ab289954 680
+mcp-server-haskell/test/Spec/DepsUnit.hs
+  s_d23a82140bf8e8::t_1546940b6f4350 14,17,21-23
+  s_d23a82140bf8e8::t_d76314d79c64a0 91-100
+mcp-server-haskell/src/HaskellFlows/Tool/Deps.hs
+  s_d23a82140bf8e8::t_83f927371cb400 205
+  s_d23a82140bf8e8::t_95167a6f2976fb 256-261
+  s_d23a82140bf8e8::t_75cc938cc4e1a5 227-231
+  s_d23a82140bf8e8::t_4ccdcd6f89c918 271-288
+  s_d23a82140bf8e8::t_3777e0b8728359 332-333
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "0da7ba37e190670426380021086a290be3b79263",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "dlattenero_meli <damian.lattenero@mercadolibre.com>"
+    }
+  }
+}
