@@ -1,0 +1,44 @@
+mcp-server-haskell/src/HaskellFlows/Tool/ValidateCabal.hs
+  s_d23a82140bf8e8::t_9de9cfa9686ab0 344-346,349-351
+  s_d23a82140bf8e8::t_50b1b6be528827 37-38
+mcp-server-haskell/test/Spec/ProcessUnit.hs
+  s_d23a82140bf8e8::t_b33030246d4617 1-50
+mcp-server-haskell/src/HaskellFlows/Tool/Format.hs
+  s_d23a82140bf8e8::t_3260af4f453885 25-26
+  s_d23a82140bf8e8::t_a4feda9f654f89 175-182
+mcp-server-haskell/src/HaskellFlows/Tool/Coverage.hs
+  s_d23a82140bf8e8::t_3ec06043a5655f 32,40-42
+  s_d23a82140bf8e8::t_ee87edb8e0ca05 147-163
+mcp-server-haskell/src/HaskellFlows/Tool/Hoogle.hs
+  s_d23a82140bf8e8::t_b6c907c95f7bbd 183-189
+  s_d23a82140bf8e8::t_0ba0e958f66970 42-43
+mcp-server-haskell/test/Spec.hs
+  s_d23a82140bf8e8::t_cab90f423e8789 442-446
+  s_d23a82140bf8e8::t_db8291978beef5 1921-1924
+mcp-server-haskell/src/HaskellFlows/Util/Process.hs
+  s_d23a82140bf8e8::t_6b0d4f1134584f 1-77
+mcp-server-haskell/src/HaskellFlows/Tool/Lint.hs
+  s_d23a82140bf8e8::t_dd541ec83d1c0c 228-231,233-235
+  s_d23a82140bf8e8::t_2f80f951657e93 50-51
+mcp-server-haskell/src/HaskellFlows/Tool/ToolchainStatus.hs
+  s_d23a82140bf8e8::t_ae1e3f903df66c 37-38
+  s_d23a82140bf8e8::t_fabc2313d57515 119-124
+mcp-server-haskell/haskell-flows-mcp.cabal
+  s_d23a82140bf8e8::t_f9ac140fb134b1 139,272
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "6445074eb0de5188bb0d0b062cf83e7091c3d399",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "dlattenero_meli <damian.lattenero@mercadolibre.com>"
+    }
+  }
+}
