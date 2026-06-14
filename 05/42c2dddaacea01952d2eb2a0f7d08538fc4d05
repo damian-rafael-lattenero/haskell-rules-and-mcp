@@ -1,0 +1,119 @@
+mcp-server-haskell/src/HaskellFlows/Tool/ValidateCabal.hs
+  s_d23a82140bf8e8::t_d9b23bbc9f3adc 347-348
+  s_d23a82140bf8e8::t_8650e31fdefcda 363
+  s_d23a82140bf8e8::t_bc8911ffc59756 49
+  s_d23a82140bf8e8::t_dff60d1e1d106e 86-87
+  s_d23a82140bf8e8::t_98c4800bb2501c 112
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheck.hs
+  s_d23a82140bf8e8::t_f2addd24d855a2 189
+  s_d23a82140bf8e8::t_c70773e91a792b 181
+  s_d23a82140bf8e8::t_c3f1c054d51134 61
+mcp-server-haskell/src/HaskellFlows/Tool/Determinism.hs
+  s_d23a82140bf8e8::t_c46b81a20eb26a 26
+  s_d23a82140bf8e8::t_753bee4cd864c7 50,52
+  s_d23a82140bf8e8::t_a8eacb21c9ad7c 62
+mcp-server-haskell/test/Spec.hs
+  s_d23a82140bf8e8::t_ba336847b610b5 1884-1885,1891-1892
+  s_d23a82140bf8e8::t_72f9d4805656db 346
+  s_d23a82140bf8e8::t_e74b5356f52277 1867-1883,1886-1890,1893
+mcp-server-haskell/src/HaskellFlows/Mcp/Server.hs
+  s_d23a82140bf8e8::t_1ffe1d49877f70 841
+  s_d23a82140bf8e8::t_5586e7acb1fdee 842,844
+  s_d23a82140bf8e8::t_8812be3b891e94 610
+  s_d23a82140bf8e8::t_e9eabdae765d65 583
+  s_d23a82140bf8e8::t_5fd570eda91b27 863-864
+  s_d23a82140bf8e8::t_3ec7d9fac30ae7 196-199
+  s_d23a82140bf8e8::t_75c9746183b961 558
+  s_d23a82140bf8e8::t_307c53db36de38 564
+  s_d23a82140bf8e8::t_5410da690de265 257,267
+  s_d23a82140bf8e8::t_cf737b687f1b8b 589,593
+  s_d23a82140bf8e8::t_7c36226f2d7251 49
+  s_d23a82140bf8e8::t_f344b815d9e238 506
+  s_d23a82140bf8e8::t_73467c5f04bf74 48
+  s_d23a82140bf8e8::t_b8129c1dedcdae 476
+mcp-server-haskell/src/HaskellFlows/Tool/CheckProject.hs
+  s_d23a82140bf8e8::t_3607e0f4f9d8c4 303,309-311,313-316,322,325-326,328-331,337-365
+  s_d23a82140bf8e8::t_912d789e4141fe 28
+  s_d23a82140bf8e8::t_f743ab61e97e62 102-103,105,113,115,117-118,135-137,140-144,147
+  s_d23a82140bf8e8::t_c4550bb8c51a37 41,46
+  s_d23a82140bf8e8::t_be870989fce120 139
+mcp-server-haskell/src/HaskellFlows/Ghc/Sanitize.hs
+  s_d23a82140bf8e8::t_30e03fd3a8e35d 63,65
+  s_d23a82140bf8e8::t_ade3cfd41a0553 21-22
+mcp-server-haskell/src/HaskellFlows/Tool/Gate.hs
+  s_d23a82140bf8e8::t_bdba3e4bb39ea6 60
+  s_d23a82140bf8e8::t_983d53aa09e8eb 393-394,398
+mcp-server-haskell/src/HaskellFlows/Config.hs
+  s_d23a82140bf8e8::t_cf23921a899163 109-115,117-123
+  s_d23a82140bf8e8::t_0f2376e8142c60 134-142
+  s_d23a82140bf8e8::t_b08ecb40d38b08 10,12-18
+  s_d23a82140bf8e8::t_43108ce075896f 1-9,11,19-77,80-97,101-108,116,124-133
+  s_d23a82140bf8e8::t_6687ce3087189e 78-79
+  s_d23a82140bf8e8::t_352b234906e659 98-100
+mcp-server-haskell/src/HaskellFlows/Tool/AddImport.hs
+  s_d23a82140bf8e8::t_c43788d40e2fdf 40
+  s_d23a82140bf8e8::t_13a8a24dacea65 131
+  s_d23a82140bf8e8::t_b6458d0ec60e2f 101-102
+mcp-server-haskell/src/HaskellFlows/Tool/Toolchain.hs
+  s_d23a82140bf8e8::t_6f7f5a97c866d4 30
+  s_d23a82140bf8e8::t_3134cb4f849cb2 76-77,82
+mcp-server-haskell/src/HaskellFlows/Tool/Project.hs
+  s_d23a82140bf8e8::t_c2b7cb0047e617 49
+  s_d23a82140bf8e8::t_23cd828d1397ff 103
+  s_d23a82140bf8e8::t_57b4e0df18bc89 64-65,74
+mcp-server-haskell/src/HaskellFlows/Tool/ToolchainStatus.hs
+  s_d23a82140bf8e8::t_0853f398cc349e 129-130
+  s_d23a82140bf8e8::t_32462c4a4b0ccd 110-111
+  s_d23a82140bf8e8::t_fb04c477b2ef41 140
+  s_d23a82140bf8e8::t_b8c8e7d2f84af2 50
+  s_d23a82140bf8e8::t_8b11d82b40cd4b 87-88
+  s_d23a82140bf8e8::t_1fc842c9ad2409 95
+  s_d23a82140bf8e8::t_7d3ef781e1280f 120
+mcp-server-haskell/src/HaskellFlows/Tool/Hoogle.hs
+  s_d23a82140bf8e8::t_0319443ae9a5d1 187-188
+  s_d23a82140bf8e8::t_01f49ff62aaf5a 53
+  s_d23a82140bf8e8::t_f87609bc7044a5 204
+  s_d23a82140bf8e8::t_aa259867008658 148
+  s_d23a82140bf8e8::t_3e45eafdef00a2 125-126
+mcp-server-haskell/src/HaskellFlows/Tool/Format.hs
+  s_d23a82140bf8e8::t_4e6fa824aabba3 37
+  s_d23a82140bf8e8::t_2c8e63742d7630 172-173
+  s_d23a82140bf8e8::t_c155ecb03d8a7d 100-101
+  s_d23a82140bf8e8::t_175d5f5af15c64 190
+  s_d23a82140bf8e8::t_090467a548c774 134
+mcp-server-haskell/src/HaskellFlows/Tool/Eval.hs
+  s_d23a82140bf8e8::t_d78131d7384ebe 54
+  s_d23a82140bf8e8::t_606e95e8f7d23d 161-163,165
+mcp-server-haskell/src/HaskellFlows/Tool/Regression.hs
+  s_d23a82140bf8e8::t_24c74ccaf42229 83
+  s_d23a82140bf8e8::t_e5027891b5074a 41
+mcp-server-haskell/test/Spec/Config.hs
+  s_d23a82140bf8e8::t_be917b7474b9c6 150-154
+  s_d23a82140bf8e8::t_b954126d1e36f0 71
+  s_d23a82140bf8e8::t_208d26596b30a0 26,33-34
+  s_d23a82140bf8e8::t_9b6ca1e016191b 1-25,27-32,35-70,72-149,155-203,223-228,233,236-247,250
+  s_d23a82140bf8e8::t_1528f0dac2fa98 204-222,229-232,234-235
+  s_d23a82140bf8e8::t_e9b44ba2655e62 248-249
+mcp-server-haskell/src/HaskellFlows/Tool/Lint.hs
+  s_d23a82140bf8e8::t_63fd01e55ed06d 224-225
+  s_d23a82140bf8e8::t_68a31f448c1c6f 125-126
+  s_d23a82140bf8e8::t_e64c809cd2df82 244
+  s_d23a82140bf8e8::t_fc8499674d9817 137
+  s_d23a82140bf8e8::t_b3f4435e854a48 62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "0542c2dddaacea01952d2eb2a0f7d08538fc4d05",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "dlattenero_meli <damian.lattenero@mercadolibre.com>"
+    }
+  }
+}
