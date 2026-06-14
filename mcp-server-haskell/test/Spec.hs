@@ -677,6 +677,7 @@ main = do
       , test "#48 extractErrorSummary case-insensitive" testExtractErrorSummaryCaseInsensitive
       , test "validateVersionConstraint accepts"   testVerAccepts
       , test "validateVersionConstraint rejects"   testVerRejects
+      , test "#292 explain action parses via ADT"   testExplainActionParses
       , test "parseDefinedAt file location"        testDefinedAtFile
       , test "parseDefinedAt module location"      testDefinedAtModule
       , test "parseDefinedAt ignores noise"        testDefinedAtNone

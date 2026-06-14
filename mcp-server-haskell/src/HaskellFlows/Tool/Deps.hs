@@ -202,7 +202,7 @@ schema = Schema.discriminatedSchema "action"
       \\"foreign-library:NAME\". Omit to target the first build-depends \
       \block in the file (backwards-compatible default)."
 
-data Action = ActList | ActAdd | ActRemove
+data Action = ActList | ActAdd | ActRemove | ActExplain
   deriving stock (Eq, Show)
 
 data DepsArgs = DepsArgs
@@ -224,10 +224,11 @@ instance FromJSON DepsArgs where
     a <- o .:  "action"
     s <- o .:? "stanza"
     act <- case (a :: Text) of
-      "list"   -> pure ActList
-      "add"    -> pure ActAdd
-      "remove" -> pure ActRemove
-      other    -> fail ("unknown action: " <> T.unpack other)
+      "list"    -> pure ActList
+      "add"     -> pure ActAdd
+      "remove"  -> pure ActRemove
+      "explain" -> pure ActExplain
+      other     -> fail ("unknown action: " <> T.unpack other)
     case act of
       ActList -> pure DepsArgs
         { daAction  = act
@@ -252,6 +253,12 @@ instance FromJSON DepsArgs where
           , daVersion = Nothing
           , daStanza  = s
           }
+      ActExplain -> pure DepsArgs
+        { daAction  = ActExplain
+        , daPackage = Nothing
+        , daVersion = Nothing
+        , daStanza  = Nothing
+        }
 
 handle :: ToolEnv -> Value -> IO ToolResult
 handle env rawArgs = do
@@ -261,36 +268,24 @@ handle env rawArgs = do
   pure r
 
 runHandle :: ProjectDir -> Value -> IO ToolResult
-runHandle pd rawArgs
-  -- #94 Phase C: 'explain' is a passthrough to DepsExplain.handle.
-  -- Intercepted before the list/add/remove parser because its
-  -- payload shape (cabal_output: String) doesn't match DepsArgs.
-  | actionTextOf rawArgs == Just "explain" = DepsExplain.handle pd rawArgs
-  | otherwise = case parseEither parseJSON rawArgs of
-      Left parseError ->
-        pure (Env.toolResponseToResult (Env.mkFailed
-          ((Env.mkErrorEnvelope (parseErrorKindD parseError)
-              (T.pack ("Invalid arguments: " <> parseError)))
-                { Env.eeCause = Just (T.pack parseError) })))
-      Right args -> do
-        mCabal <- findCabalFile pd
-        case mCabal of
-          Nothing ->
-            pure (Env.toolResponseToResult (Env.mkFailed
-              ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
-                  "No .cabal file found in project root")
-                    { Env.eeRemediation =
-                        Just "Run ghc_project(action=\"create\") to scaffold a cabal package first." })))
-          Just file -> handleAction file args
-  where
-    -- Peek at the 'action' field without committing to DepsArgs's
-    -- parser; cheap helper used only for the explain dispatch above.
-    actionTextOf :: Value -> Maybe Text
-    actionTextOf v = case v of
-      Object o -> case KeyMap.lookup "action" o of
-        Just (String s) -> Just s
-        _               -> Nothing
-      _ -> Nothing
+runHandle pd rawArgs = case parseEither parseJSON rawArgs of
+  Left parseError ->
+    pure (Env.toolResponseToResult (Env.mkFailed
+      ((Env.mkErrorEnvelope (parseErrorKindD parseError)
+          (T.pack ("Invalid arguments: " <> parseError)))
+            { Env.eeCause = Just (T.pack parseError) })))
+  Right args -> case daAction args of
+    ActExplain -> DepsExplain.handle pd rawArgs
+    _ -> do
+      mCabal <- findCabalFile pd
+      case mCabal of
+        Nothing ->
+          pure (Env.toolResponseToResult (Env.mkFailed
+            ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
+                "No .cabal file found in project root")
+                  { Env.eeRemediation =
+                      Just "Run ghc_project(action=\"create\") to scaffold a cabal package first." })))
+        Just file -> handleAction file args
 
 handleAction :: FilePath -> DepsArgs -> IO ToolResult
 handleAction file args = case daAction args of
@@ -334,6 +329,8 @@ handleAction file args = case daAction args of
         -- the resolver). Skip verify on remove to keep the call
         -- cheap.
         Right mSel -> runEdit Nothing file safePkg mSel removeDep "removed" False
+  ActExplain ->
+    pure (errorResult "internal: ActExplain must be dispatched in runHandle")
 
 -- | Resolve a stanza selector at @list@ time by scoping the body to
 -- that stanza's lines. Errors (unknown selector / stanza not found)

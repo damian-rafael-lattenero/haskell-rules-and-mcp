@@ -11,12 +11,16 @@ module Spec.DepsUnit
   , testExtractErrorSummaryCaseInsensitive
   , testVerAccepts
   , testVerRejects
+  , testExplainActionParses
   ) where
 
+import Data.Aeson (Result (..), fromJSON, object, (.=))
 import qualified Data.Text as T
 
 import HaskellFlows.Tool.Deps
-  ( extractErrorSummary
+  ( Action (..)
+  , DepsArgs (..)
+  , extractErrorSummary
   , validatePackageName
   , validateVersionConstraint
   )
@@ -84,3 +88,13 @@ testVerRejects :: IO Bool
 testVerRejects = pure $ case validateVersionConstraint "; rm -rf" of
   Left _ -> True
   _      -> False
+
+-- | #292 — 'explain' must parse through the Action ADT (not via the
+-- stringly-typed pre-check that was removed). Verifies that
+-- 'FromJSON DepsArgs' accepts {action:"explain"} and produces
+-- 'ActExplain', closing the dispatch path cleanly.
+testExplainActionParses :: IO Bool
+testExplainActionParses =
+  pure $ case fromJSON (object ["action" .= ("explain" :: T.Text)]) of
+    Success DepsArgs { daAction = ActExplain } -> True
+    _                                          -> False
