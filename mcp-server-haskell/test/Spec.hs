@@ -432,6 +432,13 @@ import Spec.DispatchUnit
   , testHandlerForGhcQuickCheckIsQcTool
   , testMkToolEnvFields
   )
+import Spec.RegistryUnit
+  ( testRegistryTotalOverToolName
+  , testRegistryNoDuplicateNames
+  , testRegistryBudgetKeysAgree
+  , testToolCategoryTotalOverToolName
+  , testToolCategoryAgreesWithToolName
+  )
 
 main :: IO ()
 main = do
@@ -1900,6 +1907,12 @@ main = do
       , test "#285: handlerFor covers every ToolName (exhaustive)"     testHandlerForExhaustive
       , test "#285: handlerFor GhcQuickCheck returns handler (QcTool)" testHandlerForGhcQuickCheckIsQcTool
       , test "#285: ToolEnv construction is total (no strict crash)"   testMkToolEnvFields
+      -- Issue #286 — ToolSpec registry single source of truth
+      , test "#286: registry is total — one ToolSpec per ToolName"         testRegistryTotalOverToolName
+      , test "#286: registry has no duplicate ToolName entries"            testRegistryNoDuplicateNames
+      , test "#286: Registry.allBudgets keys agree with Budget.allBudgets" testRegistryBudgetKeysAgree
+      , test "#286: toolCategory is total over every ToolName"             testToolCategoryTotalOverToolName
+      , test "#286: Registry.toolCategory agrees with ToolName.toolCategory" testToolCategoryAgreesWithToolName
       ]
       ++ scratchTests
   if and results then exitSuccess else exitFailure

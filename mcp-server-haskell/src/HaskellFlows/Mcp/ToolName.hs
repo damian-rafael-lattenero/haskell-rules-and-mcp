@@ -202,61 +202,54 @@ toolCategoryText = \case
   CatGate         -> "gate"
   CatControlPlane -> "control_plane"
 
--- | Classify every registered tool into the four-category taxonomy.
--- This is the authoritative mapping; 'docs/TOOL_TAXONOMY.md' is
--- generated from it.  Adding a new constructor to 'ToolName' without
--- adding an arm here is a compile error.
+-- | Map every tool to its 'ToolCategory'.
+--
+-- The authoritative classification lives in "HaskellFlows.Tool.Registry"
+-- (a derived projection of 'tsCategory').  This case is kept here because
+-- 'HaskellFlows.Tool.Workflow' imports both this module and
+-- "HaskellFlows.Tool.Registry", and Registry in turn imports Workflow —
+-- moving the function there would create an import cycle.
+--
+-- A unit test in @Spec.RegistryUnit@ (testToolCategoryAgreesWithToolName)
+-- verifies this case and the Registry projection always agree.
 toolCategory :: ToolName -> ToolCategory
 toolCategory = \case
-  -- ── Primitives ──────────────────────────────────────────────────
-  -- Read / inspect
-  GhcLoad              -> CatPrimitive
-  GhcType              -> CatPrimitive
-  GhcInfo              -> CatPrimitive
-  GhcEval              -> CatPrimitive
-  GhcHole              -> CatPrimitive
-  GhcComplete          -> CatPrimitive
-  GhcGoto              -> CatPrimitive
-  GhcBrowse            -> CatPrimitive
-  GhcImports           -> CatPrimitive
-  GhcDoc               -> CatPrimitive
-  HoogleSearch         -> CatPrimitive
-  -- Write / refactor
-  GhcRefactor          -> CatPrimitive
-  GhcFormat            -> CatPrimitive
-  GhcApplyExports      -> CatPrimitive
-  GhcFixWarning        -> CatPrimitive
-  GhcAddImport         -> CatPrimitive
-  GhcArbitrary         -> CatPrimitive
-  -- Dependency + project management
-  GhcDeps              -> CatPrimitive
-  GhcModules           -> CatPrimitive   -- #94 Phase B: action-discriminated successor
-  GhcProject           -> CatPrimitive   -- #94 Phase C step 5: action-discriminated successor
-                                         -- to ghc_create_project / ghc_switch_project /
-                                         -- ghc_validate_cabal / ghc_bootstrap
-  -- Property-first testing
-  GhcQuickCheck        -> CatPrimitive
-  GhcSuggest           -> CatPrimitive
-  GhcPropertyStore     -> CatPrimitive   -- #94 Phase C step 6: action-discriminated successor
-                                         -- to ghc_property_lifecycle / ghc_regression /
-                                         -- ghc_quickcheck_export / ghc_property_audit
-  GhcScratch           -> CatPrimitive   -- #253: persistent LLM code canvas
-  -- Phase-2 advanced
-  GhcPerf              -> CatPrimitive
-  GhcWitness           -> CatPrimitive
-  GhcExplainError      -> CatPrimitive
-  -- ── Composites ──────────────────────────────────────────────────
-  GhcGate              -> CatComposite  -- regression + cabal-test + cabal-build
-  GhcLab               -> CatComposite  -- browse + suggest + quickcheck per binding
-  GhcCoverage          -> CatComposite  -- cabal-test --enable-coverage + HPC parse
-  GhcBatch             -> CatComposite  -- N sequential tool calls
-  -- ── Gates ───────────────────────────────────────────────────────
-  GhcCheckModule       -> CatGate       -- per-file compile + warnings + holes + props
-  GhcCheckProject      -> CatGate       -- whole-project compile + warnings + holes + props
-  GhcLint              -> CatGate       -- hlint over the project
-  -- ── Control-plane ───────────────────────────────────────────────
-  GhcWorkflow          -> CatControlPlane
-  GhcToolchain         -> CatControlPlane
+  GhcLoad          -> CatPrimitive
+  GhcType          -> CatPrimitive
+  GhcInfo          -> CatPrimitive
+  GhcEval          -> CatPrimitive
+  GhcQuickCheck    -> CatPrimitive
+  GhcHole          -> CatPrimitive
+  GhcArbitrary     -> CatPrimitive
+  HoogleSearch     -> CatPrimitive
+  GhcWorkflow      -> CatControlPlane
+  GhcCheckModule   -> CatGate
+  GhcCoverage      -> CatComposite
+  GhcComplete      -> CatPrimitive
+  GhcFormat        -> CatPrimitive
+  GhcGate          -> CatComposite
+  GhcDeps          -> CatPrimitive
+  GhcDoc           -> CatPrimitive
+  GhcGoto          -> CatPrimitive
+  GhcRefactor      -> CatPrimitive
+  GhcBatch         -> CatComposite
+  GhcLint          -> CatGate
+  GhcToolchain     -> CatControlPlane
+  GhcCheckProject  -> CatGate
+  GhcSuggest       -> CatPrimitive
+  GhcAddImport     -> CatPrimitive
+  GhcApplyExports  -> CatPrimitive
+  GhcFixWarning    -> CatPrimitive
+  GhcImports       -> CatPrimitive
+  GhcBrowse        -> CatPrimitive
+  GhcLab           -> CatComposite
+  GhcExplainError  -> CatPrimitive
+  GhcPerf          -> CatPrimitive
+  GhcWitness       -> CatPrimitive
+  GhcModules       -> CatPrimitive
+  GhcProject       -> CatPrimitive
+  GhcPropertyStore -> CatPrimitive
+  GhcScratch       -> CatPrimitive
 
 ------------------------------------------------------------------------
 -- Tool versioning (issue #99 Phase B)

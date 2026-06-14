@@ -102,51 +102,13 @@ import HaskellFlows.Mcp.WorkflowState
   , trackTool
   )
 import HaskellFlows.Types (ProjectDir, mkProjectDir, unProjectDir)
-import HaskellFlows.Tool.Env (ToolEnv (..), ToolHandler)
-import qualified HaskellFlows.Tool.AddImport       as AddImportTool
-import qualified HaskellFlows.Tool.Modules         as ModulesTool
-import qualified HaskellFlows.Tool.ApplyExports    as ApplyExportsTool
-import qualified HaskellFlows.Tool.Arbitrary       as ArbitraryTool
+import HaskellFlows.Tool.Env (ToolEnv (..))
 import qualified HaskellFlows.Tool.Batch           as BatchTool
-import qualified HaskellFlows.Tool.Browse          as BrowseTool
 import qualified HaskellFlows.Tool.Determinism     as DeterminismTool
--- HaskellFlows.Tool.PropertyLifecycle is no longer registered:
--- #94 Phase C step 6 dropped its descriptor and the
--- 'ghc_property_store(action="list")' branch routes through
--- 'RegressionTool.handle' instead (the bytes are equivalent and
--- the @action@ field downstream NextStep probes expect is preserved).
--- The module's 'handle' is still exported for direct unit-test use.
-import qualified HaskellFlows.Tool.Toolchain       as ToolchainTool
-import qualified HaskellFlows.Tool.CheckModule     as CheckModuleTool
-import qualified HaskellFlows.Tool.CheckProject    as CheckProjectTool
-import qualified HaskellFlows.Tool.Complete        as CompleteTool
-import qualified HaskellFlows.Tool.Coverage        as CoverageTool
-import qualified HaskellFlows.Tool.Deps            as DepsTool
-import qualified HaskellFlows.Tool.Doc             as DocTool
-import qualified HaskellFlows.Tool.Eval            as EvalTool
-import qualified HaskellFlows.Tool.FixWarning      as FixWarningTool
-import qualified HaskellFlows.Tool.Format          as FormatTool
-import qualified HaskellFlows.Tool.Gate            as GateTool
-import qualified HaskellFlows.Tool.Goto            as GotoTool
-import qualified HaskellFlows.Tool.Hole            as HoleTool
-import qualified HaskellFlows.Tool.Hoogle          as HoogleTool
-import qualified HaskellFlows.Tool.Imports         as ImportsTool
-import qualified HaskellFlows.Tool.Info            as InfoTool
-import qualified HaskellFlows.Tool.Lint            as LintTool
-import qualified HaskellFlows.Tool.Load            as Load
 import qualified HaskellFlows.Tool.QuickCheck      as QcTool
-import qualified HaskellFlows.Tool.Refactor        as RefactorTool
-import qualified HaskellFlows.Tool.Lab              as LabTool
-import qualified HaskellFlows.Tool.ExplainError     as ExplainErrorTool
-import qualified HaskellFlows.Tool.Perf             as PerfTool
-import qualified HaskellFlows.Tool.Witness          as WitnessTool
-import qualified HaskellFlows.Tool.Suggest         as SuggestTool
 import qualified HaskellFlows.Mcp.PathBootstrap    as PathBootstrap
-import qualified HaskellFlows.Tool.Type            as TypeTool
-import qualified HaskellFlows.Tool.Workflow        as WorkflowTool
-import qualified HaskellFlows.Tool.Project         as ProjectTool
-import qualified HaskellFlows.Tool.PropertyStore   as PropertyStoreTool
-import qualified HaskellFlows.Tool.Scratch         as ScratchTool
+-- #286: allToolDescriptors, handlerFor are derived projections of the registry
+import HaskellFlows.Tool.Registry (allToolDescriptors, handlerFor)
 
 -- | All mutable server state.
 --
@@ -469,47 +431,6 @@ dispatchByName srv sink args tn =
         _               -> QcTool.handle env args
     other -> handlerFor other env args
 
--- | Pure lookup table from 'ToolName' to 'ToolHandler'.
--- Exhaustive: @-Wincomplete-patterns@ enforces every constructor has a branch.
-handlerFor :: ToolName -> ToolHandler
-handlerFor = \case
-  GhcLoad          -> Load.handle
-  GhcType          -> TypeTool.handle
-  GhcInfo          -> InfoTool.handle
-  GhcEval          -> EvalTool.handle
-  GhcQuickCheck    -> QcTool.handle
-  GhcHole          -> HoleTool.handle
-  GhcArbitrary     -> ArbitraryTool.handle
-  HoogleSearch     -> HoogleTool.handle
-  GhcWorkflow      -> WorkflowTool.handle
-  GhcCheckModule   -> CheckModuleTool.handle
-  GhcCoverage      -> CoverageTool.handle
-  GhcComplete      -> CompleteTool.handle
-  GhcFormat        -> FormatTool.handle
-  GhcDeps          -> DepsTool.handle
-  GhcDoc           -> DocTool.handle
-  GhcGoto          -> GotoTool.handle
-  GhcRefactor      -> RefactorTool.handle
-  GhcLab           -> LabTool.handle
-  GhcExplainError  -> ExplainErrorTool.handle
-  GhcPerf          -> PerfTool.handle
-  GhcWitness       -> WitnessTool.handle
-  GhcLint          -> LintTool.handle
-  GhcToolchain     -> ToolchainTool.handle
-  GhcProject       -> ProjectTool.handle
-  GhcCheckProject  -> CheckProjectTool.handle
-  GhcSuggest       -> SuggestTool.handle
-  GhcGate          -> GateTool.handle
-  GhcAddImport     -> AddImportTool.handle
-  GhcModules       -> ModulesTool.handle
-  GhcApplyExports  -> ApplyExportsTool.handle
-  GhcFixWarning    -> FixWarningTool.handle
-  GhcImports       -> ImportsTool.handle
-  GhcBrowse        -> BrowseTool.handle
-  GhcPropertyStore -> PropertyStoreTool.handle
-  GhcBatch         -> BatchTool.handle
-  GhcScratch       -> ScratchTool.handle
-
 -- | Synthesize an error 'ToolResult' for an unknown tool name.
 -- Pulled out so 'handleToolCall' and 'dispatchTool' produce the
 -- exact same shape on the wire.
@@ -617,52 +538,6 @@ injectTraceId tn tid resp = case respPayload resp of
               inner' = KeyMap.insert "meta" meta inner
           in TL.toStrict (TLE.decodeUtf8 (encode (Object inner')))
         _ -> txt
-
---------------------------------------------------------------------------------
--- tool registry — single source of truth for both tools/list and
--- ghc_workflow's status view. Keep additions in sync with the
--- dispatcher branch in 'dispatchTool'.
---------------------------------------------------------------------------------
-
-allToolDescriptors :: [ToolDescriptor]
-allToolDescriptors =
-  [ Load.descriptor
-  , TypeTool.descriptor
-  , InfoTool.descriptor
-  , EvalTool.descriptor
-  , QcTool.descriptor
-  , HoleTool.descriptor
-  , ArbitraryTool.descriptor
-  , HoogleTool.descriptor
-  , WorkflowTool.descriptor
-  , CheckModuleTool.descriptor
-  , CoverageTool.descriptor
-  , CompleteTool.descriptor
-  , FormatTool.descriptor
-  , GateTool.descriptor
-  , DepsTool.descriptor
-  , DocTool.descriptor
-  , GotoTool.descriptor
-  , RefactorTool.descriptor
-  , LabTool.descriptor
-  , ExplainErrorTool.descriptor
-  , PerfTool.descriptor
-  , WitnessTool.descriptor
-  , BatchTool.descriptor
-  , LintTool.descriptor
-  , ToolchainTool.descriptor       -- #94 Phase C: action-discriminated successor
-  , CheckProjectTool.descriptor
-  , SuggestTool.descriptor
-  , AddImportTool.descriptor
-  , ApplyExportsTool.descriptor
-  , FixWarningTool.descriptor
-  , ImportsTool.descriptor
-  , BrowseTool.descriptor
-  , ModulesTool.descriptor       -- #94 Phase B: action-discriminated 'modules' primitive
-  , ProjectTool.descriptor       -- #94 Phase C step 5: action-discriminated 'project' primitive
-  , PropertyStoreTool.descriptor -- #94 Phase C step 6: action-discriminated 'property_store' primitive
-  , ScratchTool.descriptor       -- #253: persistent LLM code canvas
-  ]
 
 -- 'allToolNames :: [ToolName]' / 'allToolNameTexts :: [Text]' both
 -- live in 'HaskellFlows.Mcp.ToolName' and are re-exported through
