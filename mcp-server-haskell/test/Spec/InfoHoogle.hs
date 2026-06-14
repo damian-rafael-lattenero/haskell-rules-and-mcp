@@ -34,6 +34,7 @@ import qualified HaskellFlows.Tool.Hoogle as HoogleTool
 import qualified HaskellFlows.Tool.AddImport as AddImportTool
 
 import Spec.Helpers (decodeToolResult, runToolEnvelope)
+import Spec.ToolEnvFixture (sessionEnv, stubEnv)
 
 -- | Phase B helper: drive 'InfoTool.handle' against a fresh
 -- session with a tiny project loaded.
@@ -49,7 +50,7 @@ runInfo args = do
     Left _   -> pure (Left "could not build ProjectDir")
     Right pd -> do
       sess <- startGhcSession pd
-      tr   <- InfoTool.handle sess args
+      tr   <- InfoTool.handle (sessionEnv sess) args
       killGhcSession sess
       case trContent tr of
         [TextContent body] ->
@@ -114,7 +115,7 @@ testInfoRefusesNewline = do
 -- These tools don't need a GhcSession.
 runHoogle :: A.Value -> IO (Either String Env.ToolResponse)
 runHoogle args = do
-  tr <- HoogleTool.handle args
+  tr <- HoogleTool.handle stubEnv args
   case trContent tr of
     [TextContent body] ->
       pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
@@ -132,7 +133,7 @@ runAddImport args = do
     Left _  -> pure (Left "could not build ProjectDir for stub session")
     Right pd -> do
       sess <- startGhcSession pd
-      tr <- AddImportTool.handle sess args
+      tr <- AddImportTool.handle (sessionEnv sess) args
       killGhcSession sess
       case trContent tr of
         [TextContent body] ->

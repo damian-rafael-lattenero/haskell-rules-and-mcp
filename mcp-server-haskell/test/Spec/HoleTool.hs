@@ -26,6 +26,7 @@ import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Tool.Hole as HoleTool
 
 import Spec.Helpers (decodeToolResult, isTraversalRefused, runToolEnvelope)
+import Spec.ToolEnvFixture (sessionPdEnv)
 
 runHole :: T.Text -> A.Value -> IO (Either String Env.ToolResponse)
 runHole stagedSource args = do
@@ -38,7 +39,7 @@ runHole stagedSource args = do
     Left _   -> pure (Left "could not build ProjectDir")
     Right pd -> do
       sess <- startGhcSession pd
-      tr   <- HoleTool.handle sess pd args
+      tr   <- HoleTool.handle (sessionPdEnv sess pd) args
       killGhcSession sess
       case trContent tr of
         [TextContent body] ->

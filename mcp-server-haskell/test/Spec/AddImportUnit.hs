@@ -34,6 +34,7 @@ import qualified HaskellFlows.Tool.AddImport as AddImport
 import qualified HaskellFlows.Tool.AddModules as AddModules
 
 import Spec.Helpers (decodeToolResult, runToolEnvelope)
+import Spec.ToolEnvFixture (sessionEnv)
 
 testAddImportMissingHoogle :: IO Bool
 testAddImportMissingHoogle = do
@@ -51,7 +52,7 @@ testAddImportMissingHoogle = do
     Left _  -> pure (ToolResult { trContent = [TextContent "{}"], trIsError = False })
     Right pd -> do
       sess <- startGhcSession pd
-      r <- AddImport.handle sess args
+      r <- AddImport.handle (sessionEnv sess) args
       killGhcSession sess
       pure r
   -- Restore PATH so other tests aren't affected.

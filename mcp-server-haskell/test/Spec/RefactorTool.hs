@@ -36,6 +36,7 @@ import HaskellFlows.Ghc.ApiSession (killGhcSession, startGhcSession)
 import HaskellFlows.Types (mkProjectDir)
 
 import Spec.Helpers (decodeToolResult, runToolEnvelope)
+import Spec.ToolEnvFixture (sessionPdEnv)
 
 -- | Refactor.scope_line_start / scope_line_end accept stringified
 -- numbers (the most user-visible win — rename_local was completely
@@ -221,7 +222,7 @@ testRefactorListActions = do
     Right pd -> do
       sess <- startGhcSession pd
       let rawArgs = A.object [ "action" A..= ("list_actions" :: T.Text) ]
-      tr <- RefactorTool.handle sess pd rawArgs
+      tr <- RefactorTool.handle (sessionPdEnv sess pd) rawArgs
       killGhcSession sess
       case trContent tr of
         [TextContent t] ->
@@ -245,7 +246,7 @@ testRefactorListActionsHasRequired = do
     Right pd -> do
       sess <- startGhcSession pd
       let rawArgs = A.object [ "action" A..= ("list_actions" :: T.Text) ]
-      tr <- RefactorTool.handle sess pd rawArgs
+      tr <- RefactorTool.handle (sessionPdEnv sess pd) rawArgs
       killGhcSession sess
       case trContent tr of
         [TextContent t] ->

@@ -53,7 +53,7 @@ runWorkflow args = do
   -- #253 Phase 5: workflow handler gained scratchRef for status section.
   scratch    <- SP.openStore pd
   scratchRef <- newIORef scratch
-  result <- WorkflowTool.handle pdRef sessRef toolNames ws staleness False scratchRef args
+  result <- WorkflowTool.runHandle pdRef sessRef toolNames ws staleness False scratchRef args
   case trContent result of
     [TextContent body] ->
       pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))

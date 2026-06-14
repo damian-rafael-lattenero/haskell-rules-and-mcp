@@ -32,6 +32,7 @@ import qualified HaskellFlows.Types
 import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
 
 import Spec.Helpers (decodeToolResult, runToolEnvelope, getTestTimestamp)
+import Spec.ToolEnvFixture (pdEnv)
 
 -- | #173: idempotent case — when the requested list is IDENTICAL to
 -- the existing one, must return Unchanged.
@@ -94,7 +95,7 @@ testApplyExportsSuccessHasApplied = withFixture $ \pd _ -> do
         [ "module_path" A..= ("src/TestMod.hs" :: T.Text)
         , "exports"     A..= (["x"] :: [T.Text])
         ]
-  tr <- ApplyExports.handle pd args
+  tr <- ApplyExports.handle (pdEnv pd) args
   let payload = resultPayload tr
   pure $ fieldEquals "applied" (A.Bool True) payload
 
@@ -111,7 +112,7 @@ testApplyExportsNoChangeHasApplied = withFixture $ \pd _ -> do
         [ "module_path" A..= ("src/TestMod2.hs" :: T.Text)
         , "exports"     A..= (["x"] :: [T.Text])
         ]
-  tr <- ApplyExports.handle pd args
+  tr <- ApplyExports.handle (pdEnv pd) args
   let payload = resultPayload tr
   pure $ fieldEquals "no_change" (A.Bool True) payload
       && fieldEquals "applied"   (A.Bool False) payload
@@ -128,7 +129,7 @@ testApplyExportsHandleAppliedTrue = withFixture $ \pd _ -> do
         [ "module_path" A..= ("src/AppliedTrue.hs" :: T.Text)
         , "exports"     A..= (["foo"] :: [T.Text])
         ]
-  tr <- ApplyExports.handle pd args
+  tr <- ApplyExports.handle (pdEnv pd) args
   bodyAfter <- TIO.readFile modulePath
   let payload = resultPayload tr
   pure $ fieldEquals "applied" (A.Bool True) payload
@@ -145,7 +146,7 @@ testApplyExportsHandleAppliedFalse = withFixture $ \pd _ -> do
         [ "module_path" A..= ("src/AppliedFalse.hs" :: T.Text)
         , "exports"     A..= (["bar"] :: [T.Text])
         ]
-  tr <- ApplyExports.handle pd args
+  tr <- ApplyExports.handle (pdEnv pd) args
   let payload = resultPayload tr
   pure $ fieldEquals "applied"   (A.Bool False) payload
       && fieldEquals "no_change" (A.Bool True)  payload
@@ -165,7 +166,7 @@ testApplyExportsWriteFalse = withFixture $ \pd _ -> do
         , "exports"     A..= (["foo"] :: [T.Text])
         , "write"       A..= False
         ]
-  tr <- ApplyExports.handle pd args
+  tr <- ApplyExports.handle (pdEnv pd) args
   bodyAfter <- TIO.readFile modulePath
   let payload = resultPayload tr
   pure $ fieldEquals "applied" (A.Bool False) payload

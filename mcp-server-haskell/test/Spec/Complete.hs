@@ -33,6 +33,7 @@ import System.FilePath ((</>))
 
 import HaskellFlows.Ghc.ApiSession (killGhcSession, startGhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
+import Spec.ToolEnvFixture (sessionEnv)
 import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..), tdDescription)
 import qualified HaskellFlows.Tool.Complete as CompleteTool
 import HaskellFlows.Types (mkProjectDir)
@@ -72,7 +73,7 @@ runComplete args = do
     Left _   -> pure (Left "could not build ProjectDir")
     Right pd -> do
       sess <- startGhcSession pd
-      tr   <- CompleteTool.handle sess args
+      tr   <- CompleteTool.handle (sessionEnv sess) args
       killGhcSession sess
       case trContent tr of
         [TextContent body] ->

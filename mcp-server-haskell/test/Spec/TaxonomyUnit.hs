@@ -61,6 +61,7 @@ import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import qualified HaskellFlows.Suggest.Rules as SuggestRules
 
 import Spec.Helpers (runToolEnvelope, withTempProject)
+import Spec.ToolEnvFixture (pdEnv)
 
 import Data.Aeson (object, (.=))
 import Data.Maybe (isJust, isNothing)
@@ -208,7 +209,7 @@ testModulesRejectsBadAction =
       -- The ProjectDir argument is never read because the action
       -- check fires first.
       ToolResult content isErr <-
-        Modules.handle pd
+        Modules.handle (pdEnv pd)
           (object
             [ "action"  .= ("nuke_everything" :: T.Text)
             , "modules" .= (["Foo"] :: [T.Text])

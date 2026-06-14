@@ -29,6 +29,7 @@ import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
 import qualified HaskellFlows.Tool.RemoveModules as RM
 
 import Spec.Helpers (decodeToolResult, runToolEnvelope)
+import Spec.ToolEnvFixture (pdEnv)
 
 --------------------------------------------------------------------------------
 -- local fixture helpers (not exported)
@@ -103,7 +104,7 @@ testHandleApplyExportsRefusesKeyword = withFixture $ \pd _ -> do
         [ "module_path" A..= ("src/Widget.hs" :: Text)
         , "exports"     A..= (["greet", "module"] :: [Text])
         ]
-  result <- ApplyExports.handle pd args
+  result <- ApplyExports.handle (pdEnv pd) args
   bodyAfter <- TIO.readFile modulePath
   -- Issue #90 Phase C: 'rejected' moved under 'result' inside the
   -- envelope. The 'resultPayload' helper drills through.
@@ -125,7 +126,7 @@ testHandleApplyExportsAcceptsLowercase = withFixture $ \pd _ -> do
         [ "module_path" A..= ("src/Widget.hs" :: Text)
         , "exports"     A..= (["greet"] :: [Text])
         ]
-  result <- ApplyExports.handle pd args
+  result <- ApplyExports.handle (pdEnv pd) args
   bodyAfter <- TIO.readFile modulePath
   pure (not (trIsError result) && "(greet) where" `T.isInfixOf` bodyAfter)
 

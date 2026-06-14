@@ -83,7 +83,7 @@ testBatchEmptyActionsWarning :: IO Bool
 testBatchEmptyActionsWarning = do
   let noopDispatch _ = pure (Env.toolResponseToResult (Env.mkOk (A.object [])))
       args = A.object [ "actions" .= ([] :: [A.Value]) ]
-  tr <- Batch.handle noopDispatch args
+  tr <- Batch.runHandle noopDispatch args
   pure $ case decodeToolResult tr of
     Right env ->
          Env.reStatus env == Env.StatusOk

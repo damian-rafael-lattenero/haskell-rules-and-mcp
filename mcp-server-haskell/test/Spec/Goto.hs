@@ -30,6 +30,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import qualified HaskellFlows.Tool.Goto as GotoTool
 import HaskellFlows.Types (mkProjectDir)
+import Spec.ToolEnvFixture (sessionEnv)
 
 -- ---------------------------------------------------------------------------
 -- Phase B helper
@@ -49,7 +50,7 @@ runGoto args = do
     Left _   -> pure (Left "could not build ProjectDir")
     Right pd -> do
       sess <- startGhcSession pd
-      tr   <- GotoTool.handle sess args
+      tr   <- GotoTool.handle (sessionEnv sess) args
       killGhcSession sess
       case trContent tr of
         [TextContent body] ->

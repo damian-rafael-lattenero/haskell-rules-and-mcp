@@ -24,6 +24,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Tool.ValidateCabal as ValidateCabalTool
+import HaskellFlows.Config (defaultLimits)
 
 import Spec.Helpers (decodeToolResult, runToolEnvelope)
 
@@ -37,7 +38,7 @@ runValidateCabalIn cabalBody = do
   result <- case mkProjectDir dir of
     Left _   -> pure (Left "could not build ProjectDir for tmp")
     Right pd -> do
-      tr <- ValidateCabalTool.handle pd (A.object [])
+      tr <- ValidateCabalTool.handle defaultLimits pd (A.object [])
       case trContent tr of
         [TextContent body] ->
           pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
@@ -154,7 +155,7 @@ testValidateCabalErrors = do
   result <- case mkProjectDir dir of
     Left _   -> pure (Left "could not build ProjectDir for tmp")
     Right pd -> do
-      tr <- ValidateCabalTool.handle pd (A.object [])
+      tr <- ValidateCabalTool.handle defaultLimits pd (A.object [])
       case trContent tr of
         [TextContent body] ->
           pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))

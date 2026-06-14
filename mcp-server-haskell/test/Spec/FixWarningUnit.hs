@@ -52,6 +52,7 @@ import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Data.PropertyStore (StoredProperty (..))
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
+import Spec.ToolEnvFixture (pdEnv)
 import HaskellFlows.Tool.Regression (renderStored)
 import qualified HaskellFlows.Tool.PropertyStore as PropertyStore
 import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
@@ -176,7 +177,7 @@ testFixWarningOutOfBounds = do
             , "code"        A..= ("GHC-66111" :: Text)
             , "apply"       A..= True
             ]
-      tr <- FixWarning.handle pd args
+      tr <- FixWarning.handle (pdEnv pd) args
       pure $ case decodeToolResult tr of
         Right env ->
              Env.reStatus env == Env.StatusFailed
@@ -264,7 +265,7 @@ testWritePatchedAlsoFixesSig235 = do
             , "name"        A..= ("listSum" :: Text)
             , "apply"       A..= True
             ]
-      _ <- FixWarning.handle pd args
+      _ <- FixWarning.handle (pdEnv pd) args
       patched <- TIO.readFile file
       let lns = T.lines patched
       -- Both type sig (line 4, ix 3) and binding (line 5, ix 4) must be renamed.

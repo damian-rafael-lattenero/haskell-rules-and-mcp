@@ -35,6 +35,7 @@ import qualified HaskellFlows.Tool.Type as TypeTool
 import qualified HaskellFlows.Tool.Eval as EvalTool
 
 import Spec.Helpers (decodeToolResult, runToolEnvelope)
+import Spec.ToolEnvFixture (sessionEnv)
 
 -- | Phase B helper: stage a tmpdir project + drive 'TypeTool.handle'.
 runType :: A.Value -> IO (Either String Env.ToolResponse)
@@ -49,7 +50,7 @@ runType args = do
     Left _   -> pure (Left "could not build ProjectDir")
     Right pd -> do
       sess <- startGhcSession pd
-      tr   <- TypeTool.handle sess args
+      tr   <- TypeTool.handle (sessionEnv sess) args
       killGhcSession sess
       case trContent tr of
         [TextContent body] ->
@@ -127,7 +128,7 @@ runEval args = do
     Left _   -> pure (Left "could not build ProjectDir")
     Right pd -> do
       sess <- startGhcSession pd
-      tr   <- EvalTool.handle sess args
+      tr   <- EvalTool.handle (sessionEnv sess) args
       killGhcSession sess
       case trContent tr of
         [TextContent body] ->

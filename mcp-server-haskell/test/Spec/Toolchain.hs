@@ -19,6 +19,7 @@ import qualified Data.Aeson.KeyMap as AKM
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatusTool
 import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmupTool
+import HaskellFlows.Config (defaultLimits)
 
 import Spec.Helpers (runToolEnvelope)
 
@@ -31,7 +32,7 @@ import Spec.Helpers (runToolEnvelope)
 -- statuses.
 testToolchainStatusEnvelopeShape :: IO Bool
 testToolchainStatusEnvelopeShape = do
-  decoded <- runToolEnvelope ToolchainStatusTool.handle (A.object [])
+  decoded <- runToolEnvelope (ToolchainStatusTool.handle defaultLimits) (A.object [])
   pure $ case decoded of
     Right env ->
       Env.reStatus env
@@ -43,7 +44,7 @@ testToolchainStatusEnvelopeShape = do
 -- legacy shape continues to function during the dual-shape window.
 testToolchainStatusBackcompatFields :: IO Bool
 testToolchainStatusBackcompatFields = do
-  decoded <- runToolEnvelope ToolchainStatusTool.handle (A.object [])
+  decoded <- runToolEnvelope (ToolchainStatusTool.handle defaultLimits) (A.object [])
   pure $ case decoded of
     Right env -> case Env.reResult env of
       Just (A.Object payload) ->

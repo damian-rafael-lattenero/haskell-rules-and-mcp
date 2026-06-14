@@ -23,7 +23,6 @@ import qualified Data.Text as T
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
-import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession, GhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Logging as Logging
 import HaskellFlows.Types (mkProjectDir)
@@ -36,11 +35,11 @@ import qualified HaskellFlows.Tool.Load as LoadTool
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
 
 import Spec.Helpers (isTraversalRefused, decodeToolResult)
+import Spec.ToolEnvFixture (pdEnv)
 
 import Data.Text (Text)
 import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
-import HaskellFlows.Data.PropertyStore (Store)
 
 import System.Environment (unsetEnv)
 import Data.Maybe (isNothing)
@@ -58,7 +57,7 @@ testApplyExportsRejectsTraversal = do
             [ "module_path" A..= ("../../etc/passwd" :: Text)
             , "exports"     A..= ([] :: [Text])
             ]
-      tr <- ApplyExports.handle pd args
+      tr <- ApplyExports.handle (pdEnv pd) args
       pure (isTraversalRefused (decodeToolResult tr))
 
 -- | #100C: 'ghc_fix_warning' must refuse traversal paths.
@@ -72,7 +71,7 @@ testFixWarningRejectsTraversal = do
             , "line"        A..= (1 :: Int)
             , "code"        A..= ("-Wunused-imports" :: Text)
             ]
-      tr <- FixWarning.handle pd args
+      tr <- FixWarning.handle (pdEnv pd) args
       pure (isTraversalRefused (decodeToolResult tr))
 
 -- | #100C: 'ghc_check_module' must refuse traversal paths.
@@ -84,10 +83,7 @@ testCheckModuleRejectsTraversal = do
     Right pd -> do
       let args = A.object
             [ "module_path" A..= ("../../etc/passwd" :: Text) ]
-      tr <- CheckModule.handle
-              (undefined :: GhcSession)
-              (undefined :: Store)
-              pd args
+      tr <- CheckModule.handle (pdEnv pd) args
       pure (isTraversalRefused (decodeToolResult tr))
 
 -- | #150: 'ghc_check_module' on a non-existent file must return
@@ -102,10 +98,7 @@ testCheckModuleNonExistentFile = do
     Right pd -> do
       let args = A.object
             [ "module_path" A..= ("src/DoesNotExist.hs" :: Text) ]
-      tr <- CheckModule.handle
-              (undefined :: GhcSession)
-              (undefined :: Store)
-              pd args
+      tr <- CheckModule.handle (pdEnv pd) args
       case decodeToolResult tr of
         Right env
           | Env.reStatus env == Env.StatusFailed
@@ -122,9 +115,7 @@ testExplainErrorRejectsTraversal = do
     Right pd -> do
       let args = A.object
             [ "module_path" A..= ("../../etc/passwd" :: Text) ]
-      tr <- ExplainError.handle
-              (undefined :: GhcSession)
-              pd args
+      tr <- ExplainError.handle (pdEnv pd) args
       pure (isTraversalRefused (decodeToolResult tr))
 
 -- | #100C: 'ghc_lab' must refuse traversal paths.
@@ -135,10 +126,7 @@ testLabRejectsTraversal = do
     Right pd -> do
       let args = A.object
             [ "module_path" A..= ("../../etc/passwd" :: Text) ]
-      tr <- LabTool.handle
-              (undefined :: GhcSession)
-              (undefined :: Store)
-              pd args
+      tr <- LabTool.handle (pdEnv pd) args
       pure (isTraversalRefused (decodeToolResult tr))
 
 -- | #160: 'ghc_lab' on a non-existent file must return
@@ -152,10 +140,7 @@ testLabNonExistentFile = do
     Right pd -> do
       let args = A.object
             [ "module_path" A..= ("src/DoesNotExist.hs" :: Text) ]
-      tr <- LabTool.handle
-              (undefined :: GhcSession)
-              (undefined :: Store)
-              pd args
+      tr <- LabTool.handle (pdEnv pd) args
       case decodeToolResult tr of
         Right env
           | Env.reStatus env == Env.StatusFailed
@@ -173,9 +158,7 @@ testLoadRejectsTraversal = do
     Right pd -> do
       let args = A.object
             [ "module_path" A..= ("../../etc/passwd" :: Text) ]
-      tr <- LoadTool.handle
-              (undefined :: GhcSession)
-              pd args
+      tr <- LoadTool.handle (pdEnv pd) args
       pure (isTraversalRefused (decodeToolResult tr))
 
 -- | #100C: 'ghc_refactor' must refuse traversal paths.
@@ -192,9 +175,7 @@ testRefactorRejectsTraversal = do
             , "scope_line_start" A..= (1 :: Int)
             , "scope_line_end"   A..= (10 :: Int)
             ]
-      tr <- RefactorTool.handle
-              (undefined :: GhcSession)
-              pd args
+      tr <- RefactorTool.handle (pdEnv pd) args
       pure (isTraversalRefused (decodeToolResult tr))
 
 -- ---------------------------------------------------------------------------

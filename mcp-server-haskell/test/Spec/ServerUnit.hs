@@ -113,7 +113,7 @@ testServerOuterTimeout = do
   let codeLines = filter (not . isDocLine) (T.lines src)
       code      = T.unlines codeLines
   pure $ T.isInfixOf "import System.Timeout" code
-      && T.isInfixOf "timeout toolTimeoutMicros action"   code
+      && T.isInfixOf "timeout ceilingMicros action"       code
       && T.isInfixOf "toolTimeoutMicros :: Int"           code
   where
     isDocLine ln =

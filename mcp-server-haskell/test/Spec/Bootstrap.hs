@@ -27,6 +27,7 @@ import HaskellFlows.Types (mkProjectDir)
 import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
 import qualified HaskellFlows.Tool.Imports as ImportsTool
+import Spec.ToolEnvFixture (sessionEnv)
 
 import Spec.Helpers (decodeToolResult)
 
@@ -143,7 +144,7 @@ testImportsEnvelopeShape = do
     Left _   -> pure (Left "could not build ProjectDir")
     Right pd -> do
       sess <- startGhcSession pd
-      tr   <- ImportsTool.handle sess (A.object [])
+      tr   <- ImportsTool.handle (sessionEnv sess) (A.object [])
       killGhcSession sess
       case trContent tr of
         [TextContent body] ->

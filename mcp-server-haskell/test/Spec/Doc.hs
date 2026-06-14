@@ -26,6 +26,7 @@ import System.FilePath ((</>))
 
 import HaskellFlows.Ghc.ApiSession (killGhcSession, startGhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
+import Spec.ToolEnvFixture (sessionEnv)
 import qualified HaskellFlows.Mcp.NextStep as NextStep
 import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Mcp.ToolName (ToolName (..))
@@ -48,7 +49,7 @@ runDoc args = do
     Left _   -> pure (Left "could not build ProjectDir")
     Right pd -> do
       sess <- startGhcSession pd
-      tr   <- DocTool.handle sess args
+      tr   <- DocTool.handle (sessionEnv sess) args
       killGhcSession sess
       case trContent tr of
         [TextContent body] ->

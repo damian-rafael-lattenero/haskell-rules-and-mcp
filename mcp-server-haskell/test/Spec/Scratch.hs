@@ -173,7 +173,7 @@ testScratchHandleWrite = withTempProject $ \pd -> do
         , "id"     A..= ("user-id" :: Text)
         , "code"   A..= ("1 + 1 :: Int" :: Text)
         ]
-  result <- ScratchTool.handle store undefined undefined args
+  result <- ScratchTool.runHandle store undefined undefined args
   case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> case AKM.lookup "status" top of
@@ -191,7 +191,7 @@ testScratchHandleWriteMissingCode :: IO Bool
 testScratchHandleWriteMissingCode = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("write" :: Text) ]
-  result <- ScratchTool.handle store undefined undefined args
+  result <- ScratchTool.runHandle store undefined undefined args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "failed")
@@ -206,8 +206,8 @@ testScratchHandleWriteAutoId = withTempProject $ \pd -> do
         [ "action" A..= ("write" :: Text)
         , "code"   A..= ("a" :: Text)
         ]
-  _ <- ScratchTool.handle store undefined undefined args
-  _ <- ScratchTool.handle store undefined undefined args
+  _ <- ScratchTool.runHandle store undefined undefined args
+  _ <- ScratchTool.runHandle store undefined undefined args
   loaded <- SP.loadAll store
   let ids = map SP.seId loaded
   pure (ids == ["scratch-1", "scratch-2"])
@@ -217,7 +217,7 @@ testScratchHandleListEmpty :: IO Bool
 testScratchHandleListEmpty = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("list" :: Text) ]
-  result <- ScratchTool.handle store undefined undefined args
+  result <- ScratchTool.runHandle store undefined undefined args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> case AKM.lookup "result" top of
@@ -231,7 +231,7 @@ testScratchHandleShowMissing :: IO Bool
 testScratchHandleShowMissing = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("show" :: Text), "id" A..= ("ghost" :: Text) ]
-  result <- ScratchTool.handle store undefined undefined args
+  result <- ScratchTool.runHandle store undefined undefined args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "no_match")
@@ -243,7 +243,7 @@ testScratchHandleClearNoConfirm :: IO Bool
 testScratchHandleClearNoConfirm = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("clear" :: Text) ]
-  result <- ScratchTool.handle store undefined undefined args
+  result <- ScratchTool.runHandle store undefined undefined args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "refused")
@@ -263,7 +263,7 @@ testScratchHandleClearById = withTempProject $ \pd -> do
   SP.save store (mk "a" "a")
   SP.save store (mk "b" "b")
   let args = A.object [ "action" A..= ("clear" :: Text), "id" A..= ("a" :: Text) ]
-  _ <- ScratchTool.handle store undefined undefined args
+  _ <- ScratchTool.runHandle store undefined undefined args
   loaded <- SP.loadAll store
   pure (map SP.seId loaded == ["b"])
 
@@ -281,7 +281,7 @@ testScratchHandleClearAll = withTempProject $ \pd -> do
   SP.save store (mk "b")
   SP.save store (mk "c")
   let args = A.object [ "action" A..= ("clear" :: Text), "confirm" A..= True ]
-  _ <- ScratchTool.handle store undefined undefined args
+  _ <- ScratchTool.runHandle store undefined undefined args
   loaded <- SP.loadAll store
   pure (null loaded)
 
@@ -296,7 +296,7 @@ testScratchCheckMissingId :: IO Bool
 testScratchCheckMissingId = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("check" :: Text) ]
-  result <- ScratchTool.handle store undefined undefined args
+  result <- ScratchTool.runHandle store undefined undefined args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "failed")
@@ -308,7 +308,7 @@ testScratchCheckUnknownId :: IO Bool
 testScratchCheckUnknownId = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("check" :: Text), "id" A..= ("ghost" :: Text) ]
-  result <- ScratchTool.handle store undefined undefined args
+  result <- ScratchTool.runHandle store undefined undefined args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "no_match")
@@ -330,12 +330,12 @@ testScratchCheckSanitizeReject = withTempProject $ \pd -> do
         , "id"     A..= ("bad" :: Text)
         , "code"   A..= badCode
         ]
-  _ <- ScratchTool.handle store undefined undefined writeArgs
+  _ <- ScratchTool.runHandle store undefined undefined writeArgs
   let checkArgs = A.object
         [ "action" A..= ("check" :: Text)
         , "id"     A..= ("bad" :: Text)
         ]
-  result <- ScratchTool.handle store undefined undefined checkArgs
+  result <- ScratchTool.runHandle store undefined undefined checkArgs
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "refused")
@@ -370,12 +370,12 @@ testScratchCheckKindAtTopLevel = withTempProject $ \pd -> do
         , "id"     A..= ("probe" :: Text)
         , "code"   A..= ("bogusF" :: Text)  -- passes sanitize, GHC call throws
         ]
-  _ <- ScratchTool.handle store undefined undefined writeArgs
+  _ <- ScratchTool.runHandle store undefined undefined writeArgs
   let checkArgs = A.object
         [ "action" A..= ("check" :: Text)
         , "id"     A..= ("probe" :: Text)
         ]
-  result <- ScratchTool.handle store undefined undefined checkArgs
+  result <- ScratchTool.runHandle store undefined undefined checkArgs
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) ->
@@ -409,12 +409,12 @@ testScratchShowFullDetail = withTempProject $ \pd -> do
         , "module" A..= ("src/Foo.hs" :: Text)
         , "note"   A..= ("hypothesis: this is a plain increment" :: Text)
         ]
-  _ <- ScratchTool.handle store undefined undefined writeArgs
+  _ <- ScratchTool.runHandle store undefined undefined writeArgs
   let showArgs = A.object
         [ "action" A..= ("show" :: Text)
         , "id"     A..= ("full-e1" :: Text)
         ]
-  result <- ScratchTool.handle store undefined undefined showArgs
+  result <- ScratchTool.runHandle store undefined undefined showArgs
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) ->
@@ -489,19 +489,19 @@ testScratchShowAfterCheckHasResult = withTempProject $ \pd -> do
         , "id"     A..= ("chk-then-show" :: Text)
         , "code"   A..= ("badIdent" :: Text)
         ]
-  _ <- ScratchTool.handle store undefined undefined writeArgs
+  _ <- ScratchTool.runHandle store undefined undefined writeArgs
   -- check — undefined session throws, type_error is persisted
   let checkArgs = A.object
         [ "action" A..= ("check" :: Text)
         , "id"     A..= ("chk-then-show" :: Text)
         ]
-  _ <- ScratchTool.handle store undefined undefined checkArgs
+  _ <- ScratchTool.runHandle store undefined undefined checkArgs
   -- show — must return the persisted result
   let showArgs = A.object
         [ "action" A..= ("show" :: Text)
         , "id"     A..= ("chk-then-show" :: Text)
         ]
-  result <- ScratchTool.handle store undefined undefined showArgs
+  result <- ScratchTool.runHandle store undefined undefined showArgs
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) ->
@@ -529,7 +529,7 @@ testScratchPromoteMissingId :: IO Bool
 testScratchPromoteMissingId = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("promote" :: Text) ]
-  result <- ScratchTool.handle store undefined pd args
+  result <- ScratchTool.runHandle store undefined pd args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "failed")
@@ -545,9 +545,9 @@ testScratchPromoteMissingTargetModule = withTempProject $ \pd -> do
         , "id"     A..= ("pm1" :: Text)
         , "code"   A..= ("f x = x" :: Text)
         ]
-  _ <- ScratchTool.handle store undefined undefined writeArgs
+  _ <- ScratchTool.runHandle store undefined undefined writeArgs
   let args = A.object [ "action" A..= ("promote" :: Text), "id" A..= ("pm1" :: Text) ]
-  result <- ScratchTool.handle store undefined pd args
+  result <- ScratchTool.runHandle store undefined pd args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "failed")
@@ -563,7 +563,7 @@ testScratchPromoteUnknownId = withTempProject $ \pd -> do
         , "id"            A..= ("no-such-id" :: Text)
         , "target_module" A..= ("src/Foo.hs" :: Text)
         ]
-  result <- ScratchTool.handle store undefined pd args
+  result <- ScratchTool.runHandle store undefined pd args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "no_match")
@@ -579,13 +579,13 @@ testScratchPromoteBadModulePath = withTempProject $ \pd -> do
         , "id"     A..= ("pm2" :: Text)
         , "code"   A..= ("f x = x" :: Text)
         ]
-  _ <- ScratchTool.handle store undefined undefined writeArgs
+  _ <- ScratchTool.runHandle store undefined undefined writeArgs
   let args = A.object
         [ "action"        A..= ("promote" :: Text)
         , "id"            A..= ("pm2" :: Text)
         , "target_module" A..= ("/etc/passwd" :: Text)
         ]
-  result <- ScratchTool.handle store undefined pd args
+  result <- ScratchTool.runHandle store undefined pd args
   pure $ case trContent result of
     [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
       Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "refused")
@@ -678,7 +678,7 @@ testScratchPromoteBindingName = withTempProject $ \pd -> do
         , "id"     A..= ("expr-entry" :: Text)
         , "code"   A..= ("(\\x -> x + 1) :: Int -> Int" :: Text)
         ]
-  _ <- ScratchTool.handle store undefined undefined writeArgs
+  _ <- ScratchTool.runHandle store undefined undefined writeArgs
   -- Promote with binding_name — target module does not exist so the
   -- path-traversal guard fires before GHC is touched, letting us test
   -- the binding_name wrapping via the refused kind.
@@ -688,7 +688,7 @@ testScratchPromoteBindingName = withTempProject $ \pd -> do
         , "target_module" A..= ("../escape" :: Text)   -- triggers path_traversal
         , "binding_name" A..= ("myFun" :: Text)
         ]
-  result <- ScratchTool.handle store undefined pd promoteArgs
+  result <- ScratchTool.runHandle store undefined pd promoteArgs
   -- We only need to confirm the args parse and reach the path-guard
   -- (status=refused, kind=path_traversal) — that proves binding_name
   -- parsed correctly and the entry was found.

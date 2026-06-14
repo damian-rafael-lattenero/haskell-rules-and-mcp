@@ -19,6 +19,7 @@ import qualified HaskellFlows.Tool.Format as FormatTool
 import HaskellFlows.Types (mkProjectDir)
 
 import Spec.Helpers (decodeToolResult, isTraversalRefused)
+import Spec.ToolEnvFixture (pdEnv)
 
 -- | #100C: 'ghc_format' must refuse traversal paths.
 testFormatRejectsTraversal :: IO Bool
@@ -28,7 +29,7 @@ testFormatRejectsTraversal =
     Right pd -> do
       let args = A.object
             [ "module_path" A..= ("../../etc/passwd" :: Text) ]
-      tr <- FormatTool.handle pd args
+      tr <- FormatTool.handle (pdEnv pd) args
       pure (isTraversalRefused (decodeToolResult tr))
 
 -- | Issue #246: 'ghc_format' on a non-existent file must return
@@ -45,7 +46,7 @@ testFormatMissingFile = do
     Right pd -> do
       let args = A.object
             [ "module_path" A..= ("src/DoesNotExist.hs" :: Text) ]
-      tr <- FormatTool.handle pd args
+      tr <- FormatTool.handle (pdEnv pd) args
       let result = decodeToolResult tr
       pure $ case result of
         Right env ->

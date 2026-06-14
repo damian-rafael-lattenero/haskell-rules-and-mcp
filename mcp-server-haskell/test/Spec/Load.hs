@@ -27,6 +27,7 @@ import System.FilePath ((</>))
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Ghc.ApiSession (killGhcSession, startGhcSession)
+import Spec.ToolEnvFixture (sessionPdEnv)
 import qualified HaskellFlows.Tool.Load as LoadTool
 import HaskellFlows.Types
   ( PathError (..)
@@ -115,7 +116,7 @@ testGhcLoadEmptyProjectNoMatch = do
     Left _   -> pure (Left "could not build ProjectDir")
     Right pd -> do
       sess <- startGhcSession pd
-      tr   <- LoadTool.handle sess pd (A.object [])
+      tr   <- LoadTool.handle (sessionPdEnv sess pd) (A.object [])
       killGhcSession sess
       case trContent tr of
         [TextContent body] ->

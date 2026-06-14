@@ -28,6 +28,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..), tdDescription)
 import qualified HaskellFlows.Tool.Browse as BrowseTool
 import HaskellFlows.Types (mkProjectDir)
+import Spec.ToolEnvFixture (sessionEnv)
 
 -- ---------------------------------------------------------------------------
 -- Helper
@@ -46,7 +47,7 @@ runBrowse args = do
     Left _   -> pure (Left "could not build ProjectDir")
     Right pd -> do
       sess <- startGhcSession pd
-      tr   <- BrowseTool.handle sess args
+      tr   <- BrowseTool.handle (sessionEnv sess) args
       killGhcSession sess
       case trContent tr of
         [TextContent body] ->
