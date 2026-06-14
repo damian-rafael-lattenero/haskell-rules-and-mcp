@@ -12,7 +12,6 @@ module Spec.Deps
 
 import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as AKM
-import Data.Text (Text)
 
 import HaskellFlows.Mcp.Protocol (ToolDescriptor (..))
 import qualified HaskellFlows.Tool.Deps as DepsTool
