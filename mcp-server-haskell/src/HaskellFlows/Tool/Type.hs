@@ -34,6 +34,7 @@ import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 -- | The schema surfaced to clients via @tools/list@.
 descriptor :: ToolDescriptor
@@ -78,9 +79,14 @@ instance FromJSON TypeArgs where
   parseJSON = withObject "TypeArgs" $ \o ->
     TypeArgs <$> o .: "expression"
 
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  runHandle ghcSess rawArgs
+
 -- | Handle a @tools/call@ for @ghc_type@.
-handle :: GhcSession -> Value -> IO ToolResult
-handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
+runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (Env.toolResponseToResult (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind parseError)

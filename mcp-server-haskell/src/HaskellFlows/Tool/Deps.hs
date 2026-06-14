@@ -72,6 +72,7 @@ import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.DepsExplain as DepsExplain
 import HaskellFlows.Types (ProjectDir, unProjectDir)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 -- | Serialise concurrent .cabal edits across every call originating
 -- in THIS process. 'hLock' below serialises across processes; the
@@ -252,8 +253,15 @@ instance FromJSON DepsArgs where
           , daStanza  = s
           }
 
-handle :: ProjectDir -> Value -> IO ToolResult
-handle pd rawArgs
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  pd <- teProjectDir env
+  r  <- runHandle pd rawArgs
+  teInvalidateStanza env
+  pure r
+
+runHandle :: ProjectDir -> Value -> IO ToolResult
+runHandle pd rawArgs
   -- #94 Phase C: 'explain' is a passthrough to DepsExplain.handle.
   -- Intercepted before the list/add/remove parser because its
   -- payload shape (cabal_output: String) doesn't match DepsArgs.

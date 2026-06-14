@@ -57,6 +57,7 @@ import HaskellFlows.Parser.Error
   , renderGhciStyle
   )
 import HaskellFlows.Types
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -108,8 +109,14 @@ instance FromJSON LoadArgs where
     dx <- o .:? "diagnostics" .!= False
     pure LoadArgs { laModulePath = mp, laDiagnostics = dx }
 
-handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  pd      <- teProjectDir env
+  runHandle ghcSess pd rawArgs
+
+runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right (LoadArgs mModPath dx) -> do

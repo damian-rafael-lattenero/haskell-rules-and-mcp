@@ -19,6 +19,7 @@
 module HaskellFlows.Tool.Scratch
   ( descriptor
   , handle
+  , runHandle
   , ScratchArgs (..)
   , ScratchAction (..)
     -- * Internals (exported for unit tests)
@@ -56,6 +57,7 @@ import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.Refactor as Refactor
+import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types
   ( PathError (..)
   , ProjectDir
@@ -255,8 +257,15 @@ instance FromJSON ScratchArgs where
 -- The session and pd are lazy in all non-check / non-promote branches
 -- so callers may safely pass 'undefined' when they know neither
 -- 'check' nor 'promote' will run (unit tests for write/list/show/clear).
-handle :: SP.Store -> GhcSession -> ProjectDir -> Value -> IO ToolResult
-handle store ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  scratch <- teScratchpad env
+  ghcSess <- teSession env
+  pd      <- teProjectDir env
+  runHandle scratch ghcSess pd rawArgs
+
+runHandle :: SP.Store -> GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle store ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> case saAction args of
     ActWrite   -> handleWrite store args

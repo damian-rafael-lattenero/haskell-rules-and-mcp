@@ -33,6 +33,7 @@ import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatus
 import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmup
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -73,8 +74,11 @@ descriptor =
 -- | Dispatch on @action@ (defaulting to @"status"@) and forward
 -- to the existing handler.  The legacy handlers were never
 -- @ProjectDir@-aware, so this dispatcher takes no @ProjectDir@.
-handle :: Limits -> Value -> IO ToolResult
-handle lim rawArgs = case parseEither parseAction rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env = runHandle (teLimits env)
+
+runHandle :: Limits -> Value -> IO ToolResult
+runHandle lim rawArgs = case parseEither parseAction rawArgs of
   Left err     -> pure (Env.toolResponseToResult (refusal err))
   Right action -> do
     let inner = stripAction rawArgs

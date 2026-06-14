@@ -44,6 +44,7 @@ import qualified Data.Text.IO as TIO
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath (takeDirectory, (</>))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 import GHC
   ( Ghc
@@ -144,8 +145,14 @@ instance FromJSON ArbitraryArgs where
   parseJSON = withObject "ArbitraryArgs" $ \o ->
     ArbitraryArgs <$> o .: "type_name" <*> o .:? "target_module"
 
-handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  pd      <- teProjectDir env
+  runHandle ghcSess pd rawArgs
+
+runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right (ArbitraryArgs tname mTarget) -> case sanitizeExpression tname of

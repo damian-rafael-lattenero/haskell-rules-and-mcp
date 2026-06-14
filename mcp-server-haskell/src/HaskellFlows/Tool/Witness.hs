@@ -59,6 +59,7 @@ import HaskellFlows.Parser.QuickCheck
   , parseQuickCheckOutput
   )
 import qualified HaskellFlows.Tool.QuickCheck as Qc
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -129,8 +130,13 @@ instance FromJSON WitnessArgs where
       , waClassifyBy = parseClassifyBy cb
       }
 
-handle :: GhcSession -> Value -> IO ToolResult
-handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  runHandle ghcSess rawArgs
+
+runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> do
     -- Build the instrumented property string first (pure, instant).

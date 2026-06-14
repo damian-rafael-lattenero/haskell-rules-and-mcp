@@ -42,6 +42,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject, withGhcSession)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types (unProjectDir)
 
 descriptor :: ToolDescriptor
@@ -79,8 +80,13 @@ newtype BrowseArgs = BrowseArgs Text
 instance FromJSON BrowseArgs where
   parseJSON = withObject "BrowseArgs" $ \o -> BrowseArgs <$> o .: "module"
 
-handle :: GhcSession -> Value -> IO ToolResult
-handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  runHandle ghcSess rawArgs
+
+runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err ->
     pure (Env.toolResponseToResult (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind err)

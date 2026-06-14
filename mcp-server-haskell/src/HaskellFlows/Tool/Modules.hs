@@ -41,6 +41,7 @@ import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.AddModules    as AddModules
 import qualified HaskellFlows.Tool.RemoveModules as RemoveModules
 import HaskellFlows.Types (ProjectDir)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -115,8 +116,15 @@ descriptor =
 -- {action:add, …}@ match what @ghc_add_modules {…}@ would return
 -- for the same payload. Same for remove. The cross-tool equivalence
 -- test in Spec.hs locks this in.
-handle :: ProjectDir -> Value -> IO ToolResult
-handle pd rawArgs = case parseEither parseAction rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  pd <- teProjectDir env
+  r  <- runHandle pd rawArgs
+  teInvalidateStanza env
+  pure r
+
+runHandle :: ProjectDir -> Value -> IO ToolResult
+runHandle pd rawArgs = case parseEither parseAction rawArgs of
   Left err     -> pure (Env.toolResponseToResult (refusal err))
   Right action -> do
     let inner = stripAction rawArgs

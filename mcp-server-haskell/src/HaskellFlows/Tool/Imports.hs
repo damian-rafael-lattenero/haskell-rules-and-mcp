@@ -33,6 +33,7 @@ import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Tool.Eval (evalContextExtras)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -58,8 +59,13 @@ descriptor =
           ]
     }
 
-handle :: GhcSession -> Value -> IO ToolResult
-handle ghcSess _rawArgs = do
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  runHandle ghcSess rawArgs
+
+runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle ghcSess _rawArgs = do
   eRes <- try (withGhcSession ghcSess queryImports)
   pure $ Env.toolResponseToResult $ case eRes of
     Left (se :: SomeException) ->

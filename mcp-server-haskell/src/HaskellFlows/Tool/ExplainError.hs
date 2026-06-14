@@ -61,6 +61,7 @@ import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
 import HaskellFlows.Util.Safe (safeAt)
 import HaskellFlows.Types (ProjectDir, ModulePath, mkModulePath, unModulePath)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -156,8 +157,14 @@ instance FromJSON ExplainErrorArgs where
       <*> o .:? "diagnostic_index"
       <*> o .:? "verify_patch"
 
-handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  pd      <- teProjectDir env
+  runHandle ghcSess pd rawArgs
+
+runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> case eaModulePath args of
     -- #282: text-only mode — no module to read, decode error_text directly.

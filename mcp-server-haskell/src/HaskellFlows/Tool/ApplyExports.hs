@@ -26,6 +26,7 @@ import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.ModuleName (isReservedKeyword)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -88,8 +89,15 @@ instance FromJSON ApplyExportsArgs where
       , aeWrite      = wr
       }
 
-handle :: ProjectDir -> Value -> IO ToolResult
-handle pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  pd <- teProjectDir env
+  r  <- runHandle pd rawArgs
+  teInvalidateSession env
+  pure r
+
+runHandle :: ProjectDir -> Value -> IO ToolResult
+runHandle pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
   Right args ->
     -- ISSUE-47: refuse exports that contain reserved keywords. An

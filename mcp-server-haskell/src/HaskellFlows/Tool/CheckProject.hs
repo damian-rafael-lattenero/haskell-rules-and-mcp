@@ -47,6 +47,7 @@ import HaskellFlows.Mcp.Progress (ProgressEvent (..), ProgressSink, emitProgress
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
+import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 descriptor :: ToolDescriptor
@@ -114,8 +115,15 @@ instance FromJSON CheckProjectArgs where
     pure CheckProjectArgs { cpFailFast = ff, cpWarningsBlock = wb
                           , cpTimeoutSeconds = fmap (max 1) ts }
 
-handle :: Limits -> ProgressSink -> GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
-handle lim sink ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  store   <- teStore env
+  pd      <- teProjectDir env
+  runHandle (teLimits env) (teSink env) ghcSess store pd rawArgs
+
+runHandle :: Limits -> ProgressSink -> GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
+runHandle lim sink ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right args -> do
@@ -351,7 +359,7 @@ runChecks sink startTime total ghcSess store pd ff wb mDeadline idx ((nm, mp) : 
           (cont, to) <- runChecks sink startTime total ghcSess store pd ff wb mDeadline (idx + 1) rest
           pure (MoNotFound nm : cont, to)
         Just relPath -> do
-          tr <- CheckModule.handle ghcSess store pd
+          tr <- CheckModule.runHandle ghcSess store pd
                   (object
                     [ "module_path"    .= relPath
                     , "warnings_block" .= wb

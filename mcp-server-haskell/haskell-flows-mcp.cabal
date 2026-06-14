@@ -134,6 +134,7 @@ library
                       HaskellFlows.Mcp.Progress
                       HaskellFlows.Util.Safe
                       HaskellFlows.Config
+                      HaskellFlows.Tool.Env
     build-depends:    base              >= 4.20 && < 5
                     , aeson             >= 2.2  && < 2.3
                     , bytestring        >= 0.11 && < 0.13
@@ -263,6 +264,8 @@ test-suite haskell-flows-mcp-test
                       Spec.WorkflowTool
                       Spec.PartialFunctions
                       Spec.Config
+                      Spec.ToolEnvFixture
+                      Spec.DispatchUnit
     build-depends:    base              >= 4.20 && < 5
                     , haskell-flows-mcp
                     , aeson             >= 2.2  && < 2.3

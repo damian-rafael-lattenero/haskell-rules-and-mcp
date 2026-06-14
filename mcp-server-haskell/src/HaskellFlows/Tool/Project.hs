@@ -51,6 +51,7 @@ import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
 import qualified HaskellFlows.Tool.CreateProject as CreateProjectTool
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProjectTool
 import qualified HaskellFlows.Tool.ValidateCabal as ValidateCabalTool
+import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types (ProjectDir)
 
 -- | #275: dispatch a @ghc_project@ call to the right delegate based on the
@@ -60,7 +61,11 @@ import HaskellFlows.Types (ProjectDir)
 -- session / store / scratchpad / self-project refs, an @invalidate-stanza@
 -- callback to run after a create, and the tool-descriptor catalog for
 -- bootstrap.
-handle
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env =
+  runHandle (teLimits env) (teProjectDirRef env) (teSessionRef env) (teStoreRef env) (teScratchpadRef env) (teIsSelfRef env) (teInvalidateStanza env) (teDescriptors env)
+
+runHandle
   :: Limits
   -> IORef ProjectDir
   -> MVar (Maybe GhcSession)
@@ -71,7 +76,7 @@ handle
   -> [ToolDescriptor]   -- ^ allToolDescriptors (for bootstrap)
   -> Value
   -> IO ToolResult
-handle lim pdRef sessRef storeRef scratchRef selfRef invalidateStanza descriptors rawArgs =
+runHandle lim pdRef sessRef storeRef scratchRef selfRef invalidateStanza descriptors rawArgs =
   case actionField rawArgs of
     Nothing ->
       pure (Env.toolResponseToResult

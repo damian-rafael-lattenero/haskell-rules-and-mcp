@@ -43,6 +43,7 @@ import HaskellFlows.Mcp.PermissiveJSON
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Util.Safe (safeAt)
 
 descriptor :: ToolDescriptor
@@ -226,8 +227,15 @@ underscorePrefix name srcLine =
                  || isDigit c
                  || c == '_' || c == '\''
 
-handle :: ProjectDir -> Value -> IO ToolResult
-handle pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  pd <- teProjectDir env
+  r  <- runHandle pd rawArgs
+  teInvalidateSession env
+  pure r
+
+runHandle :: ProjectDir -> Value -> IO ToolResult
+runHandle pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
   Right args -> case mkModulePath pd (T.unpack (fwModulePath args)) of
     Left e -> pure (pathTraversalResult (T.pack (show e)))

@@ -120,6 +120,7 @@ import HaskellFlows.Ghc.ApiSession
   , writeLoadedRefForTest
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
+import Spec.ToolEnvFixture (sessionPdEnv)
 import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Mcp.Progress (noopSink)
 import HaskellFlows.Types (mkProjectDir)
@@ -472,7 +473,7 @@ testLoadSpecificFileIgnoresStray = do
     Right pd -> do
       sess <- startGhcSession pd
       -- Load the GOOD file by explicit module_path; stray must be invisible
-      tr   <- LoadTool.handle sess pd
+      tr   <- LoadTool.handle (sessionPdEnv sess pd)
                 (A.object [ "module_path" A..= ("src/Good.hs" :: Text) ])
       killGhcSession sess
       case trContent tr of
@@ -627,15 +628,15 @@ decodeCheckProjectResult tr =
 testCheckProjectDelegates :: IO Bool
 testCheckProjectDelegates = do
   src <- TIO.readFile "src/HaskellFlows/Tool/CheckProject.hs"
-  -- Must use CheckModule.handle, not call loadForTarget directly.
-  pure $ T.isInfixOf "CheckModule.handle" src
+  -- Must use CheckModule.runHandle, not call loadForTarget directly.
+  pure $ T.isInfixOf "CheckModule.runHandle" src
       && not (T.isInfixOf "loadForTarget ghcSess" src)
 
--- 'cpTimeoutSeconds' == 120 (the documented default).
+-- When no timeout_seconds is supplied the field is Nothing (delegates to Limits).
 testCheckProjectArgsDefaultTimeout :: IO Bool
 testCheckProjectArgsDefaultTimeout =
   case A.eitherDecode "{}" :: Either String CheckProjectArgs of
-    Right args -> pure (cpTimeoutSeconds args == 120)
+    Right args -> pure (isNothing (cpTimeoutSeconds args))
     Left  _    -> pure False
 
 -- | #129: 'renderResult' with @timedOut=True@ must include

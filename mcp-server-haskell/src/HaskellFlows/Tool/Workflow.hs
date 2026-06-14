@@ -15,6 +15,7 @@
 module HaskellFlows.Tool.Workflow
   ( descriptor
   , handle
+  , runHandle
   , WorkflowArgs (..)
   , Action (..)
     -- * Exposed for unit tests
@@ -69,6 +70,7 @@ import HaskellFlows.Mcp.WorkflowState
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import qualified HaskellFlows.Tool.ToolchainStatus as TC
+import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 descriptor :: ToolDescriptor
@@ -151,7 +153,14 @@ instance FromJSON WorkflowArgs where
 -- directly, avoiding the previous "Server pre-renders + passes
 -- as flat [Text]" indirection that hid information the help view
 -- could use.
-handle
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ws       <- teWorkflowState env
+  staleness <- teStaleness env
+  isSelf   <- teIsSelf env
+  runHandle (teProjectDirRef env) (teSessionRef env) (teToolNames env) ws staleness isSelf (teScratchpadRef env) rawArgs
+
+runHandle
   :: IORef ProjectDir
   -> MVar (Maybe GhcSession)
   -> [Text]
@@ -161,7 +170,7 @@ handle
   -> IORef SP.Store        -- ^ #253 Phase 5: scratchpad store for status section
   -> Value
   -> IO ToolResult
-handle pdRef sessMVar toolNames ws staleness isSelfProject scratchRef rawArgs =
+runHandle pdRef sessMVar toolNames ws staleness isSelfProject scratchRef rawArgs =
   case parseEither parseJSON rawArgs of
     Left err ->
       pure (Env.toolResponseToResult (Env.mkFailed

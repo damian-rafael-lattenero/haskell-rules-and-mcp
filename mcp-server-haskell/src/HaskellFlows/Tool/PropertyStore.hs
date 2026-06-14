@@ -48,6 +48,7 @@ import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExportTool
 import qualified HaskellFlows.Tool.Regression as RegressionTool
+import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types (ProjectDir)
 
 -- | #275: dispatch a @ghc_property_store@ call to the right delegate based on
@@ -55,8 +56,11 @@ import HaskellFlows.Types (ProjectDir)
 -- boots the GHC session (list / run / audit need it; export does not),
 -- @storeRef@ + @pdRef@ are the server's refs. @list@ / @run@ keep the @action@
 -- field (Regression parses it); @export@ / @audit@ strip it.
-handle :: IO GhcSession -> IORef Store -> IORef ProjectDir -> Value -> IO ToolResult
-handle startSession storeRef pdRef rawArgs = case actionField rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env = runHandle (teSession env) (teStoreRef env) (teProjectDirRef env)
+
+runHandle :: IO GhcSession -> IORef Store -> IORef ProjectDir -> Value -> IO ToolResult
+runHandle startSession storeRef pdRef rawArgs = case actionField rawArgs of
   Nothing ->
     pure (Env.toolResponseToResult
       (Env.mkRefused

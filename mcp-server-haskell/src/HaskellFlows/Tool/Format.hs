@@ -39,6 +39,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types
   ( ModulePath
   , PathError (..)
@@ -97,8 +98,15 @@ instance FromJSON FormatArgs where
     w  <- o .:? "write" .!= False
     pure FormatArgs { faModulePath = mp, faWrite = w }
 
-handle :: Limits -> ProjectDir -> Value -> IO ToolResult
-handle lim pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  pd <- teProjectDir env
+  r  <- runHandle (teLimits env) pd rawArgs
+  teInvalidateSession env
+  pure r
+
+runHandle :: Limits -> ProjectDir -> Value -> IO ToolResult
+runHandle lim pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right args -> case mkModulePath pd (T.unpack (faModulePath args)) of

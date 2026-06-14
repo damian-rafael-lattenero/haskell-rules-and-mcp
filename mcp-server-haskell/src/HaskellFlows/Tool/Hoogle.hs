@@ -19,6 +19,7 @@
 module HaskellFlows.Tool.Hoogle
   ( descriptor
   , handle
+  , runHandle
   , HoogleArgs (..)
   , parseHoogleLine
   , HoogleHit (..)
@@ -54,6 +55,7 @@ import HaskellFlows.Config (Limits, hoogleTimeout, unMicros)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -122,8 +124,11 @@ clampLimit n
 maxQueryChars :: Int
 maxQueryChars = 512
 
-handle :: Limits -> Value -> IO ToolResult
-handle lim rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env = runHandle (teLimits env)
+
+runHandle :: Limits -> Value -> IO ToolResult
+runHandle lim rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (Env.toolResponseToResult (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind parseError)

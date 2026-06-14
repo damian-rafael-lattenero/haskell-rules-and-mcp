@@ -31,6 +31,7 @@
 module HaskellFlows.Tool.Batch
   ( descriptor
   , handle
+  , runHandle
   , BatchArgs (..)
   , BatchAction (..)
     -- * Exposed for unit tests
@@ -50,6 +51,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -133,8 +135,11 @@ instance FromJSON BatchArgs where
 -- | The dispatcher is passed as a parameter so this module doesn't
 -- depend on 'HaskellFlows.Mcp.Server' directly — clean DAG, easy to
 -- test in isolation.
-handle :: (ToolCall -> IO ToolResult) -> Value -> IO ToolResult
-handle dispatch rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env = runHandle (teDispatch env)
+
+runHandle :: (ToolCall -> IO ToolResult) -> Value -> IO ToolResult
+runHandle dispatch rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right args ->

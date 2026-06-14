@@ -32,6 +32,7 @@
 -- forwards to when @action="move_symbol"@.
 module HaskellFlows.Tool.Move
   ( handle
+  , runHandle
   , MoveArgs (..)
     -- * Pure slicing helpers (exported for unit tests)
   , SliceResult (..)
@@ -73,6 +74,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 
 data MoveArgs = MoveArgs
@@ -91,8 +93,14 @@ instance FromJSON MoveArgs where
       <*> o .:  "to"
       <*> o .:? "dry_run" .!= False
 
-handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  pd      <- teProjectDir env
+  runHandle ghcSess pd rawArgs
+
+runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
   Right args -> runMove ghcSess pd args
 

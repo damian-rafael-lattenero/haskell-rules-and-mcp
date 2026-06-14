@@ -49,6 +49,7 @@ import HaskellFlows.Parser.Coverage
   , parseCoverage
   )
 import HaskellFlows.Types (ProjectDir, unProjectDir)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -113,8 +114,13 @@ instance FromJSON CoverageArgs where
 coverageTimeoutMicros :: CoverageArgs -> Int
 coverageTimeoutMicros args = caTimeoutMinutes args * 60 * 1_000_000
 
-handle :: ProjectDir -> Value -> IO ToolResult
-handle pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  pd <- teProjectDir env
+  runHandle pd rawArgs
+
+runHandle :: ProjectDir -> Value -> IO ToolResult
+runHandle pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right args -> do

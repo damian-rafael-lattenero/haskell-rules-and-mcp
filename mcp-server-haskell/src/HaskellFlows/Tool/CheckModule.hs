@@ -7,6 +7,7 @@
 module HaskellFlows.Tool.CheckModule
   ( descriptor
   , handle
+  , runHandle
   , CheckArgs (..)
     -- * Issue #42 — properties-gate computation
   , propertiesGate
@@ -58,6 +59,7 @@ import HaskellFlows.Types
   , unModulePath
   , unProjectDir
   )
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -114,8 +116,15 @@ instance FromJSON CheckArgs where
     wb <- o .:? "warnings_block" .!= True
     pure CheckArgs { caModulePath = mp, caWarningsBlock = wb }
 
-handle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  store   <- teStore env
+  pd      <- teProjectDir env
+  runHandle ghcSess store pd rawArgs
+
+runHandle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
+runHandle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right (CheckArgs raw warnBlock) -> case mkModulePath pd (T.unpack raw) of

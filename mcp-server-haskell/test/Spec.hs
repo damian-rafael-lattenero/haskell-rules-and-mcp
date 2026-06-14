@@ -427,6 +427,11 @@ import Spec.WorkflowState hiding
   , testArbitraryModuleRender
   )
 import Spec.WorkflowTool
+import Spec.DispatchUnit
+  ( testHandlerForExhaustive
+  , testHandlerForGhcQuickCheckIsQcTool
+  , testMkToolEnvFields
+  )
 
 main :: IO ()
 main = do
@@ -1891,6 +1896,10 @@ main = do
       , test "#287: loadLimits overrides checkProjectTimeout via env"  testLoadLimitsCheckProjectOverride
       , test "#287: loadLimits overrides outerToolCeiling via env"     testLoadLimitsOuterCeilingOverride
       , test "#287: loadLimits does not touch GHC-session fields"      testLoadLimitsGhcSessionFieldsUnchanged
+      -- Issue #285 — uniform ToolEnv dispatch table
+      , test "#285: handlerFor covers every ToolName (exhaustive)"     testHandlerForExhaustive
+      , test "#285: handlerFor GhcQuickCheck returns handler (QcTool)" testHandlerForGhcQuickCheckIsQcTool
+      , test "#285: ToolEnv construction is total (no strict crash)"   testMkToolEnvFields
       ]
       ++ scratchTests
   if and results then exitSuccess else exitFailure

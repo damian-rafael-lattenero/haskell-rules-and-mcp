@@ -99,6 +99,7 @@ import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.QuickCheck
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -195,8 +196,14 @@ qcArgsLine =
   "do { let qcArgs = stdArgs { chatty = False, maxSuccess = "
     <> show qcMaxSuccess <> " }"
 
-handle :: Store -> GhcSession -> Value -> IO ToolResult
-handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  store   <- teStore env
+  ghcSess <- teSession env
+  runHandle store ghcSess rawArgs
+
+runHandle :: Store -> GhcSession -> Value -> IO ToolResult
+runHandle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right (QuickCheckArgs prop md) -> case sanitizeExpression prop of

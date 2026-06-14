@@ -34,6 +34,7 @@ import HaskellFlows.Parser.Hole
   , RelevantBinding (..)
   )
 import HaskellFlows.Types
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -85,8 +86,14 @@ instance FromJSON HoleArgs where
     hn <- o .:? "hole_name"
     pure HoleArgs { haModulePath = mp, haHoleName = hn }
 
-handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  pd      <- teProjectDir env
+  runHandle ghcSess pd rawArgs
+
+runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (Env.toolResponseToResult (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind parseError)

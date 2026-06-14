@@ -16,6 +16,9 @@ module HaskellFlows.Mcp.Server
   , handleRequest
     -- * Dispatch (re-exported so ghc_batch can recurse)
   , dispatchTool
+    -- * Uniform handler lookup (#285)
+  , handlerFor
+  , mkToolEnv
     -- * Canonical tool registry (shared with ghc_workflow's status view)
   , allToolDescriptors
   , allToolNameTexts
@@ -99,6 +102,7 @@ import HaskellFlows.Mcp.WorkflowState
   , trackTool
   )
 import HaskellFlows.Types (ProjectDir, mkProjectDir, unProjectDir)
+import HaskellFlows.Tool.Env (ToolEnv (..), ToolHandler)
 import qualified HaskellFlows.Tool.AddImport       as AddImportTool
 import qualified HaskellFlows.Tool.Modules         as ModulesTool
 import qualified HaskellFlows.Tool.ApplyExports    as ApplyExportsTool
@@ -386,7 +390,7 @@ handleToolCall srv call rid mProgressToken = case parseToolName (tcName call) of
     logToolStart ctx (redactArgs (tcArguments call))
     t0   <- getPOSIXTime
     resp <- runTool srv GhcBatch rid
-              (BatchTool.handle (dispatchTool srv) (tcArguments call))
+              (BatchTool.handle (mkToolEnv srv noopSink) (tcArguments call))
     t1   <- getPOSIXTime
     logToolEnd ctx (extractResponseStatus resp)
                (round ((t1 - t0) * 1000) :: Int)
@@ -419,242 +423,92 @@ dispatchTool srv call = case parseToolName (tcName call) of
   -- envelope is the unit of work the client sees.
   Just tn -> dispatchByName srv noopSink (tcArguments call) tn
 
+-- | Build a 'ToolEnv' from a live 'Server' + a progress sink.
+-- All IO-valued fields are thunks — they execute only if the tool
+-- reaches the field. Raw-ref fields are exposed for the handful of
+-- tools that mutate shared state (Project, PropertyStore, Workflow).
+mkToolEnv :: Server -> ProgressSink -> ToolEnv
+mkToolEnv srv sink = ToolEnv
+  { teSession           = getOrStartGhcSession srv
+  , teProjectDir        = readIORef (srvProjectDir srv)
+  , teStore             = readIORef (srvStore srv)
+  , teScratchpad        = readIORef (srvScratchpad srv)
+  , teWorkflowState     = readState (srvWorkflowState srv)
+  , teStaleness         = checkStaleness (srvBinaryPath srv) (srvBootPosix srv)
+  , teIsSelf            = readIORef (srvIsSelfProject srv)
+  , teLimits            = srvLimits srv
+  , teSink              = sink
+  , teDescriptors       = allToolDescriptors
+  , teToolNames         = allToolNameTexts
+  , teSessionRef        = srvGhcSession srv
+  , teProjectDirRef     = srvProjectDir srv
+  , teStoreRef          = srvStore srv
+  , teScratchpadRef     = srvScratchpad srv
+  , teIsSelfRef         = srvIsSelfProject srv
+  , teDispatch          = dispatchTool srv
+  , teInvalidateSession = invalidateGhcSessionIfPresent srv
+  , teInvalidateStanza  = invalidateStanzaFlagsIfPresent srv
+  }
+
 -- | Exhaustive dispatch from 'ToolName' to the corresponding handler.
--- @-Wincomplete-patterns@ guarantees that adding a constructor to
--- 'ToolName' without wiring its handler is a compile error — pre-ADT
--- the same omission silently fell through to "Unknown tool".
+-- @-Wincomplete-patterns@ on 'handlerFor' guarantees that adding a
+-- constructor to 'ToolName' without wiring its handler is a compile
+-- error. After #285 every handler carries the uniform 'ToolHandler'
+-- signature; 'mkToolEnv' is called once and the table is a pure lookup.
+--
+-- 'GhcQuickCheck' retains a 3-line routing arm: 'runs' >= 2 routes to
+-- the determinism detector rather than the standard single-QC path.
 dispatchByName :: Server -> ProgressSink -> Value -> ToolName -> IO ToolResult
-dispatchByName srv sink args = \case
-  GhcLoad -> do
-    -- Wave-2 full GhcSession: cabal-aware stanza compile via
-    -- loadForTarget, diagnostics captured from the logger hook,
-    -- rendered to GHCi-style text so agents still see 'raw' output.
-    ghcSess <- getOrStartGhcSession srv
-    pd      <- readIORef (srvProjectDir srv)
-    Load.handle ghcSess pd args
-  GhcType -> do
-    -- Phase-2 migrated: reads from the in-process GHC API session,
-    -- not the legacy subprocess ghci. Auto-load on first call keeps
-    -- the FlowExploratory 'type(localBinding)' scenario green.
-    ghcSess <- getOrStartGhcSession srv
-    TypeTool.handle ghcSess args
-  GhcInfo -> do
-    -- Phase-2 migrated: getInfo + TyThing classification.
-    ghcSess <- getOrStartGhcSession srv
-    InfoTool.handle ghcSess args
-  GhcEval -> do
-    -- Wave-5 full in-process. Fast path: show-wrap + compileExpr.
-    -- Fallback: evalIOString (for IO-typed expressions).
-    ghcSess <- getOrStartGhcSession srv
-    EvalTool.handle ghcSess args
-  GhcQuickCheck -> do
-    -- Wave-3 full in-process: compileExpr + unsafeCoerce of a
-    -- Test.QuickCheck.quickCheckWithResult invocation.
-    -- #94 Phase C: 'runs' >= 2 routes to the Determinism handler
-    -- (the same N-runs-flakiness-detector that ghc_determinism
-    -- used to expose). 'runs' absent or <= 1 → single QC run as
-    -- before. Behaviour-preserving relative to the legacy paths.
-    ghcSess <- getOrStartGhcSession srv
-    case quickCheckRuns args of
-      Just n | n >= 2 -> DeterminismTool.handle ghcSess args
-      _              -> do
-        store <- readIORef (srvStore srv)
-        QcTool.handle store ghcSess args
-  GhcHole -> do
-    -- Wave-2 full GhcSession: Deferred compile via stanza flags,
-    -- diagnostics captured through the logger hook, rendered to
-    -- GHCi-style text for parseTypedHoles.
-    ghcSess <- getOrStartGhcSession srv
-    pd      <- readIORef (srvProjectDir srv)
-    HoleTool.handle ghcSess pd args
-  GhcArbitrary -> do
-    -- Wave-4 full GhcSession: parseName + getInfo + showPprUnsafe.
-    ghcSess <- getOrStartGhcSession srv
-    pd      <- readIORef (srvProjectDir srv)
-    ArbitraryTool.handle ghcSess pd args
-  HoogleSearch ->
-    HoogleTool.handle (srvLimits srv) args
-  GhcWorkflow -> do
-    ws        <- readState (srvWorkflowState srv)
-    staleness <- checkStaleness (srvBinaryPath srv) (srvBootPosix srv)
-    isSelf    <- readIORef (srvIsSelfProject srv)
-    WorkflowTool.handle
-      (srvProjectDir srv)
-      (srvGhcSession srv)
-      allToolNameTexts
-      ws
-      staleness
-      isSelf
-      (srvScratchpad srv)    -- #253 Phase 5: scratchpad summary in status
-      args
-  GhcCheckModule -> do
-    -- Wave-5 full GhcSession: compile/warnings/holes + in-process
-    -- property replay via Regression.runOne.
-    ghcSess <- getOrStartGhcSession srv
-    pd      <- readIORef (srvProjectDir srv)
-    store   <- readIORef (srvStore srv)
-    CheckModuleTool.handle ghcSess store pd args
-  GhcCoverage -> do
-    pd <- readIORef (srvProjectDir srv)
-    CoverageTool.handle pd args
-  GhcComplete -> do
-    -- Phase-2 migrated: in-process getNamesInScope + prefix filter.
-    ghcSess <- getOrStartGhcSession srv
-    CompleteTool.handle ghcSess args
-  GhcFormat -> do
-    pd <- readIORef (srvProjectDir srv)
-    r  <- FormatTool.handle (srvLimits srv) pd args
-    invalidateGhcSessionIfPresent srv
-    pure r
-  GhcDeps -> do
-    pd <- readIORef (srvProjectDir srv)
-    r  <- DepsTool.handle pd args
-    -- Stanza flags hold the resolved package set; ghc_deps just
-    -- changed it, so re-bootstrap on next session use.
-    invalidateStanzaFlagsIfPresent srv
-    pure r
-  GhcDoc -> do
-    -- Phase-2 migrated: GHC.getDocs on the resolved Name.
-    ghcSess <- getOrStartGhcSession srv
-    DocTool.handle ghcSess args
-  GhcGoto -> do
-    -- Phase-2 migrated: in-process Name -> nameSrcSpan lookup.
-    ghcSess <- getOrStartGhcSession srv
-    GotoTool.handle ghcSess args
-  GhcRefactor -> do
-    -- Wave-5 full GhcSession: compile-verify via loadForTarget.
-    ghcSess <- getOrStartGhcSession srv
-    pd      <- readIORef (srvProjectDir srv)
-    RefactorTool.handle ghcSess pd args
-  GhcLab -> do
-    -- Issue #60 Phase 1: module-wide property audit. Composes
-    -- Suggest.applyRules + Tool.QuickCheck per top-level binding.
-    ghcSess <- getOrStartGhcSession srv
-    pd      <- readIORef (srvProjectDir srv)
-    store   <- readIORef (srvStore srv)
-    LabTool.handle ghcSess store pd args
-  GhcExplainError -> do
-    -- Issue #59 Phase 1: structured explanation-context builder.
-    -- The agent's own LLM consumes the response and proposes
-    -- candidates; Phase 2 will add a verify endpoint.
-    ghcSess <- getOrStartGhcSession srv
-    pd      <- readIORef (srvProjectDir srv)
-    ExplainErrorTool.handle ghcSess pd args
-  GhcPerf -> do
-    -- Issue #61 Phase 2: wall-clock perf harness with baseline persistence
-    -- and regression detection (>10% slower triggers status='refused').
-    ghcSess <- getOrStartGhcSession srv
-    pd      <- readIORef (srvProjectDir srv)
-    PerfTool.handle ghcSess pd args
-  GhcWitness -> do
-    -- Issue #65 Phase 1: property-witness explorer. Wraps the
-    -- property with size-bucket instrumentation and runs it via
-    -- the cabal-repl harness so we get QuickCheck's label histogram
-    -- in the formatted output.
-    ghcSess <- getOrStartGhcSession srv
-    WitnessTool.handle ghcSess args
-  GhcLint -> do
-    pd <- readIORef (srvProjectDir srv)
-    LintTool.handle (srvLimits srv) pd args
-  GhcToolchain ->
-    -- #94 Phase C: action-discriminated successor to
-    -- GhcToolchainStatus + GhcToolchainWarmup. ToolchainTool.handle
-    -- defaults action to "status" so an empty payload behaves the
-    -- same as the old ghc_toolchain_status no-arg call.
-    ToolchainTool.handle (srvLimits srv) args
-  GhcProject ->
-    -- #94 Phase C step 5: action-discriminated successor to
-    -- GhcCreateProject + GhcSwitchProject + GhcValidateCabal +
-    -- GhcBootstrap. The dispatch lives here (not inside Tool.Project)
-    -- because each underlying handler has a different signature with
-    -- respect to server state ('IORef ProjectDir', 'MVar GhcSession',
-    -- 'IORef Store', '[ToolDescriptor]'); bundling them into a
-    -- 'ProjectDir -> Value -> IO ToolResult' wrapper would have been
-    -- a cleaner-looking layering violation than this explicit per-arm
-    -- routing. Each branch preserves the original side-effect
-    -- semantics: 'create' invalidates stanza flags; 'switch' mutates
-    -- the project-dir / session / store refs directly inside its own
-    -- handler (we do NOT pre-read the project dir for it because the
-    -- handler tears the session down against the OLD path before
-    -- repointing).
-    -- #275: dispatch now lives in Tool.Project.handle (DI: the project-dir /
-    -- session / store / scratchpad / self refs + an invalidate-stanza callback
-    -- + the descriptor catalog).
-    ProjectTool.handle (srvLimits srv)
-      (srvProjectDir srv) (srvGhcSession srv) (srvStore srv)
-      (srvScratchpad srv) (srvIsSelfProject srv)
-      (invalidateStanzaFlagsIfPresent srv) allToolDescriptors args
-  GhcCheckProject -> do
-    -- Wave-5 full GhcSession (delegates to check_module per file).
-    -- #265/#287: pass sink for per-module progress + lim for env-overridable timeout.
-    ghcSess <- getOrStartGhcSession srv
-    pd      <- readIORef (srvProjectDir srv)
-    store   <- readIORef (srvStore srv)
-    CheckProjectTool.handle (srvLimits srv) sink ghcSess store pd args
-  GhcSuggest -> do
-    -- Wave-5 full GhcSession: exprType + module-graph walk for siblings.
-    ghcSess <- getOrStartGhcSession srv
-    SuggestTool.handle ghcSess args
-  GhcGate -> do
-    ghcSess <- getOrStartGhcSession srv
-    pd      <- readIORef (srvProjectDir srv)
-    store   <- readIORef (srvStore srv)
-    -- #265: pass the progress sink so ghc_gate streams per-step events.
-    GateTool.handle store ghcSess pd sink args
-  GhcAddImport -> do
-    -- #146: AddImportTool now needs the session to inject the top
-    -- candidate directly into the interactive context. We do NOT
-    -- invalidate the load cache here — the whole point is to KEEP the
-    -- newly-added import in scope for subsequent ghc_eval calls.
-    ghcSess <- getOrStartGhcSession srv
-    AddImportTool.handle (srvLimits srv) ghcSess args
-  GhcModules -> do
-    -- #94 Phase B: action-discriminated 'modules' primitive.
-    -- ModulesTool.handle dispatches on args.action ∈ {"add","remove"}
-    -- and forwards to the underlying AddModules / RemoveModules
-    -- handlers; .cabal writes there require stanza-flag re-bootstrap.
-    pd <- readIORef (srvProjectDir srv)
-    r  <- ModulesTool.handle pd args
-    invalidateStanzaFlagsIfPresent srv
-    pure r
-  GhcApplyExports -> do
-    pd <- readIORef (srvProjectDir srv)
-    r  <- ApplyExportsTool.handle pd args
-    invalidateGhcSessionIfPresent srv
-    pure r
-  GhcFixWarning -> do
-    pd <- readIORef (srvProjectDir srv)
-    r  <- FixWarningTool.handle pd args
-    invalidateGhcSessionIfPresent srv
-    pure r
-  GhcImports -> do
-    -- Phase-6 migrated: reads from GhcSession's interactive context.
-    ghcSess <- getOrStartGhcSession srv
-    ImportsTool.handle ghcSess args
-  GhcBrowse -> do
-    -- Phase-2 migrated: in-process getModuleInfo + modInfoExports.
-    ghcSess <- getOrStartGhcSession srv
-    BrowseTool.handle ghcSess args
-  GhcPropertyStore ->
-    -- #94 Phase C step 6: action-discriminated successor to
-    -- GhcPropertyLifecycle + GhcRegression + GhcQuickCheckExport +
-    -- GhcPropertyAudit. #275: dispatch now lives in Tool.PropertyStore.handle
-    -- (DI: a session-starter + the store / project-dir refs).
-    PropertyStoreTool.handle
-      (getOrStartGhcSession srv) (srvStore srv) (srvProjectDir srv) args
-  GhcBatch ->
-    -- Reachable only via 'dispatchTool' (e.g. when 'BatchTool.handle'
-    -- ever recursed into the dispatcher). 'BatchTool' itself rejects
-    -- nesting; this arm exists to keep the case exhaustive.
-    BatchTool.handle (dispatchTool srv) args
-  GhcScratch -> do
-    -- #253 Phase 4: action=promote is live. check/promote use the GHC
-    -- session; promote also needs the project dir to build a ModulePath.
-    -- write/list/show/clear still touch only the store.
-    scratch  <- readIORef (srvScratchpad srv)
-    ghcSess  <- getOrStartGhcSession srv
-    pd       <- readIORef (srvProjectDir srv)
-    ScratchTool.handle scratch ghcSess pd args
+dispatchByName srv sink args tn =
+  let env = mkToolEnv srv sink
+  in case tn of
+    GhcQuickCheck ->
+      -- #94 Phase C: 'runs' >= 2 routes to the Determinism handler.
+      case quickCheckRuns args of
+        Just n | n >= 2 -> DeterminismTool.handle env args
+        _               -> QcTool.handle env args
+    other -> handlerFor other env args
+
+-- | Pure lookup table from 'ToolName' to 'ToolHandler'.
+-- Exhaustive: @-Wincomplete-patterns@ enforces every constructor has a branch.
+handlerFor :: ToolName -> ToolHandler
+handlerFor = \case
+  GhcLoad          -> Load.handle
+  GhcType          -> TypeTool.handle
+  GhcInfo          -> InfoTool.handle
+  GhcEval          -> EvalTool.handle
+  GhcQuickCheck    -> QcTool.handle
+  GhcHole          -> HoleTool.handle
+  GhcArbitrary     -> ArbitraryTool.handle
+  HoogleSearch     -> HoogleTool.handle
+  GhcWorkflow      -> WorkflowTool.handle
+  GhcCheckModule   -> CheckModuleTool.handle
+  GhcCoverage      -> CoverageTool.handle
+  GhcComplete      -> CompleteTool.handle
+  GhcFormat        -> FormatTool.handle
+  GhcDeps          -> DepsTool.handle
+  GhcDoc           -> DocTool.handle
+  GhcGoto          -> GotoTool.handle
+  GhcRefactor      -> RefactorTool.handle
+  GhcLab           -> LabTool.handle
+  GhcExplainError  -> ExplainErrorTool.handle
+  GhcPerf          -> PerfTool.handle
+  GhcWitness       -> WitnessTool.handle
+  GhcLint          -> LintTool.handle
+  GhcToolchain     -> ToolchainTool.handle
+  GhcProject       -> ProjectTool.handle
+  GhcCheckProject  -> CheckProjectTool.handle
+  GhcSuggest       -> SuggestTool.handle
+  GhcGate          -> GateTool.handle
+  GhcAddImport     -> AddImportTool.handle
+  GhcModules       -> ModulesTool.handle
+  GhcApplyExports  -> ApplyExportsTool.handle
+  GhcFixWarning    -> FixWarningTool.handle
+  GhcImports       -> ImportsTool.handle
+  GhcBrowse        -> BrowseTool.handle
+  GhcPropertyStore -> PropertyStoreTool.handle
+  GhcBatch         -> BatchTool.handle
+  GhcScratch       -> ScratchTool.handle
 
 -- | Synthesize an error 'ToolResult' for an unknown tool name.
 -- Pulled out so 'handleToolCall' and 'dispatchTool' produce the

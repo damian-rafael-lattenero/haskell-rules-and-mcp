@@ -10,6 +10,7 @@
 -- the dispatcher routes to this handler when @runs >= 2@.
 module HaskellFlows.Tool.Determinism
   ( handle
+  , runHandle
   , DeterminismArgs (..)
   , clampRuns
   , maxRuns
@@ -31,6 +32,7 @@ import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..), parseQuickCheckOutput)
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 
 data DeterminismArgs = DeterminismArgs
@@ -65,8 +67,13 @@ maxRuns = determinismMaxRuns defaultLimits
 clampRuns :: Int -> Int
 clampRuns = max 1 . min maxRuns
 
-handle :: GhcSession -> Value -> IO ToolResult
-handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  runHandle ghcSess rawArgs
+
+runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> case sanitizeExpression (daProperty args) of
     Left e ->

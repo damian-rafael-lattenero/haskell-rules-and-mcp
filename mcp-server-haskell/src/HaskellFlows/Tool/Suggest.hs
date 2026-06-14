@@ -84,6 +84,7 @@ import HaskellFlows.Suggest.Rules
   , Suggestion (..)
   , applyRulesCtx
   )
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -136,8 +137,13 @@ instance FromJSON SuggestArgs where
     c  <- o .:? "category"
     pure SuggestArgs { saFunctionName = fn, saCategory = c }
 
-handle :: GhcSession -> Value -> IO ToolResult
-handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  runHandle ghcSess rawArgs
+
+runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right args -> case sanitizeExpression (saFunctionName args) of

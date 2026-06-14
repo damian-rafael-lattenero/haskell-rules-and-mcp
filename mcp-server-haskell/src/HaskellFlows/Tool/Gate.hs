@@ -70,6 +70,7 @@ import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Parser.QuickCheck as QC
 import HaskellFlows.Tool.Regression (Replay (..), runOne, replayTimeoutMicros)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 descriptor :: ToolDescriptor
@@ -163,8 +164,15 @@ cabalBuildTimeoutMicros args = gaBuildTimeoutMinutes args * 60 * 1_000_000
 -- handle
 --------------------------------------------------------------------------------
 
-handle :: Store -> GhcSession -> ProjectDir -> ProgressSink -> Value -> IO ToolResult
-handle store sess pd sink rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  store   <- teStore env
+  ghcSess <- teSession env
+  pd      <- teProjectDir env
+  runHandle store ghcSess pd (teSink env) rawArgs
+
+runHandle :: Store -> GhcSession -> ProjectDir -> ProgressSink -> Value -> IO ToolResult
+runHandle store sess pd sink rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args
     -- #138: reject vacuous all-skip calls up front so callers never

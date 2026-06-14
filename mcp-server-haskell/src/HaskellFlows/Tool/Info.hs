@@ -73,6 +73,7 @@ import HaskellFlows.Parser.Type
   ( InfoKind (..)
   , ParsedInfo (..)
   )
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -116,8 +117,13 @@ instance FromJSON InfoArgs where
   parseJSON = withObject "InfoArgs" $ \o ->
     InfoArgs <$> o .: "name"
 
-handle :: GhcSession -> Value -> IO ToolResult
-handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  runHandle ghcSess rawArgs
+
+runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (Env.toolResponseToResult (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind parseError)

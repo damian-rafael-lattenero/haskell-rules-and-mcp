@@ -68,6 +68,7 @@ import HaskellFlows.Suggest.Rules
   )
 import qualified HaskellFlows.Tool.Determinism as DeterminismTool
 import qualified HaskellFlows.Tool.QuickCheck as Qc
+import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types
   ( ProjectDir
   , mkModulePath
@@ -145,8 +146,15 @@ confidenceAtLeast threshold candidate =
     rank Medium = 1
     rank High   = 2
 
-handle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  store   <- teStore env
+  pd      <- teProjectDir env
+  runHandle ghcSess store pd rawArgs
+
+runHandle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
+runHandle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> case mkModulePath pd (T.unpack (laModulePath args)) of
     Left e   -> pure (pathTraversalResult (T.pack (show e)))
@@ -472,7 +480,7 @@ checkDeterminism ghcSess args modulePath expr = do
         , "module"   .= modulePath
         , "runs"     .= laDeterminismRuns args
         ]
-  res <- DeterminismTool.handle ghcSess detArgs
+  res <- DeterminismTool.runHandle ghcSess detArgs
   let payload = decodeToolJson (trContent res)
   pure $ case lookupString "status" payload of
     Just "ok" -> Just "stable"

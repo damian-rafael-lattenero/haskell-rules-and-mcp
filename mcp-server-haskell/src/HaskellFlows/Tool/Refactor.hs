@@ -84,6 +84,7 @@ import HaskellFlows.Types
   , mkModulePath
   , unModulePath
   )
+import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -287,8 +288,14 @@ instance FromJSON RefactorArgs where
           , raDryRun         = dr
           }
 
-handle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess pd rawArgs
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  pd      <- teProjectDir env
+  runHandle ghcSess pd rawArgs
+
+runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle ghcSess pd rawArgs
   -- #154: 'list_actions' is a zero-arg discovery action — intercept
   -- it before the rename/extract parser so the caller does not need to
   -- supply module_path / new_name. Returns available action names and
@@ -302,7 +309,7 @@ handle ghcSess pd rawArgs
   -- #94 Phase C: 'move_symbol' is a passthrough to Move.handle.
   -- Intercepted before the rename/extract parser because its payload
   -- shape (symbol/from/to) doesn't match RefactorArgs.
-  | actionTextOf rawArgs == Just "move_symbol" = Move.handle ghcSess pd rawArgs
+  | actionTextOf rawArgs == Just "move_symbol" = Move.runHandle ghcSess pd rawArgs
   | otherwise = case parseEither parseJSON rawArgs of
       Left parseError ->
         pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))

@@ -62,6 +62,7 @@ import System.Timeout (timeout)
 import HaskellFlows.Config (Limits, hlintTimeout, unMicros)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 descriptor :: ToolDescriptor
@@ -122,8 +123,13 @@ instance FromJSON LintArgs where
     f  <- o .:? "fail_on" .!= ("warning" :: Text)
     pure LintArgs { laPath = p, laModulePath = mp, laFailOn = f }
 
-handle :: Limits -> ProjectDir -> Value -> IO ToolResult
-handle lim pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  pd <- teProjectDir env
+  runHandle (teLimits env) pd rawArgs
+
+runHandle :: Limits -> ProjectDir -> Value -> IO ToolResult
+runHandle lim pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right args -> case resolveTarget pd args of

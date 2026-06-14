@@ -42,6 +42,7 @@ import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Tool.Env (ToolEnv (..))
 import qualified HaskellFlows.Tool.Hoogle as Hoogle
 
 descriptor :: ToolDescriptor
@@ -98,8 +99,13 @@ instance FromJSON AddImportArgs where
       <$> o .:  "name"
       <*> o .:? "qualified" .!= False
 
-handle :: Limits -> GhcSession -> Value -> IO ToolResult
-handle lim ghcSess rawArgs = case parseEither parseJSON rawArgs of
+handle :: ToolEnv -> Value -> IO ToolResult
+handle env rawArgs = do
+  ghcSess <- teSession env
+  runHandle (teLimits env) ghcSess rawArgs
+
+runHandle :: Limits -> GhcSession -> Value -> IO ToolResult
+runHandle lim ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err ->
     pure (Env.toolResponseToResult (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind err)
@@ -128,7 +134,7 @@ handle lim ghcSess rawArgs = case parseEither parseJSON rawArgs of
                     [ "query" .= aiName args
                     , "count" .= (10 :: Int)
                     ]
-              hoogleRes <- Hoogle.handle lim hoogleArgs
+              hoogleRes <- Hoogle.runHandle lim hoogleArgs
               let candidates = extractModules hoogleRes
               -- #204: strip .Internal modules then bring the closest
               -- name/module match to the front of the candidate list.
