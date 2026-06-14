@@ -59,6 +59,7 @@ import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
+import HaskellFlows.Util.Safe (safeAt)
 import HaskellFlows.Types (ProjectDir, ModulePath, mkModulePath, unModulePath)
 
 descriptor :: ToolDescriptor
@@ -280,9 +281,7 @@ pickDiagnostic :: Maybe Int -> [GhcError] -> Maybe GhcError
 pickDiagnostic mIdx diags =
   let errs = filter ((== SevError) . geSeverity) diags
   in case mIdx of
-       Just i
-         | i >= 0, i < length errs -> Just (errs !! i)
-         | otherwise               -> Nothing
+       Just i  -> safeAt i errs
        Nothing -> case errs of
          (d : _) -> Just d
          []      -> Nothing
@@ -393,11 +392,10 @@ applyLinePatch :: Text -> PatchSpec -> Maybe Text
 applyLinePatch body patch =
   let lns        = T.lines body
       idx        = psLine patch - 1   -- 0-based index
-  in if idx < 0 || idx >= length lns
-       then Nothing
-       else
-         let ln = lns !! idx
-         in if psOld patch `T.isInfixOf` ln
+  in case safeAt idx lns of
+       Nothing -> Nothing
+       Just ln ->
+         if psOld patch `T.isInfixOf` ln
               then
                 let replaced = T.replace (psOld patch) (psNew patch) ln
                     newLns   = take idx lns <> [replaced] <> drop (idx + 1) lns

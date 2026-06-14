@@ -25,13 +25,15 @@ module HaskellFlows.Tool.Hoogle
     -- * Exported for unit tests (#139)
   , HoogleOutcome (..)
   , renderResult
+    -- * Exported for unit tests (#289)
+  , splitModule
   ) where
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import Data.List (nubBy)
+import Data.List (nubBy, unsnoc)
 import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -264,7 +266,9 @@ splitModule lhs =
   in case ws of
        []     -> (Nothing, "")
        [_]    -> (Nothing, lhs)
-       xs     -> (Just (T.unwords (init xs)), last xs)
+       xs     -> case unsnoc xs of
+                   Nothing        -> (Nothing, lhs)  -- can't happen; xs has 2+ words
+                   Just (is, lst) -> (Just (T.unwords is), lst)
 
 --------------------------------------------------------------------------------
 -- response shaping

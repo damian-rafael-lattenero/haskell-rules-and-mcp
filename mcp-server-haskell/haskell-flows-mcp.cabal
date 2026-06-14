@@ -132,6 +132,7 @@ library
                       HaskellFlows.Bench.Budget
                       HaskellFlows.Bench.Runner
                       HaskellFlows.Mcp.Progress
+                      HaskellFlows.Util.Safe
     build-depends:    base              >= 4.20 && < 5
                     , aeson             >= 2.2  && < 2.3
                     , bytestring        >= 0.11 && < 0.13
@@ -259,6 +260,7 @@ test-suite haskell-flows-mcp-test
                       Spec.Witness
                       Spec.WorkflowState
                       Spec.WorkflowTool
+                      Spec.PartialFunctions
     build-depends:    base              >= 4.20 && < 5
                     , haskell-flows-mcp
                     , aeson             >= 2.2  && < 2.3

@@ -24,10 +24,10 @@ library
     import:           shared
     hs-source-dirs:   src
     exposed-modules:  LambdaHM
-                      LambdaHM.Syntax
-                      LambdaHM.Infer
-                      LambdaHM.Eval
-                      LambdaHM.Pretty
+                      Lambda.Syntax
+                      Lambda.Eval
+                      Lambda.Infer
+                      Lambda.Pretty
     build-depends:    base >= 4.20 && < 5
                     , containers
                     , mtl
@@ -40,3 +40,4 @@ test-suite lambda-hm-test
     build-depends:    base >= 4.20 && < 5
                     , lambda-hm
                     , QuickCheck
+                    , containers

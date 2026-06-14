@@ -28,6 +28,9 @@ module HaskellFlows.Bench.Runner
   ) where
 
 import Data.List (sort)
+import Data.Maybe (fromMaybe)
+
+import HaskellFlows.Util.Safe (safeAt)
 
 -- | Computed latency statistics over a set of warm samples.
 -- All numeric fields are in milliseconds.
@@ -70,7 +73,7 @@ computePercentile xs  pct =
       -- ceiling-based index; clamp to [0, n-1]
       rawIdx  = ceiling (pct / 100.0 * fromIntegral n :: Double) - 1
       idx     = max 0 (min (n - 1) rawIdx)
-  in sorted !! idx
+  in fromMaybe 0 (safeAt idx sorted)
 
 -- | Compute full latency statistics from a raw sample list.
 --

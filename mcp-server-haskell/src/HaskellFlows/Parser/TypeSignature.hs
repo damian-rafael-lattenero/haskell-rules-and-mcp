@@ -25,6 +25,7 @@ module HaskellFlows.Parser.TypeSignature
   ) where
 
 import Data.Char (isAlphaNum, isUpper, isLower)
+import Data.List (unsnoc)
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -85,8 +86,9 @@ parseSignature raw = do
         , psReturn      = rt
         }
     xs  -> do
-      args <- mapM parseType (init xs)
-      rt   <- parseType (last xs)
+      (argXs, retX) <- unsnoc xs
+      args <- mapM parseType argXs
+      rt   <- parseType retX
       pure ParsedSig
         { psConstraints = constraints
         , psArgs        = args

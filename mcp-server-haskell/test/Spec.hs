@@ -411,6 +411,7 @@ import Spec.Toolchain
   , testToolchainWarmupEnvelopeShape
   , testToolchainWarmupPartialWarnings
   )
+import Spec.PartialFunctions
 import Spec.TraversalGuards
 import Spec.TypeEval
 import Spec.ValidateCabal
@@ -1845,6 +1846,23 @@ main = do
       , test "#245: renderResult emits low_precision_warning when mean < 1ms" testPerfLowPrecisionWarning
       , test "#245: renderResult emits warmup_warning when warmup >10x mean"  testPerfWarmupWarning
       , test "#245: renderResult no warnings for healthy 5ms mean"            testPerfNoWarningHealthy
+      -- Issue #289 — eliminate partial functions; Util.Safe totality
+      , test "#289: safeAt returns Nothing for negative index"        testSafeAtNegative
+      , test "#289: safeAt returns Nothing for out-of-bounds index"   testSafeAtOutOfBounds
+      , test "#289: safeAt returns Just for valid index"              testSafeAtHit
+      , test "#289: safeHead returns Nothing on empty list"           testSafeHeadEmpty
+      , test "#289: safeHead returns Just on non-empty list"          testSafeHeadNonEmpty
+      , test "#289: safeLast returns Nothing on empty list"           testSafeLastEmpty
+      , test "#289: safeLast returns Just on non-empty list"          testSafeLastNonEmpty
+      , test "#289: initLast returns Nothing on empty list"           testInitLastEmpty
+      , test "#289: initLast returns Just ([],x) on singleton"        testInitLastSingleton
+      , test "#289: initLast returns Just (init,last) on multi"       testInitLastMulti
+      , test "#289: parseSignature empty input is total"              testParseSignatureEmpty
+      , test "#289: parseSignature singleton input is total"          testParseSignatureSingleton
+      , test "#289: splitModule empty input is total"                 testSplitModuleEmpty
+      , test "#289: splitModule singleton input is total"             testSplitModuleSingleton
+      , test "#289: computePercentile empty list returns 0"           testComputePercentileEmpty
+      , test "#289: aggregate empty list is total"                    testAggregateEmpty
       ]
       ++ scratchTests
   if and results then exitSuccess else exitFailure

@@ -471,10 +471,10 @@ renderRunLine i sp =
           _           -> label
   in "runProp \"" <> displayName <> "\" " <> label
   where
-    -- Safe version of 'last' that returns the whole text on an empty list.
-    last' fallback xs = case xs of
-      [] -> fallback
-      _  -> last xs
+    -- Total version of 'last': pattern-match on the reversed list.
+    last' fallback xs = case reverse xs of
+      []    -> fallback
+      (x:_) -> x
 
 -- | Sanitise a label for safe embedding in a Haskell string literal.
 -- Rules:

@@ -202,9 +202,9 @@ stripProjectDirPrefix rootN raw
   | isAbsolute raw = raw
   | otherwise =
       let rootSegs = splitDirectories rootN
-          baseName  = case rootSegs of
-            [] -> ""
-            _  -> last rootSegs
+          baseName  = case reverse rootSegs of
+            []    -> ""
+            (x:_) -> x
           rawSegs  = splitDirectories raw
       in case rawSegs of
            (first : rest)

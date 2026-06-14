@@ -1,0 +1,43 @@
+# HLint configuration for haskell-flows-mcp
+#
+# Issue #289: ban bare partial functions in src/ — use HaskellFlows.Util.Safe instead.
+# The rules below turn the absence of partial calls into a CI-enforced invariant.
+# Any new usage added to src/ will fail `ghc_lint` and the CI hlint step.
+
+- error:
+    name: "Use safeAt instead of (!!)"
+    lhs: "xs !! n"
+    rhs: "HaskellFlows.Util.Safe.safeAt n xs"
+    note: "Use HaskellFlows.Util.Safe.safeAt — (xs !! i) throws on out-of-bounds."
+
+- error:
+    name: "Use safeLast instead of last"
+    lhs: "last xs"
+    rhs: "HaskellFlows.Util.Safe.safeLast xs"
+    note: "Use HaskellFlows.Util.Safe.safeLast — last throws on empty lists."
+
+- error:
+    name: "Use safeHead instead of head"
+    lhs: "head xs"
+    rhs: "HaskellFlows.Util.Safe.safeHead xs"
+    note: "Use HaskellFlows.Util.Safe.safeHead — head throws on empty lists."
+
+- error:
+    name: "Avoid fromJust"
+    lhs: "fromJust x"
+    rhs: "maybe (error \"fromJust\") id x"
+    note: "Use explicit maybe/case — fromJust throws on Nothing."
+
+# Allow the helpers inside HaskellFlows.Util.Safe itself to use the
+# Prelude functions they wrap (they're the total implementations).
+- ignore:
+    name: "Use safeAt instead of (!!)"
+    within: ["HaskellFlows.Util.Safe"]
+
+- ignore:
+    name: "Use safeLast instead of last"
+    within: ["HaskellFlows.Util.Safe"]
+
+- ignore:
+    name: "Use safeHead instead of head"
+    within: ["HaskellFlows.Util.Safe"]

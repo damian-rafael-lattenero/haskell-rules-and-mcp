@@ -43,6 +43,7 @@ import HaskellFlows.Mcp.PermissiveJSON
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
+import HaskellFlows.Util.Safe (safeAt)
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -245,15 +246,14 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
           -- An out-of-bounds line previously silently yielded
           -- srcLine="" which produced fixable:false with no
           -- indication the input was wrong.
-          if ix < 0 || ix >= length lns
-            then pure (errorResult
+          case safeAt ix lns of
+            Nothing -> pure (errorResult
                    ("Line " <> T.pack (show (fwLine args))
                     <> " is out of bounds — the file has "
                     <> T.pack (show (length lns)) <> " line"
                     <> (if length lns == 1 then "" else "s") <> "."))
-            else do
-              let srcLine = lns !! ix
-                  plan    = planForCodeWithName (fwCode args)
+            Just srcLine -> do
+              let plan    = planForCodeWithName (fwCode args)
                               (fwName args) srcLine
               if fwApply args && fpFixable plan
                 then writePatched full plan args body
@@ -323,14 +323,17 @@ patchPrecedingTypeSig :: Text -> [Text] -> [Text]
 patchPrecedingTypeSig nm ls = fromMaybe ls (go (length ls - 1))
   where
     go i
-      | i < 0 = Nothing
-      | isTypeSigLine nm (ls !! i) =
-          let before  = take i ls
-              renamed = T.replace (nm <> " ::") ("_" <> nm <> " ::") (ls !! i)
-              after   = drop (i + 1) ls
-          in Just (before <> [renamed] <> after)
-      | isBlankOrComment (ls !! i) = go (i - 1)
-      | otherwise = Nothing   -- hit a non-blank non-comment non-sig; give up
+      | i < 0     = Nothing
+      | otherwise = case safeAt i ls of
+          Nothing   -> Nothing  -- index out of bounds; give up
+          Just line
+            | isTypeSigLine nm line ->
+                let before  = take i ls
+                    renamed = T.replace (nm <> " ::") ("_" <> nm <> " ::") line
+                    after   = drop (i + 1) ls
+                in Just (before <> [renamed] <> after)
+            | isBlankOrComment line -> go (i - 1)
+            | otherwise -> Nothing  -- hit a non-blank non-comment non-sig; give up
 
     isBlankOrComment l =
       T.null (T.strip l) || "--" `T.isPrefixOf` T.stripStart l

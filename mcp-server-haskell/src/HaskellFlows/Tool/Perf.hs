@@ -57,6 +57,7 @@ import HaskellFlows.Ghc.ApiSession
   , withGhcSession
   )
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
+import HaskellFlows.Util.Safe (safeAt)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -238,8 +239,9 @@ aggregate ns =
       mean   = total / fromIntegral cnt
       sorted = sort ns
       med    = case (cnt `mod` 2, cnt `div` 2) of
-        (1, m) -> fromIntegral (sorted !! m)
-        (0, m) -> fromIntegral (sorted !! (m - 1) + sorted !! m) / 2
+        (1, m) -> fromIntegral (fromMaybe 0 (safeAt m sorted))
+        (0, m) -> fromIntegral (fromMaybe 0 (safeAt (m - 1) sorted)
+                              + fromMaybe 0 (safeAt m sorted)) / 2
         _      -> mean
   in Stats
        { sMean   = mean
