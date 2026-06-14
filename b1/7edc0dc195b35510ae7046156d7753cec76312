@@ -1,0 +1,122 @@
+mcp-server-haskell/src/HaskellFlows/Tool/Coverage.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 52,117-123
+mcp-server-haskell/src/HaskellFlows/Tool/Imports.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 36,62-68
+mcp-server-haskell/src/HaskellFlows/Tool/Workflow.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 18,73,156-163,173
+mcp-server-haskell/src/HaskellFlows/Tool/Project.hs
+  s_d23a82140bf8e8::t_64e58b4f979b0c 65-66
+  s_d23a82140bf8e8::t_218234c38da8d7 54,64,67-68,79
+mcp-server-haskell/src/HaskellFlows/Tool/Lab.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 71,149-157,483
+mcp-server-haskell/src/HaskellFlows/Tool/Complete.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 44,110-116
+mcp-server-haskell/src/HaskellFlows/Tool/Load.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 60,112-119
+mcp-server-haskell/src/HaskellFlows/Tool/Scratch.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 22,60,260-268
+mcp-server-haskell/src/HaskellFlows/Tool/Modules.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 44,119-127
+mcp-server-haskell/src/HaskellFlows/Tool/Batch.hs
+  s_d23a82140bf8e8::t_44cea98bad419f 139
+  s_d23a82140bf8e8::t_218234c38da8d7 34,54,138,140-142
+mcp-server-haskell/src/HaskellFlows/Tool/ExplainError.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 64,160-167
+mcp-server-haskell/src/HaskellFlows/Tool/Perf.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 66,159-166
+mcp-server-haskell/src/HaskellFlows/Tool/CheckModule.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 10,62,119-127
+mcp-server-haskell/haskell-flows-mcp.cabal
+  s_d23a82140bf8e8::t_218234c38da8d7 137,267
+  s_d23a82140bf8e8::t_07268137beb35e 268
+mcp-server-haskell/src/HaskellFlows/Tool/Format.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 42,101-109
+mcp-server-haskell/src/HaskellFlows/Tool/Deps.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 75,256-264
+mcp-server-haskell/test/Spec/DispatchUnit.hs
+  s_d23a82140bf8e8::t_2fd0d47e61b19f 1-17,19-34,38-39,43,46-88
+  s_d23a82140bf8e8::t_26568130e02b24 18
+  s_d23a82140bf8e8::t_fa1570acdfafaf 35-37,40-42,44-45
+mcp-server-haskell/src/HaskellFlows/Tool/Arbitrary.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 47,148-155
+mcp-server-haskell/src/HaskellFlows/Tool/Move.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 35,77,96-103
+mcp-server-haskell/src/HaskellFlows/Tool/FixWarning.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 46,230-238
+mcp-server-haskell/src/HaskellFlows/Tool/Lint.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 65,126-132
+mcp-server-haskell/src/HaskellFlows/Tool/Witness.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 62,133-139
+mcp-server-haskell/src/HaskellFlows/Tool/Eval.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 73,116-122
+mcp-server-haskell/test/Spec/FinalMisc.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 123,476,635
+  s_d23a82140bf8e8::t_7892b062c65278 631-632
+  s_d23a82140bf8e8::t_10c3c0179134e6 639
+mcp-server-haskell/src/HaskellFlows/Tool/Toolchain.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 36,77,79-81
+  s_d23a82140bf8e8::t_c077b575ed10df 78
+mcp-server-haskell/src/HaskellFlows/Tool/PropertyStore.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 51,59,61-63
+  s_d23a82140bf8e8::t_1854ce147b9805 60
+mcp-server-haskell/src/HaskellFlows/Tool/Info.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 76,120-126
+mcp-server-haskell/src/HaskellFlows/Tool/Hole.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 37,89-96
+mcp-server-haskell/src/HaskellFlows/Tool/Goto.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 52,107-113
+mcp-server-haskell/src/HaskellFlows/Tool/Browse.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 45,83-89
+mcp-server-haskell/src/HaskellFlows/Tool/AddImport.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 45,102-108,137
+mcp-server-haskell/src/HaskellFlows/Tool/CheckProject.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 50,118-126,362
+mcp-server-haskell/src/HaskellFlows/Tool/Hoogle.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 22,58,127,129-131
+  s_d23a82140bf8e8::t_f4eed3da6c2c28 128
+mcp-server-haskell/src/HaskellFlows/Tool/Determinism.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 13,35,70-76
+mcp-server-haskell/src/HaskellFlows/Tool/Doc.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 41,85-91
+mcp-server-haskell/src/HaskellFlows/Tool/ApplyExports.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 29,92-100
+mcp-server-haskell/src/HaskellFlows/Tool/Gate.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 73,167-175
+mcp-server-haskell/test/Spec/ToolEnvFixture.hs
+  s_d23a82140bf8e8::t_d8848b78ecd07a 26-32
+  s_d23a82140bf8e8::t_477e7968decea1 1-15,17-25,33-69
+  s_d23a82140bf8e8::t_17c5a2832d026f 16
+mcp-server-haskell/src/HaskellFlows/Tool/Type.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 37,82-86,88-89
+mcp-server-haskell/src/HaskellFlows/Tool/Env.hs
+  s_d23a82140bf8e8::t_a585d91a73b457 6-11
+  s_d23a82140bf8e8::t_bde7d49e816de8 1-5,12-70
+mcp-server-haskell/src/HaskellFlows/Tool/Suggest.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 87,140-146
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheck.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 102,199-206
+mcp-server-haskell/src/HaskellFlows/Mcp/Server.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 105,393,426-452,454-460,462-511
+  s_d23a82140bf8e8::t_d197de9dbe6dbf 19-21
+mcp-server-haskell/test/Spec.hs
+  s_d23a82140bf8e8::t_1556f6af60ab6b 1899-1902
+  s_d23a82140bf8e8::t_761333c14d9beb 430-434
+mcp-server-haskell/src/HaskellFlows/Tool/Refactor.hs
+  s_d23a82140bf8e8::t_218234c38da8d7 87,291-298,312
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "b17edc0dc195b35510ae7046156d7753cec76312",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "dlattenero_meli <damian.lattenero@mercadolibre.com>"
+    }
+  }
+}
