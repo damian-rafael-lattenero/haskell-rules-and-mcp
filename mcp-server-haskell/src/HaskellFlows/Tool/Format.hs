@@ -34,6 +34,7 @@ import System.Process
   )
 import System.Timeout (timeout)
 
+import HaskellFlows.Config (Limits, formatTimeout, unMicros)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -96,11 +97,8 @@ instance FromJSON FormatArgs where
     w  <- o .:? "write" .!= False
     pure FormatArgs { faModulePath = mp, faWrite = w }
 
-formatTimeoutMicros :: Int
-formatTimeoutMicros = 30 * 1_000_000  -- 30 s
-
-handle :: ProjectDir -> Value -> IO ToolResult
-handle pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: Limits -> ProjectDir -> Value -> IO ToolResult
+handle lim pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right args -> case mkModulePath pd (T.unpack (faModulePath args)) of
@@ -133,7 +131,7 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
                 Nothing ->
                   pure (unavailableResult "Neither fourmolu nor ormolu was found on PATH")
                 Just f -> do
-                  outcome <- runFormatter pd f mp (faWrite args)
+                  outcome <- runFormatter lim pd f mp (faWrite args)
                   pure (renderResult f mp (faWrite args) outcome)
 
 -- | Issue #90 Phase C: caller-side parse failure → status='failed'
@@ -171,8 +169,8 @@ data FmtOutcome
   | FmtFailure !Int !Text
   deriving stock (Eq, Show)
 
-runFormatter :: ProjectDir -> Formatter -> ModulePath -> Bool -> IO FmtOutcome
-runFormatter pd f mp write = do
+runFormatter :: Limits -> ProjectDir -> Formatter -> ModulePath -> Bool -> IO FmtOutcome
+runFormatter lim pd f mp write = do
   -- We pass the traversal-checked absolute path from 'unModulePath'
   -- directly; --mode inplace rewrites in place, --mode stdout returns
   -- the formatted text without touching disk.
@@ -189,7 +187,7 @@ runFormatter pd f mp write = do
   errVar <- newEmptyMVar
   _ <- forkIO (hGetContents hOut >>= putMVar outVar)
   _ <- forkIO (hGetContents hErr >>= putMVar errVar)
-  exited <- timeout formatTimeoutMicros (waitForProcess ph)
+  exited <- timeout (unMicros (formatTimeout lim)) (waitForProcess ph)
   case exited of
     Nothing -> do
       terminateProcess ph

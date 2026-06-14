@@ -46,6 +46,7 @@ import System.Process
   )
 import System.Timeout (timeout)
 
+import HaskellFlows.Config (Limits, cabalCheckTimeout, unMicros)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Types (ProjectDir, unProjectDir)
@@ -82,11 +83,8 @@ instance ToJSON Issue where
       , "message"  .= iMessage i
       ]
 
-cabalCheckTimeoutMicros :: Int
-cabalCheckTimeoutMicros = 30 * 1_000_000  -- 30 s
-
-handle :: ProjectDir -> Value -> IO ToolResult
-handle pd rawArgs = case parseEither parseJSON rawArgs :: Either String Value of
+handle :: Limits -> ProjectDir -> Value -> IO ToolResult
+handle lim pd rawArgs = case parseEither parseJSON rawArgs :: Either String Value of
   Left parseError ->
     pure (Env.toolResponseToResult (Env.mkFailed
       ((Env.mkErrorEnvelope Env.Validation
@@ -111,7 +109,7 @@ handle pd rawArgs = case parseEither parseJSON rawArgs :: Either String Value of
                     { Env.eeCause = Just (T.pack (show e)) })))
           Right body -> do
             heuristicIssues <- (scanCabalText body ++) <$> scanExposedModules pd body
-            cabalCheckIssues <- runCabalCheck pd
+            cabalCheckIssues <- runCabalCheck lim pd
             pure (renderResult file (heuristicIssues <> cabalCheckIssues))
 
 --------------------------------------------------------------------------------
@@ -346,8 +344,8 @@ checkModuleExists pd name = do
 -- cabal check passthrough
 --------------------------------------------------------------------------------
 
-runCabalCheck :: ProjectDir -> IO [Issue]
-runCabalCheck pd = do
+runCabalCheck :: Limits -> ProjectDir -> IO [Issue]
+runCabalCheck lim pd = do
   mCabal <- findExecutable "cabal"
   case mCabal of
     Nothing -> pure
@@ -362,7 +360,7 @@ runCabalCheck pd = do
       errVar <- newEmptyMVar
       _ <- forkIO (hGetContents hOut >>= putMVar outVar)
       _ <- forkIO (hGetContents hErr >>= putMVar errVar)
-      exited <- timeout cabalCheckTimeoutMicros (waitForProcess ph)
+      exited <- timeout (unMicros (cabalCheckTimeout lim)) (waitForProcess ph)
       case exited of
         Nothing -> do
           terminateProcess ph

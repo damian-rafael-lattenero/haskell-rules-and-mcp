@@ -51,6 +51,7 @@ import GHC.Utils.Panic (GhcException)
 import System.Timeout (timeout)
 import Unsafe.Coerce (unsafeCoerce)
 
+import HaskellFlows.Config (defaultLimits, evalTimeout, unMicros)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
@@ -157,11 +158,11 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
             _ <- trySyncOnly (resetHscEnvInPlace ghcSess)
             pure timeoutResult
 
--- | Per-eval inner timeout. 30 s matches the ceiling documented in
--- 'Scenarios.FlowTimeoutEnforcement' and leaves comfortable
--- headroom under its 45 s failure threshold.
+-- | Per-eval inner timeout, sourced from 'HaskellFlows.Config.defaultLimits'.
+-- 30 s matches the ceiling documented in 'Scenarios.FlowTimeoutEnforcement'
+-- and leaves comfortable headroom under its 45 s failure threshold.
 evalTimeoutMicros :: Int
-evalTimeoutMicros = 30 * 1_000_000
+evalTimeoutMicros = unMicros (evalTimeout defaultLimits)
 
 evalTimeoutSeconds :: Int
 evalTimeoutSeconds = evalTimeoutMicros `div` 1_000_000

@@ -59,6 +59,7 @@ import System.Process
   )
 import System.Timeout (timeout)
 
+import HaskellFlows.Config (Limits, hlintTimeout, unMicros)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Types (ProjectDir, unProjectDir)
@@ -121,11 +122,8 @@ instance FromJSON LintArgs where
     f  <- o .:? "fail_on" .!= ("warning" :: Text)
     pure LintArgs { laPath = p, laModulePath = mp, laFailOn = f }
 
-hlintTimeoutMicros :: Int
-hlintTimeoutMicros = 60 * 1_000_000  -- 60 s
-
-handle :: ProjectDir -> Value -> IO ToolResult
-handle pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: Limits -> ProjectDir -> Value -> IO ToolResult
+handle lim pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right args -> case resolveTarget pd args of
@@ -136,7 +134,7 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
         Nothing ->
           pure (unavailableResult "hlint binary not found on PATH")
         Just _ -> do
-          res <- runHlint pd target
+          res <- runHlint lim pd target
           pure (renderResult target (laFailOn args) res)
 
 
@@ -223,8 +221,8 @@ data HlintOutcome
   | HlMissingTarget
   deriving stock (Show)
 
-runHlint :: ProjectDir -> FilePath -> IO HlintOutcome
-runHlint pd target = do
+runHlint :: Limits -> ProjectDir -> FilePath -> IO HlintOutcome
+runHlint lim pd target = do
   let cp = (proc "hlint" ["--json", target])
              { cwd     = Just (unProjectDir pd)
              , std_in  = NoStream
@@ -243,7 +241,7 @@ runHlint pd target = do
       errVar <- newEmptyMVar
       _ <- forkIO (hGetContents hOut >>= putMVar outVar)
       _ <- forkIO (hGetContents hErr >>= putMVar errVar)
-      exited <- timeout hlintTimeoutMicros (waitForProcess ph)
+      exited <- timeout (unMicros (hlintTimeout lim)) (waitForProcess ph)
       case exited of
         Nothing -> do
           terminateProcess ph

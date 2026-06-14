@@ -38,6 +38,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import System.Timeout (timeout)
 
+import HaskellFlows.Config (defaultLimits, replayTimeout, unMicros)
 import HaskellFlows.Data.PropertyStore
   ( Store
   , StoredProperty (..)
@@ -79,7 +80,7 @@ instance FromJSON RegressionArgs where
 
 -- | 30 s per property replay, mirroring the ghc_quickcheck budget.
 replayTimeoutMicros :: Int
-replayTimeoutMicros = 30_000_000
+replayTimeoutMicros = unMicros (replayTimeout defaultLimits)
 
 handle :: Store -> GhcSession -> Value -> IO ToolResult
 handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of

@@ -25,6 +25,7 @@ module HaskellFlows.Tool.CheckProject
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
+import Data.Maybe (fromMaybe)
 import Data.Aeson.Types (parseEither)
 import qualified Data.Aeson.KeyMap as AKM
 import Data.Char (isAlphaNum, isAsciiUpper, isSpace)
@@ -37,10 +38,12 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
 
+import HaskellFlows.Config (Limits, checkProjectTimeout, unMicros)
 import HaskellFlows.Data.PropertyStore (Store)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
+import HaskellFlows.Mcp.Progress (ProgressEvent (..), ProgressSink, emitProgress)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
@@ -96,9 +99,10 @@ descriptor =
 data CheckProjectArgs = CheckProjectArgs
   { cpFailFast        :: !Bool
   , cpWarningsBlock   :: !Bool
-    -- ^ #129: overall wall-clock budget. Default 120 s. When the
+    -- ^ #129: overall wall-clock budget. 'Nothing' = use 'checkProjectTimeout'
+    -- from the 'Limits' passed to 'handle' (env-var overridable). When the
     -- deadline fires we return partial results rather than hanging.
-  , cpTimeoutSeconds  :: !Int
+  , cpTimeoutSeconds  :: !(Maybe Int)
   }
   deriving stock (Show)
 
@@ -106,12 +110,12 @@ instance FromJSON CheckProjectArgs where
   parseJSON = withObject "CheckProjectArgs" $ \o -> do
     ff <- o .:? "fail_fast"       .!= False
     wb <- o .:? "warnings_block"  .!= True
-    ts <- o .:? "timeout_seconds" .!= 120
+    ts <- o .:? "timeout_seconds"
     pure CheckProjectArgs { cpFailFast = ff, cpWarningsBlock = wb
-                          , cpTimeoutSeconds = max 1 ts }
+                          , cpTimeoutSeconds = fmap (max 1) ts }
 
-handle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
-handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
+handle :: Limits -> ProgressSink -> GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
+handle lim sink ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right args -> do
@@ -128,15 +132,19 @@ handle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
           Right body -> do
             let moduleNames = parseExposedModules body
             modulePaths   <- resolveModulePaths pd moduleNames
-            -- #129: compute an absolute deadline from the caller's
-            -- budget and pass it to runChecks so each module checks
-            -- the clock before starting — no async-exception surprises.
+            -- #129: compute an absolute deadline from the caller's budget
+            -- (or the env-var-overridable Limits default) so each module
+            -- checks the clock before starting — no async-exception surprises.
             start    <- realToFrac <$> getPOSIXTime
-            let deadline = start + fromIntegral (cpTimeoutSeconds args)
-            (outcomes, timedOut) <- runChecks ghcSess store pd
+            let timeoutSecs = fromMaybe
+                  (unMicros (checkProjectTimeout lim) `div` 1_000_000)
+                  (cpTimeoutSeconds args)
+                deadline = start + fromIntegral timeoutSecs
+                total    = length modulePaths
+            (outcomes, timedOut) <- runChecks sink start total ghcSess store pd
                                       (cpFailFast args) (cpWarningsBlock args)
                                       (Just deadline)
-                                      modulePaths
+                                      1 modulePaths
             pure (renderResult outcomes timedOut)
 
 
@@ -292,51 +300,69 @@ data ModuleOutcome
   | MoSkipped  !Text
   | MoTimedOut !Text   -- #129: budget expired before this module ran
 
--- | Run per-module checks with a deadline.
+-- | Run per-module checks with a deadline and progress reporting.
 --
 -- #129: Before processing each module we compare the current clock
 -- against 'mDeadline'. On expiry, remaining modules are tagged
 -- 'MoTimedOut' and we return @(outcomes, True)@ so the caller can
 -- surface a @timed_out=true@ field in the response.
+--
+-- #265 extension: emits one 'ProgressEvent' per module via 'sink'
+-- so long-running runs surface incremental feedback in the client.
 runChecks
-  :: GhcSession
+  :: ProgressSink
+  -> Double                -- start POSIXTime (for elapsed_ms in events)
+  -> Int                   -- total module count (for progress denominator)
+  -> GhcSession
   -> Store
   -> ProjectDir
   -> Bool                  -- fail_fast
   -> Bool                  -- warnings_block — forwarded to ghc_check_module
   -> Maybe Double          -- absolute deadline (POSIXTime seconds)
+  -> Int                   -- current 1-based index
   -> [(Text, Maybe Text)]
   -> IO ([ModuleOutcome], Bool)  -- (outcomes, timed_out)
-runChecks _ _ _ _ _ _ [] = pure ([], False)
-runChecks ghcSess store pd ff wb mDeadline ((nm, mp) : rest) = do
+runChecks _ _ _ _ _ _ _ _ _ _ [] = pure ([], False)
+runChecks sink startTime total ghcSess store pd ff wb mDeadline idx ((nm, mp) : rest) = do
   -- #129: check the budget before each module.
-  expired <- case mDeadline of
-    Nothing  -> pure False
-    Just dl  -> do
-      now <- realToFrac <$> getPOSIXTime
-      pure (now >= dl)
+  now <- realToFrac <$> getPOSIXTime
+  let expired = case mDeadline of
+        Nothing -> False
+        Just dl -> now >= dl
   if expired
     then
       -- Budget exhausted — tag this module and all remaining ones.
       let timedOuts = map (MoTimedOut . fst) ((nm, mp) : rest)
       in pure (timedOuts, True)
-    else case mp of
-      Nothing -> do
-        (cont, to) <- runChecks ghcSess store pd ff wb mDeadline rest
-        pure (MoNotFound nm : cont, to)
-      Just relPath -> do
-        tr <- CheckModule.handle ghcSess store pd
-                (object
-                  [ "module_path"    .= relPath
-                  , "warnings_block" .= wb
-                  ])
-        let this = MoChecked nm tr
-            stop = ff && trIsError tr
-        if stop
-          then pure (this : map (MoSkipped . fst) rest, False)
-          else do
-            (cont, to) <- runChecks ghcSess store pd ff wb mDeadline rest
-            pure (this : cont, to)
+    else do
+      -- #265: emit progress before checking so the client sees "Checking X"
+      -- while the module is being compiled, not after.
+      let elapsedMs = round ((now - startTime) * 1000) :: Int
+      emitProgress sink ProgressEvent
+        { peStep        = "Checking " <> nm
+                            <> " (" <> T.pack (show idx)
+                            <> "/" <> T.pack (show total) <> ")"
+        , peElapsedMs   = elapsedMs
+        , peCurrentStep = Just idx
+        , peTotalSteps  = Just total
+        }
+      case mp of
+        Nothing -> do
+          (cont, to) <- runChecks sink startTime total ghcSess store pd ff wb mDeadline (idx + 1) rest
+          pure (MoNotFound nm : cont, to)
+        Just relPath -> do
+          tr <- CheckModule.handle ghcSess store pd
+                  (object
+                    [ "module_path"    .= relPath
+                    , "warnings_block" .= wb
+                    ])
+          let this = MoChecked nm tr
+              stop = ff && trIsError tr
+          if stop
+            then pure (this : map (MoSkipped . fst) rest, False)
+            else do
+              (cont, to) <- runChecks sink startTime total ghcSess store pd ff wb mDeadline (idx + 1) rest
+              pure (this : cont, to)
 
 --------------------------------------------------------------------------------
 -- response shaping

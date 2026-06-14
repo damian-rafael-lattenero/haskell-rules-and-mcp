@@ -18,6 +18,8 @@ import Data.Char (isDigit)
 import Data.Text (Text)
 import qualified Data.Text as T
 
+import HaskellFlows.Config (defaultLimits, evalOutputCapBytes)
+
 -- | Historical end-of-output marker from the original subprocess
 -- framing protocol (retired). Kept as a literal constant so
 -- 'sanitizeExpression' can reject user inputs that happen to contain
@@ -58,9 +60,9 @@ data CommandError
 maxExpressionBytes :: Int
 maxExpressionBytes = 64 * 1024
 
--- | Upper bound on bytes returned from a single evaluation.
+-- | Upper bound on bytes returned from a single evaluation. Sourced from Config.
 maxEvalBytes :: Int
-maxEvalBytes = 64 * 1024
+maxEvalBytes = evalOutputCapBytes defaultLimits
 
 -- | Boundary check for anything sent to the compiler as part of a
 -- single-line command. Pure — no IO, no Session.

@@ -45,6 +45,8 @@ import System.Directory (getCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
 import System.Timeout (timeout)
 
+import qualified HaskellFlows.Config as Config
+import HaskellFlows.Config (Limits, loadLimits, outerToolCeiling, unMicros)
 import HaskellFlows.Data.PropertyStore (Store, openStore)
 import qualified HaskellFlows.Data.Scratchpad as Scratchpad
 import HaskellFlows.Mcp.Logging
@@ -191,6 +193,10 @@ data Server = Server
     -- ^ #253: persistent LLM code canvas — the pizarra. Same
     -- 'IORef' shape as 'srvStore' because 'ghc_project(action="switch")'
     -- must be able to reopen the scratchpad against the new project root.
+  , srvLimits        :: !Limits
+    -- ^ #287: operational limits loaded once at startup via 'loadLimits'.
+    -- Subprocess timeouts are env-var overridable; GHC-session budgets
+    -- fall back to 'Config.defaultLimits'.
   }
 
 -- | Build a server whose project directory is sourced from
@@ -248,6 +254,7 @@ serverForRaw raw = do
       -- assume not-self.
       isSelf   <- detectSelfProject pd
       isSelfR  <- newIORef isSelf
+      lim      <- loadLimits
       pure Server
         { srvProjectDir    = pdRef
         , srvGhcSession    = ghcSess
@@ -257,6 +264,7 @@ serverForRaw raw = do
         , srvBinaryPath    = binPath
         , srvIsSelfProject = isSelfR
         , srvScratchpad    = scratchR
+        , srvLimits        = lim
         }
 
 -- | Dispatch a single parsed request. 'Nothing' means the input was a
@@ -465,7 +473,7 @@ dispatchByName srv sink args = \case
     pd      <- readIORef (srvProjectDir srv)
     ArbitraryTool.handle ghcSess pd args
   HoogleSearch ->
-    HoogleTool.handle args
+    HoogleTool.handle (srvLimits srv) args
   GhcWorkflow -> do
     ws        <- readState (srvWorkflowState srv)
     staleness <- checkStaleness (srvBinaryPath srv) (srvBootPosix srv)
@@ -495,7 +503,7 @@ dispatchByName srv sink args = \case
     CompleteTool.handle ghcSess args
   GhcFormat -> do
     pd <- readIORef (srvProjectDir srv)
-    r  <- FormatTool.handle pd args
+    r  <- FormatTool.handle (srvLimits srv) pd args
     invalidateGhcSessionIfPresent srv
     pure r
   GhcDeps -> do
@@ -547,13 +555,13 @@ dispatchByName srv sink args = \case
     WitnessTool.handle ghcSess args
   GhcLint -> do
     pd <- readIORef (srvProjectDir srv)
-    LintTool.handle pd args
+    LintTool.handle (srvLimits srv) pd args
   GhcToolchain ->
     -- #94 Phase C: action-discriminated successor to
     -- GhcToolchainStatus + GhcToolchainWarmup. ToolchainTool.handle
     -- defaults action to "status" so an empty payload behaves the
     -- same as the old ghc_toolchain_status no-arg call.
-    ToolchainTool.handle args
+    ToolchainTool.handle (srvLimits srv) args
   GhcProject ->
     -- #94 Phase C step 5: action-discriminated successor to
     -- GhcCreateProject + GhcSwitchProject + GhcValidateCabal +
@@ -572,16 +580,17 @@ dispatchByName srv sink args = \case
     -- #275: dispatch now lives in Tool.Project.handle (DI: the project-dir /
     -- session / store / scratchpad / self refs + an invalidate-stanza callback
     -- + the descriptor catalog).
-    ProjectTool.handle
+    ProjectTool.handle (srvLimits srv)
       (srvProjectDir srv) (srvGhcSession srv) (srvStore srv)
       (srvScratchpad srv) (srvIsSelfProject srv)
       (invalidateStanzaFlagsIfPresent srv) allToolDescriptors args
   GhcCheckProject -> do
     -- Wave-5 full GhcSession (delegates to check_module per file).
+    -- #265/#287: pass sink for per-module progress + lim for env-overridable timeout.
     ghcSess <- getOrStartGhcSession srv
     pd      <- readIORef (srvProjectDir srv)
     store   <- readIORef (srvStore srv)
-    CheckProjectTool.handle ghcSess store pd args
+    CheckProjectTool.handle (srvLimits srv) sink ghcSess store pd args
   GhcSuggest -> do
     -- Wave-5 full GhcSession: exprType + module-graph walk for siblings.
     ghcSess <- getOrStartGhcSession srv
@@ -598,7 +607,7 @@ dispatchByName srv sink args = \case
     -- invalidate the load cache here — the whole point is to KEEP the
     -- newly-added import in scope for subsequent ghc_eval calls.
     ghcSess <- getOrStartGhcSession srv
-    AddImportTool.handle ghcSess args
+    AddImportTool.handle (srvLimits srv) ghcSess args
   GhcModules -> do
     -- #94 Phase B: action-discriminated 'modules' primitive.
     -- ModulesTool.handle dispatches on args.action ∈ {"add","remove"}
@@ -829,8 +838,10 @@ allToolDescriptors =
 -- large module, a slow hoogle, a coverage run that needs 4 minutes);
 -- the fix for F-12's hang lives at the root in 'Session.hs'
 -- (terminal 'Dead' status + honoured command budget).
+-- | Outer ceiling for every tool call, sourced from 'Config.defaultLimits'.
+-- Exported for tests; the live dispatch in 'runTool' reads from 'srvLimits'.
 toolTimeoutMicros :: Int
-toolTimeoutMicros = 10 * 60 * 1_000_000
+toolTimeoutMicros = unMicros (outerToolCeiling Config.defaultLimits)
 
 -- | Common exception shield for every tool handler.
 --
@@ -849,7 +860,8 @@ toolTimeoutMicros = 10 * 60 * 1_000_000
 -- whatever that fix misses.
 runTool :: Server -> ToolName -> RequestId -> IO ToolResult -> IO Response
 runTool srv toolName rid action = do
-  out <- try (timeout toolTimeoutMicros action)
+  let ceilingMicros = unMicros (outerToolCeiling (srvLimits srv))
+  out <- try (timeout ceilingMicros action)
            :: IO (Either SomeException (Maybe ToolResult))
   case out of
     Left ex -> do

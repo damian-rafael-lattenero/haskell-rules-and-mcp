@@ -46,6 +46,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Schema as Schema
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Config (Limits)
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
 import qualified HaskellFlows.Tool.CreateProject as CreateProjectTool
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProjectTool
@@ -60,7 +61,8 @@ import HaskellFlows.Types (ProjectDir)
 -- callback to run after a create, and the tool-descriptor catalog for
 -- bootstrap.
 handle
-  :: IORef ProjectDir
+  :: Limits
+  -> IORef ProjectDir
   -> MVar (Maybe GhcSession)
   -> IORef Store
   -> IORef Scratchpad.Store
@@ -69,7 +71,7 @@ handle
   -> [ToolDescriptor]   -- ^ allToolDescriptors (for bootstrap)
   -> Value
   -> IO ToolResult
-handle pdRef sessRef storeRef scratchRef selfRef invalidateStanza descriptors rawArgs =
+handle lim pdRef sessRef storeRef scratchRef selfRef invalidateStanza descriptors rawArgs =
   case actionField rawArgs of
     Nothing ->
       pure (Env.toolResponseToResult
@@ -98,7 +100,7 @@ handle pdRef sessRef storeRef scratchRef selfRef invalidateStanza descriptors ra
              SwitchProjectTool.handle pdRef sessRef storeRef scratchRef selfRef inner
            "validate" -> do
              pd <- readIORef pdRef
-             ValidateCabalTool.handle pd inner
+             ValidateCabalTool.handle lim pd inner
            "bootstrap" -> do
              pd <- readIORef pdRef
              BootstrapTool.handle pd descriptors inner

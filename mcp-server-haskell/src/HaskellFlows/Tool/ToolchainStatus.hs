@@ -47,6 +47,7 @@ import System.Process
   )
 import System.Timeout (timeout)
 
+import HaskellFlows.Config (Limits, versionTimeout, unMicros)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 
@@ -83,18 +84,15 @@ optionalBinaryNames :: [Text]
 optionalBinaryNames =
   [ name | (name, _, category) <- probeTargets, category /= "gate" ]
 
-versionTimeoutMicros :: Int
-versionTimeoutMicros = 3_000_000  -- 3s per binary
-
-handle :: Value -> IO ToolResult
-handle rawArgs = case parseEither parseJSON rawArgs :: Either String Value of
+handle :: Limits -> Value -> IO ToolResult
+handle lim rawArgs = case parseEither parseJSON rawArgs :: Either String Value of
   Left parseError ->
     pure (Env.toolResponseToResult (Env.mkFailed
       ((Env.mkErrorEnvelope Env.MissingArg
           (T.pack ("Invalid arguments: " <> parseError)))
             { Env.eeCause = Just (T.pack parseError) })))
   Right _ -> do
-    entries <- mapM probeOne probeTargets
+    entries <- mapM (probeOne lim) probeTargets
     pure (renderResult entries)
 
 --------------------------------------------------------------------------------
@@ -109,8 +107,8 @@ data Entry = Entry
   , eVersion   :: !(Maybe Text)
   }
 
-probeOne :: (Text, String, Text) -> IO Entry
-probeOne (name, verFlag, category) = do
+probeOne :: Limits -> (Text, String, Text) -> IO Entry
+probeOne lim (name, verFlag, category) = do
   mPath <- findExecutable (T.unpack name)
   case mPath of
     Nothing ->
@@ -119,7 +117,7 @@ probeOne (name, verFlag, category) = do
         , eAvailable = False, ePath = Nothing, eVersion = Nothing
         }
     Just p -> do
-      mVer <- getVersion p verFlag
+      mVer <- getVersion lim p verFlag
       pure Entry
         { eName = name, eCategory = category
         , eAvailable = True, ePath = Just p, eVersion = mVer
@@ -128,8 +126,8 @@ probeOne (name, verFlag, category) = do
 -- | Capture a best-effort first line of @tool --version@ with a hard
 -- timeout. Failure to parse returns 'Nothing' — the tool is still
 -- available, we just didn't manage to extract a version string.
-getVersion :: FilePath -> String -> IO (Maybe Text)
-getVersion bin verFlag = do
+getVersion :: Limits -> FilePath -> String -> IO (Maybe Text)
+getVersion lim bin verFlag = do
   let cp = (proc bin [verFlag])
              { std_in  = NoStream
              , std_out = CreatePipe
@@ -139,7 +137,7 @@ getVersion bin verFlag = do
   outVar <- newEmptyMVar
   _ <- forkIO (hGetContents hOut >>= putMVar outVar)
   _ <- forkIO (void (hGetContents hErr))
-  exited <- timeout versionTimeoutMicros (waitForProcess ph)
+  exited <- timeout (unMicros (versionTimeout lim)) (waitForProcess ph)
   case exited of
     Nothing -> do
       terminateProcess ph

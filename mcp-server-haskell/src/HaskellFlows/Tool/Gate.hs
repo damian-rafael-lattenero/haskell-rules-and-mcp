@@ -57,6 +57,7 @@ import System.Process
   )
 import System.Timeout (timeout)
 
+import HaskellFlows.Config (defaultLimits, gateOutputCapBytes)
 import HaskellFlows.Data.PropertyStore (Store, loadAll)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -389,12 +390,12 @@ cabalStep pd args = do
         ]
   pure (passed, detail)
 
--- | Issue #75: cap each captured stream at 256 KiB. The cabal
--- output rarely exceeds this on green builds; on red ones the
+-- | Issue #75: cap each captured stream at 256 KiB. Sourced from Config.
+-- The cabal output rarely exceeds this on green builds; on red ones the
 -- tail is the actionable bit and the leading repeat-cycles of
 -- the build chatter add no signal.
 outputCap :: Int
-outputCap = 256 * 1024
+outputCap = gateOutputCapBytes defaultLimits
 
 --------------------------------------------------------------------------------
 -- response shaping

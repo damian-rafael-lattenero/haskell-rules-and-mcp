@@ -343,6 +343,7 @@ import Spec.Batch
 import Spec.Bootstrap
 import Spec.Browse
 import Spec.BudgetGate
+import Spec.Config
 import Spec.Complete
 import Spec.Coverage
 import Spec.CreateProject
@@ -1863,6 +1864,33 @@ main = do
       , test "#289: splitModule singleton input is total"             testSplitModuleSingleton
       , test "#289: computePercentile empty list returns 0"           testComputePercentileEmpty
       , test "#289: aggregate empty list is total"                    testAggregateEmpty
+      -- Issue #287 — centralize timeouts/caps in HaskellFlows.Config
+      , test "#287: seconds n = n * 1_000_000 microseconds"           testMicrosSeconds
+      , test "#287: minutes n = n * 60_000_000 microseconds"          testMicrosMinutes
+      , test "#287: Micros Ord compares by underlying Int"            testMicrosOrd
+      , test "#287: Micros Eq compares by underlying Int"             testMicrosEq
+      , test "#287: defaultLimits hoogleTimeout = 10 s"               testDefaultHoogleTimeout
+      , test "#287: defaultLimits hlintTimeout = 60 s"                testDefaultHlintTimeout
+      , test "#287: defaultLimits formatTimeout = 30 s"               testDefaultFormatTimeout
+      , test "#287: defaultLimits cabalCheckTimeout = 30 s"           testDefaultCabalCheckTimeout
+      , test "#287: defaultLimits versionTimeout = 3 s"               testDefaultVersionTimeout
+      , test "#287: defaultLimits evalTimeout = 30 s"                 testDefaultEvalTimeout
+      , test "#287: defaultLimits quickCheckTimeout = 30 s"           testDefaultQuickCheckTimeout
+      , test "#287: defaultLimits replayTimeout = 30 s"               testDefaultReplayTimeout
+      , test "#287: defaultLimits outerToolCeiling = 10 min"          testDefaultOuterToolCeiling
+      , test "#287: defaultLimits determinismMaxRuns = 20"            testDefaultDeterminismMaxRuns
+      , test "#287: defaultLimits quickCheckMaxSuccess = 300"         testDefaultQcMaxSuccess
+      , test "#287: defaultLimits evalOutputCapBytes = 64 KiB"        testDefaultEvalOutputCap
+      , test "#287: defaultLimits gateOutputCapBytes = 256 KiB"        testDefaultGateOutputCap
+      , test "#287: defaultLimits checkProjectTimeout = 600 s"         testDefaultCheckProjectTimeout
+      , test "#287: loadLimits falls back to default when env absent"  testLoadLimitsMissingEnvFallback
+      , test "#287: loadLimits overrides from valid env var"           testLoadLimitsValidEnvOverride
+      , test "#287: loadLimits falls back on non-numeric env var"      testLoadLimitsInvalidEnvFallback
+      , test "#287: loadLimits falls back on zero env var"             testLoadLimitsZeroEnvFallback
+      , test "#287: loadLimits falls back on negative env var"         testLoadLimitsNegativeEnvFallback
+      , test "#287: loadLimits overrides checkProjectTimeout via env"  testLoadLimitsCheckProjectOverride
+      , test "#287: loadLimits overrides outerToolCeiling via env"     testLoadLimitsOuterCeilingOverride
+      , test "#287: loadLimits does not touch GHC-session fields"      testLoadLimitsGhcSessionFieldsUnchanged
       ]
       ++ scratchTests
   if and results then exitSuccess else exitFailure

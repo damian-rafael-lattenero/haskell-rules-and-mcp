@@ -37,6 +37,7 @@ import qualified Data.Text.Lazy.Encoding as TLE
 import GHC (InteractiveImport (IIDecl), getContext, parseImportDecl, setContext)
 import System.Directory (findExecutable)
 
+import HaskellFlows.Config (Limits)
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
@@ -97,8 +98,8 @@ instance FromJSON AddImportArgs where
       <$> o .:  "name"
       <*> o .:? "qualified" .!= False
 
-handle :: GhcSession -> Value -> IO ToolResult
-handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
+handle :: Limits -> GhcSession -> Value -> IO ToolResult
+handle lim ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err ->
     pure (Env.toolResponseToResult (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind err)
@@ -127,7 +128,7 @@ handle ghcSess rawArgs = case parseEither parseJSON rawArgs of
                     [ "query" .= aiName args
                     , "count" .= (10 :: Int)
                     ]
-              hoogleRes <- Hoogle.handle hoogleArgs
+              hoogleRes <- Hoogle.handle lim hoogleArgs
               let candidates = extractModules hoogleRes
               -- #204: strip .Internal modules then bring the closest
               -- name/module match to the front of the candidate list.

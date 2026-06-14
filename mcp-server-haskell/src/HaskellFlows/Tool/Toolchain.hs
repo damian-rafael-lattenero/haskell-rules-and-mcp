@@ -27,6 +27,7 @@ import Data.Aeson.Types (Parser, parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 
+import HaskellFlows.Config (Limits)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -72,13 +73,13 @@ descriptor =
 -- | Dispatch on @action@ (defaulting to @"status"@) and forward
 -- to the existing handler.  The legacy handlers were never
 -- @ProjectDir@-aware, so this dispatcher takes no @ProjectDir@.
-handle :: Value -> IO ToolResult
-handle rawArgs = case parseEither parseAction rawArgs of
+handle :: Limits -> Value -> IO ToolResult
+handle lim rawArgs = case parseEither parseAction rawArgs of
   Left err     -> pure (Env.toolResponseToResult (refusal err))
   Right action -> do
     let inner = stripAction rawArgs
     case action of
-      "status" -> ToolchainStatus.handle inner
+      "status" -> ToolchainStatus.handle lim inner
       "warmup" -> ToolchainWarmup.handle inner
       other    -> pure (Env.toolResponseToResult
                           (refusal ("unknown action: " <> T.unpack other

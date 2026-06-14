@@ -50,6 +50,7 @@ import System.Process
   )
 import System.Timeout (timeout)
 
+import HaskellFlows.Config (Limits, hoogleTimeout, unMicros)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -121,12 +122,8 @@ clampLimit n
 maxQueryChars :: Int
 maxQueryChars = 512
 
--- | Hard timeout on the 'hoogle' subprocess (microseconds).
-hoogleTimeoutMicros :: Int
-hoogleTimeoutMicros = 10_000000  -- 10 s
-
-handle :: Value -> IO ToolResult
-handle rawArgs = case parseEither parseJSON rawArgs of
+handle :: Limits -> Value -> IO ToolResult
+handle lim rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (Env.toolResponseToResult (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind parseError)
@@ -148,7 +145,7 @@ handle rawArgs = case parseEither parseJSON rawArgs of
                         Just "Install hoogle (cabal install hoogle) and generate the index (hoogle generate), then retry."
                     })))
           Just _ -> do
-            res <- runHoogle q (haLimit args)
+            res <- runHoogle lim q (haLimit args)
             pure (renderResult q res)
 
 -- | Discriminate the FromJSON failure shape — same heuristic as
@@ -187,8 +184,8 @@ data HoogleOutcome
 
 -- | Run @hoogle --count=N "<query>"@ with a hard timeout and capture
 -- stdout. Argv-form only; the query is passed as a single argument.
-runHoogle :: Text -> Int -> IO HoogleOutcome
-runHoogle q limit = do
+runHoogle :: Limits -> Text -> Int -> IO HoogleOutcome
+runHoogle lim q limit = do
   let cp = (proc "hoogle"
               [ "--count=" <> show limit
               , T.unpack q
@@ -204,7 +201,7 @@ runHoogle q limit = do
   errVar <- newEmptyMVar
   _ <- forkIO (hGetContents hOut >>= \s -> putMVar outVar s)
   _ <- forkIO (hGetContents hErr >>= \s -> putMVar errVar s)
-  exited <- timeout hoogleTimeoutMicros (waitForProcess ph)
+  exited <- timeout (unMicros (hoogleTimeout lim)) (waitForProcess ph)
   case exited of
     Nothing -> do
       terminateProcess ph

@@ -58,6 +58,7 @@ import qualified Data.Text.IO as TIO
 
 import qualified HaskellFlows.Tool.Deps as Deps
 
+import HaskellFlows.Config (defaultLimits, quickCheckTimeout, quickCheckMaxSuccess, unMicros)
 import HaskellFlows.Data.PropertyStore (Store, saveCases)
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
@@ -177,7 +178,7 @@ instance FromJSON QuickCheckArgs where
 -- forever or expand exponentially hit this and surface as a
 -- QcException with an explicit timeout message.
 quickCheckTimeoutMicros :: Int
-quickCheckTimeoutMicros = 30_000_000
+quickCheckTimeoutMicros = unMicros (quickCheckTimeout defaultLimits)
 
 -- | #283: QuickCheck cases per single check. Raised from the stdArgs default
 -- of 100 to 300 so a single ghc_quickcheck is markedly more likely to surface a
@@ -185,7 +186,7 @@ quickCheckTimeoutMicros = 30_000_000
 -- at 100 by seed luck). The value is recorded in the property store as the
 -- confidence ('spCases') behind each persisted law.
 qcMaxSuccess :: Int
-qcMaxSuccess = 300
+qcMaxSuccess = quickCheckMaxSuccess defaultLimits
 
 -- | The QuickCheck @Args@ line shared by every cabal-repl template: silent
 -- ('chatty=False') and using 'qcMaxSuccess' cases.

@@ -23,6 +23,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import System.Timeout (timeout)
 
+import HaskellFlows.Config (defaultLimits, quickCheckTimeout, determinismMaxRuns, unMicros)
 import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -46,9 +47,9 @@ instance FromJSON DeterminismArgs where
       <*> o .:? "runs" .!= 3
       <*> o .:? "module"
 
--- | 30 s per run, mirroring ghc_quickcheck's budget.
+-- | 30 s per run, mirroring ghc_quickcheck's budget. Sourced from Config.
 runTimeoutMicros :: Int
-runTimeoutMicros = 30_000_000
+runTimeoutMicros = unMicros (quickCheckTimeout defaultLimits)
 
 -- | Upper bound on flakiness re-runs (#281). Each run repeats the WHOLE
 -- property check in a fresh @cabal repl@ subprocess, so an unbounded value —
@@ -58,7 +59,7 @@ runTimeoutMicros = 30_000_000
 -- Flakiness is observable well within this many repeats; requests above it are
 -- clamped (and the original value surfaced as @requested_runs@).
 maxRuns :: Int
-maxRuns = 20
+maxRuns = determinismMaxRuns defaultLimits
 
 -- | Clamp a requested run count into @[1, maxRuns]@.
 clampRuns :: Int -> Int
