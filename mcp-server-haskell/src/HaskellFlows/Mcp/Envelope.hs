@@ -74,6 +74,7 @@ module HaskellFlows.Mcp.Envelope
   , toolResponseToResult
     -- * Cross-tool helpers
   , sanitizeRejection
+  , isFailingStatus
   ) where
 
 import Data.Aeson
