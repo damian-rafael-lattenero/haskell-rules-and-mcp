@@ -1,0 +1,20 @@
+mcp-server-haskell/src/HaskellFlows/Util/Process.hs
+  s_d23a82140bf8e8::t_19816a019db068 13-14,18
+  s_d23a82140bf8e8::t_8427449a551995 59-61,64-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "9d10faf8cafa74c6d07bf9f89f8a9c1aa297b69a",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "dlattenero_meli <damian.lattenero@mercadolibre.com>"
+    }
+  }
+}
