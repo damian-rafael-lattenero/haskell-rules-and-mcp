@@ -1,0 +1,24 @@
+scripts/ci-local.sh
+  s_d23a82140bf8e8::t_d61e17746d74fd 263-268
+.github/workflows/haskell-ci.yml
+  s_d23a82140bf8e8::t_1b96f08ad7eed7 181-191,195-199
+  s_d23a82140bf8e8::t_2f57e3f4ebb71d 340-343,352-356
+scripts/check-ci-invariants.sh
+  s_d23a82140bf8e8::t_5aa0daed2e86a3 1-57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "f1d255d10443ef49b1ce825a651c8cc75a2d6642",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
