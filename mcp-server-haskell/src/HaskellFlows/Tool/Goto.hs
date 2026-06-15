@@ -44,6 +44,7 @@ import GHC.Types.SrcLoc
   )
 import GHC.Utils.Outputable (showPprUnsafe)
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
@@ -104,26 +105,26 @@ data Location
   | InModule !Text
   deriving stock (Eq, Show)
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   runHandle ghcSess rawArgs
 
-runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle :: GhcSession -> Value -> IO ToolResponse
 runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind parseError)
           (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) })))
+            { Env.eeCause = Just (T.pack parseError) }))
   Right (GotoArgs nm) -> case sanitizeExpression nm of
     Left e ->
-      pure (Env.toolResponseToResult (Env.mkRefused (Env.sanitizeRejection "name" e)))
+      pure (Env.mkRefused (Env.sanitizeRejection "name" e))
     Right safe -> do
       eRes <- try (withGhcSession ghcSess (queryLocation safe))
       case eRes of
         Left (se :: SomeException) ->
-          pure $ Env.toolResponseToResult $ Env.mkFailed
+          pure $ Env.mkFailed
             ((Env.mkErrorEnvelope Env.InternalError
                 (T.pack ("GHC API error: " <> show se)))
                   { Env.eeCause = Just (T.pack (show se)) })
@@ -138,7 +139,7 @@ runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
               then try (withGhcSession ghcSess (queryLocation unqual))
                      :: IO (Either SomeException (Maybe Location))
               else pure (Right Nothing)
-          pure $ Env.toolResponseToResult $ case unqualRes of
+          pure $ case unqualRes of
             Right (Just loc) ->
               Env.mkNoMatch (qualifiedPreloadPayload safe unqual loc)
             _ ->
@@ -148,7 +149,7 @@ runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
         -- jump to). The payload still carries module + has_location so
         -- the agent knows *why* there is no file path.
         Right (Just loc) ->
-          pure $ Env.toolResponseToResult $ case loc of
+          pure $ case loc of
             InFile {} -> Env.mkOk (locationPayload safe loc)
             InModule {} -> Env.mkNoMatch (locationPayload safe loc)
 

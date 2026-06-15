@@ -9,6 +9,7 @@ module HaskellFlows.Tool.PropertyLifecycle
 import Data.Aeson
 
 import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 
@@ -26,14 +27,14 @@ import HaskellFlows.Mcp.Protocol
 -- Always status='ok' (the operation has no failure modes — an
 -- empty store still returns count=0 with an empty list under
 -- 'result.properties').
-handle :: Store -> Value -> IO ToolResult
+handle :: Store -> Value -> IO ToolResponse
 handle store _rawArgs = do
   props <- loadAll store
   let payload = object
         [ "count"      .= length props
         , "properties" .= map render props
         ]
-  pure (Env.toolResponseToResult (Env.mkOk payload))
+  pure (Env.mkOk payload)
   where
     render p = object
       [ "expression" .= spExpression p

@@ -54,6 +54,7 @@ import HaskellFlows.Ghc.ApiSession
   , loadForTarget
   , targetForPath
   )
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -157,13 +158,13 @@ instance FromJSON ExplainErrorArgs where
       <*> o .:? "diagnostic_index"
       <*> o .:? "verify_patch"
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   pd      <- teProjectDir env
   runHandle ghcSess pd rawArgs
 
-runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResponse
 runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> case eaModulePath args of
@@ -219,13 +220,13 @@ runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
 -- with an empty body, so the response still carries the decoded 'diagnostic'
 -- (line/col parsed from the text) — just an empty enclosing slice. verify_patch
 -- is ignored here (it needs a module to apply + recompile).
-explainTextOnly :: ExplainErrorArgs -> ToolResult
+explainTextOnly :: ExplainErrorArgs -> ToolResponse
 explainTextOnly args = case eaErrorText args of
   Nothing ->
-    Env.toolResponseToResult (Env.mkFailed
+    Env.mkFailed
       (Env.mkErrorEnvelope Env.MissingArg
         "ghc_explain_error needs either module_path (to read enclosing context) \
-        \or error_text (to decode a diagnostic without a module)."))
+        \or error_text (to decode a diagnostic without a module).")
   Just errTxt ->
     let diag = syntheticError noModuleLabel errTxt
     in renderContext noModuleLabel "" diag [diag] Nothing
@@ -417,7 +418,7 @@ applyLinePatch body patch =
 -- the tool's job is to package evidence for the agent's LLM, not
 -- to fail. status='ok' always; the agent reads
 -- 'result.diagnostic' and decides what to do next.
-renderContext :: Text -> Text -> GhcError -> [GhcError] -> Maybe Value -> ToolResult
+renderContext :: Text -> Text -> GhcError -> [GhcError] -> Maybe Value -> ToolResponse
 renderContext modulePath body diag ownDiags mVerify =
   let lns      = T.lines body
       total    = length lns
@@ -449,12 +450,12 @@ renderContext modulePath body diag ownDiags mVerify =
               \let the tool apply it, recompile, and report whether the \
               \error is resolved. The original file is always restored." :: Text )
         ] <> verifyFields
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 -- | Issue #203: diagnostic_index is out of range — there ARE errors,
 -- just not as many as the caller expected. Status='ok' so the agent
 -- can recover; 'diagnostic=null' signals nothing was selected.
-renderIndexOutOfRange :: Text -> Int -> Int -> [GhcError] -> ToolResult
+renderIndexOutOfRange :: Text -> Int -> Int -> [GhcError] -> ToolResponse
 renderIndexOutOfRange modulePath idx total diags =
   let payload = object
         [ "module_path" .= modulePath
@@ -469,11 +470,11 @@ renderIndexOutOfRange modulePath idx total diags =
         , "all_errors"  .= map renderDiag
                               (filter ((== SevError) . geSeverity) diags)
         ]
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 -- | Issue #90 Phase C: no error to explain → status='ok' with
 -- 'diagnostic=null' and the agent-side hint under 'result'.
-renderNoErrors :: Text -> [GhcError] -> ToolResult
+renderNoErrors :: Text -> [GhcError] -> ToolResponse
 renderNoErrors modulePath diags =
   let payload = object
         [ "module_path" .= modulePath
@@ -485,7 +486,7 @@ renderNoErrors modulePath diags =
               \whole still fails to build, run ghc_check_project to \
               \enumerate the failing modules." :: Text )
         ]
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 renderDiag :: GhcError -> Value
 renderDiag d = object
@@ -502,13 +503,11 @@ renderDiag d = object
 
 
 -- | Issue #90 Phase C: 'mkModulePath' rejection.
-pathTraversalResult :: Text -> ToolResult
+pathTraversalResult :: Text -> ToolResponse
 pathTraversalResult msg =
-  Env.toolResponseToResult
-    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+  Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg)
 
 -- | Issue #90 Phase C: filesystem read failure.
-subprocessResult :: Text -> ToolResult
+subprocessResult :: Text -> ToolResponse
 subprocessResult msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg)

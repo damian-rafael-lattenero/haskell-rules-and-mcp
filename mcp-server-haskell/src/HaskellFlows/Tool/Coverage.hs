@@ -24,6 +24,7 @@ import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import System.Directory (findExecutable)
@@ -114,12 +115,12 @@ instance FromJSON CoverageArgs where
 coverageTimeoutMicros :: CoverageArgs -> Int
 coverageTimeoutMicros args = caTimeoutMinutes args * 60 * 1_000_000
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   pd <- teProjectDir env
   runHandle pd rawArgs
 
-runHandle :: ProjectDir -> Value -> IO ToolResult
+runHandle :: ProjectDir -> Value -> IO ToolResponse
 runHandle pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
@@ -265,7 +266,7 @@ runHpcReport mixDirs tix = do
 -- * 'CovTimeout' → status='timeout' kind='inner_timeout', cause=NmT.
 -- * 'CovFailure' → status='failed' kind='subprocess_error',
 --                  cause=<exit code>.
-renderResult :: CoverageArgs -> CovOutcome -> ToolResult
+renderResult :: CoverageArgs -> CovOutcome -> ToolResponse
 renderResult args (CovSuccess out) =
   let report  = parseCoverage out
       metrics = crMetrics report
@@ -273,7 +274,7 @@ renderResult args (CovSuccess out) =
                 , "summary" .= summarise metrics
                 ]
       payload = object (base <> [ "raw" .= out | caVerbose args ])
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 renderResult args CovTimeout =
   let mins   = T.pack (show (caTimeoutMinutes args)) <> "m"
       envErr = (Env.mkErrorEnvelope Env.InnerTimeout
@@ -286,13 +287,13 @@ renderResult args CovTimeout =
                            <> " min). Large projects with HPC \
                            \instrumentation typically need 10-20 min.")
                  }
-  in Env.toolResponseToResult (Env.mkTimeout envErr)
+  in Env.mkTimeout envErr
 renderResult _ (CovFailure code err) =
   let msg    = "cabal test --enable-coverage exited with code "
                  <> T.pack (show code) <> ": " <> T.strip err
       envErr = (Env.mkErrorEnvelope Env.SubprocessError msg)
                  { Env.eeCause = Just (T.pack (show code)) }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
+  in Env.mkFailed envErr
 
 -- | Issue #89 + #177: 'percent' is null when the metric has no applicable
 -- program points (@total == 0@). 'status' is the categorical
@@ -342,7 +343,7 @@ summarise ms =
 
 -- | Issue #90 Phase C: cabal binary not on PATH → status='unavailable'
 -- kind='binary_unavailable'.
-unavailableResult :: Text -> ToolResult
+unavailableResult :: Text -> ToolResponse
 unavailableResult msg =
   let payload  = object
         [ "remediation" .= ( "Install cabal (`ghcup install cabal`) and \
@@ -350,4 +351,4 @@ unavailableResult msg =
         ]
       envErr   = Env.mkErrorEnvelope Env.BinaryUnavailable msg
       response = (Env.mkUnavailable envErr) { Env.reResult = Just payload }
-  in Env.toolResponseToResult response
+  in response

@@ -50,8 +50,9 @@ import qualified Data.Text.IO as TIO
 import System.Directory (listDirectory)
 import System.FilePath ((</>), takeExtension)
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Protocol ()
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 
@@ -86,27 +87,27 @@ instance FromJSON DepsExplainArgs where
 -- Main handler
 -- ---------------------------------------------------------------------------
 
-handle :: ProjectDir -> Value -> IO ToolResult
+handle :: ProjectDir -> Value -> IO ToolResponse
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left err ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope Env.MissingArg
           (T.pack ("Invalid arguments: " <> err)))
-            { Env.eeCause = Just (T.pack err) })))
+            { Env.eeCause = Just (T.pack err) }))
   Right (DepsExplainPkg  pkg)  -> handlePkgUsage pd pkg
   Right (DepsExplainDump dump) -> pure (handleSolverConflict dump)
 
 -- | #156: show which stanzas declare @pkg@ and which source files import it.
-handlePkgUsage :: ProjectDir -> Text -> IO ToolResult
+handlePkgUsage :: ProjectDir -> Text -> IO ToolResponse
 handlePkgUsage pd pkg = do
     let root = unProjectDir pd
     -- Step 1: find the cabal file
     mCabal <- findCabalFile root
     case mCabal of
       Nothing ->
-        pure (Env.toolResponseToResult (Env.mkFailed
+        pure (Env.mkFailed
           (Env.mkErrorEnvelope Env.SubprocessError
-            "No .cabal file found in the project root.")))
+            "No .cabal file found in the project root."))
       Just cabalPath -> do
         cabalText <- TIO.readFile cabalPath
         -- Step 2: collect stanzas + source dirs
@@ -132,8 +133,7 @@ handlePkgUsage pd pkg = do
               , "import_sites" .= importSites
               , "summary"      .= summary
               ]
-        pure $ Env.toolResponseToResult $
-          if null stanzas
+        pure $ if null stanzas
             then Env.mkNoMatch (object
                    [ "package" .= pkg
                    , "hint"    .= ("Package not found in any build-depends. \
@@ -145,12 +145,11 @@ handlePkgUsage pd pkg = do
 -- | #63: parse a cabal solver dump and surface the root-cause conflict.
 -- Returns @status=ok@ with a @conflict@ object when rejections are found,
 -- or @status=no_match@ with @conflict=null@ for a clean (conflict-free) dump.
-handleSolverConflict :: Text -> ToolResult
+handleSolverConflict :: Text -> ToolResponse
 handleSolverConflict dump =
   case parseSolverOutput dump of
     Nothing ->
-      Env.toolResponseToResult $
-        Env.mkNoMatch (object ["conflict" .= Null])
+      Env.mkNoMatch (object ["conflict" .= Null])
     Just c  ->
       let root    = cRoot c
           payload = object
@@ -164,7 +163,7 @@ handleSolverConflict dump =
                 , "backjumps" .= cBackjumps c
                 ]
             ]
-      in Env.toolResponseToResult (Env.mkOk payload)
+      in Env.mkOk payload
 
 -- ---------------------------------------------------------------------------
 -- Cabal file parsing

@@ -34,6 +34,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import System.Directory (doesDirectoryExist, doesFileExist, findExecutable)
@@ -112,12 +113,12 @@ instance FromJSON LintArgs where
     f  <- o .:? "fail_on" .!= ("warning" :: Text)
     pure LintArgs { laPath = p, laModulePath = mp, laFailOn = f }
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   pd <- teProjectDir env
   runHandle (teLimits env) pd rawArgs
 
-runHandle :: Limits -> ProjectDir -> Value -> IO ToolResult
+runHandle :: Limits -> ProjectDir -> Value -> IO ToolResponse
 runHandle lim pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
@@ -135,10 +136,9 @@ runHandle lim pd rawArgs = case parseEither parseJSON rawArgs of
 
 -- | Issue #90 Phase C: 'resolveTarget' rejected the input as
 -- escaping the project root → status='refused', kind='path_traversal'.
-pathTraversalResult :: Text -> ToolResult
+pathTraversalResult :: Text -> ToolResponse
 pathTraversalResult msg =
-  Env.toolResponseToResult
-    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+  Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg)
 
 -- | Resolve which path hlint should lint. Prefer @module_path@
 -- (single file, fastest inner loop), fall back to @path@ (directory
@@ -288,7 +288,7 @@ parseHlintJson raw =
 -- under 'result' so callers can iterate per-hint; offending hints
 -- (>= fail_on) flip the status to 'failed' but the same payload
 -- is preserved so the caller can still render and decide.
-renderResult :: FilePath -> Text -> HlintOutcome -> ToolResult
+renderResult :: FilePath -> Text -> HlintOutcome -> ToolResponse
 renderResult target failOn (HlOk raw) =
   let suggestions = parseHlintJson raw
       offending   = filter (atOrAbove failOn . sSeverity) suggestions
@@ -301,29 +301,29 @@ renderResult target failOn (HlOk raw) =
           , "suggestions"  .= suggestions
           ]
   in if null offending
-       then Env.toolResponseToResult (Env.mkOk payload)
+       then Env.mkOk payload
        else
          let envErr   = Env.mkErrorEnvelope Env.Validation
                           ( T.pack (show (length offending))
                               <> " hint(s) at or above '"
                               <> failOn <> "' threshold" )
              response = (Env.mkFailed envErr) { Env.reResult = Just payload }
-         in Env.toolResponseToResult response
+         in response
 renderResult _ _ HlTimeout =
   let envErr = (Env.mkErrorEnvelope Env.InnerTimeout
                   ("hlint timed out after 60 seconds" :: Text))
                  { Env.eeCause = Just "60s" }
-  in Env.toolResponseToResult (Env.mkTimeout envErr)
+  in Env.mkTimeout envErr
 renderResult _ _ (HlFailure code err) =
   let msg    = "hlint failed with exit code " <> T.pack (show code)
                  <> ": " <> T.strip err
       envErr = (Env.mkErrorEnvelope Env.SubprocessError msg)
                  { Env.eeCause = Just (T.pack (show code)) }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
+  in Env.mkFailed envErr
 renderResult target _ HlMissingTarget =
-  Env.toolResponseToResult (Env.mkFailed
+  Env.mkFailed
     (Env.mkErrorEnvelope Env.ModulePathDoesNotExist
-       ("target path does not exist: " <> T.pack target)))
+       ("target path does not exist: " <> T.pack target))
 
 -- | severity ordering: ignore < suggestion < warning < error.
 severityRank :: Text -> Int
@@ -347,7 +347,7 @@ atOrAbove threshold severity =
 -- kind='binary_unavailable'. The 'remediation' string lives under
 -- 'result' so it stays readable when the consumer is showing an
 -- error banner.
-unavailableResult :: Text -> ToolResult
+unavailableResult :: Text -> ToolResponse
 unavailableResult msg =
   let payload  = object
         [ "remediation" .= ( "Install hlint: `cabal install hlint` or \
@@ -355,4 +355,4 @@ unavailableResult msg =
         ]
       envErr   = Env.mkErrorEnvelope Env.BinaryUnavailable msg
       response = (Env.mkUnavailable envErr) { Env.reResult = Just payload }
-  in Env.toolResponseToResult response
+  in response

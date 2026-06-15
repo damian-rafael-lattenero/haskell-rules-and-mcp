@@ -34,6 +34,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time (defaultTimeLocale, formatTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import System.Timeout (timeout)
@@ -46,7 +47,7 @@ import HaskellFlows.Data.PropertyStore
   )
 import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
-import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Protocol ()
 import HaskellFlows.Parser.QuickCheck
   ( QuickCheckResult (..)
   , parseQuickCheckOutput
@@ -82,7 +83,7 @@ instance FromJSON RegressionArgs where
 replayTimeoutMicros :: Int
 replayTimeoutMicros = unMicros (replayTimeout defaultLimits)
 
-handle :: Store -> GhcSession -> Value -> IO ToolResult
+handle :: Store -> GhcSession -> Value -> IO ToolResponse
 handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
@@ -242,7 +243,7 @@ parseShowModulesPaths raw =
 
 -- | Issue #90 Phase C: list view → status='ok'. Pure introspection
 -- of the on-disk property store.
-listResult :: [StoredProperty] -> ToolResult
+listResult :: [StoredProperty] -> ToolResponse
 listResult props =
   let nullCount = length (filter (isNothing . spModule) props)
       nullHint  = T.pack (show nullCount)
@@ -261,14 +262,14 @@ listResult props =
             , "null_module_hint"  .= nullHint
             ]
         | otherwise = []
-  in Env.toolResponseToResult (Env.mkOk (object (baseFields <> extraFields)))
+  in Env.mkOk (object (baseFields <> extraFields))
 
 -- | Issue #90 Phase C: replay run → status='ok' iff every stored
 -- property re-played green. Any regression OR any property whose
 -- module failed to load → status='failed' kind='validation'.
 -- Both buckets ('regressions', 'load_failed') stay under 'result'
 -- so consumers branch on the structured outcome.
-runResult :: [Replay] -> ToolResult
+runResult :: [Replay] -> ToolResponse
 runResult replays =
   let total          = length replays
       -- Issue #51: properties whose recorded module failed to
@@ -295,12 +296,12 @@ runResult replays =
           , "summary"        .= summarise total regressed loadFailures
           ]
   in if success
-       then Env.toolResponseToResult (Env.mkOk payload)
+       then Env.mkOk payload
        else
          let envErr   = Env.mkErrorEnvelope Env.Validation
                           (summarise total regressed loadFailures)
              response = (Env.mkFailed envErr) { Env.reResult = Just payload }
-         in Env.toolResponseToResult response
+         in response
 
 isPass :: QuickCheckResult -> Bool
 isPass (QcPassed _ _) = True

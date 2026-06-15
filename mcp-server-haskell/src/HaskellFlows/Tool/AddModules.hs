@@ -30,8 +30,9 @@ import qualified Data.Text.IO as TIO
 import System.Directory (createDirectoryIfMissing, doesFileExist, listDirectory)
 import System.FilePath (takeDirectory, takeExtension, (</>))
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Protocol ()
 import HaskellFlows.Parser.ModuleName
   ( ModuleNameError
   , renderModuleNameError
@@ -123,39 +124,39 @@ parseModuleList other =
   fail ("modules must be an array of strings or a comma-/whitespace-\
         \separated string; got: " <> show other)
 
-handle :: ProjectDir -> Value -> IO ToolResult
+handle :: ProjectDir -> Value -> IO ToolResponse
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left err ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKindAM err)
           (T.pack ("Invalid arguments: " <> err)))
-            { Env.eeCause = Just (T.pack err) })))
+            { Env.eeCause = Just (T.pack err) }))
   Right (AddModulesArgs mods mStanzaRaw) ->
     case validateModuleNames mods of
       (rejected@(_:_), _) -> pure (rejectionResult rejected)
       ([], validated) ->
         case resolveStanzaTarget mStanzaRaw of
           Left err ->
-            pure (Env.toolResponseToResult (Env.mkFailed
+            pure (Env.mkFailed
               ((Env.mkErrorEnvelope Env.Validation err)
-                  { Env.eeField = Just "stanza" })))
+                  { Env.eeField = Just "stanza" }))
           Right tgt -> do
             mCabal <- findCabalFile pd
             case mCabal of
               Nothing ->
-                pure (Env.toolResponseToResult (Env.mkFailed
+                pure (Env.mkFailed
                   ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
                       "No .cabal file found in project root")
                         { Env.eeRemediation =
-                            Just "Run ghc_project(action=\"create\") to scaffold a cabal package first." })))
+                            Just "Run ghc_project(action=\"create\") to scaffold a cabal package first." }))
               Just file -> do
                 (createdFiles, existingFiles) <- scaffoldFiles pd tgt validated
                 eCabal <- tryRewriteCabal file tgt validated
                 case eCabal of
                   Left err ->
-                    pure (Env.toolResponseToResult (Env.mkFailed
+                    pure (Env.mkFailed
                       ((Env.mkErrorEnvelope Env.SubprocessError err)
-                          { Env.eeCause = Just err })))
+                          { Env.eeCause = Just err }))
                   Right addedToCabal ->
                     pure (successResult tgt createdFiles existingFiles addedToCabal)
 
@@ -396,7 +397,7 @@ findCabalFile pd = do
 -- response shaping
 --------------------------------------------------------------------------------
 
-successResult :: StanzaTarget -> [FilePath] -> [FilePath] -> [Text] -> ToolResult
+successResult :: StanzaTarget -> [FilePath] -> [FilePath] -> [Text] -> ToolResponse
 successResult tgt created existed addedToCabal =
   let payload = object
         [ "stanza"          .= stLabel tgt
@@ -406,12 +407,12 @@ successResult tgt created existed addedToCabal =
         , "existing_files"  .= map T.pack existed
         , "cabal_added"     .= addedToCabal
         ]
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 -- | Structured rejection payload (ISSUE-47 + #90). Issue #90 §4
 -- maps invalid-module-name to 'Validation' kind; the structured
 -- 'rejected' array is preserved inside 'result' for backward-compat.
-rejectionResult :: [(Text, ModuleNameError)] -> ToolResult
+rejectionResult :: [(Text, ModuleNameError)] -> ToolResponse
 rejectionResult entries =
   let n        = length entries
       summary  = "rejected " <> tshow n <> " invalid module name"
@@ -431,7 +432,7 @@ rejectionResult entries =
               }
       response = (Env.mkFailed err)
                    { Env.reResult = Just (object [ "rejected" .= rendered ]) }
-  in Env.toolResponseToResult response
+  in response
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show

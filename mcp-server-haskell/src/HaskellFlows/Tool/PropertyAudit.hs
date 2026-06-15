@@ -56,9 +56,10 @@ import HaskellFlows.Data.PropertyStore
   , loadAll
   )
 import HaskellFlows.Ghc.ApiSession (GhcSession)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
-import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Protocol ()
 import HaskellFlows.Parser.QuickCheck
   ( QuickCheckResult (..)
   , parseQuickCheckOutput
@@ -96,7 +97,7 @@ instance FromJSON PropertyAuditArgs where
       , paCheckVacuous = cv
       }
 
-handle :: Store -> GhcSession -> Value -> IO ToolResult
+handle :: Store -> GhcSession -> Value -> IO ToolResponse
 handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> do
@@ -274,7 +275,7 @@ isVacuousResult _           = False
 renderReport
   :: PropertyAuditArgs -> Int -> Int
   -> [PairFinding] -> [Maybe StoredProperty] -> Int
-  -> ToolResult
+  -> ToolResponse
 renderReport args nProps nPairs findings vacuousFindings wallMs =
   let contradictory = filter ((== "contradictory") . pfStatus) findings
       skipped       = filter ((== "skipped") . pfStatus)       findings
@@ -310,7 +311,7 @@ renderReport args nProps nPairs findings vacuousFindings wallMs =
                   "audit ran but every pair was skipped — see skipped_pairs[].counterexample for per-pair reasons")
               }
         | otherwise = Env.mkOk payload
-  in Env.toolResponseToResult response
+  in response
 
 -- | #241: True when there were pairs to check but every one was
 -- skipped. The audit produced no actual evidence of compatibility

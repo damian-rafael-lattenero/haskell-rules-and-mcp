@@ -47,6 +47,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -135,10 +136,10 @@ instance FromJSON BatchArgs where
 -- | The dispatcher is passed as a parameter so this module doesn't
 -- depend on 'HaskellFlows.Mcp.Server' directly — clean DAG, easy to
 -- test in isolation.
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env = runHandle (teDispatch env)
 
-runHandle :: (ToolCall -> IO ToolResult) -> Value -> IO ToolResult
+runHandle :: (ToolCall -> IO ToolResult) -> Value -> IO ToolResponse
 runHandle dispatch rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
@@ -192,9 +193,9 @@ runActions dispatch ff (c:cs)
 
 -- | Issue #249: caller passed an empty actions list — return ok but
 -- add a 'warning' field so callers can detect the no-op.
-emptyActionsResult :: Bool -> ToolResult
+emptyActionsResult :: Bool -> ToolResponse
 emptyActionsResult ff =
-  Env.toolResponseToResult (Env.mkOk (object
+  Env.mkOk (object
     [ "fail_fast" .= ff
     , "total"     .= (0 :: Int)
     , "ok"        .= (0 :: Int)
@@ -202,7 +203,7 @@ emptyActionsResult ff =
     , "skipped"   .= (0 :: Int)
     , "results"   .= ([] :: [Value])
     , "warning"   .= ("actions: [] — no actions were provided; this is likely a caller error. Pass at least one tool call in the actions list." :: Text)
-    ]))
+    ])
 
 outcomeIsError :: ActionOutcome -> Bool
 outcomeIsError = \case
@@ -220,7 +221,7 @@ outcomeIsError = \case
 -- status='partial' so the consumer sees the partial-progress
 -- discriminator. Pure-failure (no oks) → status='failed'.
 -- Per-action results stay under 'result.results'.
-renderResult :: Bool -> [ActionOutcome] -> ToolResult
+renderResult :: Bool -> [ActionOutcome] -> ToolResponse
 renderResult ff outcomes =
   let errCount  = length (filter outcomeIsError outcomes)
       skipCount = length [ () | AoSkipped _ <- outcomes ]
@@ -243,13 +244,11 @@ renderResult ff outcomes =
       envErr = Env.mkErrorEnvelope Env.GateFailure envMsg
   in case (errCount, okCount) of
        (0, _) ->
-         Env.toolResponseToResult (Env.mkOk payload)
+         Env.mkOk payload
        (_, 0) ->
-         Env.toolResponseToResult
-           ((Env.mkFailed envErr) { Env.reResult = Just payload })
+         (Env.mkFailed envErr) { Env.reResult = Just payload }
        (_, _) ->
-         Env.toolResponseToResult
-           ((Env.mkPartial payload) { Env.reError = Just envErr })
+         (Env.mkPartial payload) { Env.reError = Just envErr }
 
 -- | #175: unwrap the MCP content-block wrapper that
 -- 'toolResponseToResult' places around every tool response.

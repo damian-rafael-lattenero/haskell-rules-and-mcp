@@ -47,6 +47,7 @@ import HaskellFlows.Ghc.ApiSession
   , targetForPath
   , firstLibraryOrTestSuite
   )
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -109,13 +110,13 @@ instance FromJSON LoadArgs where
     dx <- o .:? "diagnostics" .!= False
     pure LoadArgs { laModulePath = mp, laDiagnostics = dx }
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   pd      <- teProjectDir env
   runHandle ghcSess pd rawArgs
 
-runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResponse
 runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
@@ -247,7 +248,7 @@ countHaskellSources pd = do
 -- diagnostic detail ('errors', 'warnings', 'summary', 'raw')
 -- stays under 'result' so callers can render the GHCi-style
 -- output unchanged.
-okResult :: Maybe FilePath -> Bool -> [GhcError] -> ToolResult
+okResult :: Maybe FilePath -> Bool -> [GhcError] -> ToolResponse
 okResult mFile ok diags =
   let errs      = filter ((== SevError)   . geSeverity) diags
       warns     = filter ((== SevWarning) . geSeverity) diags
@@ -269,11 +270,11 @@ okResult mFile ok diags =
           ]
           <> [ "suggested_fixes" .= suggested | not (null suggested) ]
   in if succ_
-       then Env.toolResponseToResult (Env.mkOk payload)
+       then Env.mkOk payload
        else
          let envErr   = Env.mkErrorEnvelope Env.CompileError summaryMsg
              response = (Env.mkFailed envErr) { Env.reResult = Just payload }
-         in Env.toolResponseToResult response
+         in response
 
 -- | #278: actionable message for a load that failed with no error diagnostics.
 -- The library-stanza GHC session can't compile test-suite / executable /
@@ -402,17 +403,15 @@ suggestedImportsFor errs =
 
 -- | Issue #90 Phase C: 'mkModulePath' rejected the input → that's
 -- a path-traversal refusal.
-pathTraversalResult :: Text -> ToolResult
+pathTraversalResult :: Text -> ToolResponse
 pathTraversalResult msg =
-  Env.toolResponseToResult
-    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+  Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg)
 
 -- | Issue #79: module_path resolved fine but the file isn't on
 -- disk → kind='module_path_does_not_exist'.
-pathMissingResult :: Text -> ToolResult
+pathMissingResult :: Text -> ToolResponse
 pathMissingResult msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.ModulePathDoesNotExist msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.ModulePathDoesNotExist msg)
 
 -- | Issue #84: empty project (no src/ or app/ Haskell sources)
 -- on the no-args target path → status='no_match' with
@@ -421,7 +420,7 @@ pathMissingResult msg =
 -- which routed agents to ghc_suggest on a project that didn't
 -- exist yet. Now consumers branch on status and route to
 -- ghc_create_project / ghc_add_modules instead.
-emptyProjectResult :: ToolResult
+emptyProjectResult :: ToolResponse
 emptyProjectResult =
   let payload = object
         [ "loaded"      .= (0 :: Int)
@@ -436,19 +435,18 @@ emptyProjectResult =
                      \project has neither a src/ nor an app/ tree with \
                      \.hs files." :: Text )
       response = (Env.mkNoMatch payload) { Env.reError = Just envErr }
-  in Env.toolResponseToResult response
+  in response
 
 -- | Issue #90 Phase C: GHC API exception → kind='subprocess_error'.
-subprocessResult :: Text -> ToolResult
+subprocessResult :: Text -> ToolResponse
 subprocessResult msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg)
 
 -- | Issue #110: file exists but is outside every declared
 -- @hs-source-dirs@ → status='failed', kind='outside_source_dirs'.
 -- The @result@ payload gives the agent exactly what it needs to
 -- locate the right stanza and fix the path.
-outsideSourceDirsResult :: Text -> [FilePath] -> ToolResult
+outsideSourceDirsResult :: Text -> [FilePath] -> ToolResponse
 outsideSourceDirsResult modPath sourceDirs =
   let dirsText = T.intercalate ", " (map T.pack sourceDirs)
       msg = modPath
@@ -469,7 +467,7 @@ outsideSourceDirsResult modPath sourceDirs =
                           \or extend the relevant .cabal stanza."
                  }
       response = (Env.mkFailed envErr) { Env.reResult = Just payload }
-  in Env.toolResponseToResult response
+  in response
 
 -- | Merge strict and deferred diagnostic passes.  When both passes
 -- report a diagnostic at the same (file, line, col), prefer the

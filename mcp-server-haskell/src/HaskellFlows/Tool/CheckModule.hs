@@ -40,6 +40,7 @@ import HaskellFlows.Ghc.ApiSession
   , loadSpecificFileForTarget
   , targetForPath
   )
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -116,14 +117,14 @@ instance FromJSON CheckArgs where
     wb <- o .:? "warnings_block" .!= True
     pure CheckArgs { caModulePath = mp, caWarningsBlock = wb }
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   store   <- teStore env
   pd      <- teProjectDir env
   runHandle ghcSess store pd rawArgs
 
-runHandle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
+runHandle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResponse
 runHandle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
@@ -136,10 +137,10 @@ runHandle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
       -- false "All gates green" for a file that does not exist.
       exists <- doesFileExist (unModulePath mp)
       if not exists
-        then pure (Env.toolResponseToResult (Env.mkFailed
+        then pure (Env.mkFailed
           ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
               ("module_path '" <> raw <> "' does not exist"))
-                { Env.eeField = Just "module_path" })))
+                { Env.eeField = Just "module_path" }))
         else do
           invalidateLoadCache ghcSess
           tgt <- targetForPath ghcSess (T.unpack raw)
@@ -245,7 +246,7 @@ renderResult
   -> Int      -- ^ total stored properties for this module.
   -> Int      -- ^ count of replays that failed to load (#51 + #42).
   -> Bool     -- ^ warnings_block — True (default) keeps warnings blocking.
-  -> ToolResult
+  -> ToolResponse
 renderResult mp compileOk errs warns holes regressions totalProps loadFailed warnBlock =
   let gateCompile    = gate compileOk     "module compiles strictly"
       gateNoWarnings = gate (null warns || not warnBlock) $
@@ -299,14 +300,14 @@ renderResult mp compileOk errs warns holes regressions totalProps loadFailed war
   -- regression — refused the module). #119: 'validation' implies the
   -- caller's INPUT was malformed; use 'gate_failure' here.
   in if overall
-       then Env.toolResponseToResult (Env.mkOk payload)
+       then Env.mkOk payload
        else
          let kind | not compileOk = Env.CompileError
                   | otherwise     = Env.GateFailure
              envErr   = Env.mkErrorEnvelope kind
                           (summarise overall errs warns holes regressions)
              response = (Env.mkFailed envErr) { Env.reResult = Just payload }
-         in Env.toolResponseToResult response
+         in response
 
 -- | Issue #42: structured properties-gate value with a status
 -- discriminator and per-bucket counts. Four states:
@@ -380,16 +381,14 @@ summarise False errs warns holes regs =
 
 
 -- | Issue #90 Phase C: 'mkModulePath' rejection.
-pathTraversalResult :: Text -> ToolResult
+pathTraversalResult :: Text -> ToolResponse
 pathTraversalResult msg =
-  Env.toolResponseToResult
-    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+  Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg)
 
 -- | Issue #90 Phase C: GHC API exception.
-subprocessResult :: Text -> ToolResult
+subprocessResult :: Text -> ToolResponse
 subprocessResult msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg)
 
 formatPathError :: PathError -> Text
 formatPathError = \case

@@ -36,8 +36,9 @@ import System.Exit (ExitCode (..))
 
 import HaskellFlows.Config (Limits, versionTimeout)
 import HaskellFlows.Util.Process (SubprocessOutcome (..), SubprocessResult (..), runArgv)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Protocol ()
 
 -- | (binary name, version-flag, category).
 --
@@ -72,13 +73,13 @@ optionalBinaryNames :: [Text]
 optionalBinaryNames =
   [ name | (name, _, category) <- probeTargets, category /= "gate" ]
 
-handle :: Limits -> Value -> IO ToolResult
+handle :: Limits -> Value -> IO ToolResponse
 handle lim rawArgs = case parseEither parseJSON rawArgs :: Either String Value of
   Left parseError ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope Env.MissingArg
           (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) })))
+            { Env.eeCause = Just (T.pack parseError) }))
   Right _ -> do
     entries <- mapM (probeOne lim) probeTargets
     pure (renderResult entries)
@@ -148,7 +149,7 @@ firstLine t = case T.lines (T.strip t) of
 -- The legacy @success@ field on the wire is auto-derived by
 -- 'Env.isLegacySuccess'; clients that key on it keep working until
 -- Phase D removes the field.
-renderResult :: [Entry] -> ToolResult
+renderResult :: [Entry] -> ToolResponse
 renderResult entries =
   let blocking      = filter (\e -> eCategory e == "gate" && not (eAvailable e)) entries
       missingOpt    = filter (\e -> eCategory e /= "gate" && not (eAvailable e)) entries
@@ -168,7 +169,7 @@ renderResult entries =
                 { Env.eeRemediation =
                     Just ("Install the missing binaries via ghcup / cabal: "
                        <> T.intercalate ", " (map eName bs)) })
-  in Env.toolResponseToResult response
+  in response
 
 missingOptionalWarning :: Entry -> Env.Warning
 missingOptionalWarning e = Env.Warning

@@ -41,6 +41,7 @@ import System.Exit (ExitCode (..))
 
 import HaskellFlows.Config (Limits, hoogleTimeout)
 import HaskellFlows.Util.Process (SubprocessOutcome (..), SubprocessResult (..), runArgv)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -113,31 +114,31 @@ clampLimit n
 maxQueryChars :: Int
 maxQueryChars = 512
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env = runHandle (teLimits env)
 
-runHandle :: Limits -> Value -> IO ToolResult
+runHandle :: Limits -> Value -> IO ToolResponse
 runHandle lim rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind parseError)
           (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) })))
+            { Env.eeCause = Just (T.pack parseError) }))
   Right args ->
     case validateQuery (haQuery args) of
       Left (kind, msg) ->
-        pure (Env.toolResponseToResult (Env.mkRefused
-          ((Env.mkErrorEnvelope kind msg) { Env.eeField = Just "query" })))
+        pure (Env.mkRefused
+          ((Env.mkErrorEnvelope kind msg) { Env.eeField = Just "query" }))
       Right q  -> do
         mPath <- findExecutable "hoogle"
         case mPath of
           Nothing ->
-            pure (Env.toolResponseToResult (Env.mkUnavailable
+            pure (Env.mkUnavailable
               ((Env.mkErrorEnvelope Env.BinaryUnavailable
                   "hoogle binary not found on PATH")
                     { Env.eeRemediation =
                         Just "Install hoogle (cabal install hoogle) and generate the index (hoogle generate), then retry."
-                    })))
+                    }))
           Just _ -> do
             res <- runHoogle lim q (haLimit args)
             pure (renderResult q res)
@@ -249,8 +250,8 @@ splitModule lhs =
 -- non-empty hits → 'ok'; subprocess timeout → 'timeout' with
 -- 'inner_timeout'; non-zero exit code → 'failed' with
 -- 'subprocess_error'.
-renderResult :: Text -> HoogleOutcome -> ToolResult
-renderResult q outcome = Env.toolResponseToResult $ case outcome of
+renderResult :: Text -> HoogleOutcome -> ToolResponse
+renderResult q outcome = case outcome of
   HoSuccess [] ->
     Env.mkNoMatch (hitsPayload q [])
   HoSuccess hits ->

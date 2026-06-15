@@ -35,6 +35,7 @@ import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -116,24 +117,23 @@ descriptor =
 -- {action:add, …}@ match what @ghc_add_modules {…}@ would return
 -- for the same payload. Same for remove. The cross-tool equivalence
 -- test in Spec.hs locks this in.
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   pd <- teProjectDir env
   r  <- runHandle pd rawArgs
   teInvalidateStanza env
   pure r
 
-runHandle :: ProjectDir -> Value -> IO ToolResult
+runHandle :: ProjectDir -> Value -> IO ToolResponse
 runHandle pd rawArgs = case parseEither parseAction rawArgs of
-  Left err     -> pure (Env.toolResponseToResult (refusal err))
+  Left err     -> pure (refusal err)
   Right action -> do
     let inner = stripAction rawArgs
     case action of
       "add"    -> AddModules.handle    pd inner
       "remove" -> RemoveModules.handle pd inner
-      other    -> pure (Env.toolResponseToResult
-                          (refusal ("unknown action: " <> T.unpack other
-                                    <> " (expected 'add' or 'remove')")))
+      other    -> pure (refusal ("unknown action: " <> T.unpack other
+                                    <> " (expected 'add' or 'remove')"))
   where
     parseAction :: Value -> Data.Aeson.Types.Parser Text
     parseAction = withObject "ModulesArgs" $ \o ->

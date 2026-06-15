@@ -27,9 +27,10 @@ import System.Timeout (timeout)
 import HaskellFlows.Config (defaultLimits, quickCheckTimeout, determinismMaxRuns, unMicros)
 import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
-import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Protocol ()
 import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..), parseQuickCheckOutput)
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import HaskellFlows.Tool.Env (ToolEnv (..))
@@ -67,18 +68,17 @@ maxRuns = determinismMaxRuns defaultLimits
 clampRuns :: Int -> Int
 clampRuns = max 1 . min maxRuns
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   runHandle ghcSess rawArgs
 
-runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle :: GhcSession -> Value -> IO ToolResponse
 runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> case sanitizeExpression (daProperty args) of
     Left e ->
-      pure (Env.toolResponseToResult
-              (Env.mkRefused (Env.sanitizeRejection "property" e)))
+      pure (Env.mkRefused (Env.sanitizeRejection "property" e))
     Right safe -> do
       let requested = daRuns args
           n         = clampRuns requested
@@ -108,11 +108,11 @@ runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
       -- is flaky). Per-run states stay under 'result.states' so
       -- consumers can pinpoint which run flipped.
       pure $ if allPassed
-        then Env.toolResponseToResult (Env.mkOk payload)
+        then Env.mkOk payload
         else
           let envErr   = Env.mkErrorEnvelope Env.Validation summaryTxt
               response = (Env.mkFailed envErr) { Env.reResult = Just payload }
-          in Env.toolResponseToResult response
+          in response
   where
     runOnce sess origExpr safe mModule = do
       -- Route through the same subprocess-cabal-repl vehicle as

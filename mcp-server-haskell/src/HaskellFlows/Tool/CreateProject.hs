@@ -50,8 +50,9 @@ import System.Directory
   )
 import System.FilePath ((</>), takeDirectory)
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Protocol ()
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 -- | #94 Phase C step 5: this module's @descriptor@ was retired
@@ -86,27 +87,27 @@ instance FromJSON CreateArgs where
     pure CreateArgs { caName = n, caModule = m, caOverwrite = ow
                     , caPath = p, caWrite = w }
 
-handle :: ProjectDir -> Value -> IO ToolResult
+handle :: ProjectDir -> Value -> IO ToolResponse
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind parseError)
           (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) })))
+            { Env.eeCause = Just (T.pack parseError) }))
   Right args -> case validateName (caName args) of
     Left err ->
-      pure (Env.toolResponseToResult (Env.mkFailed
+      pure (Env.mkFailed
         ((Env.mkErrorEnvelope Env.Validation err)
-            { Env.eeField = Just "name" })))
+            { Env.eeField = Just "name" }))
     Right pkg -> do
       let modName = case caModule args of
             Just m  -> m
             Nothing -> packageToModule pkg
       case validateModule modName of
         Left err ->
-          pure (Env.toolResponseToResult (Env.mkFailed
+          pure (Env.mkFailed
             ((Env.mkErrorEnvelope Env.Validation err)
-                { Env.eeField = Just "module" })))
+                { Env.eeField = Just "module" }))
         Right m  ->
           -- #126 Bug A: use the caller's path when provided.
           -- Absolute paths are used as-is; relative paths and Nothing
@@ -230,7 +231,7 @@ data FilePlan = FilePlan
 -- #126 Bug B: when @write=False@, return a preview of the file
 -- contents without touching disk. The overwrite pre-check is skipped
 -- entirely — preview is always a read-only dry-run.
-scaffold :: FilePath -> Text -> Text -> Bool -> Bool -> IO ToolResult
+scaffold :: FilePath -> Text -> Text -> Bool -> Bool -> IO ToolResponse
 scaffold root pkg modName overwrite write = do
   let plans =
         [ FilePlan (T.unpack pkg <> ".cabal")                   (cabalFile pkg modName)
@@ -248,13 +249,13 @@ scaffold root pkg modName overwrite write = do
       clashes <- filterExistingM root plans
       case clashes of
         [] -> writeAll root plans pkg modName
-        xs -> pure (Env.toolResponseToResult (Env.mkFailed
+        xs -> pure (Env.mkFailed
                 ((Env.mkErrorEnvelope Env.Validation
                     ( "Target files already exist: "
                    <> T.intercalate ", " (map (T.pack . fpRelPath) xs)
                    <> ". Pass overwrite=true to replace."))
                       { Env.eeRemediation =
-                          Just "Pass overwrite=true to replace existing files, or remove them first." })))
+                          Just "Pass overwrite=true to replace existing files, or remove them first." }))
     else do
       -- #234: when overwrite=True the caller may have previously
       -- created a project with a *different* name in the same dir.
@@ -287,15 +288,15 @@ removeStaleCalabFiles root keepFile = do
     catchSilently :: IO a -> (SomeException -> IO a) -> IO a
     catchSilently action handler = try action >>= either handler pure
 
-writeAll :: FilePath -> [FilePlan] -> Text -> Text -> IO ToolResult
+writeAll :: FilePath -> [FilePlan] -> Text -> Text -> IO ToolResponse
 writeAll root plans pkg modName = do
   res <- try (mapM_ (writeOne root) plans) :: IO (Either SomeException ())
   case res of
     Left e  ->
-      pure (Env.toolResponseToResult (Env.mkFailed
+      pure (Env.mkFailed
         ((Env.mkErrorEnvelope Env.SubprocessError
             (T.pack ("write failed: " <> show e)))
-              { Env.eeCause = Just (T.pack (show e)) })))
+              { Env.eeCause = Just (T.pack (show e)) }))
     Right _ -> pure (createdResult pkg modName plans)
 
 writeOne :: FilePath -> FilePlan -> IO ()
@@ -392,7 +393,7 @@ testFile modName = T.unlines
 -- response shaping
 --------------------------------------------------------------------------------
 
-createdResult :: Text -> Text -> [FilePlan] -> ToolResult
+createdResult :: Text -> Text -> [FilePlan] -> ToolResponse
 createdResult pkg modName plans =
   let payload = object
         [ "package"       .= pkg
@@ -403,12 +404,12 @@ createdResult pkg modName plans =
                             <> ".hs\") to verify the scaffold compiles."
                             :: Text )
         ]
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 -- | #126 Bug B: preview mode — return the generated file contents
 -- without writing to disk. The caller can inspect the content and
 -- then re-call with @write=true@ to commit.
-previewResult :: Text -> Text -> [FilePlan] -> ToolResult
+previewResult :: Text -> Text -> [FilePlan] -> ToolResponse
 previewResult pkg modName plans =
   let payload = object
         [ "package"  .= pkg
@@ -418,7 +419,7 @@ previewResult pkg modName plans =
         , "hint"     .= ("Preview only — call again with write=true to \
                          \create these files." :: Text)
         ]
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
   where
     renderPlan fp = object
       [ "path"    .= T.pack (fpRelPath fp)

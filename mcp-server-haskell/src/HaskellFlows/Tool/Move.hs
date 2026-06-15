@@ -70,8 +70,9 @@ import HaskellFlows.Ghc.ApiSession
   , invalidateLoadCache
   , loadForTarget
   )
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Protocol ()
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 import HaskellFlows.Tool.Env (ToolEnv (..))
@@ -93,13 +94,13 @@ instance FromJSON MoveArgs where
       <*> o .:  "to"
       <*> o .:? "dry_run" .!= False
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   pd      <- teProjectDir env
   runHandle ghcSess pd rawArgs
 
-runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResponse
 runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
   Right args -> runMove ghcSess pd args
@@ -108,7 +109,7 @@ runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
 -- orchestration
 --------------------------------------------------------------------------------
 
-runMove :: GhcSession -> ProjectDir -> MoveArgs -> IO ToolResult
+runMove :: GhcSession -> ProjectDir -> MoveArgs -> IO ToolResponse
 runMove sess pd args = do
   let root    = unProjectDir pd
       fromAbs = root </> moduleNameToPath (maFrom args)
@@ -153,7 +154,7 @@ readBody p = try (TIO.readFile p)
 proceedMove
   :: GhcSession -> ProjectDir -> MoveArgs
   -> FilePath -> FilePath -> Text -> Text -> SliceResult
-  -> IO ToolResult
+  -> IO ToolResponse
 proceedMove sess pd args fromAbs toAbs fromBody toBody sliced = do
   -- Phase 1 source-export update: if the source module's
   -- @module Foo (sym, …) where@ header carries an explicit export
@@ -217,7 +218,7 @@ proceedMove sess pd args fromAbs toAbs fromBody toBody sliced = do
     else doApply sess args allWrites mWarn
 
 doApply
-  :: GhcSession -> MoveArgs -> [(FilePath, Text, Text)] -> Maybe Text -> IO ToolResult
+  :: GhcSession -> MoveArgs -> [(FilePath, Text, Text)] -> Maybe Text -> IO ToolResponse
 doApply sess args allWrites mWarn = do
   appliedRef <- newIORef ([] :: [FilePath])
   outcome    <- writeAll appliedRef allWrites
@@ -696,7 +697,7 @@ moduleNameToPath m
 -- (unwritten) plan under 'result'. Field names preserved verbatim
 -- so callers depending on @applied@/@dry_run@/@files_modified@
 -- still work.
-dryRunResult :: MoveArgs -> [(FilePath, Text, Text)] -> Maybe Text -> ToolResult
+dryRunResult :: MoveArgs -> [(FilePath, Text, Text)] -> Maybe Text -> ToolResponse
 dryRunResult args allWrites mWarn =
   let base =
         [ "applied"           .= False
@@ -709,12 +710,12 @@ dryRunResult args allWrites mWarn =
         , "consumers_updated" .= max 0 (length allWrites - 2)
         ]
       payload = object (base <> maybe [] (\w -> ["warning" .= w]) mWarn)
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 -- | Issue #90 Phase C: applied + verified move → status='ok'.
 -- 'verification.compile_status' stays under 'result' so the
 -- unchanged shape ('compile_status', 'new_errors') is intact.
-successResult :: MoveArgs -> [(FilePath, Text, Text)] -> Maybe Text -> ToolResult
+successResult :: MoveArgs -> [(FilePath, Text, Text)] -> Maybe Text -> ToolResponse
 successResult args allWrites mWarn =
   let base =
         [ "applied"           .= True
@@ -731,13 +732,13 @@ successResult args allWrites mWarn =
             ]
         ]
       payload = object (base <> maybe [] (\w -> ["warning" .= w]) mWarn)
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 -- | Issue #90 §4: post-move type-check failure → status='failed'
 -- with kind='verify_failed'. Diagnostic detail ('errors',
 -- 'symbol', 'from', 'to', 'applied=false') stays under 'result'
 -- so consumers can branch by error.
-verifyFailedResult :: MoveArgs -> [GhcError] -> ToolResult
+verifyFailedResult :: MoveArgs -> [GhcError] -> ToolResponse
 verifyFailedResult args errs =
   let envErr = Env.mkErrorEnvelope Env.VerifyFailed
         ( "Move rolled back — post-move project did not load. \
@@ -750,7 +751,7 @@ verifyFailedResult args errs =
         , "errors"  .= map renderErr errs
         ]
       response = (Env.mkFailed envErr) { Env.reResult = Just payload }
-  in Env.toolResponseToResult response
+  in response
   where
     renderErr e = object
       [ "file"    .= geFile e
@@ -763,17 +764,16 @@ verifyFailedResult args errs =
 -- kind='validation' (input was syntactically OK but failed a
 -- domain check). Path-traversal cases get their own kind via
 -- the 'kindError' family below.
-errorResult :: Text -> ToolResult
+errorResult :: Text -> ToolResponse
 errorResult msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg)
 
 -- | Issue #90 Phase C: typed-error helper. Maps the legacy kind
 -- string to a closed 'ErrorKind' constructor. The legacy string
 -- itself is preserved on the wire because 'ToolResponse'\'s
 -- ToJSON instance still emits the top-level @error_kind@ field
 -- during the migration window (see 'Env.errorKindToText').
-kindError :: Text -> Text -> ToolResult
+kindError :: Text -> Text -> ToolResponse
 kindError kind msg =
   let resolved = case kind of
         "source_module_missing"      -> Env.ModulePathDoesNotExist
@@ -781,5 +781,4 @@ kindError kind msg =
         "symbol_not_found"           -> Env.NotInScope
         "write_failed"               -> Env.SubprocessError
         _                            -> Env.Validation
-  in Env.toolResponseToResult
-       (Env.mkFailed (Env.mkErrorEnvelope resolved msg))
+  in Env.mkFailed (Env.mkErrorEnvelope resolved msg)

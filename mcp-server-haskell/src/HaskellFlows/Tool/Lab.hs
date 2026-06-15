@@ -40,21 +40,17 @@ module HaskellFlows.Tool.Lab
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
-import qualified Data.Aeson.Key as AKey
-import qualified Data.Aeson.KeyMap as AKM
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Directory (doesFileExist)
 
 import HaskellFlows.Data.PropertyStore (Store, saveCases)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -146,14 +142,14 @@ confidenceAtLeast threshold candidate =
     rank Medium = 1
     rank High   = 2
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   store   <- teStore env
   pd      <- teProjectDir env
   runHandle ghcSess store pd rawArgs
 
-runHandle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
+runHandle :: GhcSession -> Store -> ProjectDir -> Value -> IO ToolResponse
 runHandle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> case mkModulePath pd (T.unpack (laModulePath args)) of
@@ -166,10 +162,10 @@ runHandle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
       -- correct kind=module_path_does_not_exist instead.
       exists <- doesFileExist full
       if not exists
-        then pure (Env.toolResponseToResult (Env.mkFailed
+        then pure (Env.mkFailed
           ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
               ("module_path '" <> laModulePath args <> "' does not exist"))
-                { Env.eeField = Just "module_path" })))
+                { Env.eeField = Just "module_path" }))
         else do
           eBody <- try (TIO.readFile full)
                      :: IO (Either SomeException Text)
@@ -180,20 +176,18 @@ runHandle ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
 
 
 -- | Issue #90 Phase C: 'mkModulePath' rejection.
-pathTraversalResult :: Text -> ToolResult
+pathTraversalResult :: Text -> ToolResponse
 pathTraversalResult msg =
-  Env.toolResponseToResult
-    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+  Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg)
 
 -- | Issue #90 Phase C: filesystem read failure.
-subprocessResult :: Text -> ToolResult
+subprocessResult :: Text -> ToolResponse
 subprocessResult msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg)
 
 runLab
   :: GhcSession -> Store -> ProjectDir
-  -> LabArgs -> Text -> Text -> IO ToolResult
+  -> LabArgs -> Text -> Text -> IO ToolResponse
 runLab ghcSess store pd args modulePath body = do
   t0 <- realToFrac <$> getPOSIXTime :: IO Double
   let bindings = listTopLevelBindings body
@@ -481,18 +475,12 @@ checkDeterminism ghcSess args modulePath expr = do
         , "runs"     .= laDeterminismRuns args
         ]
   res <- DeterminismTool.runHandle ghcSess detArgs
-  let payload = decodeToolJson (trContent res)
-  pure $ case lookupString "status" payload of
-    Just "ok" -> Just "stable"
-    _         ->
-      -- 'failed' status or parse failure both map to "unstable" so
-      -- the agent sees a signal even if the determinism tool itself
-      -- hit an unexpected error.
-      Just "unstable"
-  where
-    decodeToolJson (TextContent t : _) =
-      fromMaybe Null (decode (TLE.encodeUtf8 (TL.fromStrict t)))
-    decodeToolJson _ = Null
+  pure $ if Env.reStatus res == Env.StatusOk
+         then Just "stable"
+         -- 'failed' status or any other non-ok maps to "unstable" so
+         -- the agent sees a signal even if the determinism tool itself
+         -- hit an unexpected error.
+         else Just "unstable"
 
 --------------------------------------------------------------------------------
 -- response shaping
@@ -504,7 +492,7 @@ checkDeterminism ghcSess args modulePath expr = do
 -- Phase 2: when 'laDeterminismRuns' > 0 the report includes a
 -- 'determinism_runs' field and each property object gains a
 -- 'stability' key (@"stable"@ / @"unstable"@).
-renderReport :: LabArgs -> Text -> [FunctionReport] -> Int -> ToolResult
+renderReport :: LabArgs -> Text -> [FunctionReport] -> Int -> ToolResponse
 renderReport args modulePath fns wallMs =
   let totalProps = sum (map (length . frProperties) fns)
       passedProps = sum
@@ -535,7 +523,7 @@ renderReport args modulePath fns wallMs =
                , "unstable_properties" .= unstableProps
                ]
           else []
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 renderFn :: FunctionReport -> Value
 renderFn f = object $
@@ -571,15 +559,3 @@ summarise total passed nFns covered =
     <> T.pack (show nFns) <> " functions."
 
 
---------------------------------------------------------------------------------
--- JSON walk helpers
---------------------------------------------------------------------------------
-
-lookupString :: Text -> Value -> Maybe Text
-lookupString k v = case lookupField k v of
-  Just (String s) -> Just s
-  _               -> Nothing
-
-lookupField :: Text -> Value -> Maybe Value
-lookupField k (Object o) = AKM.lookup (AKey.fromText k) o
-lookupField _ _          = Nothing

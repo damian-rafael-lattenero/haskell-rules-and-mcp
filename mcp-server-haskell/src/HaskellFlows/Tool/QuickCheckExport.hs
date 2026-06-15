@@ -59,9 +59,10 @@ import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath (takeDirectory)
 
 import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
-import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Protocol ()
 import qualified HaskellFlows.Tool.QuickCheck as Qc
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath, unProjectDir)
 
@@ -110,7 +111,7 @@ instance FromJSON ExportArgs where
 -- handle
 --------------------------------------------------------------------------------
 
-handle :: Store -> ProjectDir -> Value -> IO ToolResult
+handle :: Store -> ProjectDir -> Value -> IO ToolResponse
 handle store pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> do
@@ -164,7 +165,7 @@ handle store pd rawArgs = case parseEither parseJSON rawArgs of
 -- This prevents the critical data-loss scenario where
 -- @ghc_property_store(action=\"export\")@ silently overwrites a
 -- hand-crafted test suite (issue #131).
-exportGuard :: FilePath -> Bool -> IO (Maybe ToolResult)
+exportGuard :: FilePath -> Bool -> IO (Maybe ToolResponse)
 exportGuard path force = do
   exists <- doesFileExist path
   if not exists || force
@@ -550,9 +551,9 @@ f >=> g = \x -> f x >>= g
 
 -- | Issue #90 Phase C: rendered Spec.hs file → status='ok' with
 -- the on-disk path + counts under 'result'.
-successResult :: FilePath -> Int -> Int -> ToolResult
+successResult :: FilePath -> Int -> Int -> ToolResponse
 successResult path written total =
-  Env.toolResponseToResult (Env.mkOk (object
+  Env.mkOk (object
     [ "output_path"        .= T.pack path
     , "properties_written" .= written
     , "total_persisted"    .= total
@@ -560,18 +561,17 @@ successResult path written total =
         .= ( "Commit the generated file and add QuickCheck to the \
              \test-suite via ghc_deps. `cabal test` will replay \
              \every property as a regression gate." :: Text )
-    ]))
+    ])
 
 
 -- | Issue #90 Phase C: 'mkModulePath' rejected the output path.
-pathTraversalResult :: Text -> ToolResult
+pathTraversalResult :: Text -> ToolResponse
 pathTraversalResult msg =
-  Env.toolResponseToResult
-    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+  Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg)
 
 -- | #131: the target file exists and does not carry our generated
 -- header — refuse to overwrite it without an explicit 'force=true'.
-handWrittenGuardResult :: FilePath -> ToolResult
+handWrittenGuardResult :: FilePath -> ToolResponse
 handWrittenGuardResult path =
   let msg =
         "Refusing to overwrite '" <> T.pack path <> "': the file exists \
@@ -584,10 +584,9 @@ handWrittenGuardResult path =
         \intentionally want to replace the existing file."
       err = (Env.mkErrorEnvelope Env.HandWrittenFileGuard msg)
               { Env.eeRemediation = Just remediation }
-  in Env.toolResponseToResult (Env.mkRefused err)
+  in Env.mkRefused err
 
 -- | Issue #90 Phase C: filesystem write failure.
-subprocessResult :: Text -> ToolResult
+subprocessResult :: Text -> ToolResponse
 subprocessResult msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg)

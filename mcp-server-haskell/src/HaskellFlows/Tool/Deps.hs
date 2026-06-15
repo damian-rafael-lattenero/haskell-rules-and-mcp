@@ -66,12 +66,13 @@ import qualified System.Process as Proc
 import qualified Data.Aeson.Key as AesonKey
 import qualified Data.Aeson.KeyMap as KeyMap
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Schema as Schema
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.DepsExplain as DepsExplain
-import HaskellFlows.Types (ProjectDir, unProjectDir)
+import HaskellFlows.Types (ProjectDir)
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Tool.Deps.Validate
   ( validatePackageName
@@ -89,6 +90,7 @@ import HaskellFlows.Tool.Deps.Cabal
   , applyWithinStanza
   , resolveStanza
   , editAgreesWithVerb
+  , isTopLevelStanzaHeader
   )
 
 -- | Serialise concurrent .cabal edits across every call originating
@@ -277,34 +279,34 @@ instance FromJSON DepsArgs where
         , daStanza  = Nothing
         }
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   pd <- teProjectDir env
   r  <- runHandle pd rawArgs
   teInvalidateStanza env
   pure r
 
-runHandle :: ProjectDir -> Value -> IO ToolResult
+runHandle :: ProjectDir -> Value -> IO ToolResponse
 runHandle pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKindD parseError)
           (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) })))
+            { Env.eeCause = Just (T.pack parseError) }))
   Right args -> case daAction args of
     ActExplain -> DepsExplain.handle pd rawArgs
     _ -> do
       mCabal <- findCabalFile pd
       case mCabal of
         Nothing ->
-          pure (Env.toolResponseToResult (Env.mkFailed
+          pure (Env.mkFailed
             ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
                 "No .cabal file found in project root")
                   { Env.eeRemediation =
-                      Just "Run ghc_project(action=\"create\") to scaffold a cabal package first." })))
+                      Just "Run ghc_project(action=\"create\") to scaffold a cabal package first." }))
         Just file -> handleAction file args
 
-handleAction :: FilePath -> DepsArgs -> IO ToolResult
+handleAction :: FilePath -> DepsArgs -> IO ToolResponse
 handleAction file args = case daAction args of
   ActList -> do
     res <- try (TIO.readFile file) :: IO (Either SomeException Text)
@@ -358,7 +360,7 @@ runEdit
   -> (Text -> Text -> Text)                  -- (pkg -> body -> newBody)
   -> Text                                    -- verb for the success message
   -> Bool                                    -- verifyAfter: run cabal dry-run + rollback
-  -> IO ToolResult
+  -> IO ToolResponse
 runEdit mHint file pkg mStanza f verb verifyAfter = withCabalLock file $ do
   res <- try (TIO.readFile file) :: IO (Either SomeException Text)
   case res of
@@ -419,7 +421,7 @@ runEdit mHint file pkg mStanza f verb verifyAfter = withCabalLock file $ do
 -- Held inside 'withCabalLock' (caller's responsibility) so the
 -- subprocess sees the version we just wrote, and so a rollback
 -- can't race with a concurrent add.
-verifyAndCommit :: Maybe Value -> FilePath -> Text -> Text -> Text -> IO ToolResult
+verifyAndCommit :: Maybe Value -> FilePath -> Text -> Text -> Text -> IO ToolResponse
 verifyAndCommit mHint file originalBody pkg verb = do
   verified <- verifyResolvable file pkg
   case verified of
@@ -511,7 +513,7 @@ extractErrorSummary pkg combinedOutput =
 
 -- | F-08: list response that enumerates all stanzas. Shape is
 -- @{ stanzas: { library: [...], "test-suite:NAME": [...] } }@.
-listResultAll :: FilePath -> [(Text, [Text])] -> ToolResult
+listResultAll :: FilePath -> [(Text, [Text])] -> ToolResponse
 listResultAll file stanzas =
   let km = KeyMap.fromList
              [ (AesonKey.fromText k, toJSON deps)
@@ -522,9 +524,9 @@ listResultAll file stanzas =
         , "cabal_file" .= T.pack file
         , "stanzas"    .= Object km
         ]
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
-listResult :: FilePath -> [Text] -> ToolResult
+listResult :: FilePath -> [Text] -> ToolResponse
 listResult file deps =
   let payload = object
         [ "action"       .= ("list" :: Text)
@@ -532,9 +534,9 @@ listResult file deps =
         , "count"        .= length deps
         , "build_depends".= deps
         ]
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
-editResult :: Maybe Value -> FilePath -> Text -> Text -> ToolResult
+editResult :: Maybe Value -> FilePath -> Text -> Text -> ToolResponse
 editResult mHint file pkg verb =
   let payload = object $
         [ "action"     .= verb
@@ -547,12 +549,12 @@ editResult mHint file pkg verb =
                           :: Text )
         ]
         <> maybe [] (\h -> [ "cross_stanza_hint" .= h ]) mHint
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 -- | #48 + #90: cabal-rejected dep maps to status='failed' with
 -- kind='unresolvable_dep'. The legacy 'rolled_back' flag stays
 -- inside 'result' for back-compat.
-verifyFailedResult :: FilePath -> Text -> Text -> ToolResult
+verifyFailedResult :: FilePath -> Text -> Text -> ToolResponse
 verifyFailedResult file pkg err =
   let envErr = (Env.mkErrorEnvelope Env.UnresolvableDep
                  ("cabal could not solve the dep set after adding '"
@@ -567,15 +569,15 @@ verifyFailedResult file pkg err =
         , "rolled_back" .= True
         ]
       response = (Env.mkFailed envErr) { Env.reResult = Just payload }
-  in Env.toolResponseToResult response
+  in response
 
-unchangedResult :: FilePath -> Text -> Text -> ToolResult
+unchangedResult :: FilePath -> Text -> Text -> ToolResponse
 unchangedResult file pkg verb = unchangedResult' file pkg verb Nothing
 
 -- | Issue #244: extended version of 'unchangedResult' that accepts an
 -- optional hint string surfaced when a package is absent from the
 -- targeted stanza but found in a common stanza.
-unchangedResult' :: FilePath -> Text -> Text -> Maybe Text -> ToolResult
+unchangedResult' :: FilePath -> Text -> Text -> Maybe Text -> ToolResponse
 unchangedResult' file pkg verb mHint =
   let note = case verb of
         "added"   -> "'" <> pkg <> "' already present in target stanza — no change written."
@@ -593,7 +595,7 @@ unchangedResult' file pkg verb mHint =
         <> case mHint of
              Nothing -> []
              Just h  -> [ "hint" .= h ]
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 -- | Issue #244: scan the whole cabal body for @common@ stanzas and
 -- return the first common stanza name whose build-depends contains
@@ -721,10 +723,10 @@ findCommonStanzaWithPkg pkg body =
 -- envelope. Most call sites pass a free-form 'Text' that maps to
 -- kind='validation' (the input was structurally fine but failed a
 -- domain check).
-errorResult :: Text -> ToolResult
+errorResult :: Text -> ToolResponse
 errorResult msg =
-  Env.toolResponseToResult (Env.mkFailed
-    (Env.mkErrorEnvelope Env.Validation msg))
+  Env.mkFailed
+    (Env.mkErrorEnvelope Env.Validation msg)
 
 parseErrorKindD :: String -> Env.ErrorKind
 parseErrorKindD err

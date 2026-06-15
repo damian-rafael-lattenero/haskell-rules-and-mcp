@@ -60,6 +60,7 @@ import System.Timeout (timeout)
 import HaskellFlows.Config (defaultLimits, gateOutputCapBytes)
 import HaskellFlows.Data.PropertyStore (Store, loadAll)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Progress
@@ -164,14 +165,14 @@ cabalBuildTimeoutMicros args = gaBuildTimeoutMinutes args * 60 * 1_000_000
 -- handle
 --------------------------------------------------------------------------------
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   store   <- teStore env
   ghcSess <- teSession env
   pd      <- teProjectDir env
   runHandle store ghcSess pd (teSink env) rawArgs
 
-runHandle :: Store -> GhcSession -> ProjectDir -> ProgressSink -> Value -> IO ToolResult
+runHandle :: Store -> GhcSession -> ProjectDir -> ProgressSink -> Value -> IO ToolResponse
 runHandle store sess pd sink rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args
@@ -224,17 +225,16 @@ runHandle store sess pd sink rawArgs = case parseEither parseJSON rawArgs of
 -- | #138: returned when the caller skips every gate. Status is
 -- 'refused' (policy) so agents see it as a configuration error
 -- they can fix — not a "push is blocked" failure.
-allGatesSkippedResult :: ToolResult
+allGatesSkippedResult :: ToolResponse
 allGatesSkippedResult =
-  Env.toolResponseToResult
-    (Env.mkRefused
+  Env.mkRefused
        ((Env.mkErrorEnvelope Env.Validation
           "All gates skipped — at least one of regression / cabal_test / \
           \cabal_build must be enabled. Skipping everything provides no \
           \safety guarantee and is not a valid pre-push check.")
           { Env.eeHint = Just
               "Remove at least one skip_* flag, or call without any flags \
-              \to run the full suite." }))
+              \to run the full suite." })
 
 --------------------------------------------------------------------------------
 -- step machinery
@@ -413,7 +413,7 @@ outputCap = gateOutputCapBytes defaultLimits
 -- per-step report under 'result'. Any red step → status='failed'
 -- (kind='validation' if the step ran and reported failures,
 -- 'inner_timeout' if a step timed out).
-renderReport :: Bool -> Double -> Step -> Step -> Step -> ToolResult
+renderReport :: Bool -> Double -> Step -> Step -> Step -> ToolResponse
 renderReport allPassed total reg tst bld =
   let payload = object
         [ "totalDurationSec" .= total
@@ -425,7 +425,7 @@ renderReport allPassed total reg tst bld =
         , "summary" .= summary allPassed reg tst bld
         ]
   in if allPassed
-       then Env.toolResponseToResult (Env.mkOk payload)
+       then Env.mkOk payload
        else
          let anyTimedOut = anyTimeout reg || anyTimeout tst || anyTimeout bld
              kind | anyTimedOut = Env.InnerTimeout
@@ -433,7 +433,7 @@ renderReport allPassed total reg tst bld =
              envErr   = Env.mkErrorEnvelope kind
                           (summary allPassed reg tst bld)
              response = (Env.mkFailed envErr) { Env.reResult = Just payload }
-         in Env.toolResponseToResult response
+         in response
 
 anyTimeout :: Step -> Bool
 anyTimeout TimedOut{} = True

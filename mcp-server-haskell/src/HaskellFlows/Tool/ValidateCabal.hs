@@ -36,8 +36,9 @@ import System.FilePath (takeExtension, (</>))
 
 import HaskellFlows.Config (Limits, cabalCheckTimeout)
 import HaskellFlows.Util.Process (SubprocessOutcome (..), SubprocessResult (..), runArgv)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Protocol ()
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 -- | #94 Phase C step 5: this module's @descriptor@ was retired
@@ -72,30 +73,30 @@ instance ToJSON Issue where
       , "message"  .= iMessage i
       ]
 
-handle :: Limits -> ProjectDir -> Value -> IO ToolResult
+handle :: Limits -> ProjectDir -> Value -> IO ToolResponse
 handle lim pd rawArgs = case parseEither parseJSON rawArgs :: Either String Value of
   Left parseError ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope Env.Validation
           (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) })))
+            { Env.eeCause = Just (T.pack parseError) }))
   Right _ -> do
     mCabalFile <- findCabalFile pd
     case mCabalFile of
       Nothing ->
-        pure (Env.toolResponseToResult (Env.mkFailed
+        pure (Env.mkFailed
           ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
               "No .cabal file found in project root")
                 { Env.eeRemediation =
-                    Just "Run ghc_project(action=\"create\") to scaffold one, or check that the project root is correct." })))
+                    Just "Run ghc_project(action=\"create\") to scaffold one, or check that the project root is correct." }))
       Just file -> do
         readRes <- try (TIO.readFile file) :: IO (Either SomeException Text)
         case readRes of
           Left e ->
-            pure (Env.toolResponseToResult (Env.mkFailed
+            pure (Env.mkFailed
               ((Env.mkErrorEnvelope Env.SubprocessError
                   (T.pack ("Could not read cabal file: " <> show e)))
-                    { Env.eeCause = Just (T.pack (show e)) })))
+                    { Env.eeCause = Just (T.pack (show e)) }))
           Right body -> do
             heuristicIssues <- (scanCabalText body ++) <$> scanExposedModules pd body
             cabalCheckIssues <- runCabalCheck lim pd
@@ -385,7 +386,7 @@ runCabalCheck lim pd = do
 -- window. The 'cause' field on the error envelope mirrors the
 -- summary text without poisoning the user-facing 'message' with
 -- counts.
-renderResult :: FilePath -> [Issue] -> ToolResult
+renderResult :: FilePath -> [Issue] -> ToolResponse
 renderResult file issues =
   let errs  = length (filter ((== CabalSevError) . iSeverity) issues)
       warns = length (filter ((== CabalSevWarn)  . iSeverity) issues)
@@ -412,7 +413,7 @@ renderResult file issues =
               ("cabal validation found " <> T.pack (show errs) <> " error(s)"))
                 { Env.eeCause = Just summary })
       warningIssues = filter ((== CabalSevWarn) . iSeverity) issues
-  in Env.toolResponseToResult response
+  in response
 
 summarise :: Int -> Int -> Text
 summarise 0 0 = "cabal file is clean."

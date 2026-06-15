@@ -50,6 +50,7 @@ import GHC
 import GHC.Utils.Outputable (showPprUnsafe)
 
 import qualified HaskellFlows.Data.Scratchpad as SP
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Ghc.Sanitize (sanitizeDeclarations, sanitizeExpression)
@@ -257,14 +258,14 @@ instance FromJSON ScratchArgs where
 -- The session and pd are lazy in all non-check / non-promote branches
 -- so callers may safely pass 'undefined' when they know neither
 -- 'check' nor 'promote' will run (unit tests for write/list/show/clear).
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   scratch <- teScratchpad env
   ghcSess <- teSession env
   pd      <- teProjectDir env
   runHandle scratch ghcSess pd rawArgs
 
-runHandle :: SP.Store -> GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle :: SP.Store -> GhcSession -> ProjectDir -> Value -> IO ToolResponse
 runHandle store ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> case saAction args of
@@ -299,22 +300,22 @@ runHandle store ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
 -- so @nextStep@ can route: @type_ok@ → promote, @type_error@ →
 -- write + re-check.  The full 'SP.ScratchResult' is persisted and
 -- visible via @action=show@.
-handleCheck :: SP.Store -> GhcSession -> ScratchArgs -> IO ToolResult
+handleCheck :: SP.Store -> GhcSession -> ScratchArgs -> IO ToolResponse
 handleCheck store ghcSess args = case saId args of
   Nothing ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       (Env.mkErrorEnvelope Env.MissingArg
-        "action=check requires 'id'")))
+        "action=check requires 'id'"))
   Just i -> do
     mEntry <- SP.findById store i
     case mEntry of
       Nothing ->
-        pure (Env.toolResponseToResult (Env.mkNoMatch (object
+        pure (Env.mkNoMatch (object
           [ "id"    .= i
           , "found" .= False
           , "hint"  .= ("No scratchpad entry with that id. \
                         \Use action=list to see existing ids." :: Text)
-          ])))
+          ]))
       Just entry -> do
         now <- realToFrac <$> getPOSIXTime
         -- #276: split inline `import …` lines out of the snippet. They can't
@@ -334,12 +335,12 @@ handleCheck store ghcSess args = case saId args of
 -- | Single-line path: uses 'sanitizeExpression' + 'exprType' directly.
 -- Returns the inferred type as @\"type\"@ in the response.
 checkSingleLine :: SP.Store -> GhcSession -> SP.ScratchEntry
-                -> Text -> [Text] -> Text -> Double -> IO ToolResult
+                -> Text -> [Text] -> Text -> Double -> IO ToolResponse
 checkSingleLine store ghcSess entry i imports code now =
   case sanitizeExpression code of
     Left cmdErr ->
-      pure (Env.toolResponseToResult (Env.mkRefused
-        (Env.sanitizeRejection "code" cmdErr)))
+      pure (Env.mkRefused
+        (Env.sanitizeRejection "code" cmdErr))
     Right safe -> do
       eRes <- try (withGhcSession ghcSess (queryExprTypeWithImports imports safe))
       saveAndRespond store entry now eRes
@@ -369,12 +370,12 @@ checkSingleLine store ghcSess entry i imports code now =
 -- multi-equation definitions.  Returns @\"type\": \"declarations
 -- type-checked OK\"@ on success.
 checkMultiLine :: SP.Store -> GhcSession -> SP.ScratchEntry
-               -> Text -> [Text] -> Text -> Double -> IO ToolResult
+               -> Text -> [Text] -> Text -> Double -> IO ToolResponse
 checkMultiLine store ghcSess entry i imports code now =
   case sanitizeDeclarations code of
     Left cmdErr ->
-      pure (Env.toolResponseToResult (Env.mkRefused
-        (Env.sanitizeRejection "code" cmdErr)))
+      pure (Env.mkRefused
+        (Env.sanitizeRejection "code" cmdErr))
     Right safe -> do
       eRes <- try (withGhcSession ghcSess
                      (queryExprTypeWithImports imports (wrapAsLetBlock safe)))
@@ -412,7 +413,7 @@ saveAndRespond
   -> Either SomeException Text   -- GHC result or exception
   -> (Text -> Value)             -- success payload builder
   -> (Text -> Value)             -- failure payload builder
-  -> IO ToolResult
+  -> IO ToolResponse
 saveAndRespond store entry now eRes mkOkPayload mkErrPayload =
   case eRes of
     Right typeText -> do
@@ -427,7 +428,7 @@ saveAndRespond store entry now eRes mkOkPayload mkErrPayload =
                       , SP.seUpdated = now
                       }
       SP.save store updated
-      pure (Env.toolResponseToResult (Env.mkOk (mkOkPayload typeText)))
+      pure (Env.mkOk (mkOkPayload typeText))
     Left ex -> do
       let errText = T.pack (show ex)
           result  = SP.ScratchResult
@@ -441,7 +442,7 @@ saveAndRespond store entry now eRes mkOkPayload mkErrPayload =
                       , SP.seUpdated = now
                       }
       SP.save store updated
-      pure (Env.toolResponseToResult (Env.mkOk (mkErrPayload errText)))
+      pure (Env.mkOk (mkErrPayload errText))
 
 -- | Wrap a multi-line declaration block in @let ... in ()@ so
 -- 'exprType' can type-check it as a single expression.
@@ -493,7 +494,7 @@ queryExprTypeWithImports imports expr = do
 -- by splicing the imports into the context and type-checking @()@ against it.
 -- Restores the context afterwards.
 checkImportsOnly :: SP.Store -> GhcSession -> SP.ScratchEntry
-                 -> Text -> [Text] -> Double -> IO ToolResult
+                 -> Text -> [Text] -> Double -> IO ToolResponse
 checkImportsOnly store ghcSess entry i imports now = do
   eRes <- try (withGhcSession ghcSess
                  (queryExprTypeWithImports imports "()"))
@@ -578,12 +579,12 @@ groupImports = finish . foldl step []
 -- write
 --------------------------------------------------------------------------------
 
-handleWrite :: SP.Store -> ScratchArgs -> IO ToolResult
+handleWrite :: SP.Store -> ScratchArgs -> IO ToolResponse
 handleWrite store args = case saCode args of
   Nothing ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       (Env.mkErrorEnvelope Env.MissingArg
-        "action=write requires 'code'")))
+        "action=write requires 'code'"))
   Just code -> do
     now <- realToFrac <$> getPOSIXTime
     entryId <- case saId args of
@@ -602,13 +603,13 @@ handleWrite store args = case saCode args of
           , SP.seUpdated = now
           }
     SP.save store entry
-    pure (Env.toolResponseToResult (Env.mkOk (object
+    pure (Env.mkOk (object
       [ "id"     .= entryId
       , "kind"   .= SP.seKind entry
       , "status" .= SP.seStatus entry
       , "hint"   .= ("Entry persisted. Use action=check to type-check it \
                      \against the live session, or action=promote when verified." :: Text)
-      ])))
+      ]))
 
 -- | Auto-generate an entry id based on the existing entry count.
 -- Format: @scratch-N@ where N is the smallest unused integer.
@@ -631,17 +632,17 @@ autoId store _ = do
 -- list
 --------------------------------------------------------------------------------
 
-handleList :: SP.Store -> IO ToolResult
+handleList :: SP.Store -> IO ToolResponse
 handleList store = do
   entries <- SP.loadAll store
   let summaries = map renderEntrySummary entries
       counts    = tallyStatuses entries
-  pure (Env.toolResponseToResult (Env.mkOk (object
+  pure (Env.mkOk (object
     [ "count"   .= length entries
     , "entries" .= summaries
     , "counts"  .= counts
     , "hint"    .= listHint entries
-    ])))
+    ]))
 
 -- | Per-entry compact summary for the list view. Code is preview-only
 -- (first 80 chars) so the response stays small even when entries hold
@@ -685,58 +686,58 @@ listHint xs =
 -- show
 --------------------------------------------------------------------------------
 
-handleShow :: SP.Store -> ScratchArgs -> IO ToolResult
+handleShow :: SP.Store -> ScratchArgs -> IO ToolResponse
 handleShow store args = case saId args of
   Nothing ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       (Env.mkErrorEnvelope Env.MissingArg
-        "action=show requires 'id'")))
+        "action=show requires 'id'"))
   Just i -> do
     mEntry <- SP.findById store i
     case mEntry of
       Nothing ->
-        pure (Env.toolResponseToResult (Env.mkNoMatch (object
+        pure (Env.mkNoMatch (object
           [ "id"    .= i
           , "found" .= False
           , "hint"  .= ("No scratchpad entry with that id. \
                         \Use action=list to see existing ids." :: Text)
-          ])))
+          ]))
       Just e ->
-        pure (Env.toolResponseToResult (Env.mkOk (toJSON e)))
+        pure (Env.mkOk (toJSON e))
 
 --------------------------------------------------------------------------------
 -- clear
 --------------------------------------------------------------------------------
 
-handleClear :: SP.Store -> ScratchArgs -> IO ToolResult
+handleClear :: SP.Store -> ScratchArgs -> IO ToolResponse
 handleClear store args = case (saId args, saConfirm args) of
   (Just i, _) -> do
     -- Single-entry remove. No confirm needed — caller named the id.
     mEntry <- SP.findById store i
     case mEntry of
       Nothing ->
-        pure (Env.toolResponseToResult (Env.mkNoMatch (object
+        pure (Env.mkNoMatch (object
           [ "id"      .= i
           , "removed" .= False
           , "hint"    .= ("No entry with that id; nothing to remove." :: Text)
-          ])))
+          ]))
       Just _ -> do
         SP.remove store i
-        pure (Env.toolResponseToResult (Env.mkOk (object
+        pure (Env.mkOk (object
           [ "id"      .= i
           , "removed" .= True
-          ])))
+          ]))
   (Nothing, True) -> do
     -- Bulk truncate.
     SP.clearAll store
-    pure (Env.toolResponseToResult (Env.mkOk (object
+    pure (Env.mkOk (object
       [ "cleared" .= True
       , "hint"    .= ("Scratchpad truncated." :: Text)
-      ])))
+      ]))
   (Nothing, False) ->
-    pure (Env.toolResponseToResult (Env.mkRefused
+    pure (Env.mkRefused
       (Env.mkErrorEnvelope Env.Validation
-        "action=clear without 'id' requires confirm=true to drop the whole scratchpad")))
+        "action=clear without 'id' requires confirm=true to drop the whole scratchpad"))
 
 --------------------------------------------------------------------------------
 -- promote (#253 Phase 4)
@@ -757,36 +758,36 @@ handleClear store args = case (saId args, saConfirm args) of
 --   * 'target_line' — optional; inserts after that line (1-based) when given,
 --     appends to end of file otherwise.
 --   * A loaded GHC session (caller must have run ghc_load first).
-handlePromote :: SP.Store -> GhcSession -> ProjectDir -> ScratchArgs -> IO ToolResult
+handlePromote :: SP.Store -> GhcSession -> ProjectDir -> ScratchArgs -> IO ToolResponse
 handlePromote store ghcSess pd args =
   case saId args of
     Nothing ->
-      pure (Env.toolResponseToResult (Env.mkFailed
+      pure (Env.mkFailed
         (Env.mkErrorEnvelope Env.MissingArg
-          "action=promote requires 'id'")))
+          "action=promote requires 'id'"))
     Just i ->
       case saTargetModule args of
         Nothing ->
-          pure (Env.toolResponseToResult (Env.mkFailed
+          pure (Env.mkFailed
             (Env.mkErrorEnvelope Env.MissingArg
               "action=promote requires 'target_module' \
-              \(e.g. \"src/Foo.hs\") — the file where the code will be spliced.")))
+              \(e.g. \"src/Foo.hs\") — the file where the code will be spliced."))
         Just rawModule ->
           case mkModulePath pd (T.unpack rawModule) of
             Left pe ->
-              pure (Env.toolResponseToResult (Env.mkRefused
+              pure (Env.mkRefused
                 (Env.mkErrorEnvelope Env.PathTraversal
-                  (renderPathErr pe))))
+                  (renderPathErr pe)))
             Right mp -> do
               mEntry <- SP.findById store i
               case mEntry of
                 Nothing ->
-                  pure (Env.toolResponseToResult (Env.mkNoMatch (object
+                  pure (Env.mkNoMatch (object
                     [ "id"    .= i
                     , "found" .= False
                     , "hint"  .= ("No scratchpad entry with that id. \
                                   \Use action=list to see existing ids." :: Text)
-                    ])))
+                    ]))
                 Just entry -> do
                   now <- realToFrac <$> getPOSIXTime
                   -- F-04: if binding_name is given, wrap single-line
@@ -808,7 +809,7 @@ handlePromote store ghcSess pd args =
                     pure (Right (spliceInto orig spliceCode targetLine, successBase))
                   -- Only promote the entry if the refactor succeeded.
                   -- trIsError=True means the snapshot was rolled back.
-                  unless (trIsError result) $ do
+                  unless (trIsError (Env.toolResponseToResult result)) $ do
                     let promoted = entry
                           { SP.seStatus  = SP.ScratchPromoted
                           , SP.seModule  = Just rawModule

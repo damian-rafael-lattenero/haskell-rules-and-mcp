@@ -94,6 +94,7 @@ import GHC.Types.SrcLoc (RealSrcSpan, SrcSpan (..), srcSpanFile)
 import HaskellFlows.Ghc.Sanitize
   ( sanitizeExpression
   )
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -196,20 +197,19 @@ qcArgsLine =
   "do { let qcArgs = stdArgs { chatty = False, maxSuccess = "
     <> show qcMaxSuccess <> " }"
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   store   <- teStore env
   ghcSess <- teSession env
   runHandle store ghcSess rawArgs
 
-runHandle :: Store -> GhcSession -> Value -> IO ToolResult
+runHandle :: Store -> GhcSession -> Value -> IO ToolResponse
 runHandle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right (QuickCheckArgs prop md) -> case sanitizeExpression prop of
     Left cmdErr ->
-      pure (Env.toolResponseToResult
-              (Env.mkRefused (Env.sanitizeRejection "property" cmdErr)))
+      pure (Env.mkRefused (Env.sanitizeRejection "property" cmdErr))
     Right safe -> do
       -- Resolve the property's defining module via the GHC API.
       -- If the property is a bare identifier we can look up
@@ -732,14 +732,14 @@ isSimpleIdent t = case T.uncons t of
 --                     (cabal repl printed something we can't
 --                     parse — usually a load error; the optional
 --                     hint surfaces the cleaned stderr).
-renderResult :: QuickCheckResult -> Maybe Text -> ToolResult
+renderResult :: QuickCheckResult -> Maybe Text -> ToolResponse
 renderResult qr mHint = case qr of
   QcPassed p n ->
-    Env.toolResponseToResult (Env.mkOk (object
+    Env.mkOk (object
       [ "state"    .= ("passed" :: Text)
       , "property" .= p
       , "passed"   .= n
-      ]))
+      ])
   QcFailed p n shr cex ->
     let payload = object
           [ "state"          .= ("failed" :: Text)
@@ -753,7 +753,7 @@ renderResult qr mHint = case qr of
                        <> T.pack (show n) <> " passes, "
                        <> T.pack (show shr) <> " shrinks)")
         response = (Env.mkFailed envErr) { Env.reResult = Just payload }
-    in Env.toolResponseToResult response
+    in response
   QcException p err ->
     let payload = object
           [ "state"    .= ("exception" :: Text)
@@ -764,7 +764,7 @@ renderResult qr mHint = case qr of
              | otherwise                     = Env.SubprocessError
         envErr   = Env.mkErrorEnvelope kind err
         response = (Env.mkFailed envErr) { Env.reResult = Just payload }
-    in Env.toolResponseToResult response
+    in response
   QcGaveUp p n disc ->
     let payload = object
           [ "state"     .= ("gave_up" :: Text)
@@ -783,7 +783,7 @@ renderResult qr mHint = case qr of
                        <> T.pack (show disc) <> " discards / "
                        <> T.pack (show n) <> " passes")
         response = (Env.mkNoMatch payload) { Env.reError = Just envErr }
-    in Env.toolResponseToResult response
+    in response
   QcUnparsed p raw ->
     -- #132 / #186: classify the error kind from the summarised stderr so
     -- the agent gets a structured, actionable error rather than an opaque
@@ -819,7 +819,7 @@ renderResult qr mHint = case qr of
         response = (Env.mkFailed envErr)
                      { Env.reResult   = Just payload
                      , Env.reNextStep = nextHint }
-    in Env.toolResponseToResult response
+    in response
   where
     -- Attach the 'hint' key ONLY when the stderr actually carried
     -- a diagnostic; empty or whitespace-only stderr is worse than

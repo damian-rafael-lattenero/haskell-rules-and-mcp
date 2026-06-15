@@ -50,6 +50,7 @@ import GHC.Utils.Outputable (showPprUnsafe)
 import Text.Read (readMaybe)
 
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -130,12 +131,12 @@ instance FromJSON WitnessArgs where
       , waClassifyBy = parseClassifyBy cb
       }
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   runHandle ghcSess rawArgs
 
-runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle :: GhcSession -> Value -> IO ToolResponse
 runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> do
@@ -410,7 +411,7 @@ isPrimitiveBuckets ctorDist =
 -- top-level injection in 'enrichWithNextStep' is the sole source.
 renderReport
   :: WitnessArgs -> QuickCheckResult
-  -> [(Text, Double)] -> [Text] -> Text -> Int -> ToolResult
+  -> [(Text, Double)] -> [Text] -> Text -> Int -> ToolResponse
 renderReport args qc dist warnings rawForResponse wallMs =
   let (passed, failed, _qcRaw) = qcCounts qc
       raw = rawForResponse
@@ -474,7 +475,7 @@ renderReport args qc dist warnings rawForResponse wallMs =
           ]
           ++ [ "raw_truncated" .= True | rawTruncated ]
         )
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 renderBucket :: (Text, Double) -> Value
 renderBucket (label, pct) = object
@@ -492,18 +493,16 @@ qcCounts = \case
 
 
 -- | Issue #90 Phase C: cabal-repl subprocess threw.
-subprocessResult :: Text -> ToolResult
+subprocessResult :: Text -> ToolResponse
 subprocessResult msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg)
 
 -- | #240: property expression failed to compile.
 -- Returns a structured failed response with kind=compile_error so
 -- agents can distinguish "0 samples (vacuously true)" from "compile error".
-compileErrorResult :: Text -> Text -> ToolResult
+compileErrorResult :: Text -> Text -> ToolResponse
 compileErrorResult prop errMsg =
-  Env.toolResponseToResult $
-    Env.mkFailed $
+  Env.mkFailed $
       (Env.mkErrorEnvelope Env.CompileError
         ("Property did not compile: " <> prop))
           { Env.eeCause = Just errMsg }

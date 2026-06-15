@@ -58,6 +58,7 @@ import HaskellFlows.Ghc.ApiSession
   )
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Util.Safe (safeAt)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -156,19 +157,18 @@ instance FromJSON PerfArgs where
       -- Clamp threshold to [1, 200] percent.
       clampThreshold x = max 1.0 (min 200.0 x)
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   pd      <- teProjectDir env
   runHandle ghcSess pd rawArgs
 
-runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResponse
 runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> case sanitizeExpression (paExpression args) of
     Left e ->
-      pure (Env.toolResponseToResult
-              (Env.mkRefused (Env.sanitizeRejection "expression" e)))
+      pure (Env.mkRefused (Env.sanitizeRejection "expression" e))
     Right safe -> runPerf ghcSess pd args safe
 
 
@@ -176,7 +176,7 @@ runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
 -- timing harness
 --------------------------------------------------------------------------------
 
-runPerf :: GhcSession -> ProjectDir -> PerfArgs -> Text -> IO ToolResult
+runPerf :: GhcSession -> ProjectDir -> PerfArgs -> Text -> IO ToolResponse
 runPerf ghcSess pd args safe = do
   -- 'evalIOString' unsafeCoerce's the compiled expression to
   -- 'IO String'. Wrap the user expression so it becomes a pure
@@ -396,7 +396,7 @@ errCap = 500
 -- 'kind="validation"' signalling so the agent can act on it.
 -- #162: 'warmupNs' is the discarded first-run latency (the compile
 -- cost); the agent can inspect it but it does NOT affect mean/median.
-renderResult :: PerfArgs -> [Word64] -> Stats -> [Text] -> Maybe BaselineEntry -> Word64 -> ToolResult
+renderResult :: PerfArgs -> [Word64] -> Stats -> [Text] -> Maybe BaselineEntry -> Word64 -> ToolResponse
 renderResult args nss stats errs mBaseline warmupNs =
   -- F-31: when every sample errored the session has likely lost the
   -- module. Surface this directly rather than computing a meaningless
@@ -427,13 +427,12 @@ renderResult args nss stats errs mBaseline warmupNs =
                      <> "the module — run ghc_load to reload before benchmarking."
                    , "Call ghc_load(module_path=\8230) to reload the module, then retry ghc_perf."
                    )
-         in Env.toolResponseToResult
-              (Env.mkFailed
+         in Env.mkFailed
                 ((Env.mkErrorEnvelope Env.SubprocessError errMsg)
                       -- #135: deduplicate + truncate repeated stale-session errors.
                       { Env.eeCause       = Just (summariseMeasurementErrors errs)
                       , Env.eeRemediation = Just remediation
-                      }))
+                      })
        else
   let mRegression = do
         be  <- mBaseline
@@ -532,8 +531,7 @@ renderResult args nss stats errs mBaseline warmupNs =
           <> ", regression_pct=" <> T.pack (show (round pct :: Int))
         Nothing -> "baseline exceeded"
   in if isRegression
-       then Env.toolResponseToResult
-              (Env.mkFailed
+       then Env.mkFailed
                 ((Env.mkErrorEnvelope Env.Regression regressionMsg)
-                  { Env.eeCause = Just regressionCause }))
-       else Env.toolResponseToResult (Env.mkOk payload)
+                  { Env.eeCause = Just regressionCause })
+       else Env.mkOk payload

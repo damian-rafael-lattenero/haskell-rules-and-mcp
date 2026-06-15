@@ -28,6 +28,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 
 import HaskellFlows.Config (Limits)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -74,20 +75,19 @@ descriptor =
 -- | Dispatch on @action@ (defaulting to @"status"@) and forward
 -- to the existing handler.  The legacy handlers were never
 -- @ProjectDir@-aware, so this dispatcher takes no @ProjectDir@.
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env = runHandle (teLimits env)
 
-runHandle :: Limits -> Value -> IO ToolResult
+runHandle :: Limits -> Value -> IO ToolResponse
 runHandle lim rawArgs = case parseEither parseAction rawArgs of
-  Left err     -> pure (Env.toolResponseToResult (refusal err))
+  Left err     -> pure (refusal err)
   Right action -> do
     let inner = stripAction rawArgs
     case action of
       "status" -> ToolchainStatus.handle lim inner
       "warmup" -> ToolchainWarmup.handle inner
-      other    -> pure (Env.toolResponseToResult
-                          (refusal ("unknown action: " <> T.unpack other
-                                    <> " (expected 'status' or 'warmup')")))
+      other    -> pure (refusal ("unknown action: " <> T.unpack other
+                                    <> " (expected 'status' or 'warmup')"))
   where
     -- Default action = "status".  Mirrors the old ghc_toolchain_status
     -- (the no-arg invocation) so callers that pass an empty object

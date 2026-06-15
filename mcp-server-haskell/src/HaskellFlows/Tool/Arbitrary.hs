@@ -85,6 +85,7 @@ import HaskellFlows.Ghc.ApiSession
 import HaskellFlows.Ghc.Sanitize
   ( sanitizeExpression
   )
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -145,20 +146,19 @@ instance FromJSON ArbitraryArgs where
   parseJSON = withObject "ArbitraryArgs" $ \o ->
     ArbitraryArgs <$> o .: "type_name" <*> o .:? "target_module"
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   pd      <- teProjectDir env
   runHandle ghcSess pd rawArgs
 
-runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResponse
 runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right (ArbitraryArgs tname mTarget) -> case sanitizeExpression tname of
     Left cmdErr ->
-      pure (Env.toolResponseToResult
-              (Env.mkRefused (Env.sanitizeRejection "type_name" cmdErr)))
+      pure (Env.mkRefused (Env.sanitizeRejection "type_name" cmdErr))
     Right safe -> do
       tgt <- firstLibraryOrTestSuite ghcSess
       eLoad <- try (loadForTarget ghcSess tgt Strict)
@@ -238,39 +238,35 @@ runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
 -- because the type isn't in scope) → status='no_match' with
 -- kind='not_in_scope'. Distinct from a validation failure: the
 -- input was syntactically fine, just absent.
-notInScopeErr :: Text -> ToolResult
+notInScopeErr :: Text -> ToolResponse
 notInScopeErr msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.NotInScope msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.NotInScope msg)
 
 -- | Issue #90 Phase C: structural rejection of types we can't
 -- template (GADTs, typeclasses, type synonyms) → kind='validation'.
 -- The input is syntactically a type name and is in scope; we just
 -- don't have a template generator for its shape.
-validationErr :: Text -> ToolResult
+validationErr :: Text -> ToolResponse
 validationErr msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg)
 
 -- | Issue #90 Phase C: unexpected GHC API exception
 -- (loadForTarget threw) → kind='subprocess_error'. The exception
 -- text is preserved verbatim in the message body.
-subprocessErr :: Text -> ToolResult
+subprocessErr :: Text -> ToolResponse
 subprocessErr msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg)
 
 -- | Issue #210: module compile failure — loadForTarget returned
 -- (False, errors). The user needs to fix compile errors before
 -- ghc_arbitrary can resolve the type. Status='failed',
 -- kind='validation'.
-compileFailedErr :: Int -> ToolResult
+compileFailedErr :: Int -> ToolResponse
 compileFailedErr n =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.Validation
+  Env.mkFailed (Env.mkErrorEnvelope Env.Validation
       ( "Module has " <> T.pack (show n) <> " compile error(s); "
       <> "fix them first (use ghc_check_module or ghc_explain_error), "
-      <> "then retry ghc_arbitrary." )))
+      <> "then retry ghc_arbitrary." ))
 
 -- | Resolve the name and render the resulting 'TyThing' in the
 -- exact @data T = A | B Int | ...@ shape @:info@ would print.
@@ -585,9 +581,9 @@ renderRhsSized typeName c = case cArgs c of
 -- | Issue #90 Phase C: rendered template → status='ok'. All the
 -- caller-facing fields ('type_name', 'constructors', 'template',
 -- 'hint') stay under 'result' so existing consumers keep working.
-successResult :: Text -> [Constructor] -> Text -> ToolResult
+successResult :: Text -> [Constructor] -> Text -> ToolResponse
 successResult typeName ctors tmpl =
-  Env.toolResponseToResult (Env.mkOk (object
+  Env.mkOk (object
     [ "type_name"    .= typeName
     , "constructors" .= map renderCtor ctors
     , "template"     .= tmpl
@@ -595,7 +591,7 @@ successResult typeName ctors tmpl =
                          \defines '" <> typeName <> "'. If the type is \
                          \polymorphic, add an Arbitrary constraint on \
                          \each type variable." :: Text )
-    ]))
+    ])
 
 -- | #261: write the generated instance to a dedicated orphan-suppressing
 -- module at the given relative path (idempotent) so the agent avoids the
@@ -604,7 +600,7 @@ successResult typeName ctors tmpl =
 -- QuickCheck via ghc_deps). Full auto-placement + cabal mutation is
 -- deferred; this is the safe, single-file core.
 writeArbitraryModule
-  :: ProjectDir -> Text -> Text -> [Constructor] -> Text -> IO ToolResult
+  :: ProjectDir -> Text -> Text -> [Constructor] -> Text -> IO ToolResponse
 writeArbitraryModule pd relPath typeName ctors tmpl
   | ".." `T.isInfixOf` relPath =
       pure (validationErr "target_module must be inside the project (no '..').")
@@ -652,9 +648,9 @@ renderArbitraryModule modName mDefMod tmpl = T.unlines $
   <> [ "", tmpl ]
 
 -- | #261: success payload when the instance was written to a file.
-writtenResult :: Text -> [Constructor] -> Text -> Text -> Text -> Bool -> ToolResult
+writtenResult :: Text -> [Constructor] -> Text -> Text -> Text -> Bool -> ToolResponse
 writtenResult typeName ctors tmpl relPath modName already =
-  Env.toolResponseToResult (Env.mkOk (object
+  Env.mkOk (object
     [ "type_name"           .= typeName
     , "constructors"        .= map renderCtor ctors
     , "template"            .= tmpl
@@ -667,7 +663,7 @@ writtenResult typeName ctors tmpl relPath modName already =
           <> "ghc_deps(action=\"add\", package=\"QuickCheck\", stanza=\"...\"). "
           <> "The -Wno-orphans pragma suppresses the orphan-instance warning."
           :: Text )
-    ]))
+    ])
 
 renderCtor :: Constructor -> Value
 renderCtor c =

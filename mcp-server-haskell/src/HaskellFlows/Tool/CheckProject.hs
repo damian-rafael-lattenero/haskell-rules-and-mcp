@@ -32,8 +32,6 @@ import Data.Char (isAlphaNum, isAsciiUpper, isSpace)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
@@ -41,6 +39,7 @@ import System.FilePath (takeExtension, (</>))
 import HaskellFlows.Config (Limits, checkProjectTimeout, unMicros)
 import HaskellFlows.Data.PropertyStore (Store)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Progress (ProgressEvent (..), ProgressSink, emitProgress)
@@ -115,14 +114,14 @@ instance FromJSON CheckProjectArgs where
     pure CheckProjectArgs { cpFailFast = ff, cpWarningsBlock = wb
                           , cpTimeoutSeconds = fmap (max 1) ts }
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   store   <- teStore env
   pd      <- teProjectDir env
   runHandle (teLimits env) (teSink env) ghcSess store pd rawArgs
 
-runHandle :: Limits -> ProgressSink -> GhcSession -> Store -> ProjectDir -> Value -> IO ToolResult
+runHandle :: Limits -> ProgressSink -> GhcSession -> Store -> ProjectDir -> Value -> IO ToolResponse
 runHandle lim sink ghcSess store pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
@@ -159,7 +158,7 @@ runHandle lim sink ghcSess store pd rawArgs = case parseEither parseJSON rawArgs
 -- | Issue #90 Phase C: no .cabal in project root → status='no_match'
 -- with kind='module_not_in_graph' (the project layout doesn't
 -- expose any modules to check).
-cabalNotFoundResult :: ToolResult
+cabalNotFoundResult :: ToolResponse
 cabalNotFoundResult =
   let payload  = object
         [ "remediation" .= ( "Run ghc_create_project to scaffold a \
@@ -168,13 +167,12 @@ cabalNotFoundResult =
       envErr   = Env.mkErrorEnvelope Env.ModuleNotInGraph
                    ("No .cabal file found in project root" :: Text)
       response = (Env.mkNoMatch payload) { Env.reError = Just envErr }
-  in Env.toolResponseToResult response
+  in response
 
 -- | Issue #90 Phase C: filesystem read of .cabal failed.
-subprocessResult :: Text -> ToolResult
+subprocessResult :: Text -> ToolResponse
 subprocessResult msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg)
 
 --------------------------------------------------------------------------------
 -- cabal parsing
@@ -303,7 +301,7 @@ resolveModulePaths pd = mapM locate
 --------------------------------------------------------------------------------
 
 data ModuleOutcome
-  = MoChecked  !Text !ToolResult
+  = MoChecked  !Text !ToolResponse
   | MoNotFound !Text
   | MoSkipped  !Text
   | MoTimedOut !Text   -- #129: budget expired before this module ran
@@ -365,7 +363,7 @@ runChecks sink startTime total ghcSess store pd ff wb mDeadline idx ((nm, mp) : 
                     , "warnings_block" .= wb
                     ])
           let this = MoChecked nm tr
-              stop = ff && trIsError tr
+              stop = ff && trIsError (Env.toolResponseToResult tr)
           if stop
             then pure (this : map (MoSkipped . fst) rest, False)
             else do
@@ -384,17 +382,17 @@ runChecks sink startTime total ghcSess store pd ff wb mDeadline idx ((nm, mp) : 
 -- count so the agent knows partial results were returned. Status is
 -- still 'failed' when any checked module failed; 'ok' when all
 -- checked modules passed (even if some were skipped by the budget).
-renderResult :: [ModuleOutcome] -> Bool -> ToolResult
+renderResult :: [ModuleOutcome] -> Bool -> ToolResponse
 renderResult outcomes timedOut =
   let checked   = [ (nm, tr) | MoChecked nm tr <- outcomes ]
-      failing   = [ nm       | (nm, tr) <- checked, trIsError tr ]
+      failing   = [ nm       | (nm, tr) <- checked, trIsError (Env.toolResponseToResult tr) ]
       notFound  = [ nm       | MoNotFound nm <- outcomes ]
       skipped   = [ nm       | MoSkipped nm <- outcomes ]
       timedOutMs= [ nm       | MoTimedOut nm <- outcomes ]
       overall   = null failing && null notFound && not timedOut
       total     = length outcomes
       nChecked  = length checked
-      okCount   = length (filter (not . trIsError . snd) checked)
+      okCount   = length (filter (not . trIsError . Env.toolResponseToResult . snd) checked)
       errCount  = length failing + length notFound
       -- #255: true when some modules passed and some failed (mixed result).
       isMixed   = not overall && okCount > 0 && errCount > 0 && not timedOut
@@ -427,14 +425,12 @@ renderResult outcomes timedOut =
                  (if timedOut then Env.InnerTimeout else Env.GateFailure)
                  summaryText
   in if overall
-       then Env.toolResponseToResult (Env.mkOk payload)
+       then Env.mkOk payload
        else if isMixed
          -- #255: mixed results → status='partial' so callers can
          -- distinguish "project partially clean" from "project broken".
-         then Env.toolResponseToResult
-                ((Env.mkPartial payload) { Env.reError = Just envErr })
-         else Env.toolResponseToResult
-                ((Env.mkFailed envErr) { Env.reResult = Just payload })
+         then (Env.mkPartial payload) { Env.reError = Just envErr }
+         else (Env.mkFailed envErr) { Env.reResult = Just payload }
 
 renderOutcome :: ModuleOutcome -> Value
 renderOutcome (MoChecked nm tr) =
@@ -442,7 +438,7 @@ renderOutcome (MoChecked nm tr) =
   -- For passing modules emit only status + terse summary.
   -- For failing modules include the summary + errors list so the
   -- agent knows exactly what to fix, without the full tool result.
-  let moduleStatus = if trIsError tr then "failed" :: Text else "ok"
+  let moduleStatus = if trIsError (Env.toolResponseToResult tr) then "failed" :: Text else "ok"
       detail = extractModuleDetail tr
   in object
     [ "module"  .= nm
@@ -468,27 +464,20 @@ renderOutcome (MoTimedOut nm) =
     , "reason" .= ("overall timeout_seconds budget exhausted" :: Text)
     ]
 
--- | #119: extract a terse summary from a per-module 'ToolResult'.
--- Parse the first TextContent block as JSON and keep only the fields
--- an agent needs to triage the outcome:
---   * summary, errors, warnings  (omit holes + property-gate details)
+-- | #119: extract a terse summary from a per-module 'ToolResponse'.
+-- Keep only the fields an agent needs to triage the outcome:
+--   * summary (omit holes + property-gate details)
 -- This prevents context-bombing the agent on large projects.
-extractModuleDetail :: ToolResult -> Value
+extractModuleDetail :: ToolResponse -> Value
 extractModuleDetail tr =
-  case trContent tr of
-    (TextContent t : _) ->
-      case decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-        Just (Object top) ->
-          case AKM.lookup "result" top of
-            Just (Object r) ->
-              let wantedKeys = ["summary", "errors", "warnings"]
-                  found = [ (fieldK, fieldV)
-                          | fieldK <- wantedKeys
-                          , Just fieldV <- [AKM.lookup fieldK r]
-                          ]
-              in object [ fieldK .= fieldV | (fieldK, fieldV) <- found ]
-            _ -> object []
-        _ -> object []
+  case Env.reResult tr of
+    Just (Object r) ->
+      let wantedKeys = ["summary", "errors", "warnings"]
+          found = [ (fieldK, fieldV)
+                  | fieldK <- wantedKeys
+                  , Just fieldV <- [AKM.lookup fieldK r]
+                  ]
+      in object [ fieldK .= fieldV | (fieldK, fieldV) <- found ]
     _ -> object []
 
 summarise :: Int -> Int -> Int -> Text

@@ -42,6 +42,7 @@ import qualified Data.Text as T
 import qualified HaskellFlows.Data.Scratchpad as Scratchpad
 import HaskellFlows.Data.PropertyStore (Store)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Schema as Schema
 import HaskellFlows.Mcp.Protocol
@@ -61,7 +62,7 @@ import HaskellFlows.Types (ProjectDir)
 -- session / store / scratchpad / self-project refs, an @invalidate-stanza@
 -- callback to run after a create, and the tool-descriptor catalog for
 -- bootstrap.
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env =
   runHandle (teLimits env) (teProjectDirRef env) (teSessionRef env) (teStoreRef env) (teScratchpadRef env) (teIsSelfRef env) (teInvalidateStanza env) (teDescriptors env)
 
@@ -75,15 +76,14 @@ runHandle
   -> IO ()              -- ^ invalidate cached stanza flags (post-create)
   -> [ToolDescriptor]   -- ^ allToolDescriptors (for bootstrap)
   -> Value
-  -> IO ToolResult
+  -> IO ToolResponse
 runHandle lim pdRef sessRef storeRef scratchRef selfRef invalidateStanza descriptors rawArgs =
   case actionField rawArgs of
     Nothing ->
-      pure (Env.toolResponseToResult
-        (Env.mkRefused
+      pure (Env.mkRefused
           (Env.mkErrorEnvelope Env.MissingArg
             "ghc_project requires an 'action' field \
-            \(one of 'create', 'switch', 'validate', 'bootstrap').")))
+            \(one of 'create', 'switch', 'validate', 'bootstrap')."))
     Just action ->
       let inner = stripAction rawArgs
       in case action of
@@ -93,7 +93,7 @@ runHandle lim pdRef sessRef storeRef scratchRef selfRef invalidateStanza descrip
              invalidateStanza
              -- #256: auto-switch to the freshly created project (only when
              -- create succeeded, write=True, and an explicit path was given).
-             if trIsError r
+             if trIsError (Env.toolResponseToResult r)
                then pure r
                else case createAutoSwitchPath inner of
                  Nothing      -> pure r
@@ -110,12 +110,11 @@ runHandle lim pdRef sessRef storeRef scratchRef selfRef invalidateStanza descrip
              pd <- readIORef pdRef
              BootstrapTool.handle pd descriptors inner
            other ->
-             pure (Env.toolResponseToResult
-               (Env.mkRefused
+             pure (Env.mkRefused
                  (Env.mkErrorEnvelope Env.Validation
                    ("Unknown ghc_project action: '" <> other
                     <> "' (expected 'create', 'switch', 'validate', \
-                       \or 'bootstrap')."))))
+                       \or 'bootstrap').")))
 
 -- | Peek at the @action@ string without committing to a FromJSON parser.
 actionField :: Value -> Maybe Text

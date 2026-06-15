@@ -23,8 +23,9 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import System.Directory (findExecutable)
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Protocol ()
 
 
 -- | Blocking-gate binaries: the MCP cannot function without these.
@@ -38,7 +39,7 @@ optionalBinaries :: [Text]
 optionalBinaries =
   [ "fourmolu", "ormolu", "hls", "haskell-language-server", "hoogle" ]
 
-handle :: Value -> IO ToolResult
+handle :: Value -> IO ToolResponse
 handle _rawArgs = do
   gateAvail <- traverse probe gateBinaries
   optAvail  <- traverse probe optionalBinaries
@@ -63,7 +64,7 @@ handle _rawArgs = do
           []    -> Env.mkOk payload
           names -> Env.withWarnings (map missingBinaryWarning names)
                      (Env.mkPartial payload)
-  pure (Env.toolResponseToResult response)
+  pure response
   where
     probe :: Text -> IO (Text, Bool)
     probe n = do

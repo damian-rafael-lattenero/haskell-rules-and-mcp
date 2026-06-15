@@ -35,6 +35,7 @@ import GHC
 import GHC.Types.Name (nameModule_maybe, nameOccName)
 import GHC.Types.Name.Occurrence (occNameString)
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.PermissiveJSON (IntField (unIntField))
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
@@ -107,28 +108,27 @@ clampLimit n
   | n > 200   = 200
   | otherwise = n
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   runHandle ghcSess rawArgs
 
-runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle :: GhcSession -> Value -> IO ToolResponse
 runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind parseError)
           (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) })))
+            { Env.eeCause = Just (T.pack parseError) }))
   Right (CompleteArgs prefix limit) ->
     case sanitizeExpression prefix of
       Left e ->
-        pure (Env.toolResponseToResult (Env.mkRefused (Env.sanitizeRejection "prefix" e)))
+        pure (Env.mkRefused (Env.sanitizeRejection "prefix" e))
       Right safe -> do
         eRes <- try (withGhcSession ghcSess (queryCompletions safe))
         case eRes of
           Left (se :: SomeException) ->
-            pure $ Env.toolResponseToResult $
-              Env.mkFailed
+            pure $ Env.mkFailed
                 ((Env.mkErrorEnvelope Env.InternalError
                     (T.pack ("GHC API error: " <> show se)))
                       { Env.eeCause = Just (T.pack (show se)) })
@@ -147,11 +147,9 @@ runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
                 let fallbackCands = case eFbk of
                       Right xs -> xs
                       Left _   -> []   -- module unknown → empty list
-                pure $ Env.toolResponseToResult
-                     $ renderCompletions prefix limit fallbackCands
+                pure $ renderCompletions prefix limit fallbackCands
             | otherwise ->
-                pure $ Env.toolResponseToResult
-                     $ renderCompletions prefix limit cands
+                pure $ renderCompletions prefix limit cands
 
 -- | Discriminate the FromJSON failure shape — a missing required
 -- field maps to 'MissingArg'; everything else falls back to

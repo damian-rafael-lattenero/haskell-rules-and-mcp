@@ -35,6 +35,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.PermissiveJSON
   ( IntField (unIntField)
@@ -227,14 +228,14 @@ underscorePrefix name srcLine =
                  || isDigit c
                  || c == '_' || c == '\''
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   pd <- teProjectDir env
   r  <- runHandle pd rawArgs
   teInvalidateSession env
   pure r
 
-runHandle :: ProjectDir -> Value -> IO ToolResult
+runHandle :: ProjectDir -> Value -> IO ToolResponse
 runHandle pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
   Right args -> case mkModulePath pd (T.unpack (fwModulePath args)) of
@@ -346,7 +347,7 @@ patchPrecedingTypeSig nm ls = fromMaybe ls (go (length ls - 1))
     isBlankOrComment l =
       T.null (T.strip l) || "--" `T.isPrefixOf` T.stripStart l
 
-writePatched :: FilePath -> FixPlan -> FixWarningArgs -> Text -> IO ToolResult
+writePatched :: FilePath -> FixPlan -> FixWarningArgs -> Text -> IO ToolResponse
 writePatched full plan args body = do
   let lns        = T.lines body
       ix         = fwLine args - 1
@@ -354,11 +355,11 @@ writePatched full plan args body = do
   -- Issue #221: guard before any patch logic so out-of-bounds
   -- lines return a clear error rather than a silent no-op.
   if ix < 0 || ix >= totalLines
-    then pure (Env.toolResponseToResult (Env.mkFailed
+    then pure (Env.mkFailed
           (Env.mkErrorEnvelope Env.Validation
             (T.pack ( "line " <> show (fwLine args)
                    <> " out of bounds — file has "
-                   <> show totalLines <> " line(s)" )))))
+                   <> show totalLines <> " line(s)" ))))
     else do
       let (pre, rest) = splitAt ix lns
           newLns
@@ -398,9 +399,9 @@ writePatched full plan args body = do
 -- | Issue #90 Phase C: read-only preview → status='ok' with the
 -- plan ('fixable', 'patch', 'hint', 'dropLine') under 'result'.
 -- 'applied=False' is the explicit signal callers branch on.
-previewResult :: FilePath -> FixPlan -> FixWarningArgs -> ToolResult
+previewResult :: FilePath -> FixPlan -> FixWarningArgs -> ToolResponse
 previewResult path plan args =
-  Env.toolResponseToResult (Env.mkOk (object (catMaybes
+  Env.mkOk (object (catMaybes
     [ Just ("applied"   .= False)
     , Just ("fixable"   .= fpFixable plan)
     , Just ("path"      .= T.pack path)
@@ -409,14 +410,14 @@ previewResult path plan args =
     , Just ("hint"      .= fpHint plan)
     , Just ("dropLine"  .= fpDrop plan)
     , ("patch" .=) <$> fpPatch plan
-    ])))
+    ]))
 
 -- | Issue #90 Phase C: in-place patch → status='ok' with
 -- 'applied=True'. Same shape as preview minus 'dropLine' (the
 -- caller doesn't need it once the patch is on disk).
-appliedResult :: FilePath -> FixPlan -> FixWarningArgs -> ToolResult
+appliedResult :: FilePath -> FixPlan -> FixWarningArgs -> ToolResponse
 appliedResult path plan args =
-  Env.toolResponseToResult (Env.mkOk (object
+  Env.mkOk (object
     [ "applied"  .= True
     , "fixable"  .= fpFixable plan
     , "path"     .= T.pack path
@@ -424,18 +425,16 @@ appliedResult path plan args =
     , "line"     .= fwLine args
     , "hint"     .= fpHint plan
     , "patch"    .= fpPatch plan
-    ]))
+    ])
 
 -- | Issue #90 Phase C: bad input / IO failure / 'patch would
 -- empty file' refusal → status='failed', kind='validation'.
-errorResult :: Text -> ToolResult
+errorResult :: Text -> ToolResponse
 errorResult msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg)
 
 -- | Issue #100 Phase C: 'mkModulePath' rejected the path (escapes
 -- project root) → status='refused', kind='path_traversal'.
-pathTraversalResult :: Text -> ToolResult
+pathTraversalResult :: Text -> ToolResponse
 pathTraversalResult msg =
-  Env.toolResponseToResult
-    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+  Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg)

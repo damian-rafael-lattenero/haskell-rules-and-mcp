@@ -24,6 +24,7 @@ import System.Exit (ExitCode (..))
 
 import HaskellFlows.Config (Limits, formatTimeout)
 import HaskellFlows.Util.Process (SubprocessOutcome (..), SubprocessResult (..), runArgv)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -87,14 +88,14 @@ instance FromJSON FormatArgs where
     w  <- o .:? "write" .!= False
     pure FormatArgs { faModulePath = mp, faWrite = w }
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   pd <- teProjectDir env
   r  <- runHandle (teLimits env) pd rawArgs
   teInvalidateSession env
   pure r
 
-runHandle :: Limits -> ProjectDir -> Value -> IO ToolResult
+runHandle :: Limits -> ProjectDir -> Value -> IO ToolResponse
 runHandle lim pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
@@ -115,13 +116,12 @@ runHandle lim pd rawArgs = case parseEither parseJSON rawArgs of
           -- backtrace; we surface a clean validation error instead.
           exists <- doesFileExist (unModulePath mp)
           if not exists
-            then pure (Env.toolResponseToResult
-                    (Env.mkFailed
+            then pure (Env.mkFailed
                       ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
                           ("Module file does not exist: "
                             <> T.pack (unModulePath mp)))
                         { Env.eeRemediation =
-                            Just "Verify the path is correct. Use ghc_modules(action=\"list\") to see registered modules." })))
+                            Just "Verify the path is correct. Use ghc_modules(action=\"list\") to see registered modules." }))
             else do
               mFormatter <- resolveFormatter
               case mFormatter of
@@ -136,10 +136,9 @@ runHandle lim pd rawArgs = case parseEither parseJSON rawArgs of
 
 -- | Issue #90 Phase C: 'mkModulePath' rejected the input → that's
 -- a path-traversal refusal. Status='refused', kind='path_traversal'.
-pathTraversalResult :: Text -> ToolResult
+pathTraversalResult :: Text -> ToolResponse
 pathTraversalResult msg =
-  Env.toolResponseToResult
-    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+  Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg)
 
 -- | Which formatter we plan to invoke. 'fBinary' is the absolute path
 -- resolved at the time of the call so a mid-call PATH change can't
@@ -195,35 +194,35 @@ runFormatter lim pd f mp write = do
 --                  can distinguish from the 10-min outer guard.
 -- * 'FmtFailure' → status='failed' with kind='subprocess_error',
 --                  exit code under 'cause', stderr in the message.
-renderResult :: Formatter -> ModulePath -> Bool -> FmtOutcome -> ToolResult
+renderResult :: Formatter -> ModulePath -> Bool -> FmtOutcome -> ToolResponse
 renderResult _ _ write (FmtOk out) =
   -- #119: surface whether we actually rewrote the file.
   -- When write=true the file was rewritten in-place and 'formatted'
   -- is ""; when write=false (check-only) 'formatted' holds the
   -- reformatted text. Adding 'wrote' + 'check_only' lets callers
   -- distinguish these without inspecting the empty-string.
-  Env.toolResponseToResult (Env.mkOk (object
+  Env.mkOk (object
     [ "formatted"  .= out
     , "wrote"      .= write
     , "check_only" .= not write
-    ]))
+    ])
 renderResult _ _ _ FmtTimeout =
   let envErr = (Env.mkErrorEnvelope Env.InnerTimeout
                   ("formatter timed out after 30 seconds" :: Text))
                  { Env.eeCause = Just "30s" }
-  in Env.toolResponseToResult (Env.mkTimeout envErr)
+  in Env.mkTimeout envErr
 renderResult _ _ _ (FmtFailure code err) =
   let msg    = "formatter exited with code " <> T.pack (show code)
                  <> ": " <> T.strip err
       envErr = (Env.mkErrorEnvelope Env.SubprocessError msg)
                  { Env.eeCause = Just (T.pack (show code)) }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
+  in Env.mkFailed envErr
 
 -- | Issue #90 Phase C: neither fourmolu nor ormolu on PATH →
 -- status='unavailable', kind='binary_unavailable'. The
 -- 'remediation' string lives under 'result' so it stays readable
 -- even when the consumer is showing an error banner.
-unavailableResult :: Text -> ToolResult
+unavailableResult :: Text -> ToolResponse
 unavailableResult msg =
   let payload  = object
         [ "remediation" .= ( "Install fourmolu (`cabal install fourmolu`) \
@@ -231,7 +230,7 @@ unavailableResult msg =
         ]
       envErr   = Env.mkErrorEnvelope Env.BinaryUnavailable msg
       response = (Env.mkUnavailable envErr) { Env.reResult = Just payload }
-  in Env.toolResponseToResult response
+  in response
 
 formatPathError :: PathError -> Text
 formatPathError = \case

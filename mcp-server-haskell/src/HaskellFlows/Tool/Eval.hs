@@ -52,6 +52,7 @@ import System.Timeout (timeout)
 import Unsafe.Coerce (unsafeCoerce)
 
 import HaskellFlows.Config (defaultLimits, evalTimeout, unMicros)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
@@ -113,30 +114,30 @@ instance FromJSON EvalArgs where
   parseJSON = withObject "EvalArgs" $ \o ->
     EvalArgs <$> o .: "expression"
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   runHandle ghcSess rawArgs
 
-runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle :: GhcSession -> Value -> IO ToolResponse
 runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind parseError)
           (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) })))
+            { Env.eeCause = Just (T.pack parseError) }))
   Right (EvalArgs expr) ->
     -- #143: detect `import ...` as the expression prefix and redirect
     -- to ghc_add_import before sanitization. GHCi doesn't allow import
     -- statements in expression context; the parse error ("parse error on
     -- input 'import'") gives no guidance. Return a structured redirect.
     if "import " `T.isPrefixOf` T.stripStart expr
-      then pure (Env.toolResponseToResult (importRedirectResult expr))
+      then pure (importRedirectResult expr)
       else
     case sanitizeExpression expr of
       Left cmdErr ->
-        pure (Env.toolResponseToResult (Env.mkRefused
-          (Env.sanitizeRejection "expression" cmdErr)))
+        pure (Env.mkRefused
+          (Env.sanitizeRejection "expression" cmdErr))
       Right safe -> do
         -- Inner per-eval budget. 'ghc_eval' is the only tool that
         -- interprets user-supplied expressions; without a tighter
@@ -204,7 +205,7 @@ classifyEvalException e
 -- | The original eval pipeline, unwrapped from the timeout envelope.
 -- See the Server.hs comment on why both 'withGhcSession' and
 -- 'withStanzaFlags' wrap every eval path.
-runEvalBody :: GhcSession -> Text -> IO ToolResult
+runEvalBody :: GhcSession -> Text -> IO ToolResponse
 runEvalBody ghcSess safe = do
   -- Prime the session via 'loadForTarget' so the eval runs
   -- with: cabal stanza flags applied (exposes base / ghc-prim
@@ -269,10 +270,10 @@ runEvalBody ghcSess safe = do
               -- typecheck or is out of scope; all other SomeException
               -- originate at the unsafeCoerce/evalIOString execution stage.
               let kind = classifyEvalException ex
-              in pure (Env.toolResponseToResult (Env.mkFailed
+              in pure (Env.mkFailed
                 ((Env.mkErrorEnvelope kind
                     ("ghc_eval failed: " <> T.take 200 (T.pack (show ex))))
-                      { Env.eeCause = Just (T.pack (show ex)) })))
+                      { Env.eeCause = Just (T.pack (show ex)) }))
 
 -- | Issue #90 Phase B: timeout maps to status='timeout' with
 -- error.kind='inner_timeout'. The envelope's ToJSON also surfaces
@@ -285,9 +286,9 @@ runEvalBody ghcSess safe = do
 -- no stdout output — executed successfully but silent.
 -- Surfaced as status='ok' with @output: ""@ and a hint so agents
 -- know the action ran but wrote nothing to stdout.
-ioUnitResult :: ToolResult
+ioUnitResult :: ToolResponse
 ioUnitResult =
-  Env.toolResponseToResult (Env.mkOk (object
+  Env.mkOk (object
     [ "output"     .= ("" :: Text)
     , "truncated"  .= False
     , "kind"       .= ("io_unit_no_output" :: Text)
@@ -297,9 +298,9 @@ ioUnitResult =
           \to stdout (putStrLn / print) and not just to a file handle \
           \or to stderr. To capture a computed value, wrap it in show: \
           \e.g. 'show someValue' or 'putStrLn (show result)'." :: Text )
-    ]))
+    ])
 
-timeoutResult :: ToolResult
+timeoutResult :: ToolResponse
 timeoutResult =
   let timeoutMsg =
         "ghc_eval exceeded inner budget ("
@@ -313,7 +314,7 @@ timeoutResult =
               { Env.eeCause       = Just cause
               , Env.eeRemediation = Just remediation
               }
-  in Env.toolResponseToResult (Env.mkTimeout err)
+  in Env.mkTimeout err
 
 -- | #143: redirect when the expression is an import statement.
 -- 'ghc_eval' cannot execute import directives — they are not
@@ -440,13 +441,13 @@ truncateOutput output =
                     else output
   in TruncatedOutput { toOutput = capped, toTruncated = truncated }
 
-renderOk :: TruncatedOutput -> ToolResult
+renderOk :: TruncatedOutput -> ToolResponse
 renderOk t =
   let payload = object
         [ "output"    .= toOutput t
         , "truncated" .= toTruncated t
         ]
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 -- | Discriminate the FromJSON failure shape — same heuristic as
 -- the other Phase-B migrations.

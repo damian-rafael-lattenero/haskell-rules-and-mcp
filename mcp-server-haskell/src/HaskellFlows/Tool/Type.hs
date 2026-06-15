@@ -29,6 +29,7 @@ import qualified Data.Text as T
 import GHC (Ghc, TcRnExprMode (TM_Inst), exprType)
 import GHC.Utils.Outputable (showPprUnsafe)
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
@@ -79,27 +80,27 @@ instance FromJSON TypeArgs where
   parseJSON = withObject "TypeArgs" $ \o ->
     TypeArgs <$> o .: "expression"
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   runHandle ghcSess rawArgs
 
 -- | Handle a @tools/call@ for @ghc_type@.
-runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle :: GhcSession -> Value -> IO ToolResponse
 runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind parseError)
           (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) })))
+            { Env.eeCause = Just (T.pack parseError) }))
   Right (TypeArgs expr) ->
     case sanitizeExpression expr of
       Left cmdErr ->
-        pure (Env.toolResponseToResult (Env.mkRefused
-          (Env.sanitizeRejection "expression" cmdErr)))
+        pure (Env.mkRefused
+          (Env.sanitizeRejection "expression" cmdErr))
       Right safe -> do
         eRes <- try (withGhcSession ghcSess (queryExprType safe))
-        pure $ Env.toolResponseToResult $ case eRes of
+        pure $ case eRes of
           Left (se :: SomeException) ->
             -- Issue #141: GHC raises the same 'SomeException' for both
             -- genuine type errors and "Not in scope" failures (missing

@@ -46,6 +46,7 @@ import System.Directory (findExecutable)
 import System.FilePath ((</>))
 
 import qualified HaskellFlows.Data.Scratchpad as SP
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Mcp.Protocol
@@ -153,7 +154,7 @@ instance FromJSON WorkflowArgs where
 -- directly, avoiding the previous "Server pre-renders + passes
 -- as flat [Text]" indirection that hid information the help view
 -- could use.
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ws       <- teWorkflowState env
   staleness <- teStaleness env
@@ -169,20 +170,20 @@ runHandle
   -> Bool                  -- ^ PR-4 Phase 1: is the active project the MCP itself?
   -> IORef SP.Store        -- ^ #253 Phase 5: scratchpad store for status section
   -> Value
-  -> IO ToolResult
+  -> IO ToolResponse
 runHandle pdRef sessMVar toolNames ws staleness isSelfProject scratchRef rawArgs =
   case parseEither parseJSON rawArgs of
     Left err ->
-      pure (Env.toolResponseToResult (Env.mkFailed
+      pure (Env.mkFailed
         ((Env.mkErrorEnvelope (parseErrorKind err)
             (T.pack ("Invalid arguments: " <> err)))
-              { Env.eeCause = Just (T.pack err) })))
+              { Env.eeCause = Just (T.pack err) }))
     Right (WorkflowArgs ActPostMortem) -> do
       -- #266: post-mortem needs wall-clock 'now' for the session duration
       -- + the on-disk lifetime ledger for cross-session cumulative usage.
       pd       <- readIORef pdRef
       lifetime <- loadLifetime pd
-      Env.toolResponseToResult . Env.mkOk . postMortemPayload ws lifetime
+      Env.mkOk . postMortemPayload ws lifetime
         <$> getCurrentTime
     Right (WorkflowArgs a) -> do
       pd        <- readIORef pdRef
@@ -266,7 +267,7 @@ render
   -> Maybe Text       -- ^ F-02: suggested entry module (help view only)
   -> Bool             -- ^ PR-4 Phase 1: is the active project the MCP itself?
   -> Maybe Value      -- ^ #253 Phase 5: pre-computed scratchpad section (status only)
-  -> ToolResult
+  -> ToolResponse
 render a pd alive toolNames ws staleness missingOpt mEntry isSelfProject mScratch =
   let phase      = classifyPhase ws
       stateHints = renderHelp ws
@@ -293,7 +294,7 @@ render a pd alive toolNames ws staleness missingOpt mEntry isSelfProject mScratc
           [ "view"  .= ("post-mortem" :: Text)
           , "error" .= ("internal: post-mortem is handled on the IO path" :: Text)
           ]
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 -- | #263: the ranked top-5 unused tools for the current phase. Pure +
 -- exported so the ranking heuristic is unit-testable without going

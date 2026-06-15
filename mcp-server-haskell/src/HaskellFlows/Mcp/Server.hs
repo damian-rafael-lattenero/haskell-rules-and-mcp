@@ -352,7 +352,8 @@ handleToolCall srv call rid mProgressToken = case parseToolName (tcName call) of
     logToolStart ctx (redactArgs (tcArguments call))
     t0   <- getPOSIXTime
     resp <- runTool srv GhcBatch rid
-              (BatchTool.handle (mkToolEnv srv noopSink) (tcArguments call))
+              (Env.toolResponseToResult <$>
+                 BatchTool.handle (mkToolEnv srv noopSink) (tcArguments call))
     t1   <- getPOSIXTime
     logToolEnd ctx (extractResponseStatus resp)
                (round ((t1 - t0) * 1000) :: Int)
@@ -421,15 +422,16 @@ mkToolEnv srv sink = ToolEnv
 -- 'GhcQuickCheck' retains a 3-line routing arm: 'runs' >= 2 routes to
 -- the determinism detector rather than the standard single-QC path.
 dispatchByName :: Server -> ProgressSink -> Value -> ToolName -> IO ToolResult
-dispatchByName srv sink args tn =
+dispatchByName srv sink args tn = do
   let env = mkToolEnv srv sink
-  in case tn of
+  response <- case tn of
     GhcQuickCheck ->
       -- #94 Phase C: 'runs' >= 2 routes to the Determinism handler.
       case quickCheckRuns args of
         Just n | n >= 2 -> DeterminismTool.handle env args
         _               -> QcTool.handle env args
     other -> handlerFor other env args
+  pure (Env.toolResponseToResult response)
 
 -- | Synthesize an error 'ToolResult' for an unknown tool name.
 -- Pulled out so 'handleToolCall' and 'dispatchTool' produce the

@@ -20,6 +20,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.PermissiveJSON (BoolField (unBoolField))
 import HaskellFlows.Mcp.Protocol
@@ -89,14 +90,14 @@ instance FromJSON ApplyExportsArgs where
       , aeWrite      = wr
       }
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   pd <- teProjectDir env
   r  <- runHandle pd rawArgs
   teInvalidateSession env
   pure r
 
-runHandle :: ProjectDir -> Value -> IO ToolResult
+runHandle :: ProjectDir -> Value -> IO ToolResponse
 runHandle pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
   Right args ->
@@ -209,66 +210,64 @@ injectExports exports headerLine =
 -- carries the (path, exports) tuple so callers know what landed.
 -- #133: include @applied=true@ so callers can distinguish a successful
 -- write from the idempotent no-op path ('noChangeResult').
-successResult :: FilePath -> [Text] -> ToolResult
+successResult :: FilePath -> [Text] -> ToolResponse
 successResult path exports =
-  Env.toolResponseToResult (Env.mkOk (object
+  Env.mkOk (object
     [ "path"    .= T.pack path
     , "exports" .= exports
     , "applied" .= True
-    ]))
+    ])
 
 -- | #155: dry-run preview → status='ok', applied=false.
 -- The file is NOT written; the response shows the would-be export list
 -- so the caller can confirm before committing with write=true.
-previewResult :: FilePath -> [Text] -> ToolResult
+previewResult :: FilePath -> [Text] -> ToolResponse
 previewResult path exports =
-  Env.toolResponseToResult (Env.mkOk (object
+  Env.mkOk (object
     [ "path"    .= T.pack path
     , "exports" .= exports
     , "applied" .= False
     , "preview" .= True
-    ]))
+    ])
 
 -- | Issue #90 Phase C + #173: idempotent no-op → status='ok' with
 -- 'no_change=True'. Only emitted when the existing export list is
 -- already identical to the requested one.
-noChangeResult :: FilePath -> ToolResult
+noChangeResult :: FilePath -> ToolResponse
 noChangeResult path =
-  Env.toolResponseToResult (Env.mkOk (object
+  Env.mkOk (object
     [ "path"      .= T.pack path
     , "applied"   .= False
     , "no_change" .= True
     , "reason"    .= ("The module header already has this exact export \
                       \list — nothing to change." :: Text)
-    ]))
+    ])
 
 -- | #173: no @module Foo where@ line found in the source file.
 -- Distinct from the 'Unchanged' case so callers can tell the difference.
-noHeaderResult :: FilePath -> ToolResult
+noHeaderResult :: FilePath -> ToolResponse
 noHeaderResult path =
-  Env.toolResponseToResult (Env.mkOk (object
+  Env.mkOk (object
     [ "path"      .= T.pack path
     , "applied"   .= False
     , "no_change" .= True
     , "reason"    .= ("No 'module Foo where' declaration was found in \
                       \the file — cannot inject an export list." :: Text)
-    ]))
+    ])
 
 -- | Issue #90 Phase C: bad-input / IO failure path → status='failed',
 -- kind='validation' (input was structurally fine but failed a
 -- domain check or filesystem operation). Path-traversal cases are
 -- caught at 'mkModulePath'.
-errorResult :: Text -> ToolResult
+errorResult :: Text -> ToolResponse
 errorResult msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg)
 
 -- | Issue #100 Phase C: 'mkModulePath' rejected the path (escapes
 -- project root) → status='refused', kind='path_traversal'.
-pathTraversalResult :: Text -> ToolResult
+pathTraversalResult :: Text -> ToolResponse
 pathTraversalResult msg =
-  Env.toolResponseToResult
-    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+  Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg)
 
 -- | ISSUE-47: structured rejection when at least one export is a
 -- Haskell reserved keyword. The agent gets the offending names
@@ -278,7 +277,7 @@ pathTraversalResult msg =
 -- a hard pre-flight gate, like newline injection / oversized
 -- input) with kind='validation'. The 'rejected' / 'hint' fields
 -- stay under 'result' so consumers can iterate per-bad-export.
-exportRejectionResult :: [Text] -> ToolResult
+exportRejectionResult :: [Text] -> ToolResponse
 exportRejectionResult badNames =
   let n        = length badNames
       summary  = "rejected " <> tshow n <> " invalid export name"
@@ -304,7 +303,7 @@ exportRejectionResult badNames =
         ]
       envErr   = Env.mkErrorEnvelope Env.Validation summary
       response = (Env.mkRefused envErr) { Env.reResult = Just payload }
-  in Env.toolResponseToResult response
+  in response
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show

@@ -32,13 +32,13 @@ import Data.Char (isAlphaNum, isUpper)
 import qualified Data.Foldable as F
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
+
 import GHC (InteractiveImport (IIDecl), getContext, parseImportDecl, setContext)
 import System.Directory (findExecutable)
 
 import HaskellFlows.Config (Limits)
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
@@ -99,18 +99,18 @@ instance FromJSON AddImportArgs where
       <$> o .:  "name"
       <*> o .:? "qualified" .!= False
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   runHandle (teLimits env) ghcSess rawArgs
 
-runHandle :: Limits -> GhcSession -> Value -> IO ToolResult
+runHandle :: Limits -> GhcSession -> Value -> IO ToolResponse
 runHandle lim ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind err)
           (T.pack ("Invalid arguments: " <> err)))
-            { Env.eeCause = Just (T.pack err) })))
+            { Env.eeCause = Just (T.pack err) }))
   Right args -> do
     -- Issue #53 + #90: gate on hoogle availability up front; the
     -- 'unavailable' status is now distinct from 'failed' so the
@@ -179,7 +179,7 @@ runHandle lim ghcSess rawArgs = case parseEither parseJSON rawArgs of
               ]
         -- Issue #90 §6: zero suggestions → status='no_match'.
         -- Hits → status='ok'. Same payload either way.
-        pure $ Env.toolResponseToResult $ case imports of
+        pure $ case imports of
           [] -> Env.mkNoMatch payload
           _  -> Env.mkOk payload
 
@@ -218,14 +218,14 @@ parseErrorKind err
 -- environment-binary-missing case. Agents key on the cleaner
 -- discriminator: an unavailable tool is not retryable without
 -- installing the binary.
-unavailableHoogle :: ToolResult
+unavailableHoogle :: ToolResponse
 unavailableHoogle =
-  Env.toolResponseToResult (Env.mkUnavailable
+  Env.mkUnavailable
     ((Env.mkErrorEnvelope Env.BinaryUnavailable
         "hoogle binary not found on PATH")
           { Env.eeRemediation =
               Just "Install hoogle (cabal install hoogle) and generate the index (hoogle generate), then retry. ghc_add_import cannot suggest imports without an indexed hoogle."
-          }))
+          })
 
 -- | Build one @import@ line. Qualified form gets a single-letter
 -- alias derived from the module's last component.
@@ -244,29 +244,20 @@ shortAlias m =
       last_ = if null parts then m else last parts
   in T.take 1 (if T.null last_ then m else last_)
 
--- | Pull unique module names from a Hoogle 'ToolResult'.
+-- | Pull unique module names from a Hoogle 'ToolResponse'.
 --
--- 'Hoogle.handle' wraps its payload in the standard envelope:
--- @{"status":"ok","result":{"hits":[{"module":"..."},...]}@.
--- We must peel the @result@ wrapper before looking for @hits@.
--- Previously this function looked for a @results@ key at the
--- top level — both the wrong key name and the wrong nesting
--- level (issue #105).
-extractModules :: ToolResult -> [Text]
-extractModules tr = case trContent tr of
-  (TextContent t : _) ->
-    case decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-      Just (Object o) ->
-        -- Peel the envelope wrapper: the actual payload lives under "result".
-        let inner = case KeyMap.lookup "result" o of
-                      Just (Object r) -> r
-                      _               -> o
-        in case KeyMap.lookup "hits" inner of
-          Just (Array xs) ->
-            [ m | Object r <- F.toList xs
-                , Just (String m) <- [KeyMap.lookup "module" r]
-            ]
-          _               -> []
+-- 'Hoogle.handle' puts hits directly in reResult:
+-- @{"hits":[{"module":"..."},...]}@.
+-- With 'ToolResponse', reResult is already the parsed inner payload —
+-- no text decoding or "result" wrapper peeling needed.
+extractModules :: ToolResponse -> [Text]
+extractModules tr = case Env.reResult tr of
+  Just (Object o) ->
+    case KeyMap.lookup "hits" o of
+      Just (Array xs) ->
+        [ m | Object r <- F.toList xs
+            , Just (String m) <- [KeyMap.lookup "module" r]
+        ]
       _ -> []
   _ -> []
 

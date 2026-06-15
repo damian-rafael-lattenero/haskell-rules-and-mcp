@@ -41,6 +41,7 @@ import Data.Text (Text)
 
 import HaskellFlows.Data.PropertyStore (Store)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Schema as Schema
 import HaskellFlows.Mcp.Protocol
@@ -56,17 +57,16 @@ import HaskellFlows.Types (ProjectDir)
 -- boots the GHC session (list / run / audit need it; export does not),
 -- @storeRef@ + @pdRef@ are the server's refs. @list@ / @run@ keep the @action@
 -- field (Regression parses it); @export@ / @audit@ strip it.
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env = runHandle (teSession env) (teStoreRef env) (teProjectDirRef env)
 
-runHandle :: IO GhcSession -> IORef Store -> IORef ProjectDir -> Value -> IO ToolResult
+runHandle :: IO GhcSession -> IORef Store -> IORef ProjectDir -> Value -> IO ToolResponse
 runHandle startSession storeRef pdRef rawArgs = case actionField rawArgs of
   Nothing ->
-    pure (Env.toolResponseToResult
-      (Env.mkRefused
+    pure (Env.mkRefused
         (Env.mkErrorEnvelope Env.MissingArg
           "ghc_property_store requires an 'action' field \
-          \(one of 'list', 'run', 'export', 'audit').")))
+          \(one of 'list', 'run', 'export', 'audit')."))
   Just action -> case action of
     "list"   -> regression
     "run"    -> regression
@@ -79,11 +79,10 @@ runHandle startSession storeRef pdRef rawArgs = case actionField rawArgs of
       store <- readIORef storeRef
       PropertyAuditTool.handle store sess (stripAction rawArgs)
     other ->
-      pure (Env.toolResponseToResult
-        (Env.mkRefused
+      pure (Env.mkRefused
           (Env.mkErrorEnvelope Env.Validation
             ("Unknown ghc_property_store action: '" <> other
-             <> "' (expected 'list', 'run', 'export', or 'audit')."))))
+             <> "' (expected 'list', 'run', 'export', or 'audit').")))
   where
     regression = do
       sess  <- startSession

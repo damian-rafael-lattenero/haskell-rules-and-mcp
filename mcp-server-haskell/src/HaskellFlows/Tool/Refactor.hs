@@ -55,6 +55,7 @@ import HaskellFlows.Ghc.ApiSession
   , loadForTarget
   , targetForPath
   )
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Schema as Schema
 import HaskellFlows.Mcp.PermissiveJSON
@@ -288,24 +289,24 @@ instance FromJSON RefactorArgs where
           , raDryRun         = dr
           }
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   pd      <- teProjectDir env
   runHandle ghcSess pd rawArgs
 
-runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResponse
 runHandle ghcSess pd rawArgs
   -- #154: 'list_actions' is a zero-arg discovery action — intercept
   -- it before the rename/extract parser so the caller does not need to
   -- supply module_path / new_name. Returns available action names and
   -- their required fields.
   | actionTextOf rawArgs == Just "list_actions" =
-      pure (Env.toolResponseToResult (Env.mkOk (object
+      pure (Env.mkOk (object
         [ "actions" .= availableActions
         , "hint"    .= ("Pass one of these 'action' values with the \
                         \corresponding required fields." :: Text)
-        ])))
+        ]))
   -- #94 Phase C: 'move_symbol' is a passthrough to Move.handle.
   -- Intercepted before the rename/extract parser because its payload
   -- shape (symbol/from/to) doesn't match RefactorArgs.
@@ -330,7 +331,7 @@ runHandle ghcSess pd rawArgs
         _               -> Nothing
       _ -> Nothing
 
-handleAction :: GhcSession -> ModulePath -> RefactorArgs -> IO ToolResult
+handleAction :: GhcSession -> ModulePath -> RefactorArgs -> IO ToolResponse
 handleAction sess mp args = case raAction args of
   ActRename  -> handleRename  sess mp args
   ActExtract -> handleExtract sess mp args
@@ -339,7 +340,7 @@ handleAction sess mp args = case raAction args of
 -- rename_local
 --------------------------------------------------------------------------------
 
-handleRename :: GhcSession -> ModulePath -> RefactorArgs -> IO ToolResult
+handleRename :: GhcSession -> ModulePath -> RefactorArgs -> IO ToolResponse
 handleRename sess mp args = case raOldName args of
   Nothing  -> pure (errorResult "'old_name' is required for rename_local")
   Just old -> case validateIdentifier old of
@@ -372,7 +373,7 @@ renameSuccess old new rr =
 -- extract_binding
 --------------------------------------------------------------------------------
 
-handleExtract :: GhcSession -> ModulePath -> RefactorArgs -> IO ToolResult
+handleExtract :: GhcSession -> ModulePath -> RefactorArgs -> IO ToolResponse
 handleExtract sess mp args = case validateIdentifier (raNewName args) of
   Left err -> pure (errorResult err)
   Right safeNew -> case (raScopeLineStart args, raScopeLineEnd args) of
@@ -411,7 +412,7 @@ withSnapshot
   -> ModulePath
   -> Bool                                    -- ^ dry_run
   -> (Text -> IO (Either Text (Text, Value)))
-  -> IO ToolResult
+  -> IO ToolResponse
 withSnapshot sess mp dryRun cont = do
   readRes <- try (TIO.readFile (unModulePath mp))
              :: IO (Either SomeException Text)
@@ -432,7 +433,7 @@ commitWithVerify
   -> Text           -- original file content (snapshot)
   -> Text           -- rewritten content
   -> Value          -- base success payload (augmented with compile info)
-  -> IO ToolResult
+  -> IO ToolResponse
 commitWithVerify ghcSess mp orig newContent baseSuccess = do
   -- Issue #50: diagnostic-diff verify. Before we write the new
   -- content, load the file as-is and snapshot the *pre-existing*
@@ -493,7 +494,7 @@ dryRunWithVerify
   -> Text           -- original file content (snapshot)
   -> Text           -- rewritten content
   -> Value          -- base success payload
-  -> IO ToolResult
+  -> IO ToolResponse
 dryRunWithVerify ghcSess mp orig newContent baseSuccess = do
   invalidateLoadCache ghcSess
   preDiags <- loadAndDiagnose ghcSess mp
@@ -553,7 +554,7 @@ loadAndDiagnose ghcSess mp = do
 -- accepted, surface the pre-existing error set (if any) so the
 -- agent knows the module still has known issues — distinct from
 -- \"all green\".
-commitResultWithDiff :: Value -> [GhcError] -> [GhcError] -> ToolResult
+commitResultWithDiff :: Value -> [GhcError] -> [GhcError] -> ToolResponse
 commitResultWithDiff base preDiags postDiags =
   let -- Issue #108: exclude typed holes (GHC-88464) from pre_existing_errors.
       -- Typed holes are not compile errors; they should flow through
@@ -578,7 +579,7 @@ commitResultWithDiff base preDiags postDiags =
                , ("pre_existing_errors",         toJSON preErrs)
                , ("new_errors",                  toJSON ([] :: [GhcError]))
                ])
-         in Env.toolResponseToResult (Env.mkOk payload)
+         in Env.mkOk payload
        _ ->
          let payload = object
                [ "summary"             .= base
@@ -586,7 +587,7 @@ commitResultWithDiff base preDiags postDiags =
                , "pre_existing_errors" .= preErrs
                , "new_errors"          .= ([] :: [GhcError])
                ]
-         in Env.toolResponseToResult (Env.mkOk payload)
+         in Env.mkOk payload
 
 -- | Render a list of diagnostics into a single text blob matching
 -- the legacy @grOutput@ shape (file:line:col: message, blank line
@@ -604,7 +605,7 @@ renderDiags = T.intercalate "\n\n" . map one
 
 -- | Issue #90 Phase C: dry-run success → status='ok' with the
 -- merged base+dry-run-extras payload under 'result'.
-dryRunResult :: Value -> Text -> ToolResult
+dryRunResult :: Value -> Text -> ToolResponse
 dryRunResult base preview =
   let payload = case base of
         Object o ->
@@ -618,7 +619,7 @@ dryRunResult base preview =
             , "preview" .= preview
             , "summary" .= base
             ]
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 -- | Aeson 2.x 'Object' is a 'KeyMap.KeyMap' — we go through 'Key.fromText'
 -- so callers stay in 'Text' land and never touch the @Key@ newtype
@@ -638,7 +639,7 @@ insertKV k = KeyMap.insert (Key.fromText k)
 -- #205 Bug 1: when the errors contain \"Variable not in scope\",
 -- a @note@ field is added that names the free variables and explains
 -- that parameterised extraction is not yet supported.
-compileFailResult :: Bool -> [GhcError] -> Text -> Text -> ToolResult
+compileFailResult :: Bool -> [GhcError] -> Text -> Text -> ToolResponse
 compileFailResult dryRun errs raw restoreMsg =
   let -- F-05: prefer the first structured error's message over a
       -- raw 400-char truncation.  The raw GHC output often starts
@@ -669,7 +670,7 @@ compileFailResult dryRun errs raw restoreMsg =
         ]
         ++ noteField
       response = (Env.mkFailed envErr) { Env.reResult = Just payload }
-  in Env.toolResponseToResult response
+  in response
 
 -- | #205 Bug 1: extract variable names from @\"Variable not in scope: <name>\"@
 -- GHC error messages. Returns the names deduplicated in order of first
@@ -698,17 +699,16 @@ extractFreeVarNames errs =
 -- failures map to kind='validation' (the input was structurally
 -- fine but failed a domain check — missing 'old_name', wrong
 -- scope, etc.).
-errorResult :: Text -> ToolResult
+errorResult :: Text -> ToolResponse
 errorResult msg =
-  Env.toolResponseToResult (Env.mkFailed
-    (Env.mkErrorEnvelope Env.Validation msg))
+  Env.mkFailed
+    (Env.mkErrorEnvelope Env.Validation msg)
 
 -- | Issue #100 Phase C: 'mkModulePath' rejected the path →
 -- status='refused', kind='path_traversal'.
-pathTraversalResult :: Text -> ToolResult
+pathTraversalResult :: Text -> ToolResponse
 pathTraversalResult msg =
-  Env.toolResponseToResult
-    (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+  Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg)
 
 formatPathError :: PathError -> Text
 formatPathError = \case

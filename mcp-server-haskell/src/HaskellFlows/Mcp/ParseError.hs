@@ -44,7 +44,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol (ToolResult)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 
 -- | Structured view of a parse error after we've tried to recognise
 -- one of the canonical Aeson shapes. The 'ipMessage' is the
@@ -114,14 +114,14 @@ interpretParseError raw =
 -- | Convenience wrapper: build a failed 'ToolResult' from a parse
 -- error string. The drop-in replacement for the duplicated
 -- @parseErrorResult@ helpers each tool used to carry locally.
-formatParseError :: String -> ToolResult
+formatParseError :: String -> ToolResponse
 formatParseError raw =
   let ip      = interpretParseError raw
       envErr  = (Env.mkErrorEnvelope (ipKind ip) (ipMessage ip))
                   { Env.eeField = ipField ip
                   , Env.eeCause = Just (ipRaw ip)
                   }
-  in Env.toolResponseToResult (Env.mkFailed envErr)
+  in Env.mkFailed envErr
 
 --------------------------------------------------------------------------------
 -- internal pattern matchers

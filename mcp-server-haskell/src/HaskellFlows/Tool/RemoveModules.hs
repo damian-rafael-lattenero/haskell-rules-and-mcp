@@ -40,9 +40,10 @@ import qualified Data.Text.IO as TIO
 import System.Directory (doesFileExist, listDirectory, removeFile)
 import System.FilePath (takeExtension, (</>))
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.PermissiveJSON (BoolField (unBoolField))
-import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Protocol ()
 import HaskellFlows.Parser.ModuleName
   ( ModuleNameError
   , renderModuleNameError
@@ -69,13 +70,13 @@ instance FromJSON RemoveModulesArgs where
     frc  <- maybe False unBoolField <$> o .:? "force"
     pure (RemoveModulesArgs mods delF frc)
 
-handle :: ProjectDir -> Value -> IO ToolResult
+handle :: ProjectDir -> Value -> IO ToolResponse
 handle pd rawArgs = case parseEither parseJSON rawArgs of
   Left err ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKindRM err)
           (T.pack ("Invalid arguments: " <> err)))
-            { Env.eeCause = Just (T.pack err) })))
+            { Env.eeCause = Just (T.pack err) }))
   Right (RemoveModulesArgs mods deleteFiles forceFlag) ->
     -- ISSUE-47: refuse names that violate the module-name grammar
     -- symmetrically with 'ghc_add_modules'. Two motivations:
@@ -102,18 +103,18 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
             mCabal <- findCabalFile pd
             case mCabal of
               Nothing ->
-                pure (Env.toolResponseToResult (Env.mkFailed
+                pure (Env.mkFailed
                   ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
                       "No .cabal file found in project root")
                         { Env.eeRemediation =
-                            Just "Run ghc_project(action=\"create\") to scaffold a cabal package first." })))
+                            Just "Run ghc_project(action=\"create\") to scaffold a cabal package first." }))
               Just file -> do
                 eCabal <- tryRewriteCabal file validated
                 case eCabal of
                   Left err ->
-                    pure (Env.toolResponseToResult (Env.mkFailed
+                    pure (Env.mkFailed
                       ((Env.mkErrorEnvelope Env.SubprocessError err)
-                          { Env.eeCause = Just err })))
+                          { Env.eeCause = Just err }))
                   Right removedFromCabal -> do
                     deleted <- if deleteFiles
                                  then deleteSourceFiles pd removedFromCabal
@@ -405,7 +406,7 @@ findCabalFile pd = do
 -- response shaping
 --------------------------------------------------------------------------------
 
-successResult :: [Text] -> [FilePath] -> [Importer] -> [Text] -> ToolResult
+successResult :: [Text] -> [FilePath] -> [Importer] -> [Text] -> ToolResponse
 successResult removedFromCabal deletedFiles importers notFound =
   let payload = object $
         [ "cabal_removed" .= removedFromCabal
@@ -421,7 +422,7 @@ successResult removedFromCabal deletedFiles importers notFound =
       notFoundField
         | null notFound = []
         | otherwise     = [ "not_found" .= notFound ]
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
   where
     mkHint :: [Importer] -> [Text] -> Text
     mkHint [] [] =
@@ -444,7 +445,7 @@ successResult removedFromCabal deletedFiles importers notFound =
 -- and force=false. status='failed' (this is a hard refusal, not
 -- a sanitize-layer policy) with kind='validation' and the
 -- structured importer list inside 'result' for back-compat.
-downstreamRefusalResult :: [Text] -> [Importer] -> ToolResult
+downstreamRefusalResult :: [Text] -> [Importer] -> ToolResponse
 downstreamRefusalResult requested importers =
   let err = (Env.mkErrorEnvelope Env.Validation
                "Refusing to remove module(s) — at least one remaining .hs file still imports them. Pass force=true to override.")
@@ -458,7 +459,7 @@ downstreamRefusalResult requested importers =
         ]
       response = (Env.mkFailed err)
                    { Env.reResult = Just payload }
-  in Env.toolResponseToResult response
+  in response
 
 renderImporter :: Importer -> Value
 renderImporter i = object
@@ -468,7 +469,7 @@ renderImporter i = object
   ]
 
 -- | Mirror of 'HaskellFlows.Tool.AddModules.rejectionResult'.
-rejectionResult :: [(Text, ModuleNameError)] -> ToolResult
+rejectionResult :: [(Text, ModuleNameError)] -> ToolResponse
 rejectionResult entries =
   let n        = length entries
       summary  = "rejected " <> tshow n <> " invalid module name"
@@ -487,7 +488,7 @@ rejectionResult entries =
               }
       response = (Env.mkFailed err)
                    { Env.reResult = Just (object [ "rejected" .= rendered ]) }
-  in Env.toolResponseToResult response
+  in response
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show

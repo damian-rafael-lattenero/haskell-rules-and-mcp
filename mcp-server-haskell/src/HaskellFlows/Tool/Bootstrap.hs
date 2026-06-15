@@ -42,6 +42,7 @@ import System.Directory
   )
 import System.FilePath (takeDirectory, (</>))
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Guidance (workflowRulesMarkdown)
 import HaskellFlows.Mcp.Protocol
@@ -83,14 +84,14 @@ instance FromJSON BootstrapArgs where
       other         -> fail ("unknown host: " <> T.unpack other)
     pure BootstrapArgs { baHost = h, baWrite = w }
 
-handle :: ProjectDir -> [ToolDescriptor] -> Value -> IO ToolResult
+handle :: ProjectDir -> [ToolDescriptor] -> Value -> IO ToolResponse
 handle pd descriptors rawArgs = case parseEither parseJSON rawArgs of
   Left err ->
     let kind = parseErrorKind err
         msg  = friendlyParseError kind err
-    in pure (Env.toolResponseToResult (Env.mkFailed
+    in pure (Env.mkFailed
          ((Env.mkErrorEnvelope kind msg)
-           { Env.eeCause = Just (T.pack err) })))
+           { Env.eeCause = Just (T.pack err) }))
   Right (BootstrapArgs host write) -> do
     let body = workflowRulesMarkdown descriptors
     case host of
@@ -109,10 +110,10 @@ handle pd descriptors rawArgs = case parseEither parseJSON rawArgs of
               TIO.writeFile full body) :: IO (Either SomeException ())
             case w of
               Left e ->
-                pure (Env.toolResponseToResult (Env.mkFailed
+                pure (Env.mkFailed
                   ((Env.mkErrorEnvelope Env.SubprocessError
                       (T.pack ("Could not write: " <> show e)))
-                        { Env.eeCause = Just (T.pack (show e)) })))
+                        { Env.eeCause = Just (T.pack (show e)) }))
               Right _ -> pure (writeResult host full)
 
 -- | Walk up from @dir@ until a @.git@ entry is found, or we reach
@@ -179,7 +180,7 @@ pathForHost = \case
 -- ('mode', 'host', 'content', 'hint', and optionally 'target')
 -- so any consumer that read those fields directly continues to
 -- work during the dual-shape window.
-previewResult :: Host -> Text -> Maybe Text -> ToolResult
+previewResult :: Host -> Text -> Maybe Text -> ToolResponse
 previewResult host body mTarget =
   let payload = object $
         [ "mode"     .= ("preview" :: Text)
@@ -194,11 +195,11 @@ previewResult host body mTarget =
                 :: Text )
         ]
         <> maybe [] (\t -> ["target" .= t]) mTarget
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 -- | Write-completed response. Issue #90 Phase B: status='ok' with
 -- the write metadata inside 'result'.
-writeResult :: Host -> FilePath -> ToolResult
+writeResult :: Host -> FilePath -> ToolResponse
 writeResult host path =
   let payload = object
         [ "mode" .= ("written" :: Text)
@@ -212,7 +213,7 @@ writeResult host path =
               \tool surface."
               :: Text )
         ]
-  in Env.toolResponseToResult (Env.mkOk payload)
+  in Env.mkOk payload
 
 hostLabel :: Host -> Text
 hostLabel = \case

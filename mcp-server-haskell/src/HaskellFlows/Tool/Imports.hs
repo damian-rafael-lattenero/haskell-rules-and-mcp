@@ -28,6 +28,7 @@ import GHC
   )
 import GHC.Utils.Outputable (showPprUnsafe)
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Tool.Eval (evalContextExtras)
@@ -59,15 +60,15 @@ descriptor =
           ]
     }
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   runHandle ghcSess rawArgs
 
-runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle :: GhcSession -> Value -> IO ToolResponse
 runHandle ghcSess _rawArgs = do
   eRes <- try (withGhcSession ghcSess queryImports)
-  pure $ Env.toolResponseToResult $ case eRes of
+  pure $ case eRes of
     Left (se :: SomeException) ->
       Env.mkFailed
         ((Env.mkErrorEnvelope Env.InternalError

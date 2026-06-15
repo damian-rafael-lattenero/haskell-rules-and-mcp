@@ -62,9 +62,10 @@ import System.FilePath (takeExtension)
 import HaskellFlows.Data.PropertyStore (Store, openStore)
 import qualified HaskellFlows.Data.Scratchpad as Scratchpad
 import HaskellFlows.Ghc.ApiSession (GhcSession, killGhcSession)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
-import HaskellFlows.Mcp.Protocol
+import HaskellFlows.Mcp.Protocol ()
 import HaskellFlows.Mcp.SelfProject (detectSelfProject)
 import HaskellFlows.Types
   ( PathError (..)
@@ -175,7 +176,7 @@ handle
   -> IORef Bool              -- ^ PR-4 Phase 1: srvIsSelfProject — recomputed
                              --   against the new root after a successful switch.
   -> Value
-  -> IO ToolResult
+  -> IO ToolResponse
 handle pdRef sessRef storeRef scratchRef selfRef rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right (SwitchProjectArgs raw) -> do
@@ -222,15 +223,15 @@ handle pdRef sessRef storeRef scratchRef selfRef rawArgs = case parseEither pars
 -- The boolean 'scaffolded' lets the NextStep router branch
 -- between 'run status' (project ready) and 'run create_project'
 -- (empty dir).
-successResult :: ProjectDir -> ProjectDir -> Bool -> ToolResult
+successResult :: ProjectDir -> ProjectDir -> Bool -> ToolResponse
 successResult oldPd newPd scaffolded =
-  Env.toolResponseToResult (Env.mkOk (object
+  Env.mkOk (object
     [ "previous"   .= T.pack (unProjectDir oldPd)
     , "current"    .= T.pack (unProjectDir newPd)
     , "scaffolded" .= scaffolded
     , "message"    .= ("Project directory switched. Next tool \
                        \call boots a fresh GhcSession." :: Text)
-    ]))
+    ])
 
 
 -- | Issue #90 Phase C: closed-enum dispatch over the validation
@@ -240,16 +241,14 @@ successResult oldPd newPd scaffolded =
 --   * 'VENoCabalFile'   → kind='module_not_in_graph' (no cabal
 --                         project in the target — caller likely
 --                         wants ghc_create_project).
-validationErrorResult :: ValidationError -> ToolResult
+validationErrorResult :: ValidationError -> ToolResponse
 validationErrorResult ve =
   let msg = renderValidationError ve
   in case ve of
        VEPathError _ ->
-         Env.toolResponseToResult
-           (Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg))
+         Env.mkRefused (Env.mkErrorEnvelope Env.PathTraversal msg)
        VENotADirectory _ ->
-         Env.toolResponseToResult
-           (Env.mkFailed (Env.mkErrorEnvelope Env.ModulePathDoesNotExist msg))
+         Env.mkFailed (Env.mkErrorEnvelope Env.ModulePathDoesNotExist msg)
        VENoCabalFile _ ->
          let payload  = object
                [ "remediation" .= ( "Run ghc_create_project to scaffold \
@@ -257,4 +256,4 @@ validationErrorResult ve =
                ]
              envErr   = Env.mkErrorEnvelope Env.ModuleNotInGraph msg
              response = (Env.mkNoMatch payload) { Env.reError = Just envErr }
-         in Env.toolResponseToResult response
+         in response

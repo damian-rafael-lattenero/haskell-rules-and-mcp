@@ -38,6 +38,7 @@ import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.Var (varType)
 import GHC.Utils.Outputable (showPprUnsafe)
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject, withGhcSession)
 import HaskellFlows.Mcp.Protocol
@@ -80,31 +81,30 @@ newtype BrowseArgs = BrowseArgs Text
 instance FromJSON BrowseArgs where
   parseJSON = withObject "BrowseArgs" $ \o -> BrowseArgs <$> o .: "module"
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   runHandle ghcSess rawArgs
 
-runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle :: GhcSession -> Value -> IO ToolResponse
 runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left err ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind err)
           (T.pack ("Invalid arguments: " <> err)))
-            { Env.eeCause = Just (T.pack err) })))
+            { Env.eeCause = Just (T.pack err) }))
   Right (BrowseArgs m) -> do
     let root = unProjectDir (gsProject ghcSess)
     -- Primary: look in the compile graph (project-own modules).
     eRes <- try (withGhcSession ghcSess (queryBrowseGraph root m))
     case eRes of
       Left (se :: SomeException) ->
-        pure $ Env.toolResponseToResult $
-          Env.mkFailed
+        pure $ Env.mkFailed
             ((Env.mkErrorEnvelope Env.InternalError
                 (T.pack ("GHC API error: " <> show se)))
                   { Env.eeCause = Just (T.pack (show se)) })
       Right (Just entries) ->
-        pure $ Env.toolResponseToResult (Env.mkOk (browsePayload m entries))
+        pure $ Env.mkOk (browsePayload m entries)
       Right Nothing -> do
         -- #168 fallback: try the session's package environment.
         -- lookupModule throws when the module is completely unknown,
@@ -112,7 +112,7 @@ runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
         -- getModuleInfo gives us the exports just like the graph path.
         eFallback <- try (withGhcSession ghcSess (queryBrowseFallback m))
                        :: IO (Either SomeException (Maybe [Text]))
-        pure $ Env.toolResponseToResult $ case eFallback of
+        pure $ case eFallback of
           Right (Just entries) ->
             Env.mkOk (browsePayload m entries)
           _ ->

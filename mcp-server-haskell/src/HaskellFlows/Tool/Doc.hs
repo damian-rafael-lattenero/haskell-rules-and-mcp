@@ -33,6 +33,7 @@ import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.SrcLoc (SrcSpan (RealSrcSpan), srcSpanFile, srcSpanStartLine)
 import GHC.Utils.Outputable (showPprUnsafe)
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
@@ -82,37 +83,35 @@ instance FromJSON DocArgs where
   parseJSON = withObject "DocArgs" $ \o ->
     DocArgs <$> o .: "name"
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   runHandle ghcSess rawArgs
 
-runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle :: GhcSession -> Value -> IO ToolResponse
 runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind parseError)
           (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) })))
+            { Env.eeCause = Just (T.pack parseError) }))
   Right (DocArgs nm) -> case sanitizeExpression nm of
     Left e ->
-      pure (Env.toolResponseToResult (Env.mkRefused (Env.sanitizeRejection "name" e)))
+      pure (Env.mkRefused (Env.sanitizeRejection "name" e))
     Right safe -> do
       eRes <- try (withGhcSession ghcSess (queryDoc safe))
       case eRes of
         Left (se :: SomeException) ->
-          pure $ Env.toolResponseToResult $
-            Env.mkFailed
+          pure $ Env.mkFailed
               ((Env.mkErrorEnvelope Env.InternalError
                   (T.pack ("GHC API error: " <> show se)))
                     { Env.eeCause = Just (T.pack (show se)) })
         Right Nothing ->
           -- Issue #87 + #90: name not in scope → no_match, NOT a
           -- success-shaped 'hasDoc: false'.
-          pure $ Env.toolResponseToResult $
-            Env.mkNoMatch (noDocPayload safe "Name not in scope")
+          pure $ Env.mkNoMatch (noDocPayload safe "Name not in scope")
         Right (Just (Just t)) ->
-          pure $ Env.toolResponseToResult $ Env.mkOk (hasDocPayload safe t)
+          pure $ Env.mkOk (hasDocPayload safe t)
         Right (Just Nothing) ->
           -- Name is in scope but the package was built without
           -- -haddock (or carries no doc string).  Fall back to
@@ -121,7 +120,7 @@ runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
           do
             mSrc <- (try (withGhcSession ghcSess (sourceDoc safe))
                       :: IO (Either SomeException (Maybe Text)))
-            pure $ Env.toolResponseToResult $ case mSrc of
+            pure $ case mSrc of
               Right (Just txt) ->
                 Env.mkOk (hasDocPayload safe txt)
               _ ->

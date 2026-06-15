@@ -17,6 +17,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import System.Directory (doesFileExist)
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession
   ( GhcSession
@@ -86,25 +87,25 @@ instance FromJSON HoleArgs where
     hn <- o .:? "hole_name"
     pure HoleArgs { haModulePath = mp, haHoleName = hn }
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   pd      <- teProjectDir env
   runHandle ghcSess pd rawArgs
 
-runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResult
+runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResponse
 runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind parseError)
           (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) })))
+            { Env.eeCause = Just (T.pack parseError) }))
   Right (HoleArgs rawPath filt) ->
     case mkModulePath pd (T.unpack rawPath) of
       Left err ->
-        pure (Env.toolResponseToResult (Env.mkRefused
+        pure (Env.mkRefused
           ((Env.mkErrorEnvelope Env.PathTraversal (formatPathError err))
-              { Env.eeField = Just "module_path" })))
+              { Env.eeField = Just "module_path" }))
       Right mp -> do
         -- #148: check file existence before attempting to load.
         -- Without this, a missing file silently returns hole_count=0
@@ -112,19 +113,19 @@ runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
         let absPath = unModulePath mp
         exists <- doesFileExist absPath
         if not exists
-          then pure (Env.toolResponseToResult (Env.mkFailed
+          then pure (Env.mkFailed
             ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
                 ("module_path '" <> rawPath <> "' does not exist"))
-                  { Env.eeField = Just "module_path" })))
+                  { Env.eeField = Just "module_path" }))
           else do
             tgt <- targetForPath ghcSess (T.unpack rawPath)
             eRes <- try (loadForTarget ghcSess tgt Deferred)
             case eRes :: Either SomeException (Bool, [GhcError]) of
               Left ex ->
-                pure (Env.toolResponseToResult (Env.mkFailed
+                pure (Env.mkFailed
                   ((Env.mkErrorEnvelope Env.InternalError
                       ("loadForTarget failed: " <> T.pack (show ex)))
-                        { Env.eeCause = Just (T.pack (show ex)) })))
+                        { Env.eeCause = Just (T.pack (show ex)) }))
               Right (_ok, diags) -> do
                 let rendered = renderGhciStyle diags
                     allHoles = parseTypedHoles rendered
@@ -136,7 +137,7 @@ runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
                 -- 'no_match' (the question — "where are the typed
                 -- holes?" — was well-formed; the answer is the empty
                 -- set). Non-empty → 'ok'.
-                pure $ Env.toolResponseToResult $ case holes of
+                pure $ case holes of
                   [] -> Env.mkNoMatch payload
                   _  -> Env.mkOk payload
 

@@ -71,6 +71,7 @@ import HaskellFlows.Ghc.Sanitize
   ( sanitizeExpression
   )
 import HaskellFlows.Tool.Eval (augmentEvalContext)
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -137,18 +138,17 @@ instance FromJSON SuggestArgs where
     c  <- o .:? "category"
     pure SuggestArgs { saFunctionName = fn, saCategory = c }
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   runHandle ghcSess rawArgs
 
-runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle :: GhcSession -> Value -> IO ToolResponse
 runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
     pure (formatParseError parseError)
   Right args -> case sanitizeExpression (saFunctionName args) of
-    Left e -> pure (Env.toolResponseToResult
-                      (Env.mkRefused (Env.sanitizeRejection "function_name" e)))
+    Left e -> pure (Env.mkRefused (Env.sanitizeRejection "function_name" e))
     Right safe -> do
       tgt <- firstLibraryOrTestSuite ghcSess
       eLoad <- try (loadForTarget ghcSess tgt Strict)
@@ -192,17 +192,15 @@ runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
 
 
 -- | Issue #90 Phase C: GHC API exception (load threw).
-subprocessResult :: Text -> ToolResult
+subprocessResult :: Text -> ToolResponse
 subprocessResult msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg)
 
 -- | Issue #90 Phase C: type signature parsed by GHC but our
 -- in-house parser couldn't read it.
-validationErr :: Text -> ToolResult
+validationErr :: Text -> ToolResponse
 validationErr msg =
-  Env.toolResponseToResult
-    (Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg))
+  Env.mkFailed (Env.mkErrorEnvelope Env.Validation msg)
 
 -- | Ask GHC for the type of @safe@. Exceptions (unresolved name,
 -- ambiguous type, …) are caught at the IO layer by the caller.
@@ -221,15 +219,15 @@ queryType safe = do
 --
 -- #197: 'parsedSig' is passed so 'hintFor' can mention arity only
 -- when the function's actual arity exceeds the rules' max.
-successResult :: Text -> Text -> ParsedSig -> [Suggestion] -> ToolResult
+successResult :: Text -> Text -> ParsedSig -> [Suggestion] -> ToolResponse
 successResult fn sig parsedSig suggestions =
-  Env.toolResponseToResult (Env.mkOk (object
+  Env.mkOk (object
     [ "function"    .= fn
     , "signature"   .= sig
     , "count"       .= length suggestions
     , "suggestions" .= map renderSuggestion suggestions
     , "hint"        .= hintFor (argCount parsedSig) suggestions
-    ]))
+    ])
 
 renderSuggestion :: Suggestion -> Value
 renderSuggestion s =
@@ -286,7 +284,7 @@ maxRuleArity = 2
 -- pre-envelope pre-existing fields ('reason', 'function', 'hint',
 -- 'ghcError') stay under 'result' — consumers branch on those
 -- exactly as before.
-outOfScopeResult :: Text -> Text -> ToolResult
+outOfScopeResult :: Text -> Text -> ToolResponse
 outOfScopeResult fn ghcOutput =
   let payload  = object
         [ "reason"   .= ("function_not_in_scope" :: Text)
@@ -308,7 +306,7 @@ outOfScopeResult fn ghcOutput =
       -- (load the module). Use mkFailed so trIsError=true and the
       -- structured hint is still available under the 'result' key.
       response = (Env.mkFailed envErr) { Env.reResult = Just payload }
-  in Env.toolResponseToResult response
+  in response
 
 --------------------------------------------------------------------------------
 -- BUG-03: sibling discovery

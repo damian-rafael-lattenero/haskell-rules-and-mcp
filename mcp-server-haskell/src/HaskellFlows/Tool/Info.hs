@@ -32,6 +32,7 @@ import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
 
+import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 
 import GHC
@@ -117,25 +118,25 @@ instance FromJSON InfoArgs where
   parseJSON = withObject "InfoArgs" $ \o ->
     InfoArgs <$> o .: "name"
 
-handle :: ToolEnv -> Value -> IO ToolResult
+handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   runHandle ghcSess rawArgs
 
-runHandle :: GhcSession -> Value -> IO ToolResult
+runHandle :: GhcSession -> Value -> IO ToolResponse
 runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
   Left parseError ->
-    pure (Env.toolResponseToResult (Env.mkFailed
+    pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind parseError)
           (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) })))
+            { Env.eeCause = Just (T.pack parseError) }))
   Right (InfoArgs nm) -> case sanitizeExpression nm of
     Left cmdErr ->
-      pure (Env.toolResponseToResult (Env.mkRefused
-        (Env.sanitizeRejection "name" cmdErr)))
+      pure (Env.mkRefused
+        (Env.sanitizeRejection "name" cmdErr))
     Right safe -> do
       eRes <- try (withGhcSession ghcSess (queryInfo safe))
-      pure $ Env.toolResponseToResult $ case eRes of
+      pure $ case eRes of
         Left (se :: SomeException) ->
           -- Issue #87 + #90: instead of fabricating a 'data X'
           -- definition via the old 'bestEffortResult' (which lied
@@ -499,9 +500,9 @@ successResult
   :: ParsedInfo
   -> [(Text, [Text])]
   -> [(Text, Text)]
-  -> ToolResult
+  -> ToolResponse
 successResult parsed ctors methods =
-  Env.toolResponseToResult (Env.mkOk (successPayload parsed ctors methods))
+  Env.mkOk (successPayload parsed ctors methods)
 
 kindToText :: InfoKind -> Text
 kindToText = \case
