@@ -1,0 +1,71 @@
+mcp-server-haskell/src/HaskellFlows/Tool/Scratch.hs
+  s_d23a82140bf8e8::t_557f8fb73aa92c 408-485
+  s_d23a82140bf8e8::t_d8a5d3482dfba1 323,407
+  s_d23a82140bf8e8::t_fc53ee02e76806 30
+  s_d23a82140bf8e8::t_1e31b4ace79a5b 48
+  s_d23a82140bf8e8::t_e8c8f058bd59b2 324-333
+mcp-server-haskell/src/HaskellFlows/Tool/Determinism.hs
+  s_d23a82140bf8e8::t_395e8f9ed51a32 18,27
+  s_d23a82140bf8e8::t_5da00460aebbed 111-118
+  s_d23a82140bf8e8::t_5f3ae2e4e0cf4d 79,110
+  s_d23a82140bf8e8::t_01700c8d368876 69-70,80-88,90
+mcp-server-haskell/test/Spec/Scratch.hs
+  s_d23a82140bf8e8::t_5c95f7801a692b 75,78
+  s_d23a82140bf8e8::t_74e2fa57703b7b 79-93
+mcp-server-haskell/test/Spec.hs
+  s_d23a82140bf8e8::t_97d52def462cb5 1171,1306,1308
+  s_d23a82140bf8e8::t_5aca47876a1d09 1307,1309
+mcp-server-haskell/test/Spec/PropertyAuditUnit.hs
+  s_d23a82140bf8e8::t_7bb40d9951d7b3 471-483,485-491
+  s_d23a82140bf8e8::t_c3b9e136cefadd 42-43
+  s_d23a82140bf8e8::t_9ef237a726bd66 470,484
+mcp-server-haskell/test-e2e/Scenarios/FlowPropertyLifecycle.hs
+  s_d23a82140bf8e8::t_4852ce48e5d462 76,83-97,101,105-107,114,116-124,126,128-129
+  s_d23a82140bf8e8::t_88c44b061cad54 6,8-14
+  s_d23a82140bf8e8::t_2e9236399d2ded 140-144,146-156
+  s_d23a82140bf8e8::t_e5a6a4167ed6e4 7,82,108,115,127,139,145
+mcp-server-haskell/src/HaskellFlows/Mcp/Server.hs
+  s_d23a82140bf8e8::t_176e67117dbba6 450
+  s_d23a82140bf8e8::t_e924e6fc7149b1 451-453,455-456
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheck.hs
+  s_d23a82140bf8e8::t_b65d585e35d1ce 21-23
+mcp-server-haskell/src/HaskellFlows/Tool/FixWarning.hs
+  s_d23a82140bf8e8::t_4cba531618060c 35
+  s_d23a82140bf8e8::t_6d4966092cb162 26
+  s_d23a82140bf8e8::t_04637f13c65305 25,233,252
+  s_d23a82140bf8e8::t_f2d0567b3f9740 232,234-251,253-264
+mcp-server-haskell/src/HaskellFlows/Tool/PropertyAudit.hs
+  s_d23a82140bf8e8::t_2462fd7a2f2929 223,228
+  s_d23a82140bf8e8::t_1deb79c92ff6be 489-514
+  s_d23a82140bf8e8::t_6e6031b71793ce 44
+  s_d23a82140bf8e8::t_71674e07c4a055 43,488
+.claude/rules/haskell-flows-mcp.md
+  s_d23a82140bf8e8::t_169455d809c878 33
+mcp-server-haskell/src/HaskellFlows/Mcp/Guidance.hs
+  s_d23a82140bf8e8::t_676d97592f558a 112
+.claude/rules/use-haskell-flows-mcp.md
+  s_d23a82140bf8e8::t_52b5e16359044b 91
+mcp-server-haskell/src/HaskellFlows/Tool/Lab.hs
+  s_d23a82140bf8e8::t_3def3ee5a0262a 215
+  s_d23a82140bf8e8::t_accfea7e6f4538 468-469,475
+mcp-server-haskell/test/Spec/FixWarningUnit.hs
+  s_d23a82140bf8e8::t_6ec48500fb1c9b 29
+  s_d23a82140bf8e8::t_d25ba3bdc2eabf 414-428
+  s_d23a82140bf8e8::t_e22e8ba567def7 413
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "1599114152a63c34cdc300163adc051bbb757365",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
