@@ -1,11 +1,11 @@
 # haskell-flows — agent workflow rules
 
-You are connected to the `haskell-flows` MCP (35 tools). Use it for ALL Haskell work;
+You are connected to the `haskell-flows` MCP (36 tools). Use it for ALL Haskell work;
 do not shell out to cabal/ghc/ghci/hlint directly.
 
 ## Session handshake
 
-1. `ghc_workflow(action="status")` — confirm alive + 35 tools
+1. `ghc_workflow(action="status")` — confirm alive + 36 tools
 2. `ghc_toolchain(action="status")` — external-binary gates
 3. `ghc_workflow(action="help")` — state-aware nudges
 
@@ -84,7 +84,7 @@ The optional `chain` lets you batch multi-step plans via
   constructor).
 - All external subprocesses argv-form — no shell interpolation.
 
-## Full tool inventory (35)
+## Full tool inventory (36)
 
 - `ghc_load`
 - `ghc_type`
@@ -121,6 +121,7 @@ The optional `chain` lets you batch multi-step plans via
 - `ghc_modules`
 - `ghc_project`
 - `ghc_property_store`
+- `ghc_scratch`
 
 ## Dogfood-fix-in-place
 

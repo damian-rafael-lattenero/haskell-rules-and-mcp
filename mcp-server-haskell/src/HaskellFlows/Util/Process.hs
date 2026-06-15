@@ -15,7 +15,7 @@ import Data.Maybe (isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
 import System.Exit (ExitCode)
-import System.IO (hGetContents)
+import System.IO (hGetContents')
 import System.Process
   ( CreateProcess (..)
   , StdStream (..)
@@ -59,8 +59,8 @@ runArgv budget mCwd cmd args = do
   outVar   <- newEmptyMVar
   errVar   <- newEmptyMVar
   timedOut <- newEmptyMVar
-  _ <- forkIO (hGetContents hOut >>= putMVar outVar)
-  _ <- forkIO (hGetContents hErr >>= putMVar errVar)
+  _ <- forkIO (hGetContents' hOut >>= putMVar outVar)
+  _ <- forkIO (hGetContents' hErr >>= putMVar errVar)
   -- System.Timeout.timeout cannot interrupt waitForProcess on Linux: the
   -- thread blocks inside waitpid() (uninterruptible blocking FFI) and never
   -- receives the async exception. Use a dedicated timer thread that sends

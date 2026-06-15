@@ -175,11 +175,18 @@ fixture_warm_step() {
 
 # -----------------------------------------------------------------------
 # 4. tests — unit / scenario / full e2e
+#
+# NOTE: --keep-going is intentionally omitted from all test steps.
+# cabal 3.14 returns RC=0 when --keep-going is active even if a test
+# suite exits non-zero, masking real failures. Build steps still use
+# --keep-going (multiple build errors surface together). Tests do not —
+# a failing test must propagate its non-zero exit code.
 # -----------------------------------------------------------------------
 unit_test_step() {
   pushd mcp-server-haskell > /dev/null
   cabal test haskell-flows-mcp-test \
-    --test-show-details=direct $(cabal_keep_going_flag)
+    --test-show-details=direct \
+    --test-options="--color"
   popd > /dev/null
 }
 
@@ -190,7 +197,8 @@ scenario_test_step() {
   pushd mcp-server-haskell > /dev/null
   HASKELL_FLOWS_E2E_ONLY="$sub" \
     cabal test haskell-flows-mcp-e2e \
-      --test-show-details=direct $(cabal_keep_going_flag)
+      --test-show-details=direct \
+      --test-options="--color"
   popd > /dev/null
 }
 
@@ -199,7 +207,9 @@ full_test_step() {
   : "${HASKELL_FLOWS_E2E_PARALLEL:=4}"
   export HASKELL_FLOWS_E2E_PARALLEL
   say "(HASKELL_FLOWS_E2E_PARALLEL=$HASKELL_FLOWS_E2E_PARALLEL)"
-  cabal test all --test-show-details=direct $(cabal_keep_going_flag)
+  cabal test all \
+    --test-show-details=direct \
+    --test-options="--color"
   popd > /dev/null
 }
 
@@ -211,6 +221,25 @@ package_quality_step() {
   cabal haddock all --haddock-all
   cabal check
   cabal sdist all --output-dir /tmp/haskell-flows-mcp-sdist
+  popd > /dev/null
+}
+
+# -----------------------------------------------------------------------
+# 6. outdated deps advisory — mirrors CI's advisory job (only --full)
+#
+# Not a hard gate: cabal outdated exits 1 when bounds are stale but
+# we still want the overall ci-local run to pass (the CI treats it as
+# advisory too). We capture the exit code, print a warning if non-zero,
+# and return 0 so the outer timed() step doesn't abort.
+# -----------------------------------------------------------------------
+outdated_step() {
+  pushd mcp-server-haskell > /dev/null
+  if cabal outdated --exit-code; then
+    say "All bounds are current."
+  else
+    warn "Some deps have newer releases (advisory — not a hard gate)."
+    warn "Run 'cabal outdated' for details; update bounds when ready."
+  fi
   popd > /dev/null
 }
 
@@ -271,6 +300,8 @@ esac
 if [ "$MODE" = "full" ]; then
   step "5/N" "package-quality (haddock + check + sdist)"
   timed "package-quality" package_quality_step
+  step "6/N" "outdated deps (advisory — matches CI advisory job)"
+  timed "outdated(advisory)" outdated_step
 fi
 
 # -----------------------------------------------------------------------

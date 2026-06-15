@@ -25,9 +25,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 RULES="$REPO_ROOT/.claude/rules/use-haskell-flows-mcp.md"
+RULES2="$REPO_ROOT/.claude/rules/haskell-flows-mcp.md"
 
 if [ ! -f "$RULES" ]; then
   echo "ERROR: rules file not found at $RULES" >&2
+  exit 2
+fi
+if [ ! -f "$RULES2" ]; then
+  echo "ERROR: rules file not found at $RULES2" >&2
   exit 2
 fi
 
@@ -90,6 +95,41 @@ for name in "${RETIRED_NAMES[@]}"; do
     fail_count=$((fail_count + 1))
   fi
 done
+
+# ----------------------------------------------------------------------
+# Check 3: retired-name + self-consistency checks on haskell-flows-mcp.md.
+#
+# Unlike use-haskell-flows-mcp.md, this briefing file is ALLOWED to carry
+# a "(NN tools)" count literal — it is a quick-reference for the agent.
+# The count-literal check does NOT apply here.  Instead we verify:
+#   a) No retired wire names are recommended (same as Check 2).
+#   b) The count in the header "(NN tools)" matches the number of "- `...`"
+#      lines in the "## Full tool inventory" section.
+# ----------------------------------------------------------------------
+
+# 3a: retired wire names in the briefing file.
+for name in "${RETIRED_NAMES[@]}"; do
+  bad_lines2=$(grep -nE "\b$name\b" "$RULES2" \
+                 | grep -vE 'retired|Replaces' || true)
+  if [ -n "$bad_lines2" ]; then
+    red "DRIFT: haskell-flows-mcp.md recommends retired wire name '$name'"
+    echo "$bad_lines2"
+    echo "  → either remove the line or annotate with 'Replaces retired ...'"
+    fail_count=$((fail_count + 1))
+  fi
+done
+
+# 3b: header count vs actual inventory count.
+header_count=$(grep -oE '\([0-9]+\s+tools\)' "$RULES2" | grep -oE '[0-9]+' | head -1 || true)
+# Count "- `toolname`" lines inside the inventory section (between
+# "## Full tool inventory" and the next "## " section header).
+inventory_count=$(sed -n '/^## Full tool inventory/,/^## [A-Z]/p' "$RULES2" \
+                    | grep -cE "^- \`" || true)
+if [ -n "$header_count" ] && [ "$header_count" != "$inventory_count" ]; then
+  red "DRIFT: haskell-flows-mcp.md header says ($header_count tools) but inventory has $inventory_count entries."
+  echo "  → update the header count or add/remove the missing tool entries."
+  fail_count=$((fail_count + 1))
+fi
 
 # ----------------------------------------------------------------------
 # Summary
