@@ -1,0 +1,21 @@
+mcp-server-haskell/src/HaskellFlows/Tool/Project.hs
+  s_d23a82140bf8e8::t_9bb57e609b99e6 96
+mcp-server-haskell/test/Spec/CreateProject.hs
+  s_d23a82140bf8e8::t_1859f5cab663e4 264,266,272
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "ed08059ff4c5206cee163243dd3fc4d2e9301bbc",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "dlattenero_meli <damian.lattenero@mercadolibre.com>"
+    }
+  }
+}
