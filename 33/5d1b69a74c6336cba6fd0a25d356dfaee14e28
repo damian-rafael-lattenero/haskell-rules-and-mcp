@@ -1,0 +1,87 @@
+mcp-server-haskell/test/Spec/FixWarningUnit.hs
+  s_d23a82140bf8e8::t_a06e0bcb6576f6 178-183
+  s_d23a82140bf8e8::t_6076af13a8e79f 335-338
+  s_d23a82140bf8e8::t_eb4550fe19cd75 317-321
+mcp-server-haskell/test/Spec/TraversalGuards.hs
+  s_d23a82140bf8e8::t_ed79f4021dcb16 61
+  s_d23a82140bf8e8::t_8941665a850f4d 102-108
+  s_d23a82140bf8e8::t_a366be53ca1297 179
+  s_d23a82140bf8e8::t_a18e43384f22f0 162
+  s_d23a82140bf8e8::t_852e634da7c7c9 144-149
+  s_d23a82140bf8e8::t_85762bc2bad4b9 130
+  s_d23a82140bf8e8::t_30aacd6a7af283 75
+  s_d23a82140bf8e8::t_32e00cc877ef5a 119
+  s_d23a82140bf8e8::t_49f14bf9f12ed5 37
+  s_d23a82140bf8e8::t_7f65c1c66547fa 87
+mcp-server-haskell/test/Spec/HandleApplyRemove.hs
+  s_d23a82140bf8e8::t_dadb750f3b329c 84,108,127
+  s_d23a82140bf8e8::t_dfa67d83662642 133-144
+  s_d23a82140bf8e8::t_01363d83c07729 16
+mcp-server-haskell/test/Spec/FinalMisc.hs
+  s_d23a82140bf8e8::t_a7b8ee267745d0 327-330
+  s_d23a82140bf8e8::t_4938c77ba9170f 703-704
+  s_d23a82140bf8e8::t_8fbcd07066bd0e 464
+  s_d23a82140bf8e8::t_19d0a0532dbc7b 1196-1198
+  s_d23a82140bf8e8::t_7c2cc8588278db 836-838
+  s_d23a82140bf8e8::t_4ccfda602c413f 988-990
+  s_d23a82140bf8e8::t_14b8ae8de67487 1032-1038
+  s_d23a82140bf8e8::t_5540358c98717e 1250-1254
+  s_d23a82140bf8e8::t_797e0c2eec94c8 356
+  s_d23a82140bf8e8::t_3882261e173072 803-814
+  s_d23a82140bf8e8::t_6441f9fad03ddf 595-598
+  s_d23a82140bf8e8::t_6eb73be9393012 155
+  s_d23a82140bf8e8::t_4b97a093365b08 707-712
+  s_d23a82140bf8e8::t_4b1e82a70c10f4 854-856
+mcp-server-haskell/test/Spec/Helpers.hs
+  s_d23a82140bf8e8::t_fcf02c0a9124a4 12
+  s_d23a82140bf8e8::t_bbf3cd83578cb0 57-61,63-65,67,70
+mcp-server-haskell/test/Spec/AddModulesHandle.hs
+  s_d23a82140bf8e8::t_553e67cf88a4e6 115
+  s_d23a82140bf8e8::t_39d65917be8cb6 22
+  s_d23a82140bf8e8::t_aed6fc1625bd45 174
+  s_d23a82140bf8e8::t_624af59886e6b6 190
+  s_d23a82140bf8e8::t_e845933084aaec 82-93
+mcp-server-haskell/test/Spec/Bootstrap.hs
+  s_d23a82140bf8e8::t_06b405fa682a95 42
+  s_d23a82140bf8e8::t_fc429877a4bc95 141
+mcp-server-haskell/test/Spec/WorkflowTool.hs
+  s_d23a82140bf8e8::t_680e6c635c756b 52
+mcp-server-haskell/test/Spec/Batch.hs
+  s_d23a82140bf8e8::t_5a2fa5326c088c 86-95
+mcp-server-haskell/test/Spec/RemoveModulesUnit.hs
+  s_d23a82140bf8e8::t_ac31137432c3ba 173-182
+  s_d23a82140bf8e8::t_4fcf1e6497becd 40
+mcp-server-haskell/test/Spec/DogfoodHint.hs
+  s_d23a82140bf8e8::t_7074e341dd261f 41
+mcp-server-haskell/test/Spec/ApplyExports.hs
+  s_d23a82140bf8e8::t_8b8ab83bc47e3b 22,31
+  s_d23a82140bf8e8::t_44d1de281520c3 202-204
+mcp-server-haskell/test/Spec/Format.hs
+  s_d23a82140bf8e8::t_1785df4f971f00 33
+  s_d23a82140bf8e8::t_c22b803eb1a5f2 50-54
+  s_d23a82140bf8e8::t_bced39db7fa3d4 21
+mcp-server-haskell/test/Spec/CreateProject.hs
+  s_d23a82140bf8e8::t_79e25d8d6c9c14 258
+  s_d23a82140bf8e8::t_09fdec7024ec28 53-61,63-67
+  s_d23a82140bf8e8::t_305c4504f4860a 33,43
+  s_d23a82140bf8e8::t_7c0224f837547f 230
+  s_d23a82140bf8e8::t_d318e81bbbe085 245
+mcp-server-haskell/test/Spec/Witness.hs
+  s_d23a82140bf8e8::t_0e42e2d791bd0c 70-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "335d1b69a74c6336cba6fd0a25d356dfaee14e28",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "dlattenero_meli <damian.lattenero@mercadolibre.com>"
+    }
+  }
+}
