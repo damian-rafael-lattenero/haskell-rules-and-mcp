@@ -17,6 +17,10 @@ module HaskellFlows.Tool.FixWarning
     -- * Issue #55 — concrete-patch helpers
   , planForCodeWithName
   , underscorePrefix
+    -- * B-5 — GHC-38856 partial redundant-import patch
+  , planFor38856
+  , extractRedundantNames
+  , parseImportList
     -- * Issue #202 — binding-tail patch
   , patchTailBindings
     -- * Issue #235 — preceding type-sig patch
@@ -57,8 +61,9 @@ descriptor =
     , tdDescription =
         "PURPOSE: Propose (or apply) a patch for a common GHC warning. "
           <> "WHEN: a ghc_load / ghc_check_module surfaced a fixable code "
-          <> "(GHC-66111 unused import, GHC-40910 unused binding when "
-          <> "'name' is supplied, missing top-level signature). "
+          <> "(GHC-66111 whole unused import, GHC-38856 partial redundant "
+          <> "import when 'message' is supplied, GHC-40910 unused binding "
+          <> "when 'name' is supplied, missing top-level signature). "
           <> "WHEN NOT: the diagnostic is a type error — that is "
           <> "ghc_explain_error, not a warning. "
           <> "PREREQUISITES: a previous compile pass produced the "
@@ -84,6 +89,16 @@ descriptor =
                        \Optional for codes whose patch doesn't depend \
                        \on a binding name." :: Text)
                   ]
+              , "message"     .= object
+                  [ "type"        .= ("string" :: Text)
+                  , "description" .=
+                      ("B-5: the full warning text from the prior \
+                       \ghc_load / ghc_check_module diagnostic. Required \
+                       \for GHC-38856 (partial redundant import: \
+                       \\"The import of 'a, b' from module 'M' is \
+                       \redundant\") so the tool knows WHICH names to drop \
+                       \from the import list. Optional for other codes." :: Text)
+                  ]
               ]
           , "required"             .= (["module_path", "line", "code"] :: [Text])
           , "additionalProperties" .= False
@@ -99,6 +114,7 @@ data FixWarningArgs = FixWarningArgs
   , fwCode       :: !Text
   , fwApply      :: !Bool
   , fwName       :: !(Maybe Text)
+  , fwMessage    :: !(Maybe Text)   -- ^ B-5: full warning text (GHC-38856 needs it)
   }
   deriving stock (Show)
 
@@ -115,6 +131,7 @@ instance FromJSON FixWarningArgs where
       <*> o .:  "code"
       <*> (maybe False unBoolField <$> o .:? "apply")
       <*> o .:? "name"
+      <*> o .:? "message"
 
 data FixPlan = FixPlan
   { fpPatch   :: !(Maybe Text)   -- ^ replacement line (Just = replace, Nothing = no patch)
@@ -185,6 +202,96 @@ planForCodeWithName code mName srcLine =
                }
            Nothing -> base   -- name not found on the line; degrade gracefully
        _ -> base
+
+-- | B-5: plan for @GHC-38856@ — a PARTIAL redundant import, e.g.
+--
+-- > The import of ‘throwError, runExceptT’
+-- > from module ‘Control.Monad.Except’ is redundant
+--
+-- Unlike @GHC-66111@ (whole-line redundant → just drop it), this names
+-- SPECIFIC redundant identifiers inside the import list. We rewrite the
+-- list keeping only the still-used names; if every name is redundant the
+-- whole line is dropped.
+--
+-- The redundant-name set lives in the GHC @message@, not in the source
+-- line — so without a 'message' we can only advise. Conservative on
+-- complex export forms (constructor exports @Foo(..)@, operator imports):
+-- if the import list has nested parens we decline rather than emit a
+-- mangled patch.
+planFor38856 :: Maybe Text -> Text -> FixPlan
+planFor38856 Nothing _ = FixPlan
+  { fpPatch   = Nothing
+  , fpDrop    = False
+  , fpHint    = "GHC-38856 names specific redundant imports inside an \
+                \import list. Pass the warning 'message' (from the \
+                \ghc_load / ghc_check_module diagnostic) so the tool can \
+                \rewrite the list, dropping just those names."
+  , fpFixable = False
+  }
+planFor38856 (Just msg) srcLine =
+  case (extractRedundantNames msg, parseImportList srcLine) of
+    (redundant@(_ : _), Just (prefix, names, suffix)) ->
+      let kept = filter (`notElem` redundant) names
+      in if null kept
+           then FixPlan
+                  { fpPatch   = Nothing
+                  , fpDrop    = True
+                  , fpHint    = "Every imported name is redundant — dropping \
+                                \the whole import line."
+                  , fpFixable = True
+                  }
+           else FixPlan
+                  { fpPatch   = Just (prefix <> "(" <> T.intercalate ", " kept
+                                        <> ")" <> suffix)
+                  , fpDrop    = False
+                  , fpHint    = "Removing redundant name(s) from the import \
+                                \list: " <> T.intercalate ", " redundant
+                  , fpFixable = True
+                  }
+    _ -> FixPlan
+           { fpPatch   = Nothing
+           , fpDrop    = False
+           , fpHint    = "Could not confidently parse the redundant-name set \
+                         \or the import list (complex export form such as \
+                         \Foo(..) or an operator import?). Fix by hand."
+           , fpFixable = False
+           }
+
+-- | B-5: pull the redundant identifiers out of a @GHC-38856@ message.
+-- GHC quotes them with typographic quotes in the FIRST quoted group:
+-- @The import of ‘a, b’ from module ‘M’ is redundant@.
+--
+-- > extractRedundantNames "… The import of ‘throwError, runExceptT’ from …"
+-- ["throwError","runExceptT"]
+-- > extractRedundantNames "unrelated"
+-- []
+extractRedundantNames :: Text -> [Text]
+extractRedundantNames msg =
+  case T.breakOn "\x2018" (snd (T.breakOn "The import of" msg)) of
+    (_, q) | T.null q -> []
+    (_, q) ->
+      let inner = T.takeWhile (/= '\x2019') (T.drop 1 q)
+      in filter (not . T.null) (map T.strip (T.splitOn "," inner))
+
+-- | B-5: split a simple import line into (prefix-before-paren, names,
+-- suffix-after-paren). Returns 'Nothing' for lines without exactly one
+-- balanced paren pair — i.e. no list, or a nested form (@Foo(..)@,
+-- operator export) we won't risk mangling.
+--
+-- > parseImportList "import Control.Monad.Except (ExceptT, throwError)"
+-- Just ("import Control.Monad.Except ", ["ExceptT","throwError"], "")
+parseImportList :: Text -> Maybe (Text, [Text], Text)
+parseImportList line
+  | T.count "(" line /= 1 = Nothing
+  | T.count ")" line /= 1 = Nothing
+  | otherwise =
+      let (prefix, fromParen) = T.breakOn "(" line
+          afterOpen           = T.drop 1 fromParen
+          (inner, afterClose) = T.breakOn ")" afterOpen
+          suffix              = T.drop 1 afterClose
+          names = filter (not . T.null)
+                    (map T.strip (T.splitOn "," inner))
+      in Just (prefix, names, suffix)
 
 -- | Issue #55: replace the FIRST free word-boundary occurrence of
 -- @name@ on @srcLine@ with @\"_\" <> name@. Returns 'Nothing' when
@@ -295,8 +402,12 @@ runWithArgs pd args = case mkModulePath pd (T.unpack (fwModulePath args)) of
                     <> T.pack (show (length lns)) <> " line"
                     <> (if length lns == 1 then "" else "s") <> "."))
             Just srcLine -> do
-              let plan    = planForCodeWithName (fwCode args)
-                              (fwName args) srcLine
+              let plan = case fwCode args of
+                    -- B-5: partial redundant import needs the warning message
+                    -- to know which names to drop from the import list.
+                    "GHC-38856" -> planFor38856 (fwMessage args) srcLine
+                    _           -> planForCodeWithName (fwCode args)
+                                     (fwName args) srcLine
               if fwApply args && fpFixable plan
                 then writePatched full plan args body
                 else pure (previewResult full plan args)

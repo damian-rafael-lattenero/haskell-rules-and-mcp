@@ -1249,6 +1249,12 @@ runAllTests = do
       , test "#238: enhanceNullModuleDetail appends hint when null+skipped" testEnhanceNullModuleDetail238
       , test "#238: enhanceNullModuleDetail no-op when both have modules"   testEnhanceNullModuleDetailNoOp238
       , test "#294: fix_warning missingCoords detects module_path-only call" testFixWarningMissingCoords
+      , test "B-5: extractRedundantNames pulls GHC-38856 names" testExtractRedundantNames38856
+      , test "B-5: parseImportList splits a simple import" testParseImportListSimple
+      , test "B-5: parseImportList declines complex export forms" testParseImportListComplexDeclines
+      , test "B-5: planFor38856 partial → rewrite import list" testPlanFor38856Partial
+      , test "B-5: planFor38856 all-redundant → drop line" testPlanFor38856DropsWhenEmpty
+      , test "B-5: planFor38856 no message → advise only" testPlanFor38856NoMessageAdvises
       , test "remove_modules: scanImportersInBody plain (#41)" testRMScanImportPlain
       , test "remove_modules: scanImportersInBody respects hierarchy (#41)" testRMScanRespectsHierarchy
       , test "remove_modules: scanImportersInBody quiet on no match (#41)" testRMScanQuietOnNoMatch

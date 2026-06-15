@@ -27,6 +27,12 @@ module Spec.FixWarningUnit
   , testWarningCategorize
   , testWarningBucketize
   , testFixWarningMissingCoords
+  , testExtractRedundantNames38856
+  , testParseImportListSimple
+  , testParseImportListComplexDeclines
+  , testPlanFor38856Partial
+  , testPlanFor38856DropsWhenEmpty
+  , testPlanFor38856NoMessageAdvises
   ) where
 
 import qualified Data.Aeson as A
@@ -410,3 +416,66 @@ testFixWarningMissingCoords = pure $
                       , "line"        A..= (12 :: Int)
                       , "code"        A..= ("GHC-66111" :: T.Text) ]))
 
+
+--------------------------------------------------------------------------------
+-- B-5: GHC-38856 partial redundant-import patch
+--------------------------------------------------------------------------------
+
+-- | The redundant-name set is pulled from the FIRST typographic-quoted
+-- group of the GHC message ("The import of ‘a, b’ from module …").
+testExtractRedundantNames38856 :: IO Bool
+testExtractRedundantNames38856 = pure $
+     FixWarning.extractRedundantNames
+       "The import of \x2018\&throwError, runExceptT\x2019 from module \x2018\&Control.Monad.Except\x2019 is redundant"
+       == ["throwError", "runExceptT"]
+  && FixWarning.extractRedundantNames
+       "The import of \x2018\&foo\x2019 from module \x2018\&Bar\x2019 is redundant"
+       == ["foo"]
+  && FixWarning.extractRedundantNames "unrelated warning" == []
+
+-- | A simple import line splits into (prefix, names, suffix).
+testParseImportListSimple :: IO Bool
+testParseImportListSimple = pure $
+  case FixWarning.parseImportList "import Control.Monad.Except (ExceptT, throwError, runExceptT)" of
+    Just (prefix, names, suffix) ->
+         prefix == "import Control.Monad.Except "
+      && names  == ["ExceptT", "throwError", "runExceptT"]
+      && suffix == ""
+    Nothing -> False
+
+-- | Complex export forms (nested parens: Foo(..), operator imports) must
+-- decline rather than risk a mangled split.
+testParseImportListComplexDeclines :: IO Bool
+testParseImportListComplexDeclines = pure $
+     isNothing (FixWarning.parseImportList "import Data.Foo (Foo(..), bar)")
+  && isNothing (FixWarning.parseImportList "import Data.Bare")   -- no list at all
+
+-- | Partial redundancy → rewrite the list keeping only the still-used names.
+testPlanFor38856Partial :: IO Bool
+testPlanFor38856Partial =
+  let msg  = "The import of \x2018\&throwError, runExceptT\x2019 from module \x2018\&Control.Monad.Except\x2019 is redundant"
+      line = "import Control.Monad.Except (ExceptT, throwError, runExceptT)"
+      plan = FixWarning.planFor38856 (Just msg) line
+  in pure $ FixWarning.fpFixable plan
+         && not (FixWarning.fpDrop plan)
+         && FixWarning.fpPatch plan == Just "import Control.Monad.Except (ExceptT)"
+
+-- | When every imported name is redundant, drop the whole line.
+testPlanFor38856DropsWhenEmpty :: IO Bool
+testPlanFor38856DropsWhenEmpty =
+  let msg  = "The import of \x2018\&throwError, runExceptT\x2019 from module \x2018\&Control.Monad.Except\x2019 is redundant"
+      line = "import Control.Monad.Except (throwError, runExceptT)"
+      plan = FixWarning.planFor38856 (Just msg) line
+  in pure $ FixWarning.fpFixable plan
+         && FixWarning.fpDrop plan
+         && isNothing (FixWarning.fpPatch plan)
+
+-- | Without the 'message', GHC-38856 can only advise (not fixable) — it
+-- has no way to know which names are redundant.
+testPlanFor38856NoMessageAdvises :: IO Bool
+testPlanFor38856NoMessageAdvises =
+  let plan = FixWarning.planFor38856 Nothing
+               "import Control.Monad.Except (ExceptT, throwError)"
+  in pure $ not (FixWarning.fpFixable plan)
+         && isNothing (FixWarning.fpPatch plan)
+         && T.isInfixOf "message" (FixWarning.fpHint plan)

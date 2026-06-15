@@ -187,6 +187,7 @@ testFixWarnNoPatchKey =
                , FixWarning.fwCode       = "GHC-66111"
                , FixWarning.fwApply      = False
                , FixWarning.fwName       = Nothing
+               , FixWarning.fwMessage    = Nothing
                }
       result = FixWarning.previewResult "src/Foo.hs" plan args
   in pure $ case Env.reResult result of
