@@ -363,6 +363,8 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowRefactorPreExistingError
                       Scenarios.FlowSuggestAssocOuter
                       Scenarios.FlowAddImportNoHoogle
+                      Scenarios.FlowHoogleSearch
+                      Scenarios.FlowFormat
                       Scenarios.FlowInfoConstructors
                       Scenarios.FlowLoadHoleDiagnostics
                       Scenarios.FlowGatesProperties

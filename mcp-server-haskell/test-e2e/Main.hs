@@ -75,6 +75,8 @@ import qualified Scenarios.FlowCabalRecovery     as FlowCR
 import qualified Scenarios.FlowRefactorPreExistingError as FlowRPE
 import qualified Scenarios.FlowSuggestAssocOuter  as FlowSAO
 import qualified Scenarios.FlowAddImportNoHoogle  as FlowAINH
+import qualified Scenarios.FlowHoogleSearch       as FlowHS
+import qualified Scenarios.FlowFormat             as FlowFmt
 import qualified Scenarios.FlowInfoConstructors   as FlowIC
 import qualified Scenarios.FlowLoadHoleDiagnostics as FlowLHD
 import qualified Scenarios.FlowGatesProperties    as FlowGP
@@ -213,6 +215,10 @@ scenarios =
     , False, FlowSAO.runFlow )
   , ( "Flow: AddImport no-hoogle (#53 · honest error vs lying success)"
     , False, FlowAINH.runFlow )
+  , ( "Flow: HoogleSearch (off-graph lookup · empty/ok/unavailable)"
+    , False, FlowHS.runFlow )
+  , ( "Flow: Format (fourmolu/ormolu · traversal/missing/normalise/write)"
+    , False, FlowFmt.runFlow )
   , ( "Flow: Info constructors (#54 · data + newtype expose ctors)"
     , False, FlowIC.runFlow )
   , ( "Flow: Load hole diagnostics (#57 · drop GHC-58427 artifact)"
