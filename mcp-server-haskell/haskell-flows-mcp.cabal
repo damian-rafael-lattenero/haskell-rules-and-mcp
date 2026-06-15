@@ -272,6 +272,10 @@ test-suite haskell-flows-mcp-test
                       Spec.DispatchUnit
                       Spec.RegistryUnit
                       Spec.ProcessUnit
+    -- -threaded is required for ProcessUnit: runArgv uses forkIO for its
+    -- timer thread. Without -threaded, waitForProcess (safe FFI) blocks the
+    -- entire RTS, starving the timer thread and making the timeout test hang.
+    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
     build-depends:    base              >= 4.20 && < 5
                     , haskell-flows-mcp
                     , aeson             >= 2.2  && < 2.3
