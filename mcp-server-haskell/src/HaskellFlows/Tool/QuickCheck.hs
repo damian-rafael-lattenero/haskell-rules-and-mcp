@@ -20,6 +20,9 @@ module HaskellFlows.Tool.QuickCheck
   , runBatchPropertiesViaCabalRepl
   , extractLabelsBlock
   , extractQcOutputAt
+    -- * Module resolution (re-used by Determinism so runs>=2 persists
+    --   under the same module the single-run path would) — #294
+  , resolvePropertyModule
     -- * Issue #220 — in-process witness harness (replaces cabal-repl subprocess)
   , runQuickCheckWithLabelsInProcess
   , witnessEvalExpr

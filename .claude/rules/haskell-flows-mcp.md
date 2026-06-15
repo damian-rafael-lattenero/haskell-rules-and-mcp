@@ -30,7 +30,7 @@ do not shell out to cabal/ghc/ghci/hlint directly.
 | apply a module export list | `ghc_apply_exports` | `module_path="src/X.hs", exports=["foo"]` |
 | list live imports in GHCi | `ghc_imports` | `(no args)` |
 | browse a module | `ghc_browse` | `module="Foo.Bar"` |
-| fix a GHC warning | `ghc_fix_warning` | `module_path="src/X.hs"` |
+| fix a GHC warning | `ghc_fix_warning` | `module_path="src/X.hs", line=12, code="GHC-66111"` |
 | coverage report | `ghc_coverage` | `(no args, 8 HPC metrics)` |
 | lint (matches CI) | `ghc_lint` | `path="src/"` |
 | format source | `ghc_format` | `module_path="src/X.hs", write=true` |

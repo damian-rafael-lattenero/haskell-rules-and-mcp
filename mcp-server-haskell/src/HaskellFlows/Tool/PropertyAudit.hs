@@ -40,6 +40,8 @@ module HaskellFlows.Tool.PropertyAudit
   , enhanceCrossModuleDetail
   , appendReplStderr
   , allPairsSkipped
+    -- * #294 (exported for unit tests)
+  , enhanceNotInScopeDetail
   ) where
 
 import Control.Exception (SomeException, try)
@@ -219,11 +221,12 @@ runPairProbe ghcSess _args (p1, p2) = do
               d2 = enhanceCrossModuleDetail
                      (spModule p1) (spModule p2) status d1
               d3 = appendReplStderr err status d2
+              d4 = enhanceNotInScopeDetail status d3
           in PairFinding
                { pfP1     = p1
                , pfP2     = p2
                , pfStatus = status
-               , pfDetail = d3
+               , pfDetail = d4
                }
 
 --------------------------------------------------------------------------------
@@ -481,6 +484,33 @@ appendReplStderr err status detail
   = detail
       <> " — REPL stderr (first 500 chars): "
       <> T.take 500 (T.strip err)
+  | otherwise = detail
+
+-- | #294: a skipped pair whose stderr says a name is "not in scope" is the
+-- single most common — and most misleading — audit outcome. The default
+-- steer ("run ghc_check_project to see compile errors") is wrong: the
+-- project compiles. The real cause is structural — the contradiction probe
+-- @\\args -> P1 args && not (P2 args)@ can only evaluate properties that are
+-- BOTH visible in the probe's interactive context AND shaped @a -> Bool@.
+-- Named properties defined in a test-suite @Main@ module are not in scope
+-- for the in-process probe, and @Property@-/@Bool@-typed or multi-argument
+-- properties cannot be applied to @args@. Replace the misleading steer with
+-- an accurate explanation so the agent stops chasing a non-existent compile
+-- error. Arity-aware probe synthesis is the proper fix (tracked separately).
+-- Pure — exported for unit tests.
+enhanceNotInScopeDetail :: Text -> Text -> Text
+enhanceNotInScopeDetail status detail
+  | status == "skipped"
+  , "not in scope" `T.isInfixOf` T.toLower detail
+  = detail
+      <> " — NOTE: this is an audit limitation, not a compile error (the "
+      <> "project builds). The contradiction probe only evaluates properties "
+      <> "that are BOTH in the probe's scope AND single-argument `a -> Bool` "
+      <> "functions. Named properties living in a test-suite Main module "
+      <> "aren't visible here, and Property-/Bool-typed or multi-argument "
+      <> "properties can't be applied to `args`. For now, audit self-contained "
+      <> "`\\x -> …` Bool lambdas; compare named/typed properties by hand. "
+      <> "(Arity-aware auditing is a tracked follow-up.)"
   | otherwise = detail
 
 --------------------------------------------------------------------------------

@@ -26,6 +26,7 @@ module Spec.FixWarningUnit
   , testEnhanceNullModuleDetailNoOp238
   , testWarningCategorize
   , testWarningBucketize
+  , testFixWarningMissingCoords
   ) where
 
 import qualified Data.Aeson as A
@@ -392,4 +393,20 @@ testWarningBucketize =
   in pure $ case buckets of
        ((WcUnused, 3) : _) -> True
        _                   -> False
+
+-- | #294: ghc_fix_warning called the documented module_path-only way (no
+-- 'line'/'code') used to crash with aeson's opaque "key \"line\" not found".
+-- 'missingCoords' detects that shape so the handler can return an actionable
+-- MissingArg instead. Present line+code → not missing.
+testFixWarningMissingCoords :: IO Bool
+testFixWarningMissingCoords = pure $
+     FixWarning.missingCoords
+       (A.object [ "module_path" A..= ("src/Foo.hs" :: T.Text) ])
+  && FixWarning.missingCoords           -- line present, code still absent
+       (A.object [ "module_path" A..= ("src/Foo.hs" :: T.Text)
+                 , "line"        A..= (12 :: Int) ])
+  && not (FixWarning.missingCoords      -- all three present → satisfiable
+            (A.object [ "module_path" A..= ("src/Foo.hs" :: T.Text)
+                      , "line"        A..= (12 :: Int)
+                      , "code"        A..= ("GHC-66111" :: T.Text) ]))
 

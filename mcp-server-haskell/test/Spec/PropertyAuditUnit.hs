@@ -51,6 +51,8 @@ module Spec.PropertyAuditUnit
   , testParseGhcLineColFallback
   , testSyntheticErrorLineCol
   , testLabConfidence
+  , testEnhanceNotInScopeDetailHits
+  , testEnhanceNotInScopeDetailNotSkipped
   ) where
 
 import qualified Data.Aeson as A
@@ -464,6 +466,28 @@ testAppendReplStderrTruncates =
       -- The result should contain exactly 500 'x' chars (no more).
       stderrSection = T.dropWhile (/= 'x') result
   in pure (T.length (T.takeWhile (== 'x') stderrSection) == 500)
+
+-- | #294: a skipped pair whose stderr names an out-of-scope symbol gets an
+-- HONEST explanation (audit limitation, not a compile error) appended,
+-- replacing the misleading "run ghc_check_project to see compile errors"
+-- steer. The project compiles; the probe just can't see Main-module / typed
+-- properties.
+testEnhanceNotInScopeDetailHits :: IO Bool
+testEnhanceNotInScopeDetailHits =
+  let detail0 = "probe load/parse failure: (no GHCi output) — REPL stderr \
+                \(first 500 chars): Variable not in scope: prop_emptySubstIdentity"
+      result  = PropertyAuditTool.enhanceNotInScopeDetail "skipped" detail0
+  in pure (T.isInfixOf "audit limitation"   result
+        && T.isInfixOf "not a compile error" result
+        && not (T.isInfixOf "audit limitation" detail0))
+
+-- | #294: enhanceNotInScopeDetail is a no-op when the status isn't skipped
+-- (a genuine compatible/contradictory verdict must not be rewritten).
+testEnhanceNotInScopeDetailNotSkipped :: IO Bool
+testEnhanceNotInScopeDetailNotSkipped =
+  let detail0 = "Variable not in scope: foo"
+      result  = PropertyAuditTool.enhanceNotInScopeDetail "contradictory" detail0
+  in pure (result == detail0)
 
 -- | #241: allPairsSkipped True when every finding is skipped.
 -- We can't construct a 'PairFinding' directly (constructor unexported),

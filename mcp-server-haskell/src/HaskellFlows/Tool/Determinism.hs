@@ -16,6 +16,7 @@ module HaskellFlows.Tool.Determinism
   , maxRuns
   ) where
 
+import Control.Applicative ((<|>))
 import Control.Exception (SomeException, try)
 import Control.Monad (replicateM)
 import Data.Aeson
@@ -25,6 +26,7 @@ import qualified Data.Text as T
 import System.Timeout (timeout)
 
 import HaskellFlows.Config (defaultLimits, quickCheckTimeout, determinismMaxRuns, unMicros)
+import HaskellFlows.Data.PropertyStore (Store, saveCases)
 import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject)
 import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
@@ -71,10 +73,15 @@ clampRuns = max 1 . min maxRuns
 handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
-  runHandle ghcSess rawArgs
+  store   <- teStore env
+  -- #294: the runs>=2 path persists on all-pass exactly like the
+  -- single-run path. Lab's internal flakiness probe calls 'runHandle'
+  -- directly with 'Nothing' (it persists via its own code path first),
+  -- so the store handle is threaded as a 'Maybe'.
+  runHandle ghcSess (Just store) rawArgs
 
-runHandle :: GhcSession -> Value -> IO ToolResponse
-runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
+runHandle :: GhcSession -> Maybe Store -> Value -> IO ToolResponse
+runHandle ghcSess mStore rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> case sanitizeExpression (daProperty args) of
     Left e ->
@@ -82,8 +89,13 @@ runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
     Right safe -> do
       let requested = daRuns args
           n         = clampRuns requested
+      -- #294: resolve the defining module exactly like the single-run
+      -- ghc_quickcheck path so (a) the N runs load the right scope and
+      -- (b) the persisted entry below carries the same module shape.
+      resolved <- QcTool.resolvePropertyModule ghcSess safe
+      let loadHint = resolved <|> daModule args
       results <- replicateM n
-                   (runOnce ghcSess (daProperty args) safe (daModule args))
+                   (runOnce ghcSess (daProperty args) safe loadHint)
       let allPassed = all isPassed results
           summaryTxt
             | allPassed =
@@ -103,6 +115,17 @@ runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
              , "states"  .= map stateText results
              , "summary" .= summaryTxt
              ] ++ clampNote)
+      -- #294: persist on all-pass, mirroring ghc_quickcheck's single-run
+      -- behaviour. runs>=2 is STRICTLY stronger evidence (n * qcMaxSuccess
+      -- generated cases) yet the flakiness path used to drop the regression
+      -- entirely — the store stayed empty after a clean stability check
+      -- because this handler was never handed the store. Confidence is the
+      -- total cases explored across all runs. Lab passes Nothing (it has
+      -- already persisted via its own path) so it is a no-op there.
+      case mStore of
+        Just store | allPassed ->
+          saveCases store (daProperty args) loadHint (n * QcTool.qcMaxSuccess)
+        _ -> pure ()
       -- Issue #90 Phase C: every run passed → status='ok'. Any
       -- non-pass → status='failed' kind='validation' (the property
       -- is flaky). Per-run states stay under 'result.states' so

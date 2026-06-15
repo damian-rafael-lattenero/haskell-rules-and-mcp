@@ -1187,6 +1187,7 @@ main = do
       , test "#238: listResult no null_module fields when all have modules" testListResultNoNullFields238
       , test "#238: enhanceNullModuleDetail appends hint when null+skipped" testEnhanceNullModuleDetail238
       , test "#238: enhanceNullModuleDetail no-op when both have modules"   testEnhanceNullModuleDetailNoOp238
+      , test "#294: fix_warning missingCoords detects module_path-only call" testFixWarningMissingCoords
       , test "remove_modules: scanImportersInBody plain (#41)" testRMScanImportPlain
       , test "remove_modules: scanImportersInBody respects hierarchy (#41)" testRMScanRespectsHierarchy
       , test "remove_modules: scanImportersInBody quiet on no match (#41)" testRMScanQuietOnNoMatch
@@ -1321,6 +1322,10 @@ main = do
       , test "#241: appendReplStderr no-op when not skipped"     testAppendReplStderrNotSkipped
       , test "#241: appendReplStderr truncates long stderr to 500 chars"
                                                                  testAppendReplStderrTruncates
+      , test "#294: enhanceNotInScopeDetail gives honest skip reason"
+                                                                 testEnhanceNotInScopeDetailHits
+      , test "#294: enhanceNotInScopeDetail no-op when not skipped"
+                                                                 testEnhanceNotInScopeDetailNotSkipped
       , test "#241: allPairsSkipped True when every finding skipped"
                                                                  testAllPairsSkippedTrue
       , test "#241: allPairsSkipped False when at least one compatible"

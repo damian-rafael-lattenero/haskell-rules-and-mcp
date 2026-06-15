@@ -28,6 +28,7 @@ module HaskellFlows.Tool.Scratch
   , spliceInto
   , wrapAsLetBlock
   , splitImports
+  , hasTopLevelDecl
   ) where
 
 import Control.Exception (SomeException, try)
@@ -45,6 +46,7 @@ import GHC
   , exprType
   , getContext
   , parseImportDecl
+  , runDecls
   , setContext
   )
 import GHC.Utils.Outputable (showPprUnsafe)
@@ -328,9 +330,17 @@ handleCheck store ghcSess args = case saId args of
             decl                   = T.strip body
         if T.null decl
           then checkImportsOnly store ghcSess entry i imports now
-          else if T.any (== '\n') body
-            then checkMultiLine store ghcSess entry i imports body now
-            else checkSingleLine store ghcSess entry i imports body now
+          -- #294: type/data/newtype/class/instance declarations cannot
+          -- live inside the `let … in ()` wrapper (GHC: "parse error on
+          -- input 'type'"). Route them — and any block that opens with a
+          -- top-level declaration keyword — through runDecls, which is the
+          -- exact mechanism GHCi uses for top-level prompt input. This also
+          -- lifts the where-clause limitation the let-wrapper had.
+          else if hasTopLevelDecl body
+            then checkDecls store ghcSess entry i imports body now
+            else if T.any (== '\n') body
+              then checkMultiLine store ghcSess entry i imports body now
+              else checkSingleLine store ghcSess entry i imports body now
 
 -- | Single-line path: uses 'sanitizeExpression' + 'exprType' directly.
 -- Returns the inferred type as @\"type\"@ in the response.
@@ -403,6 +413,84 @@ checkMultiLine store ghcSess entry i imports code now =
   where
     declOkMsg :: Text
     declOkMsg = "declarations type-checked OK"
+
+-- | #294 declaration path: type-check a block that opens with a top-level
+-- declaration keyword (@type@ / @data@ / @newtype@ / @class@ / @instance@ /
+-- standalone @deriving@ / fixity). These are illegal inside the
+-- @let … in ()@ wrapper, so we hand the raw source to 'runDecls' — the
+-- same primitive GHCi uses for top-level prompt input. Success means the
+-- declarations compiled; a parse/type error is caught by 'try' and
+-- surfaced as @type_error@.
+checkDecls :: SP.Store -> GhcSession -> SP.ScratchEntry
+           -> Text -> [Text] -> Text -> Double -> IO ToolResponse
+checkDecls store ghcSess entry i imports code now =
+  case sanitizeDeclarations code of
+    Left cmdErr ->
+      pure (Env.mkRefused (Env.sanitizeRejection "code" cmdErr))
+    Right safe -> do
+      eRes <- try (withGhcSession ghcSess (runDeclsWithImports imports safe))
+      saveAndRespond store entry now eRes
+        (\_ -> object
+          [ "id"     .= i
+          , "status" .= SP.ScratchVerified
+          , "kind"   .= ("type_ok" :: Text)
+          , "module" .= SP.seModule entry
+          , "type"   .= declOkMsg
+          , "hint"   .=
+              ("Declarations compile. Use action=promote to splice them \
+               \into a target module, or action=show to see the \
+               \persisted result." :: Text)
+          ])
+        (\errText -> object
+          [ "id"         .= i
+          , "status"     .= SP.ScratchOpen
+          , "kind"       .= ("type_error" :: Text)
+          , "type_error" .= errText
+          , "hint"       .=
+              ("Type error in declarations. Use action=write to fix \
+               \the code under the same id, then run action=check again." :: Text)
+          ])
+  where
+    declOkMsg :: Text
+    declOkMsg = "declarations type-checked OK"
+
+-- | Run a block of top-level declarations against the live session via
+-- 'runDecls'. Per-entry imports are spliced in first (and the import
+-- context restored afterwards, exactly like 'queryExprTypeWithImports').
+--
+-- Note: 'runDecls' binds the declared names into the interactive context.
+-- That binding is transient — the next 'ghc_load' / 'loadForTarget' resets
+-- the context to @Prelude + home modules@ — and harmless (it only makes the
+-- just-checked names visible to a subsequent scratch check in the same
+-- session, which is the scratchpad's intent). Returns a human-readable
+-- confirmation string so 'saveAndRespond' has something to persist.
+runDeclsWithImports :: [Text] -> Text -> Ghc Text
+runDeclsWithImports imports code = do
+  saved <- getContext
+  unless (null imports) $ do
+    idecls <- mapM (parseImportDecl . T.unpack) imports
+    setContext (map IIDecl idecls ++ saved)
+  _names <- runDecls (T.unpack code)
+  setContext saved
+  pure "declarations type-checked OK"
+
+-- | True when the snippet opens (at column 0) with a top-level declaration
+-- keyword that cannot be wrapped in @let … in ()@. Used by 'handleCheck' to
+-- route such blocks to 'checkDecls'/'runDecls' instead. Exported for tests.
+hasTopLevelDecl :: Text -> Bool
+hasTopLevelDecl = any isDeclLine . T.lines
+  where
+    isDeclLine l =
+      let s = T.stripStart l
+       in l == s && any (`opensWith` s) declKeywords
+    -- A keyword "opens" a line when it is followed by a space (the common
+    -- shape: `data Foo`, `type Name = …`, `instance Show …`) or is the
+    -- whole line (degenerate, still a decl).
+    opensWith kw s = (kw <> " ") `T.isPrefixOf` s || s == kw
+    declKeywords :: [Text]
+    declKeywords =
+      ["type", "data", "newtype", "class", "instance", "deriving"
+      , "infixl", "infixr", "infix"]
 
 -- | Shared logic: persist the check result, return the appropriate
 -- response using the caller-provided payload builders.

@@ -22,6 +22,8 @@ module HaskellFlows.Tool.FixWarning
     -- * Issue #235 — preceding type-sig patch
   , isTypeSigLine
   , patchPrecedingTypeSig
+    -- * #294 — coordinate-presence guard (exported for unit tests)
+  , missingCoords
     -- * Test-only
   , previewResult
   ) where
@@ -30,6 +32,7 @@ import Control.Exception (SomeException, try)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Aeson
+import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -236,9 +239,39 @@ handle env rawArgs = do
   pure r
 
 runHandle :: ProjectDir -> Value -> IO ToolResponse
-runHandle pd rawArgs = case parseEither parseJSON rawArgs of
-  Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
-  Right args -> case mkModulePath pd (T.unpack (fwModulePath args)) of
+runHandle pd rawArgs
+  -- #294: the docs (MCP instructions, rules matrix, ghc_load's nextStep)
+  -- advertised a module_path-only call shape, but the tool genuinely needs
+  -- 'line' + 'code' to target a specific diagnostic. Calling it the
+  -- documented way made aeson throw the opaque "key \"line\" not found".
+  -- Intercept that here and hand back an actionable MissingArg envelope
+  -- naming exactly what to pass and where it comes from.
+  | missingCoords rawArgs = pure missingCoordsResult
+  | otherwise = case parseEither parseJSON rawArgs of
+      Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
+      Right args -> runWithArgs pd args
+
+-- | True when 'line' or 'code' is absent from the request object — the
+-- documented-but-unsupported coordinate-free call shape. Special-cased so
+-- the caller gets guidance instead of aeson's "key not found". Exported
+-- for unit tests.
+missingCoords :: Value -> Bool
+missingCoords (Object o) =
+  not (KM.member "line" o) || not (KM.member "code" o)
+missingCoords _ = True
+
+-- | Actionable replacement for the opaque missing-key parse error (#294).
+missingCoordsResult :: ToolResponse
+missingCoordsResult =
+  Env.mkFailed (Env.mkErrorEnvelope Env.MissingArg
+    "ghc_fix_warning targets ONE specific diagnostic, so it needs both \
+    \'line' and 'code' from a prior ghc_load / ghc_check_module result \
+    \(read them off the warning's file:line + GHC-NNNNN code). The \
+    \module_path-only form is not supported. Example: \
+    \{\"module_path\": \"src/Foo.hs\", \"line\": 12, \"code\": \"GHC-66111\"}.")
+
+runWithArgs :: ProjectDir -> FixWarningArgs -> IO ToolResponse
+runWithArgs pd args = case mkModulePath pd (T.unpack (fwModulePath args)) of
     Left e -> pure (pathTraversalResult (T.pack (show e)))
     Right mp -> do
       let full  = unModulePath mp

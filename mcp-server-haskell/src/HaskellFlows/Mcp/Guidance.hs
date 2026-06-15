@@ -109,7 +109,7 @@ situationTable =
                  "module=\"Foo.Bar\""
   , SituationRow "fix a GHC warning"
                  GhcFixWarning
-                 "module_path=\"src/X.hs\""
+                 "module_path=\"src/X.hs\", line=12, code=\"GHC-66111\""
   , SituationRow "coverage report"
                  GhcCoverage
                  "(no args, 8 HPC metrics)"

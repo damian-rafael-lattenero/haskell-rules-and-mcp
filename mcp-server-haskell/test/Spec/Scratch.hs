@@ -70,7 +70,25 @@ scratchTests =
   , test "#276: splitImports no imports → empty list"   testSplitImportsNone
   , test "#276: splitImports groups multi-line import"  testSplitImportsMultiLine
   , test "#276: splitImports ignores indented import kw" testSplitImportsBodyKeyword
+  , test "#294: hasTopLevelDecl flags type/data/class blocks" testScratchHasTopLevelDecl
   ]
+
+-- | #294: 'hasTopLevelDecl' must flag blocks that open with a top-level
+-- declaration keyword (type / data / newtype / class / instance) — these
+-- can't live in the @let … in ()@ wrapper, so 'handleCheck' routes them to
+-- 'runDecls'. Value bindings, lambdas, indented lines, and identifiers that
+-- merely start with a keyword (e.g. @typeName@) must NOT be flagged.
+testScratchHasTopLevelDecl :: IO Bool
+testScratchHasTopLevelDecl = pure $
+     ScratchTool.hasTopLevelDecl "type Name = String"
+  && ScratchTool.hasTopLevelDecl "data Foo = Bar | Baz"
+  && ScratchTool.hasTopLevelDecl "newtype Wrap = Wrap Int"
+  && ScratchTool.hasTopLevelDecl "class C a where\n  m :: a -> a"
+  && ScratchTool.hasTopLevelDecl "instance Show Foo where\n  show _ = \"x\""
+  && not (ScratchTool.hasTopLevelDecl "foo x = x + 1")
+  && not (ScratchTool.hasTopLevelDecl "\\x -> x")
+  && not (ScratchTool.hasTopLevelDecl "  data Indented = X")  -- indented ≠ top-level
+  && not (ScratchTool.hasTopLevelDecl "typeName = 5")          -- keyword prefix, not kw
 
 --------------------------------------------------------------------------------
 -- test function definitions (moved verbatim from Spec.hs, #271)

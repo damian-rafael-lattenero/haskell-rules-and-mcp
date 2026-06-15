@@ -88,7 +88,7 @@ displacement.
 | Adding / removing exposed-modules | `ghc_modules(action="add" \| "remove", modules=[…])` | Scaffolds source + registers in cabal in one call; manual edit splits the two and drifts. |
 | Adding a missing import | `ghc_add_import(name="X")` | Hoogle-resolves the module; hand-importing means guessing the package. |
 | Rewriting a module's export list | `ghc_apply_exports(module_path="…", exports=[…])` | Idempotent header rewrite + reserved-keyword validation. |
-| Auto-fixing a GHC warning | `ghc_fix_warning(module_path="…")` | Patches the common GHC codes (66111, 40910, missing-sigs); not a substitute for `ghc_explain_error` on type errors. |
+| Auto-fixing a GHC warning | `ghc_fix_warning(module_path="…", line=N, code="GHC-NNNNN")` | Patches the common GHC codes (66111, 40910, missing-sigs); needs the line+code from a prior ghc_load/ghc_check_module diagnostic (module_path-only is rejected with a MissingArg hint). Not a substitute for `ghc_explain_error` on type errors. |
 | Decoding a confusing GHC error | `ghc_explain_error(error_text="…")` | Structured error analysis + verifiable patch suggestion; `ghc_fix_warning` is for warnings only. |
 | Listing imports currently in scope | `ghc_imports()` | Reads the live GHC session; checking source files misses MCP-injected preloads. |
 | Listing names exported by a module | `ghc_browse(module="Foo.Bar")` | Resolves against the loaded module graph; off-graph modules → `hoogle_search`. |

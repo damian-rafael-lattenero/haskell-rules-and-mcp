@@ -474,7 +474,9 @@ checkDeterminism ghcSess args modulePath expr = do
         , "module"   .= modulePath
         , "runs"     .= laDeterminismRuns args
         ]
-  res <- DeterminismTool.runHandle ghcSess detArgs
+  -- #294: pass Nothing — Lab already persisted this property via its own
+  -- saveCases path in runLab, so the determinism probe must not re-persist.
+  res <- DeterminismTool.runHandle ghcSess Nothing detArgs
   pure $ if Env.reStatus res == Env.StatusOk
          then Just "stable"
          -- 'failed' status or any other non-ok maps to "unstable" so
