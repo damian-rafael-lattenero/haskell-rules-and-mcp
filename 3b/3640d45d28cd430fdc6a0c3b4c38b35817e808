@@ -1,0 +1,27 @@
+mcp-server-haskell/haskell-flows-mcp.cabal
+  s_d23a82140bf8e8::t_6fac1d68d3993d 336
+mcp-server-haskell/test-e2e/Scenarios/FlowEvalAfterCheck.hs
+  s_d23a82140bf8e8::t_91fab585a83912 1-133
+mcp-server-haskell/src/HaskellFlows/Ghc/ApiSession.hs
+  s_d23a82140bf8e8::t_97ceab138f3ba1 113
+  s_d23a82140bf8e8::t_c96856e8ee502b 1423-1433
+mcp-server-haskell/test-e2e/Main.hs
+  s_d23a82140bf8e8::t_cd713c5409206a 49
+  s_d23a82140bf8e8::t_eb8f3b0b1b4aef 133-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "3b3640d45d28cd430fdc6a0c3b4c38b35817e808",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
