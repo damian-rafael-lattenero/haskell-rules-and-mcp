@@ -178,11 +178,25 @@ jobs:
       #     - e2e (~23 of 70)             : ~230 s
       #   Haddock + cabal check + sdist   :  ~65 s
       #   Cell total (warm cache)         : ~360 s  (= 6.0 min)
-      - name: Run tests
+      # NOTE: tests must NOT use --keep-going. cabal returns exit 0 with
+      # --keep-going even when a test-suite exits non-zero, which masks
+      # real failures (a green check while tests are red). We run each
+      # suite explicitly, track per-suite exit codes, and fail if either
+      # failed — so both suites always run AND neither can swallow the
+      # other's red. Build (above) keeps --keep-going on purpose; only
+      # the test exit code must stay honest. Guarded by
+      # scripts/check-ci-invariants.sh. The bespoke unit harness already
+      # runs every test and reports all failures, so dropping
+      # --keep-going loses no within-suite coverage.
+      - name: Run tests (unit + e2e)
         env:
           HASKELL_FLOWS_E2E_PARALLEL: "1"
           HASKELL_FLOWS_E2E_SHARD: ${{ matrix.shard }}
-        run: cabal test all --test-show-details=direct --test-options="--color" --keep-going
+        run: |
+          rc=0
+          cabal test haskell-flows-mcp-test --test-show-details=direct --test-options="--color" || rc=1
+          cabal test haskell-flows-mcp-e2e  --test-show-details=direct --test-options="--color" || rc=1
+          exit $rc
 
       # haddock + cabal check + sdist round-trip moved to a separate
       # `package-quality` job (run once, not 6x per matrix cell). See
@@ -323,7 +337,10 @@ jobs:
       # split widths work without harness changes. Each cell's
       # union with its same-GHC siblings covers the full 70-scenario
       # suite once per GHC version.
-      - name: Run tests
+      # NO --keep-going on tests — see the ubuntu cell above for the
+      # exit-code-masking rationale. Same explicit per-suite run so a
+      # red suite can't report green. Guarded by check-ci-invariants.sh.
+      - name: Run tests (unit + e2e)
         env:
           # Within-shard parallelism OFF — see the ubuntu cell above
           # for the rationale + numbers. macOS gets the same treatment
@@ -332,7 +349,11 @@ jobs:
           # two OSes can be compared 1:1 when triaging future flakes.
           HASKELL_FLOWS_E2E_PARALLEL: "1"
           HASKELL_FLOWS_E2E_SHARD: ${{ matrix.shard }}
-        run: cabal test all --test-show-details=direct --test-options="--color" --keep-going
+        run: |
+          rc=0
+          cabal test haskell-flows-mcp-test --test-show-details=direct --test-options="--color" || rc=1
+          cabal test haskell-flows-mcp-e2e  --test-show-details=direct --test-options="--color" || rc=1
+          exit $rc
 
       # haddock / cabal check / sdist moved to the `package-quality`
       # job. macOS doesn't need a redundant copy; ubuntu's run is the

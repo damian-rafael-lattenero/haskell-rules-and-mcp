@@ -260,6 +260,12 @@ say "(use --help for full flag list)"
 step "0/N" "rules-freshness check (.claude/rules/use-haskell-flows-mcp.md)"
 timed "rules-freshness" bash scripts/check-rules-freshness.sh
 
+# CI-invariants gate: cheap grep guard that the GitHub workflow never
+# reintroduces `cabal test … --keep-going` (which masks test failures).
+# Same fast-fail-before-build-cost rationale as rules-freshness.
+step "0/N" "ci-invariants check (.github/workflows/haskell-ci.yml)"
+timed "ci-invariants" bash scripts/check-ci-invariants.sh
+
 if [ "$PARALLEL" = true ] && [ "$RUN_HLINT" = true ]; then
   step "1/N" "hlint + cabal build (parallel)"
   hlint_step_bg_start
