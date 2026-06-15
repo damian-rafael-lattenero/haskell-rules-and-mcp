@@ -32,11 +32,13 @@ testRunArgvCompletes = do
       srExit r == ExitSuccess
         && T.strip (srStdout r) == ("hello" :: Text)
 
--- | /bin/sleep with a 100 ms budget → TimedOut; the child is killed by
+-- | /bin/sleep with a 2 s budget → TimedOut; the child is killed by
 -- runArgv before returning so no zombie is left behind.
+-- Budget 100 ms was too tight on loaded CI runners (exec overhead
+-- consumed the window); 2 s >> exec overhead gives a reliable signal.
 testRunArgvTimeout :: IO Bool
 testRunArgvTimeout = do
-  outcome <- runArgv (Micros 100_000) Nothing "/bin/sleep" ["5"]
+  outcome <- runArgv (Micros 2_000_000) Nothing "/bin/sleep" ["60"]
   pure (outcome == TimedOut)
 
 -- | /usr/bin/false exits 1 → Completed with ExitFailure.

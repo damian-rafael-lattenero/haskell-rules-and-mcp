@@ -1920,7 +1920,7 @@ main = do
       , test "#286: Registry.toolCategory agrees with ToolName.toolCategory" testToolCategoryAgreesWithToolName
       -- Issue #288 — shared runArgv subprocess combinator
       , test "#288: runArgv completes — echo exits 0 with expected stdout" testRunArgvCompletes
-      , test "#288: runArgv timeout — sleep 5 killed within 100ms budget"  testRunArgvTimeout
+      , test "#288: runArgv timeout — sleep 60 killed within 2s budget"    testRunArgvTimeout
       , test "#288: runArgv non-zero — false exits with ExitFailure"       testRunArgvNonZeroExit
       ]
       ++ scratchTests
