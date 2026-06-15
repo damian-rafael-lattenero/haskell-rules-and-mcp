@@ -306,7 +306,9 @@ esac
 if [ "$MODE" = "full" ]; then
   step "5/N" "package-quality (haddock + check + sdist)"
   timed "package-quality" package_quality_step
-  step "6/N" "outdated deps (advisory — matches CI advisory job)"
+  step "6/N" "coverage ratchet (HPC vs coverage-baseline.txt)"
+  timed "coverage-gate" bash scripts/coverage-gate.sh
+  step "7/N" "outdated deps (advisory — matches CI advisory job)"
   timed "outdated(advisory)" outdated_step
 fi
 

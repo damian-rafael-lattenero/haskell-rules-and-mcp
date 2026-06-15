@@ -416,6 +416,69 @@ jobs:
           ls -la /tmp/haskell-flows-mcp-sdist
 
   # -------------------------------------------------------------------------
+  #  Coverage ratchet — runs the unit suite under HPC and fails if coverage
+  #  drops below the committed floor (mcp-server-haskell/coverage-baseline.txt).
+  #  Single cell, gated by hlint like package-quality. The ratchet only ever
+  #  moves UP (the gate prints a hint to raise the floor when coverage
+  #  improves). See scripts/coverage-gate.sh.
+  # -------------------------------------------------------------------------
+  coverage:
+    name: Coverage ratchet
+    needs: [hlint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache ghcup (GHC + cabal binaries)
+        uses: actions/cache@v5
+        with:
+          path: ~/.ghcup
+          key: ${{ runner.os }}-ghcup-9.12.2-3.12.1.0
+
+      - id: setup
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.12.2"
+          cabal-version: "3.12.1.0"
+          cabal-update: true
+
+      - name: Configure + freeze
+        run: |
+          cabal configure --enable-tests --disable-documentation
+          cabal freeze
+
+      # Coverage uses a separate -fhpc build, so it gets its own cache
+      # key suffix (-cov) to avoid thrashing the non-coverage caches the
+      # build-and-test / package-quality jobs populate.
+      - name: Restore cabal store cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ steps.setup.outputs.cabal-store }}
+            dist-newstyle
+          key: ${{ runner.os }}-ghc-9.12.2-cabal-3.12.1.0-cov-${{ hashFiles('mcp-server-haskell/cabal.project.freeze') }}
+          restore-keys: |
+            ${{ runner.os }}-ghc-9.12.2-cabal-3.12.1.0-cov-
+
+      # Script resolves the repo root from its own location and cd's into
+      # mcp-server-haskell; run it from the repo root (override the
+      # mcp-server-haskell default working-directory).
+      - name: Coverage ratchet gate
+        working-directory: .
+        run: bash scripts/coverage-gate.sh
+
+      # Keep the HTML report whatever the outcome — on a red ratchet it's
+      # exactly what you want to inspect to see which module regressed.
+      - name: Upload HPC HTML report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-html
+          path: mcp-server-haskell/dist-newstyle/build/**/t/haskell-flows-mcp-test/hpc/vanilla/html
+          retention-days: 14
+          if-no-files-found: warn
+
+  # -------------------------------------------------------------------------
   #  HLint with inline PR annotations. Fails on any 'suggestion' severity or
   #  above — matches the zero-tolerance stance locked in during Phase 2-3.
   # -------------------------------------------------------------------------
@@ -576,7 +639,7 @@ jobs:
     # across the four trigger shapes (push to master / PR / dispatch /
     # tag push).
     if: always() && !startsWith(github.ref, 'refs/tags/')
-    needs: [build-and-test, hlint, package-quality]
+    needs: [build-and-test, hlint, package-quality, coverage]
     permissions:
       contents: read
       # statuses:write so the final step below can post a commit
@@ -592,7 +655,8 @@ jobs:
         run: |
           if [[ "${{ needs.build-and-test.result }}"   != "success" ]] \
           || [[ "${{ needs.hlint.result }}"            != "success" ]] \
-          || [[ "${{ needs.package-quality.result }}"  != "success" ]]; then
+          || [[ "${{ needs.package-quality.result }}"  != "success" ]] \
+          || [[ "${{ needs.coverage.result }}"         != "success" ]]; then
             echo "One or more required Haskell CI jobs failed."
             echo "agg_state=failure" >> "$GITHUB_OUTPUT"
             exit 1
@@ -620,10 +684,11 @@ jobs:
             const build = '${{ needs.build-and-test.result }}';
             const lint  = '${{ needs.hlint.result }}';
             const pkg   = '${{ needs.package-quality.result }}';
+            const cov   = '${{ needs.coverage.result }}';
             const description =
               state === 'success'
-                ? `Haskell CI green (build-and-test=${build}, hlint=${lint}, pkg=${pkg})`
-                : `Haskell CI red (build-and-test=${build}, hlint=${lint}, pkg=${pkg})`;
+                ? `Haskell CI green (build-and-test=${build}, hlint=${lint}, pkg=${pkg}, cov=${cov})`
+                : `Haskell CI red (build-and-test=${build}, hlint=${lint}, pkg=${pkg}, cov=${cov})`;
             const { owner, repo } = context.repo;
             const sha = context.sha;
             await github.rest.repos.createCommitStatus({

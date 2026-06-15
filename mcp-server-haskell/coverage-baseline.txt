@@ -1,0 +1,17 @@
+# Coverage ratchet floor for the unit suite (haskell-flows-mcp-test).
+# Enforced by scripts/coverage-gate.sh and the `coverage` CI job.
+#
+# RULES:
+#   * The gate FAILS if measured coverage drops below either floor.
+#   * The gate only ever moves UP: when a run measures higher than a
+#     floor, it prints a hint to raise that floor in this file. Raising
+#     is a deliberate commit, never automatic.
+#
+# Seeded conservatively below the local measurement (75% expr / 63% top)
+# because CI may exercise different paths than a dev box (optional tools
+# like fourmolu / hoogle being absent flips Format/Hoogle code down their
+# "unavailable" branch). After the first green `coverage` CI run reports
+# its actual numbers, raise these to match (minus a 1-point jitter
+# cushion) so the ratchet is tight.
+expressions=68
+top_level=56
