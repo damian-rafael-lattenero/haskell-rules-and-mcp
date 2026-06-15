@@ -1,0 +1,60 @@
+mcp-server-haskell/test/Spec/FixWarningUnit.hs
+  s_d23a82140bf8e8::t_82b774893339f3 397-412
+  s_d23a82140bf8e8::t_43c1a48d5b009b 29
+mcp-server-haskell/test-e2e/Scenarios/FlowPropertyLifecycle.hs
+  s_d23a82140bf8e8::t_8869400dd1c60f 6-14
+  s_d23a82140bf8e8::t_a478e6e536dfbd 76,81-97,101,105-108,114-124,126-129
+  s_d23a82140bf8e8::t_2060f30ca2808e 139-156
+.claude/rules/use-haskell-flows-mcp.md
+  s_d23a82140bf8e8::t_15bf02b798dfac 91
+.claude/rules/haskell-flows-mcp.md
+  s_d23a82140bf8e8::t_9d3aeae289d175 33
+mcp-server-haskell/src/HaskellFlows/Tool/PropertyAudit.hs
+  s_d23a82140bf8e8::t_f1d89beab690b9 489-515
+  s_d23a82140bf8e8::t_84068f5d584292 43-44
+  s_d23a82140bf8e8::t_8e779a3e681072 224,229
+mcp-server-haskell/test/Spec/Scratch.hs
+  s_d23a82140bf8e8::t_cef04eadf0646c 73,76-91
+mcp-server-haskell/src/HaskellFlows/Tool/Determinism.hs
+  s_d23a82140bf8e8::t_46581aa53aa0e0 19,29
+  s_d23a82140bf8e8::t_d4e69fffcc1d38 76-81,83-84,92-96,98
+  s_d23a82140bf8e8::t_c519018b869d87 128
+  s_d23a82140bf8e8::t_14cd095b344bf7 118-127
+mcp-server-haskell/test/Spec.hs
+  s_d23a82140bf8e8::t_67900bdc2ead11 1325-1328
+  s_d23a82140bf8e8::t_42d198d2b7cf52 1190
+mcp-server-haskell/src/HaskellFlows/Tool/Lab.hs
+  s_d23a82140bf8e8::t_33a38ef5b85df2 477-479
+mcp-server-haskell/src/HaskellFlows/Tool/Scratch.hs
+  s_d23a82140bf8e8::t_070f2fc6a20b0c 333-343
+  s_d23a82140bf8e8::t_59cf9c70d9abd7 417-494
+  s_d23a82140bf8e8::t_f158056f1cbfa0 31
+  s_d23a82140bf8e8::t_6a8b51082c443f 49
+mcp-server-haskell/src/HaskellFlows/Tool/FixWarning.hs
+  s_d23a82140bf8e8::t_b952addc3d38fe 242-274
+  s_d23a82140bf8e8::t_2c3e3d73c34377 35
+  s_d23a82140bf8e8::t_0f270488911d1c 25-26
+mcp-server-haskell/src/HaskellFlows/Mcp/Guidance.hs
+  s_d23a82140bf8e8::t_8dbc4441b18f09 112
+mcp-server-haskell/test/Spec/PropertyAuditUnit.hs
+  s_d23a82140bf8e8::t_8f36cb975c95d1 54-55
+  s_d23a82140bf8e8::t_9710dce191cc6a 470-491
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheck.hs
+  s_d23a82140bf8e8::t_d8f47763dfcfd4 23-25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "2d9354066b9f5faff4aec6a2f92315003e6eecc2",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
