@@ -1,0 +1,32 @@
+mcp-server-haskell/src/HaskellFlows/Tool/Coverage.hs
+  s_d23a82140bf8e8::t_658d7548eb4324 208-212
+  s_d23a82140bf8e8::t_0d4ee95fe8df16 232-233
+  s_d23a82140bf8e8::t_328ab67e6b722e 33
+  s_d23a82140bf8e8::t_9dc5a44f6cea95 256-260
+mcp-server-haskell/test/Spec.hs
+  s_d23a82140bf8e8::t_85054e571c7114 1992
+  s_d23a82140bf8e8::t_e99b18414943c0 459-488
+  s_d23a82140bf8e8::t_32868a48fe4ae4 448-458,491-503
+  s_d23a82140bf8e8::t_6873a0699b86bb 262-263
+  s_d23a82140bf8e8::t_e0d1aa89cd9a6c 1985-1989
+mcp-server-haskell/src/HaskellFlows/Ghc/ApiSession.hs
+  s_d23a82140bf8e8::t_f2a5db4ea76572 415-424
+.github/workflows/flakiness-nightly.yml
+  s_d23a82140bf8e8::t_cfaefa26f03ead 1-103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "dd6e17c11562aea3f61d359054e4bfaf6bbcad62",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
