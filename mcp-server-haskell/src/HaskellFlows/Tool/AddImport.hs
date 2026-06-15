@@ -15,6 +15,7 @@ module HaskellFlows.Tool.AddImport
   , handle
   , AddImportArgs (..)
   , renderImportLine
+  , idiomaticAlias         -- B-2
   , extractModules
     -- * Pure helpers (exported for unit tests)
   , filterInternal         -- #204
@@ -81,6 +82,15 @@ descriptor =
                   [ "type"        .= ("boolean" :: Text)
                   , "description" .= ("Render the line as `import qualified Foo as F`. Default: false." :: Text)
                   ]
+              , "alias" .= object
+                  [ "type"        .= ("string" :: Text)
+                  , "description" .= ("Explicit alias for the qualified import \
+                                      \(`import qualified Foo as <alias>`). Only \
+                                      \used when qualified=true. Default: an \
+                                      \idiomatic alias derived from the module \
+                                      \(Data.Map.Strict→Map, Data.Set→Set, \
+                                      \Data.Text→T, Data.ByteString→BS)." :: Text)
+                  ]
               ]
           , "required"             .= ["name" :: Text]
           , "additionalProperties" .= False
@@ -90,6 +100,7 @@ descriptor =
 data AddImportArgs = AddImportArgs
   { aiName      :: !Text
   , aiQualified :: !Bool
+  , aiAlias     :: !(Maybe Text)   -- ^ B-2: explicit qualified-import alias
   }
   deriving stock (Show)
 
@@ -98,6 +109,7 @@ instance FromJSON AddImportArgs where
     AddImportArgs
       <$> o .:  "name"
       <*> o .:? "qualified" .!= False
+      <*> o .:? "alias"
 
 handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
@@ -140,7 +152,7 @@ runHandle lim ghcSess rawArgs = case parseEither parseJSON rawArgs of
               -- name/module match to the front of the candidate list.
               pure (prioritizeModuleMatch (aiName args)
                       (filterInternal candidates))
-        let imports = map (renderImportLine (aiQualified args))
+        let imports = map (renderImportLine (aiQualified args) (aiAlias args))
                         (uniqueTop 5 ranked)
         -- #146: inject the top candidate into the live GHCi session so
         -- subsequent ghc_eval calls can use the imported name
@@ -229,20 +241,62 @@ unavailableHoogle =
 
 -- | Build one @import@ line. Qualified form gets a single-letter
 -- alias derived from the module's last component.
-renderImportLine :: Bool -> Text -> Text
-renderImportLine qualifiedMode modName
+renderImportLine :: Bool -> Maybe Text -> Text -> Text
+renderImportLine qualifiedMode mAlias modName
   | qualifiedMode =
-      "import qualified " <> modName <> " as " <> shortAlias modName
+      "import qualified " <> modName <> " as " <> chosenAlias
   | otherwise =
       "import " <> modName
+  where
+    -- B-2: caller-supplied alias wins; otherwise the idiomatic default.
+    chosenAlias = case mAlias of
+      Just a | not (T.null (T.strip a)) -> T.strip a
+      _                                 -> idiomaticAlias modName
 
--- | Take the last dotted component's first letter. Falls back to
--- the module's first letter if somehow empty.
-shortAlias :: Text -> Text
-shortAlias m =
-  let parts = T.splitOn "." m
-      last_ = if null parts then m else last parts
-  in T.take 1 (if T.null last_ then m else last_)
+-- | B-2: an idiomatic qualified-import alias for a module.
+--
+-- The previous heuristic (first letter of the last component) collided
+-- badly — @Data.Map.Strict@ and @Data.Set@ both became @S@. This uses
+-- the conventional community aliases for the common containers / text /
+-- bytestring modules, and for everything else falls back to the last
+-- SIGNIFICANT component (skipping @Strict@ / @Lazy@ / @Internal@
+-- suffixes), e.g. @Data.Map.Strict → Map@, @Data.Foo.Bar → Bar@.
+idiomaticAlias :: Text -> Text
+idiomaticAlias m =
+  case lookup m wellKnown of
+    Just a  -> a
+    Nothing -> fallback
+  where
+    wellKnown =
+      [ ("Data.Map",          "Map")
+      , ("Data.Map.Strict",   "Map")
+      , ("Data.Map.Lazy",     "Map")
+      , ("Data.IntMap",       "IntMap")
+      , ("Data.IntMap.Strict","IntMap")
+      , ("Data.Set",          "Set")
+      , ("Data.IntSet",       "IntSet")
+      , ("Data.HashMap.Strict","HashMap")
+      , ("Data.HashMap.Lazy", "HashMap")
+      , ("Data.HashSet",      "HashSet")
+      , ("Data.Sequence",     "Seq")
+      , ("Data.Text",         "T")
+      , ("Data.Text.Lazy",    "TL")
+      , ("Data.Text.IO",      "T")
+      , ("Data.ByteString",   "BS")
+      , ("Data.ByteString.Lazy","BL")
+      , ("Data.ByteString.Char8","BC")
+      , ("Data.Vector",       "V")
+      , ("Data.Aeson",        "Aeson")
+      ]
+    -- last component that is not a Strict/Lazy/Internal qualifier
+    parts        = filter (not . T.null) (T.splitOn "." m)
+    insignificant = ["Strict", "Lazy", "Internal"]
+    significant  = filter (`notElem` insignificant) parts
+    fallback     = case reverse significant of
+      (p : _) -> p
+      []      -> case reverse parts of
+                   (p : _) -> p
+                   []      -> m
 
 -- | Pull unique module names from a Hoogle 'ToolResponse'.
 --

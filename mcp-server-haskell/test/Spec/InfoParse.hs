@@ -5,6 +5,7 @@
 module Spec.InfoParse
   ( testCodeToolsRegistered
   , testAddImportQualified
+  , testIdiomaticAlias
   , testInfoCtorBlockEmpty
   , testInfoCtorBlockMaybe
   , testInfoSuccessIncludesCtors
@@ -60,10 +61,31 @@ testCodeToolsRegistered = pure $
 
 testAddImportQualified :: IO Bool
 testAddImportQualified = pure $
-     AddImport.renderImportLine False "Data.Map"
+     AddImport.renderImportLine False Nothing "Data.Map"
        == "import Data.Map"
-  && AddImport.renderImportLine True  "Data.Map"
+  -- B-2: idiomatic default alias for Data.Map is "Map", not "M".
+  && AddImport.renderImportLine True  Nothing "Data.Map"
+       == "import qualified Data.Map as Map"
+  -- B-2: an explicit alias overrides the idiomatic default.
+  && AddImport.renderImportLine True (Just "M") "Data.Map"
        == "import qualified Data.Map as M"
+
+-- | B-2: idiomatic aliases must not collide the way the old first-letter
+-- heuristic did (Data.Map.Strict and Data.Set both → "S"). Well-known
+-- modules get their community alias; unknown modules fall back to the
+-- last significant component (skipping Strict/Lazy/Internal).
+testIdiomaticAlias :: IO Bool
+testIdiomaticAlias = pure $
+     AddImport.idiomaticAlias "Data.Map.Strict" == "Map"
+  && AddImport.idiomaticAlias "Data.Set"        == "Set"
+  && AddImport.idiomaticAlias "Data.Text"       == "T"
+  && AddImport.idiomaticAlias "Data.ByteString" == "BS"
+  -- the old collision is gone: Strict-map and Set differ now
+  && AddImport.idiomaticAlias "Data.Map.Strict"
+       /= AddImport.idiomaticAlias "Data.Set"
+  -- unknown module → last significant component (Strict skipped)
+  && AddImport.idiomaticAlias "Acme.Widget.Strict" == "Widget"
+  && AddImport.idiomaticAlias "Foo.Bar"            == "Bar"
 
 -- | Issue #54: empty constructor list → empty array, not a
 -- one-element block of @null@s.

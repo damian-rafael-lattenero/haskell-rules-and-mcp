@@ -1112,6 +1112,7 @@ runAllTests = do
       , test "warnings: bucketize orders by count" testWarningBucketize
       , test "code tools: all 5 registered"        testCodeToolsRegistered
       , test "add_import: qualified renderImportLine" testAddImportQualified
+      , test "B-2: idiomaticAlias (no S/S collision, override)" testIdiomaticAlias
       , test "add_import: missing hoogle returns success=false (#53)" testAddImportMissingHoogle
       , test "#146: addImportToSession rejects invalid import gracefully" testAddImportToSessionInvalid
       , test "#146: addImportToSession accepts valid base import"       testAddImportToSessionValid
