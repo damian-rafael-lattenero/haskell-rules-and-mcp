@@ -1,0 +1,43 @@
+mcp-server-haskell/test/Spec.hs
+  s_d23a82140bf8e8::t_bf3ec9d64141ca 546-548
+mcp-server-haskell/haskell-flows-mcp.cabal
+  s_d23a82140bf8e8::t_0478507d0b82b2 338
+mcp-server-haskell/src/HaskellFlows/Mcp/Envelope.hs
+  s_d23a82140bf8e8::t_0dae4c2811566e 259
+  s_d23a82140bf8e8::t_855f4a9a237c67 201-206
+mcp-server-haskell/test/Spec/ParseQc.hs
+  s_d23a82140bf8e8::t_8538d79f90aa51 13-15
+  s_d23a82140bf8e8::t_7cf079ec17562b 145
+  s_d23a82140bf8e8::t_738aae8e0d742b 130,133
+  s_d23a82140bf8e8::t_f68b0085af49cf 109-115,118-129,131-132,134-144,146-154
+  s_d23a82140bf8e8::t_bc8c7de9cc1473 116-117
+mcp-server-haskell/test/Spec/Envelope.hs
+  s_d23a82140bf8e8::t_d47f51e04d42a9 101,106
+mcp-server-haskell/test-e2e/Scenarios/FlowMissingArbitrary.hs
+  s_d23a82140bf8e8::t_ee9babc3a8f727 1-94
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheck.hs
+  s_d23a82140bf8e8::t_4a4c60b12b2347 910-938
+  s_d23a82140bf8e8::t_a94bdb99c4dc27 35,37
+  s_d23a82140bf8e8::t_79ce94108ff1da 797,803-810
+  s_d23a82140bf8e8::t_9df3a22f202ac3 864-869,873-879
+  s_d23a82140bf8e8::t_f0714d4e08d1a8 832-841
+mcp-server-haskell/test-e2e/Main.hs
+  s_d23a82140bf8e8::t_46738d1b106abe 61
+  s_d23a82140bf8e8::t_0f114582a37d8a 156-157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "d99c308b2ed27d4a4530a52519e2e230c4c62af0",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
