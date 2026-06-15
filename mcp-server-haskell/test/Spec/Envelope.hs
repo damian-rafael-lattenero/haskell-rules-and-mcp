@@ -98,11 +98,12 @@ testEnvelopeErrorKindRoundTrip =
         , (Env.BinaryUnavailable,      "binary_unavailable")
         , (Env.HandWrittenFileGuard,   "hand_written_file_guard")
         , (Env.Regression,             "regression")
+        , (Env.MissingInstance,        "missing_instance")
         ]
       pinnedOk = all (\(k, t) -> Env.errorKindToText k == t) pinned
       reverseTotal = all (\k -> Env.textToErrorKind (Env.errorKindToText k) == Just k)
                          allKinds
-      countOk = length allKinds == 28
+      countOk = length allKinds == 29
   in pure (pinnedOk && reverseTotal && countOk)
 
 -- ---------------------------------------------------------------------------

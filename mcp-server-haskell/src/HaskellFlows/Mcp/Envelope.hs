@@ -198,6 +198,12 @@ data ErrorKind
     -- Compile-time failure (status = failed) ---------------------------
   | CompileError
   | TypeError
+    -- B-6: a property / expression failed to resolve an Arbitrary (or
+    -- other) instance — the PROJECT compiles fine, but the QuickCheck
+    -- harness can't generate inputs for a type. Distinct from
+    -- 'CompileError' (project broken) so the agent is steered to
+    -- 'ghc_arbitrary' instead of 'ghc_check_project'.
+  | MissingInstance
     -- Gate / quality failure (compile ok, but a gate refused it) ------
     -- Use this instead of 'Validation' when the caller's INPUT was fine
     -- but a quality gate (warnings-block, properties, coverage) failed.
@@ -250,6 +256,7 @@ errorKindToText = \case
   HandWrittenFileGuard    -> "hand_written_file_guard"
   CompileError            -> "compile_error"
   TypeError               -> "type_error"
+  MissingInstance         -> "missing_instance"
   GateFailure             -> "gate_failure"
   Regression              -> "regression"
   NotInScope              -> "not_in_scope"

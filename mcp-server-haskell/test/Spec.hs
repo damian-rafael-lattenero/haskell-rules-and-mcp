@@ -543,6 +543,9 @@ runAllTests = do
       , test "#211: QcGaveUp renderResult kind=validation" testQcGaveUpValidationKind
       , test "parseQuickCheckOutput exception"     testQcException
       , test "parseQuickCheckOutput unparsed"      testQcUnparsed
+      , test "B-6: missing Arbitrary classifies as missing_instance" testClassifyMissingArbitrary
+      , test "B-6: extractArbitraryType pulls the offending type"    testExtractArbitraryType
+      , test "B-6: missing Arbitrary nextStep → ghc_arbitrary"       testQcMissingArbitraryNextStep
       , test "parseTypedHoles extracts one hole"   testHoleOne
       , test "parseTypedHoles ignores non-holes"   testHoleIgnored
       , test "parseConstructors inline form"       testCtorsInline

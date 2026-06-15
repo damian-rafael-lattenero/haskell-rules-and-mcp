@@ -58,6 +58,7 @@ import qualified Scenarios.FlowNonUTF8           as FlowNU
 import qualified Scenarios.FlowOversizedInput   as FlowOI
 import qualified Scenarios.FlowSandboxEscape     as FlowSE
 import qualified Scenarios.FlowTimeoutEnforcement as FlowTE
+import qualified Scenarios.FlowMissingArbitrary  as FlowMA
 import qualified Scenarios.FlowModuleNameGuard   as FlowMNG
 import qualified Scenarios.FlowMutation          as FlowMut
 import qualified Scenarios.FlowPropertyLifecycle as FlowPL
@@ -152,6 +153,8 @@ scenarios =
     , False, FlowVC.runFlow )
   , ( "Flow: Property lifecycle (store inspection)"
     , False, FlowPL.runFlow )
+  , ( "Flow: Missing Arbitrary (B-6 honest missing_instance diagnosis)"
+    , False, FlowMA.runFlow )
   , ( "Flow: Workflow help/next (phase + state hints)"
     , False, FlowWH.runFlow )
   , ( "Flow: Quality gates (lint / format / check_module / check_project)"

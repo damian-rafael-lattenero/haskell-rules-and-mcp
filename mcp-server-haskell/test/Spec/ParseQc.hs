@@ -10,6 +10,9 @@ module Spec.ParseQc
   , testQcGaveUpValidationKind
   , testQcException
   , testQcUnparsed
+  , testClassifyMissingArbitrary
+  , testExtractArbitraryType
+  , testQcMissingArbitraryNextStep
   , testHoleOne
   , testHoleIgnored
   , testCtorsInline
@@ -102,6 +105,52 @@ testQcUnparsed =
   in pure $ case parseQuickCheckOutput "prop" raw of
        QcUnparsed {} -> True
        _             -> False
+
+-- | B-6: a missing-Arbitrary stderr must classify as 'MissingInstance',
+-- NOT 'CompileError' (the project compiles; QuickCheck just can't
+-- generate inputs). GHC uses typographic quotes around the constraint.
+testClassifyMissingArbitrary :: IO Bool
+testClassifyMissingArbitrary =
+  let stderr =
+        "<interactive>:6:11: error: [GHC-39999]\n\
+        \    \x2022 No instance for \x2018\&Arbitrary Type\x2019\n\
+        \        arising from a use of \x2018\&quickCheckWithResult\x2019"
+  in pure $ QcTool.classifyStderrKind (Just stderr) == Env.MissingInstance
+         && QcTool.isMissingArbitraryStderr stderr
+         -- a genuine compile error must still classify as CompileError
+         && QcTool.classifyStderrKind (Just "src/Foo.hs:3:1: error: parse error")
+              == Env.CompileError
+
+-- | B-6: extract the offending type from the diagnostic so 'ghc_arbitrary'
+-- can be steered with 'type_name' pre-filled. Handles the bare type and a
+-- single layer of wrapping parens.
+testExtractArbitraryType :: IO Bool
+testExtractArbitraryType =
+  pure $ QcTool.extractArbitraryType
+           "No instance for \x2018\&Arbitrary Type\x2019 arising"
+           == Just "Type"
+      && QcTool.extractArbitraryType
+           "No instance for \x2018\&Arbitrary (Expr Int)\x2019 arising"
+           == Just "Expr Int"
+      && QcTool.extractArbitraryType "unrelated error" == Nothing
+
+-- | B-6: the rendered envelope for a missing-Arbitrary QcUnparsed must
+-- carry error_kind=missing_instance AND a nextStep pointing at
+-- 'ghc_arbitrary' (not the misleading 'ghc_check_project' the generic
+-- compile-error path emits).
+testQcMissingArbitraryNextStep :: IO Bool
+testQcMissingArbitraryNextStep =
+  let stderr =
+        "<interactive>:6:11: error: [GHC-39999]\n\
+        \    \x2022 No instance for \x2018\&Arbitrary Type\x2019 arising from a use of \x2018\&quickCheckWithResult\x2019"
+      result = QcTool.renderResult (QcUnparsed "\\(x :: Type) -> x == x" "") (Just stderr)
+      kindOk = case Env.reError result of
+                 Just err -> Env.eeKind err == Env.MissingInstance
+                 Nothing  -> False
+      nextOk = case Env.reNextStep result of
+                 Just v  -> "ghc_arbitrary" `T.isInfixOf` T.pack (show v)
+                 Nothing -> False
+  in pure (kindOk && nextOk)
 
 -- | A canonical GHC-88464 block. The whitespace before the indented
 -- continuation lines is significant — GHC uses 4 spaces + bullet.

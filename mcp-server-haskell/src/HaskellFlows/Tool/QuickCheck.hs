@@ -32,7 +32,9 @@ module HaskellFlows.Tool.QuickCheck
   , summariseStderr
   , classifyStderrKind
   , isCompileErrorStderr
+  , isMissingArbitraryStderr
   , extractNotInScopeSymbol
+  , extractArbitraryType
     -- * Issue #211 — result renderer exposed for envelope-shape tests
   , renderResult
     -- * #283 — the QuickCheck case count a single check runs at
@@ -792,11 +794,20 @@ renderResult qr mHint = case qr of
     -- the agent gets a structured, actionable error rather than an opaque
     -- subprocess_error.
     let kind    = classifyStderrKind mHint
+        mArbTy  = mHint >>= extractArbitraryType
         msg | kind == Env.NotInScope =
                   case mHint >>= extractNotInScopeSymbol of
                     Just sym -> "Variable not in scope: " <> sym
                                   <> " — add an import or qualify the name"
                     Nothing  -> "Variable not in scope (see hint for details)"
+            | kind == Env.MissingInstance =
+                  -- B-6: the project compiles; QuickCheck just can't generate
+                  -- inputs because a type lacks an Arbitrary instance.
+                  "Missing Arbitrary instance"
+                    <> maybe "" (\t -> " for '" <> t <> "'") mArbTy
+                    <> " — generate one with ghc_arbitrary, paste it into the \
+                       \module, reload, then re-run the property. The project \
+                       \itself compiles fine."
             | kind == Env.CompileError =
                   -- #186: project has compile errors; cabal repl couldn't load.
                   "Project has compile errors — fix them with ghc_check_project \
@@ -817,6 +828,16 @@ renderResult qr mHint = case qr of
                      , "why"  .= ("Project has compile errors preventing cabal \
                                   \repl from loading — fix them before running \
                                   \properties." :: Text)
+                     ])
+                 -- B-6: steer to ghc_arbitrary (with the type pre-filled when
+                 -- we could parse it) rather than the misleading check_project.
+                 | kind == Env.MissingInstance = Just (object
+                     [ "tool" .= ("ghc_arbitrary" :: Text)
+                     , "why"  .= ("A type in this property has no Arbitrary \
+                                  \instance. Generate one, paste it in, reload, \
+                                  \then re-run." :: Text)
+                     , "example" .= object
+                         [ "type_name" .= maybe ("<Type>" :: Text) id mArbTy ]
                      ])
                  | otherwise = Nothing
         response = (Env.mkFailed envErr)
@@ -840,8 +861,22 @@ classifyStderrKind :: Maybe Text -> Env.ErrorKind
 classifyStderrKind Nothing  = Env.SubprocessError
 classifyStderrKind (Just h)
   | "Variable not in scope" `T.isInfixOf` h = Env.NotInScope
+  -- B-6: a missing Arbitrary instance is NOT a project compile error —
+  -- the project builds fine; QuickCheck just can't generate inputs for a
+  -- type. Classify it distinctly (before the generic compile-error sweep,
+  -- which would otherwise match the "error: [GHC-39999]" the No-instance
+  -- diagnostic carries) so the agent is steered to ghc_arbitrary.
+  | isMissingArbitraryStderr h              = Env.MissingInstance
   | isCompileErrorStderr h                  = Env.CompileError
   | otherwise                               = Env.SubprocessError
+
+-- | B-6: True when the cabal repl stderr is a missing-@Arbitrary@-instance
+-- diagnostic. GHC renders it as
+-- @No instance for 'Arbitrary T' arising from a use of 'quickCheckWithResult'@.
+isMissingArbitraryStderr :: Text -> Bool
+isMissingArbitraryStderr h =
+     "No instance for" `T.isInfixOf` h
+  && "Arbitrary"      `T.isInfixOf` h
 
 -- | #186: True when cabal repl stderr contains GHC compile-error patterns,
 -- indicating the project has errors that prevent 'cabal repl' from loading
@@ -871,6 +906,35 @@ extractNotInScopeSymbol t =
          let sym  = T.strip (T.drop (T.length marker) rest)
              name = T.takeWhile (\c -> c /= ' ' && c /= ':' && c /= '\n') sym
          in if T.null name then Nothing else Just name
+
+-- | B-6: extract the type whose 'Arbitrary' instance is missing from a
+-- GHC diagnostic. GHC quotes the constraint with typographic quotes:
+--
+-- > extractArbitraryType "… No instance for ‘Arbitrary Type’ arising …"
+-- Just "Type"
+-- > extractArbitraryType "… No instance for ‘Arbitrary (Foo Bar)’ …"
+-- Just "Foo Bar"
+-- > extractArbitraryType "some unrelated error"
+-- Nothing
+--
+-- Returns 'Nothing' when the pattern is absent; the caller still emits a
+-- generic missing-instance hint with @\<Type\>@ as the placeholder.
+extractArbitraryType :: Text -> Maybe Text
+extractArbitraryType t =
+  let marker = "Arbitrary "
+  in case T.breakOn marker t of
+       (_, rest) | T.null rest -> Nothing
+       (_, rest) ->
+         let afterMarker = T.drop (T.length marker) rest
+             -- stop at the closing quote (typographic ’ or ascii ') or newline
+             raw  = T.takeWhile (\c -> c /= '\x2019' && c /= '\'' && c /= '\n') afterMarker
+             -- drop a single layer of wrapping parens: "(Foo Bar)" -> "Foo Bar"
+             name = T.strip raw
+             unwrapped
+               | "(" `T.isPrefixOf` name && ")" `T.isSuffixOf` name
+                 = T.strip (T.dropEnd 1 (T.drop 1 name))
+               | otherwise = name
+         in if T.null unwrapped then Nothing else Just unwrapped
 
 -- | Read the project's @.cabal@ file and return every module name
 -- listed under the library's @exposed-modules@. Used to widen the
