@@ -39,30 +39,24 @@ module Spec.TaxonomyUnit
   ) where
 
 import qualified Data.Aeson as A
-import qualified Data.Aeson.Key as AKey
-import qualified Data.Aeson.KeyMap as AKM
 import Data.Char (isDigit)
 import qualified Data.Text as T
-import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
-import System.FilePath ((</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNameTexts)
+import HaskellFlows.Mcp.Server (allToolNameTexts)
 import HaskellFlows.Mcp.ToolName
   ( allToolNames, toolCategory, toolVersion
   , ToolCategory (..), ToolName (..), parseToolName, toolCategoryText
   )
 import Control.Monad (unless, when)
-import HaskellFlows.Mcp.Protocol (ToolDescriptor (..), ToolContent (..), ToolResult (..))
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Tool.Modules as Modules
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
-import qualified HaskellFlows.Suggest.Rules as SuggestRules
 
 import Spec.ToolEnvFixture (pdEnv)
 
 import Data.Aeson (object, (.=))
-import Data.Maybe (isJust, isNothing)
+import Data.Maybe (isNothing)
 import qualified Data.Text.IO as TIO
 import HaskellFlows.Data.PropertyStore (StoredProperty (..))
 import qualified HaskellFlows.Tool.AddImport as AddImport
@@ -218,10 +212,9 @@ testModulesRejectsBadAction =
 -- Issue #105 · extractModules envelope peeling
 --------------------------------------------------------------------------------
 
--- | Build a 'ToolResult' that mirrors what 'Hoogle.handle' actually
--- produces: the hits list is nested inside the \"result\" sub-object, not
--- at the top level.  The bug was that 'extractModules' looked for
--- \"results\" (wrong key) at the top level (wrong nesting depth).
+-- | Build a 'ToolResponse' that mirrors what 'Hoogle.handle' actually
+-- produces: the hits list is in the inner result payload under 'hits'.
+-- The bug was that 'extractModules' looked for \"results\" (wrong key).
 testExtractModulesEnvelope :: IO Bool
 testExtractModulesEnvelope = do
   let hitsPayload = A.object
@@ -231,7 +224,7 @@ testExtractModulesEnvelope = do
             ]
         , "count" .= (2 :: Int)
         ]
-      tr = Env.toolResponseToResult (Env.mkOk hitsPayload)
+      tr   = Env.mkOk hitsPayload
       mods = AddImport.extractModules tr
   pure (mods == ["Data.Maybe", "Data.List"])
 
@@ -240,8 +233,8 @@ testExtractModulesEnvelope = do
 -- Regression pin: the wrong key must remain unrecognised.
 testExtractModulesTopLevel :: IO Bool
 testExtractModulesTopLevel = do
-  let rawJson = "{\"status\":\"ok\",\"result\":{\"results\":[{\"module\":\"Data.Maybe\"}]}}"
-      tr = ToolResult [TextContent (T.pack rawJson)] False
+  let tr   = Env.mkOk (A.object
+                [ "results" .= [A.object ["module" .= ("Data.Maybe" :: T.Text)]] ])
       mods = AddImport.extractModules tr
   pure (null mods)
 
