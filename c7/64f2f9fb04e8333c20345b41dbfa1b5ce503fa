@@ -1,0 +1,21 @@
+mcp-server-haskell/test/Spec/ProcessUnit.hs
+  s_d23a82140bf8e8::t_d5a29e2b23db04 35,37-38,41
+mcp-server-haskell/test/Spec.hs
+  s_d23a82140bf8e8::t_a828360e25e5d2 1923
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "c764f2f9fb04e8333c20345b41dbfa1b5ce503fa",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "dlattenero_meli <damian.lattenero@mercadolibre.com>"
+    }
+  }
+}
