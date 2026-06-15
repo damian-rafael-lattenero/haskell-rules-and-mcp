@@ -15,18 +15,13 @@ import qualified Data.Aeson.KeyMap as AKM
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Tool.ValidateCabal as ValidateCabalTool
 import HaskellFlows.Config (defaultLimits)
-
-import Spec.Helpers (decodeToolResult, runToolEnvelope)
 
 runValidateCabalIn :: Text -> IO (Either String Env.ToolResponse)
 runValidateCabalIn cabalBody = do
@@ -39,10 +34,7 @@ runValidateCabalIn cabalBody = do
     Left _   -> pure (Left "could not build ProjectDir for tmp")
     Right pd -> do
       tr <- ValidateCabalTool.handle defaultLimits pd (A.object [])
-      case trContent tr of
-        [TextContent body] ->
-          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
-        _ -> pure (Left "expected exactly one TextContent")
+      pure (Right tr)
   removePathForcibly dir
   pure result
 
@@ -156,10 +148,7 @@ testValidateCabalErrors = do
     Left _   -> pure (Left "could not build ProjectDir for tmp")
     Right pd -> do
       tr <- ValidateCabalTool.handle defaultLimits pd (A.object [])
-      case trContent tr of
-        [TextContent body] ->
-          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
-        _ -> pure (Left "expected exactly one TextContent")
+      pure (Right tr)
   removePathForcibly dir
   pure $ case result of
     Right env

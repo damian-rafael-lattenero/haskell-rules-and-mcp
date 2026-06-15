@@ -28,6 +28,8 @@ import qualified Data.Aeson as A
 import Data.Aeson (object, (.=))
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Maybe (isJust, isNothing)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
@@ -41,7 +43,7 @@ import HaskellFlows.Data.PropertyStore
   , openStore
   , save
   )
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Types (ProjectDir, mkProjectDir)
 import qualified HaskellFlows.Types
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
@@ -242,11 +244,10 @@ testExportHandleRefusesHandWritten =
     TIO.writeFile specPath "-- Hand-written test suite\nmodule Main where\n"
     let args = object [ "action" .= ("export" :: T.Text) ]
     result <- QcExport.handle store pd args
-    case trContent result of
-      [TextContent body] ->
-        pure (  "hand_written_file_guard" `T.isInfixOf` body
-             || "Refusing to overwrite"   `T.isInfixOf` body)
-      _ -> pure False
+    -- Encode the whole ToolResponse as JSON and search the text for the guard strings.
+    let body = TL.toStrict (TLE.decodeUtf8 (A.encode result))
+    pure (  "hand_written_file_guard" `T.isInfixOf` body
+         || "Refusing to overwrite"   `T.isInfixOf` body)
 
 --------------------------------------------------------------------------------
 -- BUG-04 — PropertyStore cold-start resilience

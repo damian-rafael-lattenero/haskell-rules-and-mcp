@@ -21,10 +21,8 @@ import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Tool.Arbitrary
   ( Constructor (..)
   , compileFailedErr
@@ -129,20 +127,12 @@ testArbitraryRecursionTokens = pure $
 testArbitraryCompileFailShape :: IO Bool
 testArbitraryCompileFailShape =
   let result = compileFailedErr 3
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             AKM.lookup "status" top == Just (A.String "failed")
-             && case AKM.lookup "error" top of
-                  Just (A.Object err) ->
-                    AKM.lookup "kind" err == Just (A.String "validation")
-                    && case AKM.lookup "message" err of
-                         Just (A.String msg) -> "3 compile error(s)" `T.isInfixOf` msg
-                         _                   -> False
-                  _ -> False
-           _ -> False
-       _ -> False
+  in pure $ Env.reStatus result == Env.StatusFailed
+         && case Env.reError result of
+              Just err ->
+                Env.eeKind err == Env.Validation
+                && "3 compile error(s)" `T.isInfixOf` Env.eeMessage err
+              Nothing -> False
 
 -- | Issue #218: when getInfo returns Nothing (GHC wired-in primitives
 -- like Bool after -hide-all-packages stanza flags), 'handle' must NOT

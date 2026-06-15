@@ -29,8 +29,6 @@ import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.Vector as Vector
 import Data.Text (Text)
 import Data.Word (Word64)
@@ -39,7 +37,6 @@ import System.FilePath ((</>))
 
 import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Types
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
@@ -48,7 +45,7 @@ import qualified HaskellFlows.Tool.Perf as PerfTool
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
 import qualified HaskellFlows.Tool.Workflow as WorkflowTool
 
-import Spec.Helpers (runToolEnvelope, withTempProject)
+import Spec.Helpers (withTempProject)
 
 -- | Local alias matching the one in Spec.hs (line 4249).
 unProjectDirRaw :: HaskellFlows.Types.ProjectDir -> FilePath
@@ -104,18 +101,12 @@ testRefactorCompileFailShape :: IO Bool
 testRefactorCompileFailShape =
   -- #205 Bug 2: pass dryRun=False explicitly (was hardcoded False before fix)
   let result = RefactorTool.compileFailResult False [] "error text" " (file restored)"
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             AKM.lookup "status" top == Just (A.String "failed")
-             && case AKM.lookup "result" top of
-                  Just (A.Object r) ->
-                    AKM.lookup "dry_run" r == Just (A.Bool False)
-                    && AKM.lookup "compile" r == Just (A.String "failed")
-                  _ -> False
-           _ -> False
-       _ -> False
+  in pure $ Env.reStatus result == Env.StatusFailed
+         && case Env.reResult result of
+              Just (A.Object r) ->
+                AKM.lookup (AKey.fromText "dry_run") r == Just (A.Bool False)
+                && AKM.lookup (AKey.fromText "compile") r == Just (A.String "failed")
+              _ -> False
 
 -- | F-31: 'renderResult' when every sample errored must return
 -- status='failed' with a remediation hint, not a meaningless
@@ -133,19 +124,13 @@ testPerfAllSamplesErrored =
       errs   = ["err1", "err2", "err3"]
       stats  = PerfTool.aggregate []
       result = PerfTool.renderResult args [] stats errs Nothing 0
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             AKM.lookup "status" top == Just (A.String "failed")
-             && case AKM.lookup "error" top of
-                  Just (A.Object err) ->
-                    case AKM.lookup "remediation" err of
-                      Just (A.String r) -> T.isInfixOf "ghc_load" r
-                      _                 -> False
-                  _ -> False
-           _ -> False
-       _ -> False
+  in pure $ Env.reStatus result == Env.StatusFailed
+         && case Env.reError result of
+              Just err ->
+                case Env.eeRemediation err of
+                  Just r -> T.isInfixOf "ghc_load" r
+                  _      -> False
+              _ -> False
 
 -- | #162: 'renderResult' must expose a 'warmup_ns' field in the
 -- top-level payload so the agent can inspect the discarded
@@ -164,15 +149,9 @@ testPerfWarmupNsInPayload =
       stats   = PerfTool.aggregate nss
       warmup  = 5_000_000_000 :: Word64  -- 5 s — simulate compile cost
       result  = PerfTool.renderResult args nss stats [] Nothing warmup
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "result" top of
-               Just (A.Object r) ->
-                 AKM.lookup "warmup_ns" r == Just (A.toJSON warmup)
-               _ -> False
-           _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object r) ->
+         AKM.lookup (AKey.fromText "warmup_ns") r == Just (A.toJSON warmup)
        _ -> False
 
 -- | #162: the warm samples passed to 'aggregate' must NOT include
@@ -270,14 +249,8 @@ testPerfCustomThreshold = do
       let nss   = [1200, 1200, 1200, 1200, 1200 :: Word64]
           stats = PerfTool.aggregate nss
           result = PerfTool.renderResult args nss stats [] baseline 0
-      in pure $ case trContent result of
-           [TextContent body_] ->
-             case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-               Just (A.Object top) ->
-                 -- #190: regression must be status=failed, not status=refused
-                 AKM.lookup "status" top == Just (A.String "failed")
-               _ -> False
-           _ -> False
+      -- #190: regression must be status=failed, not status=refused
+      in pure (Env.reStatus result == Env.StatusFailed)
     _ -> pure False
 
 -- | #190: a measured regression must carry status=failed + kind=regression,
@@ -292,17 +265,8 @@ testPerfRegressionStatusFailed = do
       let nss    = [1500, 1500, 1500, 1500, 1500 :: Word64]   -- 50% slower
           stats  = PerfTool.aggregate nss
           result = PerfTool.renderResult args nss stats [] baseline 0
-      in pure $ case trContent result of
-           [TextContent body_] ->
-             case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-               Just (A.Object top) ->
-                 AKM.lookup "status" top == Just (A.String "failed")
-                 && case AKM.lookup "error" top of
-                      Just (A.Object err) ->
-                        AKM.lookup "kind" err == Just (A.String "regression")
-                      _ -> False
-               _ -> False
-           _ -> False
+      in pure $ Env.reStatus result == Env.StatusFailed
+              && fmap Env.eeKind (Env.reError result) == Just Env.Regression
     _ -> pure False
 
 -- | #174: 'threshold_pct' is clamped to [1, 200].
@@ -349,24 +313,18 @@ testPerfRegressionPctPrecision =
       stats = PerfTool.aggregate nss
       baseline = Just (PerfTool.BaselineEntry { PerfTool.beMeanNs = 1000.0 })
       result = PerfTool.renderResult args nss stats [] baseline 0
-      encoded = case trContent result of
-        [TextContent body_] -> body_
-        _                   -> ""
-  in case A.decode (TLE.encodeUtf8 (TL.fromStrict encoded)) of
-       Just (A.Object top) ->
-         case AKM.lookup "result" top of
-           Just (A.Object res) ->
-             case AKM.lookup "baseline" res of
-               Just (A.Object bl) ->
-                 case AKM.lookup "regression_pct" bl of
-                   Just (A.Number n) ->
-                     -- render as text and ensure at most 1 digit after the dot
-                     let rendered = T.pack (show (realToFrac n :: Double))
-                         decimals = case T.breakOn "." rendered of
-                           (_, "") -> 0
-                           (_, d)  -> T.length (T.takeWhile (/= 'e') (T.drop 1 d))
-                     in pure (decimals <= 1)
-                   _ -> pure False
+  in case Env.reResult result of
+       Just (A.Object res) ->
+         case AKM.lookup (AKey.fromText "baseline") res of
+           Just (A.Object bl) ->
+             case AKM.lookup (AKey.fromText "regression_pct") bl of
+               Just (A.Number n) ->
+                 -- render as text and ensure at most 1 digit after the dot
+                 let rendered = T.pack (show (realToFrac n :: Double))
+                     decimals = case T.breakOn "." rendered of
+                       (_, "") -> 0
+                       (_, d)  -> T.length (T.takeWhile (/= 'e') (T.drop 1 d))
+                 in pure (decimals <= 1)
                _ -> pure False
            _ -> pure False
        _ -> pure False
@@ -391,17 +349,8 @@ testPerfRuntimeExceptionMessage =
               ] :: [Text]
       stats   = PerfTool.aggregate ([] :: [Word64])
       result  = PerfTool.renderResult args [] stats errs Nothing 0
-      encoded = case trContent result of
-        [TextContent body_] -> body_
-        _                   -> ""
-  in case A.decode (TLE.encodeUtf8 (TL.fromStrict encoded)) of
-       Just (A.Object top) ->
-         case AKM.lookup "error" top of
-           Just (A.Object err) ->
-             case AKM.lookup "message" err of
-               Just (A.String msg) ->
-                    pure ( "threw a runtime exception" `T.isInfixOf` msg
-                        && not ("session may have lost" `T.isInfixOf` msg) )
-               _ -> pure False
-           _ -> pure False
+  in case Env.reError result of
+       Just err ->
+         pure ( "threw a runtime exception" `T.isInfixOf` Env.eeMessage err
+             && not ("session may have lost" `T.isInfixOf` Env.eeMessage err) )
        _ -> pure False

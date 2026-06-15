@@ -25,10 +25,8 @@ import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as AKM
 import Data.Maybe (isNothing)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Parser.Coverage
 import qualified HaskellFlows.Tool.Coverage as CoverageTool
 
@@ -211,15 +209,9 @@ testCoverageRawOmittedByDefault =
                  }
       out    = "100% expressions used (5/5)\n"
       result = CoverageTool.renderResult args (CoverageTool.CovSuccess out)
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "result" top of
-               Just (A.Object res) -> not (AKM.member "raw" res)
-               _                   -> False
-           _ -> False
-       _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object res) -> not (AKM.member "raw" res)
+       _                   -> False
 
 -- | #178: when 'verbose=true', 'renderResult' MUST include the raw
 -- cabal stdout in the result payload.
@@ -231,12 +223,6 @@ testCoverageRawIncludedWhenVerbose =
                  }
       out    = "100% expressions used (5/5)\n"
       result = CoverageTool.renderResult args (CoverageTool.CovSuccess out)
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "result" top of
-               Just (A.Object res) -> AKM.member "raw" res
-               _                   -> False
-           _ -> False
-       _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object res) -> AKM.member "raw" res
+       _                   -> False

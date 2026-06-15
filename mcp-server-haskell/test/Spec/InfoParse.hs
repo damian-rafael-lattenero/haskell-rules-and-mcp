@@ -24,11 +24,9 @@ import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Maybe (isNothing)
 
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Server (allToolNameTexts)
 import qualified HaskellFlows.Tool.AddImport as AddImport
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
@@ -104,17 +102,11 @@ testInfoSuccessIncludesCtors =
         }
       ctors  = [("Nothing", []), ("Just", ["a"])]
       result = InfoTool.successResult parsed ctors []
-  in pure $ case trContent result of
-       [TextContent t] ->
-         -- Issue #90 Phase B: 'constructors' moved under 'result'.
-         -- Drill through the envelope to keep the existing oracle.
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-           Just (A.Object env) -> case AKM.lookup (AKey.fromText "result") env of
-             Just (A.Object o) -> case AKM.lookup (AKey.fromText "constructors") o of
-               Just (A.Array xs) -> length xs == 2
-               _                 -> False
-             _ -> False
-           _ -> False
+  in pure $ case Env.reResult result of
+       -- Issue #90 Phase B: 'constructors' moved under 'result'.
+       Just (A.Object o) -> case AKM.lookup (AKey.fromText "constructors") o of
+         Just (A.Array xs) -> length xs == 2
+         _                 -> False
        _ -> False
 
 -- | Issue #54: when no constructors apply (class / function /
@@ -130,14 +122,9 @@ testInfoSuccessDropsCtorField =
         , piInstances  = []
         }
       result = InfoTool.successResult parsed [] []
-  in pure $ case trContent result of
-       [TextContent t] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-           Just (A.Object env) -> case AKM.lookup (AKey.fromText "result") env of
-             Just (A.Object o) ->
-               isNothing (AKM.lookup (AKey.fromText "constructors") o)
-             _ -> False
-           _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object o) ->
+         isNothing (AKM.lookup (AKey.fromText "constructors") o)
        _ -> False
 
 -- | Issue #70: 'renderClassMethodsBlock' produces one
@@ -168,16 +155,11 @@ testInfoSuccessClassMethods =
         }
       methods = [ ("fmap", "(a -> b) -> f a -> f b") ]
       result = InfoTool.successResult parsed [] methods
-  in pure $ case trContent result of
-       [TextContent t] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-           Just (A.Object env) -> case AKM.lookup (AKey.fromText "result") env of
-             Just (A.Object o) ->
-               case AKM.lookup (AKey.fromText "class_methods") o of
-                 Just (A.Array xs) -> length xs == 1
-                 _                 -> False
-             _ -> False
-           _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object o) ->
+         case AKM.lookup (AKey.fromText "class_methods") o of
+           Just (A.Array xs) -> length xs == 1
+           _                 -> False
        _ -> False
 
 -- | Issue #70: a data type's response must NOT carry an empty
@@ -193,14 +175,9 @@ testInfoSuccessDropsClassMethods =
         }
       ctors = [("Nothing", []), ("Just", ["a"])]
       result = InfoTool.successResult parsed ctors []
-  in pure $ case trContent result of
-       [TextContent t] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-           Just (A.Object env) -> case AKM.lookup (AKey.fromText "result") env of
-             Just (A.Object o) ->
-               isNothing (AKM.lookup (AKey.fromText "class_methods") o)
-             _ -> False
-           _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object o) ->
+         isNothing (AKM.lookup (AKey.fromText "class_methods") o)
        _ -> False
 
 -- | #142: when piInstances has more than 30 entries, successResult
@@ -216,22 +193,17 @@ testInfoInstanceCap =
         , piInstances  = insts
         }
       result = InfoTool.successResult parsed [] []
-  in pure $ case trContent result of
-       [TextContent t] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-           Just (A.Object env) -> case AKM.lookup (AKey.fromText "result") env of
-             Just (A.Object o) ->
-               let instList      = AKM.lookup (AKey.fromText "instances") o
-                   instCount     = AKM.lookup (AKey.fromText "instance_count") o
-                   instTruncated = AKM.lookup (AKey.fromText "instances_truncated") o
-               in case (instList, instCount, instTruncated) of
-                    (Just (A.Array arr), Just (A.Number n), Just (A.Bool b)) ->
-                         length arr == 30
-                      && floor n == (50 :: Int)
-                      && b
-                    _ -> False
-             _ -> False
-           _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object o) ->
+         let instList      = AKM.lookup (AKey.fromText "instances") o
+             instCount     = AKM.lookup (AKey.fromText "instance_count") o
+             instTruncated = AKM.lookup (AKey.fromText "instances_truncated") o
+         in case (instList, instCount, instTruncated) of
+              (Just (A.Array arr), Just (A.Number n), Just (A.Bool b)) ->
+                   length arr == 30
+                && floor n == (50 :: Int)
+                && b
+              _ -> False
        _ -> False
 
 -- | #142: when piInstances is under the cap, instances_truncated is
@@ -246,20 +218,15 @@ testInfoInstancesNotTruncated =
         , piInstances  = insts
         }
       result = InfoTool.successResult parsed [] []
-  in pure $ case trContent result of
-       [TextContent t] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) of
-           Just (A.Object env) -> case AKM.lookup (AKey.fromText "result") env of
-             Just (A.Object o) ->
-               let instCount     = AKM.lookup (AKey.fromText "instance_count") o
-                   instTruncated = AKM.lookup (AKey.fromText "instances_truncated") o
-               in case (instCount, instTruncated) of
-                    (Just (A.Number n), Just (A.Bool b)) ->
-                         floor n == (2 :: Int)
-                      && not b
-                    _ -> False
-             _ -> False
-           _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object o) ->
+         let instCount     = AKM.lookup (AKey.fromText "instance_count") o
+             instTruncated = AKM.lookup (AKey.fromText "instances_truncated") o
+         in case (instCount, instTruncated) of
+              (Just (A.Number n), Just (A.Bool b)) ->
+                   floor n == (2 :: Int)
+                && not b
+              _ -> False
        _ -> False
 
 -- | Issue #42: empty store → status="empty", ok=true.

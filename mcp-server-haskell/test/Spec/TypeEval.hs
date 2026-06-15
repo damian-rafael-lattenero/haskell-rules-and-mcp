@@ -22,19 +22,16 @@ import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Types (mkProjectDir)
 import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Tool.Type as TypeTool
 import qualified HaskellFlows.Tool.Eval as EvalTool
 
-import Spec.Helpers (decodeToolResult, runToolEnvelope)
+import Spec.Helpers (runToolEnvelope)
 import Spec.ToolEnvFixture (sessionEnv)
 
 -- | Phase B helper: stage a tmpdir project + drive 'TypeTool.handle'.
@@ -52,10 +49,7 @@ runType args = do
       sess <- startGhcSession pd
       tr   <- TypeTool.handle (sessionEnv sess) args
       killGhcSession sess
-      case trContent tr of
-        [TextContent body] ->
-          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
-        _ -> pure (Left "expected exactly one TextContent")
+      pure (Right tr)
   removePathForcibly dir
   pure result
 
@@ -130,10 +124,7 @@ runEval args = do
       sess <- startGhcSession pd
       tr   <- EvalTool.handle (sessionEnv sess) args
       killGhcSession sess
-      case trContent tr of
-        [TextContent body] ->
-          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
-        _ -> pure (Left "expected exactly one TextContent")
+      pure (Right tr)
   removePathForcibly dir
   pure result
 

@@ -16,12 +16,9 @@ module Spec.SummariseUnit
   ) where
 
 import qualified Data.Aeson as A
-import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
@@ -32,7 +29,6 @@ import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
 import qualified HaskellFlows.Tool.Perf as PerfTool
 import HaskellFlows.Mcp.Progress (noopSink)
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Types (mkProjectDir)
 
 import Spec.Helpers (withTempProject)
@@ -101,22 +97,16 @@ testCheckModuleHolesReasonCount =
                  0      -- totalProps
                  0      -- loadFailed
                  True   -- warnings_block
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "result" top of
-               Just (A.Object r) ->
-                 case AKM.lookup "gates" r of
-                   Just (A.Object g) ->
-                     case AKM.lookup "holes" g of
-                       Just (A.Object holesGate) ->
-                         AKM.lookup "ok" holesGate == Just (A.Bool False)
-                         && case AKM.lookup "reason" holesGate of
-                              Just (A.String rr) -> "2 typed hole(s)" `T.isInfixOf` rr
-                              _                  -> False
-                       _ -> False
-                   _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object r) ->
+         case AKM.lookup "gates" r of
+           Just (A.Object g) ->
+             case AKM.lookup "holes" g of
+               Just (A.Object holesGate) ->
+                 AKM.lookup "ok" holesGate == Just (A.Bool False)
+                 && case AKM.lookup "reason" holesGate of
+                      Just (A.String rr) -> "2 typed hole(s)" `T.isInfixOf` rr
+                      _                  -> False
                _ -> False
            _ -> False
        _ -> False

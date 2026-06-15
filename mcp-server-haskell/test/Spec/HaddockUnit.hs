@@ -32,27 +32,20 @@ import Data.Maybe (isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
-import System.Directory (getTemporaryDirectory, removePathForcibly, createDirectoryIfMissing)
+import System.Directory (getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
 import qualified HaskellFlows.Ghc.ApiSession as ApiSession
-import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.NextStep
 import qualified HaskellFlows.Mcp.NextStep as NextStep
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
+import HaskellFlows.Mcp.Protocol (ToolResult (..))
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..), parseGhcErrors)
 import qualified HaskellFlows.Tool.CreateProject as CreateProject
 import qualified HaskellFlows.Tool.Doc as DocTool
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
 import HaskellFlows.Tool.Hoogle (HoogleHit (..), parseHoogleLine)
 import qualified HaskellFlows.Tool.Hoogle as HoogleTool
-import qualified HaskellFlows.Tool.Info as InfoTool
-import HaskellFlows.Types (mkProjectDir)
-
-import Spec.Helpers (runToolEnvelope, withTempProject)
 
 testExtractHaddockFindsDoc :: IO Bool
 testExtractHaddockFindsDoc = do
@@ -196,16 +189,10 @@ testFixWarnNoPatchKey =
                , FixWarning.fwName       = Nothing
                }
       result = FixWarning.previewResult "src/Foo.hs" plan args
-  in pure $ case trContent result of
-       [TextContent body] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-           Just (A.Object topEnv) ->
-             case AKM.lookup "result" topEnv of
-               Just (A.Object r) ->
-                    AKM.member "dropLine" r
-                 && not (AKM.member "patch" r)
-               _ -> False
-           _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object r) ->
+            AKM.member "dropLine" r
+         && not (AKM.member "patch" r)
        _ -> False
 
 -- | F-07: error remediation strings must reference the consolidated
@@ -252,11 +239,11 @@ testNoMatchIsNotFailing = do
   pure (not (trIsError result))
 
 -- | #139: the full hoogle renderResult path for an empty hit list must
--- produce a ToolResult with isError=false.
+-- produce a ToolResponse with a non-failing status.
 testHoogleNoMatchIsError :: IO Bool
 testHoogleNoMatchIsError = do
   let result = HoogleTool.renderResult "NoSuchSymbolXYZ" (HoogleTool.HoSuccess [])
-  pure (not (trIsError result))
+  pure (Env.reStatus result `elem` [Env.StatusOk, Env.StatusPartial, Env.StatusNoMatch])
 
 -- | #158: 'FromJSON HoogleArgs' must accept "count" as a synonym for
 -- "limit" — both field names are in common LLM use. The schema declares

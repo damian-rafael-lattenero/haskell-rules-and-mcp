@@ -21,21 +21,19 @@ import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.Vector as Vector
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory)
 import System.FilePath ((</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..), ToolDescriptor (..))
+import HaskellFlows.Mcp.Protocol (ToolDescriptor (..))
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
 import qualified HaskellFlows.Tool.RemoveModules as RM
 import HaskellFlows.Ghc.ApiSession (killGhcSession, startGhcSession)
 import HaskellFlows.Types (mkProjectDir)
 
-import Spec.Helpers (decodeToolResult, runToolEnvelope)
+import Spec.Helpers (runToolEnvelope)
 import Spec.ToolEnvFixture (sessionPdEnv)
 
 -- | Refactor.scope_line_start / scope_line_end accept stringified
@@ -224,15 +222,7 @@ testRefactorListActions = do
       let rawArgs = A.object [ "action" A..= ("list_actions" :: T.Text) ]
       tr <- RefactorTool.handle (sessionPdEnv sess pd) rawArgs
       killGhcSession sess
-      case trContent tr of
-        [TextContent t] ->
-          case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) :: Maybe A.Value of
-            Just (A.Object env) ->
-              case AKM.lookup (AKey.fromText "status") env of
-                Just (A.String "ok") -> pure True
-                _                    -> pure False
-            _ -> pure False
-        _ -> pure False
+      pure (Env.reStatus tr == Env.StatusOk)
 
 -- | #154: list_actions response carries 'actions' array with an entry
 -- for 'move_symbol' that lists the correct field names ('symbol','from','to').
@@ -248,29 +238,23 @@ testRefactorListActionsHasRequired = do
       let rawArgs = A.object [ "action" A..= ("list_actions" :: T.Text) ]
       tr <- RefactorTool.handle (sessionPdEnv sess pd) rawArgs
       killGhcSession sess
-      case trContent tr of
-        [TextContent t] ->
-          case A.decode (TLE.encodeUtf8 (TL.fromStrict t)) :: Maybe A.Value of
-            Just (A.Object env) ->
-              case AKM.lookup (AKey.fromText "result") env of
-                Just (A.Object res) ->
-                  case AKM.lookup (AKey.fromText "actions") res of
-                    Just (A.Array arr) ->
-                      -- Check that 'move_symbol' has 'symbol','from','to'
-                      let moveEntry = [ o | A.Object o <- Vector.toList arr
-                                      , AKM.lookup (AKey.fromText "action") o
-                                          == Just (A.String "move_symbol")
-                                      ]
-                      in case moveEntry of
-                           [o] -> case AKM.lookup (AKey.fromText "required") o of
-                             Just (A.Array req) ->
-                               let reqStrs = [ s | A.String s <- Vector.toList req ]
-                               in pure (  "symbol" `elem` reqStrs
-                                       && "from"   `elem` reqStrs
-                                       && "to"     `elem` reqStrs)
-                             _ -> pure False
-                           _ -> pure False
-                    _ -> pure False
-                _ -> pure False
-            _ -> pure False
-        _ -> pure False
+      pure $ case Env.reResult tr of
+        Just (A.Object res) ->
+          case AKM.lookup (AKey.fromText "actions") res of
+            Just (A.Array arr) ->
+              -- Check that 'move_symbol' has 'symbol','from','to'
+              let moveEntry = [ o | A.Object o <- Vector.toList arr
+                              , AKM.lookup (AKey.fromText "action") o
+                                  == Just (A.String "move_symbol")
+                              ]
+              in case moveEntry of
+                   [o] -> case AKM.lookup (AKey.fromText "required") o of
+                     Just (A.Array req) ->
+                       let reqStrs = [ s | A.String s <- Vector.toList req ]
+                       in "symbol" `elem` reqStrs
+                           && "from"   `elem` reqStrs
+                           && "to"     `elem` reqStrs
+                     _ -> False
+                   _ -> False
+            _ -> False
+        _ -> False

@@ -17,8 +17,6 @@ import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Maybe (isJust)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
@@ -26,14 +24,13 @@ import System.FilePath ((</>))
 import Control.Exception (bracket_)
 
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Types (mkProjectDir)
 import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Tool.Info as InfoTool
 import qualified HaskellFlows.Tool.Hoogle as HoogleTool
 import qualified HaskellFlows.Tool.AddImport as AddImportTool
 
-import Spec.Helpers (decodeToolResult, runToolEnvelope)
+import Spec.Helpers (runToolEnvelope)
 import Spec.ToolEnvFixture (sessionEnv, stubEnv)
 
 -- | Phase B helper: drive 'InfoTool.handle' against a fresh
@@ -52,10 +49,7 @@ runInfo args = do
       sess <- startGhcSession pd
       tr   <- InfoTool.handle (sessionEnv sess) args
       killGhcSession sess
-      case trContent tr of
-        [TextContent body] ->
-          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
-        _ -> pure (Left "expected exactly one TextContent")
+      pure (Right tr)
   removePathForcibly dir
   pure result
 
@@ -116,10 +110,7 @@ testInfoRefusesNewline = do
 runHoogle :: A.Value -> IO (Either String Env.ToolResponse)
 runHoogle args = do
   tr <- HoogleTool.handle stubEnv args
-  case trContent tr of
-    [TextContent body] ->
-      pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
-    _ -> pure (Left "expected exactly one TextContent")
+  pure (Right tr)
 
 -- | #146: AddImportTool.handle now requires a GhcSession. For tests
 -- that short-circuit before the session is touched (hoogle missing,
@@ -135,10 +126,7 @@ runAddImport args = do
       sess <- startGhcSession pd
       tr <- AddImportTool.handle (sessionEnv sess) args
       killGhcSession sess
-      case trContent tr of
-        [TextContent body] ->
-          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
-        _ -> pure (Left "expected exactly one TextContent")
+      pure (Right tr)
 
 -- | An empty hoogle query → status='refused' with
 -- kind='empty_input' + field='query'.

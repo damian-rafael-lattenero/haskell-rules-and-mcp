@@ -32,6 +32,8 @@ import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Text (Text)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import System.Directory (doesFileExist, getTemporaryDirectory)
@@ -43,7 +45,7 @@ import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNameTexts)
 import HaskellFlows.Mcp.ToolName (ToolName (..), allToolNames, toolNameText)
 import qualified HaskellFlows.Mcp.WorkflowState as WS
 import qualified HaskellFlows.Mcp.Guidance as Guidance
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Tool.Arbitrary (pathToModule, renderArbitraryModule)
 import qualified HaskellFlows.Tool.Bootstrap as Bootstrap
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
@@ -73,12 +75,10 @@ testBootstrapPreview = withTempProject $ \pd -> do
   let args = A.object [ "host" .= ("claude-code" :: Text)
                       , "write" .= False ]
   tr <- Bootstrap.handle pd allToolDescriptors args
-  let body = case trContent tr of
-        (TextContent t : _) -> t
-        _                   -> ""
+  let body = TL.toStrict (TLE.decodeUtf8 (A.encode tr))
       dest = unProjectDirRaw pd </> ".claude" </> "rules" </> "haskell-flows-mcp.md"
   wrote <- doesFileExist dest
-  pure $ not (trIsError tr)
+  pure $ Env.reStatus tr `elem` [Env.StatusOk, Env.StatusPartial, Env.StatusNoMatch]
       && T.isInfixOf "\"mode\":\"preview\""     body
       && T.isInfixOf "\"host\":\"claude-code\"" body
       && T.isInfixOf "haskell-flows"            body
@@ -93,12 +93,10 @@ testBootstrapDefaultWrite :: IO Bool
 testBootstrapDefaultWrite = withTempProject $ \pd -> do
   let args = A.object [ "host" .= ("claude-code" :: Text) ]
   tr <- Bootstrap.handle pd allToolDescriptors args
-  let body = case trContent tr of
-        (TextContent t : _) -> t
-        _                   -> ""
+  let body = TL.toStrict (TLE.decodeUtf8 (A.encode tr))
       dest = unProjectDirRaw pd </> ".claude" </> "rules" </> "haskell-flows-mcp.md"
   wrote <- doesFileExist dest
-  pure $ not (trIsError tr)
+  pure $ Env.reStatus tr `elem` [Env.StatusOk, Env.StatusPartial, Env.StatusNoMatch]
       && T.isInfixOf "\"mode\":\"written\"" body
       && wrote          -- default must WRITE to disk
 
@@ -119,7 +117,7 @@ testBootstrapWrite = withTempProject $ \pd -> do
     else do
       contents <- TIO.readFile dest
       let expected = Guidance.workflowRulesMarkdown allToolDescriptors
-      pure $ not (trIsError tr)
+      pure $ Env.reStatus tr `elem` [Env.StatusOk, Env.StatusPartial, Env.StatusNoMatch]
           && contents == expected
 
 -- | 'pathForHost' is a closed enum — any future host addition

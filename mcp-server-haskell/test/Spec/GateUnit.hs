@@ -33,10 +33,8 @@ import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolDescriptor (..), ToolResult (..))
+import HaskellFlows.Mcp.Protocol (ToolDescriptor (..))
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Data.PropertyStore (StoredProperty (..), openStore)
 import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNameTexts)
@@ -140,17 +138,11 @@ testCoverageTimeoutMessage :: IO Bool
 testCoverageTimeoutMessage =
   let args   = CoverageTool.CoverageArgs { CoverageTool.caTimeoutMinutes = 15, CoverageTool.caVerbose = False }
       result = CoverageTool.renderResult args CoverageTool.CovTimeout
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "error" top of
-               Just (A.Object err) ->
-                 case AKM.lookup "cause" err of
-                   Just (A.String cause) -> T.isInfixOf "15m" cause
-                   _                    -> False
-               _ -> False
-           _ -> False
+  in pure $ case Env.reError result of
+       Just err ->
+         case Env.eeCause err of
+           Just cause -> T.isInfixOf "15m" cause
+           _          -> False
        _ -> False
 
 --------------------------------------------------------------------------------
@@ -246,14 +238,8 @@ testGateAllSkipRefused = withTempProject $ \pd -> do
         , "skip_cabal_build" .= True
         ]
   tr <- Gate.handle (storeSessionPdSinkEnv store (error "GhcSession not needed for all-skip path") pd noopSink) raw
-  case trContent tr of
-    [TextContent body] ->
-      case A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)) of
-        Right env ->
-          pure $ Env.reStatus env == Env.StatusRefused
-              && fmap Env.eeKind (Env.reError env) == Just Env.Validation
-        Left _ -> pure False
-    _ -> pure False
+  pure $ Env.reStatus tr == Env.StatusRefused
+      && fmap Env.eeKind (Env.reError tr) == Just Env.Validation
 
 -- | #138: the 'summary' function must not produce the malformed
 -- "All requested gates passed: . Safe to push." string when the

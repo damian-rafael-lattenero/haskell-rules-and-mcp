@@ -33,13 +33,10 @@ import qualified HaskellFlows.Data.Scratchpad as SP
 import HaskellFlows.Tool.SwitchProject (ValidationError (..), validateSwitchTarget)
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
 
-import Spec.Helpers (decodeToolResult, runToolEnvelope, withTempProject)
-
 import Control.Concurrent (newMVar, readMVar)
 import Data.Maybe (isJust, isNothing)
 import Data.Text (Text)
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import HaskellFlows.Mcp.Protocol (ToolResult (..))
 import qualified HaskellFlows.Types
 
 -- | Build a tempdir-scoped project with the given name and .cabal
@@ -148,7 +145,7 @@ testSwitchHandleSwaps = do
       removePathForcibly dirA
       removePathForcibly dirB
       pure
-        ( not (trIsError result)
+        ( Env.reStatus result == Env.StatusOk
             && HaskellFlows.Types.unProjectDir newPd ==
                  HaskellFlows.Types.unProjectDir pdB
             && isNothing mSess

@@ -46,7 +46,6 @@ import qualified Data.Text as T
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
-import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNameTexts)
 import HaskellFlows.Mcp.ToolName
@@ -60,7 +59,6 @@ import qualified HaskellFlows.Tool.Modules as Modules
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import qualified HaskellFlows.Suggest.Rules as SuggestRules
 
-import Spec.Helpers (runToolEnvelope, withTempProject)
 import Spec.ToolEnvFixture (pdEnv)
 
 import Data.Aeson (object, (.=))
@@ -204,17 +202,17 @@ testModulesRejectsBadAction =
     Left _   -> pure False  -- mkProjectDir failed; cannot run the test
     Right pd -> do
       -- Direct handler call (no JSON-RPC envelope needed): we only
-      -- verify that the dispatcher returns isError=true with content
-      -- present, which is how 'ToolResult' renders a refused response.
+      -- verify that the dispatcher returns a refused/failed status.
       -- The ProjectDir argument is never read because the action
       -- check fires first.
-      ToolResult content isErr <-
+      tr <-
         Modules.handle (pdEnv pd)
           (object
             [ "action"  .= ("nuke_everything" :: T.Text)
             , "modules" .= (["Foo"] :: [T.Text])
             ])
-      pure (isErr && not (null content))
+      let isErr = Env.reStatus tr `notElem` [Env.StatusOk, Env.StatusPartial, Env.StatusNoMatch]
+      pure isErr
 
 --------------------------------------------------------------------------------
 -- Issue #105 · extractModules envelope peeling

@@ -26,15 +26,13 @@ import Data.Maybe (isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
 import HaskellFlows.Ghc.ApiSession (killGhcSession, startGhcSession)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import Spec.ToolEnvFixture (sessionEnv)
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..), tdDescription)
+import HaskellFlows.Mcp.Protocol (tdDescription)
 import qualified HaskellFlows.Tool.Complete as CompleteTool
 import HaskellFlows.Types (mkProjectDir)
 
@@ -75,10 +73,7 @@ runComplete args = do
       sess <- startGhcSession pd
       tr   <- CompleteTool.handle (sessionEnv sess) args
       killGhcSession sess
-      case trContent tr of
-        [TextContent body] ->
-          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
-        _ -> pure (Left "expected exactly one TextContent")
+      pure (Right tr)
   removePathForcibly dir
   pure result
 

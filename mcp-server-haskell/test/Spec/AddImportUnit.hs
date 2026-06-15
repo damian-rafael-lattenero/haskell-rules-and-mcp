@@ -16,8 +16,6 @@ import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Maybe (isNothing)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
@@ -27,13 +25,11 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.NextStep
 import qualified HaskellFlows.Mcp.NextStep as NextStep
 import HaskellFlows.Mcp.ToolName (ToolName (..))
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Types (mkProjectDir)
 import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Tool.AddImport as AddImport
 import qualified HaskellFlows.Tool.AddModules as AddModules
 
-import Spec.Helpers (decodeToolResult, runToolEnvelope)
 import Spec.ToolEnvFixture (sessionEnv)
 
 testAddImportMissingHoogle :: IO Bool
@@ -49,7 +45,7 @@ testAddImportMissingHoogle = do
   createDirectoryIfMissing True dir
   let args = A.object [ "name" A..= ("fromMaybe" :: T.Text) ]
   result <- case mkProjectDir dir of
-    Left _  -> pure (ToolResult { trContent = [TextContent "{}"], trIsError = False })
+    Left _  -> pure (Env.mkOk (A.object []))
     Right pd -> do
       sess <- startGhcSession pd
       r <- AddImport.handle (sessionEnv sess) args
@@ -59,35 +55,16 @@ testAddImportMissingHoogle = do
   case origPath of
     Just p  -> setEnv "PATH" p
     Nothing -> unsetEnv "PATH"
-  case trContent result of
-    [TextContent t] ->
-      -- Issue #90 Phase D step 2: legacy 'success: false' is gone.
-      -- Branch on @status@ and the structured @error.kind@ instead.
-      let parsed = A.decode (TLE.encodeUtf8 (TL.fromStrict t)) :: Maybe A.Value
-      in pure $ case parsed of
-           Just v -> fieldText "status" v == Just "unavailable"
-                  && trIsError result
-                  && case lookupField "error" v of
-                       Just (A.Object errObj) ->
-                         let msg = AKM.lookup (AKey.fromText "message") errObj
-                             rem_ = AKM.lookup (AKey.fromText "remediation") errObj
-                             msgOk = case msg of
-                               Just (A.String m) -> "hoogle" `T.isInfixOf` T.toLower m
-                               _ -> False
-                             remOk = case rem_ of
-                               Just (A.String _) -> True
-                               _ -> False
-                         in msgOk && remOk
-                       _ -> False
+  -- Issue #90 Phase D step 2: branch on status and structured error.kind directly.
+  pure $ Env.reStatus result == Env.StatusUnavailable
+      && case Env.reError result of
+           Just err ->
+             let msgOk = "hoogle" `T.isInfixOf` T.toLower (Env.eeMessage err)
+                 remOk = case Env.eeRemediation err of
+                   Just _  -> True
+                   Nothing -> False
+             in msgOk && remOk
            Nothing -> False
-    _ -> pure False
-  where
-    fieldText k (A.Object o) = case AKM.lookup (AKey.fromText k) o of
-      Just (A.String s) -> Just s
-      _                 -> Nothing
-    fieldText _ _ = Nothing
-    lookupField k (A.Object o) = AKM.lookup (AKey.fromText k) o
-    lookupField _ _            = Nothing
 
 -- | #146: addImportToSession returns (False, msg) when the import
 -- line is syntactically invalid — GHC rejects it during parseImportDecl

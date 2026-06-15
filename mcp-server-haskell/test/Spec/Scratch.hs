@@ -14,11 +14,9 @@ import qualified Data.Aeson.KeyMap as AKM
 import Data.Maybe (isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
 import HaskellFlows.Ghc.Sanitize
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Parser.Error
 import qualified HaskellFlows.Data.Scratchpad as SP
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
@@ -174,16 +172,12 @@ testScratchHandleWrite = withTempProject $ \pd -> do
         , "code"   A..= ("1 + 1 :: Int" :: Text)
         ]
   result <- ScratchTool.runHandle store undefined undefined args
-  case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) -> case AKM.lookup "status" top of
-        Just (A.String "ok") -> do
-          loaded <- SP.loadAll store
-          pure $ case loaded of
-            [e] -> SP.seId e == "user-id" && SP.seCode e == "1 + 1 :: Int"
-            _   -> False
-        _ -> pure False
-      _ -> pure False
+  case Env.reStatus result of
+    Env.StatusOk -> do
+      loaded <- SP.loadAll store
+      pure $ case loaded of
+        [e] -> SP.seId e == "user-id" && SP.seCode e == "1 + 1 :: Int"
+        _   -> False
     _ -> pure False
 
 -- | action=write without code returns status=failed kind=missing_arg.
@@ -192,11 +186,7 @@ testScratchHandleWriteMissingCode = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("write" :: Text) ]
   result <- ScratchTool.runHandle store undefined undefined args
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "failed")
-      _ -> False
-    _ -> False
+  pure (Env.reStatus result == Env.StatusFailed)
 
 -- | action=write without an id auto-generates scratch-1, scratch-2, ...
 testScratchHandleWriteAutoId :: IO Bool
@@ -218,12 +208,8 @@ testScratchHandleListEmpty = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("list" :: Text) ]
   result <- ScratchTool.runHandle store undefined undefined args
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) -> case AKM.lookup "result" top of
-        Just (A.Object r) -> AKM.lookup "count" r == Just (A.Number 0)
-        _ -> False
-      _ -> False
+  pure $ case Env.reResult result of
+    Just (A.Object r) -> AKM.lookup "count" r == Just (A.Number 0)
     _ -> False
 
 -- | action=show on an unknown id returns status=no_match.
@@ -232,11 +218,7 @@ testScratchHandleShowMissing = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("show" :: Text), "id" A..= ("ghost" :: Text) ]
   result <- ScratchTool.runHandle store undefined undefined args
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "no_match")
-      _ -> False
-    _ -> False
+  pure (Env.reStatus result == Env.StatusNoMatch)
 
 -- | action=clear without id and without confirm=true is refused.
 testScratchHandleClearNoConfirm :: IO Bool
@@ -244,11 +226,7 @@ testScratchHandleClearNoConfirm = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("clear" :: Text) ]
   result <- ScratchTool.runHandle store undefined undefined args
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "refused")
-      _ -> False
-    _ -> False
+  pure (Env.reStatus result == Env.StatusRefused)
 
 -- | action=clear with id removes only that entry.
 testScratchHandleClearById :: IO Bool
@@ -297,11 +275,7 @@ testScratchCheckMissingId = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("check" :: Text) ]
   result <- ScratchTool.runHandle store undefined undefined args
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "failed")
-      _ -> False
-    _ -> False
+  pure (Env.reStatus result == Env.StatusFailed)
 
 -- | action=check with an id that doesn't exist → no_match.
 testScratchCheckUnknownId :: IO Bool
@@ -309,11 +283,7 @@ testScratchCheckUnknownId = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("check" :: Text), "id" A..= ("ghost" :: Text) ]
   result <- ScratchTool.runHandle store undefined undefined args
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "no_match")
-      _ -> False
-    _ -> False
+  pure (Env.reStatus result == Env.StatusNoMatch)
 
 -- | action=check refuses code containing the sentinel string.
 -- (F-03 removed the newline rejection — multi-line declarations now go
@@ -336,11 +306,7 @@ testScratchCheckSanitizeReject = withTempProject $ \pd -> do
         , "id"     A..= ("bad" :: Text)
         ]
   result <- ScratchTool.runHandle store undefined undefined checkArgs
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "refused")
-      _ -> False
-    _ -> False
+  pure (Env.reStatus result == Env.StatusRefused)
 
 -- | 'ScratchResult' ToJSON / FromJSON round-trip.
 testScratchResultRoundTrip :: IO Bool
@@ -376,23 +342,17 @@ testScratchCheckKindAtTopLevel = withTempProject $ \pd -> do
         , "id"     A..= ("probe" :: Text)
         ]
   result <- ScratchTool.runHandle store undefined undefined checkArgs
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) ->
-        case AKM.lookup "status" top of
-          Just (A.String "ok") ->
-            -- status=ok means the try-block ran; result must have 'kind'
-            -- directly (type_error from undefined-session crash), not nested.
-            case AKM.lookup "result" top of
-              Just (A.Object inner) ->
-                -- 'kind' must be present here
-                case AKM.lookup "kind" inner of
-                  Just (A.String k) -> k == "type_ok" || k == "type_error"
-                  _ -> False
-              _ -> False
-          _ -> True  -- refused / failed paths: sanitize boundary fired, fine
-      _ -> False
-    _ -> False
+  pure $ case Env.reStatus result of
+    Env.StatusOk ->
+      -- status=ok means the try-block ran; result must have 'kind'
+      -- directly (type_error from undefined-session crash), not nested.
+      case Env.reResult result of
+        Just (A.Object inner) ->
+          case AKM.lookup "kind" inner of
+            Just (A.String k) -> k == "type_ok" || k == "type_error"
+            _ -> False
+        _ -> False
+    _ -> True  -- refused / failed paths: sanitize boundary fired, fine
 
 -- #253 Phase 3: ghc_scratch action=show — full detail + seResult round-trip.
 
@@ -415,28 +375,20 @@ testScratchShowFullDetail = withTempProject $ \pd -> do
         , "id"     A..= ("full-e1" :: Text)
         ]
   result <- ScratchTool.runHandle store undefined undefined showArgs
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) ->
-        -- Outer envelope: status=ok
-        case AKM.lookup "status" top of
-          Just (A.String "ok") ->
-            case AKM.lookup "result" top of
-              Just (A.Object inner) ->
-                -- All required fields must be present
-                AKM.lookup "id"     inner == Just (A.String "full-e1")
-                && AKM.lookup "code"   inner == Just (A.String "\\x -> x + 1")
-                && AKM.lookup "status" inner == Just (A.String "open")
-                -- note field forwarded correctly
-                && AKM.lookup "note" inner   == Just (A.String "hypothesis: this is a plain increment")
-                -- result is null before any check
-                && AKM.lookup "result" inner == Just A.Null
-                -- module field forwarded
-                && AKM.lookup "module" inner == Just (A.String "src/Foo.hs")
-              _ -> False
-          _ -> False
-      _ -> False
-    _ -> False
+  pure $ Env.reStatus result == Env.StatusOk
+      && case Env.reResult result of
+           Just (A.Object inner) ->
+             -- All required fields must be present
+             AKM.lookup "id"     inner == Just (A.String "full-e1")
+             && AKM.lookup "code"   inner == Just (A.String "\\x -> x + 1")
+             && AKM.lookup "status" inner == Just (A.String "open")
+             -- note field forwarded correctly
+             && AKM.lookup "note" inner   == Just (A.String "hypothesis: this is a plain increment")
+             -- result is null before any check
+             && AKM.lookup "result" inner == Just A.Null
+             -- module field forwarded
+             && AKM.lookup "module" inner == Just (A.String "src/Foo.hs")
+           _ -> False
 
 -- | 'seResult' survives a save → loadAll round-trip. After calling
 -- SP.save with a non-Nothing result, loadAll must return the same
@@ -502,22 +454,15 @@ testScratchShowAfterCheckHasResult = withTempProject $ \pd -> do
         , "id"     A..= ("chk-then-show" :: Text)
         ]
   result <- ScratchTool.runHandle store undefined undefined showArgs
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) ->
-        case AKM.lookup "status" top of
-          Just (A.String "ok") ->
-            case AKM.lookup "result" top of
-              Just (A.Object inner) ->
-                -- result.result must be a non-null object with kind=type_error
-                case AKM.lookup "result" inner of
-                  Just (A.Object r) ->
-                    AKM.lookup "kind" r == Just (A.String "type_error")
-                  _ -> False
-              _ -> False
-          _ -> False
-      _ -> False
-    _ -> False
+  pure $ Env.reStatus result == Env.StatusOk
+      && case Env.reResult result of
+           Just (A.Object inner) ->
+             -- result.result must be a non-null object with kind=type_error
+             case AKM.lookup "result" inner of
+               Just (A.Object r) ->
+                 AKM.lookup "kind" r == Just (A.String "type_error")
+               _ -> False
+           _ -> False
 
 -- #253 Phase 4: ghc_scratch action=promote — boundary tests.
 -- The splice + compile-verify tests require a live GHC session and are
@@ -530,11 +475,7 @@ testScratchPromoteMissingId = withTempProject $ \pd -> do
   store <- SP.openStore pd
   let args = A.object [ "action" A..= ("promote" :: Text) ]
   result <- ScratchTool.runHandle store undefined pd args
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "failed")
-      _ -> False
-    _ -> False
+  pure (Env.reStatus result == Env.StatusFailed)
 
 -- | action=promote with id but no 'target_module' → failed.
 testScratchPromoteMissingTargetModule :: IO Bool
@@ -548,11 +489,7 @@ testScratchPromoteMissingTargetModule = withTempProject $ \pd -> do
   _ <- ScratchTool.runHandle store undefined undefined writeArgs
   let args = A.object [ "action" A..= ("promote" :: Text), "id" A..= ("pm1" :: Text) ]
   result <- ScratchTool.runHandle store undefined pd args
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "failed")
-      _ -> False
-    _ -> False
+  pure (Env.reStatus result == Env.StatusFailed)
 
 -- | action=promote with unknown id → no_match.
 testScratchPromoteUnknownId :: IO Bool
@@ -564,11 +501,7 @@ testScratchPromoteUnknownId = withTempProject $ \pd -> do
         , "target_module" A..= ("src/Foo.hs" :: Text)
         ]
   result <- ScratchTool.runHandle store undefined pd args
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "no_match")
-      _ -> False
-    _ -> False
+  pure (Env.reStatus result == Env.StatusNoMatch)
 
 -- | action=promote with target_module that escapes the project → refused.
 testScratchPromoteBadModulePath :: IO Bool
@@ -586,11 +519,7 @@ testScratchPromoteBadModulePath = withTempProject $ \pd -> do
         , "target_module" A..= ("/etc/passwd" :: Text)
         ]
   result <- ScratchTool.runHandle store undefined pd args
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) -> AKM.lookup "status" top == Just (A.String "refused")
-      _ -> False
-    _ -> False
+  pure (Env.reStatus result == Env.StatusRefused)
 
 -- | Pure 'spliceInto' test: appending (no target_line) places code
 -- after a blank separator and ends with a newline.
@@ -692,12 +621,7 @@ testScratchPromoteBindingName = withTempProject $ \pd -> do
   -- We only need to confirm the args parse and reach the path-guard
   -- (status=refused, kind=path_traversal) — that proves binding_name
   -- parsed correctly and the entry was found.
-  pure $ case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) ->
-        AKM.lookup "status" top == Just (A.String "refused")
-      _ -> False
-    _ -> False
+  pure (Env.reStatus result == Env.StatusRefused)
 
 --------------------------------------------------------------------------------
 -- F-05: compileFailResult uses first error message for 'cause'
@@ -721,17 +645,11 @@ testCompileFailResultCause = pure $
       longPreamble = T.replicate 300 "package-warning ; "
       raw = longPreamble <> "Invalid type signature"
       result = RefactorTool.compileFailResult False [firstErr] raw " — snapshot restored"
-  in case trContent result of
-    [TextContent body] -> case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-      Just (A.Object top) ->
-        case AKM.lookup "error" top of
-          Just (A.Object errObj) ->
-            case AKM.lookup "cause" errObj of
-              Just (A.String cause) -> cause == "Invalid type signature"
-              _ -> False
-          _ -> False
-      _ -> False
-    _ -> False
+  in case Env.reError result of
+       Just err -> case Env.eeCause err of
+         Just cause -> cause == "Invalid type signature"
+         _          -> False
+       _ -> False
 
 -- #276: ghc_scratch(check) used to fail with "parse error on input 'import'"
 -- because import lines were wrapped inside `let … in ()`. 'splitImports' now

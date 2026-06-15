@@ -30,10 +30,8 @@ import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import Data.Maybe (isJust, isNothing)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
 import qualified HaskellFlows.Tool.DepsExplain as DepsExplain
 import HaskellFlows.Tool.Deps (importsMatchingPackage)
@@ -246,24 +244,18 @@ testExplainIndexOutOfRangeHint203 :: IO Bool
 testExplainIndexOutOfRangeHint203 =
   let diags  = [ GhcError "src/F.hs" 1 1 SevError Nothing "boom" ]
       result = ExplainError.renderIndexOutOfRange "src/F.hs" 3 1 diags
-  in pure $ case trContent result of
-    [TextContent body_] ->
-      case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-        Just (A.Object top) ->
-          case AKM.lookup "result" top of
-            Just (A.Object r) ->
-              let hint = AKM.lookup "hint" r
-              in isJust hint
-                 -- must mention "out of range"
-                 && maybe False (\case
-                      A.String s -> "out of range" `T.isInfixOf` s
-                      _          -> False) hint
-                 -- must NOT say the old wrong message
-                 && maybe True (\case
-                      A.String s -> not ("No errors detected" `T.isInfixOf` s)
-                      _          -> True) hint
-            _ -> False
-        _ -> False
+  in pure $ case Env.reResult result of
+    Just (A.Object r) ->
+      let hint = AKM.lookup (AKey.fromText "hint") r
+      in isJust hint
+         -- must mention "out of range"
+         && maybe False (\case
+              A.String s -> "out of range" `T.isInfixOf` s
+              _          -> False) hint
+         -- must NOT say the old wrong message
+         && maybe True (\case
+              A.String s -> not ("No errors detected" `T.isInfixOf` s)
+              _          -> True) hint
     _ -> False
 
 -- | Issue #59: 'extractImports' must recognise plain, qualified,

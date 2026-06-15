@@ -32,11 +32,8 @@ import qualified Data.Aeson.KeyMap as AKM
 import Data.Maybe (isNothing)
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Parser.Hole
   ( TypedHole (..)
   , parseTypedHoles
@@ -88,16 +85,9 @@ testQcGaveUp =
 testQcGaveUpValidationKind :: IO Bool
 testQcGaveUpValidationKind =
   let result = QcTool.renderResult (QcGaveUp "\\x -> x > 0" 0 1000) Nothing
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "error" top of
-               Just (A.Object err) ->
-                 AKM.lookup "kind" err == Just (A.String "validation")
-               _ -> False
-           _ -> False
-       _ -> False
+  in pure $ case Env.reError result of
+       Just err -> Env.eeKind err == Env.Validation
+       Nothing  -> False
 
 testQcException :: IO Bool
 testQcException =

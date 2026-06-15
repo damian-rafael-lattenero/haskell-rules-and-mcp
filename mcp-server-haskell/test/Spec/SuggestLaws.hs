@@ -17,9 +17,12 @@ module Spec.SuggestLaws
   , testSuggestSiblingsEnableSoundness
   ) where
 
+import qualified Data.Aeson as A
 import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.Encoding as TLE
 
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
+import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Parser.TypeSignature (parseSignature)
 import qualified HaskellFlows.Tool.Suggest as SuggestTool
 import HaskellFlows.Suggest.Rules
@@ -119,10 +122,8 @@ testSuggestScopeStructuredHint :: IO Bool
 testSuggestScopeStructuredHint =
   let ghcOut = "<interactive>:1:1: error: [GHC-88464] Variable not in scope: simplify"
       tr     = SuggestTool.outOfScopeResult "simplify" ghcOut
-      body   = case trContent tr of
-        (TextContent t : _) -> t
-        _                   -> ""
-  in pure $ trIsError tr
+      body   = TL.toStrict (TLE.decodeUtf8 (A.encode tr))
+  in pure $ Env.reStatus tr `elem` [Env.StatusFailed, Env.StatusRefused]
          && T.isInfixOf "\"reason\":\"function_not_in_scope\"" body
          && T.isInfixOf "\"function\":\"simplify\""            body
          && T.isInfixOf "ghc_load"                             body

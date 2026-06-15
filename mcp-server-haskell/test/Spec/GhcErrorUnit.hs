@@ -28,8 +28,6 @@ import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Control.Exception (SomeException, try)
 import System.Directory (getTemporaryDirectory)
 import GHC
@@ -39,7 +37,6 @@ import GHC
   , simpleImportDecl
   )
 
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.WorkflowState as WS
 import HaskellFlows.Mcp.ToolName (ToolName (..))
@@ -82,17 +79,11 @@ testExplainErrorNoModuleSource = do
         , geMessage  = "Found hole: _ :: Int"
         }
       result = ExplainError.renderContext "src/Foo.hs" body diag [diag] Nothing
-  pure $ case trContent result of
-    [TextContent body_] ->
-      case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-        Just (A.Object top) ->
-          case AKM.lookup "result" top of
-            Just (A.Object r) ->
-              case AKM.lookup "context" r of
-                Just (A.Object ctx) -> not (AKM.member "module_source" ctx)
-                _                   -> False
-            _ -> False
-        _ -> False
+  pure $ case Env.reResult result of
+    Just (A.Object r) ->
+      case AKM.lookup (AKey.fromText "context") r of
+        Just (A.Object ctx) -> not (AKM.member "module_source" ctx)
+        _                   -> False
     _ -> False
 
 -- | #153: when error_text is provided, renderContext must use that
@@ -105,17 +96,11 @@ testExplainErrorTextUsed = do
       -- Simulate the path that handle takes when error_text is supplied
       synDiag = ExplainError.syntheticError "src/Foo.hs" errTxt
       result  = ExplainError.renderContext "src/Foo.hs" body synDiag [synDiag] Nothing
-  pure $ case trContent result of
-    [TextContent body_] ->
-      case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-        Just (A.Object top) ->
-          case AKM.lookup "result" top of
-            Just (A.Object r) ->
-              case AKM.lookup "diagnostic" r of
-                Just (A.Object d) ->
-                  AKM.lookup "message" d == Just (A.String errTxt)
-                _ -> False
-            _ -> False
+  pure $ case Env.reResult result of
+    Just (A.Object r) ->
+      case AKM.lookup (AKey.fromText "diagnostic") r of
+        Just (A.Object d) ->
+          AKM.lookup (AKey.fromText "message") d == Just (A.String errTxt)
         _ -> False
     _ -> False
 
@@ -135,17 +120,11 @@ testPerfSamplesGated =
       nss   = [100, 110, 90, 105, 95]
       stats = PerfTool.aggregate nss
       result = PerfTool.renderResult args nss stats [] Nothing 0
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "result" top of
-               Just (A.Object r) ->
-                 case AKM.lookup "measurements" r of
-                   Just (A.Object m) -> not (AKM.member "samples" m)
-                   _                 -> False
-               _ -> False
-           _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object r) ->
+         case AKM.lookup (AKey.fromText "measurements") r of
+           Just (A.Object m) -> not (AKM.member "samples" m)
+           _                 -> False
        _ -> False
 
 -- | F-32: when a regression is detected, 'error.cause' must be a
@@ -165,17 +144,11 @@ testPerfRegressionCausePlain =
       stats    = PerfTool.aggregate nss
       baseline = Just (PerfTool.BaselineEntry { PerfTool.beMeanNs = 1000.0 })
       result   = PerfTool.renderResult args nss stats [] baseline 0
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "error" top of
-               Just (A.Object err) ->
-                 case AKM.lookup "cause" err of
-                   Just (A.String cause) ->
-                     not (T.isInfixOf "{" cause) && T.isInfixOf "baseline_mean_ns" cause
-                   _ -> False
-               _ -> False
+  in pure $ case Env.reError result of
+       Just err ->
+         case Env.eeCause err of
+           Just cause ->
+             not (T.isInfixOf "{" cause) && T.isInfixOf "baseline_mean_ns" cause
            _ -> False
        _ -> False
 
@@ -214,15 +187,9 @@ testMoveModuleNameToPath = pure $
 testEvalIoUnitResult :: IO Bool
 testEvalIoUnitResult =
   let result = EvalTool.ioUnitResult
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "result" top of
-               Just (A.Object r) ->
-                 AKM.lookup "kind" r == Just (A.String "io_unit_no_output")
-               _ -> False
-           _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object r) ->
+         AKM.lookup (AKey.fromText "kind") r == Just (A.String "io_unit_no_output")
        _ -> False
 
 -- | #167: The old 'ioUnitResult' hint said "Use putStrLn / print for
@@ -233,20 +200,14 @@ testEvalIoUnitResult =
 testEvalIoUnitHintNotCircular :: IO Bool
 testEvalIoUnitHintNotCircular =
   let result = EvalTool.ioUnitResult
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "result" top of
-               Just (A.Object r) ->
-                 case AKM.lookup "hint" r of
-                   Just (A.String hint) ->
-                     -- Must NOT contain circular "Use putStrLn for visible output"
-                     not (T.isInfixOf "Use putStrLn / print for visible output" hint)
-                     -- Must still describe the IO () execution
-                     && T.isInfixOf "IO ()" hint
-                   _ -> False
-               _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object r) ->
+         case AKM.lookup (AKey.fromText "hint") r of
+           Just (A.String hint) ->
+             -- Must NOT contain circular "Use putStrLn for visible output"
+             not (T.isInfixOf "Use putStrLn / print for visible output" hint)
+             -- Must still describe the IO () execution
+             && T.isInfixOf "IO ()" hint
            _ -> False
        _ -> False
 
