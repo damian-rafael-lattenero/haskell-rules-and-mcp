@@ -30,7 +30,7 @@ import HaskellFlows.Mcp.ParseError (formatParseError)
 import System.Directory (findExecutable)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
-import System.IO (hGetContents)
+import System.IO (hGetContents')
 import System.Process
   ( CreateProcess (..)
   , StdStream (..)
@@ -205,7 +205,11 @@ findTixFile root = do
              , std_err = NoStream
              }
   (_, Just hOut, _, ph) <- createProcess cp
-  out <- hGetContents hOut
+  -- Strict read BEFORE waitForProcess: lazy hGetContents would defer
+  -- the read until 'lines out' forces it (after the process is reaped),
+  -- which both races the handle close and can deadlock if find's output
+  -- exceeds the pipe buffer. Same fix as Util.Process.runArgv.
+  out <- hGetContents' hOut
   _   <- waitForProcess ph
   case filter (not . null) (lines out) of
     (p:_) -> pure (Just p)
@@ -225,7 +229,8 @@ findMixDirs root = do
              , std_err = NoStream
              }
   (_, Just hOut, _, ph) <- createProcess cp
-  out <- hGetContents hOut
+  -- Strict read before reap — see findTixFile for the rationale.
+  out <- hGetContents' hOut
   _   <- waitForProcess ph
   pure (filter (not . null) (lines out))
 
@@ -248,8 +253,11 @@ runHpcReport mixDirs tix = do
                  , std_err = CreatePipe
                  }
       (_, Just hOut, Just hErr, ph) <- createProcess cp
-      out <- hGetContents hOut
-      _   <- forkIO (void (hGetContents hErr))
+      -- Drain stderr strictly on a thread (void (hGetContents hErr)
+      -- never forced the read, so a full stderr pipe could deadlock the
+      -- child), and read stdout strictly before reaping the process.
+      _   <- forkIO (void (hGetContents' hErr))
+      out <- hGetContents' hOut
       ec  <- waitForProcess ph
       case ec of
         ExitSuccess -> pure (Just (T.pack out))

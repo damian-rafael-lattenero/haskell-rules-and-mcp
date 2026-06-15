@@ -412,7 +412,16 @@ projectExternalImports dirs = do
 -- Best-effort; errors reading the file surface as @[]@.
 extractImportLinesIO :: FilePath -> IO [String]
 extractImportLinesIO fp = do
-  e <- try @SomeException (T.pack <$> readFile fp)
+  -- Force the whole read INSIDE 'try'. With lazy 'readFile' the bytes
+  -- are read only when 'body' is later forced — so a mid-read or
+  -- decode error would escape this 'try' and surface as an uncaught
+  -- exception instead of the documented []. 'evaluate (length s)'
+  -- drains the handle eagerly within the guarded region, mirroring the
+  -- strictness idiom at 'captureFdStdout' above.
+  e <- try @SomeException $ do
+         s <- readFile fp
+         _ <- evaluate (length s)
+         pure (T.pack s)
   case e of
     Left  _    -> pure []
     Right body -> pure (importLines body)

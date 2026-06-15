@@ -1,0 +1,103 @@
+name: Flakiness hunt (nightly)
+
+# ---------------------------------------------------------------------------
+#  Nightly non-determinism hunt.
+#
+#  WHY: the per-push CI runs each suite once. A flaky test — one that
+#  passes ~95% of the time — sails through almost every push and only
+#  reds occasionally, looking like an unrelated infra blip. The #288
+#  `runArgv` lazy-I/O race was exactly this: it took a lucky local run
+#  to catch it. This workflow runs the suites REPEATEDLY so an
+#  intermittent failure is far more likely to surface on a schedule,
+#  with logs, instead of randomly blocking someone's unrelated push.
+#
+#  Like bench-nightly.yml, this is a SEPARATE workflow (not in the
+#  `Haskell CI required` aggregator), so its red is a real flakiness
+#  signal — never a branch-protection blocker. But it is NOT
+#  continue-on-error: a red badge here means "a flake was caught, go
+#  read the log", the same contract bench-nightly uses.
+#
+#  Cadence: 04:00 UTC daily — offset from bench-nightly (02:00) and the
+#  weekly CI-image build (Sun 03:00) so the three don't contend for
+#  free-tier runners.
+# ---------------------------------------------------------------------------
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch: {}
+
+# Only one hunt at a time; queue a manual dispatch behind an in-flight
+# cron rather than racing it (repeated cabal runs on one cache box).
+concurrency:
+  group: flakiness-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: mcp-server-haskell
+
+jobs:
+  flakiness:
+    name: Flakiness hunt (unit x5, e2e x3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: setup
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.12.2"
+          cabal-version: "3.12.1.0"
+          cabal-update: true
+
+      - name: Configure + freeze
+        run: |
+          cabal configure --enable-tests --disable-documentation
+          cabal freeze
+
+      - name: Build (deps + project)
+        run: cabal build all --keep-going
+
+      # Pre-warm the e2e fixture closure so the repeated e2e passes
+      # aren't each paying the solver+compile cost (mirrors the main CI).
+      - name: Pre-warm E2E fixture deps
+        working-directory: mcp-server-haskell/test-e2e/Fixtures/Baseline
+        run: cabal build
+
+      # Unit suite x5 in one process via the repeat-runner. Any failing
+      # pass makes the whole step exit non-zero (no --keep-going).
+      - name: Unit suite — 5 repeats
+        env:
+          HASKELL_FLOWS_TEST_REPEAT: "5"
+        run: cabal test haskell-flows-mcp-test --test-show-details=direct
+
+      # E2E x3, slow scenarios skipped to keep the nightly bounded.
+      # Each iteration's exit code is tracked; any red iteration reds
+      # the step. Always runs even if the unit step failed, so one
+      # nightly surfaces flakes in BOTH layers.
+      - name: E2E suite (skip-slow) — 3 repeats
+        if: always()
+        env:
+          HASKELL_FLOWS_E2E_SKIP_SLOW: "1"
+        run: |
+          rc=0
+          for i in 1 2 3; do
+            echo "=== e2e flakiness pass $i/3 ==="
+            cabal test haskell-flows-mcp-e2e --test-show-details=direct || rc=1
+          done
+          exit $rc
+
+      # Capture the suite logs whatever the outcome — a red run is
+      # exactly when the per-scenario / per-test detail is worth keeping.
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flakiness-logs
+          path: mcp-server-haskell/dist-newstyle/build/**/test/*.log
+          retention-days: 14
+          if-no-files-found: warn

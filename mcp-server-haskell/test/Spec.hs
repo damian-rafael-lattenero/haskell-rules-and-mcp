@@ -259,7 +259,8 @@ import Control.Exception (SomeException, bracket_, try)
 import qualified HaskellFlows.Mcp.PathBootstrap
 import qualified System.Directory
 import qualified System.FilePath
-import Control.Monad (unless, when)
+import Control.Monad (replicateM, unless, when)
+import Text.Read (readMaybe)
 import Control.Concurrent.MVar
   ( newEmptyMVar, putMVar, takeMVar, newMVar, readMVar )
 import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, listDirectory, removePathForcibly)
@@ -444,8 +445,62 @@ import Spec.ProcessUnit
   , testRunArgvNonZeroExit
   )
 
+-- | Number of full suite passes to run. @HASKELL_FLOWS_TEST_REPEAT=N@
+-- (N >= 1) runs the whole suite N times and fails if ANY pass has a
+-- failure — a cheap flakiness hunt that surfaces non-deterministic
+-- tests (the class that hid the #288 runArgv lazy-I/O race). Default 1.
+testRepeatCount :: IO Int
+testRepeatCount = do
+  mv <- lookupEnv "HASKELL_FLOWS_TEST_REPEAT"
+  pure $ case mv >>= readMaybe of
+    Just n | n >= 1 -> n
+    _              -> 1
+
+-- Regression tests for the repeat-runner env parsing (Phase 1). Each
+-- sets-then-unsets HASKELL_FLOWS_TEST_REPEAT so it never leaks to a
+-- sibling test; the main loop reads the count once at startup so these
+-- mutations can't change the in-flight repeat count.
+testRepeatCountDefaultsToOne :: IO Bool
+testRepeatCountDefaultsToOne = do
+  unsetEnv "HASKELL_FLOWS_TEST_REPEAT"
+  (== 1) <$> testRepeatCount
+
+testRepeatCountReadsValid :: IO Bool
+testRepeatCountReadsValid = do
+  setEnv "HASKELL_FLOWS_TEST_REPEAT" "5"
+  n <- testRepeatCount
+  unsetEnv "HASKELL_FLOWS_TEST_REPEAT"
+  pure (n == 5)
+
+testRepeatCountClampsZero :: IO Bool
+testRepeatCountClampsZero = do
+  setEnv "HASKELL_FLOWS_TEST_REPEAT" "0"
+  n <- testRepeatCount
+  unsetEnv "HASKELL_FLOWS_TEST_REPEAT"
+  pure (n == 1)
+
+testRepeatCountFallsBackOnGarbage :: IO Bool
+testRepeatCountFallsBackOnGarbage = do
+  setEnv "HASKELL_FLOWS_TEST_REPEAT" "not-a-number"
+  n <- testRepeatCount
+  unsetEnv "HASKELL_FLOWS_TEST_REPEAT"
+  pure (n == 1)
+
 main :: IO ()
 main = do
+  repeats <- testRepeatCount
+  outcomes <- replicateM repeats $ do
+    ok <- runAllTests
+    when (repeats > 1) $
+      putStrLn ("=== suite pass: " <> (if ok then "PASS" else "FAIL") <> " ===")
+    pure ok
+  if and outcomes then exitSuccess else exitFailure
+
+-- | One full pass of the suite. Extracted from 'main' so it can be run
+-- N times under HASKELL_FLOWS_TEST_REPEAT; returns True iff every test
+-- in the pass passed.
+runAllTests :: IO Bool
+runAllTests = do
   results <-
     sequence $
       [ test "mkProjectDir rejects relative"    testRejectsRelativeProject
@@ -1927,7 +1982,12 @@ main = do
       , test "#288: runArgv completes — echo exits 0 with expected stdout" testRunArgvCompletes
       , test "#288: runArgv timeout — sleep 60 killed within 2s budget"    testRunArgvTimeout
       , test "#288: runArgv non-zero — false exits with ExitFailure"       testRunArgvNonZeroExit
+      -- Phase 1 — HASKELL_FLOWS_TEST_REPEAT repeat-runner env parsing
+      , test "repeat-runner: defaults to 1 when env unset"          testRepeatCountDefaultsToOne
+      , test "repeat-runner: reads a valid positive int"           testRepeatCountReadsValid
+      , test "repeat-runner: clamps 0 to 1"                        testRepeatCountClampsZero
+      , test "repeat-runner: falls back to 1 on non-numeric"       testRepeatCountFallsBackOnGarbage
       ]
       ++ scratchTests
-  if and results then exitSuccess else exitFailure
+  pure (and results)
 
