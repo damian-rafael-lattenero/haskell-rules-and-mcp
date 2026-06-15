@@ -1,0 +1,28 @@
+.github/workflows/haskell-ci.yml
+  s_d23a82140bf8e8::t_ba05936db5aee5 419-480
+  s_d23a82140bf8e8::t_e36097cf30d185 642
+  s_d23a82140bf8e8::t_ed73dfdbb668bf 658-659
+  s_d23a82140bf8e8::t_25e709e350c520 687,690-691
+mcp-server-haskell/coverage-baseline.txt
+  s_d23a82140bf8e8::t_63f8d02caec3e6 1-17
+scripts/ci-local.sh
+  s_d23a82140bf8e8::t_49a645621ffaea 309-311
+scripts/coverage-gate.sh
+  s_d23a82140bf8e8::t_6e97dcc71663e5 1-143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "bd155321431578f1c6a2937b9ee3536ce53411b2",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
