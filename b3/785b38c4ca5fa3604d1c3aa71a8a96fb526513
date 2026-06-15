@@ -1,0 +1,30 @@
+mcp-server-haskell/haskell-flows-mcp.cabal
+  s_d23a82140bf8e8::t_842c94b5edf72c 366-367
+mcp-server-haskell/test-e2e/Scenarios/FlowFormat.hs
+  s_d23a82140bf8e8::t_b7adae663c9152 21
+  s_d23a82140bf8e8::t_d282314357a8d2 1-20,22-83,85-155
+  s_d23a82140bf8e8::t_062bed1765b9d4 84
+mcp-server-haskell/test-e2e/Main.hs
+  s_d23a82140bf8e8::t_4a129c45e2904b 78-79
+  s_d23a82140bf8e8::t_19baf0ca9b8719 218-221
+mcp-server-haskell/test-e2e/Scenarios/FlowHoogleSearch.hs
+  s_d23a82140bf8e8::t_c8e162965fe39b 1-25,27-72,74-148
+  s_d23a82140bf8e8::t_24962796627b94 26
+  s_d23a82140bf8e8::t_ac05bd5a46fdd8 73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "b3785b38c4ca5fa3604d1c3aa71a8a96fb526513",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
