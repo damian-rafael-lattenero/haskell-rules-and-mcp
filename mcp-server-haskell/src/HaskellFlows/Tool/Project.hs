@@ -93,7 +93,7 @@ runHandle lim pdRef sessRef storeRef scratchRef selfRef invalidateStanza descrip
              invalidateStanza
              -- #256: auto-switch to the freshly created project (only when
              -- create succeeded, write=True, and an explicit path was given).
-             if trIsError (Env.toolResponseToResult r)
+             if Env.isFailingStatus (Env.reStatus r)
                then pure r
                else case createAutoSwitchPath inner of
                  Nothing      -> pure r

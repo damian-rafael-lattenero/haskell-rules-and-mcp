@@ -261,14 +261,15 @@ testCreateUsesSuppliedPath = withTempProject $ \pd -> do
 -- the server must auto-switch to the new path so subsequent tool calls
 -- (ghc_deps, ghc_modules) operate on the right project.
 -- Verified via source inspection: 'createAutoSwitchPath' must exist,
--- must gate on 'trIsError', and must call 'SwitchProjectTool.handle'.
+-- must gate on 'isFailingStatus', and must call 'SwitchProjectTool.handle'.
 -- #275: the dispatch (and this logic) moved from Server to Tool.Project.
+-- #290: error check ported from 'trIsError' to 'Env.isFailingStatus'.
 testCreateAutoSwitchPresent :: IO Bool
 testCreateAutoSwitchPresent = do
   src <- TIO.readFile "src/HaskellFlows/Tool/Project.hs"
   let code = T.unlines (filter (not . isDocLine) (T.lines src))
   pure $ T.isInfixOf "createAutoSwitchPath"        code
-      && T.isInfixOf "trIsError r"                 code
+      && T.isInfixOf "isFailingStatus"              code
       && T.isInfixOf "SwitchProjectTool.handle"    code
   where
     isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
