@@ -1,0 +1,29 @@
+mcp-server-haskell/test/Spec/InfoParse.hs
+  s_d23a82140bf8e8::t_bc61a294fbaccc 8
+  s_d23a82140bf8e8::t_6f69f5dc067ac6 73-89
+  s_d23a82140bf8e8::t_29fdf2324574d8 64,66-70
+mcp-server-haskell/test/Spec.hs
+  s_d23a82140bf8e8::t_15959c1ac8ef33 1115
+mcp-server-haskell/src/HaskellFlows/Tool/AddImport.hs
+  s_d23a82140bf8e8::t_335a263e2afdcb 85-93
+  s_d23a82140bf8e8::t_25603174ba05b2 155
+  s_d23a82140bf8e8::t_684e11af675615 103,112
+  s_d23a82140bf8e8::t_bfcd162256a777 18
+  s_d23a82140bf8e8::t_0e9b1975604b59 244-245,247,250-254,256-299
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "37006376af7bb71a864dc3462496e22dfe5d7a14",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
