@@ -10,11 +10,12 @@ module HaskellFlows.Util.Process
   , runArgv
   ) where
 
-import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar)
+import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar, threadDelay, tryReadMVar)
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
 import System.Exit (ExitCode)
-import System.IO (hClose, hGetContents)
+import System.IO (hGetContents)
 import System.Process
   ( CreateProcess (..)
   , StdStream (..)
@@ -23,7 +24,6 @@ import System.Process
   , terminateProcess
   , waitForProcess
   )
-import System.Timeout (timeout)
 
 import HaskellFlows.Config (Micros (..))
 
@@ -56,18 +56,24 @@ runArgv budget mCwd cmd args = do
              , std_err = CreatePipe
              }
   (_, Just hOut, Just hErr, ph) <- createProcess cp
-  outVar <- newEmptyMVar
-  errVar <- newEmptyMVar
+  outVar   <- newEmptyMVar
+  errVar   <- newEmptyMVar
+  timedOut <- newEmptyMVar
   _ <- forkIO (hGetContents hOut >>= putMVar outVar)
   _ <- forkIO (hGetContents hErr >>= putMVar errVar)
-  exited <- timeout (unMicros budget) (waitForProcess ph)
-  case exited of
-    Nothing -> do
-      terminateProcess ph
-      hClose hOut
-      hClose hErr
-      pure TimedOut
-    Just ec -> do
+  -- System.Timeout.timeout cannot interrupt waitForProcess on Linux: the
+  -- thread blocks inside waitpid() (uninterruptible blocking FFI) and never
+  -- receives the async exception. Use a dedicated timer thread that sends
+  -- SIGTERM after the budget, letting waitForProcess return naturally.
+  _ <- forkIO $ do
+    threadDelay (unMicros budget)
+    terminateProcess ph
+    putMVar timedOut ()
+  ec     <- waitForProcess ph
+  killed <- isJust <$> tryReadMVar timedOut
+  if killed
+    then pure TimedOut
+    else do
       o <- takeMVar outVar
       e <- takeMVar errVar
       pure $ Completed SubprocessResult
