@@ -1,0 +1,29 @@
+.github/workflows/haskell-ci.yml
+  s_d23a82140bf8e8::t_bd4b7777185e36 92,244,370,427
+  s_d23a82140bf8e8::t_219ae267d94342 664
+  s_d23a82140bf8e8::t_fc86230103beea 681-682
+  s_d23a82140bf8e8::t_969726ce592044 711,714-715
+  s_d23a82140bf8e8::t_18ff00ad6689e4 516-536
+scripts/check-scenario-registration.sh
+  s_d23a82140bf8e8::t_d02a695643a7c9 1-80
+scripts/ci-local.sh
+  s_d23a82140bf8e8::t_1153fc92e8d511 269-273
+docs/testing.md
+  s_d23a82140bf8e8::t_c0fe89823b5756 39-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "e09ea273d9c5ee0d620ef715e309fc0cbcce59ac",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
