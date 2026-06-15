@@ -110,6 +110,7 @@ import GHC
   , setTargets
   , simpleImportDecl
   )
+import GHC.Driver.Backend (interpreterBackend)
 import GHC.Driver.Env (HscEnv (hsc_logger))
 import GHC.Driver.Flags (WarningFlag (..))
 import GHC.Driver.Session
@@ -1419,5 +1420,15 @@ applyFlavour flavour = do
             `wopt_set` Opt_WarnDeferredTypeErrors
             `wopt_set` Opt_WarnTypedHoles
             `wopt_set` Opt_WarnDeferredOutOfScopeVariables
-  _ <- setSessionDynFlags dflags'
+  -- #B-4: force the interpreter (byte-code) backend for every home-module
+  -- load. cabal's captured repl flags can otherwise leave the backend on
+  -- object-code; ghc_check_module then recompiles the home module to .o in
+  -- the shared HscEnv, and the *next* ghc_eval / ghc_scratch check (which
+  -- run through the byte-code interpreter via compileExpr / exprType /
+  -- runDecls) cannot link those object symbols — GHC throws
+  -- "GHC.ByteCode.Linker.lookupCE: couldn't find symbol …_closure".
+  -- Byte-code is what GHCi uses by default, is faster to generate than
+  -- native code (so check_module is not slower), and external deps still
+  -- link from their .o/.a via the system linker exactly as in normal GHCi.
+  _ <- setSessionDynFlags (dflags' { backend = interpreterBackend })
   pure ()

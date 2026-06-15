@@ -46,6 +46,7 @@ import qualified Scenarios.FlowCoverage         as FlowCov
 import qualified Scenarios.FlowCrossValidation  as FlowXV
 import qualified Scenarios.FlowDependencyConflict as FlowDC
 import qualified Scenarios.FlowDiskFull          as FlowDF
+import qualified Scenarios.FlowEvalAfterCheck    as FlowEAC
 import qualified Scenarios.FlowExploratory      as FlowE
 import qualified Scenarios.FlowExprEvaluatorDogfood as FlowEED
 import qualified Scenarios.FlowDogfoodUxFixes   as FlowDUX
@@ -129,6 +130,8 @@ scenarios =
     , True, Expr.runExprScenario )
   , ( "Flow: Exploratory (type / info / eval / complete / goto / doc)"
     , False, FlowE.runFlow )
+  , ( "Flow: Eval after check_module (B-4 byte-code linker regression)"
+    , False, FlowEAC.runFlow )
   , ( "Flow: Typed holes (hole → patch → clean)"
     , False, FlowH.runFlow )
   , ( "Flow: Refactor (rename happy + rollback + keyword-reject)"
