@@ -34,7 +34,7 @@ import qualified HaskellFlows.Tool.Lab as LabTool
 import qualified HaskellFlows.Tool.Load as LoadTool
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
 
-import Spec.Helpers (isTraversalRefused, decodeToolResult)
+import Spec.Helpers (isTraversalRefused)
 import Spec.ToolEnvFixture (pdEnv)
 
 import Data.Text (Text)
@@ -58,7 +58,7 @@ testApplyExportsRejectsTraversal = do
             , "exports"     A..= ([] :: [Text])
             ]
       tr <- ApplyExports.handle (pdEnv pd) args
-      pure (isTraversalRefused (decodeToolResult tr))
+      pure (isTraversalRefused (Right tr))
 
 -- | #100C: 'ghc_fix_warning' must refuse traversal paths.
 testFixWarningRejectsTraversal :: IO Bool
@@ -72,7 +72,7 @@ testFixWarningRejectsTraversal = do
             , "code"        A..= ("-Wunused-imports" :: Text)
             ]
       tr <- FixWarning.handle (pdEnv pd) args
-      pure (isTraversalRefused (decodeToolResult tr))
+      pure (isTraversalRefused (Right tr))
 
 -- | #100C: 'ghc_check_module' must refuse traversal paths.
 -- 'mkModulePath' fires before the GhcSession or Store are touched.
@@ -84,7 +84,7 @@ testCheckModuleRejectsTraversal = do
       let args = A.object
             [ "module_path" A..= ("../../etc/passwd" :: Text) ]
       tr <- CheckModule.handle (pdEnv pd) args
-      pure (isTraversalRefused (decodeToolResult tr))
+      pure (isTraversalRefused (Right tr))
 
 -- | #150: 'ghc_check_module' on a non-existent file must return
 -- status='failed' with kind='module_path_does_not_exist'. Before the
@@ -99,13 +99,13 @@ testCheckModuleNonExistentFile = do
       let args = A.object
             [ "module_path" A..= ("src/DoesNotExist.hs" :: Text) ]
       tr <- CheckModule.handle (pdEnv pd) args
-      case decodeToolResult tr of
-        Right env
-          | Env.reStatus env == Env.StatusFailed
-          , Just err <- Env.reError env ->
-              pure (Env.eeKind err == Env.ModulePathDoesNotExist
-                 && Env.eeField err == Just "module_path")
-        _ -> pure False
+      let env = tr
+      if  Env.reStatus env == Env.StatusFailed
+        then case Env.reError env of
+               Just err -> pure (Env.eeKind err == Env.ModulePathDoesNotExist
+                               && Env.eeField err == Just "module_path")
+               Nothing  -> pure False
+        else pure False
 
 -- | #100C: 'ghc_explain_error' must refuse traversal paths.
 testExplainErrorRejectsTraversal :: IO Bool
@@ -116,7 +116,7 @@ testExplainErrorRejectsTraversal = do
       let args = A.object
             [ "module_path" A..= ("../../etc/passwd" :: Text) ]
       tr <- ExplainError.handle (pdEnv pd) args
-      pure (isTraversalRefused (decodeToolResult tr))
+      pure (isTraversalRefused (Right tr))
 
 -- | #100C: 'ghc_lab' must refuse traversal paths.
 testLabRejectsTraversal :: IO Bool
@@ -127,7 +127,7 @@ testLabRejectsTraversal = do
       let args = A.object
             [ "module_path" A..= ("../../etc/passwd" :: Text) ]
       tr <- LabTool.handle (pdEnv pd) args
-      pure (isTraversalRefused (decodeToolResult tr))
+      pure (isTraversalRefused (Right tr))
 
 -- | #160: 'ghc_lab' on a non-existent file must return
 -- status='failed' with kind='module_path_does_not_exist', not
@@ -141,12 +141,12 @@ testLabNonExistentFile = do
       let args = A.object
             [ "module_path" A..= ("src/DoesNotExist.hs" :: Text) ]
       tr <- LabTool.handle (pdEnv pd) args
-      case decodeToolResult tr of
-        Right env
-          | Env.reStatus env == Env.StatusFailed
-          , Just err <- Env.reError env ->
-              pure (Env.eeKind err == Env.ModulePathDoesNotExist)
-        _ -> pure False
+      let env = tr
+      if  Env.reStatus env == Env.StatusFailed
+        then case Env.reError env of
+               Just err -> pure (Env.eeKind err == Env.ModulePathDoesNotExist)
+               Nothing  -> pure False
+        else pure False
 
 -- | #100C: 'ghc_load' must refuse traversal paths when 'module_path' is supplied.
 -- 'mkModulePath' fires in the Just-path branch before 'countHaskellSources'
@@ -159,7 +159,7 @@ testLoadRejectsTraversal = do
       let args = A.object
             [ "module_path" A..= ("../../etc/passwd" :: Text) ]
       tr <- LoadTool.handle (pdEnv pd) args
-      pure (isTraversalRefused (decodeToolResult tr))
+      pure (isTraversalRefused (Right tr))
 
 -- | #100C: 'ghc_refactor' must refuse traversal paths.
 testRefactorRejectsTraversal :: IO Bool
@@ -176,7 +176,7 @@ testRefactorRejectsTraversal = do
             , "scope_line_end"   A..= (10 :: Int)
             ]
       tr <- RefactorTool.handle (pdEnv pd) args
-      pure (isTraversalRefused (decodeToolResult tr))
+      pure (isTraversalRefused (Right tr))
 
 -- ---------------------------------------------------------------------------
 -- Issue #98 Phase B · structured logging unit tests

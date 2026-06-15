@@ -17,21 +17,18 @@ module Spec.ApplyExports
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
-import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
+import Data.Maybe (fromMaybe)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Types (mkProjectDir, ProjectDir)
 import qualified HaskellFlows.Types
 import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
 
-import Spec.Helpers (decodeToolResult, runToolEnvelope, getTestTimestamp)
+import Spec.Helpers (getTestTimestamp)
 import Spec.ToolEnvFixture (pdEnv)
 
 -- | #173: idempotent case — when the requested list is IDENTICAL to
@@ -202,22 +199,9 @@ fixtureCabal = T.unlines
   , "    build-depends:    base"
   ]
 
-resultPayload :: ToolResult -> A.Value
-resultPayload tr = case extractPayload tr of
-  A.Object o -> case AKM.lookup (AKey.fromText "result") o of
-    Just inner -> inner
-    Nothing    -> A.Object o
-  v          -> v
-
-extractPayload :: ToolResult -> A.Value
-extractPayload tr = case trContent tr of
-  (TextContent t : _) ->
-    case A.eitherDecodeStrict (encodeUtf8Strict t) of
-      Right v -> v
-      Left _  -> A.Null
-  _ -> A.Null
-  where
-    encodeUtf8Strict = BL.toStrict . TLE.encodeUtf8 . TL.fromStrict
+-- | After #290: return the inner @result@ payload from a 'ToolResponse'.
+resultPayload :: Env.ToolResponse -> A.Value
+resultPayload tr = fromMaybe A.Null (Env.reResult tr)
 
 fieldEquals :: T.Text -> A.Value -> A.Value -> Bool
 fieldEquals k expected v = lookupField k v == Just expected

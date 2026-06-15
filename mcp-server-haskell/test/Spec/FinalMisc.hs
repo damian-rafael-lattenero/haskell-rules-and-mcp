@@ -98,8 +98,6 @@ import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.Vector as Vector
 import Data.Maybe (isNothing)
 import qualified Data.List as List
@@ -121,7 +119,6 @@ import HaskellFlows.Ghc.ApiSession
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
 import Spec.ToolEnvFixture (sessionPdEnv)
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Mcp.Progress (noopSink)
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Tool.AddImport as AddImport
@@ -155,7 +152,7 @@ import HaskellFlows.Suggest.Rules (applyRules, Suggestion (..), Confidence (..))
 import qualified HaskellFlows.Mcp.NextStep as NextStep
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 
-import Spec.Helpers (decodeToolResult, runToolEnvelope, withTempProject)
+import Spec.Helpers (withTempProject)
 
 -- | #116: GHC-66111 (redundant import) must route to 'WcUnused', not
 -- 'WcDeferredError'. Before the fix it was listed in @deferredCodes@
@@ -327,16 +324,10 @@ testGateFailureKindExists =
 testUnchangedResultNoVerb :: IO Bool
 testUnchangedResultNoVerb =
   let tr     = DepsTool.unchangedResult "/tmp/foo.cabal" "aeson" "added"
-  in pure $ case trContent tr of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "result" top of
-               Just (A.Object r) ->
-                 AKM.lookup "action" r == Just (A.String "unchanged")
-                 && not (AKM.member "verb" r)
-               _ -> False
-           _ -> False
+  in pure $ case Env.reResult tr of
+       Just (A.Object r) ->
+         AKM.lookup "action" r == Just (A.String "unchanged")
+         && not (AKM.member "verb" r)
        _ -> False
 
 -- | #119: 'formatIso8601' must produce an ISO-8601 UTC timestamp
@@ -362,13 +353,7 @@ testValidateCabalWarningsOk =
         , VC.iSeverity = VC.CabalSevWarn
         }
       tr = VC.renderResult "/tmp/foo.cabal" [warnIssue]
-  in pure $ case trContent tr of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             AKM.lookup "status" top == Just (A.String "ok")
-           _ -> False
-       _ -> False
+  in pure $ Env.reStatus tr == Env.StatusOk
 
 --------------------------------------------------------------------------------
 -- Issue #110 — ghc_load hs-source-dirs validation
@@ -476,10 +461,7 @@ testLoadSpecificFileIgnoresStray = do
       tr   <- LoadTool.handle (sessionPdEnv sess pd)
                 (A.object [ "module_path" A..= ("src/Good.hs" :: Text) ])
       killGhcSession sess
-      case trContent tr of
-        [TextContent body] ->
-          pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
-        _ -> pure (Left "expected exactly one TextContent")
+      pure (Right tr)
   removePathForcibly dir
   pure $ case result of
     Right env
@@ -610,16 +592,10 @@ testTargetForPathLibFallback = do
 -- #129 — ghc_check_project deadline-based timeout
 --------------------------------------------------------------------------------
 
--- | Helper: decode the @result@ sub-object from the first TextContent
--- of a 'ToolResult' (the standard wire shape).
-decodeCheckProjectResult :: ToolResult -> Maybe A.Value
-decodeCheckProjectResult tr =
-  case trContent tr of
-    (TextContent body : _) ->
-      case A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)) of
-        Right (A.Object top) -> AKM.lookup "result" top
-        _                    -> Nothing
-    _ -> Nothing
+-- | Helper: extract the @result@ sub-object from a 'ToolResponse'.
+-- After #290 'CheckProject.renderResult' returns 'ToolResponse' directly.
+decodeCheckProjectResult :: Env.ToolResponse -> Maybe A.Value
+decodeCheckProjectResult = Env.reResult
 
 -- | #129: Parsing @{}@ as 'CheckProjectArgs' should yield
 -- | #191: ghc_check_project must NOT call loadForTarget directly; it must
@@ -724,27 +700,16 @@ testRenderResultTimedOutOverallFalse = do
 -- 'renderResult' must return status='partial', not status='failed'.
 testCheckProjectPartialStatus :: IO Bool
 testCheckProjectPartialStatus =
-  let passTr = Env.toolResponseToResult (Env.mkOk (A.object []))
-      failTr = Env.toolResponseToResult
-                 (Env.mkFailed (Env.mkErrorEnvelope Env.Validation "err"))
+  let passTr = Env.mkOk (A.object [])
+      failTr = Env.mkFailed (Env.mkErrorEnvelope Env.Validation "err")
       outcomes = [MoChecked "Foo.Ok" passTr, MoChecked "Foo.Bad" failTr]
       tr = renderResult outcomes False
-      -- Decode the full outer envelope (not just the inner payload) so
-      -- we can inspect the top-level "status" field.
-      mTopEnv = case trContent tr of
-        (TextContent body : _) ->
-          case A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)) of
-            Right (A.Object top) -> Just top
-            _                    -> Nothing
-        _ -> Nothing
-  in pure $ case mTopEnv of
-       Just top ->
-            AKM.lookup "status" top == Just (A.String "partial")
-         && case AKM.lookup "result" top of
-              Just (A.Object r) ->
-                AKM.lookup "overall" r == Just (A.Bool False)
-              _ -> False
-       Nothing -> False
+  in pure $
+       Env.reStatus tr == Env.StatusPartial
+    && case Env.reResult tr of
+         Just (A.Object r) ->
+           AKM.lookup "overall" r == Just (A.Bool False)
+         _ -> False
 
 -- | Issue #254: when no rule template applies to the signature shape,
 -- 'computeSuggest' must return @Left "no-template-matched"@.
@@ -835,22 +800,18 @@ testWitPrimitiveFallbackWarning = do
                      ]
           tr      = WitnessTool.renderReport args (QcPassed "prop" 200)
                       ctorDist [] "" 0
-      in pure $ case trContent tr of
-           [TextContent body] ->
-             case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-               Just (env :: Env.ToolResponse)
-                 | Just (A.Object payload) <- Env.reResult env ->
-                     -- Must use by_size (fallback), not by_constructor.
-                     case AKM.lookup "distribution" payload of
-                       Just (A.Object dist_) ->
-                         AKM.member "by_size" dist_
-                           && not (AKM.member "by_constructor" dist_)
-                           -- Must contain the primitive-fallback warning.
-                           && case AKM.lookup "warnings" payload of
-                                Just (A.Array ws) ->
-                                  any primitiveWarn (Vector.toList ws)
-                                _ -> False
-                       _ -> False
+      in pure $ case Env.reResult tr of
+           Just (A.Object payload) ->
+             -- Must use by_size (fallback), not by_constructor.
+             case AKM.lookup "distribution" payload of
+               Just (A.Object dist_) ->
+                 AKM.member "by_size" dist_
+                   && not (AKM.member "by_constructor" dist_)
+                   -- Must contain the primitive-fallback warning.
+                   && case AKM.lookup "warnings" payload of
+                        Just (A.Array ws) ->
+                          any primitiveWarn (Vector.toList ws)
+                        _ -> False
                _ -> False
            _ -> False
   where
@@ -872,13 +833,9 @@ testWitRawTruncatedFlag = do
     A.Success args ->
       let longRaw = T.replicate 1001 "x"
           tr      = WitnessTool.renderReport args (QcPassed "prop" 100) [] [] longRaw 0
-      in pure $ case trContent tr of
-           [TextContent body] ->
-             case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-               Just (env :: Env.ToolResponse)
-                 | Just (A.Object payload) <- Env.reResult env ->
-                     AKM.lookup "raw_truncated" payload == Just (A.Bool True)
-               _ -> False
+      in pure $ case Env.reResult tr of
+           Just (A.Object payload) ->
+             AKM.lookup "raw_truncated" payload == Just (A.Bool True)
            _ -> False
 
 -- | #199 Bug 2: when 'qc_raw_output' fits within 1000 chars the
@@ -894,13 +851,9 @@ testWitNoRawTruncatedWhenShort = do
     A.Success args ->
       let shortRaw = "size:0\t50\nsize:1-5\t50"
           tr       = WitnessTool.renderReport args (QcPassed "prop" 100) [] [] shortRaw 0
-      in pure $ case trContent tr of
-           [TextContent body] ->
-             case A.decode (TLE.encodeUtf8 (TL.fromStrict body)) of
-               Just (env :: Env.ToolResponse)
-                 | Just (A.Object payload) <- Env.reResult env ->
-                     not (AKM.member "raw_truncated" payload)
-               _ -> False
+      in pure $ case Env.reResult tr of
+           Just (A.Object payload) ->
+             not (AKM.member "raw_truncated" payload)
            _ -> False
 
 
@@ -1032,15 +985,9 @@ testLooksLikeModuleThree = pure $ AddImport.looksLikeModule "Data.Map.Strict"
 testRefactorCompileFailDryRunTrue :: IO Bool
 testRefactorCompileFailDryRunTrue =
   let result = RefactorTool.compileFailResult True [] "error" " (dry run, original preserved)"
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "result" top of
-               Just (A.Object r) ->
-                 AKM.lookup "dry_run" r == Just (A.Bool True)
-               _ -> False
-           _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object r) ->
+         AKM.lookup "dry_run" r == Just (A.Bool True)
        _ -> False
 
 -- | #205 Bug 1: 'extractFreeVarNames' picks up variable names from
@@ -1082,19 +1029,13 @@ testRefactorFreeVarNote =
         }
       errs   = [ mkErr "Variable not in scope: x :: Int" ]
       result = RefactorTool.compileFailResult False errs "raw errors" " (restored)"
-  in pure $ case trContent result of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "result" top of
-               Just (A.Object r) ->
-                 case AKM.lookup "note" r of
-                   Just (A.String note) ->
-                     "x" `T.isInfixOf` note
-                       && "free variable" `T.isInfixOf` note
-                       && "extract_binding" `T.isInfixOf` note
-                   _ -> False
-               _ -> False
+  in pure $ case Env.reResult result of
+       Just (A.Object r) ->
+         case AKM.lookup "note" r of
+           Just (A.String note) ->
+             "x" `T.isInfixOf` note
+               && "free variable" `T.isInfixOf` note
+               && "extract_binding" `T.isInfixOf` note
            _ -> False
        _ -> False
 
@@ -1252,15 +1193,9 @@ testDepsUnchangedResultHintField :: IO Bool
 testDepsUnchangedResultHintField =
   let tr = DepsTool.unchangedResult' "/tmp/foo.cabal" "aeson" "removed"
              (Just "aeson is in common stanza 'shared-deps'")
-  in pure $ case trContent tr of
-       [TextContent body_] ->
-         case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-           Just (A.Object top) ->
-             case AKM.lookup "result" top of
-               Just (A.Object r) -> AKM.member "hint" r
-               _                 -> False
-           _ -> False
-       _ -> False
+  in pure $ case Env.reResult tr of
+       Just (A.Object r) -> AKM.member "hint" r
+       _                 -> False
 
 -- ---------------------------------------------------------------------------
 -- Issue #243 — ghc_suggest must call augmentEvalContext before queryType
@@ -1312,16 +1247,11 @@ mkPerfArgs expr = PerfTool.PerfArgs
   , PerfTool.paThresholdPct    = 30.0
   }
 
-extractPerfResult :: ToolResult -> Maybe A.Object
-extractPerfResult tr = case trContent tr of
-  [TextContent body_] ->
-    case A.decode (TLE.encodeUtf8 (TL.fromStrict body_)) of
-      Just (A.Object top) ->
-        case AKM.lookup "result" top of
-          Just (A.Object r) -> Just r
-          _                 -> Nothing
-      _ -> Nothing
-  _ -> Nothing
+-- | After #290: extract the @result@ object from a 'ToolResponse'.
+extractPerfResult :: Env.ToolResponse -> Maybe A.Object
+extractPerfResult tr = case Env.reResult tr of
+  Just (A.Object r) -> Just r
+  _                 -> Nothing
 
 -- | #245: when mean_ns < 1_000_000 (< 1ms), payload must include
 -- 'low_precision_warning'.

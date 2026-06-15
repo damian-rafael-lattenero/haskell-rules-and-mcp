@@ -16,12 +16,10 @@ module Spec.AddModulesHandle
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
-import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.Vector as Vector
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
@@ -31,7 +29,6 @@ import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Types
 import qualified HaskellFlows.Tool.AddModules as AddModules
 import qualified HaskellFlows.Tool.RemoveModules as RM
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 
 import Spec.Helpers (getTestTimestamp)
 
@@ -82,29 +79,18 @@ withFixture k = do
   removePathForcibly dir
   pure res
 
--- | Decode a 'ToolResult' content payload back into a JSON 'Value'
--- so the tests can pattern-match on field shape (success, error,
--- rejected[]). Mirrors what an MCP client would do.
-extractPayload :: ToolResult -> A.Value
-extractPayload tr = case trContent tr of
-  (TextContent t : _) -> case A.eitherDecodeStrict (encodeUtf8Strict t) of
-    Right v -> v
-    Left _  -> A.Null
-  _ -> A.Null
-  where
-    encodeUtf8Strict = BL.toStrict . TLE.encodeUtf8 . TL.fromStrict
+-- | After #290: serialise the full 'ToolResponse' as JSON.
+extractPayload :: Env.ToolResponse -> A.Value
+extractPayload = A.toJSON
 
--- | Issue #90: drill through the envelope to the inner @result@
--- payload. Most pre-envelope tests inspected fields at the top
--- level — those fields now live under @result@. Returns the
--- top-level Value when there's no @result@ field (graceful
--- back-compat for tools still emitting the pre-envelope shape).
-resultPayload :: ToolResult -> A.Value
-resultPayload tr = case extractPayload tr of
-  A.Object o -> case AKM.lookup (AKey.fromText "result") o of
-    Just inner -> inner
-    Nothing    -> A.Object o
-  v          -> v
+-- | After #290: return the inner @result@ payload from a 'ToolResponse'.
+resultPayload :: Env.ToolResponse -> A.Value
+resultPayload tr = fromMaybe A.Null (Env.reResult tr)
+
+-- | After #290: True when the response status is a failing status.
+isError :: Env.ToolResponse -> Bool
+isError tr = Env.reStatus tr `notElem`
+  [Env.StatusOk, Env.StatusPartial, Env.StatusNoMatch]
 
 hasField :: Text -> A.Value -> Bool
 hasField k (A.Object o) = AKM.member (AKey.fromText k) o
@@ -126,7 +112,7 @@ testHandleAddModulesRefusesLowercaseModule = withFixture $ \pd cabalFile -> do
   before <- TIO.readFile cabalFile
   result <- AddModules.handle pd args
   after  <- TIO.readFile cabalFile
-  let isErr        = trIsError result
+  let isErr        = isError result
       envelope     = extractPayload result
       innerResult  = resultPayload result
   pure
@@ -185,7 +171,7 @@ testHandleAddModulesHappyPathStillWorks = withFixture $ \pd cabalFile -> do
   stubExists <- doesFileExist
                   (HaskellFlows.Types.unProjectDir pd </> "src" </> "NewMod.hs")
   pure
-    (  not (trIsError result)
+    (  not (isError result)
     && "NewMod" `T.isInfixOf` after
     && stubExists
     )
@@ -201,7 +187,7 @@ testHandleRemoveModulesRefuses = withFixture $ \pd cabalFile -> do
   result <- RM.handle pd args
   after  <- TIO.readFile cabalFile
   pure
-    (  trIsError result
+    (  isError result
     && before == after
     && hasField "rejected" (resultPayload result)
     )

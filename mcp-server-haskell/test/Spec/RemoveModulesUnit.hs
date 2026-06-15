@@ -37,7 +37,7 @@ import qualified HaskellFlows.Tool.RemoveModules as RM
 import HaskellFlows.Mcp.Progress (noopSink)
 import HaskellFlows.Types (mkProjectDir)
 
-import Spec.Helpers (withTempProject, decodeToolResult)
+import Spec.Helpers (withTempProject)
 
 testRemoveModulesRegistered :: IO Bool
 testRemoveModulesRegistered = pure $
@@ -170,17 +170,16 @@ testRemoveModulesNotFoundField = do
             , "delete_files" A..= False
             ]
       tr <- RM.handle pd args
-      pure $ case decodeToolResult tr of
-        Right env ->
-             Env.reStatus env == Env.StatusOk
-          && case Env.reResult env of
-               Just (A.Object obj) ->
-                 case AKM.lookup (AKey.fromText "not_found") obj of
-                   Just (A.Array arr) ->
-                     A.String "Never.Existed" `elem` arr
-                   _                  -> False
-               _ -> False
-        Left _ -> False
+      let env = tr
+      pure $
+           Env.reStatus env == Env.StatusOk
+        && case Env.reResult env of
+             Just (A.Object obj) ->
+               case AKM.lookup (AKey.fromText "not_found") obj of
+                 Just (A.Array arr) ->
+                   A.String "Never.Existed" `elem` arr
+                 _                  -> False
+             _ -> False
   removePathForcibly dir
   pure result
 

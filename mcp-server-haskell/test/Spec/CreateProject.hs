@@ -29,21 +29,18 @@ import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.ByteString.Lazy as BL
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import qualified Data.List as List
+import Data.Maybe (fromMaybe)
 import System.Directory (doesFileExist, getTemporaryDirectory, removePathForcibly, createDirectoryIfMissing, listDirectory)
 import System.FilePath ((</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Types
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import qualified HaskellFlows.Tool.CreateProject as CreateProject
 
-import Spec.Helpers (decodeToolResult, runToolEnvelope, withTempProject)
+import Spec.Helpers (withTempProject)
 
 -- ---------------------------------------------------------------------------
 -- Local helpers
@@ -53,26 +50,21 @@ gateField :: T.Text -> A.Value -> Maybe A.Value
 gateField k (A.Object o) = AKM.lookup (AKey.fromText k) o
 gateField _ _            = Nothing
 
-extractPayload :: ToolResult -> A.Value
-extractPayload tr = case trContent tr of
-  (TextContent t : _) -> case A.eitherDecodeStrict (encodeUtf8Strict t) of
-    Right v -> v
-    Left _  -> A.Null
-  _ -> A.Null
-  where
-    encodeUtf8Strict = BL.toStrict . TLE.encodeUtf8 . TL.fromStrict
+-- | After #290: serialise the full 'ToolResponse' as JSON so field
+-- inspection can drill into it the same way as before.
+extractPayload :: Env.ToolResponse -> A.Value
+extractPayload = A.toJSON
 
--- | Issue #90: drill through the envelope to the inner @result@
--- payload. Most pre-envelope tests inspected fields at the top
--- level — those fields now live under @result@. Returns the
--- top-level Value when there's no @result@ field (graceful
--- back-compat for tools still emitting the pre-envelope shape).
-resultPayload :: ToolResult -> A.Value
-resultPayload tr = case extractPayload tr of
-  A.Object o -> case AKM.lookup (AKey.fromText "result") o of
-    Just inner -> inner
-    Nothing    -> A.Object o
-  v          -> v
+-- | Issue #90: return the inner @result@ payload from a 'ToolResponse'.
+-- After #290 this is just 'Env.reResult' with a 'Null' fallback.
+resultPayload :: Env.ToolResponse -> A.Value
+resultPayload tr = fromMaybe A.Null (Env.reResult tr)
+
+-- | After #290: 'trIsError' equivalent — True when the status is not
+-- one of the non-error statuses (ok / partial / no_match).
+isError :: Env.ToolResponse -> Bool
+isError tr = Env.reStatus tr `notElem`
+  [Env.StatusOk, Env.StatusPartial, Env.StatusNoMatch]
 
 unProjectDirRaw :: HaskellFlows.Types.ProjectDir -> FilePath
 unProjectDirRaw = HaskellFlows.Types.unProjectDir
@@ -235,7 +227,7 @@ testCreateWriteFalseIsPreview = do
   -- "." has cabal.project, src/, test/Spec.hs — exactly the clash
   -- scenario that was failing before the fix.
   result <- CreateProject.scaffold "." "my-pkg" "MyPkg" False False
-  pure (not (trIsError result))
+  pure (not (isError result))
 
 -- | #126 Bug B: write=false response carries "preview" key with
 -- generated file contents and write=false discriminator.
@@ -250,7 +242,7 @@ testCreateWriteFalseContent = do
           writeFalse = case AKM.lookup (AKey.fromText "write") o of
                          Just (A.Bool False) -> True
                          _                  -> False
-      in pure (hasPreview && writeFalse && not (trIsError result))
+      in pure (hasPreview && writeFalse && not (isError result))
     _ -> pure False
 
 -- | #126 Bug A: scaffold uses the supplied root path, not the
@@ -263,7 +255,7 @@ testCreateUsesSuppliedPath = withTempProject $ \pd -> do
   -- Before the fix, the clash check looked in the *active* projectDir
   -- (mcp-server-haskell/) which DOES have those files.
   result <- CreateProject.scaffold (unProjectDirRaw pd) "fresh-pkg" "FreshPkg" False True
-  pure (not (trIsError result))
+  pure (not (isError result))
 
 -- | Issue #256: after a successful @ghc_project(action="create", path=<p>)@
 -- the server must auto-switch to the new path so subsequent tool calls

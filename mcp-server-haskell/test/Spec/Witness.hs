@@ -19,7 +19,6 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.Witness as WitnessTool
 
-import Spec.Helpers (decodeToolResult)
 
 -- | #220: 'witnessEvalExpr' must produce a well-formed in-process
 -- expression that contains the QC sentinel markers, the
@@ -68,8 +67,5 @@ testWitnessInProcessFallback = do
 testWitnessCompileErrorResult :: IO Bool
 testWitnessCompileErrorResult =
   let result = WitnessTool.compileErrorResult "\\x -> notAFunction x" "Not in scope: notAFunction"
-  in case decodeToolResult result of
-    Left _  -> pure False
-    Right r ->
-      pure $  Env.reStatus r == Env.StatusFailed
-           && maybe False ((== Env.CompileError) . Env.eeKind) (Env.reError r)
+  in pure $  Env.reStatus result == Env.StatusFailed
+          && maybe False ((== Env.CompileError) . Env.eeKind) (Env.reError result)

@@ -9,6 +9,7 @@ module Spec.Helpers
   ( withTempProject
   , getTestTimestamp
   , decodeToolResult
+  , decodeToolResponse
   , runToolEnvelope
   , isTraversalRefused
   ) where
@@ -53,21 +54,20 @@ decodeToolResult tr = case trContent tr of
     A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body))
   _ -> Left "expected exactly one TextContent"
 
+-- | Wrap a 'ToolResponse' in 'Right' for helpers that take 'Either String ToolResponse'.
+-- After #290 all handlers return 'ToolResponse' directly; no decode is needed.
+decodeToolResponse :: Env.ToolResponse -> Either String Env.ToolResponse
+decodeToolResponse = Right
+
 -- | Helper for Phase B tool-migration tests: drive the tool's
--- handler, decode the JSON body inside the wire-level 'ToolResult',
--- return the parsed 'Env.ToolResponse' (or a string-shaped failure
--- describing why the decode failed).
+-- handler and return the 'Env.ToolResponse' (wrapped in Right for
+-- uniform handling). After #290 all handlers return 'ToolResponse'
+-- directly; no JSON decode is needed.
 runToolEnvelope
-  :: (A.Value -> IO ToolResult)
+  :: (A.Value -> IO Env.ToolResponse)
   -> A.Value
   -> IO (Either String Env.ToolResponse)
-runToolEnvelope h args = do
-  result <- h args
-  case trContent result of
-    [TextContent body] ->
-      pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
-    _ ->
-      pure (Left "expected exactly one TextContent in trContent")
+runToolEnvelope h args = Right <$> h args
 
 -- | #100C shared assertion: a decoded envelope is a path-traversal refusal —
 -- status='refused' with error kind=PathTraversal. Used by the ghc_format /

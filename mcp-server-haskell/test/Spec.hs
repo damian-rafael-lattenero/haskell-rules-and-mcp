@@ -332,7 +332,6 @@ import GHC
 import GHC.Utils.Outputable (showPprUnsafe)
 
 import Spec.Harness (test, testTimeoutMicros, quickTest)
-import Spec.Helpers (decodeToolResult, getTestTimestamp, isTraversalRefused, runToolEnvelope, withTempProject)
 import Spec.Scratch (scratchTests)
 import Spec.AddImportUnit
 import Spec.AddModulesHandle

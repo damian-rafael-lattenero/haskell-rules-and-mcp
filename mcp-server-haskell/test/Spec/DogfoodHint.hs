@@ -38,7 +38,7 @@ import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Tool.AddModules as AddModules
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
 
-import Spec.Helpers (decodeToolResult, runToolEnvelope, withTempProject)
+import Spec.Helpers (withTempProject)
 import Data.Aeson ((.=))
 import Data.Maybe (isNothing)
 import Data.Text (Text)

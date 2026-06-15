@@ -22,7 +22,6 @@ import qualified HaskellFlows.Tool.Batch as Batch
 import HaskellFlows.Tool.Batch (BatchArgs (..), unwrapResult)
 import HaskellFlows.Mcp.Protocol (ToolCall (..))
 
-import Spec.Helpers (decodeToolResult)
 
 -- | Issue #22: @ghc_batch@ advertises @{tool, args}@ via its
 -- @inputSchema@ — parsing must accept that shape.
@@ -84,14 +83,13 @@ testBatchEmptyActionsWarning = do
   let noopDispatch _ = pure (Env.toolResponseToResult (Env.mkOk (A.object [])))
       args = A.object [ "actions" .= ([] :: [A.Value]) ]
   tr <- Batch.runHandle noopDispatch args
-  pure $ case decodeToolResult tr of
-    Right env ->
-         Env.reStatus env == Env.StatusOk
-      && case Env.reResult env of
-           Just (A.Object obj) ->
-             AKM.member (AKey.fromText "warning") obj
-             && case AKM.lookup (AKey.fromText "total") obj of
-                  Just (A.Number 0) -> True
-                  _                 -> False
-           _ -> False
-    Left _ -> False
+  let env = tr
+  pure $
+       Env.reStatus env == Env.StatusOk
+    && case Env.reResult env of
+         Just (A.Object obj) ->
+           AKM.member (AKey.fromText "warning") obj
+           && case AKM.lookup (AKey.fromText "total") obj of
+                Just (A.Number 0) -> True
+                _                 -> False
+         _ -> False

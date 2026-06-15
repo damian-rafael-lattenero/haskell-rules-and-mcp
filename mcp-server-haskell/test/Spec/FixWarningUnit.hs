@@ -33,8 +33,6 @@ import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Text (Text)
 import Data.Maybe (isNothing)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
@@ -48,7 +46,6 @@ import HaskellFlows.Parser.Error
   , categorizeWarning
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Data.PropertyStore (StoredProperty (..))
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
@@ -178,14 +175,12 @@ testFixWarningOutOfBounds = do
             , "apply"       A..= True
             ]
       tr <- FixWarning.handle (pdEnv pd) args
-      pure $ case decodeToolResult tr of
-        Right env ->
-             Env.reStatus env == Env.StatusFailed
-          && maybe False
-               (\e ->  Env.eeKind e == Env.Validation
-                    && T.isInfixOf "out of bounds" (Env.eeMessage e))
-               (Env.reError env)
-        Left _ -> False
+      pure $
+           Env.reStatus tr == Env.StatusFailed
+        && maybe False
+             (\e ->  Env.eeKind e == Env.Validation
+                  && T.isInfixOf "out of bounds" (Env.eeMessage e))
+             (Env.reError tr)
   removePathForcibly dir
   pure result
 
@@ -319,17 +314,11 @@ testListResultNullModuleCount238 = do
                  , spCases     = 0
                  }
       tr     = RegTool.listResult [spNull, spOk]
-  case trContent tr of
-    [TextContent body] ->
-      case A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)) of
-        Right env ->
-          case Env.reResult env of
-            Just (A.Object km) ->
-              pure $ AKM.member "null_module_count" km
-                  && AKM.member "null_module_hint"  km
-                  && AKM.lookup "null_module_count" km == Just (A.Number 1)
-            _ -> pure False
-        Left _ -> pure False
+  case Env.reResult tr of
+    Just (A.Object km) ->
+      pure $ AKM.member "null_module_count" km
+          && AKM.member "null_module_hint"  km
+          && AKM.lookup "null_module_count" km == Just (A.Number 1)
     _ -> pure False
 
 -- | #238: listResult should NOT emit null_module_count/hint when all props have modules.
@@ -343,16 +332,10 @@ testListResultNoNullFields238 = do
              , spCases     = 0
              }
       tr = RegTool.listResult [sp]
-  case trContent tr of
-    [TextContent body] ->
-      case A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)) of
-        Right env ->
-          case Env.reResult env of
-            Just (A.Object km) ->
-              pure $ not (AKM.member "null_module_count" km)
-                  && not (AKM.member "null_module_hint"  km)
-            _ -> pure False
-        Left _ -> pure False
+  case Env.reResult tr of
+    Just (A.Object km) ->
+      pure $ not (AKM.member "null_module_count" km)
+          && not (AKM.member "null_module_hint"  km)
     _ -> pure False
 
 -- | #238: enhanceNullModuleDetail appends a hint when status=skipped,
@@ -410,12 +393,3 @@ testWarningBucketize =
        ((WcUnused, 3) : _) -> True
        _                   -> False
 
---------------------------------------------------------------------------------
--- local helper (mirrors Spec.Helpers.decodeToolResult)
---------------------------------------------------------------------------------
-
-decodeToolResult :: ToolResult -> Either String Env.ToolResponse
-decodeToolResult tr = case trContent tr of
-  [TextContent body] ->
-    A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body))
-  _ -> Left "expected exactly one TextContent"

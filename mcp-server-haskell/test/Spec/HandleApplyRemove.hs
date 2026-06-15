@@ -11,24 +11,20 @@ module Spec.HandleApplyRemove
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
-import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Types
 import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
 import qualified HaskellFlows.Tool.RemoveModules as RM
 
-import Spec.Helpers (decodeToolResult, runToolEnvelope)
 import Spec.ToolEnvFixture (pdEnv)
 
 --------------------------------------------------------------------------------
@@ -85,7 +81,7 @@ testHandleRemoveModulesHappyPath = withFixture $ \pd cabalFile -> do
         (ln:_) -> T.strip (T.drop (T.length "exposed-modules:")
                           (T.dropWhile (/= ':') ln))
         []     -> "no-exposed-modules-line"
-  pure (not (trIsError result) && headerStripped /= "Foo")
+  pure (not (isError result) && headerStripped /= "Foo")
 
 -- | 'ghc_apply_exports' refuses a reserved keyword as an export.
 -- The module file is NOT modified — same atomic-refusal contract.
@@ -109,7 +105,7 @@ testHandleApplyExportsRefusesKeyword = withFixture $ \pd _ -> do
   -- Issue #90 Phase C: 'rejected' moved under 'result' inside the
   -- envelope. The 'resultPayload' helper drills through.
   pure
-    (  trIsError result
+    (  isError result
     && bodyAfter == original
     && hasField "rejected" (resultPayload result)
     )
@@ -128,35 +124,24 @@ testHandleApplyExportsAcceptsLowercase = withFixture $ \pd _ -> do
         ]
   result <- ApplyExports.handle (pdEnv pd) args
   bodyAfter <- TIO.readFile modulePath
-  pure (not (trIsError result) && "(greet) where" `T.isInfixOf` bodyAfter)
+  pure (not (isError result) && "(greet) where" `T.isInfixOf` bodyAfter)
 
 --------------------------------------------------------------------------------
 -- helpers shared by the handler-boundary tests
 --------------------------------------------------------------------------------
 
--- | Decode a 'ToolResult' content payload back into a JSON 'Value'
--- so the tests can pattern-match on field shape (success, error,
--- rejected[]). Mirrors what an MCP client would do.
-extractPayload :: ToolResult -> A.Value
-extractPayload tr = case trContent tr of
-  (TextContent t : _) -> case A.eitherDecodeStrict (encodeUtf8Strict t) of
-    Right v -> v
-    Left _  -> A.Null
-  _ -> A.Null
-  where
-    encodeUtf8Strict = BL.toStrict . TLE.encodeUtf8 . TL.fromStrict
+-- | After #290: serialise the full 'ToolResponse' as JSON.
+extractPayload :: Env.ToolResponse -> A.Value
+extractPayload = A.toJSON
 
--- | Issue #90: drill through the envelope to the inner @result@
--- payload. Most pre-envelope tests inspected fields at the top
--- level — those fields now live under @result@. Returns the
--- top-level Value when there's no @result@ field (graceful
--- back-compat for tools still emitting the pre-envelope shape).
-resultPayload :: ToolResult -> A.Value
-resultPayload tr = case extractPayload tr of
-  A.Object o -> case AKM.lookup (AKey.fromText "result") o of
-    Just inner -> inner
-    Nothing    -> A.Object o
-  v          -> v
+-- | After #290: return the inner @result@ payload from a 'ToolResponse'.
+resultPayload :: Env.ToolResponse -> A.Value
+resultPayload tr = fromMaybe A.Null (Env.reResult tr)
+
+-- | After #290: True when the response status is a failing status.
+isError :: Env.ToolResponse -> Bool
+isError tr = Env.reStatus tr `notElem`
+  [Env.StatusOk, Env.StatusPartial, Env.StatusNoMatch]
 
 hasField :: Text -> A.Value -> Bool
 hasField k (A.Object o) = AKM.member (AKey.fromText k) o

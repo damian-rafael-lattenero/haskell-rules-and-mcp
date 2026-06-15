@@ -13,23 +13,18 @@ import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
 import Data.IORef (newIORef)
 import Control.Concurrent.MVar (newMVar)
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol (ToolContent (..), ToolResult (..))
 import HaskellFlows.Mcp.Staleness (StalenessReport (..))
 import HaskellFlows.Types (mkProjectDir)
 import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Mcp.WorkflowState as WS
 import qualified HaskellFlows.Data.Scratchpad as SP
 import qualified HaskellFlows.Tool.Workflow as WorkflowTool
-
-import Spec.Helpers (decodeToolResult)
 
 -- | Phase B helper: build the cluster of state values 'WorkflowTool.handle'
 -- needs and drive it for a given action. Returns the parsed envelope.
@@ -54,10 +49,7 @@ runWorkflow args = do
   scratch    <- SP.openStore pd
   scratchRef <- newIORef scratch
   result <- WorkflowTool.runHandle pdRef sessRef toolNames ws staleness False scratchRef args
-  case trContent result of
-    [TextContent body] ->
-      pure (A.eitherDecode (TLE.encodeUtf8 (TL.fromStrict body)))
-    _ -> pure (Left "expected exactly one TextContent")
+  pure (Right result)
 
 -- | 'ghc_workflow {action: status}' returns an envelope-shaped
 -- response with status='ok' and a result carrying the documented

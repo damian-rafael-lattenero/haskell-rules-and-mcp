@@ -11,7 +11,6 @@ import Data.Aeson
 import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol
 
 -- | #94 Phase C step 6: this module's @descriptor@ was retired
 -- when the four legacy property-store tools were merged into
