@@ -409,6 +409,7 @@ import Spec.TaxonomyUnit
 import Spec.Toolchain
   ( testToolchainStatusBackcompatFields
   , testToolchainStatusEnvelopeShape
+  , testToolchainStatusFailedIncludesInventory
   , testToolchainWarmupEnvelopeShape
   , testToolchainWarmupPartialWarnings
   )
@@ -824,6 +825,8 @@ runAllTests = do
                                                    testToolchainStatusEnvelopeShape
       , test "Envelope #90 Phase B: ghc_toolchain_status preserves tools/blocking_gates"
                                                    testToolchainStatusBackcompatFields
+      , test "#CI-coverage: renderResult status=failed still includes inventory"
+                                                   testToolchainStatusFailedIncludesInventory
       , test "Envelope #90 Phase B: ghc_toolchain_warmup emits envelope shape"
                                                    testToolchainWarmupEnvelopeShape
       , test "Envelope #90 Phase B: ghc_toolchain_warmup partial → warnings populated"

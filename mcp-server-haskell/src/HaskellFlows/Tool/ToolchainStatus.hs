@@ -25,6 +25,9 @@ module HaskellFlows.Tool.ToolchainStatus
     -- by 'HaskellFlows.Tool.Workflow' to surface a session-start nudge
     -- without re-doing the per-binary version probe.
   , optionalBinaryNames
+    -- * Exposed for unit tests — pure inventory / response shaping
+  , Entry (..)
+  , renderResult
   ) where
 
 import Data.Aeson
@@ -163,12 +166,14 @@ renderResult entries =
         ([], [])   -> Env.mkOk payload
         ([], opts) -> Env.withWarnings (map missingOptionalWarning opts)
                         (Env.mkPartial payload)
-        (bs, _)    -> Env.mkFailed
-          ((Env.mkErrorEnvelope Env.BinaryUnavailable
-              ("blocking gate(s) unavailable: " <> T.intercalate ", " (map eName bs)))
-                { Env.eeRemediation =
-                    Just ("Install the missing binaries via ghcup / cabal: "
-                       <> T.intercalate ", " (map eName bs)) })
+        (bs, _)    ->
+          (Env.mkFailed
+            ((Env.mkErrorEnvelope Env.BinaryUnavailable
+                ("blocking gate(s) unavailable: " <> T.intercalate ", " (map eName bs)))
+                  { Env.eeRemediation =
+                      Just ("Install the missing binaries via ghcup / cabal: "
+                         <> T.intercalate ", " (map eName bs)) }))
+            { Env.reResult = Just payload }
   in response
 
 missingOptionalWarning :: Entry -> Env.Warning

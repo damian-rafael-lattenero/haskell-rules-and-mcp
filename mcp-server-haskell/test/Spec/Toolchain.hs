@@ -8,6 +8,7 @@
 module Spec.Toolchain
   ( testToolchainStatusEnvelopeShape
   , testToolchainStatusBackcompatFields
+  , testToolchainStatusFailedIncludesInventory
   , testToolchainWarmupEnvelopeShape
   , testToolchainWarmupPartialWarnings
   ) where
@@ -53,6 +54,27 @@ testToolchainStatusBackcompatFields = do
           && AKM.member (AKey.fromText "summary")        payload
       _ -> False
     Left _ -> False
+
+-- | Pure regression guard: 'renderResult' must include @tools@,
+-- @blocking_gates@, and @summary@ in the @result@ object even when
+-- @status=failed@ (i.e. when a blocking gate binary is absent).
+-- Without this guarantee the backcompat contract is only tested on dev
+-- boxes where all gates are present; CI coverage jobs do not install
+-- hlint so they hit the @status=failed@ branch.
+testToolchainStatusFailedIncludesInventory :: IO Bool
+testToolchainStatusFailedIncludesInventory =
+  let entries =
+        [ ToolchainStatusTool.Entry "cabal" "gate" True (Just "/usr/bin/cabal") (Just "3.12")
+        , ToolchainStatusTool.Entry "ghc"   "gate" True (Just "/usr/bin/ghc")   (Just "9.12")
+        , ToolchainStatusTool.Entry "hlint" "gate" False Nothing Nothing  -- simulates CI without hlint
+        ]
+      resp = ToolchainStatusTool.renderResult entries
+   in pure $ case Env.reResult resp of
+        Just (A.Object p) ->
+          AKM.member (AKey.fromText "tools")          p
+            && AKM.member (AKey.fromText "blocking_gates") p
+            && AKM.member (AKey.fromText "summary")        p
+        _ -> False
 
 -- | 'ghc_toolchain_warmup' is the simpler analogue of toolchain_status —
 -- it only probes optional binaries. After Phase B the response is
