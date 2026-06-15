@@ -89,7 +89,7 @@ jobs:
     # of CI compute. A PR that fails hlint used to burn that whole
     # budget before surfacing the style break — now it stops at
     # 30 s.
-    needs: [hlint]
+    needs: [hlint, invariants]
     strategy:
       fail-fast: false
       matrix:
@@ -241,7 +241,7 @@ jobs:
     # Same gate as the ubuntu matrix: hlint must be green for any
     # macOS cell to consume a runner. macOS minutes count 10x on
     # GitHub free-tier billing; this is even more important here.
-    needs: [hlint]
+    needs: [hlint, invariants]
     # Skip macOS on PR runs — feedback for PRs comes via the ubuntu
     # matrix (gating + faster). macOS is the portability canary; it
     # runs on master pushes (post-merge validation) and on nightly /
@@ -367,7 +367,7 @@ jobs:
   # -------------------------------------------------------------------------
   package-quality:
     name: Package quality (haddock + check + sdist)
-    needs: [hlint]
+    needs: [hlint, invariants]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -424,7 +424,7 @@ jobs:
   # -------------------------------------------------------------------------
   coverage:
     name: Coverage ratchet
-    needs: [hlint]
+    needs: [hlint, invariants]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -511,6 +511,28 @@ jobs:
           # version drift can surface stylistic suggestions that don't
           # warrant a merge block. Warnings and errors remain blocking.
           fail-on: warning
+
+  # -------------------------------------------------------------------------
+  #  Fast meta-invariants gate — pure bash greps over the checked-out tree,
+  #  no GHC/cabal build. Consolidates the three drift guards (rules-freshness
+  #  was previously local-only in ci-local.sh; now it gates master too).
+  #  Gates the matrix like hlint so meta-drift fails in seconds, not after a
+  #  full build. Each script is also runnable standalone and from ci-local.
+  # -------------------------------------------------------------------------
+  invariants:
+    name: Invariants (rules + CI + scenarios)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v6
+      - name: Rules-freshness (no stale tool counts / retired names)
+        run: bash scripts/check-rules-freshness.sh
+      - name: CI-invariants (no --keep-going on test steps)
+        run: bash scripts/check-ci-invariants.sh
+      - name: Scenario registration (every Flow*.hs is wired up)
+        run: bash scripts/check-scenario-registration.sh
 
   # -------------------------------------------------------------------------
   #  Fourmolu job intentionally omitted.
@@ -639,7 +661,7 @@ jobs:
     # across the four trigger shapes (push to master / PR / dispatch /
     # tag push).
     if: always() && !startsWith(github.ref, 'refs/tags/')
-    needs: [build-and-test, hlint, package-quality, coverage]
+    needs: [build-and-test, hlint, package-quality, coverage, invariants]
     permissions:
       contents: read
       # statuses:write so the final step below can post a commit
@@ -656,7 +678,8 @@ jobs:
           if [[ "${{ needs.build-and-test.result }}"   != "success" ]] \
           || [[ "${{ needs.hlint.result }}"            != "success" ]] \
           || [[ "${{ needs.package-quality.result }}"  != "success" ]] \
-          || [[ "${{ needs.coverage.result }}"         != "success" ]]; then
+          || [[ "${{ needs.coverage.result }}"         != "success" ]] \
+          || [[ "${{ needs.invariants.result }}"       != "success" ]]; then
             echo "One or more required Haskell CI jobs failed."
             echo "agg_state=failure" >> "$GITHUB_OUTPUT"
             exit 1
@@ -685,10 +708,11 @@ jobs:
             const lint  = '${{ needs.hlint.result }}';
             const pkg   = '${{ needs.package-quality.result }}';
             const cov   = '${{ needs.coverage.result }}';
+            const inv   = '${{ needs.invariants.result }}';
             const description =
               state === 'success'
-                ? `Haskell CI green (build-and-test=${build}, hlint=${lint}, pkg=${pkg}, cov=${cov})`
-                : `Haskell CI red (build-and-test=${build}, hlint=${lint}, pkg=${pkg}, cov=${cov})`;
+                ? `Haskell CI green (build-and-test=${build}, hlint=${lint}, pkg=${pkg}, cov=${cov}, inv=${inv})`
+                : `Haskell CI red (build-and-test=${build}, hlint=${lint}, pkg=${pkg}, cov=${cov}, inv=${inv})`;
             const { owner, repo } = context.repo;
             const sha = context.sha;
             await github.rest.repos.createCommitStatus({

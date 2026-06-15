@@ -266,6 +266,11 @@ timed "rules-freshness" bash scripts/check-rules-freshness.sh
 step "0/N" "ci-invariants check (.github/workflows/haskell-ci.yml)"
 timed "ci-invariants" bash scripts/check-ci-invariants.sh
 
+# Scenario-registration gate: every test-e2e Flow*.hs must be wired into
+# Main.hs's scenarios list (not just compiled), else it silently never runs.
+step "0/N" "scenario-registration check (test-e2e/Main.hs)"
+timed "scenario-registration" bash scripts/check-scenario-registration.sh
+
 if [ "$PARALLEL" = true ] && [ "$RUN_HLINT" = true ]; then
   step "1/N" "hlint + cabal build (parallel)"
   hlint_step_bg_start

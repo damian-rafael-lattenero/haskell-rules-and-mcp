@@ -36,22 +36,28 @@ cabal test haskell-flows-mcp-e2e
 Typical cycle time: 200–220 s with all scenarios, ~130 s with the
 slow-tagged ones skipped (see below).
 
-## On parallel execution (deferred)
+## On parallel execution
 
-There's no `HASKELL_FLOWS_E2E_PARALLEL` knob today — an earlier
-experiment tried one, but N≥2 is fundamentally flaky against the
-current architecture (each scenario spawns `cabal repl`, and
-cabal-install upstream doesn't serialise the cross-process state
-it depends on). Proof by reference: no major Haskell project runs
-concurrent `cabal repl` per-test (HLS uses the GHC API as a
-library, ghcid uses hie-bios, etc.).
+E2E parallelism IS opt-in via `HASKELL_FLOWS_E2E_PARALLEL=<N>`
+(`Main.hs` reads it; default 1 = sequential). When N≥2 it fans the
+fast, non-slow scenarios through a bounded pool; slow-tagged scenarios
+always run serially regardless.
 
-The honest fix is a `startSession` refactor to bypass `cabal repl`
-and use the GHC API via hie-bios — same pattern as HLS. See
-[`docs/TODO-parallel-e2e.md`](TODO-parallel-e2e.md) for the full
-design doc, references, implementation plan, and acceptance
-criteria. ~1–2 days of focused work; deferred until someone takes
-the slot.
+CI deliberately leaves it at 1. Sharding
+(`HASKELL_FLOWS_E2E_SHARD=i/n`) is the load-bearing parallelism — it
+splits scenarios across runners, each with its own clean
+`~/.cabal/store`, for the ~3× wall-clock win that actually matters.
+Within-shard parallelism (N≥2) only bought ~10% in local measurement
+(419 s vs 467 s) because the bottleneck is filesystem contention on the
+cabal store, not CPU, and it widened the startup-race surface that bit
+ubuntu shards. So the policy is: shard wide, run N=1 inside each shard.
+
+A deeper `startSession` refactor (bypass `cabal repl`, drive the GHC
+API via hie-bios like HLS) could make in-shard N≥2 safe and is the
+honest path to faster local full-suite runs. See
+[`docs/TODO-parallel-e2e.md`](TODO-parallel-e2e.md) for the design
+doc, references, and acceptance criteria. ~1–2 days; deferred until
+someone takes the slot.
 
 ## Skipping slow scenarios in the dev inner loop
 
