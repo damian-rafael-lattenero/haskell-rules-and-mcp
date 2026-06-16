@@ -14,6 +14,7 @@ module Spec.RegressionUnit
   , testLoadForTargetLibrary
   , testHoleDiagnosticCapture
   , testLoadAfterDepsAdd
+  , testRenderStoredIncludesCases
   ) where
 
 import qualified Data.Aeson as A
@@ -49,6 +50,9 @@ import HaskellFlows.Parser.Hole (parseTypedHoles, TypedHole (..))
 import Control.Monad (when)
 import HaskellFlows.Ghc.CabalBootstrap (Target (..))
 import HaskellFlows.Parser.Error (GhcError (..), renderGhciStyle)
+import HaskellFlows.Data.PropertyStore (StoredProperty (..))
+import qualified Data.Aeson.KeyMap as KM
+import qualified Data.Aeson.Key as AKey
 
 -- | Issue #51: a stored property whose recorded module is no
 -- longer in scope (e.g. @ghc_quickcheck_export@ overwrote
@@ -272,3 +276,24 @@ testLoadAfterDepsAdd = do
         mapM_ (putStrLn . ("    " <>) . T.unpack . geMessage) diags
       removePathForcibly dir
       pure (ok && not satisfy)
+
+-- | B-7: the 'renderStored' projection used by @action=list@ must
+-- include @"cases"@ (the QuickCheck maxSuccess / confidence level).
+-- Previously the field was present in the canonical 'ToJSON' for
+-- 'StoredProperty' but was silently omitted from this projection,
+-- making the list output ambiguous.
+testRenderStoredIncludesCases :: IO Bool
+testRenderStoredIncludesCases = do
+  let sp = StoredProperty
+              { spExpression = "\\x -> x + 1 > x"
+              , spModule     = Just "src/Foo.hs"
+              , spPassed     = 3
+              , spCases      = 100
+              , spUpdated    = 1000000.0
+              }
+      v = RegTool.renderStored sp
+  pure $ case v of
+    A.Object o -> case KM.lookup (AKey.fromText "cases") o of
+      Just (A.Number n) -> n == 100
+      _                 -> False
+    _ -> False

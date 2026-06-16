@@ -1594,6 +1594,7 @@ runAllTests = do
       , test "ghc-api: loadForTarget compiles library module via stanza flags" testLoadForTargetLibrary
       , test "ghc-api: deferred hole warnings are captured by logger hook" testHoleDiagnosticCapture
       , test "ghc-api: loadForTarget after deps-add resolves -package-id"   testLoadAfterDepsAdd
+      , test "B-7: renderStored includes cases field in list projection"     testRenderStoredIncludesCases
       , test "switch_project: rejects relative path"             testSwitchRejectsRelative
       , test "switch_project: rejects missing directory"         testSwitchRejectsMissing
       , test "switch_project: rejects dir without .cabal"        testSwitchRejectsNoCabal

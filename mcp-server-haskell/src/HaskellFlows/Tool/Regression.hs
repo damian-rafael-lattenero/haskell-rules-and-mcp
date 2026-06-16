@@ -334,6 +334,10 @@ renderStored sp =
         [ "expression" .= spExpression sp
         , "module"     .= spModule sp
         , "passed"     .= spPassed sp
+        -- B-7: expose QuickCheck maxSuccess so the caller knows the
+        -- confidence level (cases=0 means the property was saved via
+        -- ghc_quickcheck but the count was not recorded).
+        , "cases"      .= spCases sp
         -- #119: render as ISO-8601 instead of a float POSIX timestamp.
         -- Agents and humans can read "2026-04-15T14:55:27Z" directly;
         -- 1.777046127140673e9 is opaque.
