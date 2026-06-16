@@ -1,0 +1,19 @@
+mcp-server-haskell/src/HaskellFlows/Ghc/ApiSession.hs
+  s_d23a82140bf8e8::t_7ad0ec21aaef3f 1423-1438
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "d1f3676882d9b3b718b535817f1278477e1d809e",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
