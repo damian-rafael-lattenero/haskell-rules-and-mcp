@@ -87,7 +87,7 @@ instance FromJSON CreateArgs where
     -- intuitive name an agent reaches for; silently ignoring it (and
     -- scaffolding into the active project) is exactly the contamination
     -- the dogfooding hit. 'path' still wins when both are present.
-    p  <- ((<|>) <$> o .:? "path" <*> o .:? "base_dir")
+    p  <- (<|>) <$> o .:? "path" <*> o .:? "base_dir"
     w  <- o .:? "write"     .!= True
     pure CreateArgs { caName = n, caModule = m, caOverwrite = ow
                     , caPath = p, caWrite = w }
