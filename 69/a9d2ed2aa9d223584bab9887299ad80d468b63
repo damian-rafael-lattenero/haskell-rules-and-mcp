@@ -1,0 +1,36 @@
+mcp-server-haskell/test/Spec/FixWarningUnit.hs
+  s_d23a82140bf8e8::t_e53fe6edfba460 434
+mcp-server-haskell/src/HaskellFlows/Tool/AddImport.hs
+  s_d23a82140bf8e8::t_b03c34ddf5afae 266
+  s_d23a82140bf8e8::t_aed4b84d452883 33
+mcp-server-haskell/src/HaskellFlows/Tool/QuickCheck.hs
+  s_d23a82140bf8e8::t_2eea067cb63620 53
+  s_d23a82140bf8e8::t_7b443ae771c397 126-129
+  s_d23a82140bf8e8::t_339e96b9937983 843
+mcp-server-haskell/test/Spec/ParseQc.hs
+  s_d23a82140bf8e8::t_a71f3ebe2f0daa 135
+mcp-server-haskell/test/Spec/ArgCheckUnit.hs
+  s_d23a82140bf8e8::t_8e2ffbb272651b 14
+  s_d23a82140bf8e8::t_c7fc067ce58291 36
+  s_d23a82140bf8e8::t_9c78245ef09df0 55
+  s_d23a82140bf8e8::t_651d8a7c35504d 44
+mcp-server-haskell/src/HaskellFlows/Tool/CreateProject.hs
+  s_d23a82140bf8e8::t_b8ba6729ec7c96 37
+  s_d23a82140bf8e8::t_092430970cc2d0 90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.7",
+  "base_commit_sha": "69a9d2ed2aa9d223584bab9887299ad80d468b63",
+  "prompts": {},
+  "sessions": {
+    "s_d23a82140bf8e8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3b8d2c1-9cfb-4473-8039-a9c8c4251101",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "damian-rafael-lattenero <damianlattenero@gmail.com>"
+    }
+  }
+}
