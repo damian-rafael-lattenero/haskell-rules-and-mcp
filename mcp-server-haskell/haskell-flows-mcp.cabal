@@ -139,6 +139,7 @@ library
                       HaskellFlows.Util.Process
                       HaskellFlows.Tool.Deps.Validate
                       HaskellFlows.Tool.Deps.Cabal
+                      HaskellFlows.Mcp.ArgCheck
     build-depends:    base              >= 4.20 && < 5
                     , aeson             >= 2.2  && < 2.3
                     , bytestring        >= 0.11 && < 0.13
@@ -187,6 +188,7 @@ test-suite haskell-flows-mcp-test
     other-modules:    PathTraversal
                       Spec.AddImportUnit
                       Spec.AddModulesHandle
+                      Spec.ArgCheckUnit
                       Spec.ApplyExports
                       Spec.Arbitrary
                       Spec.ArbitraryUnit

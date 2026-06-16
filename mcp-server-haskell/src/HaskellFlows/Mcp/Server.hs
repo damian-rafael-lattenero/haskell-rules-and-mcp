@@ -39,6 +39,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TLE
 import Data.Foldable (for_, toList)
 import Data.IORef (IORef, newIORef, readIORef)
+import Data.List (find)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -109,6 +110,7 @@ import qualified HaskellFlows.Tool.QuickCheck      as QcTool
 import qualified HaskellFlows.Mcp.PathBootstrap    as PathBootstrap
 -- #286: allToolDescriptors, handlerFor are derived projections of the registry
 import HaskellFlows.Tool.Registry (allToolDescriptors, handlerFor)
+import qualified HaskellFlows.Mcp.ArgCheck as ArgCheck
 
 -- | All mutable server state.
 --
@@ -431,7 +433,24 @@ dispatchByName srv sink args tn = do
         Just n | n >= 2 -> DeterminismTool.handle env args
         _               -> QcTool.handle env args
     other -> handlerFor other env args
-  pure (Env.toolResponseToResult response)
+  -- B-1: attach a NON-blocking warning naming any argument keys the
+  -- caller passed that this tool's schema doesn't declare (with a
+  -- did-you-mean). The status is untouched — a benign extra field can
+  -- never break a call; the agent just learns it had no effect (the
+  -- silent-drop that sent ghc_project(base_dir=…) into the wrong dir).
+  pure (Env.toolResponseToResult (attachUnknownArgWarning tn args response))
+
+-- | B-1: decorate a response with an unknown-argument warning when the
+-- caller passed keys outside the tool's declared schema. A no-op when
+-- every key is recognised or the tool has no registered schema.
+attachUnknownArgWarning :: ToolName -> Value -> Env.ToolResponse -> Env.ToolResponse
+attachUnknownArgWarning tn args response =
+  case find ((== toolNameText tn) . tdName) allToolDescriptors of
+    Nothing -> response
+    Just d  ->
+      case ArgCheck.unknownArgsWarning (ArgCheck.schemaPropertyNames (tdInputSchema d)) args of
+        Nothing -> response
+        Just w  -> Env.withWarnings [w] response
 
 -- | Synthesize an error 'ToolResult' for an unknown tool name.
 -- Pulled out so 'handleToolCall' and 'dispatchTool' produce the

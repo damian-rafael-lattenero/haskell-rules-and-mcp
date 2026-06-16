@@ -445,6 +445,13 @@ import Spec.ProcessUnit
   , testRunArgvTimeout
   , testRunArgvNonZeroExit
   )
+import Spec.ArgCheckUnit
+  ( testSchemaPropertyNames
+  , testUnknownArgKeys
+  , testDidYouMeanBaseDir
+  , testUnknownArgsWarningFires
+  , testUnknownArgsWarningSilentWhenClean
+  )
 
 -- | Number of full suite passes to run. @HASKELL_FLOWS_TEST_REPEAT=N@
 -- (N >= 1) runs the whole suite N times and fails if ANY pass has a
@@ -1113,6 +1120,11 @@ runAllTests = do
       , test "code tools: all 5 registered"        testCodeToolsRegistered
       , test "add_import: qualified renderImportLine" testAddImportQualified
       , test "B-2: idiomaticAlias (no S/S collision, override)" testIdiomaticAlias
+      , test "B-1: schemaPropertyNames extracts declared keys"    testSchemaPropertyNames
+      , test "B-1: unknownArgKeys detects base_dir as unknown"   testUnknownArgKeys
+      , test "B-1: didYouMean suggests path for pathh"           testDidYouMeanBaseDir
+      , test "B-1: unknownArgsWarning fires on bogus param"      testUnknownArgsWarningFires
+      , test "B-1: unknownArgsWarning silent on clean call"      testUnknownArgsWarningSilentWhenClean
       , test "add_import: missing hoogle returns success=false (#53)" testAddImportMissingHoogle
       , test "#146: addImportToSession rejects invalid import gracefully" testAddImportToSessionInvalid
       , test "#146: addImportToSession accepts valid base import"       testAddImportToSessionValid
