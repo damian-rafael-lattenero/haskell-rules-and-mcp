@@ -50,6 +50,7 @@ import Data.Aeson
 import qualified Data.Aeson.Types as AesonTypes
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAlpha, isAlphaNum)
+import Data.Maybe (fromMaybe)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -122,8 +123,10 @@ descriptor =
           <> "PREREQUISITES: the property's module loaded; QuickCheck in a "
           <> "stanza. "
           <> "OUTPUT: {state: passed|failed|gave_up|exception, ...}; passes "
-          <> "persist to .haskell-flows/properties.json. "
-          <> "SEE ALSO: ghc_suggest, ghc_witness, ghc_property_store."
+          <> "persist to .haskell-flows/properties.json. When a type in the "
+          <> "property lacks an Arbitrary instance, error_kind=missing_instance "
+          <> "and nextStep points to ghc_arbitrary with the type name. "
+          <> "SEE ALSO: ghc_suggest, ghc_witness, ghc_property_store, ghc_arbitrary."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -837,7 +840,7 @@ renderResult qr mHint = case qr of
                                   \instance. Generate one, paste it in, reload, \
                                   \then re-run." :: Text)
                      , "example" .= object
-                         [ "type_name" .= maybe ("<Type>" :: Text) id mArbTy ]
+                         [ "type_name" .= fromMaybe ("<Type>" :: Text) mArbTy ]
                      ])
                  | otherwise = Nothing
         response = (Env.mkFailed envErr)

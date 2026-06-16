@@ -132,7 +132,7 @@ testExtractArbitraryType =
       && QcTool.extractArbitraryType
            "No instance for \x2018\&Arbitrary (Expr Int)\x2019 arising"
            == Just "Expr Int"
-      && QcTool.extractArbitraryType "unrelated error" == Nothing
+      && isNothing (QcTool.extractArbitraryType "unrelated error")
 
 -- | B-6: the rendered envelope for a missing-Arbitrary QcUnparsed must
 -- carry error_kind=missing_instance AND a nextStep pointing at

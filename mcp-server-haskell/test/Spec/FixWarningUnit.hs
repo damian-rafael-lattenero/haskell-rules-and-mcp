@@ -431,7 +431,7 @@ testExtractRedundantNames38856 = pure $
   && FixWarning.extractRedundantNames
        "The import of \x2018\&foo\x2019 from module \x2018\&Bar\x2019 is redundant"
        == ["foo"]
-  && FixWarning.extractRedundantNames "unrelated warning" == []
+  && null (FixWarning.extractRedundantNames "unrelated warning")
 
 -- | A simple import line splits into (prefix, names, suffix).
 testParseImportListSimple :: IO Bool

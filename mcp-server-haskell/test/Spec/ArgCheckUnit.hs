@@ -11,6 +11,7 @@ module Spec.ArgCheckUnit
 import qualified Data.Aeson as A
 import Data.Aeson ((.=))
 import Data.List (sort)
+import Data.Maybe (isNothing)
 import qualified Data.Text as T
 
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -32,7 +33,7 @@ sampleSchema = A.object
 testSchemaPropertyNames :: IO Bool
 testSchemaPropertyNames = pure $
      sort (ArgCheck.schemaPropertyNames sampleSchema) == ["name", "overwrite", "path"]
-  && ArgCheck.schemaPropertyNames (A.object []) == []
+  && null (ArgCheck.schemaPropertyNames (A.object []))
 
 testUnknownArgKeys :: IO Bool
 testUnknownArgKeys =
@@ -40,7 +41,7 @@ testUnknownArgKeys =
       args = A.object [ "name" .= ("x" :: T.Text), "base_dir" .= ("/tmp" :: T.Text) ]
   in pure $ ArgCheck.unknownArgKeys declared args == ["base_dir"]
          -- a fully-recognised call yields no unknown keys
-         && ArgCheck.unknownArgKeys declared (A.object [ "name" .= ("x" :: T.Text) ]) == []
+         && null (ArgCheck.unknownArgKeys declared (A.object [ "name" .= ("x" :: T.Text) ]))
 
 -- | The exact dogfooding case: 'base_dir' is one edit-cluster away from
 -- 'path'? No — but it should still suggest the closest, and crucially
@@ -51,7 +52,7 @@ testDidYouMeanBaseDir =
   in pure $ ArgCheck.didYouMean declared "pathh"  == Just "path"
          && ArgCheck.didYouMean declared "nam"    == Just "name"
          -- something with no close match returns Nothing
-         && ArgCheck.didYouMean declared "xyzzyqwer" == Nothing
+         && isNothing (ArgCheck.didYouMean declared "xyzzyqwer")
 
 testUnknownArgsWarningFires :: IO Bool
 testUnknownArgsWarningFires =

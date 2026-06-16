@@ -30,6 +30,7 @@ import Data.Aeson
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAlphaNum, isUpper)
+import Data.Maybe (fromMaybe)
 import qualified Data.Foldable as F
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -262,10 +263,7 @@ renderImportLine qualifiedMode mAlias modName
 -- SIGNIFICANT component (skipping @Strict@ / @Lazy@ / @Internal@
 -- suffixes), e.g. @Data.Map.Strict → Map@, @Data.Foo.Bar → Bar@.
 idiomaticAlias :: Text -> Text
-idiomaticAlias m =
-  case lookup m wellKnown of
-    Just a  -> a
-    Nothing -> fallback
+idiomaticAlias m = fromMaybe fallback (lookup m wellKnown)
   where
     wellKnown =
       [ ("Data.Map",          "Map")
