@@ -129,7 +129,7 @@ jobs:
       LC_ALL: C.UTF-8
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Re-run cabal configure + freeze inside the container so the
       # plan reflects the current Hackage index + source tree, not
@@ -271,7 +271,7 @@ jobs:
     runs-on: macos-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # macOS has NO built-in GHC toolcache, so without this cache
       # `haskell-actions/setup@v2` downloads + installs GHC from
@@ -370,7 +370,7 @@ jobs:
     needs: [hlint, invariants]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Cache ghcup (GHC + cabal binaries)
         uses: actions/cache@v5
@@ -427,7 +427,7 @@ jobs:
     needs: [hlint, invariants]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Cache ghcup (GHC + cabal binaries)
         uses: actions/cache@v5
@@ -486,7 +486,7 @@ jobs:
     name: HLint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up HLint
         uses: haskell-actions/hlint-setup@v2
@@ -526,7 +526,7 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Rules-freshness (no stale tool counts / retired names)
         run: bash scripts/check-rules-freshness.sh
       - name: CI-invariants (no --keep-going on test steps)
@@ -572,7 +572,7 @@ jobs:
     name: Outdated dependencies (advisory)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: haskell-actions/setup@v2
         id: setup
@@ -618,7 +618,7 @@ jobs:
     name: Bench (advisory)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: haskell-actions/setup@v2
         id: setup
@@ -750,7 +750,7 @@ jobs:
       run:
         working-directory: mcp-server-haskell
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: haskell-actions/setup@v2
         with:
