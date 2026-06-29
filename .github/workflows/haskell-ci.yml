@@ -279,7 +279,7 @@ jobs:
       # Caching ~/.ghcup drops that to ~10 s on cache hit — saves
       # ~3.5 min × 5 macOS cells = ~17.5 min of macOS compute per push.
       - name: Cache ghcup (GHC + cabal binaries)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.ghcup
           key: ${{ runner.os }}-ghcup-${{ matrix.ghc }}-${{ matrix.cabal }}
@@ -298,7 +298,7 @@ jobs:
           cabal freeze
 
       - name: Restore cabal store cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ${{ steps.setup.outputs.cabal-store }}
@@ -373,7 +373,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Cache ghcup (GHC + cabal binaries)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.ghcup
           key: ${{ runner.os }}-ghcup-9.12.2-3.12.1.0
@@ -391,7 +391,7 @@ jobs:
           cabal freeze
 
       - name: Restore cabal store cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ${{ steps.setup.outputs.cabal-store }}
@@ -430,7 +430,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Cache ghcup (GHC + cabal binaries)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.ghcup
           key: ${{ runner.os }}-ghcup-9.12.2-3.12.1.0
@@ -451,7 +451,7 @@ jobs:
       # key suffix (-cov) to avoid thrashing the non-coverage caches the
       # build-and-test / package-quality jobs populate.
       - name: Restore cabal store cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ${{ steps.setup.outputs.cabal-store }}
