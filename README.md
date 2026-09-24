@@ -1,6 +1,7 @@
 <div align="center">
 
 # 🌀 haskell-flows
+haskell-rules-and-mcp is an MCP server that turns "LLMs that write plausible Haskell" into "LLMs that write correct Haskell." It provides 36 tools over a single in-process GHC session, combining property-first law suggestion (8 engines), QuickCheck verification, and snapshot-verified refactors. Every response follows one normative envelope with structured errors and a nextStep pointer.
 
 ### **Property-first Haskell, driven by your AI agent.**
 
