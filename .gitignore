@@ -50,3 +50,6 @@ playground/*/
 **/bench-results.json
 !playground/lambda-hm/
 !playground/lambda-hm/**
+
+# Spike run artifacts (logs captured ad-hoc)
+mcp-server-haskell/spike-ghcide/*.log

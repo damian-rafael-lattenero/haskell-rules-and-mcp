@@ -320,6 +320,7 @@ import HaskellFlows.Ghc.CabalBootstrap
   , Target (..)
   , bootstrapProject
   )
+import HaskellFlows.Ghc.IdeSession (hieYamlFromCabal)
 import qualified HaskellFlows.Ghc.ApiSession as ApiSession
 import qualified Data.Map.Strict as Map
 import GHC
@@ -2015,5 +2016,65 @@ runAllTests = do
       , test "repeat-runner: falls back to 1 on non-numeric"       testRepeatCountFallsBackOnGarbage
       ]
       ++ scratchTests
+      ++ ideBackendTests
   pure (and results)
 
+
+-- ---------------------------------------------------------------------------
+-- F1 — ghcide backend (HaskellFlows.Ghc.IdeSession)
+-- ---------------------------------------------------------------------------
+
+ideBackendTests :: [IO Bool]
+ideBackendTests =
+  [ test "F1: hieYamlFromCabal renders lib + test-suite entries" testHieYamlRendersLibAndTest
+  , test "F1: hieYamlFromCabal uses conventional dirs when hs-source-dirs missing" testHieYamlDefaultsDirs
+  , test "F1: hieYamlFromCabal rejects cabal without name" testHieYamlRejectsNameless
+  ]
+
+testHieYamlRendersLibAndTest :: IO Bool
+testHieYamlRendersLibAndTest =
+  let cabal =
+        T.unlines
+          [ "cabal-version: 3.0"
+          , "name:            demo-pkg"
+          , "library"
+          , "    hs-source-dirs:   src"
+          , "    exposed-modules:  Demo"
+          , "test-suite demo-test"
+          , "    type:             exitcode-stdio-1.0"
+          , "    hs-source-dirs:   test"
+          , "    main-is:          Spec.hs"
+          ]
+  in case hieYamlFromCabal cabal of
+       Left _ -> pure False
+       Right yaml ->
+         pure
+           ( "component: \"lib:demo-pkg\"" `T.isInfixOf` yaml
+               && "component: \"test:demo-test\"" `T.isInfixOf` yaml
+               && "- path: \"./src\"" `T.isInfixOf` yaml
+               && "- path: \"./test\"" `T.isInfixOf` yaml
+           )
+
+testHieYamlDefaultsDirs :: IO Bool
+testHieYamlDefaultsDirs =
+  let cabal =
+        T.unlines
+          [ "name: sparse"
+          , "library"
+          , "    exposed-modules: Sparse"
+          , "test-suite sparse-test"
+          , "    type: exitcode-stdio-1.0"
+          , "    main-is: Spec.hs"
+          ]
+  in case hieYamlFromCabal cabal of
+       Left _ -> pure False
+       Right yaml ->
+         pure
+           ("- path: \"./src\"" `T.isInfixOf` yaml
+              && "- path: \"./test\"" `T.isInfixOf` yaml)
+
+testHieYamlRejectsNameless :: IO Bool
+testHieYamlRejectsNameless =
+  case hieYamlFromCabal "library\n    exposed-modules: X\n" of
+    Left msg -> pure ("name" `T.isInfixOf` T.pack msg)
+    Right _  -> pure False

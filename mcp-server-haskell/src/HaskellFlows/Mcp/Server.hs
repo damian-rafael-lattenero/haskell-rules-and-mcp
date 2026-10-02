@@ -103,9 +103,11 @@ import HaskellFlows.Mcp.WorkflowState
   , trackTool
   )
 import HaskellFlows.Types (ProjectDir, mkProjectDir, unProjectDir)
+import HaskellFlows.Ghc.IdeSession (BackendChoice (..), IdeSession, backendFromEnv)
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import qualified HaskellFlows.Tool.Batch           as BatchTool
 import qualified HaskellFlows.Tool.Determinism     as DeterminismTool
+import qualified HaskellFlows.Tool.IdeBacked       as IdeBacked
 import qualified HaskellFlows.Tool.QuickCheck      as QcTool
 import qualified HaskellFlows.Mcp.PathBootstrap    as PathBootstrap
 -- #286: allToolDescriptors, handlerFor are derived projections of the registry
@@ -165,6 +167,13 @@ data Server = Server
     -- ^ #287: operational limits loaded once at startup via 'loadLimits'.
     -- Subprocess timeouts are env-var overridable; GHC-session budgets
     -- fall back to 'Config.defaultLimits'.
+  , srvBackend       :: !BackendChoice
+    -- ^ F1 strangler: @HASKELL_FLOWS_BACKEND=ghcide@ routes the pilot
+    -- tools (check_module / eval / type) through 'IdeSession'.
+    -- Default 'BackendGhcApi' keeps every legacy code path.
+  , srvIdeSession    :: !(MVar (Maybe IdeSession))
+    -- ^ Lazily-booted ghcide session — same MVar-singleton shape as
+    -- 'srvGhcSession' (first caller boots, everyone else reuses).
   }
 
 -- | Build a server whose project directory is sourced from
@@ -223,6 +232,9 @@ serverForRaw raw = do
       isSelf   <- detectSelfProject pd
       isSelfR  <- newIORef isSelf
       lim      <- loadLimits
+      -- F1: backend flag + lazily-booted ghcide session slot.
+      backend  <- backendFromEnv
+      ideRef   <- newMVar Nothing
       pure Server
         { srvProjectDir    = pdRef
         , srvGhcSession    = ghcSess
@@ -233,6 +245,8 @@ serverForRaw raw = do
         , srvIsSelfProject = isSelfR
         , srvScratchpad    = scratchR
         , srvLimits        = lim
+        , srvBackend       = backend
+        , srvIdeSession    = ideRef
         }
 
 -- | Dispatch a single parsed request. 'Nothing' means the input was a
@@ -432,6 +446,13 @@ dispatchByName srv sink args tn = do
       case quickCheckRuns args of
         Just n | n >= 2 -> DeterminismTool.handle env args
         _               -> QcTool.handle env args
+    -- F1 strangler: experimental ghcide backend serves the pilot tools.
+    -- Falls through to the legacy handler for every other tool (and on
+    -- the default backend).
+    other
+      | srvBackend srv == BackendGhcide
+      , Just routed <- IdeBacked.routeIde (srvIdeSession srv) (srvProjectDir srv) other args
+      -> routed
     other -> handlerFor other env args
   -- B-1: attach a NON-blocking warning naming any argument keys the
   -- caller passed that this tool's schema doesn't declare (with a

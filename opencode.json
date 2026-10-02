@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "edit": "allow",
+    "bash": "allow",
+    "webfetch": "allow"
+  },
+  "mcp": {
+    "haskell-flows": {
+      "type": "local",
+      "command": ["/Users/lattenero/.local/bin/haskell-flows-mcp"],
+      "cwd": "/Users/lattenero/Projects/haskell-rules-and-mcp",
+      "environment": {
+        "HASKELL_PROJECT_DIR": "/Users/lattenero/Projects/haskell-rules-and-mcp/playground",
+        "PATH": "/Users/lattenero/.ghcup/bin:/Users/lattenero/.local/bin:/usr/local/bin:/usr/bin:/bin"
+      },
+      "enabled": true,
+      "timeout": 60000
+    }
+  }
+}
