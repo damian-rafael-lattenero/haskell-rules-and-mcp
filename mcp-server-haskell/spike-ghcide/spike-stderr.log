@@ -1,0 +1,154 @@
+2026-10-02T14:28:09.210914Z | Info | Heap statistics are not enabled (RTS option -T is needed)
+ 2026-10-02T14:28:09.221945Z | Debug | Initializing exports map from hiedb
+2026-10-02T14:28:09.222314Z | Debug | Done initializing exports map from hiedb. Size: 0
+2026-10-02T14:28:09.223085Z | Debug | Shake session initialized
+== IdeCommand reached; boot: 1.2342e-2s
+== [A] embed IdeState + diagnostics
+2026-10-02T14:28:09.224665Z | Debug | Worker starting a unit of work:  SessionLoaderTQueue
+2026-10-02T14:28:09.224844Z | Debug | Looking up session cache for /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/SpikeLib.hs
+2026-10-02T14:28:09.225250Z | Debug | Loop: getOptions for /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/SpikeLib.hs
+2026-10-02T14:28:09.225342Z | Info | Cradle path: /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/SpikeLib.hs
+2026-10-02T14:28:09.225396Z | Warning | No [cradle](https://github.com/mpickering/hie-bios#hie-bios) found for /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/SpikeLib.hs.
+Proceeding with [implicit cradle](https://hackage.haskell.org/package/implicit-hie).
+You should ignore this message, unless you see a 'Multi Cradle: No prefixes matched' error.
+2026-10-02T14:28:09.225843Z | Debug | Resolved Cradles [ResolvedCradle {prefix = "/Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide", cradleDeps = [], concreteCradle = ConcreteCabal Cabal { component = Nothing, projectFile = Nothing}}]
+2026-10-02T14:28:09.226274Z | Debug | Cradle: Cradle{ cradleRootDir = ".", cradleOptsProg = CradleAction: Cabal}
+2026-10-02T14:28:09.226362Z | Info | invoking build tool to determine build flags (this may take some time depending on the cache)
+2026-10-02T14:28:09.226416Z | Debug | Requested to load Cabal cradle using all files (multi-components):
+    /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/SpikeLib.hs[  ]
+2026-10-02T14:28:09.252305Z | Debug | cabal --numeric-version
+2026-10-02T14:28:09.685664Z | Debug | cabal --builddir=/Users/lattenero/.cache/hie-bios/dist-spike-ghcide-08a1c755d4aaa9cc56265778aa1cd8a1 path --output-format=json
+2026-10-02T14:28:09.792193Z | Debug | /Users/lattenero/.ghcup/bin/ghc --numeric-version
+2026-10-02T14:28:09.792488Z | Info | Load cabal cradle using all files (multi-components)
+2026-10-02T14:28:09.792518Z | Debug | Cabal Loading file /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/SpikeLib.hs
+    from project:  [ /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide ]
+    with prefixes: 
+    with actual loading files: [ /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/SpikeLib.hs ]
+2026-10-02T14:28:09.793345Z | Info | cabal --builddir=/Users/lattenero/.cache/hie-bios/dist-spike-ghcide-08a1c755d4aaa9cc56265778aa1cd8a1 v2-repl --with-repl /Users/lattenero/.cache/hie-bios/repl-wrapper-fae20739a232ed1b9dcdf40eca9cf71e --enable-multi-repl --keep-temp-files /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/SpikeLib.hs
+  Environment Variables
+    HIE_BIOS_OUTPUT: /private/var/folders/mt/6n_kh76x031gg9r6hx0y_nmr0000gn/T/HIE_BIOS_OUTPUT51053-1
+2026-10-02T14:28:09.809772Z | Debug | Error: [Cabal-7121]
+2026-10-02T14:28:09.809913Z | Debug | Failed extracting script block: `{- cabal:` start marker not found
+2026-10-02T14:28:09.809948Z | Debug | 
+2026-10-02T14:28:09.816070Z | Debug | Session loading result: Left [CradleError {cradleErrorDependencies = ["spike-ghcide.cabal","cabal.project","cabal.project.local","/Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/spike-target.cabal"], cradleErrorExitCode = ExitFailure 1, cradleErrorStderr = ["Failed to run cabal '--builddir=/Users/lattenero/.cache/hie-bios/dist-spike-ghcide-08a1c755d4aaa9cc56265778aa1cd8a1' v2-repl --with-repl /Users/lattenero/.cache/hie-bios/repl-wrapper-fae20739a232ed1b9dcdf40eca9cf71e --enable-multi-repl --keep-temp-files /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/SpikeLib.hs in directory \".\". Consult the logs for full command and error.","Failed command: cabal '--builddir=/Users/lattenero/.cache/hie-bios/dist-spike-ghcide-08a1c755d4aaa9cc56265778aa1cd8a1' v2-repl --with-repl /Users/lattenero/.cache/hie-bios/repl-wrapper-fae20739a232ed1b9dcdf40eca9cf71e --enable-multi-repl --keep-temp-files /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/SpikeLib.hs","","Error: [Cabal-7121]\nFailed extracting script block: `{- cabal:` start marker not found\n\n","","Process Environment:"], cradleErrorLoadingFiles = ["/Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/SpikeLib.hs"]}]
+2026-10-02T14:28:09.816406Z | Debug | Looking up session cache for /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/SpikeLib.hs
+2026-10-02T14:28:09.817060Z | Info | updateFileDiagnostics published different from new diagnostics - file diagnostics: File:    
+  /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/SpikeLib.hs
+Hidden:   no
+Range:    1:1-2:1
+Source:   cradle
+Severity: DiagnosticSeverity_Error
+Code:     <none>
+Message: 
+  [0;91mLoading the module
+  '/Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/SpikeLib.hs'
+  failed.
+
+  It may not be listed in your .cabal file!
+  Perhaps you need to add `SpikeLib` to other-modules or exposed-modules.
+
+  For more information, visit:
+  https://cabal.readthedocs.io/en/3.4/developing-packages.html#modules-included-in-the-package[0m
+2026-10-02T14:28:09.817479Z | Debug | Finished: spike-a-good Took: 0.59s
+2026-10-02T14:28:09.817569Z | Debug | Looking up session cache for /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs
+2026-10-02T14:28:09.817674Z | Debug | Loop: getOptions for /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs
+2026-10-02T14:28:09.817734Z | Info | Cradle path: /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs
+2026-10-02T14:28:09.817763Z | Warning | No [cradle](https://github.com/mpickering/hie-bios#hie-bios) found for /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs.
+Proceeding with [implicit cradle](https://hackage.haskell.org/package/implicit-hie).
+You should ignore this message, unless you see a 'Multi Cradle: No prefixes matched' error.
+2026-10-02T14:28:09.817993Z | Debug | Resolved Cradles [ResolvedCradle {prefix = "/Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide", cradleDeps = [], concreteCradle = ConcreteCabal Cabal { component = Nothing, projectFile = Nothing}}]
+2026-10-02T14:28:09.818045Z | Debug | Cradle: Cradle{ cradleRootDir = ".", cradleOptsProg = CradleAction: Cabal}
+2026-10-02T14:28:09.818068Z | Info | invoking build tool to determine build flags (this may take some time depending on the cache)
+2026-10-02T14:28:09.818095Z | Debug | Requested to load Cabal cradle using all files (multi-components):
+    /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs[  ]
+2026-10-02T14:28:09.842882Z | Debug | cabal --numeric-version
+2026-10-02T14:28:09.940768Z | Debug | cabal --builddir=/Users/lattenero/.cache/hie-bios/dist-spike-ghcide-08a1c755d4aaa9cc56265778aa1cd8a1 path --output-format=json
+2026-10-02T14:28:10.085911Z | Debug | /Users/lattenero/.ghcup/bin/ghc --numeric-version
+2026-10-02T14:28:10.086182Z | Info | Load cabal cradle using all files (multi-components)
+2026-10-02T14:28:10.086211Z | Debug | Cabal Loading file /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs
+    from project:  [ /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide ]
+    with prefixes: 
+    with actual loading files: [ /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs ]
+2026-10-02T14:28:10.086660Z | Info | cabal --builddir=/Users/lattenero/.cache/hie-bios/dist-spike-ghcide-08a1c755d4aaa9cc56265778aa1cd8a1 v2-repl --with-repl /Users/lattenero/.cache/hie-bios/repl-wrapper-fae20739a232ed1b9dcdf40eca9cf71e --enable-multi-repl --keep-temp-files /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs
+  Environment Variables
+    HIE_BIOS_OUTPUT: /private/var/folders/mt/6n_kh76x031gg9r6hx0y_nmr0000gn/T/HIE_BIOS_OUTPUT51053-2
+2026-10-02T14:28:10.103224Z | Debug | Error: [Cabal-7121]
+2026-10-02T14:28:10.103321Z | Debug | Failed extracting script block: `{- cabal:` start marker not found
+2026-10-02T14:28:10.103346Z | Debug | 
+2026-10-02T14:28:10.109541Z | Debug | Session loading result: Left [CradleError {cradleErrorDependencies = ["spike-ghcide.cabal","cabal.project","cabal.project.local","/Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/spike-target.cabal"], cradleErrorExitCode = ExitFailure 1, cradleErrorStderr = ["Failed to run cabal '--builddir=/Users/lattenero/.cache/hie-bios/dist-spike-ghcide-08a1c755d4aaa9cc56265778aa1cd8a1' v2-repl --with-repl /Users/lattenero/.cache/hie-bios/repl-wrapper-fae20739a232ed1b9dcdf40eca9cf71e --enable-multi-repl --keep-temp-files /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs in directory \".\". Consult the logs for full command and error.","Failed command: cabal '--builddir=/Users/lattenero/.cache/hie-bios/dist-spike-ghcide-08a1c755d4aaa9cc56265778aa1cd8a1' v2-repl --with-repl /Users/lattenero/.cache/hie-bios/repl-wrapper-fae20739a232ed1b9dcdf40eca9cf71e --enable-multi-repl --keep-temp-files /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs","","Error: [Cabal-7121]\nFailed extracting script block: `{- cabal:` start marker not found\n\n","","Process Environment:"], cradleErrorLoadingFiles = ["/Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs"]}]
+2026-10-02T14:28:10.110014Z | Debug | Looking up session cache for /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs
+2026-10-02T14:28:10.110370Z | Info | updateFileDiagnostics published different from new diagnostics - file diagnostics: File:    
+  /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs
+Hidden:   no
+Range:    1:1-2:1
+Source:   cradle
+Severity: DiagnosticSeverity_Error
+Code:     <none>
+Message: 
+  [0;91mLoading the module
+  '/Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs'
+  failed.
+
+  It may not be listed in your .cabal file!
+  Perhaps you need to add `Broken` to other-modules or exposed-modules.
+
+  For more information, visit:
+  https://cabal.readthedocs.io/en/3.4/developing-packages.html#modules-included-in-the-package[0m
+ 2026-10-02T14:28:10.110572Z | Debug | Finished: spike-a-broken Took: 0.29s
+  SpikeLib.hs diagnostic lines: 2
+   Broken.hs  diagnostic lines: 2
+       /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs
+       '/Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/src/Broken.hs'
+   A wall time (2 typechecks): 0.88669s
+   [A] FAIL
+== [B] per-component sessions (the differential proof)
+2026-10-02T14:28:10.112345Z | Debug | Looking up session cache for /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/test/Spec.hs
+2026-10-02T14:28:10.112459Z | Debug | Loop: getOptions for /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/test/Spec.hs
+2026-10-02T14:28:10.112513Z | Info | Cradle path: /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/test/Spec.hs
+2026-10-02T14:28:10.112549Z | Warning | No [cradle](https://github.com/mpickering/hie-bios#hie-bios) found for /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/test/Spec.hs.
+Proceeding with [implicit cradle](https://hackage.haskell.org/package/implicit-hie).
+You should ignore this message, unless you see a 'Multi Cradle: No prefixes matched' error.
+2026-10-02T14:28:10.112777Z | Debug | Resolved Cradles [ResolvedCradle {prefix = "/Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide", cradleDeps = [], concreteCradle = ConcreteCabal Cabal { component = Nothing, projectFile = Nothing}}]
+2026-10-02T14:28:10.112828Z | Debug | Cradle: Cradle{ cradleRootDir = ".", cradleOptsProg = CradleAction: Cabal}
+2026-10-02T14:28:10.112849Z | Info | invoking build tool to determine build flags (this may take some time depending on the cache)
+2026-10-02T14:28:10.112874Z | Debug | Requested to load Cabal cradle using all files (multi-components):
+    /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/test/Spec.hs[  ]
+2026-10-02T14:28:10.134806Z | Debug | cabal --numeric-version
+2026-10-02T14:28:10.230224Z | Debug | cabal --builddir=/Users/lattenero/.cache/hie-bios/dist-spike-ghcide-08a1c755d4aaa9cc56265778aa1cd8a1 path --output-format=json
+2026-10-02T14:28:10.340699Z | Debug | /Users/lattenero/.ghcup/bin/ghc --numeric-version
+2026-10-02T14:28:10.340979Z | Info | Load cabal cradle using all files (multi-components)
+2026-10-02T14:28:10.341008Z | Debug | Cabal Loading file /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/test/Spec.hs
+    from project:  [ /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide ]
+    with prefixes: 
+    with actual loading files: [ /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/test/Spec.hs ]
+2026-10-02T14:28:10.341424Z | Info | cabal --builddir=/Users/lattenero/.cache/hie-bios/dist-spike-ghcide-08a1c755d4aaa9cc56265778aa1cd8a1 v2-repl --with-repl /Users/lattenero/.cache/hie-bios/repl-wrapper-fae20739a232ed1b9dcdf40eca9cf71e --enable-multi-repl --keep-temp-files /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/test/Spec.hs
+  Environment Variables
+    HIE_BIOS_OUTPUT: /private/var/folders/mt/6n_kh76x031gg9r6hx0y_nmr0000gn/T/HIE_BIOS_OUTPUT51053-3
+2026-10-02T14:28:10.357073Z | Debug | Error: [Cabal-7121]
+2026-10-02T14:28:10.357171Z | Debug | Failed extracting script block: `{- cabal:` start marker not found
+2026-10-02T14:28:10.357198Z | Debug | 
+2026-10-02T14:28:10.365726Z | Debug | Session loading result: Left [CradleError {cradleErrorDependencies = ["spike-ghcide.cabal","cabal.project","cabal.project.local","/Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/spike-target.cabal"], cradleErrorExitCode = ExitFailure 1, cradleErrorStderr = ["Failed to run cabal '--builddir=/Users/lattenero/.cache/hie-bios/dist-spike-ghcide-08a1c755d4aaa9cc56265778aa1cd8a1' v2-repl --with-repl /Users/lattenero/.cache/hie-bios/repl-wrapper-fae20739a232ed1b9dcdf40eca9cf71e --enable-multi-repl --keep-temp-files /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/test/Spec.hs in directory \".\". Consult the logs for full command and error.","Failed command: cabal '--builddir=/Users/lattenero/.cache/hie-bios/dist-spike-ghcide-08a1c755d4aaa9cc56265778aa1cd8a1' v2-repl --with-repl /Users/lattenero/.cache/hie-bios/repl-wrapper-fae20739a232ed1b9dcdf40eca9cf71e --enable-multi-repl --keep-temp-files /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/test/Spec.hs","","Error: [Cabal-7121]\nFailed extracting script block: `{- cabal:` start marker not found\n\n","","Process Environment:"], cradleErrorLoadingFiles = ["/Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/test/Spec.hs"]}]
+2026-10-02T14:28:10.365962Z | Debug | Looking up session cache for /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/test/Spec.hs
+2026-10-02T14:28:10.366226Z | Info | updateFileDiagnostics published different from new diagnostics - file diagnostics: File:    
+  /Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/test/Spec.hs
+Hidden:   no
+Range:    1:1-2:1
+Source:   cradle
+Severity: DiagnosticSeverity_Error
+Code:     <none>
+Message: 
+  [0;91mLoading the module
+  '/Users/lattenero/Projects/haskell-rules-and-mcp/mcp-server-haskell/spike-ghcide/target/test/Spec.hs'
+  failed.
+
+  It may not be listed in your .cabal file!
+  Perhaps you need to add `Spec` to other-modules or exposed-modules.
+
+  For more information, visit:
+  https://cabal.readthedocs.io/en/3.4/developing-packages.html#modules-included-in-the-package[0m
+2026-10-02T14:28:10.366385Z | Debug | Finished: spike-b-test Took: 0.25s
+   2026-10-02T14:28:10.366430Z | Debug | Finished: spike-b-lib Took: 0.00s
+could not obtain test-suite HscEnvEq
+   [B] FAIL — component resolution for test/Spec.hs failed
+== total spike wall time: 1.156076s
+== F0 GATE: FAIL (A=FAIL B=FAIL C=FAIL)

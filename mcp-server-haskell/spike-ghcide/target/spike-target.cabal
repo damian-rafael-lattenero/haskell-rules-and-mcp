@@ -1,0 +1,20 @@
+cabal-version:      3.0
+name:               spike-target
+version:            0.1.0
+build-type:         Simple
+
+library
+    hs-source-dirs:   src
+    exposed-modules:  SpikeLib
+                    , Broken
+    build-depends:    base >= 4.20 && < 5
+    default-language: GHC2021
+
+test-suite spike-test
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Spec.hs
+    build-depends:    base >= 4.20 && < 5
+                    , spike-target
+                    , QuickCheck >= 2.14
+    default-language: GHC2021

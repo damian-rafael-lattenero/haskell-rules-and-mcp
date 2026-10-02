@@ -1,0 +1,23 @@
+cabal-version:      3.0
+name:               spike-ghcide
+version:            0.1.0
+build-type:         Simple
+
+executable spike-ghcide
+    main-is:          Main.hs
+    hs-source-dirs:   app
+    build-depends:    base              >= 4.20 && < 5
+                    , directory
+                    , extra
+                    , filepath
+                    , ghc
+                    , ghc-paths
+                    , ghcide           == 2.15.0.0
+                    , hls-plugin-api   == 2.15.0.0
+                    , prettyprinter
+                    , process
+                    , stm
+                    , text
+                    , time
+    default-language: GHC2021
+    ghc-options:      -threaded -rtsopts "-with-rtsopts=-N4"
