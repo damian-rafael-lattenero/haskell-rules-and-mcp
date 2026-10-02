@@ -13,8 +13,7 @@
 -- Deliberately does NOT write to disk — letting the agent review +
 -- paste preserves the auditing loop.
 module HaskellFlows.Tool.Arbitrary
-  ( descriptor
-  , handle
+  ( handle
   , ArbitraryArgs (..)
   , renderTemplate
   , parseConstructors
@@ -93,48 +92,6 @@ import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Error (GhcError)
 import HaskellFlows.Parser.Type (isOutOfScope)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcArbitrary
-    , tdDescription =
-        "PURPOSE: Generate a QuickCheck Arbitrary instance template for a "
-          <> "user-defined data type. "
-          <> "WHEN: a new data/newtype needs an Arbitrary before property "
-          <> "testing; polymorphic types get an Arbitrary constraint per "
-          <> "type variable; pass target_module to write the instance to a "
-          <> "-Wno-orphans module instead of pasting it. "
-          <> "WHEN NOT: ghc_quickcheck once the instance exists; hand-edit "
-          <> "GADTs / existentials / constrained constructors the template "
-          <> "cannot fully express. "
-          <> "PREREQUISITES: the type's module loaded so its constructors "
-          <> "resolve. "
-          <> "OUTPUT: {template, constructors}; with target_module also "
-          <> "{instance_written_to, module, next_steps} (writes one file). "
-          <> "SEE ALSO: ghc_quickcheck, ghc_suggest."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "type_name" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Name of the data/newtype to derive Arbitrary for. \
-                       \Example: \"Expr\", \"Command\", \"Status\"." :: Text)
-                  ]
-              , "target_module" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Optional .hs path to write the instance to as a \
-                       \-Wno-orphans module (e.g. \"src/Foo/Arbitrary.hs\"), \
-                       \avoiding the orphan-instance warning. Omit to return \
-                       \the template inline." :: Text)
-                  ]
-              ]
-          , "required"             .= ["type_name" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data ArbitraryArgs = ArbitraryArgs
   { aaTypeName     :: Text

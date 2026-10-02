@@ -34,6 +34,8 @@ import Data.Text (Text)
 import qualified Test.QuickCheck as QC
 
 import qualified HaskellFlows.Mcp.Envelope as Env
+import qualified HaskellFlows.Mcp.NextStep as NS
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 
 -- | Local pure key-lookup helper (defined at module level so the
 -- legacy-field tests can share it).
@@ -217,7 +219,7 @@ testEnvelopeRoundTrip =
                }
       response =
         Env.withMeta meta
-        . Env.withNextStep (A.object [ "tool" A..= ("ghc_quickcheck" :: Text) ])
+        . Env.withNextStep (NS.simple GhcProperty "" Nothing)
         . Env.withWarnings [warning]
         $ Env.mkOk payload
       encoded = A.encode response

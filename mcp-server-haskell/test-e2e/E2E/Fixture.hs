@@ -4,9 +4,9 @@
 --
 -- @
 --   _ <- Client.callTool c GhcProject (object [ "action" .= "create", ... ])
---   _ <- Client.callTool c GhcModules (object [ "action" .= "add", ... ])
+--   _ <- Client.callTool c GhcModule (object [ "action" .= "add", ... ])
 --   _ <- Client.callTool c GhcDeps    (object [ "action" .= "add", "package" .= "QuickCheck", ... ])
---   _ <- Client.callTool c GhcLoad    ...
+--   _ <- Client.callTool c GhcCheck    ...
 -- @
 --
 -- The first @ghc_load@ on a freshly-scaffolded project triggers

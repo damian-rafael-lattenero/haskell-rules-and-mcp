@@ -17,8 +17,7 @@
 --  'HaskellFlows.Tool.ToolchainWarmup.handle') after stripping the
 -- @action@ field, so the response shape on the wire is unchanged.
 module HaskellFlows.Tool.Toolchain
-  ( descriptor
-  , handle
+  ( handle
   ) where
 
 import Data.Aeson
@@ -36,41 +35,6 @@ import qualified HaskellFlows.Tool.ToolchainStatus as ToolchainStatus
 import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmup
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcToolchain
-    , tdDescription =
-        "PURPOSE: Probe or warm up the external toolchain (cabal, ghc, \
-        \hlint, fourmolu, ormolu, hoogle, hls). \
-        \WHEN: session start (paired with ghc_workflow handshake); \
-        \action='warmup' pre-resolves binaries on PATH ahead of the \
-        \first tool that needs them. \
-        \WHEN NOT: you want MCP server / GHCi state — that is \
-        \ghc_workflow(action='status'). \
-        \PREREQUISITES: none. \
-        \OUTPUT: {tools:[{name, available, path, version, category}], \
-        \summary, blocking_gates}; cabal/ghc/hlint are blocking gates, \
-        \fourmolu/ormolu/hoogle/hls degrade gracefully. \
-        \SEE ALSO: ghc_workflow. \
-        \#94 Phase C successor to ghc_toolchain_status + \
-        \ghc_toolchain_warmup."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "action" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "enum"        .= (["status", "warmup"] :: [Text])
-                  , "description" .=
-                      ("Operation: 'status' (default) reports each \
-                       \binary's path + version; 'warmup' resolves \
-                       \them on PATH ahead of time." :: Text)
-                  ]
-              ]
-          , "additionalProperties" .= False
-          ]
-    }
 
 -- | Dispatch on @action@ (defaulting to @"status"@) and forward
 -- to the existing handler.  The legacy handlers were never

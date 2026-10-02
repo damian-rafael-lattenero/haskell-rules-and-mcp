@@ -104,7 +104,7 @@ runFlow c projectDir = do
   -- write all sources.
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("move-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Source", "Dest", "Consumer"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Source.hs")   sourceSrc
@@ -114,7 +114,7 @@ runFlow c projectDir = do
   -- Step 2 — dry_run preview, no FS writes.
   t0 <- stepHeader 1 "ghc_move dry_run lists files (#62)"
   consumerBefore <- TIO.readFile (projectDir </> "src" </> "Consumer.hs")
-  rDry <- Client.callTool c GhcRefactor (object [ "action" .= ("move_symbol" :: Text), "symbol"  .= ("double" :: Text)
+  rDry <- Client.callTool c GhcEdit (object [ "action" .= ("move_symbol" :: Text), "symbol"  .= ("double" :: Text)
     , "from"    .= ("Source" :: Text)
     , "to"      .= ("Dest"   :: Text)
     , "dry_run" .= True
@@ -133,7 +133,7 @@ runFlow c projectDir = do
   -- Step 3 — real move. Source loses 'double', Dest gains it,
   -- Consumer's selective import splits.
   t1 <- stepHeader 2 "ghc_move applies + verifies (#62)"
-  rApply <- Client.callTool c GhcRefactor (object [ "action" .= ("move_symbol" :: Text), "symbol" .= ("double" :: Text)
+  rApply <- Client.callTool c GhcEdit (object [ "action" .= ("move_symbol" :: Text), "symbol" .= ("double" :: Text)
     , "from"   .= ("Source" :: Text)
     , "to"     .= ("Dest"   :: Text)
     ])
@@ -172,11 +172,11 @@ runFlow c projectDir = do
   -- list spans several lines should have its symbol correctly removed
   -- after a move (not silently skipped, causing a verify rollback).
   t4 <- stepHeader 5 "ghc_move multi-line export list (#228)"
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["MultiSrc", "MultiDest"] :: [Text]) ])
   TIO.writeFile (projectDir </> "src" </> "MultiSrc.hs") multiSrcSrc
   TIO.writeFile (projectDir </> "src" </> "MultiDest.hs") multiDestSrc
-  rMulti <- Client.callTool c GhcRefactor (object
+  rMulti <- Client.callTool c GhcEdit (object
     [ "action" .= ("move_symbol" :: Text)
     , "symbol" .= ("helper" :: Text)
     , "from"   .= ("MultiSrc"  :: Text)
@@ -196,7 +196,7 @@ runFlow c projectDir = do
 
   -- Step 6 — negative: missing destination is refused.
   t3 <- stepHeader 6 "ghc_move refuses missing destination (#62)"
-  rMissing <- Client.callTool c GhcRefactor (object [ "action" .= ("move_symbol" :: Text), "symbol" .= ("greet"             :: Text)
+  rMissing <- Client.callTool c GhcEdit (object [ "action" .= ("move_symbol" :: Text), "symbol" .= ("greet"             :: Text)
     , "from"   .= ("Source"            :: Text)
     , "to"     .= ("Definitely.Missing" :: Text)
     ])

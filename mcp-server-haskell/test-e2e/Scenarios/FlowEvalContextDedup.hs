@@ -73,12 +73,12 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + Foo + load"
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("eval-ctx-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Foo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Foo.hs") fooSrc
-  _ <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("src/Foo.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Foo.hs" :: Text) ])
   stepFooter 1 t0
 
   ----------------------------------------------------------------
@@ -95,7 +95,7 @@ runFlow c projectDir = do
   let evalOnce = do
         _ <- Client.callTool c GhcEval
                (object [ "expression" .= ("1 + 1" :: Text) ])
-        Client.callTool c GhcImports (object [])
+        Client.callTool c GhcSession (object [ "action" .= ("imports" :: Text)])
   snap1 <- evalOnce
   snap2 <- evalOnce
   snap3 <- evalOnce

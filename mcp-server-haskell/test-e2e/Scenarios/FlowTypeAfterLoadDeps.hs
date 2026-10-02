@@ -73,12 +73,12 @@ runFlow c projectDir = do
            , "package" .= ("aeson" :: Text)
            , "stanza"  .= ("library" :: Text)
            ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["UsesAeson"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "UsesAeson.hs") usesAesonSrc
-  loadR <- Client.callTool c GhcLoad
-            (object [ "module_path" .= ("src/UsesAeson.hs" :: Text) ])
+  loadR <- Client.callTool c GhcCheck
+            (object [ "action" .= ("load" :: Text), "module_path" .= ("src/UsesAeson.hs" :: Text) ])
   c1 <- liveCheck $ checkJsonField
           "setup · ghc_load on UsesAeson succeeded (deps + import resolved)"
           loadR "success" (Bool True)
@@ -93,8 +93,8 @@ runFlow c projectDir = do
   -- type is wrong (e.g. "()" or empty string).
   --------------------------------------------------------------------
   t1 <- stepHeader 2 "type_after_load · ghc_type \"id\" returns polymorphic type"
-  tIdR <- Client.callTool c GhcType
-           (object [ "expression" .= ("id" :: Text) ])
+  tIdR <- Client.callTool c GhcInspect
+           (object [ "action" .= ("type" :: Text), "expression" .= ("id" :: Text) ])
   c2a <- liveCheck $ checkJsonField
           "ghc_type(id) success=true (no hidden-package cascade · #80)"
           tIdR "success" (Bool True)
@@ -116,8 +116,8 @@ runFlow c projectDir = do
   -- functions still fail.
   --------------------------------------------------------------------
   t2 <- stepHeader 3 "ghc_type \"map\" returns base list signature"
-  tMapR <- Client.callTool c GhcType
-            (object [ "expression" .= ("map" :: Text) ])
+  tMapR <- Client.callTool c GhcInspect
+            (object [ "action" .= ("type" :: Text), "expression" .= ("map" :: Text) ])
   c3 <- liveCheck $ checkJsonFieldMatches
           "ghc_type(map) renders '(a -> b) -> [a] -> [b]' shape"
           tMapR "type" mentionsListArrow
@@ -137,8 +137,8 @@ runFlow c projectDir = do
   -- shows up as a partial pass.
   --------------------------------------------------------------------
   t3 <- stepHeader 4 "ghc_type \"toJSON\" resolves under aeson dep (project-dep oracle)"
-  tToJsonR <- Client.callTool c GhcType
-               (object [ "expression" .= ("toJSON" :: Text) ])
+  tToJsonR <- Client.callTool c GhcInspect
+               (object [ "action" .= ("type" :: Text), "expression" .= ("toJSON" :: Text) ])
   c4 <- liveCheck $ checkJsonField
           "ghc_type(toJSON) success=true (aeson exposed in IC after load)"
           tToJsonR "success" (Bool True)

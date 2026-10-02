@@ -8,8 +8,7 @@
 -- names) still belongs to HLS — a future phase will wrap an
 -- @ghc_hls@ tool once that lands.
 module HaskellFlows.Tool.Goto
-  ( descriptor
-  , handle
+  ( handle
   , GotoArgs (..)
   , parseDefinedAt
   , Location (..)
@@ -52,41 +51,6 @@ import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcGoto
-    , tdDescription =
-        "PURPOSE: Return the source location where a name is defined, "
-          <> "via the GHC API's SrcSpan. "
-          <> "WHEN: jumping from a usage to its definition; locating a "
-          <> "binding before ghc_refactor scopes a rename. "
-          <> "WHEN NOT: you also want the type/kind/instances — that is "
-          <> "ghc_info (which already includes 'defined_at'); cross-"
-          <> "module re-exports / macro names — future ghc_hls. "
-          <> "PREREQUISITES: name must be in scope. File+line is only "
-          <> "available for names loaded in interpreted (byte-code) mode. "
-          <> "Most project modules are compiled to object code, so goto "
-          <> "typically returns the defining module name only "
-          <> "(has_location: false). Use grep or ghc_info as a fallback. "
-          <> "OUTPUT: {name, has_location, location?:{file, line, column}, "
-          <> "module?}. "
-          <> "SEE ALSO: ghc_info, ghc_browse."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "name" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Name to locate. Examples: \"greet\", \"Functor\"."
-                       :: Text)
-                  ]
-              ]
-          , "required"             .= ["name" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 newtype GotoArgs = GotoArgs
   { gaName :: Text

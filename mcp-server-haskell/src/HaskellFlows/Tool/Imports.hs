@@ -4,8 +4,7 @@
 -- 'GHC.getContext'. Pre-migration wrapped @:show imports@; post
 -- migration the GhcSession's interactive context is authoritative.
 module HaskellFlows.Tool.Imports
-  ( descriptor
-  , handle
+  ( handle
   , parseImportsOutput
     -- * Exposed for unit tests
   , importsPayload
@@ -36,29 +35,6 @@ import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcImports
-    , tdDescription =
-        "PURPOSE: List imports currently in the GHC session's "
-          <> "interactive context. "
-          <> "WHEN: confirming whether a name is already in scope before "
-          <> "ghc_add_import; debugging \"Not in scope\" after recent loads. "
-          <> "WHEN NOT: you want a module's exports — that is ghc_browse; "
-          <> "you want to add an import — that is ghc_add_import. "
-          <> "PREREQUISITES: none — reads from the live session, no args. "
-          <> "OUTPUT: {count, imports, session_preloads}; preloads are "
-          <> "MCP-injected modules (Prelude, System.IO, etc.) reported "
-          <> "separately from source-file imports. "
-          <> "SEE ALSO: ghc_add_import, ghc_browse."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object []
-          , "additionalProperties" .= False
-          ]
-    }
 
 handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do

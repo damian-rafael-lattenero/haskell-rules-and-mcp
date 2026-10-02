@@ -13,8 +13,7 @@
 -- the session — safe to call at any time, including from an agent that
 -- just errored and wants to know what's reachable.
 module HaskellFlows.Tool.Workflow
-  ( descriptor
-  , handle
+  ( handle
   , runHandle
   , WorkflowArgs (..)
   , Action (..)
@@ -74,50 +73,6 @@ import qualified HaskellFlows.Tool.ToolchainStatus as TC
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcWorkflow
-    , tdDescription =
-        "PURPOSE: Report MCP / session state and the context-aware next "
-          <> "action; read-only. "
-          <> "WHEN: session-start handshake (action='status'); when unsure "
-          <> "what to do next (action='help'); action='discover' ranks the "
-          <> "tools you have NOT used this session by relevance to the "
-          <> "current phase; action='post-mortem' gives a session retro "
-          <> "(counts + missed opportunities); action='plan' (goal=...) "
-          <> "turns a one-line goal into a ghc_batch-ready chain. "
-          <> "WHEN NOT: ghc_toolchain to probe external binaries; the "
-          <> "per-response nextStep already covers most next-step moments. "
-          <> "PREREQUISITES: none — never spawns or mutates a GHCi session. "
-          <> "OUTPUT: per-action view — status {projectDir, phase, "
-          <> "toolsActive, staleness, session_activity}; help {steps, "
-          <> "phaseHint}; discover {unused:[{tool, category, why_now}]}; "
-          <> "post-mortem {session_duration_ms, tools_called, "
-          <> "missed_opportunities, ...}; plan {matched_template, chain, "
-          <> "confidence, alternative_templates}. "
-          <> "SEE ALSO: ghc_toolchain, ghc_check_project."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "action" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "enum"        .= (["status", "help", "discover", "post-mortem", "plan"] :: [Text])
-                  , "description" .=
-                      ("Which view to return. Default: 'status'." :: Text)
-                  ]
-              , "goal" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("For action='plan': a one-line goal to turn into a \
-                       \ghc_batch-ready chain, e.g. 'set up Expr.Foo with a \
-                       \QC roundtrip'." :: Text)
-                  ]
-              ]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data Action = ActStatus | ActHelp | ActDiscover | ActPostMortem | ActPlan Text
   deriving stock (Eq, Show)
@@ -319,22 +274,19 @@ scoreTool phase t = phaseScore + catScore
       CatControlPlane -> 0
     boost xs = if t `elem` xs then 10 else 0
     phaseScore = case phase of
-      PhasePreScaffold -> boost [GhcProject, GhcLoad, GhcToolchain]
-      PhaseBootstrap   -> boost [GhcDeps, GhcModules, GhcAddImport, GhcLoad]
-      PhaseDeveloping  -> boost [GhcScratch, GhcHole, GhcSuggest, GhcType, GhcInfo, GhcComplete]
-      PhaseTestingLaws -> boost [GhcSuggest, GhcQuickCheck, GhcArbitrary]
-      PhaseReadyToPush -> boost [GhcGate, GhcPropertyStore, GhcCheckProject, GhcLint]
+      PhasePreScaffold -> boost [GhcProject, GhcCheck, GhcSession]
+      PhaseBootstrap   -> boost [GhcDeps, GhcModule, GhcEdit, GhcCheck]
+      PhaseDeveloping  -> boost [GhcModule, GhcInspect, GhcSuggest, GhcInspect, GhcInspect, GhcInspect]
+      PhaseTestingLaws -> boost [GhcSuggest, GhcProperty, GhcProperty]
+      PhaseReadyToPush -> boost [GhcGate, GhcProperty, GhcCheck, GhcCheck]
 
 -- | A short "why this matters now" line per tool, with a
 -- category-derived fallback. Kept compact — the goal is to nudge.
 whyNow :: ToolName -> Text
 whyNow t = case t of
-  GhcScratch      -> "Type-check a hypothesis before editing source — faster and reversible."
   GhcSuggest      -> "Derive candidate QuickCheck laws from a function's type signature."
-  GhcComplete     -> "Prefix-complete in-scope identifiers when you half-remember a name."
   GhcExplainError -> "Decode a confusing type error and verify a candidate patch."
   GhcGate         -> "One-shot pre-push gate: regression + cabal test + cabal build."
-  GhcHole         -> "List a stub's typed holes with expected types + in-scope fits."
   _               -> "Unused this session — a "
                        <> toolCategoryText (toolCategory t) <> " tool worth a look."
 
@@ -413,51 +365,51 @@ planTemplates :: [PlanTemplate]
 planTemplates =
   [ PlanTemplate "module-with-qc-property"
       ["quickcheck", "qc", "property", "roundtrip", "law"]
-      (\mh -> [ planStep GhcModules (object ["action" .= ("add" :: Text), "modules" .= [planModName mh]])
-              , planStep GhcQuickCheck (object ["property" .= ("\\x -> f x === g x" :: Text), "module_path" .= planModPath mh])
+      (\mh -> [ planStep GhcModule (object ["action" .= ("add" :: Text), "modules" .= [planModName mh]])
+              , planStep GhcProperty (object ["property" .= ("\\x -> f x === g x" :: Text), "module_path" .= planModPath mh])
               ])
   , PlanTemplate "module-only"
       ["new module", "add module", "exposed-module", "scaffold module"]
-      (\mh -> [ planStep GhcModules (object ["action" .= ("add" :: Text), "modules" .= [planModName mh]]) ])
+      (\mh -> [ planStep GhcModule (object ["action" .= ("add" :: Text), "modules" .= [planModName mh]]) ])
   , PlanTemplate "add-dep-then-import"
       ["dependency", "add package", "build-depends", "add dep"]
       (const [ planStep GhcDeps (object ["action" .= ("add" :: Text), "package" .= ("<pkg>" :: Text), "stanza" .= ("library" :: Text)])
-             , planStep GhcAddImport (object ["name" .= ("<Module.To.Import>" :: Text)])
+             , planStep GhcEdit (object ["name" .= ("<Module.To.Import>" :: Text)])
              ])
   , PlanTemplate "refactor-then-verify"
       ["refactor", "extract"]
-      (\mh -> [ planStep GhcRefactor (object ["action" .= ("rename_local" :: Text), "module_path" .= planModPath mh, "old_name" .= ("<old>" :: Text), "new_name" .= ("<new>" :: Text), "scope_line_start" .= (1 :: Int), "scope_line_end" .= (1 :: Int)])
-              , planStep GhcCheckModule (object ["module_path" .= planModPath mh])
+      (\mh -> [ planStep GhcEdit (object ["action" .= ("rename_local" :: Text), "module_path" .= planModPath mh, "old_name" .= ("<old>" :: Text), "new_name" .= ("<new>" :: Text), "scope_line_start" .= (1 :: Int), "scope_line_end" .= (1 :: Int)])
+              , planStep GhcCheck (object ["module_path" .= planModPath mh])
               ])
   , PlanTemplate "bootstrap-project"
       ["new project", "create project", "bootstrap", "from scratch"]
       (\mh -> [ planStep GhcProject (object ["action" .= ("create" :: Text), "name" .= ("<pkg-name>" :: Text)])
               , planStep GhcDeps (object ["action" .= ("add" :: Text), "package" .= ("QuickCheck" :: Text), "stanza" .= ("test-suite" :: Text)])
-              , planStep GhcLoad (object ["module_path" .= planModPath mh])
+              , planStep GhcCheck (object ["module_path" .= planModPath mh])
               ])
   , PlanTemplate "rename-local"
       ["rename local", "rename binding", "rename variable", "rename"]
-      (\mh -> [ planStep GhcRefactor (object ["action" .= ("rename_local" :: Text), "module_path" .= planModPath mh, "old_name" .= ("<old>" :: Text), "new_name" .= ("<new>" :: Text), "scope_line_start" .= (1 :: Int), "scope_line_end" .= (1 :: Int)])
-              , planStep GhcCheckModule (object ["module_path" .= planModPath mh])
+      (\mh -> [ planStep GhcEdit (object ["action" .= ("rename_local" :: Text), "module_path" .= planModPath mh, "old_name" .= ("<old>" :: Text), "new_name" .= ("<new>" :: Text), "scope_line_start" .= (1 :: Int), "scope_line_end" .= (1 :: Int)])
+              , planStep GhcCheck (object ["module_path" .= planModPath mh])
               ])
   , PlanTemplate "move-symbol"
       ["move symbol", "move function", "relocate", "move to"]
-      (const [ planStep GhcRefactor (object ["action" .= ("move_symbol" :: Text), "symbol" .= ("<name>" :: Text), "from" .= ("src/From.hs" :: Text), "to" .= ("src/To.hs" :: Text)])
-             , planStep GhcCheckProject (object [])
+      (const [ planStep GhcEdit (object ["action" .= ("move_symbol" :: Text), "symbol" .= ("<name>" :: Text), "from" .= ("src/From.hs" :: Text), "to" .= ("src/To.hs" :: Text)])
+             , planStep GhcCheck (object [])
              ])
   , PlanTemplate "fix-warning-loop"
       ["fix warning", "warnings", "clean warnings"]
-      (\mh -> [ planStep GhcFixWarning (object ["module_path" .= planModPath mh])
-              , planStep GhcLoad (object ["module_path" .= planModPath mh, "diagnostics" .= True])
+      (\mh -> [ planStep GhcEdit (object ["module_path" .= planModPath mh])
+              , planStep GhcCheck (object ["module_path" .= planModPath mh, "diagnostics" .= True])
               ])
   , PlanTemplate "audit-properties"
       ["audit", "contradiction", "consistency"]
-      (const [ planStep GhcPropertyStore (object ["action" .= ("audit" :: Text)])
-             , planStep GhcPropertyStore (object ["action" .= ("list" :: Text)])
+      (const [ planStep GhcProperty (object ["action" .= ("audit" :: Text)])
+             , planStep GhcProperty (object ["action" .= ("list" :: Text)])
              ])
   , PlanTemplate "export-test-suite"
       ["export", "materialise", "materialize", "spec.hs", "test suite"]
-      (const [ planStep GhcPropertyStore (object ["action" .= ("export" :: Text)])
+      (const [ planStep GhcProperty (object ["action" .= ("export" :: Text)])
              , planStep GhcGate (object [])
              ])
   , PlanTemplate "pre-push-gate"
@@ -572,10 +524,10 @@ planPayload goal =
 -- first so the agent has a compile surface to iterate on.
 multiModuleChain :: [Text] -> [Value]
 multiModuleChain mods =
-  [ planStep GhcModules (object ["action" .= ("add" :: Text), "modules" .= mods])
+  [ planStep GhcModule (object ["action" .= ("add" :: Text), "modules" .= mods])
   ]
   <> case mods of
-       (m : _) -> [ planStep GhcLoad (object ["module_path" .= modPath m]) ]
+       (m : _) -> [ planStep GhcCheck (object ["module_path" .= modPath m]) ]
        []      -> []
   where
     modPath m = "src/" <> T.replace "." "/" m <> ".hs"

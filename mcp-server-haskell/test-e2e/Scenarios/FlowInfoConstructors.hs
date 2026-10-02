@@ -55,8 +55,8 @@ runFlow c _projectDir = do
   -- Step 1 — Maybe is the canonical 2-constructor algebraic type
   -- (one nullary, one unary).
   t0 <- stepHeader 1 "ghc_info(Maybe) shows Nothing + Just (#54)"
-  rMaybe <- Client.callTool c GhcInfo
-              (object [ "name" .= ("Maybe" :: Text) ])
+  rMaybe <- Client.callTool c GhcInspect
+              (object [ "action" .= ("info" :: Text), "name" .= ("Maybe" :: Text) ])
   let mDefMaybe = lookupString "definition" rMaybe
       ctorsMaybe = ctorNames rMaybe
   cMaybe <- liveCheck $ checkPure
@@ -74,8 +74,8 @@ runFlow c _projectDir = do
   -- Step 2 — Either widens the test to two type vars / non-trivial
   -- constructor arities.
   t1 <- stepHeader 2 "ghc_info(Either) shows Left + Right (#54)"
-  rEither <- Client.callTool c GhcInfo
-               (object [ "name" .= ("Either" :: Text) ])
+  rEither <- Client.callTool c GhcInspect
+               (object [ "action" .= ("info" :: Text), "name" .= ("Either" :: Text) ])
   let mDefEither = lookupString "definition" rEither
       ctorsEither = ctorNames rEither
   cEither <- liveCheck $ checkPure
@@ -94,8 +94,8 @@ runFlow c _projectDir = do
   -- The response must NOT carry a 'constructors' field, preserving
   -- wire-format compat for consumers that branch on its presence.
   t2 <- stepHeader 3 "ghc_info(Functor) has no 'constructors' field (#54)"
-  rFunctor <- Client.callTool c GhcInfo
-                (object [ "name" .= ("Functor" :: Text) ])
+  rFunctor <- Client.callTool c GhcInspect
+                (object [ "action" .= ("info" :: Text), "name" .= ("Functor" :: Text) ])
   let hasCtorsKey = case lookupField "constructors" rFunctor of
         Just _  -> True
         Nothing -> False

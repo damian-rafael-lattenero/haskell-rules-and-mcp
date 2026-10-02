@@ -73,7 +73,7 @@ runFlow c projectDir = do
   -- would either fail outright or come back with a reset
   -- projectDir. Both are reported in the e2e log.
   t1 <- stepHeader 2 "MCP transport survives cabal_test failure (#75)"
-  rWf <- Client.callTool c GhcWorkflow
+  rWf <- Client.callTool c GhcSession
            (object [ "action" .= ("status" :: Text) ])
   let okSurvive =
            hasField "phase" rWf

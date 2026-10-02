@@ -63,8 +63,8 @@ runFlow c _projectDir = do
        Just p  -> Env.setEnv "PATH" p
        Nothing -> Env.unsetEnv "PATH")
     (do
-      r <- Client.callTool c GhcAddImport
-             (object [ "name" .= ("fromMaybe" :: Text) ])
+      r <- Client.callTool c GhcEdit
+             (object [ "action" .= ("import" :: Text), "name" .= ("fromMaybe" :: Text) ])
       let success     = statusOk r
           -- Issue #90: 'error' is now an object; the message
           -- is at error.message and remediation lives on the

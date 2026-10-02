@@ -41,15 +41,15 @@ runFlow c _projectDir = do
   -- Step 1 — bootstrap a project so the GhcSession is alive.
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("browse-interactive-demo" :: Text) ])
-  _ <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("src/BrowseInteractiveDemo.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("src/BrowseInteractiveDemo.hs" :: Text) ])
 
   -- Step 2 — browse Prelude. Fix #168 added 'queryBrowseFallback'
   -- via 'lookupModule', so Prelude browse now succeeds (status='ok')
   -- with a full entry listing (count >= 200).
   t0 <- stepHeader 1 "ghc_browse(Prelude) succeeds via #168 fallback path"
-  rBr <- Client.callTool c GhcBrowse
-           (object [ "module" .= ("Prelude" :: Text) ])
+  rBr <- Client.callTool c GhcInspect
+           (object [ "action" .= ("browse" :: Text), "module" .= ("Prelude" :: Text) ])
   -- #168: Prelude is now browseable via the package-env fallback.
   -- We assert status='ok', at least 200 entries, and that the
   -- module echo matches what we asked for.
@@ -77,7 +77,7 @@ runFlow c _projectDir = do
   -- Prelude is still observable through ghc_imports, just under a
   -- distinct key.
   t1 <- stepHeader 2 "ghc_imports lists Prelude (the inconsistency surface) (#72)"
-  rImp <- Client.callTool c GhcImports (object [])
+  rImp <- Client.callTool c GhcSession (object [ "action" .= ("imports" :: Text)])
   let imports  = case lookupField "imports" rImp of
         Just (Array a) -> [ s | String s <- V.toList a ]
         _              -> []

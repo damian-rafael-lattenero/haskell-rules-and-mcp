@@ -85,10 +85,9 @@ ellipticalOr = (||)
 testBajaRegistered :: IO Bool
 testBajaRegistered = pure $
   all (`elem` allToolNameTexts)
-    [ "ghc_browse"
-    , "ghc_quickcheck"  -- #94 Phase C: ghc_determinism merged in (runs>=N)
-    , "ghc_property_store"  -- #94 Phase C step 6: subsumes ghc_property_lifecycle
-    , "ghc_toolchain"  -- #94 Phase C: subsumes ghc_toolchain_warmup
+    [ "ghc_inspect"
+    , "ghc_property"   -- wave 2b: check/store/arbitrary merged
+    , "ghc_session"    -- wave 2b: workflow/toolchain/imports merged
     ]
 
 -- | Phase 11l: resources/read for the rules URI returns the
@@ -233,8 +232,10 @@ testGuidanceNoPhantomSession = do
   let instructions = Guidance.sessionInstructionsText allToolDescriptors
       md           = Guidance.workflowRulesMarkdown   allToolDescriptors
       phantom      = "ghc_session"
-  pure $ not (phantom `T.isInfixOf` instructions)
-      && not (phantom `T.isInfixOf` md)
+  -- wave 2b: ghc_session is a real composite now — both surfaces
+      -- must mention it.
+  pure $ phantom `T.isInfixOf` instructions
+      && phantom `T.isInfixOf` md
 
 -- | BUG-19 companion: the @ghc_deps@ tool descriptor used to say
 -- \"run ghc_session(action='restart')\". Pin that the description

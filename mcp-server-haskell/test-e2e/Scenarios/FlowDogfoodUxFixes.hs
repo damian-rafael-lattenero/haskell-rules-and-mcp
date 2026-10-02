@@ -123,7 +123,7 @@ runFlow c projectDir = do
   -- Step 3 — Fix 1: register a module into the test-suite stanza.
   t3 <- stepHeader 3
           "Fix 1 · ghc_add_modules stanza=test-suite → other-modules + test/"
-  r3 <- Client.callTool c GhcModules
+  r3 <- Client.callTool c GhcModule
           (object [ "action" .= ("add" :: Text), "modules" .= ["Gen" :: Text]
                   , "stanza" .= ("test-suite" :: Text)
                   ])
@@ -157,7 +157,7 @@ runFlow c projectDir = do
     "module Gen where\n\ntrivial :: Int\ntrivial = 42\n"
   t4 <- stepHeader 4
           "Fix 5 · check_project resolves test-suite modules under test/"
-  r4 <- Client.callTool c GhcCheckProject (object [])
+  r4 <- Client.callTool c GhcCheck (object [ "action" .= ("project" :: Text)])
   let c4 = checkPure
         "Gen not reported as not_found"
         (numberOf "not_found" r4 == Just 0)
@@ -172,7 +172,7 @@ runFlow c projectDir = do
   -- Scaffold a NEW library module and an adjacent broken one. The
   -- good module's check must not inherit the broken module's
   -- warnings.
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["UxDemo.Good", "UxDemo.Noisy"] :: [Text])
                  , "stanza" .= ("library" :: Text)
                  ])
@@ -190,8 +190,8 @@ runFlow c projectDir = do
     \noisy unused = 7\n"
   t5 <- stepHeader 5
           "Fix 4 · warning in Noisy does NOT red-gate Good"
-  r5 <- Client.callTool c GhcCheckModule
-          (object [ "module_path" .= ("src/UxDemo/Good.hs" :: Text)
+  r5 <- Client.callTool c GhcCheck
+          (object [ "action" .= ("module" :: Text), "module_path" .= ("src/UxDemo/Good.hs" :: Text)
                   , "warnings_block" .= True
                   ])
   let c5 = checkPure

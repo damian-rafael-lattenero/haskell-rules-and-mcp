@@ -65,13 +65,13 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + Foo.hs (fooBar is the only local)"
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("oos-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Foo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   let srcPath = projectDir </> "src" </> "Foo.hs"
   TIO.writeFile srcPath srcModule
-  _ <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("src/Foo.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Foo.hs" :: Text) ])
   stepFooter 1 t0
 
   -- Snapshot the file content for the byte-equality oracle.
@@ -85,7 +85,7 @@ runFlow c projectDir = do
   -- wrong is that 'fooBarz' is not a binding in that scope.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "rename_local(fooBarz → fooBarzzz) — target missing"
-  r <- Client.callTool c GhcRefactor (object
+  r <- Client.callTool c GhcEdit (object
     [ "action"            .= ("rename_local" :: Text)
     , "module_path"       .= ("src/Foo.hs"   :: Text)
     , "old_name"          .= ("fooBarz"      :: Text)
@@ -125,7 +125,7 @@ runFlow c projectDir = do
   --     failure state behind).
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "sanity · rename_local(fooBar → foobaz) after refusal works"
-  r2 <- Client.callTool c GhcRefactor (object
+  r2 <- Client.callTool c GhcEdit (object
     [ "action"            .= ("rename_local" :: Text)
     , "module_path"       .= ("src/Foo.hs"   :: Text)
     , "old_name"          .= ("fooBar"       :: Text)

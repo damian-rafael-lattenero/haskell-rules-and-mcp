@@ -71,6 +71,7 @@ import HaskellFlows.Ghc.Sanitize
   )
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import qualified HaskellFlows.Mcp.NextStep as NS
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
@@ -330,18 +331,15 @@ importRedirectResult expr =
                   "'import' is a declaration, not an expression. \
                   \GHCi eval context only accepts expressions and IO actions."
               , Env.eeRemediation = Just
-                  "Use ghc_add_import to bring a module into scope, then \
+                  "Use ghc_edit(action=import) to bring a module into scope, then \
                   \use ghc_eval to call names from it."
               }
-      nextStep = object
-        [ "tool"    .= ("ghc_add_import" :: Text)
-        , "why"     .= ("'import' is not a valid expression for ghc_eval. \
-                        \ghc_add_import(name=\"Module.Name\") loads the \
-                        \module into scope so its names are available in \
-                        \subsequent ghc_eval / ghc_type / ghc_quickcheck \
-                        \calls." :: Text)
-        , "example" .= object [ "name" .= moduleName ]
-        ]
+      nextStep = NS.simple GhcEdit
+        "'import' is not a valid expression for ghc_eval. \
+        \ghc_edit(action=import, name=\"Module.Name\") loads the \
+        \module into scope so its names are available in \
+        \subsequent ghc_eval / ghc_inspect / ghc_property \
+        \calls." (Just (object [ "name" .= moduleName ]))
   in Env.withNextStep nextStep (Env.mkFailed err)
 
 -- | Fast path: wrap user expr in 'show', compile, coerce. Returns

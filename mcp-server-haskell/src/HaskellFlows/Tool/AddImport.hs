@@ -11,8 +11,7 @@
 -- @session_updated@ (bool) and @added_import@ (the line that was
 -- injected, or null) so callers can see what happened.
 module HaskellFlows.Tool.AddImport
-  ( descriptor
-  , handle
+  ( handle
   , AddImportArgs (..)
   , renderImportLine
   , idiomaticAlias         -- B-2
@@ -47,56 +46,6 @@ import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import qualified HaskellFlows.Tool.Hoogle as Hoogle
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcAddImport
-    , tdDescription =
-        "PURPOSE: Look up which module exports a name and add the top "
-          <> "hit to the live GHCi session so ghc_eval can use it "
-          <> "immediately. "
-          <> "WHEN: a compile error reports a missing identifier and you "
-          <> "need to know which module exports it; adding a transient "
-          <> "import to the interactive session before evaluating an "
-          <> "expression with ghc_eval. "
-          <> "WHEN NOT: the name is already in scope — check via "
-          <> "ghc_imports first; you want to discover names by type "
-          <> "signature — use hoogle_search directly; you want to persist "
-          <> "the import to a source file — use ghc_apply_exports or "
-          <> "edit the file directly then ghc_load. "
-          <> "PREREQUISITES: hoogle binary on PATH (ghc_toolchain "
-          <> "action='status' confirms availability). "
-          <> "OUTPUT: {name, count, imports, session_updated, "
-          <> "added_import, hint}. The top candidate is injected into "
-          <> "the GHCi session (session_updated=true) so ghc_eval works "
-          <> "immediately. Does NOT modify source files. "
-          <> "SEE ALSO: ghc_imports, hoogle_search, ghc_apply_exports."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "name" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .= ("Name to look up. Examples: \"fromMaybe\", \"Map.lookup\", \"Data.Map.Strict\"." :: Text)
-                  ]
-              , "qualified" .= object
-                  [ "type"        .= ("boolean" :: Text)
-                  , "description" .= ("Render the line as `import qualified Foo as F`. Default: false." :: Text)
-                  ]
-              , "alias" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .= ("Explicit alias for the qualified import \
-                                      \(`import qualified Foo as <alias>`). Only \
-                                      \used when qualified=true. Default: an \
-                                      \idiomatic alias derived from the module \
-                                      \(Data.Map.Strict→Map, Data.Set→Set, \
-                                      \Data.Text→T, Data.ByteString→BS)." :: Text)
-                  ]
-              ]
-          , "required"             .= ["name" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data AddImportArgs = AddImportArgs
   { aiName      :: !Text

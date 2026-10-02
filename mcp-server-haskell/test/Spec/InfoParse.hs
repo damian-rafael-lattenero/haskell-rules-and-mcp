@@ -52,11 +52,9 @@ gateField _ _            = Nothing
 testCodeToolsRegistered :: IO Bool
 testCodeToolsRegistered = pure $
   all (`elem` allToolNameTexts)
-    [ "ghc_add_import"
-    , "ghc_modules"
-    , "ghc_apply_exports"
-    , "ghc_fix_warning"
-    , "ghc_imports"
+    [ "ghc_edit"
+    , "ghc_module"
+    , "ghc_session"
     ]
 
 testAddImportQualified :: IO Bool

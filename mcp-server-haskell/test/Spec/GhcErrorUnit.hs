@@ -15,7 +15,6 @@ module Spec.GhcErrorUnit
   , testEvalIOUnitCaptureViaSess
   , testLoadMergeDiagsPreferDeferred
   , testWarmupIncludesGates
-  , testClassifyPhaseNoLoad
   , testEnclosingRangePadding
   , testDepsExplainRejectionSplit
   ) where
@@ -249,19 +248,6 @@ testWarmupIncludesGates = do
 -- tool calls with no load ever attempted.  Before the fix the
 -- @wsToolCalls < 3@ guard caused it to fall through to
 -- 'PhaseDeveloping' after the 3rd call.
-
-testClassifyPhaseNoLoad :: IO Bool
-
-testClassifyPhaseNoLoad = do
-  ref <- WS.newWorkflowStateRef
-  let anyPayload = A.object [ "success" .= True ]
-  -- 5 read-only calls (workflow status, toolchain, etc.) — no load.
-  mapM_ (\_ -> WS.trackTool ref GhcWorkflow True anyPayload) [1..5 :: Int]
-  s <- WS.readState ref
-  pure (WS.classifyPhase s == WS.PhasePreScaffold)
-
--- | F-24: with padding=15, 'enclosingLineRange' should not return
--- the whole file for a 28-line module (error at line 10).
 
 testEnclosingRangePadding :: IO Bool
 

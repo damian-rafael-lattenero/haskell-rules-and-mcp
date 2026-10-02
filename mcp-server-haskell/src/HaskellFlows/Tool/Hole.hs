@@ -5,8 +5,7 @@
 -- existing 'parseTypedHoles' parser (tuned for terminal output) works
 -- unchanged.
 module HaskellFlows.Tool.Hole
-  ( descriptor
-  , handle
+  ( handle
   , HoleArgs (..)
   ) where
 
@@ -37,43 +36,6 @@ import HaskellFlows.Parser.Hole
 import HaskellFlows.Types
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcHole
-    , tdDescription =
-        "PURPOSE: List every typed hole in a module with its expected "
-          <> "type, in-scope fits, and relevant local bindings. "
-          <> "WHEN: implementing a stub whose type is known but the "
-          <> "expression is not — the fits list narrows the search space "
-          <> "immediately. "
-          <> "WHEN NOT: ghc_explain_error for an actual type error; "
-          <> "ghc_check_module for full module health. "
-          <> "PREREQUISITES: a module path in the active project (loaded "
-          <> "under -fdefer-typed-holes). "
-          <> "OUTPUT: {holes:[{type, fits, bindings}]}. "
-          <> "SEE ALSO: ghc_explain_error, ghc_check_module."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "module_path" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Path to the module to scan for holes, relative to \
-                       \the project directory." :: Text)
-                  ]
-              , "hole_name" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Optional: filter results to a specific hole \
-                       \identifier (e.g. \"_x\")." :: Text)
-                  ]
-              ]
-          , "required"             .= ["module_path" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data HoleArgs = HoleArgs
   { haModulePath :: !Text

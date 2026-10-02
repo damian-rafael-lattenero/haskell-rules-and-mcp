@@ -172,14 +172,14 @@ runOneProject binary rootDir tp = do
     $ \c -> do
       _ <- Client.callTool c GhcProject
              (object [ "action" .= ("create" :: Text), "name" .= ("xv-demo" :: Text) ])
-      _ <- Client.callTool c GhcModules
+      _ <- Client.callTool c GhcModule
              (object [ "action" .= ("add" :: Text), "modules" .= tpModules tp ])
 
       createDirectoryIfMissing True (subdir </> "src")
       mapM_ (\(rel, body) -> TIO.writeFile (subdir </> rel) body)
             (tpFiles tp)
 
-      mcpR <- Client.callTool c GhcCheckProject (object [])
+      mcpR <- Client.callTool c GhcCheck (object [ "action" .= ("project" :: Text)])
       let mcpOverall = fieldBool "overall" mcpR
 
       cabalExit <- runCabalBuild subdir

@@ -54,7 +54,7 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + add QuickCheck + load Calc"
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("proplife-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Calc"] :: [Text]) ])
   _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
@@ -64,16 +64,16 @@ runFlow c projectDir = do
          ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs") calcSrc
-  _ <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Calc.hs" :: Text) ])
   stepFooter 1 t0
 
   ----------------------------------------------------------------
   -- seed: quickcheck a simple property so it persists.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "quickcheck (auto-persist on pass)"
-  _ <- Client.callTool c GhcQuickCheck (object
-    [ "property" .= propSingle
+  _ <- Client.callTool c GhcProperty (object
+    [ "action" .= ("check" :: Text), "property" .= propSingle
     , "module"   .= ("src/Calc.hs" :: Text)
     ])
   stepFooter 2 t1
@@ -84,8 +84,8 @@ runFlow c projectDir = do
   -- silently dropped, so the store stayed at one entry.
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "quickcheck runs=2 (determinism path must also persist)"
-  rDet <- Client.callTool c GhcQuickCheck (object
-    [ "property" .= propRuns2
+  rDet <- Client.callTool c GhcProperty (object
+    [ "action" .= ("check" :: Text), "property" .= propRuns2
     , "module"   .= ("src/Calc.hs" :: Text)
     , "runs"     .= (2 :: Int)
     ])
@@ -99,7 +99,7 @@ runFlow c projectDir = do
   -- ghc_property_lifecycle — inspect the store.
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "ghc_property_lifecycle (inspect store)"
-  r <- Client.callTool c GhcPropertyStore (object [ "action" .= ("list" :: Text) ])
+  r <- Client.callTool c GhcProperty (object [ "action" .= ("check" :: Text), "action" .= ("list" :: Text) ])
   c1 <- liveCheck $ checkJsonField "success" r "success" (Bool True)
   c2 <- liveCheck $ checkJsonFieldMatches
           "store has ≥ 2 properties (single-run + runs=2 both persisted)"

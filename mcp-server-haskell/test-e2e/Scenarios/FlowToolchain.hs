@@ -31,7 +31,7 @@ runFlow :: Client.McpClient -> FilePath -> IO [Check]
 runFlow c _pd = do
   -- ghc_toolchain action=status (#94 Phase C: subsumed ghc_toolchain_status)
   t0 <- stepHeader 1 "ghc_toolchain action=status"
-  r1 <- Client.callTool c GhcToolchain (object [ "action" .= ("status" :: Text) ])
+  r1 <- Client.callTool c GhcSession (object [ "action" .= ("toolchain" :: Text) ])
   -- Dropped: "status success" — the 'cabal/ghc/hlint available'
   -- check below is a stronger semantic oracle (fails if any of the
   -- three binaries are missing, which is the real failure mode).
@@ -53,7 +53,7 @@ runFlow c _pd = do
 
   -- ghc_toolchain action=warmup (#94 Phase C: subsumed ghc_toolchain_warmup)
   t1 <- stepHeader 2 "ghc_toolchain action=warmup (probe + report)"
-  r2 <- Client.callTool c GhcToolchain (object [ "action" .= ("warmup" :: Text) ])
+  r2 <- Client.callTool c GhcSession (object [ "action" .= ("warmup" :: Text) ])
   -- Dropped: "warmup success" — redundant with 'tools array non-empty'
   -- which is the shape the tool is actually producing.
   c6 <- liveCheck $ checkJsonFieldMatches

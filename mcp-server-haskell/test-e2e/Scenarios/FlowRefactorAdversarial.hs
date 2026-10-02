@@ -116,13 +116,13 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + Refactor module (greet, double, buildMessage)"
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("refactor-adv-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Refactor"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   let srcPath = projectDir </> "src" </> "Refactor.hs"
   TIO.writeFile srcPath initialSrc
-  loadR <- Client.callTool c GhcLoad
-             (object [ "module_path" .= ("src/Refactor.hs" :: Text) ])
+  loadR <- Client.callTool c GhcCheck
+             (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Refactor.hs" :: Text) ])
   cPre <- liveCheck $ checkPure
     "setup · Refactor compiles clean"
     (fieldIsTrue "success" loadR)
@@ -137,7 +137,7 @@ runFlow c projectDir = do
   --------------------------------------------------------------------
   t1 <- stepHeader 2 "collision · rename greet → double (duplicate)"
   bodyBefore <- TIO.readFile srcPath
-  collisionR <- Client.callTool c GhcRefactor (object
+  collisionR <- Client.callTool c GhcEdit (object
     [ "action"           .= ("rename_local" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "old_name"         .= ("greet" :: Text)
@@ -180,8 +180,8 @@ runFlow c projectDir = do
      \contract is actually untested. Raw: " <> renderShort collisionR)
   -- And the session should still work — a failed refactor must not
   -- wedge the GHCi child.
-  alive1 <- Client.callTool c GhcLoad
-              (object [ "module_path" .= ("src/Refactor.hs" :: Text) ])
+  alive1 <- Client.callTool c GhcCheck
+              (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Refactor.hs" :: Text) ])
   cCollisionAlive <- liveCheck $ checkPure
     "collision · ghc_load of the restored file still green"
     (fieldIsTrue "success" alive1)
@@ -195,7 +195,7 @@ runFlow c projectDir = do
   -- Compile must stay green.
   --------------------------------------------------------------------
   t2 <- stepHeader 3 "extract_binding · lift prefix into top-level"
-  extractR <- Client.callTool c GhcRefactor (object
+  extractR <- Client.callTool c GhcEdit (object
     [ "action"           .= ("extract_binding" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "new_name"         .= ("infoPrefix" :: Text)
@@ -227,8 +227,8 @@ runFlow c projectDir = do
      \Observed: success=" <> T.pack (show extractSucceeded)
      <> ", mentionsTopLevel=" <> T.pack (show mentionsTopLevel))
   -- Either way, the session must still be usable.
-  alive2 <- Client.callTool c GhcLoad
-              (object [ "module_path" .= ("src/Refactor.hs" :: Text) ])
+  alive2 <- Client.callTool c GhcCheck
+              (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Refactor.hs" :: Text) ])
   cExtractAlive <- liveCheck $ checkPure
     "extract · ghc_load after the refactor still green"
     (fieldIsTrue "success" alive2)
@@ -243,7 +243,7 @@ runFlow c projectDir = do
   --------------------------------------------------------------------
   t3 <- stepHeader 4 "invalid scope · start > end must be refused"
   bodyBefore3 <- TIO.readFile srcPath
-  badScopeR <- Client.callTool c GhcRefactor (object
+  badScopeR <- Client.callTool c GhcEdit (object
     [ "action"           .= ("rename_local" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "old_name"         .= ("greet" :: Text)
@@ -268,7 +268,7 @@ runFlow c projectDir = do
   -- alive.
   --------------------------------------------------------------------
   t4 <- stepHeader 5 "nonexistent file · src/DoesNotExist.hs"
-  missingR <- Client.callTool c GhcRefactor (object
+  missingR <- Client.callTool c GhcEdit (object
     [ "action"           .= ("rename_local" :: Text)
     , "module_path"      .= ("src/DoesNotExist.hs" :: Text)
     , "old_name"         .= ("x" :: Text)
@@ -302,7 +302,7 @@ runFlow c projectDir = do
   --------------------------------------------------------------------
   t5 <- stepHeader 6 "extract_binding · top-level equation refused (#46)"
   bodyBefore5 <- TIO.readFile srcPath
-  topLevelR <- Client.callTool c GhcRefactor (object
+  topLevelR <- Client.callTool c GhcEdit (object
     [ "action"           .= ("extract_binding" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "new_name"         .= ("doubledImpl" :: Text)
@@ -335,8 +335,8 @@ runFlow c projectDir = do
      \success=false with no guidance leaves the agent guessing. \
      \Raw: " <> renderShort topLevelR)
   -- Belt-and-braces: a refused refactor must not poison the session.
-  alive4 <- Client.callTool c GhcLoad
-              (object [ "module_path" .= ("src/Refactor.hs" :: Text) ])
+  alive4 <- Client.callTool c GhcCheck
+              (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Refactor.hs" :: Text) ])
   cTopLevelAlive <- liveCheck $ checkPure
     "top-level extract · ghc_load still green after the refusal"
     (fieldIsTrue "success" alive4)
@@ -354,7 +354,7 @@ runFlow c projectDir = do
   --------------------------------------------------------------------
   t6 <- stepHeader 7 "extract_binding · type signature refused (#46)"
   bodyBefore6 <- TIO.readFile srcPath
-  sigR <- Client.callTool c GhcRefactor (object
+  sigR <- Client.callTool c GhcEdit (object
     [ "action"           .= ("extract_binding" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "new_name"         .= ("sigCopy" :: Text)
@@ -384,7 +384,7 @@ runFlow c projectDir = do
   --------------------------------------------------------------------
   t7 <- stepHeader 8 "extract_binding · multi-line equation refused (#46)"
   bodyBefore7 <- TIO.readFile srcPath
-  multiR <- Client.callTool c GhcRefactor (object
+  multiR <- Client.callTool c GhcEdit (object
     [ "action"           .= ("extract_binding" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "new_name"         .= ("doubleAll" :: Text)
@@ -415,7 +415,7 @@ runFlow c projectDir = do
   --------------------------------------------------------------------
   t8 <- stepHeader 9 "extract_binding · dry_run=true top-level still refused (#46)"
   bodyBefore8 <- TIO.readFile srcPath
-  dryR <- Client.callTool c GhcRefactor (object
+  dryR <- Client.callTool c GhcEdit (object
     [ "action"           .= ("extract_binding" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "new_name"         .= ("doubledImpl" :: Text)
@@ -467,7 +467,7 @@ runFlow c projectDir = do
            then pure (object [ "success" .= False
                              , "error"   .= ("fixture lost the let-prefix line"
                                               :: Text) ])
-           else Client.callTool c GhcRefactor (object
+           else Client.callTool c GhcEdit (object
              [ "action"           .= ("extract_binding" :: Text)
              , "module_path"      .= ("src/Refactor.hs" :: Text)
              , "new_name"         .= ("infoPrefix2" :: Text)

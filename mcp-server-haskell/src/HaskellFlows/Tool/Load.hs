@@ -11,8 +11,7 @@
 -- compatibility with existing e2e scenarios: success, errors,
 -- warnings, summary, raw.
 module HaskellFlows.Tool.Load
-  ( descriptor
-  , handle
+  ( handle
   , LoadArgs (..)
   , checkPathExists
     -- * Exposed for unit tests
@@ -60,43 +59,6 @@ import HaskellFlows.Parser.Error
 import HaskellFlows.Types
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcLoad
-    , tdDescription =
-        "PURPOSE: Load or reload Haskell modules via the in-process GHC "
-          <> "API and return structured errors + warnings. "
-          <> "WHEN: after editing a module; the first call boots GHCi; "
-          <> "diagnostics=true adds a deferred pass that surfaces typed holes. "
-          <> "WHEN NOT: ghc_check_module for the aggregate pass/fail gate; "
-          <> "ghc_explain_error to decode a specific type error. "
-          <> "PREREQUISITES: a module path in the active project (omit to "
-          <> "reload the current set). "
-          <> "OUTPUT: {errors, warnings, loaded}; diagnostics=true adds "
-          <> "typed-hole warnings. "
-          <> "SEE ALSO: ghc_check_module, ghc_hole, ghc_explain_error."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "module_path" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Path to a module to load, relative to the project \
-                       \directory. Omit to reload current modules." :: Text)
-                  ]
-              , "diagnostics" .= object
-                  [ "type"        .= ("boolean" :: Text)
-                  , "description" .=
-                      ("When true, runs a second deferred pass to extract \
-                       \typed holes and deferred-type-error warnings. \
-                       \Default: false." :: Text)
-                  ]
-              ]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data LoadArgs = LoadArgs
   { laModulePath  :: !(Maybe Text)

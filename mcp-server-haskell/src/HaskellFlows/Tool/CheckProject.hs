@@ -14,8 +14,7 @@
 -- * @fail_fast=false@ by default: we want full coverage of which
 --   modules are red, not just the first.
 module HaskellFlows.Tool.CheckProject
-  ( descriptor
-  , handle
+  ( handle
   , CheckProjectArgs (..)
   , parseExposedModules
     -- * Exposed for unit tests (#129)
@@ -49,52 +48,6 @@ import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcCheckProject
-    , tdDescription =
-        "PURPOSE: Run ghc_check_module on every exposed-module + "
-          <> "other-module in the .cabal. "
-          <> "WHEN: before pushing, to confirm the whole project is clean — "
-          <> "not just the files you edited. "
-          <> "WHEN NOT: ghc_check_module for a single file; ghc_gate for the "
-          <> "tests + build pre-push composite. "
-          <> "PREREQUISITES: a .cabal in the active project. "
-          <> "OUTPUT: {modules:[{path, overall}], overall, timed_out}. "
-          <> "SEE ALSO: ghc_check_module, ghc_gate."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "fail_fast" .= object
-                  [ "type"        .= ("boolean" :: Text)
-                  , "description" .=
-                      ("Stop on first red module. Default: false (full "
-                       <> "coverage preferred over speed)." :: Text)
-                  ]
-              , "warnings_block" .= object
-                  [ "type"        .= ("boolean" :: Text)
-                  , "description" .=
-                      ("Forwarded verbatim to each 'ghc_check_module' \
-                       \call. When false, warnings stay informational \
-                       \— the project is considered green as long as \
-                       \there are no compile errors, holes, or property \
-                       \regressions. Default: true (pre-push strictness)." :: Text)
-                  ]
-              -- #129: overall wall-clock budget
-              , "timeout_seconds" .= object
-                  [ "type"        .= ("integer" :: Text)
-                  , "description" .=
-                      ("Overall wall-clock budget in seconds. Default: 120. \
-                       \When the budget expires the tool returns partial \
-                       \results with timed_out=true rather than hanging \
-                       \the session." :: Text)
-                  ]
-              ]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data CheckProjectArgs = CheckProjectArgs
   { cpFailFast        :: !Bool

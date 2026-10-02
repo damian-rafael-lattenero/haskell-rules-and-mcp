@@ -52,7 +52,7 @@ runFlow c projectDir = do
   -- help at t=0 (no state yet → phase = PhasePreScaffold)
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "help at t=0 — pre-scaffold phase"
-  r0 <- Client.callTool c GhcWorkflow (object [ "action" .= ("help" :: Text) ])
+  r0 <- Client.callTool c GhcSession (object [ "action" .= ("help" :: Text) ])
   c1 <- liveCheck $ checkJsonFieldMatches
           "help has a 'steps' array"
           r0 "steps" isNonEmptyArray
@@ -69,7 +69,7 @@ runFlow c projectDir = do
   t1 <- stepHeader 2 "advance state: scaffold + load + 3 passing props"
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("workflow-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Calc"] :: [Text]) ])
   _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
@@ -79,8 +79,8 @@ runFlow c projectDir = do
          ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs") calcSrc
-  _ <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Calc.hs" :: Text) ])
   -- 3 distinct passing properties to cross the wsPassedProperties
   -- >= 3 threshold in WorkflowState.renderHelp.
   let props =
@@ -89,8 +89,8 @@ runFlow c projectDir = do
         , "\\(x :: Int) -> double (double x) == triple x + x"
         ]
   forM_ props $ \p ->
-    Client.callTool c GhcQuickCheck (object
-      [ "property" .= (p :: Text)
+    Client.callTool c GhcProperty (object
+      [ "action" .= ("check" :: Text), "property" .= (p :: Text)
       , "module"   .= ("src/Calc.hs" :: Text)
       ])
   stepFooter 2 t1
@@ -99,7 +99,7 @@ runFlow c projectDir = do
   -- help at t=N (≥3 passing props → state hint mentions regression)
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "help after ≥3 passing props — history nudge"
-  rN <- Client.callTool c GhcWorkflow (object [ "action" .= ("help" :: Text) ])
+  rN <- Client.callTool c GhcSession (object [ "action" .= ("check" :: Text), "action" .= ("help" :: Text) ])
   c3 <- liveCheck $ checkJsonFieldMatches
           "help now reports a non-preScaffold phase"
           rN "phase" (not . stringIs "PhasePreScaffold")
@@ -119,7 +119,7 @@ runFlow c projectDir = do
   -- retired action=next, #269)
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "workflow(discover) — ranked unused tools"
-  rDisc <- Client.callTool c GhcWorkflow (object [ "action" .= ("discover" :: Text) ])
+  rDisc <- Client.callTool c GhcSession (object [ "action" .= ("discover" :: Text) ])
   c5 <- liveCheck $ checkJsonFieldMatches
           "discover · payload carries a non-empty 'unused' array"
           rDisc "unused" isNonEmptyArray

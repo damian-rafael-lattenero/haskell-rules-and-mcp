@@ -86,20 +86,20 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + write Shapes + load"
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("arbitrary-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Shapes"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Shapes.hs") shapesSrc
-  _ <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("src/Shapes.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Shapes.hs" :: Text) ])
   stepFooter 1 t0
 
   ----------------------------------------------------------------
   -- (1) Status: flat ADT → classical oneof template
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "ghc_arbitrary(Status) — flat oneof"
-  r1 <- Client.callTool c GhcArbitrary
-          (object [ "type_name" .= ("Status" :: Text) ])
+  r1 <- Client.callTool c GhcProperty
+          (object [ "action" .= ("arbitrary" :: Text), "type_name" .= ("Status" :: Text) ])
   c1 <- liveCheck $ checkJsonField
           "Status · success" r1 "success" (Bool True)
   c2 <- liveCheck $ checkJsonFieldMatches
@@ -124,8 +124,8 @@ runFlow c projectDir = do
   -- (2) Expr: recursive → sized template (BUG-17 core)
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "ghc_arbitrary(Expr) — sized recursive (BUG-17)"
-  r2 <- Client.callTool c GhcArbitrary
-          (object [ "type_name" .= ("Expr" :: Text) ])
+  r2 <- Client.callTool c GhcProperty
+          (object [ "action" .= ("arbitrary" :: Text), "type_name" .= ("Expr" :: Text) ])
   c6 <- liveCheck $ checkJsonField
           "Expr · success" r2 "success" (Bool True)
   c7 <- liveCheck $ checkJsonFieldMatches
@@ -151,8 +151,8 @@ runFlow c projectDir = do
   -- (3) Tree a: polymorphic recursive → Arbitrary constraint
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "ghc_arbitrary(Tree) — polymorphic + sized"
-  r3 <- Client.callTool c GhcArbitrary
-          (object [ "type_name" .= ("Tree" :: Text) ])
+  r3 <- Client.callTool c GhcProperty
+          (object [ "action" .= ("arbitrary" :: Text), "type_name" .= ("Tree" :: Text) ])
   c11 <- liveCheck $ checkJsonField
           "Tree · success" r3 "success" (Bool True)
   c12 <- liveCheck $ checkJsonFieldMatches
@@ -207,7 +207,7 @@ runFlow c projectDir = do
         ]
   TIO.writeFile (projectDir </> "src" </> "ShapesGen.hs") genSrc
 
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["ShapesGen"] :: [Text]) ])
   -- The session needs QuickCheck in scope to resolve 'Arbitrary',
   -- 'arbitrary', 'oneof', 'sized', 'frequency'. It's already a
@@ -220,8 +220,8 @@ runFlow c projectDir = do
            , "package" .= ("QuickCheck" :: Text)
            , "stanza"  .= ("library" :: Text)
            ])
-  loadGen <- Client.callTool c GhcLoad
-               (object [ "module_path" .= ("src/ShapesGen.hs" :: Text) ])
+  loadGen <- Client.callTool c GhcCheck
+               (object [ "action" .= ("load" :: Text), "module_path" .= ("src/ShapesGen.hs" :: Text) ])
   c15 <- liveCheck $ Check
     { cName   = "3 generated Arbitrary instances compile together"
     , cOk     = statusOk loadGen == Just True

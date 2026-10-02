@@ -48,13 +48,13 @@ runFlow c _projectDir = do
   -- live session.
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("info-class-demo" :: Text) ])
-  _ <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("src/InfoClassDemo.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("src/InfoClassDemo.hs" :: Text) ])
 
   -- Step 2 — Functor: must report class header + 'fmap'.
   t0 <- stepHeader 1 "ghc_info(Functor) returns class header + fmap (#70)"
-  rFun <- Client.callTool c GhcInfo
-            (object [ "name" .= ("Functor" :: Text) ])
+  rFun <- Client.callTool c GhcInspect
+            (object [ "action" .= ("info" :: Text), "name" .= ("Functor" :: Text) ])
   let funDef    = fieldText "definition" rFun
       funMethods = methodNames rFun
       funOk =
@@ -76,8 +76,8 @@ runFlow c _projectDir = do
   -- (==) / (/=). MINIMAL pragma exposes only one, but at least
   -- one operator must surface.
   t1 <- stepHeader 2 "ghc_info(Eq) returns class header + (==)/(/=) (#70)"
-  rEq <- Client.callTool c GhcInfo
-           (object [ "name" .= ("Eq" :: Text) ])
+  rEq <- Client.callTool c GhcInspect
+           (object [ "action" .= ("info" :: Text), "name" .= ("Eq" :: Text) ])
   let eqMethods = methodNames rEq
       hasOp     = "(==)" `elem` eqMethods || "(/=)" `elem` eqMethods
       eqOk      =
@@ -95,8 +95,8 @@ runFlow c _projectDir = do
   -- Maybe must report kind=data + constructors[]. The
   -- class_methods field must be ABSENT.
   t2 <- stepHeader 3 "ghc_info(Maybe) data path unaffected (#70 + #54)"
-  rMaybe <- Client.callTool c GhcInfo
-             (object [ "name" .= ("Maybe" :: Text) ])
+  rMaybe <- Client.callTool c GhcInspect
+             (object [ "action" .= ("info" :: Text), "name" .= ("Maybe" :: Text) ])
   let maybeOk =
            fieldText "kind" rMaybe == Just "data"
         && hasArrayField "constructors" rMaybe

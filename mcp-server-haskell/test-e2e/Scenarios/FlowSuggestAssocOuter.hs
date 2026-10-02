@@ -60,12 +60,12 @@ runFlow c projectDir = do
   -- real type signature to read.
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("assoc-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["AssocDemo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "AssocDemo.hs") assocSrc
-  _ <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("src/AssocDemo.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("src/AssocDemo.hs" :: Text) ])
 
   -- Step 2 — ghc_suggest must include an Associative entry whose
   -- property string applies @combineSorted@ at the outer LHS.

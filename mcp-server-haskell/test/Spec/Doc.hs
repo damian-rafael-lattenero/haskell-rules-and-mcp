@@ -8,7 +8,6 @@ module Spec.Doc
   ( testDocHasDocOk
   , testDocUnknownNameNoMatch
   , testDocRefusesNewline
-  , testDocNoDocNextStepIsInfo
   , testDocStripLatex
   , testDocStripBrackets
   ) where
@@ -35,6 +34,7 @@ import HaskellFlows.Types (mkProjectDir)
 -- ---------------------------------------------------------------------------
 
 runDoc :: A.Value -> IO (Either String Env.ToolResponse)
+
 runDoc args = do
   tmp <- getTemporaryDirectory
   let dir = tmp </> "haskell-flows-doc-test"
@@ -61,7 +61,9 @@ runDoc args = do
 -- The test accepts BOTH 'ok' (Haddock available) and 'no_match'
 -- (Haddock missing on this build of base) — the contract is that
 -- a name-in-scope with no doc maps to no_match, not to an error.
+
 testDocHasDocOk :: IO Bool
+
 testDocHasDocOk = do
   decoded <- runDoc (A.object [ "name" A..= ("map" :: Text) ])
   pure $ case decoded of
@@ -77,7 +79,9 @@ testDocHasDocOk = do
     _ -> False
 
 -- | 'ghc_doc' on a name that's not in scope → status='no_match'.
+
 testDocUnknownNameNoMatch :: IO Bool
+
 testDocUnknownNameNoMatch = do
   decoded <- runDoc
     (A.object [ "name" A..= ("definitelyNotARealName123" :: Text) ])
@@ -92,7 +96,9 @@ testDocUnknownNameNoMatch = do
     _ -> False
 
 -- | A newline-laden name → status='refused' with kind='newline_injection'.
+
 testDocRefusesNewline :: IO Bool
+
 testDocRefusesNewline = do
   decoded <- runDoc (A.object [ "name" A..= ("foo\n:quit" :: Text) ])
   pure $ case decoded of
@@ -109,17 +115,9 @@ testDocRefusesNewline = do
 
 -- | #195: when ghc_doc returns status=ok with @hasDoc=false@, the
 -- injected nextStep must route to @ghc_info@, not @hoogle_search@.
-testDocNoDocNextStepIsInfo :: IO Bool
-testDocNoDocNextStepIsInfo =
-  let payload = DocTool.noDocInScopePayload "greet"
-      mNs = NextStep.suggestNext GhcDoc True payload
-  in case mNs of
-       Just ns -> pure (NextStep.nsTool ns == GhcInfo)
-       Nothing -> pure False
 
--- | F-11: 'hasDocPayload' must strip LaTeX @\\(…\\)@ delimiters that
--- GHC's pretty-printer emits for math notation in Haddock strings.
 testDocStripLatex :: IO Bool
+
 testDocStripLatex =
   let raw     = "O(\\(n\\)) complexity"
       payload = DocTool.hasDocPayload "foo" raw
@@ -133,7 +131,9 @@ testDocStripLatex =
 -- | #144: GHC's 'showPprUnsafe' wraps Haddock doc strings in literal
 -- @[@ … @]@ brackets (its internal DocH list format). 'hasDocPayload'
 -- must strip those brackets so agents receive clean prose.
+
 testDocStripBrackets :: IO Bool
+
 testDocStripBrackets = pure $
   DocTool.stripDocBrackets "[ Left-associative fold @since base-4.6.0.0]"
     == "Left-associative fold @since base-4.6.0.0"

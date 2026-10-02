@@ -46,6 +46,7 @@ library
                       HaskellFlows.Mcp.Envelope
                       HaskellFlows.Mcp.Guidance
                       HaskellFlows.Mcp.Logging
+                      HaskellFlows.Mcp.Action
                       HaskellFlows.Mcp.NextStep
                       HaskellFlows.Mcp.ToolName
                       HaskellFlows.Mcp.ParseError
@@ -85,6 +86,12 @@ library
                       HaskellFlows.Tool.Bootstrap
                       HaskellFlows.Tool.Browse
                       HaskellFlows.Tool.CheckModule
+                      HaskellFlows.Tool.Check
+                      HaskellFlows.Tool.Edit
+                      HaskellFlows.Tool.Inspect
+                      HaskellFlows.Tool.ModuleMgmt
+                      HaskellFlows.Tool.Property
+                      HaskellFlows.Tool.Session
                       HaskellFlows.Tool.CheckProject
                       HaskellFlows.Tool.Complete
                       HaskellFlows.Tool.CreateProject
@@ -266,6 +273,7 @@ test-suite haskell-flows-mcp-test
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
     build-depends:    base              >= 4.20 && < 5
                     , haskell-flows-mcp
+                    , aeson-pretty
                     , aeson             >= 2.2  && < 2.3
                     , bytestring        >= 0.11 && < 0.13
                     , containers        >= 0.6  && < 0.9

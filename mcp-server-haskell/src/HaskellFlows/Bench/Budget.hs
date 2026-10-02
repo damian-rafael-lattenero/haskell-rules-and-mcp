@@ -49,89 +49,38 @@ type BudgetTable = Map ToolName ToolBudget
 allBudgets :: BudgetTable
 allBudgets = Map.fromList
   --  Tool                   p50    p95   cold-start   notes
-  [ ( GhcLoad
-    , ToolBudget 300  800   (Just 6000)
-        "warm path; first call boots cabal v2-repl (cold-start: ~5s)")
-  , ( GhcType
-    , ToolBudget  50  200   Nothing
-        "cached GHCi env; near-zero marginal cost")
-  , ( GhcInfo
-    , ToolBudget 100  300   Nothing
-        "cached GHCi env; :i lookup only")
-  , ( GhcEval
-    , ToolBudget 100  500   Nothing
-        "cached GHCi env; simple expression eval")
-  , ( GhcQuickCheck
-    , ToolBudget 500 1500   Nothing
-        "100 QC runs + property persist; cabal-repl harness")
-  , ( GhcHole
-    , ToolBudget 200  600   Nothing
-        "typed-hole query over loaded module")
-  , ( GhcArbitrary
-    , ToolBudget 200  500   Nothing
-        "template generation from :i output; pure")
-  , ( GhcWorkflow
-    , ToolBudget  50  200   Nothing
-        "inventory scan; no GHCi interaction")
-  , ( GhcCheckModule
-    , ToolBudget 500 1500   Nothing
-        "strict load + warning gate + property replay")
-  , ( GhcComplete
-    , ToolBudget  50  200   Nothing
-        ":complete repl; cached env")
-  , ( GhcFormat
-    , ToolBudget 300 1000   Nothing
-        "fourmolu/ormolu subprocess; per-file read+write I/O")
+  [ ( GhcEval
+    , ToolBudget 100  500   Nothing     "cached GHCi env; simple expression eval")
+  , ( GhcCheck
+    , ToolBudget  500 3000  Nothing
+        "wave-2b composite: load/module/project/lint gates (max of the merged verbs)")
+  , ( GhcProperty
+    , ToolBudget  200 5000  Nothing
+        "wave-2b composite: QC + store replay + arbitrary (max of merged verbs)")
+  , ( GhcSession
+    , ToolBudget   50  500  Nothing
+        "wave-2b composite: workflow/toolchain/imports views")
+  , ( GhcEdit
+    , ToolBudget  200 2000  Nothing
+        "wave-2b composite: refactor + imports + exports + fix + format")
+  , ( GhcModule
+    , ToolBudget  100  600  Nothing
+        "wave-2b composite: cabal registration + scratchpad canvas")
+  , ( GhcInspect
+    , ToolBudget   50  300  Nothing
+        "wave-2b composite: read-only introspection actions")
   , ( GhcGate
     , ToolBudget 8000 15000 Nothing
         "cabal test + cabal build; scales with project size")
   , ( GhcDeps
     , ToolBudget 1500 3000  Nothing
         "cabal solver invocation; version-constraint resolution")
-  , ( GhcDoc
-    , ToolBudget 100  300   Nothing
-        ":doc lookup; cached env + optional haddock data")
-  , ( GhcGoto
-    , ToolBudget  50  200   Nothing
-        "parse Defined-at marker; pure text scan")
-  , ( GhcRefactor
-    , ToolBudget 1500 4000  Nothing
-        "rename/extract/move_symbol + snapshot-and-compile-verify \
-        \roundtrip; #94 Phase C bumped the budget when ghc_move was \
-        \merged in (multi-file moves dominate the upper bound)")
   , ( GhcBatch
     , ToolBudget 500 2000   Nothing
         "per-child average; actual budget = sum of included tools")
-  , ( GhcLint
-    , ToolBudget 2500 5000  Nothing
-        "hlint subprocess; recursive project scan")
-  , ( GhcToolchain
-    , ToolBudget 200  500   Nothing
-        "#94 Phase C: action-discriminated successor to \
-        \ghc_toolchain_status + ghc_toolchain_warmup; budget covers \
-        \binary-probe (status) and PATH warm-up (warmup) — both are \
-        \subprocess-bound but cheap")
-  , ( GhcCheckProject
-    , ToolBudget 1500 4000  Nothing
-        "check_module over every exposed + other-module in .cabal")
   , ( GhcSuggest
     , ToolBudget 100  400   Nothing
         "signature-driven property proposal; pure computation")
-  , ( GhcAddImport
-    , ToolBudget 200  800   Nothing
-        "AST-free import line injection; optional hoogle subprocess")
-  , ( GhcApplyExports
-    , ToolBudget 300  800   Nothing
-        "export list insertion + compile-verify roundtrip")
-  , ( GhcFixWarning
-    , ToolBudget 500 1500   Nothing
-        "warning-driven text rewrite + compile-verify roundtrip")
-  , ( GhcImports
-    , ToolBudget  50  200   Nothing
-        "list live GHCi imports; cached env query")
-  , ( GhcBrowse
-    , ToolBudget 100  300   Nothing
-        "module member listing; cached env query")
   , ( GhcProject
     , ToolBudget 200  500   Nothing
         "#94 Phase C step 5: action-discriminated successor to \
@@ -142,30 +91,9 @@ allBudgets = Map.fromList
         \bootstrap was 50/200) — all four share a 'no GHCi, light \
         \subprocess' profile so we keep the worst-case bound rather \
         \than per-action thresholds.")
-  , ( GhcPropertyStore
-    , ToolBudget 1000 3000  Nothing
-        "#94 Phase C step 6: action-discriminated successor to \
-        \ghc_property_lifecycle + ghc_regression + \
-        \ghc_quickcheck_export + ghc_property_audit. Budget covers \
-        \the worst-case branch — 'audit' (300/1000) and 'run' \
-        \(300/1000 with cabal-repl per-property cost) dominate; \
-        \'list'/'export' are pure I/O. We pick 1000/3000 as the \
-        \action-agnostic upper bound to avoid per-action thresholds.")
   , ( GhcExplainError
     , ToolBudget 200  500   Nothing
         "diagnostic evidence package + optional patch verify roundtrip")
-  , ( GhcModules
-    , ToolBudget 100  300   Nothing
-        "#94 Phase B: action-discriminated successor to ghc_add_modules / \
-        \ghc_remove_modules; budgets match the underlying handlers")
-  , ( GhcScratch
-    , ToolBudget 100  300   Nothing
-        "#253: persistent LLM code canvas. Phase 1 ships data-bound \
-        \actions only (write / list / show / clear) — pure JSON I/O \
-        \through the scratchpad store; budgets mirror ghc_property_store's \
-        \list/run profile. The 'check' / 'promote' actions land in later \
-        \phases and will need higher budgets when they engage the GHC \
-        \API + refactor pipeline.")
   ]
 
 -- | Look up the budget for a specific tool.

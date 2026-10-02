@@ -72,16 +72,16 @@ runFlow c projectDir = do
          (object [ "action" .= ("create" :: Text)
                  , "name"   .= ("eval-after-check" :: Text)
                  ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Calc"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs") calcSrc
-  _ <- Client.callTool c GhcLoad (object [ "module_path" .= modPath ])
+  _ <- Client.callTool c GhcCheck (object [ "action" .= ("load" :: Text), "module_path" .= modPath ])
 
   -- Step 1 — check_module: the StrictFresh + ForceRecomp recompile that,
   -- before the fix, left the home module as object code in the env.
   t0 <- stepHeader 1 "ghc_check_module recompiles the home module"
-  chkR <- Client.callTool c GhcCheckModule (object [ "module_path" .= modPath ])
+  chkR <- Client.callTool c GhcCheck (object [ "action" .= ("module" :: Text), "module_path" .= modPath ])
   cCheck <- liveCheck $ checkPure
     "check_module → status=ok"
     (statusOk chkR == Just True)
@@ -105,12 +105,12 @@ runFlow c projectDir = do
   -- Step 3 — secondary oracle: scratch check that references the same
   -- home-module symbol. Same byte-code-link path; must type-check.
   t2 <- stepHeader 3 "ghc_scratch check referencing the home symbol post-check"
-  _ <- Client.callTool c GhcScratch
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("write" :: Text)
                  , "code"   .= ("useDouble :: Int\nuseDouble = double 10" :: Text)
                  , "kind"   .= ("hypothesis" :: Text)
                  ])
-  scR <- Client.callTool c GhcScratch
+  scR <- Client.callTool c GhcModule
            (object [ "action" .= ("check" :: Text), "id" .= ("scratch-1" :: Text) ])
   let okScratch = statusOk scR == Just True
                && fieldText "kind" scR == Just "type_ok"

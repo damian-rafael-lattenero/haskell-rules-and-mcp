@@ -37,6 +37,8 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 
 import qualified HaskellFlows.Mcp.Envelope as Env
+import qualified HaskellFlows.Mcp.NextStep as NS
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 import HaskellFlows.Parser.Hole
   ( TypedHole (..)
   , parseTypedHoles
@@ -148,7 +150,7 @@ testQcMissingArbitraryNextStep =
                  Just err -> Env.eeKind err == Env.MissingInstance
                  Nothing  -> False
       nextOk = case Env.reNextStep result of
-                 Just v  -> "ghc_arbitrary" `T.isInfixOf` T.pack (show v)
+                 Just ns -> NS.nsTool ns == GhcProperty
                  Nothing -> False
   in pure (kindOk && nextOk)
 

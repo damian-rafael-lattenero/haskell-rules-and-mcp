@@ -26,6 +26,8 @@ import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, remove
 import System.FilePath ((</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
+import qualified HaskellFlows.Mcp.NextStep as NS
+import HaskellFlows.Mcp.ToolName (ToolName (..))
 import HaskellFlows.Types (mkProjectDir)
 import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Tool.Type as TypeTool
@@ -153,9 +155,8 @@ testEvalImportRedirect =
                Just err -> Env.eeKind err == Env.CompileError
                Nothing  -> False
           && case Env.reNextStep resp of
-               Just (A.Object ns) ->
-                 AKM.lookup "tool" ns == Just (A.String "ghc_add_import")
-               _ -> False
+               Just ns -> NS.nsTool ns == GhcEdit
+               _       -> False
 
 -- | Newline in expression → status='refused' with
 -- kind='newline_injection'.

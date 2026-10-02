@@ -53,8 +53,8 @@ runFlow c projectDir = do
   -- Step 1 — path traversal is refused (deterministic).
   ----------------------------------------------------------------
   t0 <- stepHeader 1 "ghc_format path traversal → refused"
-  rTrav <- Client.callTool c GhcFormat
-             (object [ "module_path" .= ("../../../../etc/passwd" :: Text) ])
+  rTrav <- Client.callTool c GhcEdit
+             (object [ "action" .= ("format" :: Text), "module_path" .= ("../../../../etc/passwd" :: Text) ])
   c1 <- liveCheck $ checkPure
           "traversal module_path → status=refused, kind=path_traversal"
           (statusIs "refused" rTrav && errorKind rTrav == Just "path_traversal")
@@ -65,8 +65,8 @@ runFlow c projectDir = do
   -- Step 2 — non-existent module → clean failed, not a backtrace.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "ghc_format non-existent module → failed (clean)"
-  rMissing <- Client.callTool c GhcFormat
-                (object [ "module_path" .= ("src/DoesNotExist.hs" :: Text) ])
+  rMissing <- Client.callTool c GhcEdit
+                (object [ "action" .= ("format" :: Text), "module_path" .= ("src/DoesNotExist.hs" :: Text) ])
   c2 <- liveCheck $ checkPure
           "missing module → status=failed, kind=module_path_does_not_exist"
           ( statusIs "failed" rMissing
@@ -87,8 +87,8 @@ runFlow c projectDir = do
   -- Step 3 — write=false normalises and does NOT touch disk.
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "ghc_format write=false previews normalised text"
-  rPreview <- Client.callTool c GhcFormat
-                (object [ "module_path" .= ("src/Messy.hs" :: Text)
+  rPreview <- Client.callTool c GhcEdit
+                (object [ "action" .= ("format" :: Text), "module_path" .= ("src/Messy.hs" :: Text)
                         , "write"       .= False
                         ])
   c3 <- liveCheck $ checkPure
@@ -111,8 +111,8 @@ runFlow c projectDir = do
   -- Step 4 — write=true rewrites the file to the normalised form.
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "ghc_format write=true rewrites in place"
-  rWrite <- Client.callTool c GhcFormat
-              (object [ "module_path" .= ("src/Messy.hs" :: Text)
+  rWrite <- Client.callTool c GhcEdit
+              (object [ "action" .= ("format" :: Text), "module_path" .= ("src/Messy.hs" :: Text)
                       , "write"       .= True
                       ])
   onDisk <- readFile' (projectDir </> "src" </> "Messy.hs")

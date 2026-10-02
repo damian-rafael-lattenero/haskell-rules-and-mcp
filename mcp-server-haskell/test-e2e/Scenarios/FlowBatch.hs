@@ -61,7 +61,7 @@ runFlow c _projectDir = do
   t1 <- stepHeader 2 "ghc_batch(3 happy actions)"
   let happyActions =
         [ object
-            [ "tool" .= ("ghc_modules" :: Text)
+            [ "tool" .= ("ghc_module" :: Text)
             , "args" .= object
                 [ "action"  .= ("add" :: Text)
                 , "modules" .= (["Foo", "Bar"] :: [Text])
@@ -76,7 +76,7 @@ runFlow c _projectDir = do
                 ]
             ]
         , object
-            [ "tool" .= ("ghc_workflow" :: Text)
+            [ "tool" .= ("ghc_session" :: Text)
             , "args" .= object [ "action" .= ("status" :: Text) ]
             ]
         ]

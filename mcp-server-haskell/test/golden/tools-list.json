@@ -1,0 +1,549 @@
+[
+    {
+        "description": "PURPOSE: The verification gate — load a module, gate one module, gate the whole project, or lint. WHEN: after every write cycle; action='module' after editing one file; action='project' before wider chains; action='lint' matches CI hygiene; action='load' boots the session and returns the cleanest error surface for one module. WHEN NOT: pre-push finalizer — that is ghc_gate. PREREQUISITES: a scaffolded project (ghc_project). OUTPUT: each action returns the legacy verb's envelope. SEE ALSO: ghc_gate, ghc_edit. Wave 2b successor to ghc_load + ghc_check_module + ghc_check_project + ghc_lint.",
+        "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "action": {
+                    "description": "'load' boots the session on one module; 'module' is the strict per-module gate; 'project' gates every module; 'lint' runs hlint (matches CI).",
+                    "enum": [
+                        "load",
+                        "module",
+                        "project",
+                        "lint"
+                    ],
+                    "type": "string"
+                },
+                "diagnostics": {
+                    "description": "load: surface hole/warning diagnostics in the envelope.",
+                    "type": "boolean"
+                },
+                "fail_fast": {
+                    "description": "project: stop at the first failing module.",
+                    "type": "boolean"
+                },
+                "module_path": {
+                    "description": "Relative module path (load/module/lint).",
+                    "type": "string"
+                },
+                "path": {
+                    "description": "File or directory for lint.",
+                    "type": "string"
+                },
+                "timeout_seconds": {
+                    "description": "project: per-module gate budget.",
+                    "type": "integer"
+                },
+                "warnings_block": {
+                    "description": "module/project: treat warnings as gate failures.",
+                    "type": "boolean"
+                }
+            },
+            "type": "object"
+        },
+        "name": "ghc_check",
+        "version": "2.0.0"
+    },
+    {
+        "description": "PURPOSE: Evaluate a single Haskell expression in-process via the GHC API. WHEN: checking a value, a pure function result, or an IO action's output mid-session. WHEN NOT: ghc_quickcheck to test a property over many inputs; ghc_type for just the type. PREREQUISITES: a loaded session (auto-boots on first use). OUTPUT: {result} — show-wrapped for pure exprs, IO String otherwise; capped at 65536 characters. SEE ALSO: ghc_type, ghc_quickcheck.",
+        "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "expression": {
+                    "description": "Expression to evaluate. Examples: \"1 + 2\", \"map (+1) [1..5]\", \"fmap show Nothing\"",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "expression"
+            ],
+            "type": "object"
+        },
+        "name": "ghc_eval",
+        "version": "1.0.0"
+    },
+    {
+        "description": "PURPOSE: The property-first loop — check a law, generate Arbitrary instances, and replay/audit the persisted store. WHEN: action='check' with a property expression (passes auto-persist to the store); action='arbitrary' with a type_name; action='run' replays every persisted property; action='list'/'export'/'audit' manage the store. runs >= 2 on 'check' routes to the determinism detector. WHEN NOT: one-off value checks — ghc_eval. PREREQUISITES: QuickCheck in the test-suite for the anchor module. OUTPUT: per-action envelope of the merged verbs. SEE ALSO: ghc_suggest proposes the laws. Wave 2b successor to ghc_quickcheck + ghc_property_store + ghc_arbitrary.",
+        "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "action": {
+                    "description": "'check' runs one property (default); 'arbitrary' generates a template; list/run/export/audit are the persisted store verbs.",
+                    "enum": [
+                        "check",
+                        "arbitrary",
+                        "list",
+                        "run",
+                        "export",
+                        "audit"
+                    ],
+                    "type": "string"
+                },
+                "force": {
+                    "description": "export: overwrite an existing file.",
+                    "type": "boolean"
+                },
+                "module": {
+                    "description": "Module anchoring the property.",
+                    "type": "string"
+                },
+                "output_path": {
+                    "description": "export: destination file.",
+                    "type": "string"
+                },
+                "property": {
+                    "description": "Property expression for action='check'.",
+                    "type": "string"
+                },
+                "runs": {
+                    "description": "Repeat count; >= 2 enables determinism detection.",
+                    "type": "integer"
+                },
+                "target_module": {
+                    "description": "Where to anchor the Arbitrary template.",
+                    "type": "string"
+                },
+                "type_name": {
+                    "description": "Type for action='arbitrary'.",
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
+        "name": "ghc_property",
+        "version": "2.0.0"
+    },
+    {
+        "description": "PURPOSE: Session wayfinding — phase-aware guidance, toolchain health, and the live import list. WHEN: start of session (action='status' then 'help'); before heavy work (action='toolchain' confirms cabal/ghc/hlint); action='warmup' pre-resolves binaries; action='imports' shows what the GHCi session has in scope; 'plan' turns a goal into a batchable chain; 'discover' ranks unused tools; 'post-mortem' retros the session. WHEN NOT: build/test execution — ghc_gate. PREREQUISITES: none. OUTPUT: per-action envelope of the merged verbs. SEE ALSO: ghc_batch executes a plan chain. Wave 2b successor to ghc_workflow + ghc_toolchain + ghc_imports.",
+        "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "action": {
+                    "description": "Workflow verbs (status/help/plan/discover/post-mortem), toolchain probes (toolchain/warmup), or the live import list (imports).",
+                    "enum": [
+                        "toolchain",
+                        "warmup",
+                        "imports",
+                        "status",
+                        "help",
+                        "plan",
+                        "discover",
+                        "post-mortem"
+                    ],
+                    "type": "string"
+                },
+                "goal": {
+                    "description": "plan/discover: the session's stated objective.",
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
+        "name": "ghc_session",
+        "version": "2.0.0"
+    },
+    {
+        "description": "PURPOSE: Edit Haskell source with verification — the refactor engine snapshots, compile-verifies, and rolls back on failure. WHEN: rename a local binding (rename_local), extract a binding (extract_binding), move a top-level symbol (move_symbol), add an import (import), rewrite an export list (exports), auto-patch a GHC warning (fix_warning), or format (format). WHEN NOT: writing whole new modules — that is ghc_module. PREREQUISITES: the target module(s) in the active project. OUTPUT: {applied|preview, diff}; on compile error the file is restored from snapshot (atomic). PREREQUISITES: target module in the active project. SEE ALSO: ghc_module, ghc_check. Wave 2b successor to ghc_refactor + ghc_add_import + ghc_apply_exports + ghc_fix_warning + ghc_format.",
+        "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "action": {
+                    "enum": [
+                        "rename_local",
+                        "extract_binding",
+                        "move_symbol",
+                        "list_actions",
+                        "import",
+                        "exports",
+                        "fix_warning",
+                        "format"
+                    ],
+                    "type": "string"
+                },
+                "alias": {
+                    "type": "string"
+                },
+                "apply": {
+                    "type": "boolean"
+                },
+                "code": {
+                    "type": "string"
+                },
+                "dry_run": {
+                    "type": "boolean"
+                },
+                "exports": {
+                    "type": "string"
+                },
+                "line": {
+                    "type": "integer"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "module_path": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "new_name": {
+                    "type": "string"
+                },
+                "old_name": {
+                    "type": "string"
+                },
+                "qualified": {
+                    "type": "boolean"
+                },
+                "scope_line_end": {
+                    "type": "integer"
+                },
+                "scope_line_start": {
+                    "type": "integer"
+                },
+                "write": {
+                    "type": "boolean"
+                }
+            },
+            "type": "object"
+        },
+        "name": "ghc_edit",
+        "version": "2.0.0"
+    },
+    {
+        "description": "PURPOSE: Module authorship — register modules in the .cabal and grow them from the persistent scratchpad. WHEN: action='add' scaffolds stubs + registers; 'remove' de-registers; 'write' records a hypothesis on the canvas; 'check' type-checks it in project context; 'promote' splices a verified entry into a real module (snapshot + compile-verify). WHEN NOT: edits to code that already compiles — ghc_edit. PREREQUISITES: a .cabal in the active project. OUTPUT: per-action envelope of the merged verbs. SEE ALSO: ghc_edit for changes to code that already compiles. Wave 2b successor to ghc_modules + ghc_scratch.",
+        "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "action": {
+                    "enum": [
+                        "add",
+                        "remove",
+                        "list",
+                        "write",
+                        "check",
+                        "show",
+                        "clear",
+                        "promote"
+                    ],
+                    "type": "string"
+                },
+                "binding_name": {
+                    "type": "string"
+                },
+                "code": {
+                    "type": "string"
+                },
+                "confirm": {
+                    "type": "boolean"
+                },
+                "delete_files": {
+                    "type": "boolean"
+                },
+                "force": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "imports": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "module": {
+                    "type": "string"
+                },
+                "modules": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "stanza": {
+                    "type": "string"
+                },
+                "target_line": {
+                    "type": "integer"
+                },
+                "target_module": {
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
+        "name": "ghc_module",
+        "version": "2.0.0"
+    },
+    {
+        "description": "PURPOSE: Read-only introspection — types, holes, definitions, docs, completions. WHEN: action='type' (expression type), 'hole' (valid fits for a typed hole), 'info' (definition site + instances), 'browse' (module exports), 'complete' (prefix completion), 'goto' (definition jump), 'doc' (Haddock block). WHEN NOT: your host's LSP already surfaces most of this to humans — reach here when the agent loop needs it inline. PREREQUISITES: a loaded session for project-scope queries. OUTPUT: per-action envelope of the merged read verbs. SEE ALSO: ghc_check, ghc_eval. Wave 2b successor to the seven thin read tools.",
+        "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "action": {
+                    "enum": [
+                        "type",
+                        "hole",
+                        "info",
+                        "browse",
+                        "complete",
+                        "goto",
+                        "doc"
+                    ],
+                    "type": "string"
+                },
+                "expression": {
+                    "type": "string"
+                },
+                "hole_name": {
+                    "type": "string"
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "module": {
+                    "type": "string"
+                },
+                "module_path": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "prefix": {
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
+        "name": "ghc_inspect",
+        "version": "2.0.0"
+    },
+    {
+        "description": "PURPOSE: Pre-push finalizer — run regression + cabal test + cabal build in one call. WHEN: just before git commit / push; green here means CI is very likely green too. WHEN NOT: ghc_check_module / ghc_check_project for the faster compile-only gates during iteration. PREREQUISITES: cabal on PATH and a test-suite (steps are skippable via skip_* flags). OUTPUT: {steps:[{name, status, duration}], summary, overall}. SEE ALSO: ghc_check_project, ghc_coverage.",
+        "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "build_timeout_minutes": {
+                    "description": "Minutes allowed for `cabal build`. Default 3, clamp [1,60]. Raise for large projects with heavy TH or code-gen.",
+                    "type": "integer"
+                },
+                "skip_cabal_build": {
+                    "description": "Skip `cabal build` invocation.",
+                    "type": "boolean"
+                },
+                "skip_cabal_test": {
+                    "description": "Skip `cabal test` invocation.",
+                    "type": "boolean"
+                },
+                "skip_regression": {
+                    "description": "Skip the regression replay.",
+                    "type": "boolean"
+                },
+                "test_timeout_minutes": {
+                    "description": "Minutes allowed for `cabal test`. Default 5, clamp [1,60]. Raise for large projects with slow test suites.",
+                    "type": "integer"
+                }
+            },
+            "type": "object"
+        },
+        "name": "ghc_gate",
+        "version": "1.0.0"
+    },
+    {
+        "description": "PURPOSE: Manage build-depends in the project's .cabal (list / add / remove / explain). WHEN: action='add'/'remove' a dependency; action='list' the current set; action='explain' which stanzas + source imports use package=X. WHEN NOT: ghc_modules for exposed-modules / other-modules; ghc_add_import to add a source import line. PREREQUISITES: a .cabal in the active project; never hand-edit build-depends — the post-edit invariant guards this tool. OUTPUT: per-action {action, stanzas|added|removed|explanation}; the next ghc_load picks up the new package graph. SEE ALSO: ghc_modules, ghc_add_import.",
+        "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "action": {
+                    "description": "Action to perform — exactly one of the listed values.",
+                    "enum": [
+                        "list",
+                        "add",
+                        "remove",
+                        "explain"
+                    ],
+                    "type": "string"
+                },
+                "cabal_output": {
+                    "description": "Raw cabal solver / dry-run output. The tool extracts the root-cause conflict and affected packages. Mutually exclusive with package.",
+                    "type": "string"
+                },
+                "package": {
+                    "description": "Hackage package name.",
+                    "type": "string"
+                },
+                "stanza": {
+                    "description": "Optional stanza selector. \"library\" (main library), \"test-suite\" (first occurrence), \"test-suite:NAME\", \"executable\" / \"executable:NAME\", \"benchmark\" / \"benchmark:NAME\", \"foreign-library\" / \"foreign-library:NAME\". Omit to target the first build-depends block in the file (backwards-compatible default).",
+                    "type": "string"
+                },
+                "version": {
+                    "description": "Optional cabal version constraint (e.g. '>= 2.14', '^>= 1.4').",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "action"
+            ],
+            "type": "object"
+        },
+        "name": "ghc_deps",
+        "version": "1.0.0"
+    },
+    {
+        "description": "PURPOSE: Build a structured explanation context for a GHC type error, and optionally verify a candidate patch. WHEN: decoding a confusing type error; pass verify_patch to apply a candidate to a snapshot and recompile. WHEN NOT: ghc_fix_warning for warnings (not type errors); ghc_hole when the issue is an unfilled stub. PREREQUISITES: the failing module in the active project. OUTPUT: {diagnostic, context:{source, imports, enclosing_range}}; verify_patch adds {error_resolved}. SEE ALSO: ghc_fix_warning, ghc_hole.",
+        "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "diagnostic_index": {
+                    "type": "integer"
+                },
+                "error_text": {
+                    "description": "The GHC error message to explain. When supplied, the tool uses this text directly instead of recompiling module_path. Works without module_path for a text-only decode — this is the failure-path route (#282).",
+                    "type": "string"
+                },
+                "module_path": {
+                    "description": "Optional: module whose file supplies the enclosing-code context. Omit it to decode a diagnostic from error_text alone (text-only mode — no enclosing slice). At least one of module_path / error_text must be given.",
+                    "type": "string"
+                },
+                "verify_patch": {
+                    "properties": {
+                        "line": {
+                            "type": "integer"
+                        },
+                        "new": {
+                            "type": "string"
+                        },
+                        "old": {
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "line",
+                        "old",
+                        "new"
+                    ],
+                    "type": "object"
+                }
+            },
+            "required": [],
+            "type": "object"
+        },
+        "name": "ghc_explain_error",
+        "version": "1.0.0"
+    },
+    {
+        "description": "PURPOSE: Run a list of tool invocations sequentially in one request. WHEN: collapsing a known multi-step plan (e.g. a nextStep chain) into one round-trip; fail_fast=true (default) stops on the first error, false runs every action. WHEN NOT: single tool calls when each step depends on inspecting the previous result. PREREQUISITES: each action is {tool, args}; nesting ghc_batch inside itself is refused. OUTPUT: {results:[...]} in input order; partial results when fail_fast=false. SEE ALSO: ghc_workflow.",
+        "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "actions": {
+                    "description": "List of `{tool, args}` tool invocations.",
+                    "items": {
+                        "properties": {
+                            "args": {
+                                "type": "object"
+                            },
+                            "tool": {
+                                "type": "string"
+                            }
+                        },
+                        "required": [
+                            "tool",
+                            "args"
+                        ],
+                        "type": "object"
+                    },
+                    "type": "array"
+                },
+                "fail_fast": {
+                    "description": "Stop on first error. Default: true.",
+                    "type": "boolean"
+                }
+            },
+            "required": [
+                "actions"
+            ],
+            "type": "object"
+        },
+        "name": "ghc_batch",
+        "version": "1.0.0"
+    },
+    {
+        "description": "PURPOSE: Propose QuickCheck properties a function's type signature implies, each with a confidence score. WHEN: you have a function and want candidate laws to test; feed the highest-confidence property straight into ghc_quickcheck. WHEN NOT: ghc_lab to audit a whole module at once; ghc_quickcheck when you already have the property. PREREQUISITES: the function's module loaded so its signature resolves. OUTPUT: {suggestions:[{property, rationale, confidence}]}. SEE ALSO: ghc_quickcheck, ghc_lab.",
+        "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "category": {
+                    "description": "Optional category filter: \"algebraic\", \"list\", \"monoid\", \"predicate\". Omit to return all matching laws.",
+                    "type": "string"
+                },
+                "function_name": {
+                    "description": "Name of the function to analyse. Example: \"reverse\", \"Prelude.map\".",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "function_name"
+            ],
+            "type": "object"
+        },
+        "name": "ghc_suggest",
+        "version": "1.0.0"
+    },
+    {
+        "description": "PURPOSE: Project lifecycle — scaffold / switch root / validate cabal / bootstrap host rules, all under one action-discriminated tool. WHEN: action='create' new package from scratch; action='switch' repoint MCP at a different project without restarting; action='validate' run cabal check + heuristics on .cabal; action='bootstrap' install or refresh host rules. WHEN NOT: register/de-register exposed-modules — that is ghc_modules; add/remove dependencies — that is ghc_deps. PREREQUISITES: action='switch' requires the target dir to exist; action='validate' requires a .cabal in the active project. OUTPUT: per-action shapes detailed in the per-branch JSON schema (oneOf-discriminated). SEE ALSO: ghc_modules, ghc_deps, ghc_toolchain. #94 Phase C step 5 successor to ghc_create_project + ghc_switch_project + ghc_validate_cabal + ghc_bootstrap; the four legacy tools were retired in the same commit.",
+        "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+                "action": {
+                    "description": "Action to perform — exactly one of the listed values.",
+                    "enum": [
+                        "create",
+                        "switch",
+                        "validate",
+                        "bootstrap"
+                    ],
+                    "type": "string"
+                },
+                "host": {
+                    "description": "Target host convention.",
+                    "enum": [
+                        "claude-code",
+                        "cursor",
+                        "generic"
+                    ],
+                    "type": "string"
+                },
+                "module": {
+                    "description": "Top-level module name. Default: derived from the package name by PascalCase-ing the segments.",
+                    "type": "string"
+                },
+                "name": {
+                    "description": "Package name (Hackage shape: letters + digits + hyphen, must start with a letter).",
+                    "type": "string"
+                },
+                "overwrite": {
+                    "description": "If true, overwrite existing scaffolded files. Default: false — fails if any target already exists.",
+                    "type": "boolean"
+                },
+                "path": {
+                    "description": "Absolute path to the target directory. Default: the active project directory. The overwrite pre-check tests THIS path — not the active project directory.",
+                    "type": "string"
+                },
+                "write": {
+                    "description": "If true (default), write files to disk. If false, return a preview of the generated content without touching the filesystem. Preview mode never fails due to existing files.",
+                    "type": "boolean"
+                }
+            },
+            "required": [
+                "action"
+            ],
+            "type": "object"
+        },
+        "name": "ghc_project",
+        "version": "1.0.0"
+    }
+]

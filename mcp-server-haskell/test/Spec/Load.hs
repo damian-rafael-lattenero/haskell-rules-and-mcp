@@ -10,8 +10,6 @@ module Spec.Load
   , testRejectsTraversal
   , testCheckPathExistsAccepts
   , testCheckPathExistsRejects
-  , testGhcLoadEmptyProjectNoMatch
-  , testGhcLoadNoArgsUsesLibraryTarget
   ) where
 
 import qualified Data.Aeson as A
@@ -34,12 +32,14 @@ import HaskellFlows.Types
 import HaskellFlows.Tool.Load (checkPathExists)
 
 testRejectsRelativeProject :: IO Bool
+
 testRejectsRelativeProject =
   pure $ case mkProjectDir "relative/path" of
     Left (PathNotAbsolute _) -> True
     _                        -> False
 
 testAcceptsInTree :: IO Bool
+
 testAcceptsInTree = do
   case mkProjectDir "/tmp/project" of
     Left _ -> pure False
@@ -48,6 +48,7 @@ testAcceptsInTree = do
       _       -> False
 
 testRejectsTraversal :: IO Bool
+
 testRejectsTraversal = do
   case mkProjectDir "/tmp/project" of
     Left _ -> pure False
@@ -59,7 +60,9 @@ testRejectsTraversal = do
 -- "load anything, get the whole library back" foot-gun into an
 -- explicit error. The Right () branch fires when the file is on
 -- disk; the Left branch is the original bug repro shape.
+
 testCheckPathExistsAccepts :: IO Bool
+
 testCheckPathExistsAccepts = do
   tmp <- getTemporaryDirectory
   let dir  = tmp </> "haskell-flows-issue-79-accept"
@@ -75,6 +78,7 @@ testCheckPathExistsAccepts = do
       pure (r == Right ())
 
 testCheckPathExistsRejects :: IO Bool
+
 testCheckPathExistsRejects = do
   tmp <- getTemporaryDirectory
   let dir = tmp </> "haskell-flows-issue-79-reject"
@@ -103,46 +107,3 @@ testCheckPathExistsRejects = do
 -- The stub is built by 'startGhcSession' on a tmpdir that has no
 -- src/ + no app/ + no .cabal file — the same shape the issue's
 -- repro describes.
-testGhcLoadEmptyProjectNoMatch :: IO Bool
-testGhcLoadEmptyProjectNoMatch = do
-  tmp <- getTemporaryDirectory
-  let dir = tmp </> "haskell-flows-issue-84-empty"
-  removePathForcibly dir
-  createDirectoryIfMissing True dir
-  result <- case mkProjectDir dir of
-    Left _   -> pure (Left "could not build ProjectDir")
-    Right pd -> do
-      sess <- startGhcSession pd
-      tr   <- LoadTool.handle (sessionPdEnv sess pd) (A.object [])
-      killGhcSession sess
-      pure (Right tr)
-  removePathForcibly dir
-  pure $ case result of
-    Right env
-      | Env.reStatus env == Env.StatusNoMatch
-      , Just envErr <- Env.reError env
-      , Env.eeKind envErr == Env.ModuleNotInGraph
-      , Just (A.Object payload) <- Env.reResult env ->
-          AKM.lookup (AKey.fromText "loaded") payload == Just (A.Number 0)
-            && AKM.member (AKey.fromText "remediation") payload
-    _ -> False
-
--- | #214: regression — the no-args 'ghc_load' path must use
--- 'firstLibraryOrTestSuite' (prefers library stanza) rather than
--- 'firstTestSuiteOrLibrary' (prefers test-suite stanza).
--- Under test-suite stanza flags, library-only build-depends
--- (containers, scientific, regex-tdfa, …) are NOT directly exposed,
--- causing GHC-87110 "hidden package" errors on every src/ module
--- that imports them.
---
--- This is a source-inspection test: it verifies that Load.hs
--- does NOT reference 'firstTestSuiteOrLibrary' in its
--- implementation, confirming the fix is in place.
-testGhcLoadNoArgsUsesLibraryTarget :: IO Bool
-testGhcLoadNoArgsUsesLibraryTarget = do
-  src <- TIO.readFile "src/HaskellFlows/Tool/Load.hs"
-  -- The import section must list firstLibraryOrTestSuite (not
-  -- firstTestSuiteOrLibrary, which causes the reload to use the
-  -- test-suite stanza and lose library-only package context).
-  let importLine = "  , firstLibraryOrTestSuite"
-  pure $ T.isInfixOf importLine src

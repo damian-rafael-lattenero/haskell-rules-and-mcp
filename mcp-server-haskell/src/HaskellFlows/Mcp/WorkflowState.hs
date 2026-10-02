@@ -179,16 +179,16 @@ trackTool (WorkflowStateRef ref) toolName ok payload =
 -- constructor explicitly.
 applyToolUpdate :: WorkflowState -> ToolName -> Bool -> Value -> WorkflowState
 applyToolUpdate s toolName ok payload = case toolName of
-  GhcLoad | ok ->
+  GhcCheck | ok ->
     s { wsEditsSinceLastLoad = 0
       , wsLastLoadSuccess    = Just True
       , wsLastLoadWarnings   = warningCount payload
       }
-  GhcLoad ->
+  GhcCheck ->
     s { wsLastLoadSuccess = Just False }
-  GhcRefactor ->
+  GhcEdit ->
     s { wsEditsSinceLastLoad = wsEditsSinceLastLoad s + 1 }
-  GhcQuickCheck | ok, isPassed payload ->
+  GhcProperty | ok, isPassed payload ->
     s { wsPassedProperties = wsPassedProperties s + 1 }
   _ -> s
 
@@ -276,20 +276,20 @@ historyNudges hist = concat
       \rather than progressing. Try ghc_quickcheck(runs=3) on a \
       \recent property for flakiness, or ghc_check_project to \
       \surface module-level gates you can knock out in parallel."
-    | length recent5 >= 5, all (== GhcLoad) recent5
+    | length recent5 >= 5, all (== GhcCheck) recent5
     ]
     -- ghc_suggest recent, no ghc_quickcheck since.
   , [ "You ran ghc_suggest but haven't tried any of the proposals \
       \with ghc_quickcheck yet. Pick the highest-confidence law \
       \and feed it in — passes auto-persist to the regression store."
-    | GhcSuggest `elem` recent3, GhcQuickCheck `notElem` recent3
+    | GhcSuggest `elem` recent3, GhcProperty `notElem` recent3
     ]
     -- Last tool was ghc_refactor and there's been no load since.
   , [ "Last tool was ghc_refactor. The refactor was snapshot-and-\
       \compile-verified, but a fresh ghc_load(diagnostics=true) \
       \catches any new holes or warnings the rename surfaced."
     | case hist of
-        (GhcRefactor : rest) -> GhcLoad `notElem` take 2 rest
+        (GhcEdit : rest) -> GhcCheck `notElem` take 2 rest
         _                    -> False
     ]
   ]
@@ -324,7 +324,7 @@ classifyPhase s
   | isNothing (wsLastLoadSuccess s)   = PhasePreScaffold
   | wsLastLoadSuccess s == Just False = PhaseBootstrap
   | wsPassedProperties s >= 3         = PhaseReadyToPush
-  | GhcQuickCheck `elem` recent3
+  | GhcProperty `elem` recent3
       || GhcSuggest `elem` recent3    = PhaseTestingLaws
   | otherwise                         = PhaseDeveloping
   where
@@ -382,7 +382,7 @@ sessionMissedOpportunities s = take 5 $ concat
   , [ "You've made " <> tshow (wsToolCalls s) <> " tool calls but never \
       \reached for ghc_scratch — type-checking a hypothesis there is \
       \faster and reversible than edit/reload."
-    | wsToolCalls s >= 8, GhcScratch `Set.notMember` wsEverCalled s
+    | wsToolCalls s >= 8, GhcModule `Set.notMember` wsEverCalled s
     ]
   ]
   where

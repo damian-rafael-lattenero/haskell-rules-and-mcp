@@ -24,8 +24,7 @@
 -- shapes; this module only adds the @action@ discriminator on top
 -- and delegates everything else.
 module HaskellFlows.Tool.Modules
-  ( descriptor
-  , handle
+  ( handle
   ) where
 
 import Data.Aeson
@@ -44,70 +43,6 @@ import qualified HaskellFlows.Tool.RemoveModules as RemoveModules
 import HaskellFlows.Types (ProjectDir)
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcModules
-    , tdDescription =
-        "PURPOSE: Manage exposed-modules / other-modules in the .cabal \
-        \and the matching .hs files. \
-        \WHEN: action='add' registers modules + scaffolds stubs; \
-        \action='remove' de-registers (delete_files=true also removes \
-        \the .hs). \
-        \WHEN NOT: ghc_deps for build-depends; ghc_apply_exports to \
-        \change a module's export list. \
-        \PREREQUISITES: a .cabal in the active project; stanza selector \
-        \defaults to library. Idempotent on add. \
-        \OUTPUT: {action, modules, created_files|removed}. \
-        \SEE ALSO: ghc_deps, ghc_apply_exports. \
-        \(Phase B successor to ghc_add_modules + ghc_remove_modules, #94.)"
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "action" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "enum"        .= (["add", "remove"] :: [Text])
-                  , "description" .=
-                      ("Operation: 'add' registers + scaffolds stubs; \
-                       \'remove' de-registers (delete_files=true also \
-                       \removes the .hs)." :: Text)
-                  ]
-              , "modules" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Module names. Accepts a JSON array \
-                       \[\"Foo.Bar\",\"Foo.Baz\"] (passed as a JSON \
-                       \string) or a single string with comma-/whitespace-\
-                       \separated names. Same parser as ghc_add_modules / \
-                       \ghc_remove_modules." :: Text)
-                  ]
-              , "stanza" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Optional stanza selector. Same vocabulary as \
-                       \ghc_add_modules: 'library' (default), \
-                       \'test-suite[:NAME]', 'executable[:NAME]', \
-                       \'benchmark[:NAME]'." :: Text)
-                  ]
-              , "delete_files" .= object
-                  [ "type"        .= ("boolean" :: Text)
-                  , "description" .=
-                      ("(action=remove only) Whether to also delete \
-                       \the .hs files. Defaults to false — by default \
-                       \we only de-register; the source files remain." :: Text)
-                  ]
-              , "force" .= object
-                  [ "type"        .= ("boolean" :: Text)
-                  , "description" .=
-                      ("(action=remove only) Bypass downstream-import \
-                       \safety check. Defaults to false." :: Text)
-                  ]
-              ]
-          , "required"             .= (["action", "modules"] :: [Text])
-          , "additionalProperties" .= False
-          ]
-    }
 
 -- | Dispatch on the @action@ discriminator and forward to the
 -- legacy tool's 'handle' with the @action@ field stripped (so the

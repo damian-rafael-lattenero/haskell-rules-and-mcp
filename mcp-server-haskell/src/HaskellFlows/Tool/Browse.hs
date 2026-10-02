@@ -5,8 +5,7 @@
 -- queries 'getModuleInfo' + 'modInfoExports' and renders each export's
 -- type via 'TyThing'.
 module HaskellFlows.Tool.Browse
-  ( descriptor
-  , handle
+  ( handle
   , parseBrowseOutput
   ) where
 
@@ -43,38 +42,10 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject, withGhcSession)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import qualified HaskellFlows.Mcp.NextStep as NS
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types (unProjectDir)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcBrowse
-    , tdDescription =
-        "PURPOSE: List names exported by a loaded module + their types. "
-          <> "WHEN: orienting in an unfamiliar module before touching it; "
-          <> "confirming an export was added or surfaced; exploring what "
-          <> "a session-preloaded module (Prelude, Data.Map, etc.) exports "
-          <> "after ghc_add_import brought it into scope. "
-          <> "WHEN NOT: the module cannot be found in the project graph "
-          <> "or the package environment — use hoogle_search for discovery, "
-          <> "or ghc_info for a single name's details. "
-          <> "PREREQUISITES: any prior ghc_load / ghc_check_module / "
-          <> "ghc_check_project pulls the target into the compile graph; "
-          <> "ghc_add_import makes standard-library modules browseable too. "
-          <> "OUTPUT: {module, count, entries:[\"name :: type\"]}; "
-          <> "status='no_match' when the module is not in this project or "
-          <> "the current package environment. "
-          <> "SEE ALSO: ghc_info, hoogle_search, ghc_add_import."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "module" .= object [ "type" .= ("string" :: Text) ] ]
-          , "required"             .= ["module" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 newtype BrowseArgs = BrowseArgs Text
 
@@ -230,12 +201,9 @@ moduleNotInGraphPayload m = object
 
 -- | NextStep pointer attached to the no-match path: per-name
 -- inspection via 'ghc_info', or discovery via 'hoogle_search'.
-moduleNotInGraphNextStep :: Value
-moduleNotInGraphNextStep = object
-  [ "tool"    .= ("ghc_info" :: Text)
-  , "why"     .= ("'ghc_browse' only sees modules compiled into this project. \
-                  \Use ghc_info(name=\"<symbol>\") for per-name inspection of \
-                  \external/base modules, or hoogle_search to discover names." :: Text)
-  , "example" .= object
-      [ "name" .= ("<symbol you're trying to inspect>" :: Text) ]
-  ]
+moduleNotInGraphNextStep :: NS.NextStep
+moduleNotInGraphNextStep = NS.simple GhcInspect
+  "'ghc_inspect(action=browse)' only sees modules compiled into this project. \
+  \Use ghc_inspect(action=info, name=\"<symbol>\") for per-name inspection of \
+  \external/base modules, or your host's search to discover names."
+  (Just (object [ "name" .= ("<symbol you're trying to inspect>" :: Text) ]))

@@ -400,15 +400,14 @@ import Spec.PartialFunctions
 import Spec.TraversalGuards
 import Spec.TypeEval
 import Spec.ValidateCabal
+import Spec.SurfaceHarness
 import Spec.WorkflowState hiding
   ( testArbitraryPathToModule
   , testArbitraryModuleRender
   )
 import Spec.WorkflowTool
 import Spec.DispatchUnit
-  ( testHandlerForExhaustive
-  , testHandlerForGhcQuickCheckIsQcTool
-  , testMkToolEnvFields
+  ( testMkToolEnvFields
   )
 import Spec.RegistryUnit
   ( testRegistryTotalOverToolName
@@ -493,10 +492,7 @@ runAllTests = do
       , test "mkModulePath rejects traversal"    testRejectsTraversal
       , test "ghc_load #79: checkPathExists Right" testCheckPathExistsAccepts
       , test "ghc_load #79: checkPathExists Left"  testCheckPathExistsRejects
-      , test "ghc_load #84: empty project → no_match" testGhcLoadEmptyProjectNoMatch
       -- Issue #214 — no-args reload uses library stanza, not test-suite stanza
-      , test "#214: ghc_load no-args uses firstLibraryOrTestSuite (not firstTestSuiteOrLibrary)"
-             testGhcLoadNoArgsUsesLibraryTarget
       , test "parseGhcErrors extracts header"    testParseHeader
       , test "sanitizeExpression accepts normal" testSanitizeAccepts
       , test "sanitizeExpression rejects newline" testSanitizeRejectsNewline
@@ -529,7 +525,7 @@ runAllTests = do
       , test "parseQuickCheckOutput unparsed"      testQcUnparsed
       , test "B-6: missing Arbitrary classifies as missing_instance" testClassifyMissingArbitrary
       , test "B-6: extractArbitraryType pulls the offending type"    testExtractArbitraryType
-      , test "B-6: missing Arbitrary nextStep → ghc_arbitrary"       testQcMissingArbitraryNextStep
+      , test "B-6: missing Arbitrary nextStep → ghc_property(arbitrary)"       testQcMissingArbitraryNextStep
       , test "parseTypedHoles extracts one hole"   testHoleOne
       , test "parseTypedHoles ignores non-holes"   testHoleIgnored
       , test "parseConstructors inline form"       testCtorsInline
@@ -647,8 +643,6 @@ runAllTests = do
                                                    testRefactorExtractBindingNoOldName
       , test "Refactor · extract_binding still needs both scope lines (#92B)"
                                                    testRefactorExtractBindingMissingScope
-      , test "Refactor · published schema uses discriminatedSchema (#92B)"
-                                                   testRefactorSchemaIsDiscriminated
       , test "#154: list_actions returns available actions without module_path"
                                                    testRefactorListActions
       , test "#154: list_actions response has required field catalogue"
@@ -662,8 +656,6 @@ runAllTests = do
                                                    testDepsRemoveMissingPackage
       , test "Deps · 'add' with package + version parses (#92B)"
                                                    testDepsAddCompleteParses
-      , test "Deps · published schema uses discriminatedSchema (#92B)"
-                                                   testDepsSchemaIsDiscriminated
       , test "Schema · every registered tool publishes valid JSON Schema (#92D)"
                                                    testEveryToolPublishesValidSchema
       , test "nextStep · every recommended tool is in the registry (#95)"
@@ -823,10 +815,6 @@ runAllTests = do
                                                    testBrowseProjectModuleOk
       , test "Envelope #90 Phase B: ghc_browse on external module → status=no_match"
                                                    testBrowseExternalModuleNoMatch
-      , test "#168: ghc_browse fallback to package env → status=ok (Data.Maybe)"
-                                                   testBrowseFallbackOk
-      , test "#168: ghc_browse descriptor mentions session-preloaded modules"
-                                                   testBrowseDescriptorMentionsSession
       , test "Envelope #90 Phase B: ghc_browse rejects missing module arg"
                                                    testBrowseRejectsMissingArg
       , test "Envelope #90 Phase B: ghc_complete with hits → status=ok"
@@ -837,8 +825,6 @@ runAllTests = do
                                                    testCompleteQualifiedRemediation
       , test "#225: ghc_complete qualified remediation names module and suggests bare prefix"
                                                    testCompleteQualifiedRemediation225
-      , test "#252: ghc_complete description documents qualified prefix support"
-                                                   testCompleteDescriptionMentionsQualified
       , test "#252: splitQualifiedPrefix splits at LAST dot — name suffix"
                                                    testSplitQualifiedPrefixWithName
       , test "#252: splitQualifiedPrefix splits at LAST dot — empty suffix"
@@ -873,7 +859,7 @@ runAllTests = do
                                                    testTypeNotInScope
       , test "Envelope #90 Phase B: ghc_eval pure expr → status=ok"
                                                    testEvalPureExprOk
-      , test "#143: ghc_eval import prefix → compile_error + nextStep=ghc_add_import"
+      , test "#143: ghc_eval import prefix → compile_error + nextStep=ghc_edit(import)"
                                                    testEvalImportRedirect
       , test "Envelope #90 Phase B: ghc_eval refuses newline in expression"
                                                    testEvalRefusesNewline
@@ -992,45 +978,11 @@ runAllTests = do
       , test "initialize emits instructions field"  testInitializeEmitsInstructions
       , test "instructions mention key tools+flows" testInstructionsMentionCore
       , test "nextStep: create_project -> deps"     testNextStepCreateProject
-      , test "nextStep: deps(add) -> load"          testNextStepDepsAdd
-      , test "nextStep: load clean -> suggest"      testNextStepLoadClean
-      , test "nextStep: load w/ warnings -> hole"   testNextStepLoadWarnings
-      , test "nextStep: suggest -> scratch(write)"   testNextStepSuggest
-      , test "nextStep: qc passed -> check_module"  testNextStepQcPassed
-      , test "nextStep: qc failed -> eval"          testNextStepQcFailed
-      , test "nextStep: regression list -> run"     testNextStepRegressionList
-      , test "nextStep: refactor -> load"           testNextStepRefactor
-      , test "nextStep: check_module -> project"   testNextStepCheckModule
-      , test "nextStep: errors -> no suggestion"   testNextStepErrorsSuppressed
-      , test "#A5: compile_error -> explain_error" testSuggestOnErrorCompileError
       , test "#A5: not_in_scope -> explain_error"  testSuggestOnErrorNotInScope
       , test "#A5: explain_error no self-loop"     testSuggestOnErrorNoSelfLoop
-      , test "#A5: unrouted error kind suppresses" testSuggestOnErrorUnroutedKind
-      , test "#282: A5 echoes module_path from payload" testSuggestOnErrorEchoesModule
-      , test "#282: A5 omits module_path when absent"   testSuggestOnErrorNoModule
       , test "#282: explain_error parses w/o module_path" testExplainErrorOptionalModule
-      , test "#266 xsession: ledger round-trips"   testSessionLedgerRoundtrip
       , test "#266 xsession: empty ledger reads empty" testSessionLedgerEmpty
-      , test "#A4: info nextStep resolves name from payload" testNextStepInfoNameResolved
-      , test "#A4: echoField falls back to placeholder"      testNextStepEchoFieldFallback
-      , test "#274: scratch promote resolves target_module"  testNextStepScratchTargetResolved
       -- Phase 5: cross-tool nextStep arms
-      , test "Phase 5: hole nextStep → scratch(write) chain"
-                                                   testNextStepFromHoleRoutesToScratch
-      , test "Phase 5: explain_error nextStep → scratch(write) chain"
-                                                   testNextStepFromExplainErrorRoutesToScratch
-      , test "Phase 5: scratch check chain has quickcheck after suggest"
-                                                   testNextStepSuggestChainHasQuickCheck
-      , test "#251: ghc_goto no_match -> ghc_load"       testNextStepGotoNoMatchIsGhcLoad
-      , test "#185: ghc_info found -> ghc_doc (not hoogle)" testNextStepInfoFoundIsDoc
-      , test "nextStep: action-discriminated coverage" testNextStepActionCoverage
-      , test "nextStep: suppressIf suppresses when rule holds (#95)"  testNextStepSuppressIfTrue
-      , test "nextStep: suppressIf passes when rule false (#95)"      testNextStepSuppressIfFalse
-      , test "nextStep: suppressOnDegraded active for failed (#95)"   testNextStepSuppressOnDegraded
-      , test "nextStep: suppressOnZero suppresses zero count (#95)"   testNextStepSuppressOnZero
-      , test "nextStep: suppressOnZero passes nonzero count (#95)"    testNextStepSuppressOnZeroPass
-      , test "injectNextStep splices into payload" testInjectSplices
-      , test "injectNextStep no-op on non-JSON"    testInjectSkipsNonJson
       , test "suggest: functor fmap two laws"      testSuggestFunctorFmap
       , test "suggest: evaluator preservation"     testSuggestEvaluatorPreservation
       , test "suggest: constant-folding soundness" testSuggestConstFoldingSoundness
@@ -1102,8 +1054,6 @@ runAllTests = do
       , test "#256: create with path auto-switches active project"    testCreateAutoSwitchPresent
       , test "#256: create preview (write=false) does not switch"     testCreatePreviewNoSwitch
       , test "#256: create without path does not switch"              testCreateNoPathNoSwitch
-      , test "nextStep: add_import count=0 suppresses load (#53)"     testNextStepAddImportZero
-      , test "nextStep: add_import count>0 nudges load (#53)"         testNextStepAddImportNonZero
       , test "add_modules: moduleToPath mapping"   testAddModulesPath
       , test "apply_exports: rewriteHeader idempotent" testApplyExportsIdempotent
       , test "apply_exports: injects exports"      testApplyExportsInjects
@@ -1311,18 +1261,9 @@ runAllTests = do
       , test "#189: parseGhcLineCol falls back to 1:1 on no location"  testParseGhcLineColFallback
       , test "#189: syntheticError uses parsed line+col"                testSyntheticErrorLineCol
       , test "workflow-state: initial empty"       testWorkflowStateInitial
-      , test "workflow-state: tracks load + edits" testWorkflowStateTracks
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
-      , test "#257: session activity ever-called set"  testSessionActivityEverCalled
-      , test "#257: session activity error streak"      testSessionActivityErrorStreak
-      , test "#257: session activity unused count"       testSessionActivityUnusedCount
-      , test "#263: discover excludes called tools"    testDiscoverExcludesCalled
       , test "#263: discover returns at most 5"         testDiscoverAtMostFive
       , test "#263: discover ranks phase-relevant"      testDiscoverPhaseRelevance
-      , test "#266: post-mortem flags missed scratch"  testPostMortemMissedScratch
-      , test "#266: post-mortem reports counts"         testPostMortemCounts
-      , test "#262: modules(add) -> design-first scratch" testNextStepModulesCreatedScratch
-      , test "#270: chain resolves <same module> from payload" testNextStepResolvesSameModule
       , test "#264: plan matches module-with-qc template" testPlanMatchesModuleQc
       , test "#264: plan low-confidence lists alternatives" testPlanLowConfidenceListsAlternatives
       , test "#284: plan scaffolds all named modules"  testPlanMultiModule
@@ -1399,22 +1340,14 @@ runAllTests = do
       , test "suggest: parseBrowseBindings skips continuations" testParseBrowseContinuation
       , test "suggest: siblings enable preservation" testSuggestSiblingsEnablePreservation
       , test "suggest: siblings enable soundness"   testSuggestSiblingsEnableSoundness
-      , test "nextStep: gate fail -> check_project" testNextStepGateFail
-      , test "nextStep: qcexport -> gate"           testNextStepQcExport
-      , test "nextStep: determinism pass -> regression" testNextStepDeterminismPass
-      , test "nextStep: determinism fail -> quickcheck" testNextStepDeterminismFail
       , test "#281: clampRuns caps at maxRuns"      testClampRunsCapsHigh
       , test "#281: clampRuns floors at 1"          testClampRunsFloorsLow
       , test "#281: clampRuns passes through normal" testClampRunsPassThrough
-      , test "nextStep: add_import -> load"         testNextStepAddImport
-      , test "nextStep: add_modules carries chain"  testNextStepAddModulesChain
-      , test "nextStep: apply_exports -> load"      testNextStepApplyExports
-      , test "nextStep: fix_warning -> load"        testNextStepFixWarning
-      , test "nextStep: browse -> suggest"          testNextStepBrowse
-      , test "nextStep: toolchain_warmup -> workflow" testNextStepToolchainWarmup
-      , test "nextStep: property_lifecycle(list) -> regression" testNextStepPropertyLifecycleList
-      , test "nextStep: create_project carries chain" testNextStepCreateProjectChain
       , test "nextStep: every tool covered or whitelisted" testNextStepFullCoverage
+      , test "harness: tools/list golden freeze (#268 companion)" testToolsListGolden
+      , test "harness: nextStep sweep — no unregistered refs"   testNextStepSweep
+      , test "harness: no raw string emitters in src/"          testNoRawNextStepStrings
+      , test "harness: action specs round-trip"                 testActionSpecsTotal
       , test "staleness: wired into server (static)"  testStalenessWired
       , test "#280: identity differs -> stale"        testStalenessIdentityDiffers
       , test "#280: identity matches -> fresh"         testStalenessIdentityMatches
@@ -1423,13 +1356,7 @@ runAllTests = do
       , test "#265: no _meta -> no progress token"        testProgressTokenAbsent
       , test "#265: collecting sink receives events"      testProgressCollectingSink
       , test "#265: no subscription -> noop sink"         testProgressNoSubscriptionNoop
-      , test "workflow: history polls ghc_load"      testHistoryPolling
-      , test "workflow: history missing quickcheck"   testHistoryMissingQc
-      , test "workflow: history refactor unreloaded"  testHistoryRefactorNotReloaded
       , test "workflow: phase pre-scaffold"           testPhasePreScaffold
-      , test "workflow: phase bootstrap"              testPhaseBootstrap
-      , test "workflow: phase testing laws"           testPhaseTestingLaws
-      , test "workflow: phase ready to push"          testPhaseReadyToPush
       , test "workflow: phase hint non-empty"         testPhaseHintNonEmpty
       , test "arbitrary: detects recursion on self"   testArbitraryDetectsRecursion
       , test "arbitrary: Expr template uses sized"    testArbitraryExprSized
@@ -1445,7 +1372,6 @@ runAllTests = do
       , test "#226: renderTyThing uses firstJust over all parseName results" testArbitraryFirstJustSource
       , test "#226: parseTypeParams two-param type"                  testArbitraryTwoParamTemplate
       -- Issue #217 — ghc_goto descriptor mentions compiled-mode limitation
-      , test "#217: ghc_goto descriptor acknowledges compiled-mode"  testGhcGotoDescriptorAccurate
       , test "remove_modules: tool registered"        testRemoveModulesRegistered
       , test "remove_modules: strips exposed entry"   testRemoveModulesStripsCabal
       , test "remove_modules: idempotent no-op"       testRemoveModulesIdempotent
@@ -1454,7 +1380,6 @@ runAllTests = do
       , test "#157: remove_modules other-modules idempotent"      testRemoveModulesOtherModulesIdempotent
       , test "#157: remove_modules finds both sections"           testRemoveModulesBothSections
       , test "#248: remove_modules not_found for non-existent module" testRemoveModulesNotFoundField
-      , test "nextStep: remove_modules -> check+load" testNextStepRemoveModules
       , test "gate: runStep catches exceptions"       testGateRunStepCatchesExceptions
       , test "gate: cabalStep uses bracket + partial safe" testGateCabalStepBracket
       , test "bootstrap: tool registered"             testBootstrapRegistered
@@ -1493,9 +1418,6 @@ runAllTests = do
       , test "PR-4: detectSelfProject positive (real cabal name)" testDetectSelfProjectPositive
       , test "PR-4: detectSelfProject negative (other name)"     testDetectSelfProjectNegative
       , test "PR-4: detectSelfProject missing cabal → False"     testDetectSelfProjectMissing
-      , test "PR-4: withDogfoodHint fires when self+write+path"  testWithDogfoodHintFiresWhenSelf
-      , test "PR-4: withDogfoodHint suppressed when not self"    testWithDogfoodHintNotFiresWhenNotSelf
-      , test "PR-4: withDogfoodHint suppressed on read-only tool" testWithDogfoodHintNotFiresOnReadTool
       , test "PR-5: every tool description meets the 6-field template"
                                                                  testDescriptionsMeetTemplate
       , test "path-bootstrap: hard-coded candidates are absolute"
@@ -1564,12 +1486,6 @@ runAllTests = do
       , test "#132: extractNotInScopeSymbol extracts name before type sig"   testExtractNisTypeSig
       , test "#132: extractNotInScopeSymbol returns Nothing for other text"  testExtractNisAbsent
       , test "#132: summariseStderr strips -Wmissing-home-modules lines"     testQcSummariseStripsWmhm
-      , test "nextStep: ghc_load with typed-hole warning \8594 ghc_hole"
-                                                                 testNextStepTypedHoleWarn
-      , test "nextStep: ghc_load with non-hole warning \8594 ghc_fix_warning"
-                                                                 testNextStepFixableWarn
-      , test "nextStep: ghc_load with no warnings \8594 ghc_suggest"
-                                                                 testNextStepCleanLoad
       -- Issue #98 Phase B · structured logging
       , test "#98B: Logging · redaction truncates strings > 40 chars"
                                                                  testLoggingRedactionPolicy
@@ -1582,19 +1498,14 @@ runAllTests = do
       -- Issue #96 Phase A · performance budget scaffold
       , test "#96A: Budget · every ToolName has an entry"         testBudgetParsesCleanly
       -- Issue #95 Phase D · nextStep quality gates
-      , test "#95D: nextStep Gate D — why ≥ 10 chars + ends in period" testNextStepGateDWhyQuality
-      , test "#95D: nextStep Gate E — chain ≤ 4 steps"               testNextStepGateEChainLength
       -- Issue #95 Phase C · golden dispatch snapshot
       -- Issue #94 Phase A · tool taxonomy invariants
       , test "#94A: tool count ≤ 50 (surface-bloat cap)"              testToolCountWithinCap
       , test "#94A: every ToolName has a category"                     testEveryToolHasCategory
-      , test "#94A: category counts match taxonomy"                    testCategoryCountsMatchTaxonomy
       , test "#268: TOOL_TAXONOMY.md lists every registered tool"      testTaxonomyDocListsAllTools
       -- Issue #99 Phase B · per-tool version surface
       , test "#99B: every ToolName has a non-empty version"           testEveryToolHasVersion
-      , test "#99B: every tool version is valid semver triple"        testToolVersionIsSemverTriple
       -- Issue #94 Phase B · action-discriminated 'modules' primitive
-      , test "#94B: ghc_modules registered with category=primitive"   testModulesRegistered
       , test "#94B: ghc_modules rejects unknown action"               testModulesRejectsBadAction
       -- Issue #105: extractModules envelope peeling
       , test "#105: extractModules reads hits inside result envelope"  testExtractModulesEnvelope
@@ -1648,7 +1559,6 @@ runAllTests = do
       , test "#195: extractHaddockAbove finds -- | above type signature" testExtractHaddockAboveTypeSig
       , test "#195: noDocInScopePayload has found_in_scope=true"        testNoDocInScopePayloadShape
       , test "#195: hasDocFalse returns True for noDocInScopePayload"   testHasDocFalseDirectly
-      , test "#195: nextStep for doc ok+hasDoc=false routes to ghc_info" testDocNoDocNextStepIsInfo
       -- Issue #106 sub-findings
       , test "#106/F-14: mkGhcError propagates code from captureHook" testMkGhcErrorCode
       , test "#180: stripGhcInternalQual removes ghc-internal prefix"  testStripGhcInternalQual
@@ -1677,7 +1587,6 @@ runAllTests = do
       , test "#194: evalIOUnitCapture via GHC session captures putStrLn"    testEvalIOUnitCaptureViaSess
       , test "#106/F-23: mergeDiags prefers deferred version at same position" testLoadMergeDiagsPreferDeferred
       , test "#106/F-04: toolchain warmup includes gates in response" testWarmupIncludesGates
-      , test "#106/F-01: classifyPhase stays PreScaffold beyond 3 calls w/o load" testClassifyPhaseNoLoad
       , test "#106/F-24: enclosingLineRange padding 15 doesn't return whole file" testEnclosingRangePadding
       , test "#106/F-09: parseRejections splits comma-separated versions" testDepsExplainRejectionSplit
       , test "#205: compileFailResult dry_run=true propagates to result field"  testRefactorCompileFailDryRunTrue
@@ -1831,8 +1740,6 @@ runAllTests = do
       , test "#287: loadLimits overrides outerToolCeiling via env"     testLoadLimitsOuterCeilingOverride
       , test "#287: loadLimits does not touch GHC-session fields"      testLoadLimitsGhcSessionFieldsUnchanged
       -- Issue #285 — uniform ToolEnv dispatch table
-      , test "#285: handlerFor covers every ToolName (exhaustive)"     testHandlerForExhaustive
-      , test "#285: handlerFor GhcQuickCheck returns handler (QcTool)" testHandlerForGhcQuickCheckIsQcTool
       , test "#285: ToolEnv construction is total (no strict crash)"   testMkToolEnvFields
       -- Issue #286 — ToolSpec registry single source of truth
       , test "#286: registry is total — one ToolSpec per ToolName"         testRegistryTotalOverToolName

@@ -78,7 +78,7 @@ testToolNameWireUnique =
   let texts = map toolNameText allToolNames
       uniq  = length (foldr insertOnce [] texts)
       insertOnce x acc = if x `elem` acc then acc else x : acc
-  in pure (uniq == length texts && length texts >= 30)
+  in pure (uniq == length texts && length texts == 13)
 
 -- | Wire forms must be non-empty, all-ASCII lowercase snake_case
 -- (a-z, 0-9, underscores only — no spaces, no hyphens, no slashes,
@@ -115,7 +115,7 @@ testToolNameSnakeCase =
 -- constructor is added but Bounded/Enum is broken, this catches it.
 testToolNameExhaustive :: IO Bool
 testToolNameExhaustive = pure $
-     length allToolNames >= 30
+     length allToolNames == 13
   && length allToolNames == length allToolNameTexts
 
 -- ---------------------------------------------------------------------------

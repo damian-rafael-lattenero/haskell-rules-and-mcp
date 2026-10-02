@@ -278,14 +278,14 @@ runFlow c projectDir = do
            ])
 
   -- Canonical array form.
-  addR1 <- Client.callTool c GhcModules
+  addR1 <- Client.callTool c GhcModule
              (object [ "action" .= ("add" :: Text), "modules" .= (["Expr.Eval"] :: [Text]) ])
   cArrayForm <- liveCheck $ checkJsonField
     "add_modules · JSON array form succeeds"
     addR1 "success" (Bool True)
 
   -- Comma-separated string fallback.
-  addR2 <- Client.callTool c GhcModules
+  addR2 <- Client.callTool c GhcModule
              (object [ "action" .= ("add" :: Text), "modules" .= ("Expr.Simplify" :: Text) ])
   cStringForm <- liveCheck $ checkJsonField
     "add_modules · comma-separated string form succeeds"
@@ -297,7 +297,7 @@ runFlow c projectDir = do
   -- the array into a string before dispatch. The handler must
   -- unwrap and land a proper @Expr.Pretty@ module (not
   -- @[\"Expr.Pretty\"]@).
-  addR3 <- Client.callTool c GhcModules
+  addR3 <- Client.callTool c GhcModule
              (object [ "action" .= ("add" :: Text), "modules" .= ("[\"Expr.Pretty\"]" :: Text) ])
   cJsonStringForm <- liveCheck $ checkJsonField
     "add_modules · stringified JSON-array unwraps cleanly (BUG-PLUS-08)"
@@ -357,8 +357,8 @@ runFlow c projectDir = do
   TIO.writeFile (src </> "Expr" </> "Simplify.hs") simplifySrc
   TIO.writeFile (src </> "Expr" </> "Pretty.hs")   prettySrc
 
-  loadR <- Client.callTool c GhcLoad
-             (object [ "module_path" .= ("src/Expr/Syntax.hs" :: Text) ])
+  loadR <- Client.callTool c GhcCheck
+             (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Expr/Syntax.hs" :: Text) ])
   cLoadOk <- liveCheck $ checkJsonField
     "ghc_load · Syntax.hs compiles clean (common-stanza extensions \
     \propagate via mtime-tracked re-bootstrap)"
@@ -369,7 +369,7 @@ runFlow c projectDir = do
   -- (5) check_project — 4-gate green verdict for the full set.
   ----------------------------------------------------------------
   t4 <- stepHeader 5 "check_project · all 4 modules green"
-  cpR <- Client.callTool c GhcCheckProject (object [])
+  cpR <- Client.callTool c GhcCheck (object [ "action" .= ("project" :: Text)])
   let cpTrace = "check_project raw response: " <> truncRender cpR
   -- We deliberately DON'T assert 'overall: true' here — the
   -- 4-gate check treats warnings as failures, and the
@@ -395,8 +395,8 @@ runFlow c projectDir = do
   -- (6) ghc_arbitrary — Expr template generation.
   ----------------------------------------------------------------
   t5 <- stepHeader 6 "ghc_arbitrary Expr · sized template"
-  arbR <- Client.callTool c GhcArbitrary
-            (object [ "type_name" .= ("Expr" :: Text) ])
+  arbR <- Client.callTool c GhcProperty
+            (object [ "action" .= ("arbitrary" :: Text), "type_name" .= ("Expr" :: Text) ])
   cArbSuccess <- liveCheck $ checkJsonField
     "ghc_arbitrary Expr · success"
     arbR "success" (Bool True)
@@ -439,10 +439,10 @@ runFlow c projectDir = do
   -- BUG-PLUS-mediocre-1 coverage.
   ----------------------------------------------------------------
   t7 <- stepHeader 8 "check_project · warnings_block (strict vs lax)"
-  cpStrict <- Client.callTool c GhcCheckProject
-                (object [ "warnings_block" .= True ])
-  cpLax <- Client.callTool c GhcCheckProject
-                (object [ "warnings_block" .= False ])
+  cpStrict <- Client.callTool c GhcCheck
+                (object [ "action" .= ("project" :: Text), "warnings_block" .= True ])
+  cpLax <- Client.callTool c GhcCheck
+                (object [ "action" .= ("project" :: Text), "warnings_block" .= False ])
   let strictBlocks = case lookupField "failed" cpStrict of
         Just (Number n) -> round n >= (1 :: Int)
         _               -> False
@@ -467,9 +467,9 @@ runFlow c projectDir = do
   -- raw="" and no explanation. BUG-PLUS-mediocre-2 coverage.
   ----------------------------------------------------------------
   t8 <- stepHeader 9 "quickcheck · broken property surfaces stderr as hint"
-  brokenR <- Client.callTool c GhcQuickCheck
+  brokenR <- Client.callTool c GhcProperty
                (object
-                 [ "property" .= ("nonexistent_property_xyzzy" :: Text)
+                 [ "action" .= ("check" :: Text), "property" .= ("nonexistent_property_xyzzy" :: Text)
                  , "module"   .= ("src/Expr/Simplify.hs"       :: Text)
                  ])
   cBrokenFails <- liveCheck $ checkJsonField
@@ -499,13 +499,13 @@ runFlow c projectDir = do
   ----------------------------------------------------------------
   t9 <- stepHeader 10 "ghc_load warnings → nextStep = ghc_fix_warning"
   TIO.writeFile (src </> "Expr" </> "Pretty.hs") prettyWarnSrc
-  loadForWarnR <- Client.callTool c GhcLoad
-                    (object [ "module_path" .= ("src/Expr/Pretty.hs" :: Text) ])
+  loadForWarnR <- Client.callTool c GhcCheck
+                    (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Expr/Pretty.hs" :: Text) ])
   cNextStepFixWarn <- liveCheck $ checkPure
     "ghc_load · nextStep.tool = 'ghc_fix_warning' when non-hole warnings present"
     (case lookupField "nextStep" loadForWarnR of
        Just (Object ns) -> case KeyMap.lookup (Key.fromText "tool") ns of
-         Just (String s) -> s == "ghc_fix_warning"
+         Just (String s) -> s == "ghc_edit"
          _               -> False
        _                -> False)
     ("Warnings in the load response should route to fix_warning, \

@@ -440,11 +440,6 @@ dispatchByName :: Server -> ProgressSink -> Value -> ToolName -> IO ToolResult
 dispatchByName srv sink args tn = do
   let env = mkToolEnv srv sink
   response <- case tn of
-    GhcQuickCheck ->
-      -- #94 Phase C: 'runs' >= 2 routes to the Determinism handler.
-      case quickCheckRuns args of
-        Just n | n >= 2 -> DeterminismTool.handle env args
-        _               -> QcTool.handle env args
     -- F1 strangler: experimental ghcide backend serves the pilot tools.
     -- Falls through to the legacy handler for every other tool (and on
     -- the default backend).

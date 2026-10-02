@@ -71,10 +71,10 @@ runFlow c projectDir = do
 
   t0 <- stepHeader 1 "contention · 2 × ghc_quickcheck against same dist-newstyle"
   (rA, rB) <- concurrently
-    (Client.callTool c GhcQuickCheck
-       (object [ "property" .= (propA :: Text) ]))
-    (Client.callTool d GhcQuickCheck
-       (object [ "property" .= (propB :: Text) ]))
+    (Client.callTool c GhcProperty
+       (object [ "action" .= ("check" :: Text), "property" .= (propA :: Text) ]))
+    (Client.callTool d GhcProperty
+       (object [ "action" .= ("check" :: Text), "property" .= (propB :: Text) ]))
 
   let aSucc    = statusOk rA == Just True
       bSucc    = statusOk rB == Just True

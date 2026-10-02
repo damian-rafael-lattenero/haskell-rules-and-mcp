@@ -47,7 +47,7 @@ import Spec.Helpers (withTempProject)
 
 testQcExportRegistered :: IO Bool
 
-testQcExportRegistered = pure $ "ghc_property_store" `elem` allToolNameTexts
+testQcExportRegistered = pure $ "ghc_property" `elem` allToolNameTexts
   -- #94 Phase C step 6: ghc_quickcheck_export merged into
   -- ghc_property_store(action="export"). The legacy wire surface
   -- is gone; the action lives on inside the consolidated tool.

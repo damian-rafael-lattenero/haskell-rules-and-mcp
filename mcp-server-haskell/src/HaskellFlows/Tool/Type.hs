@@ -14,8 +14,7 @@
 -- the way subprocess-ghci did, but preserving the contract keeps the
 -- rejection-surface identical to the ghci-backed version.
 module HaskellFlows.Tool.Type
-  ( descriptor
-  , handle
+  ( handle
   , queryExprType
   , TypeArgs (..)
   ) where
@@ -38,38 +37,6 @@ import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
 -- | The schema surfaced to clients via @tools/list@.
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcType
-    , tdDescription =
-        "PURPOSE: Get the type of a Haskell expression via :t / GHC API. "
-          <> "WHEN: verifying types of subexpressions before composing; "
-          <> "understanding what a function expects or returns; sanity-"
-          <> "checking before ghc_quickcheck. "
-          <> "WHEN NOT: you need the full kind/instances/definition site "
-          <> "— that is ghc_info; you want to evaluate the expression — "
-          <> "ghc_eval. "
-          <> "PREREQUISITES: imports for symbols in the expression must "
-          <> "be in scope (see ghc_imports). "
-          <> "OUTPUT: {expression, type}; type is the GHC-rendered "
-          <> "monomorphic or polymorphic signature. "
-          <> "SEE ALSO: ghc_info, ghc_eval, ghc_suggest."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "expression" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("The Haskell expression to type-check. Examples: \
-                       \\"map (+1)\", \"foldr\", \"Just . show\"" :: Text)
-                  ]
-              ]
-          , "required"             .= ["expression" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 newtype TypeArgs = TypeArgs
   { taExpression :: Text

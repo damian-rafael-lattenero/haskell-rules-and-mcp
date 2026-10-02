@@ -101,7 +101,7 @@ runFlow c projectDir = do
          , "stanza"  .= ("test-suite" :: Text)
          , "version" .= (">= 0.6 && < 0.9" :: Text)
          ])
-  _ <- Client.callTool c GhcModules (object [ "action" .= ("add" :: Text), "modules" .= (["Expr.Syntax", "Expr.Eval", "Expr.Simplify", "Expr.Pretty"]
+  _ <- Client.callTool c GhcModule (object [ "action" .= ("add" :: Text), "modules" .= (["Expr.Syntax", "Expr.Eval", "Expr.Simplify", "Expr.Pretty"]
                       :: [Text])
     ])
   stepFooter 1 t0
@@ -123,7 +123,7 @@ runFlow c projectDir = do
   -- step 3 · check_project — all 5 library modules must be green
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "gate · ghc_check_project 5/5 green, -Wall clean"
-  cpR <- Client.callTool c GhcCheckProject (object [])
+  cpR <- Client.callTool c GhcCheck (object [ "action" .= ("project" :: Text)])
   let cpOverall = fieldBool "overall" cpR == Just True
       cpPassed  = fieldInt "passed" cpR == Just 5
       cpFailed  = fieldInt "failed" cpR == Just 0
@@ -140,8 +140,8 @@ runFlow c projectDir = do
   -- in scope for the next steps
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "load · test/Spec.hs (brings prop_* symbols into scope)"
-  loadR <- Client.callTool c GhcLoad
-             (object [ "module_path" .= ("test/Spec.hs" :: Text) ])
+  loadR <- Client.callTool c GhcCheck
+             (object [ "action" .= ("load" :: Text), "module_path" .= ("test/Spec.hs" :: Text) ])
   let loadOk = statusOk loadR == Just True
             && fieldArrayLen "errors" loadR == Just 0
   cLoad <- liveCheck $ checkPure
@@ -162,8 +162,8 @@ runFlow c projectDir = do
   -- is exactly what the scenario's next step guards against.
   ----------------------------------------------------------------
   t4 <- stepHeader 5 "properties · 3 × ghc_quickcheck @ 100 tests each"
-  rRT <- Client.callTool c GhcQuickCheck (object
-    [ "property" .= ("prop_prettyRoundtrip" :: Text)
+  rRT <- Client.callTool c GhcProperty (object
+    [ "action" .= ("check" :: Text), "property" .= ("prop_prettyRoundtrip" :: Text)
     , "module"   .= ("test/Spec.hs"          :: Text)
     ])
   cRT <- liveCheck $ checkPure
@@ -174,8 +174,8 @@ runFlow c projectDir = do
      \OR 'pInsideParens' went greedy on a leading '-digits' without the \
      \isSoleNegLit guard. Raw: " <> truncRender rRT)
 
-  rSPM <- Client.callTool c GhcQuickCheck (object
-    [ "property" .= ("prop_simplifyPreservesMeaning" :: Text)
+  rSPM <- Client.callTool c GhcProperty (object
+    [ "action" .= ("check" :: Text), "property" .= ("prop_simplifyPreservesMeaning" :: Text)
     , "module"   .= ("test/Spec.hs"                    :: Text)
     ])
   cSPM <- liveCheck $ checkPure
@@ -186,8 +186,8 @@ runFlow c projectDir = do
      \new errors (bad) or changing defined values (very bad). Raw: "
      <> truncRender rSPM)
 
-  rSI <- Client.callTool c GhcQuickCheck (object
-    [ "property" .= ("prop_simplifyIdempotent" :: Text)
+  rSI <- Client.callTool c GhcProperty (object
+    [ "action" .= ("check" :: Text), "property" .= ("prop_simplifyIdempotent" :: Text)
     , "module"   .= ("test/Spec.hs"              :: Text)
     ])
   cSI <- liveCheck $ checkPure
@@ -203,8 +203,8 @@ runFlow c projectDir = do
   -- end-to-end when the persisted module path is correct
   ----------------------------------------------------------------
   t5 <- stepHeader 6 "regression · store has 3 props, all replay green"
-  regR <- Client.callTool c GhcPropertyStore
-            (object [ "action" .= ("run" :: Text) ])
+  regR <- Client.callTool c GhcProperty
+            (object [ "action" .= ("check" :: Text), "action" .= ("run" :: Text) ])
   let regPassed = fieldInt "passed" regR == Just 3
       regTotal  = fieldInt "total"  regR == Just 3
       regRegressions = fieldArrayLen "regressions" regR == Just 0

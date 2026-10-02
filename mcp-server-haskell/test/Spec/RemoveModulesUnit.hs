@@ -13,7 +13,6 @@ module Spec.RemoveModulesUnit
   , testRemoveModulesNotFoundField
   , testGateRunStepCatchesExceptions
   , testGateCabalStepBracket
-  , testNextStepRemoveModules
   ) where
 
 import qualified Data.Aeson as A
@@ -40,12 +39,15 @@ import HaskellFlows.Types (mkProjectDir)
 import Spec.Helpers (withTempProject)
 
 testRemoveModulesRegistered :: IO Bool
+
 testRemoveModulesRegistered = pure $
-  "ghc_modules" `elem` allToolNameTexts
+  "ghc_module" `elem` allToolNameTexts
 
 -- | Core behaviour: the exposed-modules entry for the named
 -- module disappears; the rest of the block survives.
+
 testRemoveModulesStripsCabal :: IO Bool
+
 testRemoveModulesStripsCabal =
   let cabal = T.unlines
         [ "library"
@@ -62,7 +64,9 @@ testRemoveModulesStripsCabal =
 
 -- | Removing a module that is not registered is a silent no-op:
 -- no write, empty removed-list, body unchanged.
+
 testRemoveModulesIdempotent :: IO Bool
+
 testRemoveModulesIdempotent =
   let cabal = T.unlines
         [ "library"
@@ -75,7 +79,9 @@ testRemoveModulesIdempotent =
 
 -- | Removing must not disturb other fields (build-depends,
 -- test-suite stanza, etc). Full-file regression guard.
+
 testRemoveModulesPreservesFields :: IO Bool
+
 testRemoveModulesPreservesFields =
   let cabal = T.unlines
         [ "library"
@@ -98,7 +104,9 @@ testRemoveModulesPreservesFields =
 -- like @exposed-modules:@ entries. Before the fix only
 -- @exposed-modules@ was scanned, so 'other-modules' entries
 -- silently fell through with an empty 'cabal_removed'.
+
 testRemoveModulesOtherModules :: IO Bool
+
 testRemoveModulesOtherModules =
   let cabal = T.unlines
         [ "library"
@@ -113,7 +121,9 @@ testRemoveModulesOtherModules =
 
 -- | #157: removing a module that does not appear in @other-modules@
 -- is still a no-op (same idempotency guarantee as exposed-modules).
+
 testRemoveModulesOtherModulesIdempotent :: IO Bool
+
 testRemoveModulesOtherModulesIdempotent =
   let cabal = T.unlines
         [ "library"
@@ -126,7 +136,9 @@ testRemoveModulesOtherModulesIdempotent =
 -- | #157: when a module appears in @exposed-modules@ of one stanza
 -- and @other-modules@ of another, both occurrences are removed and
 -- both names appear in the returned list.
+
 testRemoveModulesBothSections :: IO Bool
+
 testRemoveModulesBothSections =
   let cabal = T.unlines
         [ "library"
@@ -146,7 +158,9 @@ testRemoveModulesBothSections =
 -- | Issue #248: 'ghc_modules remove' must surface a 'not_found' list
 -- when a requested module does not appear in any cabal section,
 -- rather than silently returning an empty 'cabal_removed' list.
+
 testRemoveModulesNotFoundField :: IO Bool
+
 testRemoveModulesNotFoundField = do
   tmp <- getTemporaryDirectory
   let dir      = tmp </> "haskell-flows-rm-notfound"
@@ -189,7 +203,9 @@ testRemoveModulesNotFoundField = do
 -- propagate past runTool's outer try as a connection close, and
 -- reproduce F-22 (the dogfood crash that killed the MCP
 -- mid-session).
+
 testGateRunStepCatchesExceptions :: IO Bool
+
 testGateRunStepCatchesExceptions = do
   src <- TIO.readFile "src/HaskellFlows/Tool/Gate.hs"
   pure $ T.isInfixOf "timeout budget (try body)"  src
@@ -213,7 +229,9 @@ testGateRunStepCatchesExceptions = do
 -- uses strict bytestring drains for both pipes internally. This
 -- test pins the new invariant: the manual fork-and-MVar pattern
 -- is gone, replaced by the canonical helper.
+
 testGateCabalStepBracket :: IO Bool
+
 testGateCabalStepBracket = do
   src <- TIO.readFile "src/HaskellFlows/Tool/Gate.hs"
   pure $ T.isInfixOf "readCreateProcessWithExitCode" src
@@ -224,18 +242,4 @@ testGateCabalStepBracket = do
 -- success suggests the project-wide check + reload chain so any
 -- dangling import surfaces immediately.  Both add and remove route
 -- through the same chain (the post-condition is the same).
-testNextStepRemoveModules :: IO Bool
-testNextStepRemoveModules =
-  let payload = A.object
-        [ "success"      .= True
-        , "cabal_removed".= (["Foo.Old"] :: [Text])
-        ]
-  in case suggestNext GhcModules True payload of
-       Just ns ->
-         pure $ nsTool ns == GhcCheckProject
-             && case nsChain ns of
-                  Just steps ->
-                       any ((== GhcCheckProject) . csTool) steps
-                    && any ((== GhcLoad)         . csTool) steps
-                  Nothing -> False
-       Nothing -> pure False
+

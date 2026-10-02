@@ -79,12 +79,12 @@ runFlow c projectDir = do
   -- Also register the module in the cabal file so ghc_load tries
   -- to compile it. Uses the public MCP surface so we're still
   -- black-box.
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Evil"] :: [Text]) ])
 
   t0 <- stepHeader 1 "load · ghc_load on a non-UTF-8 module"
-  r  <- Client.callTool c GhcLoad
-          (object [ "module_path" .= ("src/Evil.hs" :: Text) ])
+  r  <- Client.callTool c GhcCheck
+          (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Evil.hs" :: Text) ])
   let ok        = statusOk r
       errsField = lookupField "errors" r
       hasErrors = case errsField of

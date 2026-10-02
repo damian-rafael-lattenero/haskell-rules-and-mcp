@@ -57,70 +57,70 @@ data SituationRow = SituationRow
 situationTable :: [SituationRow]
 situationTable =
   [ SituationRow "new data T declared"
-                 GhcArbitrary
+                 GhcProperty
                  "type_name=\"T\""
   , SituationRow "typed hole or empty stub"
-                 GhcHole
+                 GhcInspect
                  "module_path=\"src/X.hs\""
   , SituationRow "want QuickCheck laws from a signature"
                  GhcSuggest
                  "function_name=\"f\""
   , SituationRow "check a property"
-                 GhcQuickCheck
+                 GhcProperty
                  "property=\"\\\\x -> ...\", module=\"src/X.hs\""
   , SituationRow "check property stability"
-                 GhcQuickCheck
+                 GhcProperty
                  "property=\"...\", runs=5"
   , SituationRow "replay persisted properties"
-                 GhcPropertyStore
+                 GhcProperty
                  "action=\"run\""
   , SituationRow "materialize test/Spec.hs"
-                 GhcPropertyStore
+                 GhcProperty
                  "action=\"export\""
   , SituationRow "list persisted property store"
-                 GhcPropertyStore
+                 GhcProperty
                  "action=\"list\""
   , SituationRow "audit property store for contradictions"
-                 GhcPropertyStore
+                 GhcProperty
                  "action=\"audit\""
   , SituationRow "rename a local binding"
-                 GhcRefactor
+                 GhcEdit
                  "action=\"rename_local\", scope_line_start=, scope_line_end="
   , SituationRow "add a dependency"
                  GhcDeps
                  "action=\"add\", package=\"X\", stanza=\"library\"|\"test-suite\""
   , SituationRow "register new modules"
-                 GhcModules
+                 GhcModule
                  "action=\"add\", modules=[\"Foo.Bar\"]"
   , SituationRow "de-register modules"
-                 GhcModules
+                 GhcModule
                  "action=\"remove\", modules=[\"Foo.Old\"], delete_files=false"
   , SituationRow "add a missing import"
-                 GhcAddImport
+                 GhcEdit
                  "name=\"Data.Map\""
   , SituationRow "apply a module export list"
-                 GhcApplyExports
+                 GhcEdit
                  "module_path=\"src/X.hs\", exports=[\"foo\"]"
   , SituationRow "list live imports in GHCi"
-                 GhcImports
+                 GhcSession
                  "(no args)"
   , SituationRow "browse a module"
-                 GhcBrowse
+                 GhcInspect
                  "module=\"Foo.Bar\""
   , SituationRow "fix a GHC warning"
-                 GhcFixWarning
+                 GhcEdit
                  "module_path=\"src/X.hs\", line=12, code=\"GHC-66111\""
   , SituationRow "lint (matches CI)"
-                 GhcLint
+                 GhcCheck
                  "path=\"src/\""
   , SituationRow "format source"
-                 GhcFormat
+                 GhcEdit
                  "module_path=\"src/X.hs\", write=true"
   , SituationRow "module gate"
-                 GhcCheckModule
+                 GhcCheck
                  "module_path=\"src/X.hs\""
   , SituationRow "project-wide gate"
-                 GhcCheckProject
+                 GhcCheck
                  "(no args)"
   , SituationRow "pre-push finalizer"
                  GhcGate
@@ -132,10 +132,10 @@ situationTable =
                  GhcProject
                  "action=\"validate\""
   , SituationRow "toolchain gates (cabal/ghc/hlint)"
-                 GhcToolchain
+                 GhcSession
                  "action=\"status\""
   , SituationRow "toolchain warmup (probe optional bins)"
-                 GhcToolchain
+                 GhcSession
                  "action=\"warmup\""
   , SituationRow "batch N tool calls"
                  GhcBatch
@@ -147,7 +147,7 @@ situationTable =
                  GhcProject
                  "action=\"switch\", path=\"/abs/path/to/project\""
   , SituationRow "what should I do next"
-                 GhcWorkflow
+                 GhcSession
                  "action=\"help\""
   ]
 

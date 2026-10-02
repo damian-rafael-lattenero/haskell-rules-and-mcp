@@ -71,20 +71,20 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + Arith.hs (typechecks)"
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("typebreak-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Arith"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Arith.hs") clean
-  _ <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("src/Arith.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Arith.hs" :: Text) ])
   stepFooter 1 t0
 
   ----------------------------------------------------------------
   -- (2) precondition — module gate is GREEN on the clean source
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "precondition · check_module is GREEN on clean source"
-  rClean <- Client.callTool c GhcCheckModule
-              (object [ "module_path" .= ("src/Arith.hs" :: Text) ])
+  rClean <- Client.callTool c GhcCheck
+              (object [ "action" .= ("module" :: Text), "module_path" .= ("src/Arith.hs" :: Text) ])
   let cleanOverall = fieldBool "overall" rClean == Just True
   cPre <- liveCheck $ checkPure
     "precondition · check_module overall=true on clean source"
@@ -99,8 +99,8 @@ runFlow c projectDir = do
   t2 <- stepHeader 3 "break the types: f :: Int -> Int but body returns String"
   TIO.writeFile (projectDir </> "src" </> "Arith.hs") broken
 
-  rBroken <- Client.callTool c GhcCheckModule
-               (object [ "module_path" .= ("src/Arith.hs" :: Text) ])
+  rBroken <- Client.callTool c GhcCheck
+               (object [ "action" .= ("module" :: Text), "module_path" .= ("src/Arith.hs" :: Text) ])
 
   let overallBroken = fieldBool "overall" rBroken
       compileGreen  = case lookupPath rBroken ["gates", "compile", "ok"] of

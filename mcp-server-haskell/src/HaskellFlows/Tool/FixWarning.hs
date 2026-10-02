@@ -9,8 +9,7 @@
 -- write the file in place (still rejects the write if the patch
 -- would produce an empty file to avoid accidental truncation).
 module HaskellFlows.Tool.FixWarning
-  ( descriptor
-  , handle
+  ( handle
   , FixWarningArgs (..)
   , FixPlan (..)
   , planForCode
@@ -54,59 +53,6 @@ import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Util.Safe (safeAt)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcFixWarning
-    , tdDescription =
-        "PURPOSE: Propose (or apply) a patch for a common GHC warning. "
-          <> "WHEN: a ghc_load / ghc_check_module surfaced a fixable code "
-          <> "(GHC-66111 whole unused import, GHC-38856 partial redundant "
-          <> "import when 'message' is supplied, GHC-40910 unused binding "
-          <> "when 'name' is supplied, missing top-level signature). "
-          <> "WHEN NOT: the diagnostic is a type error — that is "
-          <> "ghc_explain_error, not a warning. "
-          <> "PREREQUISITES: a previous compile pass produced the "
-          <> "diagnostic at the given (module_path, line, code). "
-          <> "OUTPUT: {fixable, patch?, hint?, applied?}; read-only by "
-          <> "default — pass apply=true to write the file. "
-          <> "SEE ALSO: ghc_explain_error, ghc_lint."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "module_path" .= obj "string"
-              , "line"        .= obj "integer"
-              , "code"        .= obj "string"
-              , "apply"       .= obj "boolean"
-              , "name"        .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Issue #55: identifier the warning names. \
-                       \Required for GHC-40910 (unused-binding) to \
-                       \produce a concrete patch — the tool prefixes \
-                       \this name with an underscore on the given line. \
-                       \Optional for codes whose patch doesn't depend \
-                       \on a binding name." :: Text)
-                  ]
-              , "message"     .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("B-5: the full warning text from the prior \
-                       \ghc_load / ghc_check_module diagnostic. Required \
-                       \for GHC-38856 (partial redundant import: \
-                       \\"The import of 'a, b' from module 'M' is \
-                       \redundant\") so the tool knows WHICH names to drop \
-                       \from the import list. Optional for other codes." :: Text)
-                  ]
-              ]
-          , "required"             .= (["module_path", "line", "code"] :: [Text])
-          , "additionalProperties" .= False
-          ]
-    }
-  where
-    obj :: Text -> Value
-    obj t = object [ "type" .= t ]
 
 data FixWarningArgs = FixWarningArgs
   { fwModulePath :: !Text

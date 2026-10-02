@@ -25,8 +25,7 @@
 -- This is textual, not AST-aware. The compile step is the correctness
 -- oracle — we never have to reason about Haskell syntax ourselves.
 module HaskellFlows.Tool.Refactor
-  ( descriptor
-  , handle
+  ( handle
   , RefactorArgs (..)
   , Action (..)
     -- * Diagnostic-diff helpers (#50)
@@ -87,29 +86,6 @@ import HaskellFlows.Types
   )
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcRefactor
-    , tdDescription =
-        "PURPOSE: Refactor Haskell source with snapshot-and-compile "
-          <> "safety (rename_local / extract_binding / move_symbol / "
-          <> "list_actions). "
-          <> "WHEN: 'rename_local' (module_path, old_name, new_name, "
-          <> "scope_line_start, scope_line_end); 'extract_binding' "
-          <> "(module_path, new_name, scope_line_start, scope_line_end); "
-          <> "'move_symbol' (symbol, from, to — field is 'symbol' NOT "
-          <> "'symbol_name', paths are 'from'/'to' NOT 'source'/'target'); "
-          <> "'list_actions' for the catalogue. "
-          <> "WHEN NOT: ghc_apply_exports to rewrite an export list; "
-          <> "ghc_add_import to add an import. "
-          <> "PREREQUISITES: the target module(s) in the active project. "
-          <> "OUTPUT: {applied|preview, diff}; on a compile error the file "
-          <> "is restored from snapshot (atomic). "
-          <> "SEE ALSO: ghc_check_project, ghc_apply_exports. "
-          <> "(#94 Phase C: move_symbol subsumes the retired ghc_move.)"
-    , tdInputSchema = schema
-    }
 
 -- | Issue #92 Phase B: per-action discriminated schema. Each
 -- branch declares its OWN required-field set so a host that

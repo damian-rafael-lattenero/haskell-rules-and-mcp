@@ -8,8 +8,7 @@
 -- Boundary safety: prefix still routes through 'sanitizeExpression'
 -- so the newline/sentinel/empty/too-large contract is identical.
 module HaskellFlows.Tool.Complete
-  ( descriptor
-  , handle
+  ( handle
   , CompleteArgs (..)
   , renderCompletions
     -- * #252 (exported for unit tests)
@@ -44,48 +43,6 @@ import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcComplete
-    , tdDescription =
-        "PURPOSE: Return in-scope identifiers that start with the given "
-          <> "prefix, via :complete / GHC API. "
-          <> "WHEN: discovering names that match a prefix before drilling "
-          <> "in with ghc_info or ghc_type; auto-completion-style lookup "
-          <> "during exploration. Qualified prefixes (e.g. \"Data.Map.\") "
-          <> "are supported and return fully-qualified candidates — the "
-          <> "module must be loaded or in session imports. "
-          <> "WHEN NOT: you want a specific module's full export surface — "
-          <> "use ghc_browse; the symbol is off-graph (external lib not "
-          <> "yet loaded) — use hoogle_search. "
-          <> "PREREQUISITES: a session is loaded (preloads always make "
-          <> "Prelude visible); for qualified completions the qualifying "
-          <> "module must be in scope (use ghc_add_import first if not). "
-          <> "OUTPUT: {prefix, count, candidates:[name]}; default limit "
-          <> "25, hard-capped at 200. "
-          <> "SEE ALSO: ghc_info, ghc_type, ghc_browse."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "prefix" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Prefix to complete. Example: \"fold\" returns \
-                       \foldr, foldl, foldMap, ..." :: Text)
-                  ]
-              , "limit" .= object
-                  [ "type"        .= ("integer" :: Text)
-                  , "description" .=
-                      ("Maximum candidates to return. Default 25, capped \
-                       \at 200." :: Text)
-                  ]
-              ]
-          , "required"             .= ["prefix" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data CompleteArgs = CompleteArgs
   { caPrefix :: !Text

@@ -4,21 +4,9 @@
 --
 -- Extracted from the Spec.hs monolith (#271) via the function-export shape.
 module Spec.NextStepUnit
-  ( testNextStepGateFail
-  , testNextStepQcExport
-  , testNextStepDeterminismPass
-  , testNextStepDeterminismFail
-  , testClampRunsCapsHigh
+  ( testClampRunsCapsHigh
   , testClampRunsFloorsLow
   , testClampRunsPassThrough
-  , testNextStepAddImport
-  , testNextStepAddModulesChain
-  , testNextStepApplyExports
-  , testNextStepFixWarning
-  , testNextStepBrowse
-  , testNextStepToolchainWarmup
-  , testNextStepPropertyLifecycleList
-  , testNextStepCreateProjectChain
   , testStalenessWired
   , testStalenessIdentityDiffers
   , testStalenessIdentityMatches
@@ -51,45 +39,6 @@ assertNext tool payload expected =
     Just ns -> nsTool ns == expected
     Nothing -> False
 
-testNextStepGateFail :: IO Bool
-
-testNextStepGateFail =
-  let payload = A.object [ "success" .= False, "totalDurationSec" .= (1.0 :: Double) ]
-  in pure (assertNext GhcGate payload GhcCheckProject)
-
-testNextStepQcExport :: IO Bool
-
-testNextStepQcExport =
-  -- #94 Phase C step 6: ghc_quickcheck_export merged into
-  -- ghc_property_store(action=export). The export branch's
-  -- discriminator in the response is 'files_written'.
-  let payload = A.object
-        [ "success" .= True
-        , "properties_written" .= (3 :: Int)
-        , "files_written" .= (["test/Spec.hs"] :: [Text])
-        ]
-  in pure (assertNext GhcPropertyStore payload GhcGate)
-
-testNextStepDeterminismPass :: IO Bool
-
-testNextStepDeterminismPass =
-  -- #94 Phase C: ghc_determinism merged into ghc_quickcheck (runs>=2).
-  -- The 'runs' field in the payload is the discriminator that tells
-  -- the dispatcher this was a multi-run call.
-  -- #94 Phase C step 6: regression-replay is now ghc_property_store(run).
-  let payload = A.object [ "success" .= True, "runs" .= (3 :: Int) ]
-  in pure (assertNext GhcQuickCheck payload GhcPropertyStore)
-
-testNextStepDeterminismFail :: IO Bool
-
-testNextStepDeterminismFail =
-  let payload = A.object [ "success" .= False, "runs" .= (3 :: Int) ]
-  in pure (assertNext GhcQuickCheck payload GhcQuickCheck)
-
--- #281: an absurd 'runs' value (e.g. mistaking it for maxSuccess) used to
--- spawn that many cabal-repl subprocesses and crash the MCP. 'clampRuns' now
--- caps the count.
-
 testClampRunsCapsHigh :: IO Bool
 
 testClampRunsCapsHigh =
@@ -108,100 +57,6 @@ testClampRunsPassThrough =
   pure (DeterminismTool.clampRuns 3 == 3
           && DeterminismTool.clampRuns DeterminismTool.maxRuns
                == DeterminismTool.maxRuns)
-
-testNextStepAddImport :: IO Bool
-
-testNextStepAddImport =
-  -- Issue #53: count>0 must accompany the success payload for the
-  -- nudge to fire. A payload without 'count' is interpreted as
-  -- \"nothing was added\" and the nextStep is suppressed.
-  let payload = A.object
-        [ "success" .= True
-        , "module"  .= ("src/Foo.hs" :: Text)
-        , "count"   .= (3 :: Int)
-        ]
-  in pure (assertNext GhcAddImport payload GhcLoad)
-
--- | #94 Phase B — 'ghc_modules' (the action-discriminated successor
--- to add_modules + remove_modules) emits a multi-step chain. The
--- primary next tool is 'ghc_check_project' AND the chain must
--- include at least 'ghc_check_project' + 'ghc_load'.
-
-testNextStepAddModulesChain :: IO Bool
-
-testNextStepAddModulesChain =
-  let payload = A.object [ "success" .= True, "cabal_added" .= (["Foo.Bar"] :: [Text]) ]
-  in case suggestNext GhcModules True payload of
-       Just ns ->
-         pure $ nsTool ns == GhcCheckProject
-             && case nsChain ns of
-                  Just steps ->
-                       any ((== GhcLoad)         . csTool) steps
-                    && any ((== GhcCheckProject) . csTool) steps
-                  Nothing -> False
-       Nothing -> pure False
-
-testNextStepApplyExports :: IO Bool
-
-testNextStepApplyExports =
-  let payload = A.object [ "success" .= True, "module" .= ("src/Foo.hs" :: Text) ]
-  in pure (assertNext GhcApplyExports payload GhcLoad)
-
-testNextStepFixWarning :: IO Bool
-
-testNextStepFixWarning =
-  let payload = A.object [ "success" .= True, "module" .= ("src/Foo.hs" :: Text) ]
-  in pure (assertNext GhcFixWarning payload GhcLoad)
-
-testNextStepBrowse :: IO Bool
-
-testNextStepBrowse =
-  let payload = A.object [ "success" .= True, "count" .= (5 :: Int) ]
-  in pure (assertNext GhcBrowse payload GhcSuggest)
-
-testNextStepToolchainWarmup :: IO Bool
-
-testNextStepToolchainWarmup =
-  -- #94 Phase C: GhcToolchainWarmup merged into GhcToolchain
-  -- (action="warmup"). The dispatch arm is action-agnostic — both
-  -- status and warmup recommend ghc_workflow help.
-  let payload = A.object [ "success" .= True, "action" .= ("warmup" :: Text) ]
-  in pure (assertNext GhcToolchain payload GhcWorkflow)
-
-testNextStepPropertyLifecycleList :: IO Bool
-
-testNextStepPropertyLifecycleList =
-  -- #94 Phase C step 6: ghc_property_lifecycle + ghc_regression
-  -- merged into ghc_property_store. action=list now recommends
-  -- action=run on the same consolidated tool.
-  let payload = A.object [ "success" .= True, "action" .= ("list" :: Text) ]
-  in pure (assertNext GhcPropertyStore payload GhcPropertyStore)
-
--- | BUG-22: create_project emits the canonical project-bootstrap
--- chain (deps + add_modules + load). Pin that all three steps are
--- present so the agent can hand it off to ghc_batch.
-
-testNextStepCreateProjectChain :: IO Bool
-
-testNextStepCreateProjectChain =
-  let payload = A.object [ "success" .= True, "files_written" .= ([] :: [Text]) ]
-  in case suggestNext GhcProject True payload of
-       Just ns ->
-         pure $ nsTool ns == GhcDeps
-             && case nsChain ns of
-                  Just steps ->
-                    let tools = map csTool steps
-                    in GhcDeps    `elem` tools
-                    && GhcModules `elem` tools
-                    && GhcLoad    `elem` tools
-                  Nothing -> False
-       Nothing -> pure False
-
--- | BUG-07 — static source check: the Server must (a) import
--- Staleness, (b) capture boot time + binary path, (c) actually
--- invoke 'checkStaleness' when dispatching ghc_workflow, and
--- (d) pass the report into Workflow.handle. Any of these missing
--- means the Staleness module lapses back to dead code.
 
 testStalenessWired :: IO Bool
 

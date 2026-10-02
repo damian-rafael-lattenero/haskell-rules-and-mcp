@@ -13,6 +13,8 @@ module HaskellFlows.Tool.IdeBacked
 import Control.Concurrent.MVar (MVar, modifyMVar)
 import Control.Monad (void)
 import Data.Aeson (Value, object, withObject, (.=), (.:))
+import qualified Data.Aeson
+import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Key (Key)
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, readIORef)
@@ -72,13 +74,30 @@ routeIde
   -> Value
   -> Maybe (IO ToolResponse)
 routeIde ref pdRef tn args = case tn of
-  GhcCheckModule -> Just (withIdeSession ref pdRef (handleCheck pdRef args))
+  GhcCheck
+    | actionIs "module" args -> Just (withIdeSession ref pdRef (handleCheck pdRef (stripped args)))
+    | otherwise -> Nothing
   GhcEval -> Just (withIdeSession ref pdRef (handleEval args))
-  GhcType -> Just (withIdeSession ref pdRef (handleType args))
+  GhcInspect
+    | actionIs "type" args -> Just (withIdeSession ref pdRef (handleType (stripped args)))
+    | otherwise -> Nothing
   _ -> Nothing
 
 argField :: Key -> Value -> Either String Text
 argField field = parseEither (withObject "args" (.: field))
+
+-- | True when the composite @action@ field equals the given verb.
+actionIs :: Text -> Value -> Bool
+actionIs want v = case parseEither (withObject "args" (.: "action")) v of
+  Right got -> got == want
+  Left _    -> False
+
+-- | Drop the composite @action@ before forwarding to the legacy-shaped
+-- handler args.
+stripped :: Value -> Value
+stripped val = case val of
+  Data.Aeson.Object o -> Data.Aeson.Object (KM.delete "action" o)
+  _ -> val
 
 handleCheck :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
 handleCheck pdRef raw s = case argField "module_path" raw of

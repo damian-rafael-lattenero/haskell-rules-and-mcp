@@ -11,8 +11,7 @@
 -- On success the property expression + module are persisted to the
 -- property store so @ghc_regression@ can replay it later.
 module HaskellFlows.Tool.QuickCheck
-  ( descriptor
-  , handle
+  ( handle
   , QuickCheckArgs (..)
     -- * Shared runtime-execution helper (Regression, Determinism)
   , runQuickCheckViaCabalRepl
@@ -105,65 +104,10 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import qualified HaskellFlows.Mcp.NextStep as NS
 import HaskellFlows.Parser.QuickCheck
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcQuickCheck
-    , tdDescription =
-        "PURPOSE: Run a QuickCheck property against the current session "
-          <> "and auto-persist it on pass. "
-          <> "WHEN: checking a law (a Testable value, e.g. "
-          <> "`\\x -> reverse (reverse x) == x`); pass runs>=2 for flakiness "
-          <> "detection (subsumes the retired ghc_determinism). "
-          <> "WHEN NOT: ghc_suggest to derive candidate laws first; "
-          <> "ghc_witness to inspect the input distribution. "
-          <> "PREREQUISITES: the property's module loaded; QuickCheck in a "
-          <> "stanza. "
-          <> "OUTPUT: {state: passed|failed|gave_up|exception, ...}; passes "
-          <> "persist to .haskell-flows/properties.json. When a type in the "
-          <> "property lacks an Arbitrary instance, error_kind=missing_instance "
-          <> "and nextStep points to ghc_arbitrary with the type name. "
-          <> "SEE ALSO: ghc_suggest, ghc_witness, ghc_property_store, ghc_arbitrary."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "property" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("QuickCheck-testable property expression. Examples: \
-                       \\"\\\\(xs :: [Int]) -> reverse (reverse xs) == xs\", \
-                       \\"prop_idempotent\"" :: Text)
-                  ]
-              , "module" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Optional: module path to associate with the property \
-                       \in the regression store. Lets ghc_regression reload \
-                       \the right scope before re-running. Example: \
-                       \\"src/Foo.hs\"." :: Text)
-                  ]
-              , "runs" .= object
-                  [ "type"        .= ("integer" :: Text)
-                  , "description" .=
-                      ("Optional flakiness repeat-count, NOT QuickCheck's \
-                       \maxSuccess. Default 1 (single check, each check is \
-                       \already 100 generated cases). Pass >= 2 to re-run the \
-                       \WHOLE property N times (each a fresh subprocess) and \
-                       \report flakiness — the old ghc_determinism mode. \
-                       \Capped at 20: a single check already explores 100 \
-                       \inputs, so large values only waste subprocesses." :: Text)
-                  , "minimum"     .= (1 :: Int)
-                  , "maximum"     .= (20 :: Int)
-                  ]
-              ]
-          , "required"             .= ["property" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data QuickCheckArgs = QuickCheckArgs
   { qaProperty :: !Text
@@ -808,7 +752,7 @@ renderResult qr mHint = case qr of
                   -- inputs because a type lacks an Arbitrary instance.
                   "Missing Arbitrary instance"
                     <> maybe "" (\t -> " for '" <> t <> "'") mArbTy
-                    <> " — generate one with ghc_arbitrary, paste it into the \
+                    <> " — generate one with ghc_property(action=arbitrary), paste it into the \
                        \module, reload, then re-run the property. The project \
                        \itself compiles fine."
             | kind == Env.CompileError =
@@ -826,22 +770,19 @@ renderResult qr mHint = case qr of
         -- #186: for compile errors, inject a nextStep even though the
         -- response is failed (suggestNext suppresses hints on failure, so we
         -- set reNextStep directly).
-        nextHint | kind == Env.CompileError = Just (object
-                     [ "tool" .= ("ghc_check_project" :: Text)
-                     , "why"  .= ("Project has compile errors preventing cabal \
-                                  \repl from loading — fix them before running \
-                                  \properties." :: Text)
-                     ])
+        nextHint | kind == Env.CompileError = Just (NS.simple GhcCheck
+                     "Project has compile errors preventing cabal \
+                     \repl from loading — fix them before running \
+                     \properties." Nothing)
                  -- B-6: steer to ghc_arbitrary (with the type pre-filled when
                  -- we could parse it) rather than the misleading check_project.
-                 | kind == Env.MissingInstance = Just (object
-                     [ "tool" .= ("ghc_arbitrary" :: Text)
-                     , "why"  .= ("A type in this property has no Arbitrary \
-                                  \instance. Generate one, paste it in, reload, \
-                                  \then re-run." :: Text)
-                     , "example" .= object
-                         [ "type_name" .= fromMaybe ("<Type>" :: Text) mArbTy ]
-                     ])
+                 | kind == Env.MissingInstance = Just (NS.simple GhcProperty
+                     "A type in this property has no Arbitrary \
+                     \instance. Generate one (action=arbitrary), paste it in, \
+                     \reload, then re-run."
+                     (Just (object
+                         [ "type_name" .= fromMaybe ("<Type>" :: Text) mArbTy
+                         , "action"    .= ("arbitrary" :: Text) ])))
                  | otherwise = Nothing
         response = (Env.mkFailed envErr)
                      { Env.reResult   = Just payload

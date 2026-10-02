@@ -1,9 +1,11 @@
 packages: .
 
--- #101 Phase B: emit one section per top-level definition so the
--- linker can drop unreferenced symbols. Pairs with `strip` in
--- scripts/install-mcp.sh to take the binary from 199 MB → ~135 MB
--- without changing functionality (verified in docs/BINARY_SIZE.md §3).
--- Cross-platform: GHC emits the right linker invocation per platform.
+-- #101 Phase B originally enabled split-sections here (199 MB → ~135 MB
+-- with strip). Disabled in wave 2b: on arm64 Xcode ld, the combination
+-- split-sections + this archive size produced
+-- `fixup error (kind=arm64_adrp_lo12) ... does not have address`
+-- at link time on the test binaries. The size win moves to
+-- `strip` alone (scripts/install-mcp.sh); revisit with a per-component
+-- split-sections once ld behavior is understood.
 package haskell-flows-mcp
-  split-sections: True
+  split-sections: False

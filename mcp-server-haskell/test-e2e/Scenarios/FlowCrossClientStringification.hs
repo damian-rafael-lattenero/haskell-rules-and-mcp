@@ -75,12 +75,12 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + Foo + ghc_load (warm cache)"
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("xclient-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Foo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Foo.hs") fooSrc
-  _ <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("src/Foo.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Foo.hs" :: Text) ])
   stepFooter 1 t0
 
   ----------------------------------------------------------------
@@ -91,7 +91,7 @@ runFlow c projectDir = do
   --     separate axis (we only pin "no parser-side rejection").
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "ghc_refactor · scope_line_start/end as strings (#91/#88)"
-  r1 <- Client.callTool c GhcRefactor
+  r1 <- Client.callTool c GhcEdit
           (object
              [ "action"           .= ("rename_local" :: Text)
              , "module_path"      .= ("src/Foo.hs" :: Text)
@@ -118,7 +118,7 @@ runFlow c projectDir = do
   --     module is actually removed is downstream.
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "ghc_remove_modules · delete_files/force as strings (#91/#88)"
-  r2 <- Client.callTool c GhcModules
+  r2 <- Client.callTool c GhcModule
           (object [ "action" .= ("remove" :: Text), "modules"      .= (["NonExistent"] :: [Text])
              , "delete_files" .= ("false" :: Text)  -- stringified Bool
              , "force"        .= ("false" :: Text)  -- stringified Bool
@@ -136,9 +136,9 @@ runFlow c projectDir = do
   --     The required-Int parser was the most user-visible win.
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "ghc_fix_warning · required line as string (#91/#88)"
-  r3 <- Client.callTool c GhcFixWarning
+  r3 <- Client.callTool c GhcEdit
           (object
-             [ "module_path" .= ("src/Foo.hs" :: Text)
+             [ "action" .= ("fix_warning" :: Text), "module_path" .= ("src/Foo.hs" :: Text)
              , "line"        .= ("3" :: Text)        -- stringified required Int
              , "code"        .= ("GHC-66111" :: Text)
              , "apply"       .= ("false" :: Text)    -- stringified Bool
@@ -160,9 +160,9 @@ runFlow c projectDir = do
   --     rejection".
   ----------------------------------------------------------------
   t4 <- stepHeader 5 "ghc_complete · optional limit as string (#91/#88)"
-  r4 <- Client.callTool c GhcComplete
+  r4 <- Client.callTool c GhcInspect
           (object
-             [ "prefix" .= ("sho" :: Text)
+             [ "action" .= ("complete" :: Text), "prefix" .= ("sho" :: Text)
              , "limit"  .= ("10" :: Text)  -- stringified Int (optional)
              ])
   c4 <- liveCheck $ checkPure

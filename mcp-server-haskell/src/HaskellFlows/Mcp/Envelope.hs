@@ -69,6 +69,7 @@ module HaskellFlows.Mcp.Envelope
     -- * Optional decorators
   , withWarnings
   , withNextStep
+  , withResultAction
   , withMeta
     -- * Wire-wrapper bridge
   , toolResponseToResult
@@ -90,6 +91,8 @@ import Data.Aeson
   , (.:?)
   , (.=)
   )
+import qualified Data.Aeson.Key as AKey
+import qualified Data.Aeson.KeyMap as AKeyMap
 import Data.Aeson.Types (Parser)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes)
@@ -103,6 +106,7 @@ import HaskellFlows.Mcp.Protocol
   ( ToolContent (..)
   , ToolResult (..)
   )
+import qualified HaskellFlows.Mcp.NextStep as NextStep
 
 --------------------------------------------------------------------------------
 -- ToolStatus
@@ -487,10 +491,11 @@ data ToolResponse = ToolResponse
     -- ^ Diagnostic. Present iff
     -- @reStatus ∈ {refused, failed, timeout, unavailable}@.
   , reWarnings :: ![Warning]
-  , reNextStep :: !(Maybe Value)
-    -- ^ Existing 'HaskellFlows.Mcp.NextStep' payload. Kept as a
-    -- 'Value' here to avoid a cyclic dependency; the consumer
-    -- decodes it back into the structured type.
+  , reNextStep :: !(Maybe NextStep.NextStep)
+    -- ^ Typed since the wave-2b harness: the tool pointer is a
+    -- 'ToolName', so a dead wire name is a type/parse error, not a
+    -- silent runtime drift. (No cycle: NextStep depends only on
+    -- Protocol + ToolName.)
   , reMeta     :: !(Maybe Meta)
   }
   deriving stock (Eq, Show)
@@ -636,8 +641,18 @@ withWarnings ws r = r { reWarnings = reWarnings r <> ws }
 
 -- | Attach a 'NextStep' payload (kept as a 'Value' to avoid a
 -- module-level dependency cycle).
-withNextStep :: Value -> ToolResponse -> ToolResponse
+withNextStep :: NextStep.NextStep -> ToolResponse -> ToolResponse
 withNextStep ns r = r { reNextStep = Just ns }
+
+-- | Wave-2b harness: stamp the executed composite @action@ into the
+-- response's @result@ so provenance travels with the payload
+-- (requests carry @action@; responses must carry their own). No-op
+-- when there is no result (error/timeout envelopes).
+withResultAction :: Text -> ToolResponse -> ToolResponse
+withResultAction a r = r { reResult = stamp <$> reResult r }
+  where
+    stamp (Object o) = Object (AKeyMap.insert (AKey.fromText "action") (String a) o)
+    stamp v          = v
 
 -- | Attach instrumentation metadata.
 withMeta :: Meta -> ToolResponse -> ToolResponse

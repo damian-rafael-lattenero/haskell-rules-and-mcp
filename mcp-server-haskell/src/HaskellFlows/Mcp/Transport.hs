@@ -32,6 +32,7 @@ module HaskellFlows.Mcp.Transport
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (MVar, newMVar, tryTakeMVar, withMVar)
 import Control.Concurrent.QSem (newQSem, signalQSem, waitQSem)
+import Control.Concurrent.STM (atomically, modifyTVar', newTVarIO, readTVar, retry)
 import Control.Exception (SomeException, finally, try)
 import Control.Monad (unless, void, when)
 import Data.Aeson (eitherDecodeStrict', encode)
@@ -85,33 +86,42 @@ runStdioTransport srv = do
   hSetBuffering stderr LineBuffering
   writeLock <- newMVar ()
   sem <- newQSem =<< maxConcurrentCalls
+  active <- newTVarIO (0 :: Int)
   warmupInBackground
-  loop sem writeLock
+  loop sem writeLock active
+  -- EOF ≠ done: in-flight workers still own responses. Draining
+  -- here fixes the burst-input race where the process exits before
+  -- forked handlers write (e2e step 0 regressed exactly this way).
+  atomically $ do
+    n <- readTVar active
+    unless (n == 0) retry
   where
     -- Grace over Server.runTool's own ceiling: the inner timeout gets
     -- to fire first with its structured envelope; the watchdog is the
     -- last resort for uninterruptible sections.
     budgetMicros = unMicros (outerToolCeiling (srvLimits srv)) + 5_000_000
 
-    loop sem wl = do
+    loop sem wl active = do
       eof <- isEOF
       unless eof $ do
         line <- BS.hGetLine stdin
         case eitherDecodeStrict' line of
           Left parseErrTxt ->
             hPutStrLn stderr ("[haskell-flows] parse error: " <> parseErrTxt)
-          Right req -> route sem wl req
-        loop sem wl
+          Right req -> route sem wl active req
+        loop sem wl active
 
     -- Notifications run inline (no response, cheap bookkeeping);
     -- requests go to a bounded worker pool with a watchdog.
-    route sem wl req = case reqId req of
+    route sem wl active req = case reqId req of
       Nothing -> void (handleRequest srv req)
       Just rid -> do
         gate <- newMVar ()
+        atomically (modifyTVar' active (+ 1))
         void . forkIO $
           (waitQSem sem >> worker wl gate rid req)
-            `finally` signalQSem sem
+            `finally` (atomically (modifyTVar' active (subtract 1))
+                       >> signalQSem sem)
         void (forkIO (void (watchdog wl gate rid)))
 
     worker wl gate rid req = do

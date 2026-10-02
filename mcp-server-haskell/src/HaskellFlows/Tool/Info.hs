@@ -9,8 +9,7 @@
 -- Boundary safety: still routes through 'sanitizeExpression' so the
 -- newline/sentinel/empty/too-large rejection contract is unchanged.
 module HaskellFlows.Tool.Info
-  ( descriptor
-  , handle
+  ( handle
   , InfoArgs (..)
     -- * Issue #54 — constructor extraction helpers
   , successResult
@@ -76,38 +75,6 @@ import HaskellFlows.Parser.Type
   )
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcInfo
-    , tdDescription =
-        "PURPOSE: Get detailed information about a Haskell name "
-          <> "(function, type, typeclass) via :i / GHC API. "
-          <> "WHEN: inspecting a single symbol — its definition, kind, "
-          <> "instances, and where it is defined; following up on a "
-          <> "ghc_complete or ghc_browse hit to drill in. "
-          <> "WHEN NOT: you only need the type — that is cheaper via "
-          <> "ghc_type; you want the source location only — that is "
-          <> "ghc_goto; you want the Haddock prose — that is ghc_doc. "
-          <> "PREREQUISITES: name must be in scope (preloads + imports). "
-          <> "OUTPUT: structured ParsedInfo {kind, definition, instances, "
-          <> "constructors? methods? defined_at}. "
-          <> "SEE ALSO: ghc_type, ghc_doc, ghc_goto, ghc_browse."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "name" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("The name to look up. Examples: \"Functor\", \
-                       \\"Map.Map\", \"Maybe\", \"(++)\"" :: Text)
-                  ]
-              ]
-          , "required"             .= ["name" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 newtype InfoArgs = InfoArgs
   { iaName :: Text

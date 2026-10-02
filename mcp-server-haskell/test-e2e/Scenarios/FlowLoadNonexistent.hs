@@ -53,8 +53,8 @@ runFlow c _projectDir = do
   -- Post-fix: success=false, error mentions "does not exist".
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "ghc_load nonexistent module_path"
-  r1 <- Client.callTool c GhcLoad
-          (object [ "module_path" .= ("src/DoesNotExist.hs" :: Text) ])
+  r1 <- Client.callTool c GhcCheck
+          (object [ "action" .= ("load" :: Text), "module_path" .= ("src/DoesNotExist.hs" :: Text) ])
   -- Issue #90: post-envelope, 'error' is an object; the message
 -- text is at error.message. Use 'errorMessage' from E2E.Envelope.
   let succ1   = statusOk r1
@@ -81,7 +81,7 @@ runFlow c _projectDir = do
   -- library by default) should still work.
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "session survives · ghc_load (no args) still loads"
-  r2 <- Client.callTool c GhcLoad (object [])
+  r2 <- Client.callTool c GhcCheck (object [ "action" .= ("load" :: Text)])
   let alive = statusOk r2 == Just True
   cAlive <- liveCheck $ checkPure
     "ghc_load #79 · session alive after rejected nonexistent path"

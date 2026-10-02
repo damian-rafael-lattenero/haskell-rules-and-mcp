@@ -10,8 +10,7 @@
 -- caller cannot trick us into formatting (or rewriting!) a file
 -- outside the project tree.
 module HaskellFlows.Tool.Format
-  ( descriptor
-  , handle
+  ( handle
   , FormatArgs (..)
   ) where
 
@@ -40,41 +39,6 @@ import HaskellFlows.Types
   , unProjectDir
   )
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcFormat
-    , tdDescription =
-        "PURPOSE: Format a Haskell module with fourmolu (preferred) or "
-          <> "ormolu (fallback). "
-          <> "WHEN: before committing, to keep style consistent; write=false "
-          <> "previews the diff, write=true rewrites in place. "
-          <> "WHEN NOT: ghc_lint for semantic hints (not layout); "
-          <> "ghc_check_module for compile health. "
-          <> "PREREQUISITES: fourmolu or ormolu on PATH. "
-          <> "OUTPUT: {formatted|diff, changed}; status='unavailable' when "
-          <> "no formatter is on PATH. "
-          <> "SEE ALSO: ghc_lint, ghc_check_module."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "module_path" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Relative path to the module." :: Text)
-                  ]
-              , "write" .= object
-                  [ "type"        .= ("boolean" :: Text)
-                  , "description" .=
-                      ("Rewrite the file in place. Default: false \
-                       \(returns formatted text only)." :: Text)
-                  ]
-              ]
-          , "required"             .= ["module_path" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data FormatArgs = FormatArgs
   { faModulePath :: !Text

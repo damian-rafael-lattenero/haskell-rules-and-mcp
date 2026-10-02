@@ -98,7 +98,7 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + deps + Calc.hs (clean)"
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("mutation-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Calc"] :: [Text]) ])
   _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
@@ -108,16 +108,16 @@ runFlow c projectDir = do
          ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs") calcClean
-  _ <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Calc.hs" :: Text) ])
   stepFooter 1 t0
 
   ----------------------------------------------------------------
   -- (2) persist two laws that PASS on the clean source
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "persist prop_commutative + prop_double2xEven (both pass)"
-  rCommClean <- Client.callTool c GhcQuickCheck (object
-    [ "property" .= ("\\(x :: Int) (y :: Int) -> add x y == add y x" :: Text)
+  rCommClean <- Client.callTool c GhcProperty (object
+    [ "action" .= ("check" :: Text), "property" .= ("\\(x :: Int) (y :: Int) -> add x y == add y x" :: Text)
     , "module"   .= ("src/Calc.hs" :: Text)
     ])
   let commPassedClean = statePassed rCommClean
@@ -128,8 +128,8 @@ runFlow c projectDir = do
      \'add' was supposed to be commutative initially. Raw: "
      <> truncRender rCommClean)
 
-  rScaleClean <- Client.callTool c GhcQuickCheck (object
-    [ "property" .= ("\\(x :: Int) -> even (double2x x)" :: Text)
+  rScaleClean <- Client.callTool c GhcProperty (object
+    [ "action" .= ("check" :: Text), "property" .= ("\\(x :: Int) -> even (double2x x)" :: Text)
     , "module"   .= ("src/Calc.hs" :: Text)
     ])
   let double2xPassedClean = statePassed rScaleClean
@@ -153,8 +153,8 @@ runFlow c projectDir = do
   -- catches up with the disk. If regression-run itself fails to
   -- reload, that is the bug we are hunting — but a conscientious
   -- client would reload first, so do that here.
-  rReload <- Client.callTool c GhcLoad
-               (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
+  rReload <- Client.callTool c GhcCheck
+               (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Calc.hs" :: Text) ])
   let reloadedCleanly = statusOk rReload == Just True
                      && fieldArrayLen "errors" rReload == Just 0
   cReload <- liveCheck $ checkPure
@@ -169,8 +169,8 @@ runFlow c projectDir = do
   --     broken commutativity law and MUST NOT flag double2x.
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "ghc_regression(run): must detect the mutated commutativity"
-  rReg <- Client.callTool c GhcPropertyStore
-            (object [ "action" .= ("run" :: Text), "action" .= ("run" :: Text) ])
+  rReg <- Client.callTool c GhcProperty
+            (object [ "action" .= ("check" :: Text), "action" .= ("run" :: Text), "action" .= ("run" :: Text) ])
 
   let regs              = regressionExprs rReg
       sawCommutativity  = any (T.isInfixOf "add x y == add y x") regs

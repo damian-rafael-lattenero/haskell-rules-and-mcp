@@ -82,14 +82,14 @@ runFlow c projectDir = do
 
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("ansi-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Broken"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Broken.hs") brokenSrc
 
   t0 <- stepHeader 1 "load · trigger a type error (potential SGR output)"
-  loadR <- Client.callTool c GhcLoad
-            (object [ "module_path" .= ("src/Broken.hs" :: Text) ])
+  loadR <- Client.callTool c GhcCheck
+            (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Broken.hs" :: Text) ])
   -- Restore TERM immediately after the call so later scenarios
   -- don't inherit our override.
   case oldTerm of

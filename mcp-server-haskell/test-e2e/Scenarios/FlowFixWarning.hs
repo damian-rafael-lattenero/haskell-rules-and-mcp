@@ -47,7 +47,7 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + Warn module (unused import)"
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("fixwarn-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Warn"] :: [Text]) ])
   _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
@@ -62,8 +62,8 @@ runFlow c projectDir = do
   -- ghc_fix_warning — ask for a patch, apply=false.
   ----------------------------------------------------------------
   t1 <- stepHeader 2 "ghc_fix_warning(Warn.hs, line=3, GHC-66111)"
-  r <- Client.callTool c GhcFixWarning (object
-    [ "module_path" .= ("src/Warn.hs" :: Text)
+  r <- Client.callTool c GhcEdit (object
+    [ "action" .= ("fix_warning" :: Text), "module_path" .= ("src/Warn.hs" :: Text)
     , "line"        .= (3 :: Int)
     , "code"        .= ("GHC-66111" :: Text)   -- -Wunused-imports
     , "apply"       .= False

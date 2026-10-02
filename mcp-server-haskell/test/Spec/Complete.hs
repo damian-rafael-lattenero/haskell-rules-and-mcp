@@ -10,7 +10,6 @@ module Spec.Complete
   , testCompleteNoMatch
   , testCompleteQualifiedRemediation
   , testCompleteQualifiedRemediation225
-  , testCompleteDescriptionMentionsQualified
   , testSplitQualifiedPrefixWithName
   , testSplitQualifiedPrefixEmptySuffix
   , testSplitQualifiedPrefixUnqualified
@@ -39,6 +38,7 @@ import HaskellFlows.Types (mkProjectDir)
 -- | Complete.limit accepts stringified numbers. Default still
 -- applies when the field is omitted entirely.
 testCompletePermissiveLimit :: IO Bool
+
 testCompletePermissiveLimit = do
   let nativeJson = "{\"prefix\":\"sho\",\"limit\":10}"
       stringJson = "{\"prefix\":\"sho\",\"limit\":\"10\"}"
@@ -59,7 +59,9 @@ testCompletePermissiveLimit = do
 
 -- | Stage a tmpdir project with a 'Foo' module exporting 'foo' and drive
 -- 'CompleteTool.handle' with the given args.
+
 runComplete :: A.Value -> IO (Either String Env.ToolResponse)
+
 runComplete args = do
   tmp <- getTemporaryDirectory
   let dir = tmp </> "haskell-flows-complete-test"
@@ -84,7 +86,9 @@ runComplete args = do
 -- | Completing 'fold' returns at least one in-scope candidate (foldr,
 -- foldl, foldMap, …) → status='ok' with the legacy candidates
 -- array preserved inside 'result'.
+
 testCompleteHitsOk :: IO Bool
+
 testCompleteHitsOk = do
   decoded <- runComplete
     (A.object [ "prefix" A..= ("fold" :: Text) ])
@@ -99,7 +103,9 @@ testCompleteHitsOk = do
     _ -> False
 
 -- | A prefix that matches no in-scope identifier → status='no_match'.
+
 testCompleteNoMatch :: IO Bool
+
 testCompleteNoMatch = do
   decoded <- runComplete
     (A.object [ "prefix" A..= ("zZqXunlikelyPrefix" :: Text) ])
@@ -113,7 +119,9 @@ testCompleteNoMatch = do
 -- | #145: zero hits for a qualified prefix (contains '.') must include
 -- a 'remediation' field explaining the import-scope root cause.
 -- Unqualified zero-hit results should NOT include the remediation field.
+
 testCompleteQualifiedRemediation :: IO Bool
+
 testCompleteQualifiedRemediation = pure $
   let qualResp  = CompleteTool.renderCompletions "Data.Map." 25 []
       plainResp = CompleteTool.renderCompletions "zZqUnlikely" 25 []
@@ -126,7 +134,9 @@ testCompleteQualifiedRemediation = pure $
 
 -- | #225: updated qualified remediation names the module and suggests
 -- bare prefix instead of just "use ghc_add_import first".
+
 testCompleteQualifiedRemediation225 :: IO Bool
+
 testCompleteQualifiedRemediation225 = pure $
   let resp = CompleteTool.renderCompletions "Data.List." 25 []
   in case Env.reResult resp of
@@ -141,45 +151,43 @@ testCompleteQualifiedRemediation225 = pure $
 
 -- | Issue #252: the ghc_complete tool description must document that
 -- qualified prefixes (e.g. "Data.Map.") are supported.
-testCompleteDescriptionMentionsQualified :: IO Bool
-testCompleteDescriptionMentionsQualified =
-  let desc = tdDescription CompleteTool.descriptor
-  in pure $ "Qualified" `T.isInfixOf` desc
-         || "qualified" `T.isInfixOf` desc
 
--- ---------------------------------------------------------------------------
--- splitQualifiedPrefix unit tests (#252)
--- ---------------------------------------------------------------------------
-
--- | #252: splitQualifiedPrefix splits "Data.Map.lookup" into
--- ("Data.Map", "lookup").
 testSplitQualifiedPrefixWithName :: IO Bool
+
 testSplitQualifiedPrefixWithName =
   pure $ CompleteTool.splitQualifiedPrefix "Data.Map.lookup"
        == Just ("Data.Map", "lookup")
 
 -- | #252: splitQualifiedPrefix splits "Data.Map." (trailing dot) into
 -- ("Data.Map", "") — the empty name prefix means "all exports".
+
 testSplitQualifiedPrefixEmptySuffix :: IO Bool
+
 testSplitQualifiedPrefixEmptySuffix =
   pure $ CompleteTool.splitQualifiedPrefix "Data.Map."
        == Just ("Data.Map", "")
 
 -- | #252: splitQualifiedPrefix returns Nothing for bare prefixes
 -- with no dot.
+
 testSplitQualifiedPrefixUnqualified :: IO Bool
+
 testSplitQualifiedPrefixUnqualified =
   pure (isNothing (CompleteTool.splitQualifiedPrefix "fold"))
 
 -- | #252: splitQualifiedPrefix handles multi-dot module paths.
+
 testSplitQualifiedPrefixDeep :: IO Bool
+
 testSplitQualifiedPrefixDeep =
   pure $ CompleteTool.splitQualifiedPrefix "Data.Map.Strict.lookup"
        == Just ("Data.Map.Strict", "lookup")
 
 -- | #252: structural source check — Complete.hs must reference
 -- @lookupModule@ so the qualified-prefix fallback path is wired in.
+
 testCompleteImportsLookupModule :: IO Bool
+
 testCompleteImportsLookupModule = do
   src <- TIO.readFile "src/HaskellFlows/Tool/Complete.hs"
   pure $ "lookupModule" `T.isInfixOf` src
@@ -187,7 +195,9 @@ testCompleteImportsLookupModule = do
 
 -- | A newline-laden prefix → status='refused' with
 -- error.kind='newline_injection'.
+
 testCompleteRefusesNewline :: IO Bool
+
 testCompleteRefusesNewline = do
   decoded <- runComplete
     (A.object [ "prefix" A..= ("fold\n:quit" :: Text) ])

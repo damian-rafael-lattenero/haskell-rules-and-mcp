@@ -6,8 +6,6 @@ module Spec.AddImportUnit
   ( testAddImportMissingHoogle
   , testAddImportToSessionInvalid
   , testAddImportToSessionValid
-  , testNextStepAddImportZero
-  , testNextStepAddImportNonZero
   , testAddModulesPath
   ) where
 
@@ -33,6 +31,7 @@ import qualified HaskellFlows.Tool.AddModules as AddModules
 import Spec.ToolEnvFixture (sessionEnv)
 
 testAddImportMissingHoogle :: IO Bool
+
 testAddImportMissingHoogle = do
   origPath <- lookupEnv "PATH"
   setEnv "PATH" "/nonexistent/path-for-test-only"
@@ -69,7 +68,9 @@ testAddImportMissingHoogle = do
 -- | #146: addImportToSession returns (False, msg) when the import
 -- line is syntactically invalid — GHC rejects it during parseImportDecl
 -- and the exception is caught gracefully.
+
 testAddImportToSessionInvalid :: IO Bool
+
 testAddImportToSessionInvalid = do
   tmp <- getTemporaryDirectory
   let dir = tmp </> "haskell-flows-add-import-invalid"
@@ -85,7 +86,9 @@ testAddImportToSessionInvalid = do
 
 -- | #146: addImportToSession returns (True, importLine) for a
 -- well-formed import of a GHC base module.
+
 testAddImportToSessionValid :: IO Bool
+
 testAddImportToSessionValid = do
   tmp <- getTemporaryDirectory
   let dir = tmp </> "haskell-flows-add-import-valid"
@@ -102,32 +105,9 @@ testAddImportToSessionValid = do
 -- | Issue #53: nextStep dispatch on a ghc_add_import payload
 -- with @count: 0@ must return 'Nothing' (no \"reload to confirm\"
 -- nudge), since nothing was added.
-testNextStepAddImportZero :: IO Bool
-testNextStepAddImportZero =
-  let payload = A.object
-        [ "success" A..= True
-        , "name"    A..= ("ghostFn" :: T.Text)
-        , "count"   A..= (0 :: Int)
-        , "imports" A..= ([] :: [T.Text])
-        ]
-  in pure (isNothing (suggestNext GhcAddImport True payload))
-
--- | Issue #53: nextStep dispatch on a ghc_add_import payload
--- with @count: 3@ must return 'Just (...GhcLoad...)' so the
--- reload nudge fires when there's something to reload.
-testNextStepAddImportNonZero :: IO Bool
-testNextStepAddImportNonZero =
-  let payload = A.object
-        [ "success" A..= True
-        , "name"    A..= ("fromMaybe" :: T.Text)
-        , "count"   A..= (3 :: Int)
-        , "imports" A..= (["import Data.Maybe"] :: [T.Text])
-        ]
-  in pure $ case suggestNext GhcAddImport True payload of
-       Just ns -> nsTool ns == GhcLoad
-       Nothing -> False
 
 testAddModulesPath :: IO Bool
+
 testAddModulesPath = pure $
      AddModules.moduleToPath "Expr.Syntax"  == "src/Expr/Syntax.hs"
   && AddModules.moduleToPath "Main"         == "src/Main.hs"

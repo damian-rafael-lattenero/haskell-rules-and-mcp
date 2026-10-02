@@ -93,8 +93,8 @@ runFlow c projectDir = do
   -- 2. Fire a passing property. The eval is a pure Haskell evaluation,
   -- it will pass. The persist step is what we want to see fail.
   t1 <- stepHeader 2 "quickcheck · property passes eval, persist must fail"
-  eRes <- try (Client.callTool c GhcQuickCheck
-                 (object [ "property"
+  eRes <- try (Client.callTool c GhcProperty
+                 (object [ "action" .= ("check" :: Text), "property"
                          .= ("\\(xs :: [Int]) -> reverse (reverse xs) == xs"
                              :: Text) ]))
            :: IO (Either SomeException Value)
@@ -149,8 +149,8 @@ runFlow c projectDir = do
   -- 4. Second quickcheck after store dir is restored should persist OK
   -- — the tool must not be in a sticky-failed state.
   t3 <- stepHeader 4 "recovery · second ghc_quickcheck after dir restore"
-  r2 <- Client.callTool c GhcQuickCheck
-          (object [ "property"
+  r2 <- Client.callTool c GhcProperty
+          (object [ "action" .= ("check" :: Text), "property"
                   .= ("\\(n :: Int) -> n + 0 == n" :: Text) ])
   storeExists <- doesDirectoryExist storeDir
   cRecov <- liveCheck $ checkPure

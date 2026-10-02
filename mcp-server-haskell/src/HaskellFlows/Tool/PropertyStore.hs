@@ -27,8 +27,7 @@
 -- action declares its own required-field set (which, for these
 -- four, is empty — 'action' is the only field).
 module HaskellFlows.Tool.PropertyStore
-  ( descriptor
-  , handle
+  ( handle
   ) where
 
 import Data.Aeson
@@ -98,27 +97,6 @@ stripAction :: Value -> Value
 stripAction (Object o) = Object (KeyMap.delete "action" o)
 stripAction v          = v
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcPropertyStore
-    , tdDescription =
-        "PURPOSE: Inspect, replay, export, or audit the persisted property \
-        \store. \
-        \WHEN: action='list' (one entry per stored property); \
-        \action='run' (replay all as a regression suite); \
-        \action='export' (materialise test/Spec.hs); action='audit' \
-        \(pairwise contradiction detector across stored laws). \
-        \WHEN NOT: ghc_quickcheck to add a new property; ghc_gate for \
-        \the full pre-push run. \
-        \PREREQUISITES: a .haskell-flows/properties.json (populated by \
-        \ghc_quickcheck passes). \
-        \OUTPUT: per-action {count, properties|results|files_written|findings}. \
-        \SEE ALSO: ghc_quickcheck, ghc_gate. \
-        \(#94 Phase C step 6 successor to ghc_property_lifecycle + \
-        \ghc_regression + ghc_quickcheck_export + ghc_property_audit.)"
-    , tdInputSchema = schema
-    }
 
 schema :: Value
 schema = Schema.discriminatedSchema "action"

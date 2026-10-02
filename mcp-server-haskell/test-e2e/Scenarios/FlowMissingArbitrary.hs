@@ -52,7 +52,7 @@ runFlow c projectDir = do
   -- setup — scaffold + QuickCheck dep + load the no-Arbitrary module.
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("missing-arb-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Calc"] :: [Text]) ])
   _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
@@ -62,19 +62,19 @@ runFlow c projectDir = do
          ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Calc.hs") calcSrc
-  _ <- Client.callTool c GhcLoad (object [ "module_path" .= ("src/Calc.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Calc.hs" :: Text) ])
 
   -- The property quantifies over Foo, which has no Arbitrary instance.
   t0 <- stepHeader 1 "quickcheck over a no-Arbitrary type → honest diagnosis"
-  qcR <- Client.callTool c GhcQuickCheck (object
-    [ "property" .= ("\\(x :: Foo) -> idFoo x == x" :: Text)
+  qcR <- Client.callTool c GhcProperty (object
+    [ "action" .= ("check" :: Text), "property" .= ("\\(x :: Foo) -> idFoo x == x" :: Text)
     , "module"   .= ("src/Calc.hs" :: Text)
     ])
   let isFailed   = statusIs "failed" qcR
       kindOk     = errorKind qcR == Just "missing_instance"
       -- the message OR nextStep must mention ghc_arbitrary (not check_project)
-      mentionsArb = "ghc_arbitrary" `T.isInfixOf` T.pack (show qcR)
-      notMisleading = not ("ghc_check_project" `T.isInfixOf` T.pack (show qcR))
+      mentionsArb = "ghc_property" `T.isInfixOf` T.pack (show qcR)
+      notMisleading = not ("ghc_check(action=project)" `T.isInfixOf` T.pack (show qcR))
   cKind <- liveCheck $ checkPure
     "error_kind=missing_instance (not compile_error)"
     (isFailed && kindOk)

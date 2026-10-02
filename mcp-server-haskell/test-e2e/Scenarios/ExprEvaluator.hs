@@ -143,7 +143,7 @@ runStep n title body = do
 
 step1_initialStatus :: Client.McpClient -> IO [Check]
 step1_initialStatus c = do
-  r <- Client.callTool c GhcWorkflow (object [ "action" .= ("status" :: Text) ])
+  r <- Client.callTool c GhcSession (object [ "action" .= ("status" :: Text) ])
   pure
     [ mkCheck "step 1 · status view carries phase field"
         (isJust (fieldString "phase" r))
@@ -177,8 +177,8 @@ step2_scaffold c = do
         "nextStep.tool should be ghc_deps (BUG-06)"
     , mkCheck "step 2 · nextStep chain carries bootstrap plan (BUG-22)"
         (  "ghc_deps"    `elem` chainTools
-        && "ghc_modules" `elem` chainTools
-        && "ghc_load"    `elem` chainTools )
+        && "ghc_module" `elem` chainTools
+        && "ghc_check"   `elem` chainTools )
         "chain must include deps + modules + load (#94 Phase B)"
     ]
 
@@ -233,7 +233,7 @@ step3_addQuickCheck c = do
 
 step4_addModules :: Client.McpClient -> IO [Check]
 step4_addModules c = do
-  r <- Client.callTool c GhcModules (object [ "action" .= ("add" :: Text), "modules" .= (["Expr.Syntax", "Expr.Eval", "Expr.Simplify", "Expr.Pretty"] :: [Text])
+  r <- Client.callTool c GhcModule (object [ "action" .= ("add" :: Text), "modules" .= (["Expr.Syntax", "Expr.Eval", "Expr.Simplify", "Expr.Pretty"] :: [Text])
     ])
   pure
     [ checkJsonField "step 4 · add_modules success" r "success" (Bool True)
@@ -257,7 +257,7 @@ step5_removeStub c = do
   -- the use-case 'force=true' is for. The follow-up step 7 then
   -- rewrites Spec.hs to import the real test modules, so the
   -- post-step state is consistent.
-  r <- Client.callTool c GhcModules (object [ "action" .= ("remove" :: Text), "modules"      .= (["ExprEvaluator"] :: [Text])
+  r <- Client.callTool c GhcModule (object [ "action" .= ("remove" :: Text), "modules"      .= (["ExprEvaluator"] :: [Text])
     , "delete_files" .= True
     , "force"        .= True
     ])
@@ -339,8 +339,8 @@ step7_wireOtherModules projectDir = do
 
 step8_loadAll :: Client.McpClient -> IO [Check]
 step8_loadAll c = do
-  r <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("test/Gen.hs" :: Text) ])
+  r <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("test/Gen.hs" :: Text) ])
   pure
     [ checkJsonField "step 8 · load success" r "success" (Bool True)
     , mkCheck "step 8 · no errors"
@@ -413,8 +413,8 @@ step10_runProperties c = do
            "\\(x :: Expr) -> parseExpr (pretty x) == Just x")
         ]
   forM props $ \(label, prop) -> do
-    r <- Client.callTool c GhcQuickCheck (object
-      [ "property" .= (prop :: Text)
+    r <- Client.callTool c GhcProperty (object
+      [ "action" .= ("check" :: Text), "property" .= (prop :: Text)
       , "module"   .= ("test/Gen.hs" :: Text)
       ])
     let passed = case lookupPath r ["state"] of
@@ -432,8 +432,8 @@ step10_runProperties c = do
 step11_determinism :: Client.McpClient -> IO [Check]
 step11_determinism c = do
   -- #94 Phase C: ghc_determinism merged into ghc_quickcheck (runs>=2).
-  r <- Client.callTool c GhcQuickCheck (object
-    [ "property" .= (
+  r <- Client.callTool c GhcProperty (object
+    [ "action" .= ("check" :: Text), "property" .= (
         "\\(env :: Env) (x :: Expr) -> eval env (simplify x) == eval env x"
         :: Text)
     , "runs"     .= (3 :: Int)
@@ -446,7 +446,7 @@ step11_determinism c = do
   pure
     [ checkJsonField "step 11 · determinism success" r "success" (Bool True)
     , mkCheck "step 11 · nextStep points at property_store(run)"
-        (fetchNextStepTool r == Just "ghc_property_store")
+        (fetchNextStepTool r == Just "ghc_property")
         -- #94 Phase C step 6: ghc_regression merged into
         -- ghc_property_store; the determinism nextStep now points
         -- at the consolidated tool.
@@ -459,8 +459,8 @@ step11_determinism c = do
 
 step12_regressionList :: Client.McpClient -> IO [Check]
 step12_regressionList c = do
-  r <- Client.callTool c GhcPropertyStore
-         (object [ "action" .= ("list" :: Text) ])
+  r <- Client.callTool c GhcProperty
+         (object [ "action" .= ("check" :: Text), "action" .= ("list" :: Text) ])
   pure
     [ checkJsonField "step 12 · regression list success" r "success" (Bool True)
     , mkCheck "step 12 · at least 3 properties persisted"
@@ -474,8 +474,8 @@ step12_regressionList c = do
 
 step13_regressionRun :: Client.McpClient -> IO [Check]
 step13_regressionRun c = do
-  r <- Client.callTool c GhcPropertyStore
-         (object [ "action" .= ("run" :: Text), "action" .= ("run" :: Text) ])
+  r <- Client.callTool c GhcProperty
+         (object [ "action" .= ("check" :: Text), "action" .= ("run" :: Text), "action" .= ("run" :: Text) ])
   -- Dropped: "step 13 · regression run success" — 'no regressions' is
   -- strictly stronger and catches the real failure shape.
   pure
@@ -491,7 +491,7 @@ step13_regressionRun c = do
 
 step14_export :: Client.McpClient -> FilePath -> IO [Check]
 step14_export c projectDir = do
-  r <- Client.callTool c GhcPropertyStore (object [ "action" .= ("export" :: Text) ])
+  r <- Client.callTool c GhcProperty (object [ "action" .= ("export" :: Text) ])
   let success = statusOk r == Just True
       specPath = projectDir </> "test" </> "Spec.hs"
   specExists <- doesFileExist specPath

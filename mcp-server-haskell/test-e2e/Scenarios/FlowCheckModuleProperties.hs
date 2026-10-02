@@ -56,15 +56,15 @@ runFlow c projectDir = do
     \\"module\":\"CheckPropDemo\",\"passed\":1,\"updated\":0}]"
 
   -- Step 3 — load the module so the gate has a fresh GhcSession.
-  _ <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("src/CheckPropDemo.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("src/CheckPropDemo.hs" :: Text) ])
 
   -- Step 4 — call check_module by relative path. Pre-#74 this
   -- would return total=0 for the properties gate. Post-#74 it
   -- must see the planted property and report total=1, passed=1.
   t0 <- stepHeader 1 "ghc_check_module sees module-name-shaped properties (#74)"
-  rCheck <- Client.callTool c GhcCheckModule
-              (object [ "module_path" .= ("src/CheckPropDemo.hs" :: Text) ])
+  rCheck <- Client.callTool c GhcCheck
+              (object [ "action" .= ("module" :: Text), "module_path" .= ("src/CheckPropDemo.hs" :: Text) ])
   let total    = fieldIntPath ["gates", "properties", "total"]    rCheck
       passed   = fieldIntPath ["gates", "properties", "passed"]   rCheck
       status   = fieldTextPath ["gates", "properties", "status"]  rCheck

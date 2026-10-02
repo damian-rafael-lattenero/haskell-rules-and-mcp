@@ -44,37 +44,19 @@ import Data.Text (Text)
 -- order as the previous 'Text' list in 'allToolDescriptors' so the
 -- @tools/list@ wire output is unchanged.
 data ToolName
-  = GhcLoad
-  | GhcType
-  | GhcInfo
-  | GhcEval
-  | GhcQuickCheck
-  | GhcHole
-  | GhcArbitrary
-  | GhcWorkflow
-  | GhcCheckModule
-  | GhcComplete
-  | GhcFormat
+  = GhcEval
+  | GhcCheck
+  | GhcProperty
+  | GhcSession
+  | GhcEdit
+  | GhcModule
+  | GhcInspect
   | GhcGate
   | GhcDeps
-  | GhcDoc
-  | GhcGoto
-  | GhcRefactor
   | GhcBatch
-  | GhcLint
-  | GhcCheckProject
   | GhcSuggest
-  | GhcAddImport
-  | GhcApplyExports
-  | GhcFixWarning
-  | GhcImports
-  | GhcBrowse
   | GhcExplainError
-  | GhcModules
-  | GhcToolchain
   | GhcProject
-  | GhcPropertyStore
-  | GhcScratch
     -- ^ #253: persistent LLM code canvas. Action-discriminated:
     -- @action="write"|"check"|"list"|"show"|"clear"|"promote"@.
     -- Pair-programming surface — lets the LLM type-check + persist
@@ -108,37 +90,19 @@ data ToolName
 -- string form lives; every other site must go through this function.
 toolNameText :: ToolName -> Text
 toolNameText = \case
-  GhcLoad              -> "ghc_load"
-  GhcType              -> "ghc_type"
-  GhcInfo              -> "ghc_info"
   GhcEval              -> "ghc_eval"
-  GhcQuickCheck        -> "ghc_quickcheck"
-  GhcHole              -> "ghc_hole"
-  GhcArbitrary         -> "ghc_arbitrary"
-  GhcWorkflow          -> "ghc_workflow"
-  GhcCheckModule       -> "ghc_check_module"
-  GhcComplete          -> "ghc_complete"
-  GhcFormat            -> "ghc_format"
+  GhcCheck             -> "ghc_check"
+  GhcProperty          -> "ghc_property"
+  GhcSession           -> "ghc_session"
+  GhcEdit              -> "ghc_edit"
+  GhcModule            -> "ghc_module"
+  GhcInspect           -> "ghc_inspect"
   GhcGate              -> "ghc_gate"
   GhcDeps              -> "ghc_deps"
-  GhcDoc               -> "ghc_doc"
-  GhcGoto              -> "ghc_goto"
-  GhcRefactor          -> "ghc_refactor"
   GhcBatch             -> "ghc_batch"
-  GhcLint              -> "ghc_lint"
-  GhcCheckProject      -> "ghc_check_project"
   GhcSuggest           -> "ghc_suggest"
-  GhcAddImport         -> "ghc_add_import"
-  GhcApplyExports      -> "ghc_apply_exports"
-  GhcFixWarning        -> "ghc_fix_warning"
-  GhcImports           -> "ghc_imports"
-  GhcBrowse            -> "ghc_browse"
-  GhcToolchain         -> "ghc_toolchain"
   GhcProject           -> "ghc_project"
-  GhcPropertyStore     -> "ghc_property_store"
   GhcExplainError      -> "ghc_explain_error"
-  GhcModules           -> "ghc_modules"
-  GhcScratch           -> "ghc_scratch"
 
 -- | Parse a wire-format tool name back to its constructor. Returns
 -- 'Nothing' for any unknown string — used by the dispatcher to emit
@@ -204,37 +168,19 @@ toolCategoryText = \case
 -- verifies this case and the Registry projection always agree.
 toolCategory :: ToolName -> ToolCategory
 toolCategory = \case
-  GhcLoad          -> CatPrimitive
-  GhcType          -> CatPrimitive
-  GhcInfo          -> CatPrimitive
   GhcEval          -> CatPrimitive
-  GhcQuickCheck    -> CatPrimitive
-  GhcHole          -> CatPrimitive
-  GhcArbitrary     -> CatPrimitive
-  GhcWorkflow      -> CatControlPlane
-  GhcCheckModule   -> CatGate
-  GhcComplete      -> CatPrimitive
-  GhcFormat        -> CatPrimitive
+  GhcCheck         -> CatGate
+  GhcProperty      -> CatComposite
+  GhcSession       -> CatControlPlane
+  GhcEdit          -> CatComposite
+  GhcModule        -> CatComposite
+  GhcInspect       -> CatPrimitive
   GhcGate          -> CatComposite
   GhcDeps          -> CatPrimitive
-  GhcDoc           -> CatPrimitive
-  GhcGoto          -> CatPrimitive
-  GhcRefactor      -> CatPrimitive
   GhcBatch         -> CatComposite
-  GhcLint          -> CatGate
-  GhcToolchain     -> CatControlPlane
-  GhcCheckProject  -> CatGate
   GhcSuggest       -> CatPrimitive
-  GhcAddImport     -> CatPrimitive
-  GhcApplyExports  -> CatPrimitive
-  GhcFixWarning    -> CatPrimitive
-  GhcImports       -> CatPrimitive
-  GhcBrowse        -> CatPrimitive
   GhcExplainError  -> CatPrimitive
-  GhcModules       -> CatPrimitive
   GhcProject       -> CatPrimitive
-  GhcPropertyStore -> CatPrimitive
-  GhcScratch       -> CatPrimitive
 
 ------------------------------------------------------------------------
 -- Tool versioning (issue #99 Phase B)
@@ -263,42 +209,24 @@ toolCategory = \case
 toolVersion :: ToolName -> Text
 toolVersion = \case
   -- ── Read / inspect ──────────────────────────────────────────────
-  GhcLoad              -> "1.0.0"
-  GhcType              -> "1.0.0"
-  GhcInfo              -> "1.0.0"
   GhcEval              -> "1.0.0"
-  GhcHole              -> "1.0.0"
-  GhcComplete          -> "1.0.0"
-  GhcGoto              -> "1.0.0"
-  GhcBrowse            -> "1.0.0"
-  GhcImports           -> "1.0.0"
-  GhcDoc               -> "1.0.0"
+  GhcCheck             -> "2.0.0"
+  GhcProperty          -> "2.0.0"
+  GhcSession           -> "2.0.0"
+  GhcEdit              -> "2.0.0"
+  GhcModule            -> "2.0.0"
+  GhcInspect           -> "2.0.0"
   -- ── Write / refactor ────────────────────────────────────────────
-  GhcRefactor          -> "1.0.0"
-  GhcFormat            -> "1.0.0"
-  GhcApplyExports      -> "1.0.0"
-  GhcFixWarning        -> "1.0.0"
-  GhcAddImport         -> "1.0.0"
-  GhcArbitrary         -> "1.0.0"
   -- ── Dependency + project management ─────────────────────────────
   GhcDeps              -> "1.0.0"
   GhcProject           -> "1.0.0"   -- #94 Phase C step 5: action-discriminated successor
   -- ── Property-first testing ──────────────────────────────────────
-  GhcQuickCheck        -> "1.0.0"
   GhcSuggest           -> "1.0.0"
-  GhcPropertyStore     -> "1.0.0"   -- #94 Phase C step 6: action-discriminated successor
-  GhcScratch           -> "1.0.0"   -- #253: persistent LLM code canvas (Phase 1 MVP)
   -- ── Phase-2 advanced ────────────────────────────────────────────
   GhcExplainError      -> "1.0.0"
   -- ── Composites ──────────────────────────────────────────────────
   GhcGate              -> "1.0.0"
   GhcBatch             -> "1.0.0"
   -- ── Gates ───────────────────────────────────────────────────────
-  GhcCheckModule       -> "1.0.0"
-  GhcCheckProject      -> "1.0.0"
-  GhcLint              -> "1.0.0"
   -- ── Control-plane ───────────────────────────────────────────────
-  GhcWorkflow          -> "1.0.0"
-  GhcToolchain         -> "1.0.0"
   -- ── #94 Phase B: action-discriminated successors ────────────────
-  GhcModules           -> "1.0.0"

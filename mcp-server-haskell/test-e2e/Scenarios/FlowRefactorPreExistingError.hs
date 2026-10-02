@@ -69,7 +69,7 @@ runFlow c projectDir = do
   -- typed hole that used to block the refactor.
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("ref-prerr" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Refactor"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Refactor.hs")
@@ -81,7 +81,7 @@ runFlow c projectDir = do
   -- the hole was there before AND after, so the rewrite is
   -- accepted.
   t0 <- stepHeader 1 "rename_local accepted despite unrelated hole (#50)"
-  r <- Client.callTool c GhcRefactor (object
+  r <- Client.callTool c GhcEdit (object
     [ "action"           .= ("rename_local" :: Text)
     , "module_path"      .= ("src/Refactor.hs" :: Text)
     , "old_name"         .= ("msg" :: Text)

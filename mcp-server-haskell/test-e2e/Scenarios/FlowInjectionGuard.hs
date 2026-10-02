@@ -99,8 +99,8 @@ runFlow c _projectDir = do
   -- callers inside the Haskell code.
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "path traversal · ghc_load must refuse '../..' escapes"
-  r3 <- Client.callTool c GhcLoad
-          (object [ "module_path" .= ("../../etc/passwd" :: Text) ])
+  r3 <- Client.callTool c GhcCheck
+          (object [ "action" .= ("load" :: Text), "module_path" .= ("../../etc/passwd" :: Text) ])
   let r3Ok = errorShaped r3
   c3 <- liveCheck $ checkPure
     "path traversal refused · load rejects paths that escape the root"
@@ -125,8 +125,8 @@ runFlow c _projectDir = do
   ----------------------------------------------------------------
   t3 <- stepHeader 4
           "lint_relative_traversal · ghc_lint must refuse '../..'"
-  r4 <- Client.callTool c GhcLint
-          (object [ "path" .= ("../.." :: Text) ])
+  r4 <- Client.callTool c GhcCheck
+          (object [ "action" .= ("lint" :: Text), "path" .= ("../.." :: Text) ])
   let r4Ok = errorShaped r4
   c4 <- liveCheck $ checkPure
     "ghc_lint refused traversal · escape error before subprocess spawns"

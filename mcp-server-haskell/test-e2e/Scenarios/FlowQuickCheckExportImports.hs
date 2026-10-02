@@ -57,7 +57,7 @@ runFlow c projectDir = do
   -- Step 2 — register a library module so 'libraryExposedModules'
   -- has something non-empty to return. The renderer should union
   -- this into the import set.
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= ["Lib.Foo" :: Text] ])
 
   -- Step 3 — write a property to the on-disk store with
@@ -72,7 +72,7 @@ runFlow c projectDir = do
   -- Step 4 — invoke the export. Defaults the output to
   -- 'test/Spec.hs', mirroring the bug's exact reproduction.
   t0 <- stepHeader 1 "ghc_quickcheck_export defaults to test/Spec.hs (#40)"
-  r <- Client.callTool c GhcPropertyStore (object [ "action" .= ("export" :: Text) ])
+  r <- Client.callTool c GhcProperty (object [ "action" .= ("export" :: Text) ])
   let exportSucceeded = statusOk r == Just True
   cExport <- liveCheck $ checkPure
     "export tool returns success=true"

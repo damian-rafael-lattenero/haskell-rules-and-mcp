@@ -18,8 +18,7 @@
 --   escape the project directory.
 -- * argv-form spawn; no shell.
 module HaskellFlows.Tool.Lint
-  ( descriptor
-  , handle
+  ( handle
   , LintArgs (..)
   , Suggestion (..)
   , parseHlintJson
@@ -55,49 +54,6 @@ import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcLint
-    , tdDescription =
-        "PURPOSE: Run HLint over the project (or a single file) with "
-          <> "structured suggestions. "
-          <> "WHEN: before pushing use path (recursive, matches CI exactly); "
-          <> "module_path for a faster single-file inner loop. "
-          <> "WHEN NOT: ghc_format for style / layout; ghc_check_module for "
-          <> "compile + warnings. "
-          <> "PREREQUISITES: hlint on PATH. "
-          <> "OUTPUT: {hints:[{severity, location, hint}], count}. "
-          <> "SEE ALSO: ghc_format, ghc_fix_warning."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "path" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Directory to lint (recursive). Example: "
-                       <> "\".\" (whole project) or \"src/\" (sources only). "
-                       <> "Omit to lint the project root." :: Text)
-                  ]
-              , "module_path" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Single file to lint. Faster for inner loops; "
-                       <> "use `path` before pushing." :: Text)
-                  ]
-              , "fail_on" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "enum"        .=
-                      (["suggestion", "warning", "error"] :: [Text])
-                  , "description" .=
-                      ("Minimum severity that counts as failure. "
-                       <> "Default: warning." :: Text)
-                  ]
-              ]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data LintArgs = LintArgs
   { laPath       :: !(Maybe Text)

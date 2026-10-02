@@ -59,7 +59,7 @@ runFlow c projectDir = do
   -- bootstrap finds it under the library stanza.
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("hole-artifact-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["HoleArtifact"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "HoleArtifact.hs") holeSrc
@@ -71,8 +71,8 @@ runFlow c projectDir = do
   -- 'warnings' (severity SevWarning under -fdefer-typed-holes), and
   -- 'errors' should be empty (no GHC-58427 artifact, no shadow-error).
   t0 <- stepHeader 1 "ghc_load(diagnostics=true) returns one warning per hole (#57, F-23)"
-  r <- Client.callTool c GhcLoad (object
-         [ "module_path" .= ("src/HoleArtifact.hs" :: Text)
+  r <- Client.callTool c GhcCheck (object
+         [ "action" .= ("load" :: Text), "module_path" .= ("src/HoleArtifact.hs" :: Text)
          , "diagnostics" .= True
          ])
   let errs           = errorsArray r

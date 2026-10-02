@@ -58,7 +58,7 @@ runFlow c projectDir = do
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("hole-fits-demo" :: Text) ])
   TIO.writeFile (projectDir </> "src" </> "HoleDemo.hs") moduleSrc
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["HoleDemo"] :: [Text]) ])
 
   -- Step 2 — query the hole. The response's validFits array
@@ -67,8 +67,8 @@ runFlow c projectDir = do
   -- hole. Pre-#71 this row was absorbed into a preceding
   -- entry's source field and missing from the array.
   t0 <- stepHeader 1 "ghc_hole returns operator-named fit as a distinct row (#71)"
-  rHole <- Client.callTool c GhcHole
-            (object [ "module_path" .= ("src/HoleDemo.hs" :: Text) ])
+  rHole <- Client.callTool c GhcInspect
+            (object [ "action" .= ("hole" :: Text), "module_path" .= ("src/HoleDemo.hs" :: Text) ])
   let firstHole = case lookupField "holes" rHole of
         Just (Array a) | not (V.null a) -> Just (V.head a)
         _                                -> Nothing

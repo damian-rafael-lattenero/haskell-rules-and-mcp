@@ -5,8 +5,7 @@
 -- the requested one, the list is REPLACED.  Only if it is already
 -- identical does the tool return @{no_change: true}@.
 module HaskellFlows.Tool.ApplyExports
-  ( descriptor
-  , handle
+  ( handle
   , ApplyExportsArgs (..)
   , rewriteHeader
     -- * Internals exposed for unit tests
@@ -29,47 +28,6 @@ import HaskellFlows.Parser.ModuleName (isReservedKeyword)
 import HaskellFlows.Types (ProjectDir, mkModulePath, unModulePath)
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcApplyExports
-    , tdDescription =
-        "PURPOSE: Rewrite a module's header to declare an explicit "
-          <> "export list. "
-          <> "WHEN: tightening a module's surface after development; "
-          <> "responding to a downstream API audit that demands explicit "
-          <> "exports. "
-          <> "WHEN NOT: you want to know what is currently exported — "
-          <> "that is ghc_browse, not this tool; the export list already "
-          <> "matches your intent — re-running is a no-op anyway. "
-          <> "PREREQUISITES: decide the export list first via ghc_browse "
-          <> "(see what is exported now) or by reading the module. "
-          <> "OUTPUT: {applied, no_change?}; idempotent — if a list is "
-          <> "already present and equal, returns no_change=true. "
-          <> "Validates against reserved keywords before writing. "
-          <> "SEE ALSO: ghc_browse, ghc_modules."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "module_path" .= object
-                  [ "type" .= ("string" :: Text) ]
-              , "exports" .= object
-                  [ "type"  .= ("array" :: Text)
-                  , "items" .= object [ "type" .= ("string" :: Text) ]
-                  ]
-              , "write" .= object
-                  [ "type"        .= ("boolean" :: Text)
-                  , "description" .=
-                      ("When false (default true), preview the new header "
-                       <> "without writing to disk. The response carries "
-                       <> "applied=false and the would-be exports list." :: Text)
-                  ]
-              ]
-          , "required"             .= (["module_path", "exports"] :: [Text])
-          , "additionalProperties" .= False
-          ]
-    }
 
 data ApplyExportsArgs = ApplyExportsArgs
   { aeModulePath :: !Text

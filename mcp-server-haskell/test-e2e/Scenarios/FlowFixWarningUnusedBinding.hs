@@ -59,15 +59,15 @@ runFlow c projectDir = do
   -- line 6 (1-indexed) of FixDemo.hs.
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("fix-warning-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["FixDemo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "FixDemo.hs") unusedBindingSrc
 
   -- Step 2 — call WITHOUT name. fixable=false, no patch.
   t0 <- stepHeader 1 "ghc_fix_warning(40910) sin name → fixable=false (#55)"
-  rNoName <- Client.callTool c GhcFixWarning (object
-    [ "module_path" .= ("src/FixDemo.hs" :: Text)
+  rNoName <- Client.callTool c GhcEdit (object
+    [ "action" .= ("fix_warning" :: Text), "module_path" .= ("src/FixDemo.hs" :: Text)
     , "line"        .= (6 :: Int)
     , "code"        .= ("GHC-40910" :: Text)
     ])
@@ -81,8 +81,8 @@ runFlow c projectDir = do
 
   -- Step 3 — call WITH name + apply=true. fixable=true, applied=true.
   t1 <- stepHeader 2 "ghc_fix_warning(40910, name=ys, apply) → patched (#55)"
-  rApply <- Client.callTool c GhcFixWarning (object
-    [ "module_path" .= ("src/FixDemo.hs" :: Text)
+  rApply <- Client.callTool c GhcEdit (object
+    [ "action" .= ("fix_warning" :: Text), "module_path" .= ("src/FixDemo.hs" :: Text)
     , "line"        .= (6 :: Int)
     , "code"        .= ("GHC-40910" :: Text)
     , "name"        .= ("ys" :: Text)

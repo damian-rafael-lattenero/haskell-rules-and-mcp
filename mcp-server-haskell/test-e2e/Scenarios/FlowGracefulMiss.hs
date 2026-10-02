@@ -70,7 +70,7 @@ runFlow c projectDir = do
   t0 <- stepHeader 1 "scaffold + Whole (a module with NO holes)"
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("gracefulmiss-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Whole"] :: [Text]) ])
   _ <- Client.callTool c GhcDeps (object
          [ "action"  .= ("add" :: Text)
@@ -80,8 +80,8 @@ runFlow c projectDir = do
          ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Whole.hs") noHolesSrc
-  _ <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("src/Whole.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("src/Whole.hs" :: Text) ])
   stepFooter 1 t0
 
   ----------------------------------------------------------------
@@ -133,8 +133,8 @@ runFlow c projectDir = do
   -- no way to distinguish "no holes" from "tool broke".
   ----------------------------------------------------------------
   t2 <- stepHeader 3 "ghc_hole on Whole.hs (no holes present)"
-  r2 <- Client.callTool c GhcHole
-          (object [ "module_path" .= ("src/Whole.hs" :: Text) ])
+  r2 <- Client.callTool c GhcInspect
+          (object [ "action" .= ("hole" :: Text), "module_path" .= ("src/Whole.hs" :: Text) ])
   -- Issue #90: ghc_hole on a hole-free module emits status='no_match'
 -- post-envelope (semantically "no holes matched"). The end-state
 -- semantic is the same — there are 0 holes to fix. Accept either
@@ -161,8 +161,8 @@ runFlow c projectDir = do
   -- tools still work.
   ----------------------------------------------------------------
   t3 <- stepHeader 4 "ghc_quickcheck('42') — not a predicate"
-  r3 <- Client.callTool c GhcQuickCheck (object
-    [ "property" .= ("42" :: Text)
+  r3 <- Client.callTool c GhcProperty (object
+    [ "action" .= ("check" :: Text), "property" .= ("42" :: Text)
     , "module"   .= ("src/Whole.hs" :: Text)
     ])
   let stateField   = lookupField "state" r3
@@ -189,7 +189,7 @@ runFlow c projectDir = do
   -- Critical liveness assert: session must still be alive after
   -- the bad call. A follow-up ghc_eval should respond quickly.
   r4 <- Client.callTool c GhcEval
-          (object [ "expression" .= ("1 + 1" :: Text) ])
+          (object [ "action" .= ("check" :: Text), "expression" .= ("1 + 1" :: Text) ])
   let sessionAlive = statusOk r4 == Just True
   cLive <- liveCheck $ checkPure
     "session survives · ghc_eval(1+1) still works after the failed QC"

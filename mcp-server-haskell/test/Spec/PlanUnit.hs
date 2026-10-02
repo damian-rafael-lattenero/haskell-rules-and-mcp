@@ -7,8 +7,6 @@ module Spec.PlanUnit
   , testPlanLowConfidenceListsAlternatives
   , testPlanMultiModule
   , testPlanComplexGoalCapped
-  , testNextStepResolvesSameModule
-  , testNextStepModulesCreatedScratch
   ) where
 
 import qualified Data.Aeson as A
@@ -24,6 +22,7 @@ import qualified HaskellFlows.Tool.Workflow as WorkflowTool
 
 -- | #264: a concrete goal matches the right template + yields a chain.
 testPlanMatchesModuleQc :: IO Bool
+
 testPlanMatchesModuleQc =
   pure $ case WorkflowTool.planPayload "set up Expr.Foo with a QC roundtrip property" of
     A.Object o ->
@@ -34,7 +33,9 @@ testPlanMatchesModuleQc =
     _ -> False
 
 -- | #264: a vague goal yields no match but lists alternatives.
+
 testPlanLowConfidenceListsAlternatives :: IO Bool
+
 testPlanLowConfidenceListsAlternatives =
   pure $ case WorkflowTool.planPayload "do the thing with stuff zzz" of
     A.Object o ->
@@ -47,7 +48,9 @@ testPlanLowConfidenceListsAlternatives =
 -- | #284: a goal naming several modules scaffolds them ALL in one ghc_modules
 -- step (matched_template = multi-module-scaffold) instead of collapsing to the
 -- first, and carries a clarifying note.
+
 testPlanMultiModule :: IO Bool
+
 testPlanMultiModule =
   pure $ case WorkflowTool.planPayload
                "build modules Expr.Syntax, Expr.Eval, Expr.Pretty with QC" of
@@ -70,7 +73,9 @@ testPlanMultiModule =
 -- | #284: a long / multi-faceted goal that still maps to a single template has
 -- its confidence capped (<= 0.5) and gains a note, so the agent treats the
 -- chain as a starting slice rather than a complete plan.
+
 testPlanComplexGoalCapped :: IO Bool
+
 testPlanComplexGoalCapped =
   pure $ case WorkflowTool.planPayload
                "build an arithmetic expression evaluator with eval, algebraic \
@@ -84,30 +89,4 @@ testPlanComplexGoalCapped =
 -- | #270: a nextStep example's module_path is resolved to the payload's
 -- concrete module (not a "<same module>" placeholder) when the tool
 -- echoes module_path (ghc_refactor does) — so the chain is ghc_batch-ready.
-testNextStepResolvesSameModule :: IO Bool
-testNextStepResolvesSameModule =
-  let payload = A.object
-        [ "status"      A..= ("ok" :: T.Text)
-        , "action"      A..= ("rename_local" :: T.Text)
-        , "module_path" A..= ("src/Calc.hs" :: T.Text)
-        ]
-  in pure $ case suggestNext GhcRefactor True payload of
-       Just ns -> case nsExample ns of
-         Just (A.Object o) ->
-           AKM.lookup "module_path" o == Just (A.String "src/Calc.hs")
-         _ -> False
-       Nothing -> False
 
--- | #262: ghc_modules(add) with created_files routes nextStep to a
--- design-first ghc_scratch chain (one scratch per created file + a
--- closing ghc_load on the first, with concrete paths).
-testNextStepModulesCreatedScratch :: IO Bool
-testNextStepModulesCreatedScratch =
-  let payload = A.object
-        [ "action"        A..= ("add" :: T.Text)
-        , "created_files" A..= (["src/Expr/Pretty.hs", "src/Expr/Eval.hs"] :: [T.Text])
-        ]
-  in pure $ case suggestNext GhcModules True payload of
-       Just ns -> nsTool ns == GhcScratch
-                    && fmap length (nsChain ns) == Just 3
-       Nothing -> False

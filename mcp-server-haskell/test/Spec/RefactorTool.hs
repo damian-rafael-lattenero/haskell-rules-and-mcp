@@ -11,7 +11,6 @@ module Spec.RefactorTool
   , testRefactorRenameLocalMissingScopeStart
   , testRefactorExtractBindingNoOldName
   , testRefactorExtractBindingMissingScope
-  , testRefactorSchemaIsDiscriminated
   , testRefactorListActions
   , testRefactorListActionsHasRequired
   ) where
@@ -40,6 +39,7 @@ import Spec.ToolEnvFixture (sessionPdEnv)
 -- numbers (the most user-visible win — rename_local was completely
 -- unusable from stringifying clients pre-fix).
 testRefactorPermissiveLineRange :: IO Bool
+
 testRefactorPermissiveLineRange = do
   -- Issue #92 Phase B note: old_name is now a parse-time
   -- requirement for rename_local (the schema declares it,
@@ -71,7 +71,9 @@ testRefactorPermissiveLineRange = do
 -- | RemoveModules.delete_files / force accept stringified
 -- "true"/"false" — the shape that triggered the issue's
 -- @\"true\"@ wire form.
+
 testRemoveModulesPermissiveBool :: IO Bool
+
 testRemoveModulesPermissiveBool = do
   let nativeJson =
         "{\"modules\":[\"Foo\"],\"delete_files\":true,\"force\":false}"
@@ -88,7 +90,9 @@ testRemoveModulesPermissiveBool = do
 
 -- | FixWarning.line and apply: line is REQUIRED, and apply has a
 -- default. Both must accept stringified primitives.
+
 testFixWarningPermissiveLine :: IO Bool
+
 testFixWarningPermissiveLine = do
   let nativeJson =
         "{\"module_path\":\"src/X.hs\",\"line\":3,\"code\":\"GHC-66111\",\
@@ -116,7 +120,9 @@ testFixWarningPermissiveLine = do
 --------------------------------------------------------------------------------
 
 -- | rename_local with the FULL required set must parse cleanly.
+
 testRefactorRenameLocalCompleteParses :: IO Bool
+
 testRefactorRenameLocalCompleteParses = do
   let raw =
         "{\"action\":\"rename_local\",\"module_path\":\"src/X.hs\",\
@@ -132,7 +138,9 @@ testRefactorRenameLocalCompleteParses = do
 -- (post-#92). Pre-fix this parsed and the handler returned
 -- "'old_name' is required for rename_local" at runtime — the
 -- schema-vs-runtime contract drift this issue closes.
+
 testRefactorRenameLocalMissingOldName :: IO Bool
+
 testRefactorRenameLocalMissingOldName = do
   let raw =
         "{\"action\":\"rename_local\",\"module_path\":\"src/X.hs\",\
@@ -147,7 +155,9 @@ testRefactorRenameLocalMissingOldName = do
 -- | rename_local without scope_line_start must FAIL at parse
 -- time. Same contract: schema declares it required, parser must
 -- enforce.
+
 testRefactorRenameLocalMissingScopeStart :: IO Bool
+
 testRefactorRenameLocalMissingScopeStart = do
   let raw =
         "{\"action\":\"rename_local\",\"module_path\":\"src/X.hs\",\
@@ -162,7 +172,9 @@ testRefactorRenameLocalMissingScopeStart = do
 -- | extract_binding does NOT need old_name — it only renames the
 -- extracted binding's name, not an existing identifier. Anchor:
 -- the parser must ACCEPT extract_binding without old_name.
+
 testRefactorExtractBindingNoOldName :: IO Bool
+
 testRefactorExtractBindingNoOldName = do
   let raw =
         "{\"action\":\"extract_binding\",\"module_path\":\"src/X.hs\",\
@@ -177,7 +189,9 @@ testRefactorExtractBindingNoOldName = do
 -- | extract_binding STILL requires both scope lines. The
 -- per-action contract: dropping just one of the scope lines fails
 -- at parse time (Aeson 'fromJSON' returns 'Error').
+
 testRefactorExtractBindingMissingScope :: IO Bool
+
 testRefactorExtractBindingMissingScope = do
   let raw =
         "{\"action\":\"extract_binding\",\"module_path\":\"src/X.hs\",\
@@ -192,25 +206,10 @@ testRefactorExtractBindingMissingScope = do
 -- the action discriminant as an 'enum' over every branch.
 -- Anchor: a future drift back to top-level 'oneOf' (which Claude
 -- rejects) would fail this.
-testRefactorSchemaIsDiscriminated :: IO Bool
-testRefactorSchemaIsDiscriminated =
-  -- #94 Phase C: THREE action branches + #154 adds list_actions → FOUR.
-  -- Post-flat-schema fix (Claude API top-level oneOf rejection): we
-  -- anchor on the discriminant 'enum' instead of a per-branch 'oneOf'.
-  let s = tdInputSchema RefactorTool.descriptor
-  in pure $ case s of
-       A.Object km -> case AKM.lookup "properties" km of
-         Just (A.Object props) -> case AKM.lookup "action" props of
-           Just (A.Object actObj) -> case AKM.lookup "enum" actObj of
-             Just (A.Array xs) -> length xs == 4
-             _                 -> False
-           _ -> False
-         _ -> False
-       _ -> False
 
--- | #154: list_actions with no other args returns status=ok and
--- an 'actions' list (no module_path / new_name required).
+
 testRefactorListActions :: IO Bool
+
 testRefactorListActions = do
   tmp <- getTemporaryDirectory
   let dir = tmp </> "haskell-flows-refactor-list-actions"
@@ -226,7 +225,9 @@ testRefactorListActions = do
 
 -- | #154: list_actions response carries 'actions' array with an entry
 -- for 'move_symbol' that lists the correct field names ('symbol','from','to').
+
 testRefactorListActionsHasRequired :: IO Bool
+
 testRefactorListActionsHasRequired = do
   tmp <- getTemporaryDirectory
   let dir = tmp </> "haskell-flows-refactor-list-actions-req"

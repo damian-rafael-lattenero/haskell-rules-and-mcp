@@ -59,7 +59,7 @@ runFlow c projectDir = do
   -- Step 1 — scaffold + write GateDemo.
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("gate-props-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["GateDemo"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "GateDemo.hs") demoSrc
@@ -77,8 +77,8 @@ runFlow c projectDir = do
   -- the load-failure: ok=false, status=skipped, reason mentions
   -- load — NOT \"pass\".
   t0 <- stepHeader 1 "ghc_check_module reports skipped status (#42)"
-  r <- Client.callTool c GhcCheckModule
-         (object [ "module_path" .= ("src/GateDemo.hs" :: Text) ])
+  r <- Client.callTool c GhcCheck
+         (object [ "action" .= ("module" :: Text), "module_path" .= ("src/GateDemo.hs" :: Text) ])
   let propsGate = drillField "gates" "properties" r
       okVal     = case propsGate of
                     Just (Object o) -> KeyMap.lookup (Key.fromText "ok") o

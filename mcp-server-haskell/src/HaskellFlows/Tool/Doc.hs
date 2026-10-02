@@ -8,8 +8,7 @@
 -- Same shape as before, same 'success: true' invariant that
 -- @FlowExploratory@ checks.
 module HaskellFlows.Tool.Doc
-  ( descriptor
-  , handle
+  ( handle
   , DocArgs (..)
   , extractHaddockAbove
     -- * Response shaping (exported for unit tests)
@@ -41,38 +40,6 @@ import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcDoc
-    , tdDescription =
-        "PURPOSE: Look up Haddock documentation for a name via :doc / "
-          <> "GHC API. "
-          <> "WHEN: you have a candidate name and want the prose contract "
-          <> "before using it; understanding pre-conditions / corner-"
-          <> "cases an upstream documented. "
-          <> "WHEN NOT: you want the type only — ghc_type; you want the "
-          <> "definition site / instances — ghc_info. "
-          <> "PREREQUISITES: name in scope; for non-empty docs, the "
-          <> "hosting package must have been built with -haddock. "
-          <> "OUTPUT: {name, hasDoc, doc?}; reports hasDoc=false cleanly "
-          <> "instead of failing when -haddock is absent. "
-          <> "SEE ALSO: ghc_info, ghc_type, ghc_browse."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "name" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Name to look up. Examples: \"map\", \"Functor\", \
-                       \\"(++)\"." :: Text)
-                  ]
-              ]
-          , "required"             .= ["name" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 newtype DocArgs = DocArgs
   { daName :: Text

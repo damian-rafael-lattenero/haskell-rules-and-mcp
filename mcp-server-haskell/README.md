@@ -65,7 +65,7 @@ That writes `.claude/rules/haskell-flows-mcp.md` from content baked
 into the running binary — always in sync with the tool surface you
 actually have.
 
-## Tool surface (31 tools)
+## Tool surface (13 tools)
 
 Grouped by workflow phase. Every one of these is dispatchable through
 `tools/call`; `tools/list` returns the authoritative registry.

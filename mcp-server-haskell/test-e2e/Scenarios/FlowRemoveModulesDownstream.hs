@@ -51,7 +51,7 @@ runFlow c projectDir = do
   -- importer in test/Spec.hs.
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("rm-down-demo" :: Text) ])
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["Expr"] :: [Text]) ])
   createDirectoryIfMissing True (projectDir </> "src")
   TIO.writeFile (projectDir </> "src" </> "Expr.hs") $ T.unlines
@@ -74,7 +74,7 @@ runFlow c projectDir = do
   -- downstream_imports array. .cabal stays untouched.
   t0 <- stepHeader 1 "ghc_remove_modules refuses on importers (#41)"
   cabalBefore <- TIO.readFile =<< findCabal projectDir
-  rRefused <- Client.callTool c GhcModules
+  rRefused <- Client.callTool c GhcModule
                 (object [ "action" .= ("remove" :: Text), "modules" .= (["Expr"] :: [Text]) ])
   cabalAfter <- TIO.readFile =<< findCabal projectDir
   let success    = statusOk rRefused
@@ -107,7 +107,7 @@ runFlow c projectDir = do
 
   -- Step 3 — force=true proceeds AND surfaces warnings.
   t1 <- stepHeader 2 "ghc_remove_modules force=true → warning (#41)"
-  rForced <- Client.callTool c GhcModules
+  rForced <- Client.callTool c GhcModule
                (object [ "action" .= ("remove" :: Text), "modules" .= (["Expr"] :: [Text])
                  , "force"   .= True
                  ])

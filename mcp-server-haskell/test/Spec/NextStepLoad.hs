@@ -3,10 +3,7 @@
 --
 -- Extracted from the Spec.hs monolith (#271) via the function-export shape.
 module Spec.NextStepLoad
-  ( testNextStepCleanLoad
-  , testNextStepTypedHoleWarn
-  , testNextStepFixableWarn
-  , testCabalBootstrapLibrary
+  ( testCabalBootstrapLibrary
   , testGhcSessionPersists
   , testGhcSessionBoots
   ) where
@@ -37,64 +34,8 @@ import GHC.Utils.Outputable (showPprUnsafe)
 
 -- | When the 'warnings' array is empty, 'dispatch' proposes
 -- 'ghc_suggest' — the clean-compile follow-up.
-testNextStepCleanLoad :: IO Bool
-testNextStepCleanLoad =
-  let payload = A.object
-        [ "success"  A..= True
-        , "errors"   A..= ([] :: [Text])
-        , "warnings" A..= ([] :: [Text])
-        ]
-  in pure $ case suggestNext GhcLoad True payload of
-       Just ns -> nsTool ns == GhcSuggest
-       Nothing -> False
-
--- | A typed-hole warning routes to 'ghc_hole' (which knows how
--- to surface expected types + in-scope fits).
-testNextStepTypedHoleWarn :: IO Bool
-testNextStepTypedHoleWarn =
-  let payload = A.object
-        [ "success"  A..= True
-        , "errors"   A..= ([] :: [Text])
-        , "warnings" A..=
-            [ A.object
-                [ "message" A..=
-                    ("Found hole: _ :: Int\n  Valid hole fits include …"
-                     :: Text)
-                , "severity" A..= ("warning" :: Text)
-                ]
-            ]
-        ]
-  in pure $ case suggestNext GhcLoad True payload of
-       Just ns -> nsTool ns == GhcHole
-       Nothing -> False
-
--- | A non-hole warning (unused-imports, type-defaults, …) routes
--- to 'ghc_fix_warning' — the auto-patch tool.
-testNextStepFixableWarn :: IO Bool
-testNextStepFixableWarn =
-  let payload = A.object
-        [ "success"  A..= True
-        , "errors"   A..= ([] :: [Text])
-        , "warnings" A..=
-            [ A.object
-                [ "message" A..=
-                    ("Defaulting the type variable 'a0' to type 'Integer'"
-                     :: Text)
-                , "severity" A..= ("warning" :: Text)
-                ]
-            ]
-        ]
-  in pure $ case suggestNext GhcLoad True payload of
-       Just ns -> nsTool ns == GhcFixWarning
-       Nothing -> False
-
--- | Wave-1 gate: drive cabal via the shim against a real project
--- and verify we get back a non-empty flag set that includes the
--- expected package-db paths. Uses '/tmp/bench-project' (created
--- during the Phase-2 benchmark work) as a minimal test fixture.
--- If that dir isn't there — e.g. on CI before the benchmark has
--- been run — we skip gracefully by returning True.
 testCabalBootstrapLibrary :: IO Bool
+
 testCabalBootstrapLibrary = case mkProjectDir "/tmp/bench-project" of
   Left _   -> pure True   -- malformed path shouldn't happen, skip
   Right pd -> do
@@ -125,7 +66,9 @@ testCabalBootstrapLibrary = case mkProjectDir "/tmp/bench-project" of
 -- If this ever starts failing, the fix is to host GHC in a
 -- dedicated thread (HLS/ghcid pattern) rather than invoking 'runGhc'
 -- per call. Better to discover that here than 6 tools into Phase 2.
+
 testGhcSessionPersists :: IO Bool
+
 testGhcSessionPersists = case mkProjectDir "/tmp" of
   Left _   -> pure False
   Right pd -> do
@@ -149,7 +92,9 @@ testGhcSessionPersists = case mkProjectDir "/tmp" of
 --
 -- No modules are loaded here — Phase 2 will layer that in when real
 -- tool handlers (type, info) migrate.
+
 testGhcSessionBoots :: IO Bool
+
 testGhcSessionBoots = case mkProjectDir "/tmp" of
   Left _   -> pure False
   Right pd -> do

@@ -1,7 +1,7 @@
 <div align="center">
 
 # 🌀 haskell-flows
-haskell-rules-and-mcp is an MCP server that turns "LLMs that write plausible Haskell" into "LLMs that write correct Haskell." It provides 31 tools over a single in-process GHC session, combining property-first law suggestion (8 engines), QuickCheck verification, and snapshot-verified refactors. Every response follows one normative envelope with structured errors and a nextStep pointer.
+haskell-rules-and-mcp is an MCP server that turns "LLMs that write plausible Haskell" into "LLMs that write correct Haskell." It provides 13 tools over a single in-process GHC session, combining property-first law suggestion (8 engines), QuickCheck verification, and snapshot-verified refactors. Every response follows one normative envelope with structured errors and a nextStep pointer.
 
 ### **Property-first Haskell, driven by your AI agent.**
 
@@ -11,7 +11,7 @@ haskell-rules-and-mcp is an MCP server that turns "LLMs that write plausible Has
 [![Nix flake](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/nix-flake.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/nix-flake.yml)
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
 
-[![MCP tools](https://img.shields.io/badge/MCP%20tools-31-blue?logo=anthropic)](mcp-server-haskell/src/HaskellFlows/Tool)
+[![MCP tools](https://img.shields.io/badge/MCP%20tools-13-blue?logo=anthropic)](mcp-server-haskell/src/HaskellFlows/Tool)
 [![Unit tests](https://img.shields.io/badge/unit%20tests-700%2B%20passing-brightgreen)](mcp-server-haskell/test/Spec.hs)
 [![E2E scenarios](https://img.shields.io/badge/e2e%20scenarios-72-brightgreen)](mcp-server-haskell/test-e2e/Scenarios)
 [![GHC](https://img.shields.io/badge/GHC-9.10%20%7C%209.12-8a5aa0?logo=haskell)](https://www.haskell.org/ghc/)
@@ -24,7 +24,7 @@ haskell-rules-and-mcp is an MCP server that turns "LLMs that write plausible Has
 
 ## ⚡ The 30-second story
 
-Plug into Claude Code, Cursor, or any MCP host. Your agent gets **31 tools** that share **one in-process GHC session** and **one normative response envelope** — every call answers with the same structured shape, every gate is honest, every refactor verifies-or-rolls-back.
+Plug into Claude Code, Cursor, or any MCP host. Your agent gets **13 tools** that share **one in-process GHC session** and **one normative response envelope** — every call answers with the same structured shape, every gate is honest, every refactor verifies-or-rolls-back.
 
 ```text
 ghc_project(create) ─▶ ghc_modules ─▶ ghc_load

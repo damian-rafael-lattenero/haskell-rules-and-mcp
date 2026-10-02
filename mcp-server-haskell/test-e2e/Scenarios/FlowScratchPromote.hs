@@ -43,11 +43,11 @@ runFlow c _projectDir = do
          (object [ "action" .= ("create" :: Text)
                  , "name"   .= ("scratch-promote-demo" :: Text)
                  ])
-  _ <- Client.callTool c GhcLoad (object [ "module_path" .= modPath ])
+  _ <- Client.callTool c GhcCheck (object [ "action" .= ("load" :: Text), "module_path" .= modPath ])
 
   -- Step 1 — write a Prelude-only declaration; expect an Open entry id.
   t0 <- stepHeader 1 "ghc_scratch write persists an entry"
-  wR <- Client.callTool c GhcScratch
+  wR <- Client.callTool c GhcModule
           (object [ "action" .= ("write" :: Text)
                   , "code"   .= declCode
                   , "kind"   .= ("hypothesis" :: Text)
@@ -64,7 +64,7 @@ runFlow c _projectDir = do
 
   -- Step 2 — check it: the declaration must type-check.
   t1 <- stepHeader 2 "ghc_scratch check verifies the declaration"
-  kR <- Client.callTool c GhcScratch
+  kR <- Client.callTool c GhcModule
           (object [ "action" .= ("check" :: Text)
                   , "id"     .= entryId
                   ])
@@ -80,7 +80,7 @@ runFlow c _projectDir = do
   -- so the code is appended to the end of the file; snapshot-and-compile-
   -- verify commits because the Prelude-only binding keeps it compiling.
   t2 <- stepHeader 3 "ghc_scratch promote splices + verifies"
-  pR <- Client.callTool c GhcScratch
+  pR <- Client.callTool c GhcModule
           (object [ "action"        .= ("promote" :: Text)
                   , "id"            .= entryId
                   , "target_module" .= modPath
@@ -96,7 +96,7 @@ runFlow c _projectDir = do
   -- Step 4 — reload: the spliced binding must compile, proving promote
   -- wrote valid code (not just that it reported success).
   t3 <- stepHeader 4 "promoted module reloads clean"
-  rl <- Client.callTool c GhcLoad (object [ "module_path" .= modPath ])
+  rl <- Client.callTool c GhcCheck (object [ "action" .= ("load" :: Text), "module_path" .= modPath ])
   let okReload = statusOk rl == Just True
   cReload <- liveCheck $ checkPure
     "ghc_load on the promoted module succeeds"
@@ -106,7 +106,7 @@ runFlow c _projectDir = do
 
   -- Step 5 — the entry's status must now be 'promoted' in the store.
   t4 <- stepHeader 5 "scratch list shows the entry promoted"
-  lR <- Client.callTool c GhcScratch (object [ "action" .= ("list" :: Text) ])
+  lR <- Client.callTool c GhcModule (object [ "action" .= ("list" :: Text) ])
   let okList = statusOk lR == Just True && promotedCount lR >= 1
   cList <- liveCheck $ checkPure
     "list → counts.promoted >= 1"

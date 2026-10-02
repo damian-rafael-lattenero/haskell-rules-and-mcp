@@ -66,10 +66,10 @@ runFlow c projectDir = do
   _ <- Client.callTool c GhcProject
          (object [ "action" .= ("create" :: Text), "name" .= ("damp-demo" :: Text) ])
   TIO.writeFile (projectDir </> "src" </> "DampDemo.hs") moduleSrc
-  _ <- Client.callTool c GhcModules
+  _ <- Client.callTool c GhcModule
          (object [ "action" .= ("add" :: Text), "modules" .= (["DampDemo"] :: [Text]) ])
-  _ <- Client.callTool c GhcLoad
-         (object [ "module_path" .= ("src/DampDemo.hs" :: Text) ])
+  _ <- Client.callTool c GhcCheck
+         (object [ "action" .= ("load" :: Text), "module_path" .= ("src/DampDemo.hs" :: Text) ])
 
   -- Step 2 — ask suggest. The 'Self-inverse on lists'
   -- suggestion (if surfaced) MUST be Low, not Medium.

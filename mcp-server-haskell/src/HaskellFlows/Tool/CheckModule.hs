@@ -5,8 +5,7 @@
 -- 'loadForTarget' Deferred → hole warnings; property replay via
 -- 'Regression.runOne' (which itself is in-process Wave-3).
 module HaskellFlows.Tool.CheckModule
-  ( descriptor
-  , handle
+  ( handle
   , runHandle
   , CheckArgs (..)
     -- * Issue #42 — properties-gate computation
@@ -62,48 +61,6 @@ import HaskellFlows.Types
   )
 import HaskellFlows.Tool.Env (ToolEnv (..))
 
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText GhcCheckModule
-    , tdDescription =
-        "PURPOSE: Aggregate every module-health gate (compiles? errors? "
-          <> "warnings? typed holes? stored properties pass?) into one "
-          <> "pass/fail report. "
-          <> "WHEN: after editing a module, to confirm it is clean before "
-          <> "moving on. "
-          <> "WHEN NOT: ghc_check_project for whole-project health; ghc_gate "
-          <> "for the tests + build pre-push composite. "
-          <> "PREREQUISITES: a module path in the active project. "
-          <> "OUTPUT: {gates:{compiles, warnings, holes, properties}, "
-          <> "overall}. "
-          <> "SEE ALSO: ghc_check_project, ghc_lint, ghc_gate."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "module_path" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Path to the module to check, relative to the \
-                       \project directory." :: Text)
-                  ]
-              , "warnings_block" .= object
-                  [ "type"        .= ("boolean" :: Text)
-                  , "description" .=
-                      ("When true (default), '-Wall' warnings count \
-                       \against 'overall' — the strict pre-push gate. \
-                       \Set false during early iteration to keep \
-                       \warnings informational; they still appear in \
-                       \'diagnostics.warnings' but don't fail the \
-                       \gate. Errors and hole/regression gates are \
-                       \always blocking." :: Text)
-                  ]
-              ]
-          , "required"             .= ["module_path" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data CheckArgs = CheckArgs
   { caModulePath    :: !Text

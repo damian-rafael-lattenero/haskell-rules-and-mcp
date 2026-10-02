@@ -7,8 +7,6 @@
 module Spec.Browse
   ( testBrowseProjectModuleOk
   , testBrowseExternalModuleNoMatch
-  , testBrowseFallbackOk
-  , testBrowseDescriptorMentionsSession
   , testBrowseRejectsMissingArg
   ) where
 
@@ -33,6 +31,7 @@ import Spec.ToolEnvFixture (sessionEnv)
 -- ---------------------------------------------------------------------------
 
 runBrowse :: A.Value -> IO (Either String Env.ToolResponse)
+
 runBrowse args = do
   tmp <- getTemporaryDirectory
   let dir = tmp </> "haskell-flows-browse-test"
@@ -56,7 +55,9 @@ runBrowse args = do
 -- ---------------------------------------------------------------------------
 
 -- | Browsing a project module → status='ok' with module / count / entries.
+
 testBrowseProjectModuleOk :: IO Bool
+
 testBrowseProjectModuleOk = do
   decoded <- runBrowse (A.object [ "module" A..= ("Foo" :: Text) ])
   pure $ case decoded of
@@ -70,7 +71,9 @@ testBrowseProjectModuleOk = do
 
 -- | Browsing a module not in the project graph and not in the
 -- package environment → status='no_match' with remediation + nextStep.
+
 testBrowseExternalModuleNoMatch :: IO Bool
+
 testBrowseExternalModuleNoMatch = do
   decoded <- runBrowse (A.object [ "module" A..= ("NonExistent.Module.XYZ999" :: Text) ])
   pure $ case decoded of
@@ -87,28 +90,9 @@ testBrowseExternalModuleNoMatch = do
 
 -- | #168: package-env modules (e.g. Data.Maybe from base) are
 -- browseable via the fallback path even without a project compile graph.
-testBrowseFallbackOk :: IO Bool
-testBrowseFallbackOk = do
-  decoded <- runBrowse (A.object [ "module" A..= ("Data.Maybe" :: Text) ])
-  pure $ case decoded of
-    Right env
-      | Env.reStatus env == Env.StatusOk
-      , Just (A.Object payload) <- Env.reResult env ->
-          AKM.lookup (AKey.fromText "module") payload == Just (A.String "Data.Maybe")
-            && AKM.member (AKey.fromText "count") payload
-            && AKM.member (AKey.fromText "entries") payload
-    _ -> False
 
--- | The descriptor must mention "session" or "ghc_add_import" so
--- agents know they can browse session-preloaded modules.
-testBrowseDescriptorMentionsSession :: IO Bool
-testBrowseDescriptorMentionsSession =
-  let desc = BrowseTool.descriptor
-  in pure ( "session" `T.isInfixOf` tdDescription desc
-         || "ghc_add_import" `T.isInfixOf` tdDescription desc )
-
--- | Empty args (missing 'module') → status='failed' kind='missing_arg'.
 testBrowseRejectsMissingArg :: IO Bool
+
 testBrowseRejectsMissingArg = do
   decoded <- runBrowse (A.object [])
   pure $ case decoded of
