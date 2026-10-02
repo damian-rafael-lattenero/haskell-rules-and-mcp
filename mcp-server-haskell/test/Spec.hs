@@ -106,11 +106,6 @@ import HaskellFlows.Mcp.ToolName
   , toolVersion
   , toolNameText
   )
-import HaskellFlows.Mcp.ErrorKind
-  ( ErrorKind (..)
-  , parseErrorKind
-  , renderErrorKind
-  )
 import HaskellFlows.Mcp.RpcMethod
   ( RpcMethod (..)
   , allRpcMethods
@@ -797,11 +792,6 @@ runAllTests = do
       , test "ToolName: wire forms unique"          testToolNameWireUnique
       , test "ToolName: wire forms snake_case"      testToolNameSnakeCase
       , test "ToolName: allToolNames is exhaustive" testToolNameExhaustive
-      , test "ErrorKind: render-parse round-trip"   testErrorKindRoundTrip
-      , test "ErrorKind: parse rejects unknown"     testErrorKindParseUnknown
-      , test "ErrorKind: wire forms unique"         testErrorKindWireUnique
-      , test "ErrorKind: covers timeout/exhausted/exception"
-          testErrorKindCoversThree
       , test "RpcMethod: render-parse round-trip"   testRpcMethodRoundTrip
       , test "RpcMethod: parse rejects unknown"     testRpcMethodParseUnknown
       , test "RpcMethod: wire forms unique"         testRpcMethodWireUnique

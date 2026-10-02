@@ -11,14 +11,11 @@
 -- primitive. This collapses four wire surfaces to one and aligns
 -- with the previous mergers' pattern.
 --
--- (Note: 'HaskellFlows.Tool.PropertyLifecycle' had the same
--- shape as @action=list@ on the legacy 'ghc_regression'; the
--- consolidated @list@ branch routes to 'Regression.handle' with
--- @action=list@ so the wire shape (including the @action@ field)
--- is byte-identical to the legacy 'ghc_regression(action=list)'
--- caller. 'PropertyLifecycle.handle' is no longer reachable through
--- this surface but is kept exported because some unit tests still
--- exercise it directly.)
+-- (History: a fifth sibling, HaskellFlows.Tool.PropertyLifecycle, had
+-- the same shape as @action=list@ on the legacy 'ghc_regression'; it
+-- became unreachable after this consolidation and was deleted in the
+-- 2026-10 cleanup audit — zero importers, stale "tests still exercise
+-- it" justification.)
 --
 -- #275: dispatch now lives HERE in 'handle' (next to the tool it
 -- discriminates, consistent with ghc_deps / ghc_modules / ghc_workflow)

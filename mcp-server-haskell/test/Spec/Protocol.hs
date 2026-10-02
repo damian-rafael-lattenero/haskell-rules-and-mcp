@@ -12,10 +12,6 @@ module Spec.Protocol
   , testToolNameWireUnique
   , testToolNameSnakeCase
   , testToolNameExhaustive
-  , testErrorKindRoundTrip
-  , testErrorKindParseUnknown
-  , testErrorKindWireUnique
-  , testErrorKindCoversThree
   , testRpcMethodRoundTrip
   , testRpcMethodParseUnknown
   , testRpcMethodWireUnique
@@ -30,11 +26,6 @@ import Data.Char (isAsciiLower, isDigit)
 import Data.Maybe (isNothing)
 import qualified Data.Text as T
 
-import HaskellFlows.Mcp.ErrorKind
-  ( ErrorKind (..)
-  , parseErrorKind
-  , renderErrorKind
-  )
 import HaskellFlows.Mcp.ResourceUri
   ( ResourceUri (..)
   , allResourceUris
@@ -126,46 +117,6 @@ testToolNameExhaustive :: IO Bool
 testToolNameExhaustive = pure $
      length allToolNames >= 30
   && length allToolNames == length allToolNameTexts
-
--- ---------------------------------------------------------------------------
--- ErrorKind (#45)
--- ---------------------------------------------------------------------------
-
--- | Bijection: every ErrorKind round-trips through its text form.
--- This is the wire contract for tool-error responses; if any
--- constructor's text drifts, the LLM's classifier breaks.
-testErrorKindRoundTrip :: IO Bool
-testErrorKindRoundTrip =
-  let kinds = [Timeout, SessionExhausted, ToolException]
-  in pure $ all (\k -> parseErrorKind (renderErrorKind k) == Just k) kinds
-
--- | Unknown error_kind strings must not parse — protects against
--- silent classification of fresh failure modes as known ones.
-testErrorKindParseUnknown :: IO Bool
-testErrorKindParseUnknown = pure $
-     isNothing (parseErrorKind "")
-  && isNothing (parseErrorKind "unknown")
-  && isNothing (parseErrorKind "TIMEOUT")           -- case-sensitive
-  && isNothing (parseErrorKind "session-exhausted") -- hyphen vs underscore
-
--- | The three kinds must produce three distinct wire strings.
--- Uniqueness check: deduplicate the list and assert the length is
--- preserved.
-testErrorKindWireUnique :: IO Bool
-testErrorKindWireUnique =
-  let kinds = [Timeout, SessionExhausted, ToolException]
-      texts = map renderErrorKind kinds
-      uniq  = foldr (\x acc -> if x `elem` acc then acc else x:acc) [] texts
-  in pure (length uniq == length texts && length uniq == 3)
-
--- | The wire strings are exactly the three documented constants.
--- This is the literal contract surfaced to the agent in tool-error
--- responses.
-testErrorKindCoversThree :: IO Bool
-testErrorKindCoversThree = pure $
-     renderErrorKind Timeout          == "timeout"
-  && renderErrorKind SessionExhausted == "session_exhausted"
-  && renderErrorKind ToolException    == "tool_exception"
 
 -- ---------------------------------------------------------------------------
 -- RpcMethod

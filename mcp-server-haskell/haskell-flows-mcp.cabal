@@ -44,7 +44,6 @@ library
     exposed-modules:  HaskellFlows
                       HaskellFlows.Types
                       HaskellFlows.Mcp.Envelope
-                      HaskellFlows.Mcp.ErrorKind
                       HaskellFlows.Mcp.Guidance
                       HaskellFlows.Mcp.Logging
                       HaskellFlows.Mcp.NextStep
@@ -105,7 +104,6 @@ library
                       HaskellFlows.Tool.Imports
                       HaskellFlows.Tool.Info
                       HaskellFlows.Tool.Lint
-                      HaskellFlows.Tool.PropertyLifecycle
                       HaskellFlows.Tool.Load
                       HaskellFlows.Tool.Move
                       HaskellFlows.Tool.DepsExplain
@@ -177,14 +175,6 @@ executable haskell-flows-mcp
 --  library's session bootstrap before any unit test had a chance to
 --  observe it.
 -- --------------------------------------------------------------------------
-executable spike-ghc-api
-    import:           shared
-    main-is:          GhcApiSpike.hs
-    hs-source-dirs:   spike
-    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
-    build-depends:    base              >= 4.20 && < 5
-                    , ghc               >= 9.10 && < 9.15
-                    , ghc-paths         >= 0.1  && < 0.2
 
 test-suite haskell-flows-mcp-test
     import:           shared
