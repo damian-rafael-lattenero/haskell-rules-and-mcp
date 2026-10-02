@@ -32,8 +32,9 @@ module HaskellFlows.Ghc.IdeSession
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.STM (atomically)
-import Control.Exception (SomeException, try)
+import Control.Exception (SomeException, evaluate, try)
 import Control.Monad (forever, forM)
+import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value, object, (.=))
 import Data.Char (isSpace, toLower)
 import Data.List (find, sort)
@@ -170,7 +171,12 @@ ideEvalExprIn s anchor extraImports expr = do
         (map (IIDecl . simpleImportDecl . mkModuleName . T.unpack)
              (extraImports ++ ["Prelude"]))
       hv <- compileExpr (T.unpack expr)
-      pure (unsafeCoerce hv :: String)
+      -- F30: the String comes back as a thunk — without forcing it here
+      -- the expression would only run when the envelope serializes it,
+      -- outside the 30s budget. Force the full render inside the window.
+      let s = unsafeCoerce hv :: String
+      _ <- liftIO (evaluate (length s))
+      pure s
 
 -- | Type of an expression in the component context of the anchor file.
 ideTypeOfExprIn :: IdeSession -> FilePath -> Text -> IO (Either Text Text)

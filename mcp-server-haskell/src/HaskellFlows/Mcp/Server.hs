@@ -10,7 +10,7 @@
 -- the value under a transaction so a mid-flight @tools/call@ can not see
 -- a half-switched project.
 module HaskellFlows.Mcp.Server
-  ( Server
+  ( Server (..)
   , defaultServer
   , serverFor
   , handleRequest

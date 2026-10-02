@@ -7,9 +7,11 @@
 -- the flag is additive and defaults to the legacy backend.
 module HaskellFlows.Tool.IdeBacked
   ( routeIde
+  , warmupIdeSession
   ) where
 
 import Control.Concurrent.MVar (MVar, modifyMVar)
+import Control.Monad (void)
 import Data.Aeson (Value, object, withObject, (.=), (.:))
 import Data.Aeson.Key (Key)
 import Data.Aeson.Types (parseEither)
@@ -38,18 +40,29 @@ import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 -- | Get-or-boot the ghcide session under the MVar (first caller boots,
 -- everyone else reuses — same single-writer shape as 'srvGhcSession').
+-- The handler itself runs OUTSIDE the MVar: a slow tool call must never
+-- hold the boot lock (that would serialize every ghcide-backed call).
 withIdeSession
   :: MVar (Maybe IdeSession)
   -> IORef ProjectDir
   -> (IdeSession -> IO ToolResponse)
   -> IO ToolResponse
-withIdeSession ref pdRef k =
-  modifyMVar ref $ \m -> do
-    s <- case m of
-      Just s -> pure s
-      Nothing -> bootIdeSession =<< readIORef pdRef
-    r <- k s
-    pure (Just s, r)
+withIdeSession ref pdRef k = do
+  s <- modifyMVar ref $ \case
+    Just s -> pure (Just s, s)
+    Nothing -> do
+      s <- bootIdeSession =<< readIORef pdRef
+      pure (Just s, s)
+  k s
+
+-- | Boot the ghcide session in the background (idempotent — shares the
+-- MVar singleton). Used by the transport warmup so the first tool call
+-- on the ghcide backend arrives warm.
+warmupIdeSession :: MVar (Maybe IdeSession) -> IORef ProjectDir -> IO ()
+warmupIdeSession ref pdRef =
+  void (withIdeSession ref pdRef (\_ -> pure mkWarmupAck))
+  where
+    mkWarmupAck = mkOk (object ["warmup" .= ("ghcide" :: Text)])
 
 -- | Nothing for tools the ghcide backend does not serve (yet).
 routeIde
@@ -94,6 +107,13 @@ handleCheck pdRef raw s = case argField "module_path" raw of
               )
           )
 
+-- | Distinguish timeouts from compile failures in the eval/type
+-- envelopes — the budget tripping is not a compile error.
+budgetErrorKind :: Text -> ErrorKind
+budgetErrorKind err
+  | "timeout" `T.isInfixOf` T.toLower err = InnerTimeout
+  | otherwise = CompileError
+
 handleEval :: Value -> IdeSession -> IO ToolResponse
 handleEval raw s = case argField "expression" raw of
   Left err -> pure (mkFailed (mkErrorEnvelope MissingArg (T.pack err)))
@@ -101,7 +121,7 @@ handleEval raw s = case argField "expression" raw of
     anchor <- anchorModuleIn s
     r <- ideEvalExprIn s anchor [] ("show (" <> expr <> ")")
     case r of
-      Left err -> pure (mkFailed (mkErrorEnvelope CompileError err))
+      Left err -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) err))
       Right out ->
         pure
           ( mkOk
@@ -120,5 +140,5 @@ handleType raw s = case argField "expression" raw of
     anchor <- anchorModuleIn s
     r <- ideTypeOfExprIn s anchor expr
     case r of
-      Left err -> pure (mkFailed (mkErrorEnvelope CompileError err))
+      Left err -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) err))
       Right ty -> pure (mkOk (object ["type" .= ty, "backend" .= ("ghcide" :: Text)]))

@@ -321,6 +321,7 @@ import HaskellFlows.Ghc.CabalBootstrap
   , bootstrapProject
   )
 import HaskellFlows.Ghc.IdeSession (hieYamlFromCabal)
+import HaskellFlows.Mcp.Transport (deliverOnce)
 import qualified HaskellFlows.Ghc.ApiSession as ApiSession
 import qualified Data.Map.Strict as Map
 import GHC
@@ -2017,6 +2018,9 @@ runAllTests = do
       ]
       ++ scratchTests
       ++ ideBackendTests
+      ++ [ test "F2: deliverOnce — first delivery wins, second is a no-op" testDeliverOnceFirstWins
+         , test "F2: deliverOnce runs the winner's action" testDeliverOnceRunsWinnerAction
+         ]
   pure (and results)
 
 
@@ -2078,3 +2082,22 @@ testHieYamlRejectsNameless =
   case hieYamlFromCabal "library\n    exposed-modules: X\n" of
     Left msg -> pure ("name" `T.isInfixOf` T.pack msg)
     Right _  -> pure False
+
+-- ---------------------------------------------------------------------------
+-- F2 — concurrent transport (HaskellFlows.Mcp.Transport)
+-- ---------------------------------------------------------------------------
+
+testDeliverOnceFirstWins :: IO Bool
+testDeliverOnceFirstWins = do
+  gate <- newMVar ()
+  r1 <- deliverOnce gate (pure ())
+  r2 <- deliverOnce gate (pure ())
+  pure (r1 && not r2)
+
+testDeliverOnceRunsWinnerAction :: IO Bool
+testDeliverOnceRunsWinnerAction = do
+  gate <- newMVar ()
+  ref <- newIORef False
+  _ <- deliverOnce gate (writeIORef ref True)
+  _ <- deliverOnce gate (writeIORef ref False)
+  readIORef ref
