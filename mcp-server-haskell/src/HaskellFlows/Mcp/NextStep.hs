@@ -524,10 +524,9 @@ dispatch name payload = case name of
   GhcCheckProject -> Just (chained GhcGate
     "Project-wide gate is green. Run ghc_gate for the pre-push \
     \finalizer (regression + cabal test + cabal build in one call). \
-    \Coverage is the optional follow-up."
+    \"
     Nothing
     [ step GhcGate     (object [])
-    , step GhcCoverage (object [])
     ])
 
   -- #94 Phase C: toolchain (status or warmup) — if everything green, go build.
@@ -568,20 +567,6 @@ dispatch name payload = case name of
   -- Gate passed → green to push. On fail, drill in per module.
   GhcGate -> Just (gateNext payload)
 
-  -- Issue #61 Phase 2: baseline persistence is live.
-  -- If the caller set save_baseline=true the mean is now persisted;
-  -- the canonical follow-up is a second run with compare_baseline=true
-  -- to detect regressions. For first-time profiling, recommend saving.
-  GhcPerf -> Just (simple GhcPerf
-    "Phase 2: use save_baseline=true to persist this mean_ns, then \
-    \compare_baseline=true on the next run to detect regressions \
-    \(>10% slower triggers status='refused'). Run with a different \
-    \implementation to compare wall-clock performance."
-    (Just (object
-        [ "expression"       .= ("<same expression>" :: Text)
-        , "compare_baseline" .= True
-        ])))
-
   -- Issue #59 Phase 2: verify_patch is live.
   -- Error explained → record the proposed fix in the scratchpad so
   -- the user can see the reasoning and the LLM can type-check the
@@ -609,33 +594,6 @@ dispatch name payload = case name of
             ]
         ])
     ])
-
-  -- Issue #60 + chain: the audit just persisted a new batch of
-  -- properties. A pairwise audit catches contradictions with the
-  -- prior set BEFORE the project gate replays them, then the
-  -- check_project replay confirms cross-module consistency.
-  GhcLab -> Just (chained GhcPropertyStore
-    "Module audit completed and persisted new properties. The chain \
-    \first audits the store for pairwise contradictions with prior \
-    \entries, then replays the full project gate so cross-module \
-    \regressions surface in the same round-trip."
-    (Just (object [ "action" .= ("audit" :: Text) ]))
-    [ step GhcPropertyStore (object [ "action" .= ("audit" :: Text) ])
-    , step GhcCheckProject  (object [])
-    ])
-
-
-  -- Issue #65 Phase 1: witness already emitted its own nextStep
-  -- pointing back at ghc_quickcheck (re-run without instrumentation
-  -- to confirm the pass/fail signal). The dispatcher hint here is
-  -- a backstop — when the runtime payload carries no nextStep we
-  -- still want to nudge the agent towards the canonical follow-up.
-  GhcWitness -> Just (simple GhcQuickCheck
-    "Witness reported a distribution and any biased buckets. Re-run \
-    \the property with ghc_quickcheck (or tighten the Arbitrary \
-    \instance) so the next pass/fail signal reflects an unbiased \
-    \input space."
-    Nothing)
 
   -- Issue #62: a successful move was already verified via the
   -- internal loadForTarget; the agent's next reasonable check is
@@ -705,10 +663,6 @@ dispatch name payload = case name of
   -- Definition site located → surface the prose contract via Haddock.
   -- On no_match, the name is not in scope: redirect to hoogle_search. (#185)
   GhcInfo
-    | statusNoMatch_ payload -> Just (simple HoogleSearch
-        "Name not found in interactive scope — hoogle_search discovers \
-        \names across Hackage and surfaces the module to import."
-        (Just (object [ "query" .= echoField "name" "<the name you looked up>" payload ])))
     | otherwise -> Just (simple GhcDoc
         "Definition + kind + instances are in. ghc_doc retrieves the \
         \Haddock block (if any) for the contract / corner-cases the \
@@ -751,10 +705,6 @@ dispatch name payload = case name of
   -- When the name WAS found (found_in_scope=true or status=ok + hasDoc=false),
   -- ghc_info is more useful than hoogle_search (which searches Hackage).
   GhcDoc
-    | statusNoMatch_ payload -> Just (simple HoogleSearch
-        "Name not found in Haddock — hoogle_search discovers names \
-        \across Hackage and surfaces the module to import."
-        (Just (object [ "query" .= echoField "name" "<the name you looked up>" payload ])))
     | hasDocFalse payload -> Just (simple GhcInfo
         "Name is in scope but has no doc string. ghc_info returns the \
         \type, definition site, and instances in one call — more useful \
@@ -773,32 +723,6 @@ dispatch name payload = case name of
       \definition site, and instances in a single call."
       (Just (object [ "name" .= ("<one of the candidates above>" :: Text) ])))
     _              -> Nothing
-
-  -- Hoogle hits → chain into ghc_add_import to scaffold the import.
-  -- Suppressed on zero hits (no candidates to import).
-  HoogleSearch -> case intField "count" payload of
-    Just n | n > 0 -> Just (chained GhcAddImport
-      "Hoogle hits include the module each name lives in. \
-      \ghc_add_import scaffolds the import; reload to confirm \
-      \the missing-symbol error is gone."
-      (Just (object [ "name" .= ("<one of the hit names>" :: Text) ]))
-      [ step GhcAddImport
-          (object [ "name" .= ("<one of the hit names>" :: Text) ])
-      , step GhcLoad
-          (object [ "module_path" .= ("<your entry module>" :: Text) ])
-      ])
-    _              -> Nothing
-
-  -- Coverage report read → ghc_gate is the next pre-push step.
-  -- Suppressed on degraded status (failed coverage = surface the
-  -- error, not a generic forward-chain).
-  GhcCoverage
-    | not (statusOk_ payload) -> Nothing
-    | otherwise -> Just (simple GhcGate
-        "Coverage report read. ghc_gate is the next pre-push finalizer \
-        \(regression + cabal test + cabal build in one shot). On green, \
-        \you're clear to commit + push."
-        Nothing)
 
   -- #253: ghc_scratch — action-discriminated. The dispatcher picks the
   -- next step based on which action just ran (read off the @action@
@@ -950,7 +874,7 @@ projectNext payload
 -- unblocked; on red, the agent should narrow down per module.
 gateNext :: Value -> NextStep
 gateNext payload
-  | gatePassed payload = simple GhcCoverage
+  | gatePassed payload = simple GhcCheckProject
       (gateGreenText payload)
       Nothing
   | otherwise = simple GhcCheckProject

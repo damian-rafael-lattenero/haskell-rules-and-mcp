@@ -354,7 +354,7 @@ testSessionActivityUnusedCount = do
   s <- WS.readState ref
   let total  = length allToolNameTexts
       unused = total - Set.size (WS.wsEverCalled s)
-  pure $ total == 36 && unused == 34
+  pure $ total == 31 && unused == 29
 
 -- | #261: pathToModule derives the module name from a target path,
 -- dropping a leading conventional source dir.

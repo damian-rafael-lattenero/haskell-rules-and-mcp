@@ -110,9 +110,6 @@ situationTable =
   , SituationRow "fix a GHC warning"
                  GhcFixWarning
                  "module_path=\"src/X.hs\", line=12, code=\"GHC-66111\""
-  , SituationRow "coverage report"
-                 GhcCoverage
-                 "(no args, 8 HPC metrics)"
   , SituationRow "lint (matches CI)"
                  GhcLint
                  "path=\"src/\""

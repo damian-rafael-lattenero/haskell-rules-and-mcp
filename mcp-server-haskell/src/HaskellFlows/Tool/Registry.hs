@@ -45,7 +45,6 @@ import qualified HaskellFlows.Tool.Browse          as BrowseTool
 import qualified HaskellFlows.Tool.CheckModule     as CheckModuleTool
 import qualified HaskellFlows.Tool.CheckProject    as CheckProjectTool
 import qualified HaskellFlows.Tool.Complete        as CompleteTool
-import qualified HaskellFlows.Tool.Coverage        as CoverageTool
 import qualified HaskellFlows.Tool.Deps            as DepsTool
 import qualified HaskellFlows.Tool.Doc             as DocTool
 import qualified HaskellFlows.Tool.Eval            as EvalTool
@@ -58,11 +57,9 @@ import qualified HaskellFlows.Tool.Hole            as HoleTool
 import qualified HaskellFlows.Tool.Hoogle          as HoogleTool
 import qualified HaskellFlows.Tool.Imports         as ImportsTool
 import qualified HaskellFlows.Tool.Info            as InfoTool
-import qualified HaskellFlows.Tool.Lab             as LabTool
 import qualified HaskellFlows.Tool.Lint            as LintTool
 import qualified HaskellFlows.Tool.Load            as Load
 import qualified HaskellFlows.Tool.Modules         as ModulesTool
-import qualified HaskellFlows.Tool.Perf            as PerfTool
 import qualified HaskellFlows.Tool.Project         as ProjectTool
 import qualified HaskellFlows.Tool.PropertyStore   as PropertyStoreTool
 import qualified HaskellFlows.Tool.QuickCheck      as QcTool
@@ -71,7 +68,6 @@ import qualified HaskellFlows.Tool.Scratch         as ScratchTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
 import qualified HaskellFlows.Tool.Toolchain       as ToolchainTool
 import qualified HaskellFlows.Tool.Type            as TypeTool
-import qualified HaskellFlows.Tool.Witness         as WitnessTool
 import qualified HaskellFlows.Tool.Workflow        as WorkflowTool
 
 ------------------------------------------------------------------------
@@ -139,11 +135,6 @@ registry =
       (Just (ToolBudget 200  500   Nothing     "template generation from :i output; pure"))
       ArbitraryTool.handle
 
-  , ToolSpec HoogleSearch     CatPrimitive     (toolVersion HoogleSearch)
-      HoogleTool.descriptor
-      (Just (ToolBudget 200 1000   Nothing     "hoogle subprocess; includes fork+exec overhead"))
-      HoogleTool.handle
-
   , ToolSpec GhcWorkflow      CatControlPlane  (toolVersion GhcWorkflow)
       WorkflowTool.descriptor
       (Just (ToolBudget  50  200   Nothing     "inventory scan; no GHCi interaction"))
@@ -153,11 +144,6 @@ registry =
       CheckModuleTool.descriptor
       (Just (ToolBudget 500 1500   Nothing     "strict load + warning gate + property replay"))
       CheckModuleTool.handle
-
-  , ToolSpec GhcCoverage      CatComposite     (toolVersion GhcCoverage)
-      CoverageTool.descriptor
-      (Just (ToolBudget 5000 10000 Nothing     "full test rebuild with HPC instrumentation; subprocess-heavy"))
-      CoverageTool.handle
 
   , ToolSpec GhcComplete      CatPrimitive     (toolVersion GhcComplete)
       CompleteTool.descriptor
@@ -197,25 +183,10 @@ registry =
         \(multi-file moves dominate the upper bound)"))
       RefactorTool.handle
 
-  , ToolSpec GhcLab           CatComposite     (toolVersion GhcLab)
-      LabTool.descriptor
-      (Just (ToolBudget 5000 15000 Nothing     "per-binding suggest + QC across whole module; scales with module size"))
-      LabTool.handle
-
   , ToolSpec GhcExplainError  CatPrimitive     (toolVersion GhcExplainError)
       ExplainErrorTool.descriptor
       (Just (ToolBudget 200  500   Nothing     "diagnostic evidence package + optional patch verify roundtrip"))
       ExplainErrorTool.handle
-
-  , ToolSpec GhcPerf          CatPrimitive     (toolVersion GhcPerf)
-      PerfTool.descriptor
-      (Just (ToolBudget 3000 8000  Nothing     "expression eval x30 samples via cabal-repl harness"))
-      PerfTool.handle
-
-  , ToolSpec GhcWitness       CatPrimitive     (toolVersion GhcWitness)
-      WitnessTool.descriptor
-      (Just (ToolBudget 4000 10000 Nothing     "property eval x1000 with distribution labelling; cabal-repl harness"))
-      WitnessTool.handle
 
   , ToolSpec GhcBatch         CatComposite     (toolVersion GhcBatch)
       BatchTool.descriptor

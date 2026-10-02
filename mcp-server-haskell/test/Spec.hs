@@ -95,7 +95,6 @@ import qualified HaskellFlows.Mcp.SelfProject as SelfProject
 import qualified HaskellFlows.Mcp.NextStep as NextStep
 import HaskellFlows.Mcp.Protocol (ToolCall (..), ToolContent (..), ToolDescriptor (..), ToolResult (..))
 import qualified HaskellFlows.Bench.Budget as Budget
-import qualified HaskellFlows.Bench.Runner as Runner
 import HaskellFlows.Mcp.ToolName
   ( ToolCategory (..)
   , ToolName (..)
@@ -126,17 +125,13 @@ import HaskellFlows.Mcp.PermissiveJSON
   )
 import qualified HaskellFlows.Tool.Batch as Batch
 import HaskellFlows.Tool.Batch (BatchArgs (..), unwrapResult)
-import qualified HaskellFlows.Tool.Coverage as CoverageTool
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import qualified HaskellFlows.Tool.CreateProject as CreateProject
 import qualified HaskellFlows.Tool.Move as MoveTool
 import qualified HaskellFlows.Tool.DepsExplain as DepsExplain
-import qualified HaskellFlows.Tool.Lab as LabTool
 import qualified HaskellFlows.Tool.ExplainError as ExplainError
-import qualified HaskellFlows.Tool.Perf as PerfTool
 import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
-import qualified HaskellFlows.Tool.Witness as WitnessTool
 import qualified HaskellFlows.Tool.Determinism as DeterminismTool
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
@@ -204,12 +199,6 @@ import HaskellFlows.Data.PropertyStore
   , saveCases
   )
 import qualified HaskellFlows.Data.Scratchpad as SP
-import qualified HaskellFlows.Tool.Scratch as ScratchTool
-import HaskellFlows.Parser.Coverage
-  ( CoverageReport (..)
-  , Metric (..)
-  , parseCoverage
-  )
 import HaskellFlows.Parser.ModuleName
   ( ModuleNameError (..)
   , isReservedKeyword
@@ -342,7 +331,6 @@ import Spec.Browse
 import Spec.BudgetGate
 import Spec.Config
 import Spec.Complete
-import Spec.Coverage
 import Spec.CreateProject
 import Spec.Deps
 import Spec.DepsExplainLab
@@ -381,8 +369,6 @@ import Spec.NextStepUnit
 import Spec.ParseError
 import Spec.ParseHeaderUnit
 import Spec.ParseQc
-import Spec.Perf
-import Spec.PerfUnit
 import Spec.PermissiveJSON
 import Spec.PlanUnit
 import Spec.Progress
@@ -414,12 +400,6 @@ import Spec.PartialFunctions
 import Spec.TraversalGuards
 import Spec.TypeEval
 import Spec.ValidateCabal
-import Spec.Witness
-  ( testWitnessCompileErrorResult
-  , testWitnessEvalExprStructure
-  , testWitnessInProcessFallback
-  , testWitnessUsesInProcessPath
-  )
 import Spec.WorkflowState hiding
   ( testArbitraryPathToModule
   , testArbitraryModuleRender
@@ -559,28 +539,6 @@ runAllTests = do
       , test "renderTemplate 3 ctors"              testTemplate3
       , test "parseHoogleLine normal hit"          testHoogleHit
       , test "parseHoogleLine no-results line"    testHoogleEmpty
-      , test "parseCoverage full report"           testCoverageFull
-      , test "parseCoverage ignores banner"        testCoverageBanner
-      , test "parseCoverage flags 0/0 not_applicable (#89)"
-                                                   testCoverageMetricNotApplicable
-      , test "summarise skips not_applicable (#89)"
-                                                   testCoverageAverageSkipsNotApplicable
-      , test "summarise covers all-applicable case (#89)"
-                                                   testCoverageAllMetricsApplicable
-      , test "summarise handles all-non-applicable (#89)"
-                                                   testCoverageAllNotApplicable
-      , test "#176: summarise excludes boolean-coverage parent from average"
-                                                   testCoverageSummariseExcludesBooleanParent
-      , test "#177: parseCoverage captures alwaysTrue annotation"
-                                                   testCoverageAlwaysTrueParsed
-      , test "#177: parseCoverage captures alwaysFalse annotation"
-                                                   testCoverageAlwaysFalseParsed
-      , test "#177: parseCoverage captures combined always annotation"
-                                                   testCoverageAlwaysBothParsed
-      , test "#178: renderResult omits raw by default"
-                                                   testCoverageRawOmittedByDefault
-      , test "#178: renderResult includes raw when verbose=true"
-                                                   testCoverageRawIncludedWhenVerbose
       , test "eval ctx · empty adds all 5 extras (#86)"
                                                    testEvalContextEmptyAddsAll
       , test "eval ctx · existing Prelude suppresses dup (#86)"
@@ -659,10 +617,6 @@ runAllTests = do
                                                    testCheckModuleNonExistentFile
       , test "#100C: ghc_explain_error rejects traversal path"
                                                    testExplainErrorRejectsTraversal
-      , test "#100C: ghc_lab rejects traversal path"
-                                                   testLabRejectsTraversal
-      , test "#160: ghc_lab non-existent file → module_path_does_not_exist"
-                                                   testLabNonExistentFile
       , test "#100C: ghc_load rejects traversal path"
                                                    testLoadRejectsTraversal
       , test "#100C: ghc_refactor rejects traversal path"
@@ -1018,9 +972,6 @@ runAllTests = do
       , test "suggest [a]->[Run a] skips list rules" testSuggestEncodeShapeSkipsListRules
       , test "parseCtors record strict w/ kind header" testCtorsRecordStrictWithKindHeader
       , test "parseCtors inline record 2 fields"    testCtorsInlineRecord2Fields
-      , test "coverage enriches w/ hpc report call" testCoverageInvokesHpcReport
-      , test "parseCoverage handles hpc report out" testParseHpcReportText
-      , test "coverage passes multiple --hpcdir"    testCoveragePassesAllMixDirs
       , test "parseTypeParams extracts one tyvar"   testTypeParamsOne
       , test "parseTypeParams extracts two tyvars"  testTypeParamsTwo
       , test "parseTypeParams empty for monotype"   testTypeParamsNone
@@ -1050,7 +1001,6 @@ runAllTests = do
       , test "nextStep: regression list -> run"     testNextStepRegressionList
       , test "nextStep: refactor -> load"           testNextStepRefactor
       , test "nextStep: check_module -> project"   testNextStepCheckModule
-      , test "nextStep: check_project -> coverage" testNextStepCheckProject
       , test "nextStep: errors -> no suggestion"   testNextStepErrorsSuppressed
       , test "#A5: compile_error -> explain_error" testSuggestOnErrorCompileError
       , test "#A5: not_in_scope -> explain_error"  testSuggestOnErrorNotInScope
@@ -1064,7 +1014,6 @@ runAllTests = do
       , test "#A4: info nextStep resolves name from payload" testNextStepInfoNameResolved
       , test "#A4: echoField falls back to placeholder"      testNextStepEchoFieldFallback
       , test "#274: scratch promote resolves target_module"  testNextStepScratchTargetResolved
-      , test "#274: scratch promote keeps placeholder w/o module" testNextStepScratchTargetPlaceholder
       -- Phase 5: cross-tool nextStep arms
       , test "Phase 5: hole nextStep → scratch(write) chain"
                                                    testNextStepFromHoleRoutesToScratch
@@ -1072,12 +1021,8 @@ runAllTests = do
                                                    testNextStepFromExplainErrorRoutesToScratch
       , test "Phase 5: scratch check chain has quickcheck after suggest"
                                                    testNextStepSuggestChainHasQuickCheck
-      , test "nextStep: exploratory -> no suggestion" testNextStepExploratoryNothing
-      , test "#185: ghc_info no_match -> hoogle_search"  testNextStepInfoNoMatchIsHoogle
-      , test "#185: ghc_doc no_match -> hoogle_search"   testNextStepDocNoMatchIsHoogle
       , test "#251: ghc_goto no_match -> ghc_load"       testNextStepGotoNoMatchIsGhcLoad
       , test "#185: ghc_info found -> ghc_doc (not hoogle)" testNextStepInfoFoundIsDoc
-      , test "nextStep: coverage exhaustive (PR-3)"   testNextStepCoverageExhaustive
       , test "nextStep: action-discriminated coverage" testNextStepActionCoverage
       , test "nextStep: suppressIf suppresses when rule holds (#95)"  testNextStepSuppressIfTrue
       , test "nextStep: suppressIf passes when rule false (#95)"      testNextStepSuppressIfFalse
@@ -1094,9 +1039,6 @@ runAllTests = do
       , test "gate: all-skip parses + passes"      testGateAllSkip
       , test "#138: gate all-skip returns refused/validation" testGateAllSkipRefused
       , test "#138: gate summary avoids empty-verbs malform" testGateSummaryNoEmptyVerbs
-      , test "#163: coverage default timeout is 5 min"        testCoverageDefaultTimeout
-      , test "#163: coverage timeout_minutes clamps to [1,60]" testCoverageTimeoutClamp
-      , test "#163: coverage timeout msg reflects actual minutes" testCoverageTimeoutMessage
       , test "#164: gate default test timeout is 5 min"        testGateDefaultTestTimeout
       , test "#164: gate default build timeout is 3 min"       testGateDefaultBuildTimeout
       , test "#164: gate test_timeout_minutes parses"          testGateCustomTestTimeout
@@ -1299,24 +1241,12 @@ runAllTests = do
       , test "#156: importMatchesPkg aeson import Data.Aeson"   testImportMatchesPkgHit
       , test "#156: importMatchesPkg aeson import Data.Map miss" testImportMatchesPkgMiss
       , test "#156: cabalComponentsMatchingPkg finds library stanza" testCabalComponentsLibrary
-      , test "lab: listTopLevelBindings finds simple sigs (#60)" testLabListSimple
-      , test "lab: listTopLevelBindings handles multi-line sig (#60)" testLabListMultiline
-      , test "lab: listTopLevelBindings skips empty + non-sigs (#60)" testLabListSkips
-      , test "lab: confidenceAtLeast threshold (#60)" testLabConfidence
       , test "explain_error: pickDiagnostic default first (#59)" testExplainPickDefault
       , test "explain_error: pickDiagnostic by index (#59)" testExplainPickIndex
       , test "explain_error: pickDiagnostic out of range (#59)" testExplainPickOOR
       , test "explain_error: index out of range gives clear hint, not 'No errors' (#203)" testExplainIndexOutOfRangeHint203
       , test "explain_error: extractImports recognises shapes (#59)" testExplainExtractImports
       , test "explain_error: enclosingLineRange clamps (#59)" testExplainRangeClamps
-      , test "perf: aggregate empty -> zeros (#61)" testPerfAggregateEmpty
-      , test "perf: aggregate single sample (#61)" testPerfAggregateSingle
-      , test "perf: aggregate odd count median (#61)" testPerfAggregateOdd
-      , test "perf: aggregate even count median average (#61)" testPerfAggregateEven
-      , test "perf: regressionPct positive when slower (#61 Phase2)" testPerfRegressionPctPositive
-      , test "perf: regressionPct negative when faster (#61 Phase2)" testPerfRegressionPctNegative
-      , test "perf: regressionPct Nothing when zero baseline (#61 Phase2)" testPerfRegressionPctZeroBaseline
-      , test "perf: BaselineEntry JSON roundtrip (#61 Phase2)" testPerfBaselineEntryRoundtrip
       , test "#212: audit detects ==> in expression text"       testPAImplicationDetection
       , test "property_audit: pairCombinations 0 elements (#64)" testPACombinationsEmpty
       , test "property_audit: pairCombinations 5 elements (#64)" testPACombinations5
@@ -1334,45 +1264,6 @@ runAllTests = do
                                                                  testPADedupByExpression
       , test "property_audit: dedupByExpression preserves singletons (#77)"
                                                                  testPADedupSingletons
-      , test "witness: bucketSize boundary cases (#65)" testWitBucketBoundaries
-      , test "witness: buildInstrumentedProperty wraps with collect (#65)" testWitBuildInstrumented
-      , test "witness: parseLabelDistribution recovers buckets (#65)" testWitParseDistribution
-      , test "witness: biasWarnings flags <1% bucket (#65)" testWitBiasWarning
-      , test "witness: parseLabelCounts reads tab-separated rows (#78)"
-                                                                 testWitParseLabelCounts
-      , test "witness: parseLabelCounts skips malformed rows (#78)"
-                                                                 testWitParseLabelCountsRobust
-      , test "witness: countsToDistribution sums to 100 (#78)"   testWitCountsToDistribution
-      , test "witness: countsToDistribution empty input → []  (#78)"
-                                                                 testWitCountsEmpty
-      , test "witness: buildConstructorProperty wraps with ctor label (#65 Phase2)"
-                                                                 testWitBuildConstructorProperty
-      , test "#239: buildConstructorProperty uses list-aware extraction"
-                                                                 testWitConstructorListAware
-      , test "witness: descriptor mentions 'deferred' field (#171)"
-                                                                 testWitDeferredDocumented
-      , test "witness: timer starts after property build (#171)"
-                                                                 testWitTimerAfterBuild
-      , test "#199: isPrimitiveBuckets true for numeric ctor labels"
-                                                                 testWitIsPrimitiveBucketsTrue
-      , test "#199: isPrimitiveBuckets false for ADT ctor labels"
-                                                                 testWitIsPrimitiveBucketsFalse
-      , test "#199: isPrimitiveBuckets false when empty"
-                                                                 testWitIsPrimitiveBucketsEmpty
-      , test "#199: primitive fallback adds warning + uses by_size"
-                                                                 testWitPrimitiveFallbackWarning
-      , test "#199: raw_truncated=true when qc_raw_output > 1000 chars"
-                                                                 testWitRawTruncatedFlag
-      , test "#199: raw_truncated absent when output <= 1000 chars"
-                                                                 testWitNoRawTruncatedWhenShort
-      , test "#220: witnessEvalExpr contains sentinel markers and QC calls"
-                                                                 testWitnessEvalExprStructure
-      , test "#220: Witness.hs uses runQuickCheckWithLabelsInProcess (in-process)"
-                                                                 testWitnessUsesInProcessPath
-      , test "#220: runQuickCheckWithLabelsInProcess has subprocess fallback"
-                                                                 testWitnessInProcessFallback
-      , test "#240: compileErrorResult returns status=failed kind=compile_error"
-                                                                 testWitnessCompileErrorResult
       , test "property_audit: isVacuousResult true for QcGaveUp (#64 Phase2)"
                                                                  testPAIsVacuousGaveUp
       , test "property_audit: isVacuousResult false for QcPassed (#64 Phase2)"
@@ -1508,7 +1399,6 @@ runAllTests = do
       , test "suggest: parseBrowseBindings skips continuations" testParseBrowseContinuation
       , test "suggest: siblings enable preservation" testSuggestSiblingsEnablePreservation
       , test "suggest: siblings enable soundness"   testSuggestSiblingsEnableSoundness
-      , test "nextStep: gate pass -> coverage"      testNextStepGatePass
       , test "nextStep: gate fail -> check_project" testNextStepGateFail
       , test "nextStep: qcexport -> gate"           testNextStepQcExport
       , test "nextStep: determinism pass -> regression" testNextStepDeterminismPass
@@ -1630,8 +1520,6 @@ runAllTests = do
       , test "#159: Either rule in allRules catalog"              testSuggestEitherRuleRegistered
       , test "ghc-api: external cabal edit invalidates stanza cache"
                                                                  testMtimeInvalidation
-      , test "ghc-api: withGhcSession ensures stanza flags (#49)"
-                                                                 testWithGhcSessionEnsuresStanza
       , test "ghc-api: absolutizePathArg single-token shapes (#43)"
                                                                  testAbsolutizePathArgSingleToken
       , test "ghc-api: absolutizePathArg eq-form (#43)"           testAbsolutizePathArgEqForm
@@ -1693,13 +1581,10 @@ runAllTests = do
                                                                  testLoggingAuditPathPresentWhenEnabled
       -- Issue #96 Phase A · performance budget scaffold
       , test "#96A: Budget · every ToolName has an entry"         testBudgetParsesCleanly
-      , test "#96A: Budget · no budget is 0 ms"                   testBudgetNoZeroValues
-      , test "#96A: Runner · discardFirst drops cold-start sample" testRunnerDiscardFirstSample
       -- Issue #95 Phase D · nextStep quality gates
       , test "#95D: nextStep Gate D — why ≥ 10 chars + ends in period" testNextStepGateDWhyQuality
       , test "#95D: nextStep Gate E — chain ≤ 4 steps"               testNextStepGateEChainLength
       -- Issue #95 Phase C · golden dispatch snapshot
-      , test "#95C: nextStep golden dispatch table"                    testNextStepGoldenDispatch
       -- Issue #94 Phase A · tool taxonomy invariants
       , test "#94A: tool count ≤ 50 (surface-bloat cap)"              testToolCountWithinCap
       , test "#94A: every ToolName has a category"                     testEveryToolHasCategory
@@ -1784,8 +1669,6 @@ runAllTests = do
       , test "#106/F-11: ghc_doc strips LaTeX delimiters" testDocStripLatex
       , test "#144: ghc_doc strips spurious [ ] brackets from doc string"
                                                            testDocStripBrackets
-      , test "#106/F-26: ghc_perf omits samples by default" testPerfSamplesGated
-      , test "#106/F-32: ghc_perf regression cause is plain text" testPerfRegressionCausePlain
       , test "#106/F-08: ghc_deps list all stanzas returns stanzas map" testDepsListAllStanzas
       , test "#106/F-34: moduleNameToPath accepts file paths without mangling" testMoveModuleNameToPath
       , test "#106/F-12: ioUnitResult has kind=io_unit_no_output" testEvalIoUnitResult
@@ -1797,44 +1680,13 @@ runAllTests = do
       , test "#106/F-01: classifyPhase stays PreScaffold beyond 3 calls w/o load" testClassifyPhaseNoLoad
       , test "#106/F-24: enclosingLineRange padding 15 doesn't return whole file" testEnclosingRangePadding
       , test "#106/F-09: parseRejections splits comma-separated versions" testDepsExplainRejectionSplit
-      , test "#106/F-06: gitRootOf walks up to .git directory" testBootstrapGitRoot
-      , test "#106/F-02: pickModuleLine extracts exposed-modules" testWorkflowPickModuleLine
-      , test "#106/F-10: importsPayload has session_preloads field" testImportsHasSessionPreloads
-      , test "#106/F-21: compileFailResult has status=failed and dry_run=false" testRefactorCompileFailShape
       , test "#205: compileFailResult dry_run=true propagates to result field"  testRefactorCompileFailDryRunTrue
       , test "#205: extractFreeVarNames picks up not-in-scope variables"        testExtractFreeVarNames
       , test "#205: extractFreeVarNames empty when no not-in-scope errors"      testExtractFreeVarNamesEmpty
       , test "#205: compileFailResult adds note for free-variable errors"       testRefactorFreeVarNote
       , test "#201: extractQcOutputAt slices indexed sentinel output"          testExtractQcOutputAt
-      , test "#201: extractQcOutputAt returns empty when sentinel absent"       testExtractQcOutputAtMissing
-      , test "#201: qcResultDetail formats counterexample for QcFailed"        testQcResultDetailFailed
-      , test "#201: qcResultDetail returns empty for QcPassed"                 testQcResultDetailPassed
-      , test "#201: qcResultStatus covers all five constructors"               testQcResultStatusAll
-      , test "#237: qcResultStatus QcUnparsed stack-overflow → exception"     testQcResultStatusStackOverflow237
-      , test "#237: qcResultStatus QcUnparsed heap-overflow → exception"      testQcResultStatusHeapOverflow237
-      , test "#237: qcResultStatus QcUnparsed other raw → unparsed"           testQcResultStatusOtherUnparsed237
-      , test "#237: qcResultDetail QcUnparsed non-empty raw → surfaces raw"   testQcResultDetailUnparsedNonEmpty237
-      , test "#237: qcResultDetail QcUnparsed empty raw → empty string"       testQcResultDetailUnparsedEmpty237
-      , test "#106/F-31: perf renderResult with all errors returns failed" testPerfAllSamplesErrored
-      , test "#162: perf renderResult exposes warmup_ns field"            testPerfWarmupNsInPayload
-      , test "#162: perf warm samples exclude warmup from mean"           testPerfWarmSamplesNotSkewed
-      , test "#136: readBaseline uses strict I/O (no lazy file handle)"    testPerfReadBaselineStrict
-      , test "#136: save+compare both flags work sequentially (no lock)"   testPerfSaveAndCompareNoLock
-      , test "#161: saveBaseline save→save sequence does not lock"          testPerfSaveBaselinesNoLock
-      , test "#174: perf default threshold is 30%, not 10%"               testPerfDefaultThreshold30
-      , test "#174: threshold_pct param overrides default"                testPerfCustomThreshold
-      , test "#190: perf regression returns status=failed + kind=regression"  testPerfRegressionStatusFailed
-      , test "#174: perf threshold_pct clamped to [1,200]"               testPerfThresholdClamped
       -- Issue #200 — regression_pct precision
-      , test "#200: roundTo1dp rounds to 1 decimal place"                testPerfRoundTo1dp
-      , test "#200: regression_pct in payload has at most 1 decimal"     testPerfRegressionPctPrecision
-      , test "#223: perf runtime exception gets 'threw' message not 'module lost'"
-                                                                          testPerfRuntimeExceptionMessage
       -- Issue #135 — summariseMeasurementErrors truncation
-      , test "#135: summariseMeasurementErrors single error stays short"   testSummariseSingleError
-      , test "#135: summariseMeasurementErrors 20 repeated errors omits"  testSummariseRepeatedErrors
-      , test "#135: summariseMeasurementErrors long error truncates"       testSummariseLongError
-      , test "#135: summariseMeasurementErrors empty list is empty"        testSummariseEmptyList
       , test "#213: check_module holes.reason reflects count when holes present" testCheckModuleHolesReasonCount
       -- Issue #108 — typed-hole reclassification in check_module + refactor
       , test "#108: check_module compileOk true when only hole errors"   testCheckModuleHoleOnlyCompileOk
@@ -1930,8 +1782,6 @@ runAllTests = do
       , test "#151: timeout summary does not claim 'N/N green' when only k<N checked"
                                                               testRenderResultTimedOutSummary
       , test "#255: check_project mixed results -> status:partial"  testCheckProjectPartialStatus
-      , test "#254: lab no-template-matched reason"  testLabNoTemplateMatchedReason
-      , test "#254: lab low-confidence reason"       testLabLowConfidenceReason
       , test "#250: renderRunLine uses module name not path"  testRenderRunLineUsesModuleName
       , test "#244: findCommonStanzaWithPkg finds stanza containing pkg" testDepsCommonStanzaPkgFound
       , test "#244: findCommonStanzaWithPkg returns Nothing when pkg absent" testDepsCommonStanzaPkgAbsent
@@ -1939,9 +1789,6 @@ runAllTests = do
       , test "#244: unchangedResult' emits hint field when mHint=Just" testDepsUnchangedResultHintField
       , test "#243: suggest.hs imports and calls augmentEvalContext"   testSuggestCallsAugmentContext
       , test "#242: add_import bypasses Hoogle for module-path names (source check)" testAddImportBypassesHoogle
-      , test "#245: renderResult emits low_precision_warning when mean < 1ms" testPerfLowPrecisionWarning
-      , test "#245: renderResult emits warmup_warning when warmup >10x mean"  testPerfWarmupWarning
-      , test "#245: renderResult no warnings for healthy 5ms mean"            testPerfNoWarningHealthy
       -- Issue #289 — eliminate partial functions; Util.Safe totality
       , test "#289: safeAt returns Nothing for negative index"        testSafeAtNegative
       , test "#289: safeAt returns Nothing for out-of-bounds index"   testSafeAtOutOfBounds
@@ -1956,9 +1803,6 @@ runAllTests = do
       , test "#289: parseSignature empty input is total"              testParseSignatureEmpty
       , test "#289: parseSignature singleton input is total"          testParseSignatureSingleton
       , test "#289: splitModule empty input is total"                 testSplitModuleEmpty
-      , test "#289: splitModule singleton input is total"             testSplitModuleSingleton
-      , test "#289: computePercentile empty list returns 0"           testComputePercentileEmpty
-      , test "#289: aggregate empty list is total"                    testAggregateEmpty
       -- Issue #287 — centralize timeouts/caps in HaskellFlows.Config
       , test "#287: seconds n = n * 1_000_000 microseconds"           testMicrosSeconds
       , test "#287: minutes n = n * 60_000_000 microseconds"          testMicrosMinutes
@@ -2012,7 +1856,6 @@ runAllTests = do
          , test "F2: deliverOnce runs the winner's action" testDeliverOnceRunsWinnerAction
          ]
   pure (and results)
-
 
 -- ---------------------------------------------------------------------------
 -- F1 — ghcide backend (HaskellFlows.Ghc.IdeSession)

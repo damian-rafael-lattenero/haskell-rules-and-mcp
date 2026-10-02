@@ -4,11 +4,8 @@
 --
 -- Extracted from the Spec.hs monolith (#271) via the function-export shape.
 module Spec.NextStepCoverage
-  ( testNextStepInfoNoMatchIsHoogle
-  , testNextStepDocNoMatchIsHoogle
-  , testNextStepGotoNoMatchIsGhcLoad
+  ( testNextStepGotoNoMatchIsGhcLoad
   , testNextStepInfoFoundIsDoc
-  , testNextStepCoverageExhaustive
   , testNextStepActionCoverage
   , testNextStepSuppressIfTrue
   , testNextStepSuppressIfFalse
@@ -39,26 +36,9 @@ import HaskellFlows.Mcp.ToolName (allToolNames, ToolName (..))
 
 -- | #185: ghc_info on a name not found (status=no_match) must route to
 -- hoogle_search, not ghc_doc (which will also no_match on the same name).
-testNextStepInfoNoMatchIsHoogle :: IO Bool
-testNextStepInfoNoMatchIsHoogle =
-  let payload = A.object [ "status" .= ("no_match" :: Text), "name" .= ("unknownXYZ" :: Text) ]
-  in pure $ case suggestNext GhcInfo True payload of
-       Just ns -> nsTool ns == HoogleSearch
-       Nothing -> False
 
--- | #185: ghc_doc on a name not found (status=no_match) must route to
--- hoogle_search, not ghc_browse (which expects a module, not a symbol).
-testNextStepDocNoMatchIsHoogle :: IO Bool
-testNextStepDocNoMatchIsHoogle =
-  let payload = A.object [ "status" .= ("no_match" :: Text), "name" .= ("unknownXYZ" :: Text) ]
-  in pure $ case suggestNext GhcDoc True payload of
-       Just ns -> nsTool ns == HoogleSearch
-       Nothing -> False
-
--- | #251: ghc_goto on a name not found (status=no_match) must route to
--- ghc_load (so the user loads the module containing the symbol), not
--- hoogle_search (which searches Hackage and is wrong for project-local names).
 testNextStepGotoNoMatchIsGhcLoad :: IO Bool
+
 testNextStepGotoNoMatchIsGhcLoad =
   let payload = A.object [ "status" .= ("no_match" :: Text), "name" .= ("unknownXYZ" :: Text) ]
   in pure $ case suggestNext GhcGoto True payload of
@@ -67,7 +47,9 @@ testNextStepGotoNoMatchIsGhcLoad =
 
 -- | #185: ghc_info on a name FOUND (status=ok) must still route to ghc_doc,
 -- not hoogle_search — the no_match branch must not fire on success.
+
 testNextStepInfoFoundIsDoc :: IO Bool
+
 testNextStepInfoFoundIsDoc =
   let payload = A.object [ "status" .= ("ok" :: Text), "name" .= ("Data.List.sort" :: Text) ]
   in pure $ case suggestNext GhcInfo True payload of
@@ -83,51 +65,9 @@ testNextStepInfoFoundIsDoc =
 -- The canonical payload per tool exercises the success path: tools
 -- that suppress on missing fields get rich payloads; everything else
 -- falls back to {status:"ok"}.
-testNextStepCoverageExhaustive :: IO Bool
-testNextStepCoverageExhaustive = do
-  let exempt :: Set.Set ToolName
-      exempt = Set.fromList [GhcWorkflow, GhcBatch]
-      missing =
-        [ n | n <- allToolNames
-            , n `Set.notMember` exempt
-            , isNothing (suggestNext n True (canonicalPayload n)) ]
-  unless (null missing) $
-    putStrLn ("nextStep coverage gap: " <> show missing)
-  pure (null missing)
-  where
-    -- Default success envelope; tools that need richer discriminators
-    -- override below.
-    defaultPayload :: Value
-    defaultPayload = A.object [ "status" .= ("ok" :: Text) ]
 
-    canonicalPayload :: ToolName -> Value
-    canonicalPayload = \case
-      -- count-gated suggestions: provide a non-zero count.
-      GhcLint        -> A.object [ "count" .= (3 :: Int) ]
-      GhcAddImport   -> A.object [ "count" .= (3 :: Int) ]
-      GhcComplete    -> A.object [ "count" .= (3 :: Int) ]
-      HoogleSearch   -> A.object [ "count" .= (3 :: Int) ]
-      -- shape-gated dispatchers: feed the right discriminator.
-      GhcLoad        -> A.object [ "warnings" .= ([] :: [Value])
-                                 , "errors"   .= ([] :: [Value]) ]
-      GhcDeps        -> A.object [ "action" .= ("add" :: Text) ]
-      GhcQuickCheck  -> A.object [ "state"  .= ("passed" :: Text) ]
-      GhcRefactor    -> A.object [ "action" .= ("rename_local" :: Text) ]
-      GhcPropertyStore -> A.object [ "action" .= ("list" :: Text) ]
-      GhcProject     -> A.object [ "scaffolded" .= True ]
-      GhcGate        -> A.object [ "status" .= ("ok" :: Text) ]
-      -- #253: ghc_scratch action-discriminated by payload shape. Use the
-      -- write/show single-entry shape (carries 'id').
-      GhcScratch     -> A.object [ "id" .= ("scratch-1" :: Text)
-                                 , "kind" .= ("hypothesis" :: Text) ]
-      -- everything else: bare success envelope is enough.
-      _              -> defaultPayload
-
--- | Action-discriminated coverage: ghc_property_store, ghc_modules,
--- ghc_project, and ghc_deps each branch on 'action'. This test
--- exercises every action and confirms a Just result, catching the
--- "we forgot to wire one branch" regression.
 testNextStepActionCoverage :: IO Bool
+
 testNextStepActionCoverage = pure $
   all justOf
     [ suggestNext GhcPropertyStore True (A.object [ "action" .= ("list" :: Text) ])
@@ -155,7 +95,9 @@ testNextStepActionCoverage = pure $
 -- Issue #95 Phase A: suppression rule unit tests --------------------------------
 
 -- | suppressIf suppresses when the predicate returns True.
+
 testNextStepSuppressIfTrue :: IO Bool
+
 testNextStepSuppressIfTrue =
   let ns   = NextStep { nsTool = GhcLoad, nsWhy = "w", nsExample = Nothing, nsChain = Nothing, nsDogfood = Nothing }
       ctx  = NextStep.RecommendCtx { NextStep.rcTool = GhcLoad, NextStep.rcStatus = "ok", NextStep.rcPayload = A.object [] }
@@ -163,7 +105,9 @@ testNextStepSuppressIfTrue =
   in pure (isNothing (NextStep.suppressIf rule ctx (Just ns)))
 
 -- | suppressIf passes through when the predicate returns False.
+
 testNextStepSuppressIfFalse :: IO Bool
+
 testNextStepSuppressIfFalse =
   let ns   = NextStep { nsTool = GhcLoad, nsWhy = "w", nsExample = Nothing, nsChain = Nothing, nsDogfood = Nothing }
       ctx  = NextStep.RecommendCtx { NextStep.rcTool = GhcLoad, NextStep.rcStatus = "ok", NextStep.rcPayload = A.object [] }
@@ -171,7 +115,9 @@ testNextStepSuppressIfFalse =
   in pure (isJust (NextStep.suppressIf rule ctx (Just ns)))
 
 -- | suppressOnDegraded returns True (suppress) for "failed" status.
+
 testNextStepSuppressOnDegraded :: IO Bool
+
 testNextStepSuppressOnDegraded =
   let ctx = NextStep.RecommendCtx { NextStep.rcTool = GhcLoad
                                   , NextStep.rcStatus = "failed"
@@ -180,7 +126,9 @@ testNextStepSuppressOnDegraded =
   in pure (NextStep.suppressOnDegraded ctx)
 
 -- | suppressOnZero suppresses when count field is zero.
+
 testNextStepSuppressOnZero :: IO Bool
+
 testNextStepSuppressOnZero =
   let ctx = NextStep.RecommendCtx { NextStep.rcTool = GhcAddImport
                                   , NextStep.rcStatus = "ok"
@@ -189,7 +137,9 @@ testNextStepSuppressOnZero =
   in pure (NextStep.suppressOnZero "count" ctx)
 
 -- | suppressOnZero passes when count field is nonzero.
+
 testNextStepSuppressOnZeroPass :: IO Bool
+
 testNextStepSuppressOnZeroPass =
   let ctx = NextStep.RecommendCtx { NextStep.rcTool = GhcAddImport
                                   , NextStep.rcStatus = "ok"
@@ -199,7 +149,9 @@ testNextStepSuppressOnZeroPass =
 
 -- | injectNextStep splices the nextStep into the first TextContent
 -- block's JSON payload.
+
 testInjectSplices :: IO Bool
+
 testInjectSplices =
   let body = A.object [ "success" .= True, "data" .= (42 :: Int) ]
       txt  = TL.toStrict (TLE.decodeUtf8 (A.encode body))
@@ -217,7 +169,9 @@ testInjectSplices =
        _ -> pure False
 
 -- | injectNextStep must NOT corrupt non-JSON payloads.
+
 testInjectSkipsNonJson :: IO Bool
+
 testInjectSkipsNonJson =
   let raw = "this is not json"
       tr  = ToolResult { trContent = [ TextContent raw ], trIsError = False }

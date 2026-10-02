@@ -70,18 +70,12 @@ allBudgets = Map.fromList
   , ( GhcArbitrary
     , ToolBudget 200  500   Nothing
         "template generation from :i output; pure")
-  , ( HoogleSearch
-    , ToolBudget 200 1000   Nothing
-        "hoogle subprocess; includes fork+exec overhead")
   , ( GhcWorkflow
     , ToolBudget  50  200   Nothing
         "inventory scan; no GHCi interaction")
   , ( GhcCheckModule
     , ToolBudget 500 1500   Nothing
         "strict load + warning gate + property replay")
-  , ( GhcCoverage
-    , ToolBudget 5000 10000 Nothing
-        "full test rebuild with HPC instrumentation; subprocess-heavy")
   , ( GhcComplete
     , ToolBudget  50  200   Nothing
         ":complete repl; cached env")
@@ -157,18 +151,9 @@ allBudgets = Map.fromList
         \(300/1000 with cabal-repl per-property cost) dominate; \
         \'list'/'export' are pure I/O. We pick 1000/3000 as the \
         \action-agnostic upper bound to avoid per-action thresholds.")
-  , ( GhcLab
-    , ToolBudget 5000 15000 Nothing
-        "per-binding suggest + QC across whole module; scales with module size")
   , ( GhcExplainError
     , ToolBudget 200  500   Nothing
         "diagnostic evidence package + optional patch verify roundtrip")
-  , ( GhcPerf
-    , ToolBudget 3000 8000  Nothing
-        "expression eval x30 samples via cabal-repl harness")
-  , ( GhcWitness
-    , ToolBudget 4000 10000 Nothing
-        "property eval x1000 with distribution labelling; cabal-repl harness")
   , ( GhcModules
     , ToolBudget 100  300   Nothing
         "#94 Phase B: action-discriminated successor to ghc_add_modules / \

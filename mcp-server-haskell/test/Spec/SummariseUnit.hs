@@ -4,11 +4,7 @@
 --
 -- Extracted from the Spec.hs monolith (#271) via the function-export shape.
 module Spec.SummariseUnit
-  ( testSummariseSingleError
-  , testSummariseRepeatedErrors
-  , testSummariseLongError
-  , testSummariseEmptyList
-  , testCheckModuleHolesReasonCount
+  ( testCheckModuleHolesReasonCount
   , testCheckModuleHoleOnlyCompileOk
   , testCheckModuleRealErrorsExcludesHoles
   , testRefactorPreExistingHolesExcluded
@@ -27,7 +23,6 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
-import qualified HaskellFlows.Tool.Perf as PerfTool
 import HaskellFlows.Mcp.Progress (noopSink)
 import HaskellFlows.Types (mkProjectDir)
 
@@ -39,52 +34,8 @@ import Spec.Helpers (withTempProject)
 
 -- | #135: a single short error is presented as "First error (1/1): …"
 -- with no omit note and total length well under 600 chars.
-testSummariseSingleError :: IO Bool
-testSummariseSingleError = do
-  let msg    = "Could not load module 'Foo'" :: T.Text
-      result = PerfTool.summariseMeasurementErrors [msg]
-  pure $ T.isInfixOf "First error (1/1):" result
-      && T.isInfixOf msg result
-      && not (T.isInfixOf "omitted" result)
-      && T.length result < 600
-
--- | #135: 20 identical errors are collapsed to one line with
--- "[19 similar errors omitted]" and total length < 600 chars.
-testSummariseRepeatedErrors :: IO Bool
-testSummariseRepeatedErrors = do
-  let msg    = "Could not load module 'GHC.Types.Error'" :: T.Text
-      errs   = replicate 20 msg
-      result = PerfTool.summariseMeasurementErrors errs
-  pure $ T.isInfixOf "First error (1/20):" result
-      && T.isInfixOf "19 similar errors omitted" result
-      && T.length result < 600
-
--- | #135: an error longer than 500 chars is truncated with a [truncated]
--- note and the result stays under 600 chars.
-testSummariseLongError :: IO Bool
-testSummariseLongError = do
-  let longMsg = T.replicate 600 "x"
-      result  = PerfTool.summariseMeasurementErrors [longMsg]
-  pure $ T.isInfixOf "[truncated]" result
-      && T.length result < 600
-
--- | #135: empty error list returns empty string (no crash).
-testSummariseEmptyList :: IO Bool
-testSummariseEmptyList =
-  pure $ PerfTool.summariseMeasurementErrors [] == ""
-
---------------------------------------------------------------------------------
--- Issue #108 — typed-hole reclassification in check_module + refactor
---------------------------------------------------------------------------------
-
--- | #108: the 'handle' body in CheckModule.hs must filter typed holes
--- (GHC-88464) out of the 'errors' bucket and compute 'compileOk' from
--- the remaining real errors.  Checked structurally by scanning the
--- source file so we don't need a live GHCi session in unit tests.
--- | Issue #213: when holes are present, holes.reason must say
--- "N typed hole(s) found", not the contradictory "no deferred
--- typed holes". Use renderResult directly to avoid a live session.
 testCheckModuleHolesReasonCount :: IO Bool
+
 testCheckModuleHolesReasonCount =
   -- Pass 2 dummy holes (unit values — holes param is polymorphic [a])
   let result = CheckModule.renderResult
@@ -112,6 +63,7 @@ testCheckModuleHolesReasonCount =
        _ -> False
 
 testCheckModuleHoleOnlyCompileOk :: IO Bool
+
 testCheckModuleHoleOnlyCompileOk = do
   src <- TIO.readFile "src/HaskellFlows/Tool/CheckModule.hs"
   let code = T.unlines (filter (not . isDocLine) (T.lines src))
@@ -123,7 +75,9 @@ testCheckModuleHoleOnlyCompileOk = do
     isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
 
 -- | #108: 'errors' must exclude diagnostics where 'geCode == Just "GHC-88464"'.
+
 testCheckModuleRealErrorsExcludesHoles :: IO Bool
+
 testCheckModuleRealErrorsExcludesHoles = do
   src <- TIO.readFile "src/HaskellFlows/Tool/CheckModule.hs"
   let code = T.unlines (filter (not . isDocLine) (T.lines src))
@@ -135,7 +89,9 @@ testCheckModuleRealErrorsExcludesHoles = do
 
 -- | #108: 'commitResultWithDiff' in Refactor.hs must exclude holes from
 -- pre_existing_errors by filtering on 'GHC-88464'.
+
 testRefactorPreExistingHolesExcluded :: IO Bool
+
 testRefactorPreExistingHolesExcluded = do
   src <- TIO.readFile "src/HaskellFlows/Tool/Refactor.hs"
   let code = T.unlines (filter (not . isDocLine) (T.lines src))
@@ -154,7 +110,9 @@ testRefactorPreExistingHolesExcluded = do
 -- any unregistered broken file existed in src/ even if the checked module
 -- was clean. Fix: use 'loadSpecificFileForTarget' so only the requested
 -- file is compiled.
+
 testCheckModuleUsesSpecificLoader :: IO Bool
+
 testCheckModuleUsesSpecificLoader = do
   src <- TIO.readFile "src/HaskellFlows/Tool/CheckModule.hs"
   let code = T.unlines (filter (not . isDocLine) (T.lines src))

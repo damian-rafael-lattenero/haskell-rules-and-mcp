@@ -9,8 +9,6 @@ module Spec.TraversalGuards
   , testCheckModuleRejectsTraversal
   , testCheckModuleNonExistentFile
   , testExplainErrorRejectsTraversal
-  , testLabRejectsTraversal
-  , testLabNonExistentFile
   , testLoadRejectsTraversal
   , testRefactorRejectsTraversal
   , testLoggingRedactionPolicy
@@ -30,7 +28,6 @@ import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
 import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import qualified HaskellFlows.Tool.ExplainError as ExplainError
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
-import qualified HaskellFlows.Tool.Lab as LabTool
 import qualified HaskellFlows.Tool.Load as LoadTool
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
 
@@ -49,6 +46,7 @@ import Data.Maybe (isNothing)
 -- | #100C: 'ghc_apply_exports' must refuse traversal paths.
 -- No GhcSession needed — 'mkModulePath' guard fires before any filesystem access.
 testApplyExportsRejectsTraversal :: IO Bool
+
 testApplyExportsRejectsTraversal = do
   case mkProjectDir "/tmp/project" of
     Left _ -> pure False
@@ -61,7 +59,9 @@ testApplyExportsRejectsTraversal = do
       pure (isTraversalRefused (Right tr))
 
 -- | #100C: 'ghc_fix_warning' must refuse traversal paths.
+
 testFixWarningRejectsTraversal :: IO Bool
+
 testFixWarningRejectsTraversal = do
   case mkProjectDir "/tmp/project" of
     Left _ -> pure False
@@ -76,7 +76,9 @@ testFixWarningRejectsTraversal = do
 
 -- | #100C: 'ghc_check_module' must refuse traversal paths.
 -- 'mkModulePath' fires before the GhcSession or Store are touched.
+
 testCheckModuleRejectsTraversal :: IO Bool
+
 testCheckModuleRejectsTraversal = do
   case mkProjectDir "/tmp/project" of
     Left _ -> pure False
@@ -91,7 +93,9 @@ testCheckModuleRejectsTraversal = do
 -- fix the tool returned status='ok' with all gates green — a false
 -- all-green for a file that does not exist.
 -- The GhcSession and Store are not reached (existence check fires first).
+
 testCheckModuleNonExistentFile :: IO Bool
+
 testCheckModuleNonExistentFile = do
   case mkProjectDir "/tmp" of
     Left _ -> pure False
@@ -108,7 +112,9 @@ testCheckModuleNonExistentFile = do
         else pure False
 
 -- | #100C: 'ghc_explain_error' must refuse traversal paths.
+
 testExplainErrorRejectsTraversal :: IO Bool
+
 testExplainErrorRejectsTraversal = do
   case mkProjectDir "/tmp/project" of
     Left _ -> pure False
@@ -119,39 +125,9 @@ testExplainErrorRejectsTraversal = do
       pure (isTraversalRefused (Right tr))
 
 -- | #100C: 'ghc_lab' must refuse traversal paths.
-testLabRejectsTraversal :: IO Bool
-testLabRejectsTraversal = do
-  case mkProjectDir "/tmp/project" of
-    Left _ -> pure False
-    Right pd -> do
-      let args = A.object
-            [ "module_path" A..= ("../../etc/passwd" :: Text) ]
-      tr <- LabTool.handle (pdEnv pd) args
-      pure (isTraversalRefused (Right tr))
 
--- | #160: 'ghc_lab' on a non-existent file must return
--- status='failed' with kind='module_path_does_not_exist', not
--- kind='subprocess_error'. The existence check fires before any
--- I/O or GhcSession usage.
-testLabNonExistentFile :: IO Bool
-testLabNonExistentFile = do
-  case mkProjectDir "/tmp" of
-    Left _ -> pure False
-    Right pd -> do
-      let args = A.object
-            [ "module_path" A..= ("src/DoesNotExist.hs" :: Text) ]
-      tr <- LabTool.handle (pdEnv pd) args
-      let env = tr
-      if  Env.reStatus env == Env.StatusFailed
-        then case Env.reError env of
-               Just err -> pure (Env.eeKind err == Env.ModulePathDoesNotExist)
-               Nothing  -> pure False
-        else pure False
-
--- | #100C: 'ghc_load' must refuse traversal paths when 'module_path' is supplied.
--- 'mkModulePath' fires in the Just-path branch before 'countHaskellSources'
--- or any GhcSession usage.
 testLoadRejectsTraversal :: IO Bool
+
 testLoadRejectsTraversal = do
   case mkProjectDir "/tmp/project" of
     Left _ -> pure False
@@ -162,7 +138,9 @@ testLoadRejectsTraversal = do
       pure (isTraversalRefused (Right tr))
 
 -- | #100C: 'ghc_refactor' must refuse traversal paths.
+
 testRefactorRejectsTraversal :: IO Bool
+
 testRefactorRejectsTraversal = do
   case mkProjectDir "/tmp/project" of
     Left _ -> pure False
@@ -185,7 +163,9 @@ testRefactorRejectsTraversal = do
 -- | 'redactArgs' must truncate string values longer than 'maxArgStringLen'
 -- (40 chars) to exactly 40 chars + the Unicode ellipsis "…", while leaving
 -- short strings, numbers, and bools verbatim.
+
 testLoggingRedactionPolicy :: IO Bool
+
 testLoggingRedactionPolicy = do
   let longStr  = T.replicate 50 "x"   -- 50 chars, will be truncated
       shortStr = T.replicate 20 "y"   -- 20 chars, kept verbatim
@@ -217,7 +197,9 @@ testLoggingRedactionPolicy = do
 
 -- | 'newLogContext' must produce a 'LogContext' whose 'lcTraceId' is
 -- exactly 6 characters long and consists solely of lowercase hex digits.
+
 testLoggingTraceIdGeneration :: IO Bool
+
 testLoggingTraceIdGeneration = do
   ctx <- Logging.newLogContext "ghc_test"
   let tid = Logging.lcTraceId ctx
@@ -226,7 +208,9 @@ testLoggingTraceIdGeneration = do
       )
 
 -- | When 'HASKELL_FLOWS_AUDIT' is not set, 'lcAuditPath' must be 'Nothing'.
+
 testLoggingAuditPathAbsentByDefault :: IO Bool
+
 testLoggingAuditPathAbsentByDefault = do
   -- Ensure the env var is absent for this test.
   unsetEnv "HASKELL_FLOWS_AUDIT"

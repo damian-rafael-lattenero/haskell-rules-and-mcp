@@ -8,9 +8,6 @@ module Spec.GateUnit
   ( testQcExportRegistered
   , testQcExportRenderShape
   , testQcExportSanitize
-  , testCoverageDefaultTimeout
-  , testCoverageTimeoutClamp
-  , testCoverageTimeoutMessage
   , testGateDefaultTestTimeout
   , testGateDefaultBuildTimeout
   , testGateCustomTestTimeout
@@ -38,7 +35,6 @@ import HaskellFlows.Mcp.Protocol (ToolDescriptor (..))
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Data.PropertyStore (StoredProperty (..), openStore)
 import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNameTexts)
-import qualified HaskellFlows.Tool.Coverage as CoverageTool
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import HaskellFlows.Mcp.Progress (noopSink)
@@ -50,6 +46,7 @@ import HaskellFlows.Suggest.Rules (Confidence (..), Suggestion (..), RuleContext
 import Spec.Helpers (withTempProject)
 
 testQcExportRegistered :: IO Bool
+
 testQcExportRegistered = pure $ "ghc_property_store" `elem` allToolNameTexts
   -- #94 Phase C step 6: ghc_quickcheck_export merged into
   -- ghc_property_store(action="export"). The legacy wire surface
@@ -58,7 +55,9 @@ testQcExportRegistered = pure $ "ghc_property_store" `elem` allToolNameTexts
 -- | Phase 11h: renderTestFile emits a valid-looking Main module
 -- with the expected structural pieces (main, imports, a prop_N
 -- binding per property, a runProp helper).
+
 testQcExportRenderShape :: IO Bool
+
 testQcExportRenderShape =
   let props =
         [ StoredProperty
@@ -92,7 +91,9 @@ testQcExportRenderShape =
 -- | Phase 11h: sanitizeLabel must (a) strip CR/LF so a label never
 -- breaks the generated string literal, (b) collapse whitespace
 -- runs, (c) fall back to "property" on an empty-after-clean input.
+
 testQcExportSanitize :: IO Bool
+
 testQcExportSanitize = pure $
      QcExport.sanitizeLabel "add right identity"    == "add_right_identity"
   && QcExport.sanitizeLabel "with\nnewline"         == "with_newline"
@@ -108,49 +109,9 @@ testQcExportSanitize = pure $
 -- | Default CoverageArgs must produce a 5-minute timeout (unchanged
 -- from the pre-#163 hard-coded value so existing workflows see no
 -- behavioural difference).
-testCoverageDefaultTimeout :: IO Bool
-testCoverageDefaultTimeout =
-  let args = CoverageTool.CoverageArgs { CoverageTool.caTimeoutMinutes = 5, CoverageTool.caVerbose = False }
-  in pure $ CoverageTool.coverageTimeoutMicros args == 5 * 60 * 1_000_000
 
--- | Clamping: values below 1 become 1, above 60 become 60.
-testCoverageTimeoutClamp :: IO Bool
-testCoverageTimeoutClamp =
-  let raw0  = A.object []  -- defaults to 5
-      raw10 = A.object ["timeout_minutes" .= (10 :: Int)]
-      raw80 = A.object ["timeout_minutes" .= (80 :: Int)]
-      raw0_ = A.object ["timeout_minutes" .= (0  :: Int)]
-  in case ( A.fromJSON raw0  :: A.Result CoverageTool.CoverageArgs
-          , A.fromJSON raw10 :: A.Result CoverageTool.CoverageArgs
-          , A.fromJSON raw80 :: A.Result CoverageTool.CoverageArgs
-          , A.fromJSON raw0_ :: A.Result CoverageTool.CoverageArgs ) of
-       (A.Success a0, A.Success a10, A.Success a80, A.Success a0_) ->
-         pure $ CoverageTool.caTimeoutMinutes a0  == 5
-             && CoverageTool.caTimeoutMinutes a10 == 10
-             && CoverageTool.caTimeoutMinutes a80 == 60  -- clamped
-             && CoverageTool.caTimeoutMinutes a0_ == 1   -- clamped
-       _ -> pure False
-
--- | The timeout error message must reflect the ACTUAL configured
--- minutes (not hard-code "5 minutes"). This caught by checking
--- the cause field when CovTimeout is rendered with a 15-minute arg.
-testCoverageTimeoutMessage :: IO Bool
-testCoverageTimeoutMessage =
-  let args   = CoverageTool.CoverageArgs { CoverageTool.caTimeoutMinutes = 15, CoverageTool.caVerbose = False }
-      result = CoverageTool.renderResult args CoverageTool.CovTimeout
-  in pure $ case Env.reError result of
-       Just err ->
-         case Env.eeCause err of
-           Just cause -> T.isInfixOf "15m" cause
-           _          -> False
-       _ -> False
-
---------------------------------------------------------------------------------
--- #164: ghc_gate configurable timeouts
---------------------------------------------------------------------------------
-
--- | Default GateArgs must give 5 min for test (unchanged).
 testGateDefaultTestTimeout :: IO Bool
+
 testGateDefaultTestTimeout =
   let raw = A.object []
   in case A.fromJSON raw :: A.Result Gate.GateArgs of
@@ -159,7 +120,9 @@ testGateDefaultTestTimeout =
        _ -> pure False
 
 -- | Default GateArgs must give 3 min for build (unchanged).
+
 testGateDefaultBuildTimeout :: IO Bool
+
 testGateDefaultBuildTimeout =
   let raw = A.object []
   in case A.fromJSON raw :: A.Result Gate.GateArgs of
@@ -168,7 +131,9 @@ testGateDefaultBuildTimeout =
        _ -> pure False
 
 -- | Passing test_timeout_minutes=20 raises the test budget to 20 min.
+
 testGateCustomTestTimeout :: IO Bool
+
 testGateCustomTestTimeout =
   let raw = A.object ["test_timeout_minutes" .= (20 :: Int)]
   in case A.fromJSON raw :: A.Result Gate.GateArgs of
@@ -177,7 +142,9 @@ testGateCustomTestTimeout =
        _ -> pure False
 
 -- | Passing build_timeout_minutes=10 raises the build budget to 10 min.
+
 testGateCustomBuildTimeout :: IO Bool
+
 testGateCustomBuildTimeout =
   let raw = A.object ["build_timeout_minutes" .= (10 :: Int)]
   in case A.fromJSON raw :: A.Result Gate.GateArgs of
@@ -186,7 +153,9 @@ testGateCustomBuildTimeout =
        _ -> pure False
 
 -- | #216: with 0 properties the dynamic timeout must not fall below 2 min.
+
 testDynamicRegressionFloor :: IO Bool
+
 testDynamicRegressionFloor =
   pure $ Gate.dynamicRegressionTimeout 0 == 2 * 60 * 1_000_000
 
@@ -194,11 +163,14 @@ testDynamicRegressionFloor =
 -- the budget doesn't fire before all 7 cabal-repl launches finish.
 -- Formula: max(2 min, n × replayTimeout + 30 s overhead)
 -- With n=7 and replayTimeout=30 s:  7×30 + 30 = 240 s > 120 s
+
 testDynamicRegressionScales :: IO Bool
+
 testDynamicRegressionScales =
   pure $ Gate.dynamicRegressionTimeout 7 > 2 * 60 * 1_000_000
 
 testGateRegistered :: IO Bool
+
 testGateRegistered = pure $
      "ghc_gate" `elem` allToolNameTexts
   && case filter (\td -> tdName td == "ghc_gate") allToolDescriptors of
@@ -213,7 +185,9 @@ testGateRegistered = pure $
 -- a report with three "skip" steps and success=true. Uses a minimal
 -- decode instead of invoking the full handler (which would spawn
 -- cabal subprocesses).
+
 testGateAllSkip :: IO Bool
+
 testGateAllSkip =
   let raw = A.object
         [ "skip_regression"  .= True
@@ -229,7 +203,9 @@ testGateAllSkip =
 -- "All gates passed: . Safe to push." success that misled callers.
 -- The early-exit path never touches the GhcSession, so 'undefined'
 -- is safe for that argument — it is guaranteed not to be forced.
+
 testGateAllSkipRefused :: IO Bool
+
 testGateAllSkipRefused = withTempProject $ \pd -> do
   store <- openStore pd
   let raw = A.object
@@ -245,7 +221,9 @@ testGateAllSkipRefused = withTempProject $ \pd -> do
 -- "All requested gates passed: . Safe to push." string when the
 -- passed-verbs list is empty. Verified via source inspection of
 -- the defensive guard added in the fix.
+
 testGateSummaryNoEmptyVerbs :: IO Bool
+
 testGateSummaryNoEmptyVerbs = do
   src <- TIO.readFile "src/HaskellFlows/Tool/Gate.hs"
   -- The fix adds a null-check on the verbs list before the safe-to-push string.
@@ -254,7 +232,9 @@ testGateSummaryNoEmptyVerbs = do
 
 -- | Phase 11f: Functor shape `(a -> b) -> F a -> F b` emits BOTH
 -- identity and composition laws in one rule firing.
+
 testSuggestFunctorFmap :: IO Bool
+
 testSuggestFunctorFmap =
   case parseSignature "(a -> b) -> [a] -> [b]" of
     Nothing  -> pure False
@@ -266,7 +246,9 @@ testSuggestFunctorFmap =
 -- | Phase 11f: transform @simplify :: Expr -> Expr@ with sibling
 -- interpreter @eval :: Env -> Expr -> Int@ → emits evaluator
 -- preservation law.
+
 testSuggestEvaluatorPreservation :: IO Bool
+
 testSuggestEvaluatorPreservation =
   case (parseSignature "Expr -> Expr", parseSignature "Env -> Expr -> Int") of
     (Just simplifySig, Just evalSig) ->
@@ -282,7 +264,9 @@ testSuggestEvaluatorPreservation =
 -- | Phase 11f: same sibling pair BUT the focal name is
 -- "simplify" → triggers ConstantFoldingSoundness AT High on top of
 -- the generic EvaluatorPreservation.
+
 testSuggestConstFoldingSoundness :: IO Bool
+
 testSuggestConstFoldingSoundness =
   case (parseSignature "Expr -> Expr", parseSignature "Env -> Expr -> Int") of
     (Just simplifySig, Just evalSig) ->
@@ -300,7 +284,9 @@ testSuggestConstFoldingSoundness =
 
 -- | Phase 11f: evaluator laws require at least one interpreter
 -- sibling. With no siblings, nothing fires.
+
 testSuggestEvaluatorNoSibling :: IO Bool
+
 testSuggestEvaluatorNoSibling =
   case parseSignature "Expr -> Expr" of
     Nothing  -> pure False

@@ -67,7 +67,6 @@ library
                       HaskellFlows.Ghc.Sanitize
                       HaskellFlows.Data.PropertyStore
                       HaskellFlows.Data.Scratchpad
-                      HaskellFlows.Parser.Coverage
                       HaskellFlows.Parser.Error
                       HaskellFlows.Parser.Hole
                       HaskellFlows.Parser.ModuleName
@@ -88,7 +87,6 @@ library
                       HaskellFlows.Tool.CheckModule
                       HaskellFlows.Tool.CheckProject
                       HaskellFlows.Tool.Complete
-                      HaskellFlows.Tool.Coverage
                       HaskellFlows.Tool.CreateProject
                       HaskellFlows.Tool.Deps
                       HaskellFlows.Tool.Determinism
@@ -107,9 +105,7 @@ library
                       HaskellFlows.Tool.Load
                       HaskellFlows.Tool.Move
                       HaskellFlows.Tool.DepsExplain
-                      HaskellFlows.Tool.Lab
                       HaskellFlows.Tool.ExplainError
-                      HaskellFlows.Tool.Perf
                       HaskellFlows.Tool.Project
                       HaskellFlows.Tool.PropertyAudit
                       HaskellFlows.Tool.PropertyStore
@@ -126,11 +122,9 @@ library
                       HaskellFlows.Tool.ToolchainWarmup
                       HaskellFlows.Tool.Type
                       HaskellFlows.Tool.ValidateCabal
-                      HaskellFlows.Tool.Witness
                       HaskellFlows.Tool.Workflow
                       -- Bench modules (#96 Phase A)
                       HaskellFlows.Bench.Budget
-                      HaskellFlows.Bench.Runner
                       HaskellFlows.Mcp.Progress
                       HaskellFlows.Util.Safe
                       HaskellFlows.Config
@@ -193,7 +187,6 @@ test-suite haskell-flows-mcp-test
                       Spec.Browse
                       Spec.BudgetGate
                       Spec.Complete
-                      Spec.Coverage
                       Spec.CreateProject
                       Spec.Deps
                       Spec.DepsExplainLab
@@ -234,8 +227,6 @@ test-suite haskell-flows-mcp-test
                       Spec.ParseError
                       Spec.ParseHeaderUnit
                       Spec.ParseQc
-                      Spec.Perf
-                      Spec.PerfUnit
                       Spec.PermissiveJSON
                       Spec.PlanUnit
                       Spec.Progress
@@ -261,7 +252,6 @@ test-suite haskell-flows-mcp-test
                       Spec.TraversalGuards
                       Spec.TypeEval
                       Spec.ValidateCabal
-                      Spec.Witness
                       Spec.WorkflowState
                       Spec.WorkflowTool
                       Spec.PartialFunctions
@@ -327,7 +317,6 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowBootstrap
                       Scenarios.FlowConcurrentClients
                       Scenarios.FlowCorpusTransport
-                      Scenarios.FlowCoverage
                       Scenarios.FlowCrossValidation
                       Scenarios.FlowDependencyConflict
                       Scenarios.FlowDiskFull
@@ -363,7 +352,6 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowRefactorPreExistingError
                       Scenarios.FlowSuggestAssocOuter
                       Scenarios.FlowAddImportNoHoogle
-                      Scenarios.FlowHoogleSearch
                       Scenarios.FlowFormat
                       Scenarios.FlowInfoConstructors
                       Scenarios.FlowLoadHoleDiagnostics
@@ -374,11 +362,8 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowRemoveModulesDownstream
                       Scenarios.FlowMoveSymbol
                       Scenarios.FlowDepsExplain
-                      Scenarios.FlowLabAudit
                       Scenarios.FlowExplainError
-                      Scenarios.FlowPerfBasic
                       Scenarios.FlowPropertyAudit
-                      Scenarios.FlowWitness
                       Scenarios.FlowCheckModuleProperties
                       Scenarios.FlowGateNoCrash
                       Scenarios.FlowMoveExportLists

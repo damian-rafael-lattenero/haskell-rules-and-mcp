@@ -42,7 +42,6 @@ import qualified Scenarios.FlowBatch            as FlowB
 import qualified Scenarios.FlowBootstrap        as FlowBoot
 import qualified Scenarios.FlowCorpusTransport  as FlowCT
 import qualified Scenarios.FlowConcurrentClients as FlowCC
-import qualified Scenarios.FlowCoverage         as FlowCov
 import qualified Scenarios.FlowCrossValidation  as FlowXV
 import qualified Scenarios.FlowDependencyConflict as FlowDC
 import qualified Scenarios.FlowDiskFull          as FlowDF
@@ -77,7 +76,6 @@ import qualified Scenarios.FlowCabalRecovery     as FlowCR
 import qualified Scenarios.FlowRefactorPreExistingError as FlowRPE
 import qualified Scenarios.FlowSuggestAssocOuter  as FlowSAO
 import qualified Scenarios.FlowAddImportNoHoogle  as FlowAINH
-import qualified Scenarios.FlowHoogleSearch       as FlowHS
 import qualified Scenarios.FlowFormat             as FlowFmt
 import qualified Scenarios.FlowInfoConstructors   as FlowIC
 import qualified Scenarios.FlowLoadHoleDiagnostics as FlowLHD
@@ -88,11 +86,8 @@ import qualified Scenarios.FlowFixWarningUnusedBinding as FlowFWUB
 import qualified Scenarios.FlowRemoveModulesDownstream as FlowRMD
 import qualified Scenarios.FlowMoveSymbol         as FlowMS
 import qualified Scenarios.FlowDepsExplain        as FlowDE
-import qualified Scenarios.FlowLabAudit           as FlowLab
 import qualified Scenarios.FlowExplainError       as FlowEE
-import qualified Scenarios.FlowPerfBasic          as FlowPerf
 import qualified Scenarios.FlowPropertyAudit      as FlowPA
-import qualified Scenarios.FlowWitness            as FlowWit
 import qualified Scenarios.FlowCheckModuleProperties as FlowCMP
 import qualified Scenarios.FlowGateNoCrash        as FlowGNC
 import qualified Scenarios.FlowMoveExportLists    as FlowMEL
@@ -161,8 +156,6 @@ scenarios =
     , False, FlowQG.runFlow )
   , ( "Flow: Fix warning (unused-import patch preview)"
     , False, FlowFW.runFlow )
-  , ( "Flow: Coverage (cabal test --enable-coverage + HPC)"
-    , True, FlowCov.runFlow )
   , ( "Flow: Mutation testing (bug-finding oracle for regression)"
     , False, FlowMut.runFlow )
   , ( "Flow: Refactor out-of-scope (refuse silent no-op)"
@@ -221,8 +214,6 @@ scenarios =
     , False, FlowSAO.runFlow )
   , ( "Flow: AddImport no-hoogle (#53 · honest error vs lying success)"
     , False, FlowAINH.runFlow )
-  , ( "Flow: HoogleSearch (off-graph lookup · empty/ok/unavailable)"
-    , False, FlowHS.runFlow )
   , ( "Flow: Format (fourmolu/ormolu · traversal/missing/normalise/write)"
     , False, FlowFmt.runFlow )
   , ( "Flow: Info constructors (#54 · data + newtype expose ctors)"
@@ -243,16 +234,10 @@ scenarios =
     , True, FlowMS.runFlow )
   , ( "Flow: DepsExplain solver translator (#63 · root cause)"
     , False, FlowDE.runFlow )
-  , ( "Flow: Lab audit (#60 · module-wide property audit)"
-    , True, FlowLab.runFlow )
   , ( "Flow: ExplainError context (#59 · type-error therapist)"
     , False, FlowEE.runFlow )
-  , ( "Flow: Perf basic (#61 · wall-clock harness)"
-    , True, FlowPerf.runFlow )
   , ( "Flow: PropertyAudit pair skeleton (#64 · empty + 1-element)"
     , False, FlowPA.runFlow )
-  , ( "Flow: Witness distribution surface (#65 · cabal-repl harness)"
-    , True, FlowWit.runFlow )
   , ( "Flow: Scratch promote (write → check → promote round-trip, #253/#272)"
     , True, FlowSP.runFlow )
   , ( "Flow: CheckModule properties gate finds module-name entries (#74)"

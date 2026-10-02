@@ -108,7 +108,7 @@ testEveryToolHasCategory = pure $
 -- Current breakdown: 27 primitives, 4 composites, 3 gates, 2 control-plane.
 testCategoryCountsMatchTaxonomy :: IO Bool
 testCategoryCountsMatchTaxonomy = pure $
-  countCat CatPrimitive    == 27
+  countCat CatPrimitive    == 24
   -- ^ #94 Phase B retrofit: GhcModules replaces GhcAddModules +
   -- GhcRemoveModules (36 → 35).
   -- #94 Phase C step 1: GhcDeps action="explain" replaces
@@ -127,7 +127,7 @@ testCategoryCountsMatchTaxonomy = pure $
   -- GhcQuickCheckExport + GhcPropertyAudit outright (29 → 26 —
   -- four removed, one added).
   -- #253: GhcScratch — persistent LLM code canvas (26 → 27).
-  && countCat CatComposite    ==  4
+  && countCat CatComposite    ==  2
   && countCat CatGate         ==  3
   && countCat CatControlPlane ==  2
   -- ^ #94 Phase C step 2: GhcToolchain (action="status"|"warmup")

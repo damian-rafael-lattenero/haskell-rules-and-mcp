@@ -51,10 +51,8 @@ data ToolName
   | GhcQuickCheck
   | GhcHole
   | GhcArbitrary
-  | HoogleSearch
   | GhcWorkflow
   | GhcCheckModule
-  | GhcCoverage
   | GhcComplete
   | GhcFormat
   | GhcGate
@@ -71,10 +69,7 @@ data ToolName
   | GhcFixWarning
   | GhcImports
   | GhcBrowse
-  | GhcLab
   | GhcExplainError
-  | GhcPerf
-  | GhcWitness
   | GhcModules
   | GhcToolchain
   | GhcProject
@@ -120,10 +115,8 @@ toolNameText = \case
   GhcQuickCheck        -> "ghc_quickcheck"
   GhcHole              -> "ghc_hole"
   GhcArbitrary         -> "ghc_arbitrary"
-  HoogleSearch         -> "hoogle_search"
   GhcWorkflow          -> "ghc_workflow"
   GhcCheckModule       -> "ghc_check_module"
-  GhcCoverage          -> "ghc_coverage"
   GhcComplete          -> "ghc_complete"
   GhcFormat            -> "ghc_format"
   GhcGate              -> "ghc_gate"
@@ -143,10 +136,7 @@ toolNameText = \case
   GhcToolchain         -> "ghc_toolchain"
   GhcProject           -> "ghc_project"
   GhcPropertyStore     -> "ghc_property_store"
-  GhcLab               -> "ghc_lab"
   GhcExplainError      -> "ghc_explain_error"
-  GhcPerf              -> "ghc_perf"
-  GhcWitness           -> "ghc_witness"
   GhcModules           -> "ghc_modules"
   GhcScratch           -> "ghc_scratch"
 
@@ -221,10 +211,8 @@ toolCategory = \case
   GhcQuickCheck    -> CatPrimitive
   GhcHole          -> CatPrimitive
   GhcArbitrary     -> CatPrimitive
-  HoogleSearch     -> CatPrimitive
   GhcWorkflow      -> CatControlPlane
   GhcCheckModule   -> CatGate
-  GhcCoverage      -> CatComposite
   GhcComplete      -> CatPrimitive
   GhcFormat        -> CatPrimitive
   GhcGate          -> CatComposite
@@ -242,10 +230,7 @@ toolCategory = \case
   GhcFixWarning    -> CatPrimitive
   GhcImports       -> CatPrimitive
   GhcBrowse        -> CatPrimitive
-  GhcLab           -> CatComposite
   GhcExplainError  -> CatPrimitive
-  GhcPerf          -> CatPrimitive
-  GhcWitness       -> CatPrimitive
   GhcModules       -> CatPrimitive
   GhcProject       -> CatPrimitive
   GhcPropertyStore -> CatPrimitive
@@ -288,7 +273,6 @@ toolVersion = \case
   GhcBrowse            -> "1.0.0"
   GhcImports           -> "1.0.0"
   GhcDoc               -> "1.0.0"
-  HoogleSearch         -> "1.0.0"
   -- ── Write / refactor ────────────────────────────────────────────
   GhcRefactor          -> "1.0.0"
   GhcFormat            -> "1.0.0"
@@ -305,13 +289,9 @@ toolVersion = \case
   GhcPropertyStore     -> "1.0.0"   -- #94 Phase C step 6: action-discriminated successor
   GhcScratch           -> "1.0.0"   -- #253: persistent LLM code canvas (Phase 1 MVP)
   -- ── Phase-2 advanced ────────────────────────────────────────────
-  GhcPerf              -> "1.0.0"
-  GhcWitness           -> "1.0.0"
   GhcExplainError      -> "1.0.0"
   -- ── Composites ──────────────────────────────────────────────────
   GhcGate              -> "1.0.0"
-  GhcLab               -> "1.0.0"
-  GhcCoverage          -> "1.0.0"
   GhcBatch             -> "1.0.0"
   -- ── Gates ───────────────────────────────────────────────────────
   GhcCheckModule       -> "1.0.0"

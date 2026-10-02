@@ -65,7 +65,7 @@ testPostMortemCounts = do
     A.Object o ->
       pure $ AKM.lookup "tools_called" o == Just (A.Number 7)
           && AKM.lookup "tools_unique" o == Just (A.Number 3)
-          && AKM.lookup "tools_unused" o == Just (A.Number 33)
+          && AKM.lookup "tools_unused" o == Just (A.Number 28)
     _ -> pure False
 
 -- | Phase 11j: all 5 Code tools registered in the inventory.

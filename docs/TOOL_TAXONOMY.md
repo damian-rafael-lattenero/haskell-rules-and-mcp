@@ -1,6 +1,6 @@
 # haskell-flows MCP — Tool Taxonomy
 
-> Issue #94 Phase A.  The canonical classification of all 36 registered tools.
+> Issue #94 Phase A.  The canonical classification of all 31 registered tools.
 > The four-category breakdown is **CI-enforced** by `testCategoryCountsMatchTaxonomy`,
 > and `testTaxonomyDocListsAllTools` (#268) fails CI if this file omits any
 > registered wire name or states the wrong total — both in `test/Spec.hs`.
@@ -119,7 +119,7 @@
 | Composite | 4 |
 | Gate | 3 |
 | Control-plane | 2 |
-| **Total** | **36** |
+| **Total** | **31** |
 
 * Phase B retrofit: `GhcModules` replaced `GhcAddModules` +
   `GhcRemoveModules` outright (47 → 45 — two less, one new).
@@ -139,7 +139,7 @@
   replaced `GhcPropertyLifecycle` + `GhcRegression` + `GhcQuickCheckExport` +
   `GhcPropertyAudit` outright (38 → 35 — four less, one new).
 * #253: `GhcScratch` added as a new primitive — persistent LLM code
-  canvas / pair-programming surface (35 → 36 — one new).
+  canvas / pair-programming surface (35 → 31 — one new).
 
 With a single internal consumer there was no deprecation cost to
 honour, so the legacy wire surface was removed in the same commit as
@@ -153,7 +153,7 @@ Bumping the cap requires an explicit PR with rationale.
 ## Consolidation history (issue #94 — all landed)
 
 Every merge below shipped; the action-discriminated successor is now the
-only wire surface. The live total is **36 tools** (see Totals above),
+only wire surface. The live total is **31 tools** (see Totals above),
 CI-enforced by `testCategoryCountsMatchTaxonomy` + `testTaxonomyDocListsAllTools`.
 
 | Retired wire tools | Action-discriminated successor |

@@ -7,8 +7,6 @@
 module Spec.GhcErrorUnit
   ( testExplainErrorNoModuleSource
   , testExplainErrorTextUsed
-  , testPerfSamplesGated
-  , testPerfRegressionCausePlain
   , testDepsListAllStanzas
   , testMoveModuleNameToPath
   , testEvalIoUnitResult
@@ -56,7 +54,6 @@ import qualified HaskellFlows.Tool.Eval as EvalTool
 import qualified HaskellFlows.Tool.ExplainError as ExplainError
 import qualified HaskellFlows.Tool.Load as LoadTool
 import qualified HaskellFlows.Tool.Move as MoveTool
-import qualified HaskellFlows.Tool.Perf as PerfTool
 import qualified HaskellFlows.Tool.ToolchainWarmup as ToolchainWarmupTool
 import qualified HaskellFlows.Tool.Workflow as WorkflowTool
 
@@ -67,7 +64,9 @@ import Spec.Helpers (runToolEnvelope, withTempProject)
 -- alongside 'enclosing_slice' — they were byte-identical for small
 -- files, doubling the payload size for no benefit. Verify the field
 -- is absent from the rendered JSON.
+
 testExplainErrorNoModuleSource :: IO Bool
+
 testExplainErrorNoModuleSource = do
   let body = T.unlines ["module Foo where", "foo :: Int", "foo = _"]
       diag  = GhcError
@@ -89,7 +88,9 @@ testExplainErrorNoModuleSource = do
 -- | #153: when error_text is provided, renderContext must use that
 -- text as the diagnostic message — not fall through to recompilation.
 -- We test the pure 'syntheticError' + 'renderContext' path directly.
+
 testExplainErrorTextUsed :: IO Bool
+
 testExplainErrorTextUsed = do
   let body    = T.unlines ["module Foo where", "foo :: Int", "foo = 42"]
       errTxt  = "Couldn't match expected type 'Int' with actual type 'Bool'"
@@ -107,55 +108,9 @@ testExplainErrorTextUsed = do
 -- | F-26: when 'verbose=false' (default), the 'measurements' object
 -- must not contain a 'samples' key — sending thousands of integers
 -- for large 'runs' values is wasteful.
-testPerfSamplesGated :: IO Bool
-testPerfSamplesGated =
-  let args = PerfTool.PerfArgs
-               { PerfTool.paExpression      = "1 + 1"
-               , PerfTool.paRuns            = 5
-               , PerfTool.paSaveBaseline    = False
-               , PerfTool.paCompareBaseline = False
-               , PerfTool.paVerbose         = False
-               , PerfTool.paThresholdPct    = 30.0
-               }
-      nss   = [100, 110, 90, 105, 95]
-      stats = PerfTool.aggregate nss
-      result = PerfTool.renderResult args nss stats [] Nothing 0
-  in pure $ case Env.reResult result of
-       Just (A.Object r) ->
-         case AKM.lookup (AKey.fromText "measurements") r of
-           Just (A.Object m) -> not (AKM.member "samples" m)
-           _                 -> False
-       _ -> False
 
--- | F-32: when a regression is detected, 'error.cause' must be a
--- plain human-readable string, not a stringified JSON blob (no
--- literal escaped braces or quotes in the cause field).
-testPerfRegressionCausePlain :: IO Bool
-testPerfRegressionCausePlain =
-  let args = PerfTool.PerfArgs
-               { PerfTool.paExpression      = "1 + 1"
-               , PerfTool.paRuns            = 5
-               , PerfTool.paSaveBaseline    = False
-               , PerfTool.paCompareBaseline = True
-               , PerfTool.paVerbose         = False
-               , PerfTool.paThresholdPct    = 30.0
-               }
-      nss      = [1_000_000, 1_100_000, 900_000, 1_050_000, 950_000]
-      stats    = PerfTool.aggregate nss
-      baseline = Just (PerfTool.BaselineEntry { PerfTool.beMeanNs = 1000.0 })
-      result   = PerfTool.renderResult args nss stats [] baseline 0
-  in pure $ case Env.reError result of
-       Just err ->
-         case Env.eeCause err of
-           Just cause ->
-             not (T.isInfixOf "{" cause) && T.isInfixOf "baseline_mean_ns" cause
-           _ -> False
-       _ -> False
-
--- | F-08: 'ghc_deps list' without a stanza selector must return all
--- stanzas as a structured @{stanzas: {library: [...], ...}}@ map
--- rather than only the first 'build-depends' block.
 testDepsListAllStanzas :: IO Bool
+
 testDepsListAllStanzas =
   let cabal = T.unlines
         [ "cabal-version: 3.0"
@@ -173,7 +128,9 @@ testDepsListAllStanzas =
 -- | F-34: 'moduleNameToPath' must not mangle file paths that already
 -- contain slashes or end with .hs.  Before the fix, passing
 -- @"src/HaskellFlows/Util.hs"@ produced @"src/src/HaskellFlows/Util/hs.hs"@.
+
 testMoveModuleNameToPath :: IO Bool
+
 testMoveModuleNameToPath = pure $
      MoveTool.moduleNameToPath "Foo.Bar"           == "src/Foo/Bar.hs"
   && MoveTool.moduleNameToPath "src/Foo/Bar.hs"    == "src/Foo/Bar.hs"
@@ -184,7 +141,9 @@ testMoveModuleNameToPath = pure $
 -- | F-12: 'ioUnitResult' must carry @kind = "io_unit_no_output"@ so
 -- agents know the expression was @IO ()@ and did execute (no silent
 -- empty-string confusion from the old unsafeCoerce path).
+
 testEvalIoUnitResult :: IO Bool
+
 testEvalIoUnitResult =
   let result = EvalTool.ioUnitResult
   in pure $ case Env.reResult result of
@@ -197,7 +156,9 @@ testEvalIoUnitResult =
 -- putStrLn and got @output: ""@. The new hint must NOT contain the
 -- phrase "Use putStrLn" (or the equivalent "use putStrLn") and must
 -- instead explain that the action ran but produced no stdout output.
+
 testEvalIoUnitHintNotCircular :: IO Bool
+
 testEvalIoUnitHintNotCircular =
   let result = EvalTool.ioUnitResult
   in pure $ case Env.reResult result of
@@ -217,7 +178,9 @@ testEvalIoUnitHintNotCircular =
 -- (stdout is a pipe to the JSON-RPC transport) due to Handle-level FD
 -- aliasing on the restore call. The new POSIX pipe implementation must
 -- return the expected string.
+
 testCaptureStdoutActuallyCaptures :: IO Bool
+
 testCaptureStdoutActuallyCaptures = do
   -- Test captureStdout directly — no GHC session needed; it's a plain
   -- IO capture utility. putStrLn is already in scope.
@@ -228,7 +191,9 @@ testCaptureStdoutActuallyCaptures = do
 -- action is compiled at runtime by the GHC API interpreter — not just
 -- when a direct Haskell action is passed to 'captureStdout'. Exercises
 -- the complete path used by 'ghc_eval("putStrLn \"hello\"")'.
+
 testEvalIOUnitCaptureViaSess :: IO Bool
+
 testEvalIOUnitCaptureViaSess = case mkProjectDir "/tmp" of
   Left _   -> pure False
   Right pd -> do
@@ -252,7 +217,9 @@ testEvalIOUnitCaptureViaSess = case mkProjectDir "/tmp" of
 -- version when both passes report a diagnostic at the same position.
 -- Before the fix it kept the strict error version, causing typed holes
 -- to show up as plain errors rather than informative hole-fit warnings.
+
 testLoadMergeDiagsPreferDeferred :: IO Bool
+
 testLoadMergeDiagsPreferDeferred =
   let strictD   = [mkErr  "Foo.hs" 10 5 "error at hole"]
       deferredD = [mkWarn "Foo.hs" 10 5 "Found hole: _ :: Int"]
@@ -264,7 +231,9 @@ testLoadMergeDiagsPreferDeferred =
 -- | F-04: 'ghc_toolchain(warmup)' must include a @gates@ field and
 -- a top-level @gates_warm@ boolean so agents can distinguish gate
 -- availability from optional-binary availability.
+
 testWarmupIncludesGates :: IO Bool
+
 testWarmupIncludesGates = do
   decoded <- runToolEnvelope ToolchainWarmupTool.handle (A.object [])
   pure $ case decoded of
@@ -280,7 +249,9 @@ testWarmupIncludesGates = do
 -- tool calls with no load ever attempted.  Before the fix the
 -- @wsToolCalls < 3@ guard caused it to fall through to
 -- 'PhaseDeveloping' after the 3rd call.
+
 testClassifyPhaseNoLoad :: IO Bool
+
 testClassifyPhaseNoLoad = do
   ref <- WS.newWorkflowStateRef
   let anyPayload = A.object [ "success" .= True ]
@@ -291,7 +262,9 @@ testClassifyPhaseNoLoad = do
 
 -- | F-24: with padding=15, 'enclosingLineRange' should not return
 -- the whole file for a 28-line module (error at line 10).
+
 testEnclosingRangePadding :: IO Bool
+
 testEnclosingRangePadding =
   let (lo, hi) = ExplainError.enclosingLineRange 28 15 10
   in pure $ (hi - lo) < 28  -- must be smaller than the whole file
@@ -299,7 +272,9 @@ testEnclosingRangePadding =
 -- | F-09: 'parseRejections' must split comma-separated package
 -- versions into separate 'Rejection' entries so 'rejection_count'
 -- is accurate.
+
 testDepsExplainRejectionSplit :: IO Bool
+
 testDepsExplainRejectionSplit =
   let line = "[__1] rejecting: QuickCheck-2.14.2, QuickCheck-2.14.1 (conflict: text)"
       rs   = DepsExplain.parseRejections line

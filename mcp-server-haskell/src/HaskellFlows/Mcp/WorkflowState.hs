@@ -379,10 +379,6 @@ sessionMissedOpportunities s = take 5 $ concat
       \reversibly before touching source."
     | wsErrorStreak s >= 3
     ]
-  , [ "You persisted passing properties but never ran ghc_witness — the \
-      \input distribution may be trivially biased; a green QC run can lie."
-    | wsPassedProperties s > 0, GhcWitness `Set.notMember` wsEverCalled s
-    ]
   , [ "You've made " <> tshow (wsToolCalls s) <> " tool calls but never \
       \reached for ghc_scratch — type-checking a hypothesis there is \
       \faster and reversible than edit/reload."

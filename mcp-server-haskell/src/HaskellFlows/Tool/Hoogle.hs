@@ -17,8 +17,8 @@
 --   accept an arbitrary path from the caller, only the @PATH@-resolved
 --   one. A caller who wants a bundled hoogle must put it on @PATH@.
 module HaskellFlows.Tool.Hoogle
-  ( descriptor
-  , handle
+  ( handle
+  , runHandle
   , runHandle
   , HoogleArgs (..)
   , parseHoogleLine
@@ -43,50 +43,7 @@ import HaskellFlows.Config (Limits, hoogleTimeout)
 import HaskellFlows.Util.Process (SubprocessOutcome (..), SubprocessResult (..), runArgv)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Tool.Env (ToolEnv (..))
-
-descriptor :: ToolDescriptor
-descriptor =
-  ToolDescriptor
-    { tdName        = toolNameText HoogleSearch
-    , tdDescription =
-        "PURPOSE: Search the local Hoogle index for functions, types, "
-          <> "and classes by name or by type signature. "
-          <> "WHEN: discovering an off-graph (external/upstream) symbol; "
-          <> "finding library functions whose type matches a hole's "
-          <> "signature; following up before ghc_add_import. "
-          <> "WHEN NOT: the symbol is in this project's compile graph — "
-          <> "ghc_browse / ghc_info / ghc_complete are faster; you only "
-          <> "need to import a known name — ghc_add_import goes direct. "
-          <> "PREREQUISITES: hoogle binary on PATH (ghc_toolchain "
-          <> "action='status' confirms availability). "
-          <> "OUTPUT: {query, count, hits:[{name, module, signature, "
-          <> "score}]}; reports availability=false cleanly when hoogle "
-          <> "is missing. "
-          <> "SEE ALSO: ghc_add_import, ghc_browse, ghc_info."
-    , tdInputSchema =
-        object
-          [ "type"       .= ("object" :: Text)
-          , "properties" .= object
-              [ "query" .= object
-                  [ "type"        .= ("string" :: Text)
-                  , "description" .=
-                      ("Hoogle query. Examples: \"filter\", \
-                       \\"(a -> Bool) -> [a] -> [a]\"" :: Text)
-                  ]
-              , "limit" .= object
-                  [ "type"        .= ("integer" :: Text)
-                  , "description" .=
-                      ("Maximum number of hits to return. Default 10, \
-                       \hard-capped at 50." :: Text)
-                  ]
-              ]
-          , "required"             .= ["query" :: Text]
-          , "additionalProperties" .= False
-          ]
-    }
 
 data HoogleArgs = HoogleArgs
   { haQuery :: !Text
@@ -109,13 +66,13 @@ clampLimit n
   | n > 50    = 50
   | otherwise = n
 
+handle :: ToolEnv -> Value -> IO ToolResponse
+handle env = runHandle (teLimits env)
+
 -- | Upper bound on the query length; anything longer is rejected at the
 -- boundary rather than shipped to the child.
 maxQueryChars :: Int
 maxQueryChars = 512
-
-handle :: ToolEnv -> Value -> IO ToolResponse
-handle env = runHandle (teLimits env)
 
 runHandle :: Limits -> Value -> IO ToolResponse
 runHandle lim rawArgs = case parseEither parseJSON rawArgs of

@@ -322,21 +322,17 @@ scoreTool phase t = phaseScore + catScore
       PhasePreScaffold -> boost [GhcProject, GhcLoad, GhcToolchain]
       PhaseBootstrap   -> boost [GhcDeps, GhcModules, GhcAddImport, GhcLoad]
       PhaseDeveloping  -> boost [GhcScratch, GhcHole, GhcSuggest, GhcType, GhcInfo, GhcComplete]
-      PhaseTestingLaws -> boost [GhcSuggest, GhcQuickCheck, GhcWitness, GhcLab, GhcArbitrary]
-      PhaseReadyToPush -> boost [GhcGate, GhcCoverage, GhcPropertyStore, GhcCheckProject, GhcLint, GhcPerf]
+      PhaseTestingLaws -> boost [GhcSuggest, GhcQuickCheck, GhcArbitrary]
+      PhaseReadyToPush -> boost [GhcGate, GhcPropertyStore, GhcCheckProject, GhcLint]
 
 -- | A short "why this matters now" line per tool, with a
 -- category-derived fallback. Kept compact — the goal is to nudge.
 whyNow :: ToolName -> Text
 whyNow t = case t of
   GhcScratch      -> "Type-check a hypothesis before editing source — faster and reversible."
-  GhcLab          -> "Discover + run QuickCheck laws for every binding in a module in one call."
   GhcSuggest      -> "Derive candidate QuickCheck laws from a function's type signature."
-  GhcWitness      -> "Sanity-check a property's input distribution — catch trivial-input bias."
-  GhcPerf         -> "Wall-clock baseline for an expression; compare later to catch regressions."
   GhcComplete     -> "Prefix-complete in-scope identifiers when you half-remember a name."
   GhcExplainError -> "Decode a confusing type error and verify a candidate patch."
-  GhcCoverage     -> "Find untested code paths via HPC before pushing."
   GhcGate         -> "One-shot pre-push gate: regression + cabal test + cabal build."
   GhcHole         -> "List a stub's typed holes with expected types + in-scope fits."
   _               -> "Unused this session — a "
@@ -433,19 +429,6 @@ planTemplates =
       (\mh -> [ planStep GhcRefactor (object ["action" .= ("rename_local" :: Text), "module_path" .= planModPath mh, "old_name" .= ("<old>" :: Text), "new_name" .= ("<new>" :: Text), "scope_line_start" .= (1 :: Int), "scope_line_end" .= (1 :: Int)])
               , planStep GhcCheckModule (object ["module_path" .= planModPath mh])
               ])
-  , PlanTemplate "property-discovery"
-      ["discover laws", "lab", "audit module", "properties for"]
-      (\mh -> [ planStep GhcLab (object ["module_path" .= planModPath mh])
-              , planStep GhcPropertyStore (object ["action" .= ("run" :: Text)])
-              ])
-  , PlanTemplate "coverage-report"
-      ["coverage", "hpc", "untested"]
-      (const [ planStep GhcCoverage (object [])
-             , planStep GhcPropertyStore (object ["action" .= ("export" :: Text)])
-             ])
-  , PlanTemplate "perf-baseline"
-      ["perf", "benchmark", "baseline", "performance", "profile"]
-      (const [ planStep GhcPerf (object ["expression" .= ("<expr>" :: Text), "save_baseline" .= True]) ])
   , PlanTemplate "bootstrap-project"
       ["new project", "create project", "bootstrap", "from scratch"]
       (\mh -> [ planStep GhcProject (object ["action" .= ("create" :: Text), "name" .= ("<pkg-name>" :: Text)])
@@ -476,11 +459,6 @@ planTemplates =
       ["export", "materialise", "materialize", "spec.hs", "test suite"]
       (const [ planStep GhcPropertyStore (object ["action" .= ("export" :: Text)])
              , planStep GhcGate (object [])
-             ])
-  , PlanTemplate "find-via-hoogle"
-      ["hoogle", "find function", "search for", "which function"]
-      (const [ planStep HoogleSearch (object ["query" .= ("<type or name>" :: Text)])
-             , planStep GhcAddImport (object ["name" .= ("<one of the hits>" :: Text)])
              ])
   , PlanTemplate "pre-push-gate"
       ["push", "gate", "ship", "finalize", "ready to push", "pre-push"]

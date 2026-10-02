@@ -9,8 +9,6 @@ module Spec.ArbitraryUnit
   , testTypeParamsNone
   , testTemplatePolymorphic
   , testTemplateMultiParam
-  , testCoveragePassesAllMixDirs
-  , testParseHpcReportText
   , testCtorsRecordStrictWithKindHeader
   , testCtorsInlineRecord2Fields
   , testSuggestEncodeShapeSkipsListRules
@@ -28,9 +26,7 @@ import qualified Data.Text as T
 import System.Directory (getTemporaryDirectory)
 import System.FilePath ((</>))
 
-import HaskellFlows.Parser.Coverage (parseCoverage, CoverageReport (..), Metric (..))
 import qualified HaskellFlows.Tool.Arbitrary as Arb
-import qualified HaskellFlows.Tool.Coverage as CoverageTool
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.Regression as RegTool
 import qualified HaskellFlows.Suggest.Rules as SuggestRules
@@ -48,6 +44,7 @@ import HaskellFlows.Parser.TypeSignature (parseSignature)
 import HaskellFlows.Suggest.Rules (applyRules, sLaw)
 
 testTypeParamsOne :: IO Bool
+
 testTypeParamsOne =
   let raw = T.unlines
         [ "type Run :: * -> *"
@@ -56,6 +53,7 @@ testTypeParamsOne =
   in pure (parseTypeParams raw == ["a"])
 
 testTypeParamsTwo :: IO Bool
+
 testTypeParamsTwo =
   let raw = T.unlines
         [ "type Map :: * -> * -> *"
@@ -64,6 +62,7 @@ testTypeParamsTwo =
   in pure (parseTypeParams raw == ["k", "v"])
 
 testTypeParamsNone :: IO Bool
+
 testTypeParamsNone =
   let raw = T.unlines
         [ "type Foo :: *"
@@ -72,6 +71,7 @@ testTypeParamsNone =
   in pure (null (parseTypeParams raw))
 
 testTemplatePolymorphic :: IO Bool
+
 testTemplatePolymorphic =
   let out = renderTemplate "Run" ["a"]
               [Constructor "Run" (replicate 2 "arbitrary")]
@@ -80,6 +80,7 @@ testTemplatePolymorphic =
     && "Run <$> arbitrary <*> arbitrary"                  `T.isInfixOf` out
 
 testTemplateMultiParam :: IO Bool
+
 testTemplateMultiParam =
   let out = renderTemplate "Either" ["a", "b"]
               [ Constructor "Left"  ["arbitrary"]
@@ -101,38 +102,9 @@ testTemplateMultiParam =
 -- mix dir under @dist-newstyle@, and @runHpcReport@ expands them
 -- into a list of @--hpcdir=@ flags. Static source check is the
 -- narrowest regression:
-testCoveragePassesAllMixDirs :: IO Bool
-testCoveragePassesAllMixDirs = do
-  src <- TIO.readFile "src/HaskellFlows/Tool/Coverage.hs"
-  pure $ T.isInfixOf "findMixDirs"                        src
-      && T.isInfixOf "extra-compilation-artifacts"        src
-      && T.isInfixOf "[FilePath] -> FilePath"             src
-      -- keep the F-09 invariants alongside the F-11 ones
-      && T.isInfixOf "findTixFile"                        src
 
--- | End-to-end smoke of the happy path: 'parseCoverage' must
--- recognise the text shape that @hpc report@ emits under GHC 9.x.
--- Pins both the parser and the enrichment contract together.
-testParseHpcReportText :: IO Bool
-testParseHpcReportText =
-  let sample = T.unlines
-        [ " 92% expressions used (12/13)"
-        , " 100% boolean coverage (0/0)"
-        , " 100% alternatives used (3/3)"
-        , " 100% local declarations used (1/1)"
-        , " 100% top-level declarations used (1/1)"
-        ]
-      rpt = parseCoverage sample
-  in pure (length (crMetrics rpt) >= 5
-         && any (\m -> mPercent m == Just 92) (crMetrics rpt))
-
--- | Phase 11b F-04 part A: GHC 9.x emits a kind-signature line
--- (@type Run :: * -> *@) BEFORE the data decl in @:i@ output.
--- 'parseConstructors' previously bailed because @hasCtorHeader@
--- only checked the collapsed string's prefix. Pin the GHC 9.x layout
--- plus a record constructor with strict fields — must parse into a
--- 2-arg Constructor.
 testCtorsRecordStrictWithKindHeader :: IO Bool
+
 testCtorsRecordStrictWithKindHeader =
   let raw = T.unlines
         [ "type Run :: * -> *"
@@ -147,7 +119,9 @@ testCtorsRecordStrictWithKindHeader =
 -- constructor @Ctor {f1 :: T1, f2 :: T2}@ used to be mis-tokenised
 -- because @groupTokens@ didn't treat @{}@ as grouping — fields got
 -- split on every internal space, inflating 'cArgs' to 6 tokens.
+
 testCtorsInlineRecord2Fields :: IO Bool
+
 testCtorsInlineRecord2Fields =
   let raw = "data Run a = Run {runLen :: !Int, runVal :: !a}"
   in case parseConstructors raw of
@@ -161,7 +135,9 @@ testCtorsInlineRecord2Fields =
 -- @Length preserving@ are nonsense (don't even type-check) when
 -- arg and return lists carry different element types. Pin the
 -- invariant: for @[a] -> [SomeOther a]@, neither rule fires.
+
 testSuggestEncodeShapeSkipsListRules :: IO Bool
+
 testSuggestEncodeShapeSkipsListRules =
   case parseSignature "[a] -> [Run a]" of
     Nothing  -> pure False
@@ -183,7 +159,9 @@ testSuggestEncodeShapeSkipsListRules =
 -- that plumbing sat on top of the subprocess ghci which has been
 -- retired. Under the new contract it always returns the caller's
 -- hint verbatim, regardless of what ':info' would have said.
+
 testChooseStoreModuleIdentWithInfo :: IO Bool
+
 testChooseStoreModuleIdentWithInfo = pure $
   QcTool.chooseStoreModule
     "prop_idempotent"
@@ -194,7 +172,9 @@ testChooseStoreModuleIdentWithInfo = pure $
 
 -- | Identifier but no ':info' available (e.g. session busy) → fall back
 -- to whatever the caller passed. We don't invent a path.
+
 testChooseStoreModuleIdentNoInfo :: IO Bool
+
 testChooseStoreModuleIdentNoInfo = pure $
   QcTool.chooseStoreModule
     "prop_idempotent"
@@ -205,7 +185,9 @@ testChooseStoreModuleIdentNoInfo = pure $
 -- | Lambda expression (not a simple identifier) → ':info' doesn't apply
 -- even if we had it; use caller hint verbatim. Keeps backwards
 -- compatibility for inline-property callers.
+
 testChooseStoreModuleLambda :: IO Bool
+
 testChooseStoreModuleLambda = pure $
   QcTool.chooseStoreModule
     "\\xs -> reverse (reverse xs) == xs"
@@ -217,7 +199,9 @@ testChooseStoreModuleLambda = pure $
 -- location. That's not actionable for regression replay, so we still
 -- fall back to the caller hint. Prevents a regression where we'd
 -- persist a module NAME where the store expects a file PATH.
+
 testChooseStoreModuleModuleLoc :: IO Bool
+
 testChooseStoreModuleModuleLoc = pure $
   QcTool.chooseStoreModule
     "prop_trivial"
@@ -227,7 +211,9 @@ testChooseStoreModuleModuleLoc = pure $
 
 -- | Classifier: bare identifiers pass, qualified identifiers pass,
 -- prefix operators and lambdas are rejected.
+
 testIsSimpleIdentClassifier :: IO Bool
+
 testIsSimpleIdentClassifier = pure $ and
   [       QcTool.isSimpleIdent "prop_x"
   ,       QcTool.isSimpleIdent "Spec.prop_x"
@@ -249,7 +235,9 @@ testIsSimpleIdentClassifier = pure $ and
 
 -- | Single-module shape: the format GHCi emits for a project with
 -- exactly one compiled module.
+
 testParseShowModulesPathsSimple :: IO Bool
+
 testParseShowModulesPathsSimple =
   let raw = T.pack "Foo              ( src/Foo.hs, interpreted )\n"
   in pure (RegTool.parseShowModulesPaths raw == ["src/Foo.hs"])
@@ -257,7 +245,9 @@ testParseShowModulesPathsSimple =
 -- | Multi-module shape: library + test-suite layout. Order preserved;
 -- paths extracted without picking up the module name or the 'kind'
 -- trailing bit.
+
 testParseShowModulesPathsMulti :: IO Bool
+
 testParseShowModulesPathsMulti =
   let raw = T.unlines
         [ "Expr.Syntax     ( src/Expr/Syntax.hs, interpreted )"
@@ -271,7 +261,9 @@ testParseShowModulesPathsMulti =
 -- | Garbage / empty lines: skip. Parser is a best-effort tool, not a
 -- strict validator; refusing to crash on unexpected input is the
 -- important invariant.
+
 testParseShowModulesPathsGarbage :: IO Bool
+
 testParseShowModulesPathsGarbage = pure $ and
   [ null (RegTool.parseShowModulesPaths "")
   , null (RegTool.parseShowModulesPaths "random log output\n")

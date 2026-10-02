@@ -5,7 +5,6 @@
 module Spec.Guidance
   ( testParseStanzaAccepts
   , testParseStanzaRejects
-  , testCoverageInvokesHpcReport
   , testBajaRegistered
   , testResourcesRulesRead
   , testResourcesUnknown
@@ -34,7 +33,6 @@ import HaskellFlows.Mcp.Protocol (ToolDescriptor (..))
 import qualified HaskellFlows.Mcp.Guidance as Guidance
 import qualified HaskellFlows.Mcp.Resources as Resources
 import HaskellFlows.Tool.Deps (parseStanzaSelector)
-import qualified HaskellFlows.Tool.Coverage as CoverageTool
 import HaskellFlows.Types (mkProjectDir)
 import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import HaskellFlows.Mcp.ResourceUri
@@ -78,16 +76,6 @@ testParseStanzaRejects = pure $
 -- output the parser already understands. The regression check here is
 -- narrow: pin the static shape of Tool/Coverage.hs so a future edit
 -- can't accidentally drop the @hpc report@ invocation.
-testCoverageInvokesHpcReport :: IO Bool
-testCoverageInvokesHpcReport = do
-  src <- TIO.readFile "src/HaskellFlows/Tool/Coverage.hs"
-  pure $ T.isInfixOf "runHpcReport"         src
-      && T.isInfixOf "enrichWithHpcReport"  src
-      && T.isInfixOf "findTixFile"          src
-      && T.isInfixOf "\"hpc\""              src
-      && T.isInfixOf "\"--hpcdir=\""        src `ellipticalOr`
-         T.isInfixOf "--hpcdir="            src
-
 -- | Rescues us from the difference between `"--hpcdir="` as a
 -- quoted literal in source and the concatenation form. Either is fine.
 ellipticalOr :: Bool -> Bool -> Bool
