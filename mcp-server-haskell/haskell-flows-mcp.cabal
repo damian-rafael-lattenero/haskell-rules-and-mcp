@@ -150,6 +150,12 @@ library
                     , ghc               >= 9.10 && < 9.15
                     , ghc-paths         >= 0.1  && < 0.2
                     , ghcide            >= 2.15 && < 2.16
+                    , lsp-types
+                    , unordered-containers
+                    , hls-graph
+                    , deepseq
+                    , hashable
+                    , data-default
                     , hls-plugin-api    >= 2.15 && < 2.16
                     , prettyprinter     >= 1.7  && < 1.8
                     , process           >= 1.6  && < 1.7

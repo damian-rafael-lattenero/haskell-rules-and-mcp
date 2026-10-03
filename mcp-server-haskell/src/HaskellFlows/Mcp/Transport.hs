@@ -35,6 +35,7 @@ import Control.Concurrent.QSem (newQSem, signalQSem, waitQSem)
 import Control.Concurrent.STM (atomically, modifyTVar', newTVarIO, readTVar, retry)
 import Control.Exception (SomeException, finally, try)
 import Control.Monad (unless, void, when)
+import System.Posix.IO (dup, fdToHandle, stdOutput)
 import Data.Aeson (eitherDecodeStrict', encode)
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as BL
@@ -85,10 +86,16 @@ runStdioTransport srv = do
   hSetBuffering stdout LineBuffering
   hSetBuffering stderr LineBuffering
   writeLock <- newMVar ()
+  -- Own stable output handle: under the ghcide backend the warmup's
+  -- defaultMain can remap the process-wide 'stdout' handle; the
+  -- JSON-RPC wire must never depend on it. Duplicate the fd before
+  -- anything else runs and speak exclusively through it.
+  wireOut <- fdToHandle =<< dup stdOutput
+  hSetBuffering wireOut LineBuffering
   sem <- newQSem =<< maxConcurrentCalls
   active <- newTVarIO (0 :: Int)
   warmupInBackground
-  loop sem writeLock active
+  loop sem writeLock wireOut active
   -- EOF ≠ done: in-flight workers still own responses. Draining
   -- here fixes the burst-input race where the process exits before
   -- forked handlers write (e2e step 0 regressed exactly this way).
@@ -101,30 +108,30 @@ runStdioTransport srv = do
     -- last resort for uninterruptible sections.
     budgetMicros = unMicros (outerToolCeiling (srvLimits srv)) + 5_000_000
 
-    loop sem wl active = do
+    loop sem wl out active = do
       eof <- isEOF
       unless eof $ do
         line <- BS.hGetLine stdin
         case eitherDecodeStrict' line of
           Left parseErrTxt ->
             hPutStrLn stderr ("[haskell-flows] parse error: " <> parseErrTxt)
-          Right req -> route sem wl active req
-        loop sem wl active
+          Right req -> route sem wl out active req
+        loop sem wl out active
 
     -- Notifications run inline (no response, cheap bookkeeping);
     -- requests go to a bounded worker pool with a watchdog.
-    route sem wl active req = case reqId req of
+    route sem wl out active req = case reqId req of
       Nothing -> void (handleRequest srv req)
       Just rid -> do
         gate <- newMVar ()
         atomically (modifyTVar' active (+ 1))
         void . forkIO $
-          (waitQSem sem >> worker wl gate rid req)
+          (waitQSem sem >> worker wl out gate rid req)
             `finally` (atomically (modifyTVar' active (subtract 1))
                        >> signalQSem sem)
-        void (forkIO (void (watchdog wl gate rid)))
+        void (forkIO (void (watchdog wl out gate rid)))
 
-    worker wl gate rid req = do
+    worker wl out gate rid req = do
       result <- try (handleRequest srv req) :: IO (Either SomeException (Maybe Response))
       let mresp = case result of
             Left ex ->
@@ -132,11 +139,11 @@ runStdioTransport srv = do
             Right r -> r
       won <- deliverOnce gate $ case mresp of
         Nothing -> pure ()
-        Just resp -> writeResponse wl resp
+        Just resp -> writeResponse out wl resp
       unless won $
         hPutStrLn stderr "[haskell-flows] late response dropped (watchdog answered first)"
 
-    watchdog wl gate rid = do
+    watchdog wl out gate rid = do
       threadDelay budgetMicros
       won <-
         deliverOnce gate $ do
@@ -144,13 +151,13 @@ runStdioTransport srv = do
             ("[haskell-flows] watchdog: no response for this request after "
                <> show (budgetMicros `div` 1_000_000)
                <> "s — delivering timeout; worker may be wedged uninterruptibly")
-          writeResponse wl (Response rid (Left (internalErr "tool call exceeded the outer ceiling (watchdog)")))
+          writeResponse out wl (Response rid (Left (internalErr "tool call exceeded the outer ceiling (watchdog)")))
       pure won
 
-    writeResponse wl resp = withMVar wl $ \_ -> do
-      BL.hPutStr stdout (encode resp)
-      BS.hPutStr stdout "\n"
-      hFlush stdout
+    writeResponse out wl resp = withMVar wl $ \_ -> do
+      BL.hPutStr out (encode resp)
+      BS.hPutStr out "\n"
+      hFlush out
 
     warmupInBackground = when (srvBackend srv == BackendGhcide) $ do
       w <- lookupEnv "HASKELL_FLOWS_WARMUP"

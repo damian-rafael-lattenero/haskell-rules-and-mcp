@@ -45,7 +45,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import System.Directory (getCurrentDirectory)
+import System.Directory (canonicalizePath, getCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
 import System.Timeout (timeout)
 
@@ -211,7 +211,12 @@ serverForRaw raw = do
   -- 'ghc_project(action="validate")' all fail with
   -- "posix_spawnp: does not exist".
   _ <- PathBootstrap.augmentPath
-  case mkProjectDir raw of
+  -- Canonicalize (resolve symlinks, e.g. macOS /tmp → /private/tmp):
+  -- ghcide's implicit cradle prefixes are realpaths, so every path
+  -- we derive must share the spelling or files land in
+  -- "Multi Cradle: No prefixes matched".
+  raw' <- canonicalizePath raw
+  case mkProjectDir raw' of
     Left err -> error ("Could not build ProjectDir: " <> show err)
     Right pd -> do
       pdRef    <- newIORef pd
