@@ -100,9 +100,13 @@ testSwitchAcceptsEmpty = do
   let dir = base </> ("sp-empty-" <> show (floor (ts * 1000000) :: Int))
   createDirectoryIfMissing True dir
   res <- validateSwitchTarget (T.pack dir)
+  -- Canonicalize-fix contract: the validator realpaths the target
+  -- (matching the boot path), so the expectation must share the
+  -- canonical spelling of the fixture dir.
+  want <- System.Directory.canonicalizePath dir
   removePathForcibly dir
   pure $ case res of
-    Right pd -> HaskellFlows.Types.unProjectDir pd == dir
+    Right pd -> HaskellFlows.Types.unProjectDir pd == want
     _        -> False
 
 --------------------------------------------------------------------------------

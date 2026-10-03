@@ -56,7 +56,7 @@ import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, atomicWriteIORef, readIORef)
 import Data.Text (Text)
 import qualified Data.Text as T
-import System.Directory (doesDirectoryExist, listDirectory)
+import System.Directory (canonicalizePath, doesDirectoryExist, listDirectory)
 import System.FilePath (takeExtension)
 
 import HaskellFlows.Data.PropertyStore (Store, openStore)
@@ -134,21 +134,40 @@ renderValidationError = \case
 --     at a random folder (e.g. @~/Downloads@) whose contents
 --     would be interpreted as sources by subsequent tools.
 validateSwitchTarget :: Text -> IO (Either ValidationError ProjectDir)
-validateSwitchTarget raw =
-  case mkProjectDir (T.unpack raw) of
+validateSwitchTarget rawTxt = do
+  -- Guard relative inputs FIRST: canonicalizePath resolves against
+  -- the CWD, which would launder a relative path into a valid
+  -- absolute one and bypass the PathNotAbsolute contract.
+  case mkProjectDir (T.unpack rawTxt) of
     Left pe -> pure (Left (VEPathError pe))
-    Right pd -> do
-      let root = unProjectDir pd
-      exists <- doesDirectoryExist root
-      if not exists
-        then pure (Left (VENotADirectory root))
-        else do
-          entries <- listDirectory root
-          let hasCabal = any ((".cabal" ==) . takeExtension) entries
-              isEmpty  = null entries
-          if hasCabal || isEmpty
-            then pure (Right pd)
-            else pure (Left (VENoCabalFile root))
+    Right _ -> do
+      -- Canonicalize (resolve symlinks, e.g. macOS /var →
+      -- /private/var): ghcide's implicit cradle prefixes are
+      -- realpaths. A switched-to dir spelled through a symlink must
+      -- land on the same spelling the boot path uses
+      -- (serverForRaw), or every file under it misses the cradle
+      -- prefixes ("Multi Cradle: No prefixes matched") and the
+      -- whole session degrades to cradle errors.
+      raw <- canonicalizePath (T.unpack rawTxt)
+      case mkProjectDir raw of
+        Left pe    -> pure (Left (VEPathError pe))
+        Right pd -> validateTargetDir pd
+
+-- | Filesystem half of the validation: the dir must exist and
+-- either contain a .cabal or be empty (scaffold-ready).
+validateTargetDir :: ProjectDir -> IO (Either ValidationError ProjectDir)
+validateTargetDir pd = do
+  let root = unProjectDir pd
+  exists <- doesDirectoryExist root
+  if not exists
+    then pure (Left (VENotADirectory root))
+    else do
+      entries <- listDirectory root
+      let hasCabal = any ((".cabal" ==) . takeExtension) entries
+          isEmpty  = null entries
+      if hasCabal || isEmpty
+        then pure (Right pd)
+        else pure (Left (VENoCabalFile root))
 
 -- | Side-effecting handler. Takes the mutable refs the server
 -- already owns — we don't import 'Server' here to keep

@@ -21,7 +21,7 @@ import Data.IORef (newIORef, readIORef)
 import qualified Data.Aeson as A
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -57,7 +57,12 @@ scaffoldTmpProject tag = do
     , "  build-depends: base"
     , "  default-language: Haskell2010"
     ]
-  pure dir
+  -- Post-canonicalize-fix contract: validateSwitchTarget now
+  -- canonicalizes (realpath) the target, matching the boot path.
+  -- getTemporaryDirectory returns the unresolved spelling
+  -- (/var/... on macOS); expectations must share the canonical
+  -- form or every comparison trips on the symlink spelling.
+  canonicalizePath dir
 
 -- | Relative paths must be rejected before touching the filesystem —
 -- 'mkProjectDir' is the guard; 'validateSwitchTarget' surfaces it as

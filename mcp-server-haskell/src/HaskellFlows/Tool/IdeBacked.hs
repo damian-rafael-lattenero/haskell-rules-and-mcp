@@ -17,7 +17,7 @@ module HaskellFlows.Tool.IdeBacked
 
 import Control.Concurrent.MVar (MVar, modifyMVar)
 import Control.Exception (SomeException, try)
-import Control.Monad (void)
+import Control.Monad (void, when)
 import Data.Aeson (Value, object, withObject, (.=), (.:))
 import qualified Data.Aeson
 import Data.Maybe (fromMaybe)
@@ -34,6 +34,8 @@ import qualified Data.Text.IO as TIO
 import System.Directory (listDirectory)
 import System.FilePath ((</>))
 
+import HaskellFlows.Data.PropertyStore (Store, loadAll, saveCases)
+import HaskellFlows.Data.PropertyStore (StoredProperty (..))
 import HaskellFlows.Ghc.IdeSession
   ( EvalArgs (..)
   , IdeSession (..)
@@ -87,10 +89,11 @@ warmupIdeSession ref pdRef =
 routeIde
   :: MVar (Maybe IdeSession)
   -> IORef ProjectDir
+  -> IORef Store
   -> ToolName
   -> Value
   -> Maybe (IO ToolResponse)
-routeIde ref pdRef tn args = case tn of
+routeIde ref pdRef storeRef tn args = case tn of
   GhcCheck
     | actionIs "module"  args -> Just (withIdeSession ref pdRef (handleCheckModule pdRef (stripped args)))
     | actionIs "load"    args -> Just (withIdeSession ref pdRef (handleCheckLoad pdRef (stripped args)))
@@ -101,7 +104,8 @@ routeIde ref pdRef tn args = case tn of
     | actionIs "type" args -> Just (withIdeSession ref pdRef (handleType (stripped args)))
     | otherwise -> Nothing
   GhcProperty
-    | actionIs "check" args -> Just (withIdeSession ref pdRef (handlePropertyCheck pdRef (stripped args)))
+    | actionIs "check" args -> Just (withIdeSession ref pdRef (handlePropertyCheck pdRef storeRef (stripped args)))
+    | actionIs "run" args -> Just (withIdeSession ref pdRef (handlePropertyRun pdRef storeRef))
     | otherwise -> Nothing
   _ -> Nothing
 
@@ -171,6 +175,11 @@ firstRight (io : rest) = do
       | any (`T.isInfixOf` e)
           [ "Could not find module", "Could not load module"
           , "not loaded", "Variable not in scope"
+          -- GHC >= 9.4 message shape ("Variable/Data constructor/Type
+          -- not in scope" all collapse to this prefix; the anchor
+          -- chain must advance on ANY out-of-scope name — a richer
+          -- anchor (e.g. test/Spec.hs) may provide it).
+          , "Not in scope"
           , "could not resolve GHC session" ]
       -> firstRight rest
     Left e -> pure (Just (Left e))
@@ -505,8 +514,8 @@ handleType raw s = case argField "expression" raw of
 -- an anchor whose graph provides both QuickCheck and the property's
 -- home module. @runs >= 2@ replays N times (@RUN;STATE|…@) and
 -- reports stability — the determinism route.
-handlePropertyCheck :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
-handlePropertyCheck pdRef raw s = case argField "property" raw of
+handlePropertyCheck :: IORef ProjectDir -> IORef Store -> Value -> IdeSession -> IO ToolResponse
+handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
   Left err -> pure (mkFailed (mkErrorEnvelope MissingArg (T.pack err)))
   Right prop -> do
     let runs = case KM.lookup "runs" (objOf raw) of
@@ -544,8 +553,31 @@ handlePropertyCheck pdRef raw s = case argField "property" raw of
         pure (Env.mkUnavailable (mkErrorEnvelope Validation
           "could not resolve a GHC session with QuickCheck for this property"))
       Just (Left err) ->
-        pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) err))
-      Just (Right out) -> pure (qcResponse prop runs out)
+        -- Parity with the legacy QcUnparsed surface: a property that
+        -- fails to compile must carry the compiler output in 'hint'
+        -- — without it the agent sees raw="" and zero explanation.
+        let payload =
+              object
+                [ "action" .= ("check" :: Text)
+                , "property" .= prop
+                , "state" .= ("unparsed" :: Text)
+                , "hint" .= err
+                , "backend" .= ("ghcide" :: Text)
+                ]
+        in pure
+          ( (mkFailed (mkErrorEnvelope (budgetErrorKind err) err))
+              { Env.reResult = Just payload }
+          )
+      Just (Right out) -> do
+        -- Product contract parity with the legacy backend: a pass
+        -- persists the law into the project's property store so
+        -- ghc_property(action="run") / property_store(action="run")
+        -- can replay it later. The recorded module hint is the
+        -- caller's module argument when present.
+        when (qcWorstOf runs out == "passed") $ do
+          store <- readIORef storeRef
+          saveCases store prop moduleArgText (qcNOf runs out)
+        pure (qcResponse prop runs out)
   where
     objOf (Data.Aeson.Object o) = o
     objOf _ = KM.empty
@@ -575,18 +607,12 @@ qcExpr prop runs =
 qcResponse :: Text -> Int -> Text -> ToolResponse
 qcResponse prop runs out =
   let entries
-        | runs >= 2 = map parseRun (filter (not . T.null) (T.splitOn "RUN;" out))
-        | otherwise = [parseRun out]
+        | runs >= 2 = map parseRun' (filter (not . T.null) (T.splitOn "RUN;" out))
+        | otherwise = [parseRun' out]
       states = [st | (st, _, _) <- entries]
       stable = length (distinct states) <= 1
-      worst
-        | "failed" `elem` states = ("failed" :: Text)
-        | "exception" `elem` states = "exception"
-        | "gave_up" `elem` states = "gave_up"
-        | otherwise = "passed"
-      n = case [n' | (_, Just n', _) <- entries] of
-            (x : _) -> x
-            [] -> 0
+      worst = qcWorstOf runs out
+      n = qcNOf runs out
       cex = case [o | (st, _, Just o) <- entries, st == "failed"] of
         (o : _) -> T.strip (cexOf o)
         [] -> ""
@@ -609,20 +635,155 @@ qcResponse prop runs out =
                ("Property " <> worst <> " — ghcide backend"))
             & \r -> r { Env.reResult = Just (object withCex) }
   where
-    parseRun t =
-      let (st, rest1) = splitOnce "|N|" t
-          (nTxt, rest2) = splitOnce "|OUT|" rest1
-      in (T.strip st, readMaybeInt nTxt, Just rest2)
-    splitOnce sep t = case T.breakOn sep t of
-      (a, b) | T.null b -> (t, "")
-             | otherwise -> (a, T.drop (T.length sep) b)
-    readMaybeInt t = case reads (T.unpack (T.strip t)) of
-      [(x, "")] -> Just x
-      _ -> Nothing
     distinct = foldr (\x acc -> if x `elem` acc then acc else x : acc) []
     cexOf o = case T.lines o of
       (_ : rest) -> T.unlines rest
       [] -> o
-    qcErrorKind "failed" = CompileError
-    qcErrorKind "exception" = TypeError
-    qcErrorKind _ = Validation
+
+-- | Worst QuickCheck state across all RUN; entries (shared by the
+-- check route and the regression replay).
+qcWorstOf :: Int -> Text -> Text
+qcWorstOf runs out =
+  let entries
+        | runs >= 2 = map parseRun' (filter (not . T.null) (T.splitOn "RUN;" out))
+        | otherwise = [parseRun' out]
+      states = [st | (st, _, _) <- entries]
+  in pickWorst states
+
+pickWorst :: [Text] -> Text
+pickWorst states
+  | "failed" `elem` states = "failed"
+  | "exception" `elem` states = "exception"
+  | "gave_up" `elem` states = "gave_up"
+  | otherwise = "passed"
+
+-- | Case count of the first RUN; entry (numTests).
+qcNOf :: Int -> Text -> Int
+qcNOf runs out =
+  let entries
+        | runs >= 2 = map parseRun' (filter (not . T.null) (T.splitOn "RUN;" out))
+        | otherwise = [parseRun' out]
+  in case [n' | (_, Just n', _) <- entries] of
+       (x : _) -> x
+       [] -> 0
+
+parseRun' :: Text -> (Text, Maybe Int, Maybe Text)
+parseRun' t =
+  let (st, rest1) = splitOnce' "|N|" t
+      (nTxt, rest2) = splitOnce' "|OUT|" rest1
+  in (T.strip st, readMaybeInt' nTxt, Just rest2)
+
+splitOnce' :: Text -> Text -> (Text, Text)
+splitOnce' sep t = case T.breakOn sep t of
+  (a, b) | T.null b -> (t, "")
+         | otherwise -> (a, T.drop (T.length sep) b)
+
+readMaybeInt' :: Text -> Maybe Int
+readMaybeInt' t = case reads (T.unpack (T.strip t)) of
+  [(x, "")] -> Just x
+  _         -> Nothing
+
+-- | Map a QuickCheck verdict onto the envelope taxonomy.
+qcErrorKind :: Text -> ErrorKind
+qcErrorKind "failed" = CompileError
+qcErrorKind "exception" = TypeError
+qcErrorKind _ = Validation
+
+--------------------------------------------------------------------------------
+-- ghc_property(action=run) — regression replay via the session
+--------------------------------------------------------------------------------
+
+-- | Replay every persisted property through the ghcide session —
+-- parity with the legacy Regression route (which replays via a
+-- cabal v2-repl subprocess). Response shape is the legacy
+-- @runResult@: action/total/passed/regressions/load_failed/summary,
+-- where a property that could not even resolve a scope lands in
+-- 'load_failed' rather than counting as a regression.
+handlePropertyRun :: IORef ProjectDir -> IORef Store -> IdeSession -> IO ToolResponse
+handlePropertyRun pdRef storeRef s = do
+  store <- readIORef storeRef
+  props <- loadAll store
+  if null props
+    then pure
+      ( mkOk
+          ( object
+              [ "action" .= ("run" :: Text)
+              , "total" .= (0 :: Int)
+              , "passed" .= (0 :: Int)
+              , "regressions" .= ([] :: [Value])
+              , "load_failed" .= ([] :: [Value])
+              , "summary" .= ("Replayed 0 stored properties." :: Text)
+              ]
+          )
+      )
+    else do
+      results <- mapM (replayProp pdRef s) props
+      let regressions =
+            [ object
+                [ "expression" .= spExpression p
+                , "module" .= spModule p
+                , "outcome" .= object ["state" .= st]
+                ]
+            | (p, Left st) <- results
+            ]
+          loadFailed =
+            [ object
+                [ "expression" .= spExpression p
+                , "module" .= spModule p
+                , "outcome" .= object ["state" .= ("load_failed" :: Text)]
+                ]
+            | (p, Right Nothing) <- results
+            ]
+          total = length props
+          regressed = length regressions
+          loadFailures = length loadFailed
+          passed = total - regressed - loadFailures
+          success = regressed == 0 && loadFailures == 0
+          summary =
+            "Replayed "
+              <> T.pack (show total)
+              <> " stored properties: "
+              <> T.pack (show passed)
+              <> " passed, "
+              <> T.pack (show regressed)
+              <> " regressed"
+              <> (if loadFailures > 0 then ", " <> T.pack (show loadFailures) <> " failed to load" else "")
+              <> "."
+          payload =
+            object
+              [ "action" .= ("run" :: Text)
+              , "total" .= total
+              , "passed" .= passed
+              , "regressions" .= regressions
+              , "load_failed" .= loadFailed
+              , "summary" .= summary
+              ]
+      if success
+        then pure (mkOk payload)
+        else pure
+          ( (mkFailed (mkErrorEnvelope Validation summary))
+              { Env.reResult = Just payload }
+          )
+
+-- | Replay one stored property. 'Right (Just n)' = passed n cases;
+-- 'Right Nothing' = no anchor could even scope the property
+-- (load_failed); 'Left state' = it ran and regressed.
+replayProp :: IORef ProjectDir -> IdeSession -> StoredProperty -> IO (StoredProperty, Either Text (Maybe Int))
+replayProp pdRef s p = do
+  let prop = spExpression p
+      anchorArg = T.unpack <$> spModule p
+  anchors <- anchorCandidates pdRef anchorArg
+  warmAnchors s anchors
+  r <- firstRight
+    [ ideEvalExprIn s (EvalArgs a ["Test.QuickCheck", "System.IO.Unsafe"] True) (qcExpr prop 1)
+    | a <- anchors
+    ]
+  case r of
+    Nothing -> pure (p, Right Nothing)
+    Just (Left _) -> pure (p, Right Nothing)
+    Just (Right out) ->
+      let worst = qcWorstOf 1 out
+      in if worst == "passed"
+           then pure (p, Right (Just (qcNOf 1 out)))
+           else pure (p, Left worst)
+

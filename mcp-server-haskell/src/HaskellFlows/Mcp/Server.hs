@@ -450,7 +450,7 @@ dispatchByName srv sink args tn = do
     -- the default backend).
     other
       | srvBackend srv == BackendGhcide
-      , Just routed <- IdeBacked.routeIde (srvIdeSession srv) (srvProjectDir srv) other args
+      , Just routed <- IdeBacked.routeIde (srvIdeSession srv) (srvProjectDir srv) (srvStore srv) other args
       -> routed
     other -> handlerFor other env args
   -- B-1: attach a NON-blocking warning naming any argument keys the
