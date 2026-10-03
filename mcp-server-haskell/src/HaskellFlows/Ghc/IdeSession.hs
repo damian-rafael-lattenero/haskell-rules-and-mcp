@@ -5,11 +5,11 @@
 -- forked so the MCP stdio transport keeps running. Tool handlers reach
 -- the state via 'runAction' — the same embedding HLS plugins use.
 --
--- Component resolution (library vs test-suite package envs) comes from
--- hie-bios via an explicit @hie.yaml@. F0 finding: without one, the
--- implicit cradle degrades to a base-only direct cradle with empty
--- cradle-error diagnostics. 'ensureHieYaml' synthesizes the file from
--- the project's .cabal when missing.
+-- Component resolution comes from hie-bios implicit cabal discovery
+-- (no hie.yaml): the session runs with cwd = project root and all
+-- paths canonicalized, matching how the editor launches HLS. F3
+-- finding: generated CabalMulti cradles break multi-component
+-- targets ("No cradle target found") — never synthesize one.
 --
 -- Verified API recipes (docs/ghcide-spike-F0.md):
 --   * 'GhcSessionDeps' (not 'GhcSession') for interactive eval/type.
@@ -27,8 +27,6 @@ module HaskellFlows.Ghc.IdeSession
   , ideEvalExprIn
   , ideTypeOfExprIn
   , anchorModuleIn
-  , hieYamlFromCabal
-  , ensureHieYaml
     -- * F3: project-wide diagnostics + module inventory
   , EvalArgs (..)
   , ideDiagnosticsFor
@@ -317,6 +315,63 @@ ideProjectDiagnostics s fs =
   withMVar (isEvalLock s) $ \_ ->
     mapM (\fp -> (,) fp <$> ideDiagnosticsFor' s fp) fs
 
+splitStanzas :: [Text] -> [(Stanza, [Text])]
+splitStanzas [] = []
+splitStanzas (t : rest) = case stanzaHeaderOf t of
+  Just st ->
+    let (body, rest') = span (isNothing . stanzaHeaderOf) rest
+    in (st, body) : splitStanzas rest'
+  Nothing -> splitStanzas rest
+
+-- | Top-level (column-0) stanza headers only.
+stanzaHeaderOf :: Text -> Maybe Stanza
+stanzaHeaderOf t
+  | not (T.null t)
+  , not (isSpace (T.head t)) =
+      if t == "library"
+        then Just LibStanza
+        else case T.stripPrefix "test-suite " t of
+          Just rest
+            | not (T.null (T.strip rest)) ->
+                Just (TestStanza (T.takeWhile (/= ' ') (T.strip rest)))
+          _ -> Nothing
+  | otherwise = Nothing
+
+packageNameOf :: [Text] -> Either String Text
+packageNameOf ls =
+  case mapMaybe pick ls of
+    (n : _) -> Right n
+    [] -> Left "no 'name:' field in .cabal"
+  where
+    pick t =
+      let (k, v) = fieldSplit t
+      in if T.toLower (T.strip k) == "name" && not (T.null v)
+           then Just v
+           else Nothing
+
+-- | Break a @field: value@ line, dropping the separator colon and
+-- trimming both sides.
+fieldSplit :: Text -> (Text, Text)
+fieldSplit t =
+  let (k, v) = T.break (== ':') t
+  in (T.strip k, T.strip (T.drop 1 v))
+
+-- | First comma-separated value of the stanza's hs-source-dirs, or the
+-- conventional default when the stanza omits the field.
+sourceDirOf :: Text -> [Text] -> Text
+sourceDirOf def body =
+  case mapMaybe pick body of
+    (d : _) -> d
+    [] -> def
+  where
+    pick t =
+      let (k, v) = fieldSplit t
+      in if T.toLower k == "hs-source-dirs"
+           then let first = T.takeWhile (/= ',') v
+                in if T.null first then Nothing else Just first
+           else Nothing
+
+
 -- | F3: relative module paths (library + test stanzas) parsed from
 -- .cabal content. Module names map to @dir/Mod/Sub.hs@ under each
 -- stanza's hs-source-dirs.
@@ -377,7 +432,9 @@ ideEvalExprIn s ea expr =
 
 ideEvalExprIn' :: IdeSession -> EvalArgs -> Text -> IO (Either Text Text)
 ideEvalExprIn' s ea expr = do
-  menv <- ideInteractiveEnvFor s (eaAnchor ea) (eaQuickCheck ea)
+  nfp0 <- toNormalizedFilePath' <$> makeAbsolute (eaAnchor ea)
+  scopeAnchorForEval s nfp0
+  menv <- ideInteractiveEnvFor s nfp0 (eaQuickCheck ea)
   case menv of
     Left e   -> pure (Left e)
     Right (mn, hsc) -> fmap joinTimeout (timeout 30_000_000 (tryRun mn hsc))
@@ -400,7 +457,9 @@ ideEvalExprIn' s ea expr = do
 -- module (see 'ideInteractiveEnvFor').
 ideTypeOfExprIn :: IdeSession -> EvalArgs -> Text -> IO (Either Text Text)
 ideTypeOfExprIn s ea expr = do
-  menv <- ideInteractiveEnvFor s (eaAnchor ea) False
+  nfp0 <- toNormalizedFilePath' <$> makeAbsolute (eaAnchor ea)
+  scopeAnchorForEval s nfp0
+  menv <- ideInteractiveEnvFor s nfp0 False
   case menv of
     Left e   -> pure (Left e)
     Right (mn, hsc) -> fmap joinTimeout (timeout 30_000_000 (tryRun mn hsc))
@@ -443,111 +502,6 @@ anchorModuleIn s = do
 -- | A cabal stanza we can map to a hie.yaml component.
 data Stanza = LibStanza | TestStanza !Text
   deriving stock (Eq, Show)
-
--- | Render a @hie.yaml@ from .cabal content: one @- path/component@
--- pair per library and test-suite stanza. Two passes: split the file
--- into stanzas, then extract each stanza's hs-source-dirs (or the
--- conventional default). Pure — unit-tested.
-hieYamlFromCabal :: Text -> Either String Text
-hieYamlFromCabal cabal = do
-  pkg <- packageNameOf sigLines
-  let stanzas = splitStanzas sigLines
-  if null stanzas
-    then Left "no library or test-suite stanza found"
-    else
-      Right $
-        T.unlines $
-          [ "cradle:"
-          , "  cabal:"
-          ]
-            <> concatMap (renderEntry pkg) stanzas
-  where
-    sigLines =
-      [ T.strip t
-      | t <- T.lines cabal
-      , not (T.null (T.strip t))
-      , not ("--" `T.isPrefixOf` T.strip t)
-      ]
-    renderEntry pkg (LibStanza, body) =
-      entry (sourceDirOf "src" body) ("lib:" <> pkg)
-    renderEntry _ (TestStanza n, body) =
-      entry (sourceDirOf "test" body) ("test:" <> n)
-    entry dir comp =
-      [ "    - path: \"./" <> dir <> "\""
-      , "      component: \"" <> comp <> "\""
-      ]
-
--- | Significant lines, split into (stanza, body-lines) pairs. Lines
--- before the first stanza header (name:, version:, …) are skipped.
-splitStanzas :: [Text] -> [(Stanza, [Text])]
-splitStanzas [] = []
-splitStanzas (t : rest) = case stanzaHeaderOf t of
-  Just st ->
-    let (body, rest') = span (isNothing . stanzaHeaderOf) rest
-    in (st, body) : splitStanzas rest'
-  Nothing -> splitStanzas rest
-
--- | Top-level (column-0) stanza headers only.
-stanzaHeaderOf :: Text -> Maybe Stanza
-stanzaHeaderOf t
-  | not (T.null t)
-  , not (isSpace (T.head t)) =
-      if t == "library"
-        then Just LibStanza
-        else case T.stripPrefix "test-suite " t of
-          Just rest
-            | not (T.null (T.strip rest)) ->
-                Just (TestStanza (T.takeWhile (/= ' ') (T.strip rest)))
-          _ -> Nothing
-  | otherwise = Nothing
-
-packageNameOf :: [Text] -> Either String Text
-packageNameOf ls =
-  case mapMaybe pick ls of
-    (n : _) -> Right n
-    [] -> Left "no 'name:' field in .cabal"
-  where
-    pick t =
-      let (k, v) = fieldSplit t
-      in if T.toLower (T.strip k) == "name" && not (T.null v)
-           then Just v
-           else Nothing
-
--- | Break a @field: value@ line, dropping the separator colon and
--- trimming both sides.
-fieldSplit :: Text -> (Text, Text)
-fieldSplit t =
-  let (k, v) = T.break (== ':') t
-  in (T.strip k, T.strip (T.drop 1 v))
-
--- | First comma-separated value of the stanza's hs-source-dirs, or the
--- conventional default when the stanza omits the field.
-sourceDirOf :: Text -> [Text] -> Text
-sourceDirOf def body =
-  case mapMaybe pick body of
-    (d : _) -> d
-    [] -> def
-  where
-    pick t =
-      let (k, v) = fieldSplit t
-      in if T.toLower k == "hs-source-dirs"
-           then let first = T.takeWhile (/= ',') v
-                in if T.null first then Nothing else Just first
-           else Nothing
-
--- | Write a synthesized @hie.yaml@ when the project has none. Returns
--- True when the file was written.
-ensureHieYaml :: FilePath -> IO Bool
-ensureHieYaml root = do
-  -- F3 finding: our generated CabalMulti cradle (path -> component)
-  -- drives hie-bios into its multi-repl wrapper path, which fails in
-  -- this environment ("No cradle target found" for every file, and —
-  -- worse — the poisoned rule cache makes NeedsCompilation of
-  -- LIBRARY files fail via reverse deps). ghcide's implicit cabal
-  -- cradle (no hie.yaml) resolves components per file reliably, so
-  -- for cabal projects we generate NOTHING. User-provided hie.yaml
-  -- is respected (we only look, never overwrite).
-  pure False
 
 -- | Interactive context from an import list (plain 'IIDecl's; the
 -- anchor module itself is already in scope via 'IIModule').
@@ -616,24 +570,26 @@ unqueueForEvaluation ide nfp = do
 -- | NOT self-locking: callers ('ideEvalExprIn' / 'ideTypeOfExprIn')
 -- already hold 'isEvalLock' — an MVar is not reentrant, nesting it
 -- self-deadlocks (F3: the matrix hang).
-ideInteractiveEnvFor :: IdeSession -> FilePath -> Bool -> IO (Either Text (String, HscEnv))
-ideInteractiveEnvFor s anchor needsQC = do
-  absF0 <- makeAbsolute anchor
-  let nfp0 = toNormalizedFilePath' absF0
+-- | The anchor's eval lifecycle: queue it for linkables (the
+-- redefined NeedsCompilation rule) and drive the official
+-- didOpen-equivalent — GetModArtefacts only computes serialized core
+-- (the GetLinkable BCO input) on the IsFOI branch, and without an LSP
+-- client nothing records the state changes, so we mark it OnDisk and
+-- restart the session with the affected keys in dirtyKeys (the
+-- mechanism Notifications.hs drives for real editors).
+--
+-- NOT self-locking: callers hold 'isEvalLock' — a concurrent burst of
+-- restarts aborts each other's sessions (F3: matrix prop-determinism
+-- raced exactly this way); the lock must cover lifecycle + body.
+scopeAnchorForEval :: IdeSession -> NormalizedFilePath -> IO ()
+scopeAnchorForEval s nfp0 = do
   queueForEvaluation (isState s) nfp0
-  -- GetModArtefacts only computes serialized core (the GetLinkable
-  -- BCO input) on the IsFOI branch; without an LSP client every
-  -- file is NotFOI and GetLinkable dies with "file without a
-  -- linkable". Mark the anchor OnDisk — the official addFileOfInterest
-  -- API, mirroring an open editor buffer.
-  -- Official didOpen-equivalent (LSP/Notifications.hs wraps
-  -- addFileOfInterest in setSomethingModified; Main.hs:392 uses the
-  -- same with VFSUnmodified headless). The IO [Key] action mutates
-  -- state and returns the keys whose cached rule values must be
-  -- invalidated (dirtyKeys); the session restart re-propagates them.
   setSomethingModified VFSUnmodified (isState s) "mcp-eval-scope" $ do
     ks <- addFileOfInterest (isState s) nfp0 OnDisk
     pure (toKey IsEvaluating nfp0 : toKey NeedsCompilation nfp0 : ks)
+
+ideInteractiveEnvFor :: IdeSession -> NormalizedFilePath -> Bool -> IO (Either Text (String, HscEnv))
+ideInteractiveEnvFor s nfp0 needsQC = do
   r <- try (body nfp0) :: IO (Either SomeException (String, HscEnv))
   _ <- try (unqueueForEvaluation (isState s) nfp0) :: IO (Either SomeException ())
   case r of
