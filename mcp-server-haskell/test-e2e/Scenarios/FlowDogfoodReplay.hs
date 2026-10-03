@@ -430,15 +430,21 @@ runFlow c projectDir = do
 
   ----------------------------------------------------------------
   -- (8) check_project warnings_block: strict vs informational.
-  -- The scaffold's -Wall set means the per-module re-loads carry
-  -- warnings (e.g. -Wunused-packages fires per-component), so we
-  -- can prove:
-  --   * warnings_block=true  → 'overall' = false (strict gate)
-  --   * warnings_block=false → 'overall' = true  (warnings
-  --     surface in diagnostics but don't block)
-  -- BUG-PLUS-mediocre-1 coverage.
+  -- The ORIGINAL version relied on the legacy ghci backend's
+  -- spurious -Wunused-packages warnings to have something to
+  -- block on — an artifact, not a contract (ghcide emits none).
+  -- Now the scenario injects a REAL warning (-Wname-shadowing on
+  -- a shadowed binding) so both modes are exercised for what they
+  -- actually are:
+  --   * warnings_block=true  → 'failed' >= 1 (strict gate blocks)
+  --   * warnings_block=false → 'overall' = true (informational)
   ----------------------------------------------------------------
   t7 <- stepHeader 8 "check_project · warnings_block (strict vs lax)"
+  createDirectoryIfMissing True (projectDir </> "src" </> "Expr")
+  TIO.writeFile (projectDir </> "src" </> "Expr" </> "Warn.hs") warnSrc
+  _ <- Client.callTool c GhcModule (object
+         [ "action" .= ("add" :: Text)
+         , "modules" .= (["Expr.Warn"] :: [Text]) ])
   cpStrict <- Client.callTool c GhcCheck
                 (object [ "action" .= ("project" :: Text), "warnings_block" .= True ])
   cpLax <- Client.callTool c GhcCheck
@@ -627,3 +633,15 @@ allModulesCompileOk v =
         _ -> False
     moduleCompiles _ = False
 allModulesCompileOk _ = False
+
+-- | A module with a REAL warning (shadowed binding under -Wname-shadowing
+-- via the common -Wall stanza): the strict/lax gate contract gets
+-- exercised by genuine diagnostics, not backend artifacts.
+warnSrc :: Text
+warnSrc = T.unlines
+  [ "module Expr.Warn where"
+  , ""
+  , "-- top-level binding without a signature: -Wmissing-signatures"
+  , "-- is part of -Wall, so this is a guaranteed real warning."
+  , "noSigHere = 42 :: Int"
+  ]

@@ -45,7 +45,7 @@ import Control.Monad (forever, forM, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value, object, (.=))
 import Data.Char (isSpace, toLower)
-import Data.List (find, sort)
+import Data.List (find, isSuffixOf, sort)
 import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -68,14 +68,17 @@ import Development.IDE (LinkableType (BCOLinkable)
   )
 import Development.IDE.Core.FileStore (setSomethingModified)
 import Development.IDE.Core.OfInterest (FileOfInterestStatus (OnDisk), addFileOfInterest)
-import Development.IDE.Core.Shake (VFSModified (VFSUnmodified))
-import Development.IDE.Types.Shake (toKey)
+import Development.IDE.Core.Shake
+  ( IdeRule, ShakeExtras (..), VFSModified (VFSUnmodified), getShakeExtras )
+import qualified Data.Vector as V
+import qualified StmContainers.Map as STM
+import Development.IDE.Types.Shake (Key, ValueWithDiagnostics (..), toKey)
 
 import Development.IDE.Core.Shake
   ( IsIdeGlobal, addIdeGlobal, getIdeGlobalAction, getIdeGlobalState )
 import qualified Development.IDE.Core.Rules as NS (needsCompilationRule)
 import Data.Hashable (Hashable (hashWithSalt))
-import Development.IDE.Graph (RuleResult)
+import Development.IDE.Graph (Action, RuleResult)
 import Development.IDE.Graph (alwaysRerun)
 import Development.IDE.Core.RuleTypes
   ( pattern GetModificationTime
@@ -293,13 +296,34 @@ ideModuleNameOf s fp =
 
 -- | didSave-equivalent for headless runs: the client edits files on
 -- disk between tool calls, and without an LSP client nothing tells
--- the engine to re-stat them. Records the mtime key as dirty and
+-- the engine to re-stat them. Records the mtime keys as dirty and
 -- restarts the session — exactly what Notifications.hs does on
--- TextDocumentDidSave (setFileModified). Must run under isEvalLock.
+-- TextDocumentDidSave (setFileModified).
+--
+-- Beyond the target .hs, the project's cabal files are invalidated
+-- too: GhcSessionIO depends on the cradle's GetModificationTime
+-- (Rules.hs uses_ the cradle deps), so a dirty .cabal re-bootstraps
+-- the session — new modules land in the component targets (legacy's
+-- "mtime-tracked re-bootstrap" equivalent). Must run under
+-- isEvalLock.
 rescanForDiskChanges :: IdeSession -> NormalizedFilePath -> IO ()
-rescanForDiskChanges s nfp =
+rescanForDiskChanges s nfp = do
+  cabalKeys <- cabalMTimeKeys (isRoot s)
   setSomethingModified VFSUnmodified (isState s) "mcp-external-edit" $
-    pure [toKey GetModificationTime nfp]
+    pure (toKey GetModificationTime nfp : cabalKeys)
+
+-- | mtime dirty-keys for every build manifest under the project
+-- root (the cradle dependencies hie-bios reports: *.cabal +
+-- cabal.project).
+cabalMTimeKeys :: FilePath -> IO [Key]
+cabalMTimeKeys root = do
+  entries <- try (listDirectory root) :: IO (Either SomeException [FilePath])
+  let cabals = case entries of
+        Right es -> [ root </> e | e <- es
+                    , ".cabal" `isSuffixOf` e || e == "cabal.project" ]
+        Left _   -> []
+  pure [ toKey GetModificationTime (toNormalizedFilePath' c)
+       | c <- cabals ]
 
 ideDiagnosticsFor :: IdeSession -> FilePath -> IO [Value]
 ideDiagnosticsFor s fp = withMVar (isEvalLock s) $ \_ -> do
@@ -311,8 +335,23 @@ ideDiagnosticsFor' :: IdeSession -> FilePath -> IO [Value]
 ideDiagnosticsFor' s fp = do
   absF <- makeAbsolute fp
   let nfp = toNormalizedFilePath' absF
-  _ <- runAction "mcp-ide-check" (isState s) (use TypeCheck nfp)
-  diags <- atomically (getDiagnostics (isState s))
+  -- Fresh, per-file, per-rule diagnostics read from the Values map
+  -- inside the SAME action that forced the rules — the published
+  -- store (getDiagnostics) is flushed asynchronously, so a check
+  -- right after a fix could serve stale cross-run errors. Cradle
+  -- errors ("not listed in .cabal") surface via GetModSummary /
+  -- GhcSessionDeps, compile errors+warnings via TypeCheck.
+  diags <- runAction "mcp-ide-check" (isState s) $ do
+    _ <- use TypeCheck nfp
+    _ <- use GetModSummary nfp
+    extras <- getShakeExtras
+    let readRuleDiags :: IdeRule k v => k -> Action [FileDiagnostic]
+        readRuleDiags k = liftIO . atomically $ do
+          mv <- STM.lookup (toKey k nfp) (state extras)
+          pure (maybe [] (V.toList . ruleDiagsOf) mv)
+    tc <- readRuleDiags TypeCheck
+    ms <- readRuleDiags GetModSummary
+    pure (tc <> ms)
   pure
     [ object
         [ "severity" .= (if _severity d == Just DiagnosticSeverity_Error
@@ -327,6 +366,11 @@ ideDiagnosticsFor' s fp = do
     , fdFilePath fd == nfp
     , let d = fdLspDiagnostic fd
     ]
+
+-- | The diagnostics a rule run produced for its file (the second
+-- component of the stored 'ValueWithDiagnostics').
+ruleDiagsOf :: ValueWithDiagnostics -> V.Vector FileDiagnostic
+ruleDiagsOf (ValueWithDiagnostics _ vd) = vd
 
 -- | @[GHC-xxxxx]@ code embedded in a diagnostic message, when present.
 diagCode :: Text -> Text
@@ -347,7 +391,15 @@ rangeToLineCol r =
 -- the Shake graph dedupes shared deps anyway.
 ideProjectDiagnostics :: IdeSession -> [FilePath] -> IO [(FilePath, [Value])]
 ideProjectDiagnostics s fs =
-  withMVar (isEvalLock s) $ \_ ->
+  withMVar (isEvalLock s) $ \_ -> do
+    -- Same didSave-equivalent as single-file checks: new modules
+    -- land in the component targets only after the cabal mtime is
+    -- invalidated (GhcSessionIO depends on the cradle deps).
+    case fs of
+      (f0 : _) -> do
+        absF <- makeAbsolute f0
+        rescanForDiskChanges s (toNormalizedFilePath' absF)
+      [] -> pure ()
     mapM (\fp -> (,) fp <$> ideDiagnosticsFor' s fp) fs
 
 splitStanzas :: [Text] -> [(Stanza, [Text])]
@@ -436,14 +488,27 @@ listFieldOf name body =
   case dropWhile (not . isField name) body of
     [] -> []
     (h : rest) ->
-      let first = T.strip (snd (fieldSplit h))
-          conts = map (T.strip . T.dropWhile (== ','))
-                    (takeWhile isCont rest)
-          items = filter (not . T.null) (first : conts)
+      -- cabal continuation grammar: a field value spans its first
+      -- line plus following lines that are neither fields (contain
+      -- ':') nor stanza headers — covers both the comma style and
+      -- the one-module-per-line style ghc_module add writes.
+      let first = splitList (snd (fieldSplit h))
+          conts = concatMap splitList (takeWhile isItem rest)
+          items = filter (not . T.null) (first <> conts)
       in items
   where
     isField n t = T.toLower (T.strip (fst (fieldSplit t))) == n
-    isCont t = "," `T.isPrefixOf` T.strip t
+    isItem t =
+      not (T.null t)
+        && not (T.any (== ':') t)
+        && not (isStanzaHeader t)
+    isStanzaHeader t =
+      let w = T.takeWhile (/= ' ') t
+      in w `elem`
+           [ "library", "test-suite", "executable", "benchmark"
+           , "flag", "source-repository", "foreign-library", "common"
+           , "custom-setup", "setup" ]
+    splitList v = [ T.strip x | x <- T.splitOn "," v ]
 
 -- | Compile and run a String-valued expression in the context of the
 -- component owning the anchor file, with extra interactive imports
@@ -619,12 +684,13 @@ unqueueForEvaluation ide nfp = do
 scopeAnchorForEval :: IdeSession -> NormalizedFilePath -> IO ()
 scopeAnchorForEval s nfp0 = do
   queueForEvaluation (isState s) nfp0
+  cabalKeys <- cabalMTimeKeys (isRoot s)
   setSomethingModified VFSUnmodified (isState s) "mcp-eval-scope" $ do
     ks <- addFileOfInterest (isState s) nfp0 OnDisk
     pure ( toKey IsEvaluating nfp0
          : toKey NeedsCompilation nfp0
          : toKey GetModificationTime nfp0
-         : ks )
+         : cabalKeys <> ks )
 
 ideInteractiveEnvFor :: IdeSession -> NormalizedFilePath -> Bool -> IO (Either Text (String, HscEnv))
 ideInteractiveEnvFor s nfp0 needsQC = do

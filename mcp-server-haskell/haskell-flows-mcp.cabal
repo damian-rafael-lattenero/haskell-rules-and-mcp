@@ -156,6 +156,8 @@ library
                     , deepseq
                     , hashable
                     , data-default
+                    , vector            >= 0.13 && < 0.14
+                    , stm-containers
                     , hls-plugin-api    >= 2.15 && < 2.16
                     , prettyprinter     >= 1.7  && < 1.8
                     , process           >= 1.6  && < 1.7

@@ -94,7 +94,7 @@ routeIde ref pdRef tn args = case tn of
   GhcCheck
     | actionIs "module"  args -> Just (withIdeSession ref pdRef (handleCheckModule pdRef (stripped args)))
     | actionIs "load"    args -> Just (withIdeSession ref pdRef (handleCheckLoad pdRef (stripped args)))
-    | actionIs "project" args -> Just (withIdeSession ref pdRef (handleCheckProject pdRef))
+    | actionIs "project" args -> Just (withIdeSession ref pdRef (handleCheckProject pdRef (stripped args)))
     | otherwise -> Nothing
   GhcEval -> Just (withIdeSession ref pdRef (handleEval args))
   GhcInspect
@@ -279,7 +279,73 @@ handleCheckModule pdRef raw s = case argField "module_path" raw of
   Right mp -> do
     pd <- readIORef pdRef
     diags <- ideDiagnosticsFor s (unProjectDir pd </> T.unpack mp)
-    pure (loadShapeEnvelope "module" mp diags)
+    -- Product contract (CheckModule.renderResult): overall + gates,
+    -- with warnings_block (default True = warnings block).
+    let warnBlock = case KM.lookup "warnings_block" (diagObj raw) of
+                      Just (Data.Aeson.Bool b) -> b
+                      _                         -> True
+        errs  = [d | d <- diags, isSevDiag "error" d]
+        warns = [d | d <- diags, isSevDiag "warning" d]
+        holes = [d | d <- diags, isHoleDiag d]
+        compileOk = null errs
+        overall = compileOk && (null warns || not warnBlock) && null holes
+        moduleGate ok why = object ["ok" .= ok, "reason" .= (why :: Text)]
+        payload =
+          [ "action"  .= ("module" :: Text)
+          , "module_path" .= mp
+          , "backend" .= ("ghcide" :: Text)
+          , "module"  .= mp
+          , "overall" .= overall
+          , "errors"  .= errs
+          , "warnings" .= warns
+          , "raw"     .= renderDiagsRaw diags
+          , "gates"   .= object
+              [ "compile"  .= moduleGate compileOk
+                  (if compileOk then "module compiles strictly"
+                                else T.pack (show (length errs)) <> " error(s)")
+              , "warnings" .= moduleGate (null warns || not warnBlock)
+                  (if null warns then "no warnings (-Wall clean)"
+                   else if warnBlock
+                     then T.pack (show (length warns)) <> " warning(s) (blocking — pass warnings_block=false to keep iterating)"
+                     else T.pack (show (length warns)) <> " warning(s) (informational; warnings_block=false)")
+              , "holes"    .= moduleGate (null holes)
+                  (if null holes then "no deferred typed holes"
+                                 else T.pack (show (length holes)) <> " typed hole(s) found")
+              , "properties" .= moduleGate True "no stored properties replayed by check_module"
+              ]
+          , "summary" .= (if overall then "Compiled OK." else "Module check failed." :: Text)
+          ]
+    pure $ if overall
+      then Env.mkOk (object payload)
+      else Env.mkFailed
+        ((mkErrorEnvelope CompileError "Module check failed — ghcide backend")
+          { Env.eeCause = Just "ghcide_diagnostics" })
+        & \r -> r { Env.reResult = Just (object payload) }
+
+-- | Cradle-resolution diagnostics (module not in any component).
+isCradleDiag :: Value -> Bool
+isCradleDiag d = case KM.lookup "message" (diagObj d) of
+  Just (Data.Aeson.String m) ->
+       "not be listed in your .cabal file" `T.isInfixOf` m
+    || "No cradle target found" `T.isInfixOf` m
+    || "Loading the module" `T.isInfixOf` m && "failed" `T.isInfixOf` m
+  _ -> False
+
+-- | Severity classifier over diagnostic VALUES.
+isSevDiag :: T.Text -> Value -> Bool
+isSevDiag want d = KM.lookup "severity" (diagObj d) == Just (Data.Aeson.String want)
+
+-- | The KeyMap of a diagnostic VALUE (empty for non-objects).
+diagObj :: Value -> KM.KeyMap Value
+diagObj (Data.Aeson.Object o) = o
+diagObj _ = KM.empty
+
+-- | Typed-hole diagnostics (deferred holes surface as warnings with
+-- the hole marker in the message).
+isHoleDiag :: Value -> Bool
+isHoleDiag d = case KM.lookup "message" (diagObj d) of
+  Just (Data.Aeson.String m) -> "Found hole" `T.isInfixOf` m
+  _                          -> False
 
 handleCheckLoad :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
 handleCheckLoad pdRef raw s = case argField "module_path" raw of
@@ -291,8 +357,8 @@ handleCheckLoad pdRef raw s = case argField "module_path" raw of
 
 -- | F3 project gate: typecheck every module listed in the .cabal.
 -- Legacy-compatible @gates.compile@ verdict + per-module rows.
-handleCheckProject :: IORef ProjectDir -> IdeSession -> IO ToolResponse
-handleCheckProject pdRef s = do
+handleCheckProject :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
+handleCheckProject pdRef raw s = do
   pd <- readIORef pdRef
   mCabal <- findCabalIn (unProjectDir pd)
   case mCabal of
@@ -306,34 +372,75 @@ handleCheckProject pdRef s = do
                               "no modules listed in .cabal"))
         else do
           rows <- ideProjectDiagnostics s (map (unProjectDir pd </>) mods)
-          let rowsV =
+          -- Product contract (CheckProject): overall / total /
+          -- checked / passed / failed / not_found / per_module.
+          -- not_found = modules whose only diagnostics are
+          -- cradle-resolution failures ("not listed in .cabal" /
+          -- "No cradle target") — they never reached compilation.
+          let warnBlock = case KM.lookup "warnings_block" (diagObj raw) of
+                            Just (Data.Aeson.Bool b) -> b
+                            _                         -> True
+              outcomeOf (fp, ds) =
+                let errs   = [d | d <- ds, isSevDiag "error" d]
+                    warns  = [d | d <- ds, isSevDiag "warning" d]
+                    cradle = [d | d <- ds, isCradleDiag d]
+                    nm     = T.pack (relativize (unProjectDir pd) fp)
+                    detail = object
+                      [ "errors" .= errs
+                      , "warnings" .= warns
+                      ]
+                in ( nm
+                   , if not (null cradle) && null errs
+                       then "not_found" :: Text
+                       else if not (null errs) then "failed"
+                       else if not (null warns) && warnBlock then "failed"
+                       else "ok"
+                   , detail )
+              outcomes = map outcomeOf rows
+              notFound = [nm | (nm, "not_found", _) <- outcomes]
+              failing  = [nm | (nm, st, _) <- outcomes, st == "failed"]
+              total    = length outcomes
+              nChecked = total - length notFound
+              okCount  = length [() | (_, "ok", _) <- outcomes]
+              overall  = null failing && null notFound
+              perModule =
                 [ object
-                    [ "module_path" .= T.pack (relativize (unProjectDir pd) fp)
-                    , "errors" .= [d | d <- ds, isSev "error" d]
-                    , "warnings" .= [d | d <- ds, isSev "warning" d]
+                    [ "module" .= nm
+                    , "status" .= st
+                    , "module_path" .= nm
+                    , "detail" .= detail
                     ]
-                | (fp, ds) <- rows
+                | (nm, st, detail) <- outcomes
                 ]
-              totalErrs = sum [length (filter (isSev "error") ds) | (_, ds) <- rows]
-          if totalErrs == 0
-            then pure (Env.mkOk (object
-                  [ "action" .= ("project" :: Text)
-                  , "backend" .= ("ghcide" :: Text)
-                  , "gates" .= object [ "compile" .= True ]
-                  , "modules" .= rowsV
-                  , "summary" .=
-                      ("All " <> T.pack (show (length rows)) <> " modules compile clean." :: Text)
-                  ]))
+              summaryText =
+                T.pack (show okCount) <> "/" <> T.pack (show total)
+                  <> " modules green."
+                  <> (if not (null notFound)
+                        then " (" <> T.pack (show (length notFound)) <> " not found)"
+                        else "")
+              payload =
+                [ "action"   .= ("project" :: Text)
+                , "backend"  .= ("ghcide" :: Text)
+                , "overall"  .= overall
+                , "total"    .= total
+                , "checked"  .= nChecked
+                , "passed"   .= okCount
+                , "failed"   .= length failing
+                , "not_found" .= length notFound
+                , "skipped"  .= (0 :: Int)
+                , "gates"    .= object [ "compile" .= overall ]
+                , "modules"  .= perModule
+                , "per_module" .= perModule
+                , "summary"  .= summaryText
+                ]
+          if overall
+            then pure (Env.mkOk (object payload))
             else pure
                   (Env.mkFailed
-                     ((mkErrorEnvelope CompileError
-                         (T.pack (show totalErrs) <> " error(s) across project — ghcide backend"))
-                     ) & \r -> r { Env.reResult = Just (object
-                        [ "action" .= ("project" :: Text)
-                        , "backend" .= ("ghcide" :: Text)
-                        , "gates" .= object [ "compile" .= False ]
-                        , "modules" .= rowsV
-                        ]) })
+                     (mkErrorEnvelope GateFailure
+                        (T.pack (show (length failing + length notFound))
+                           <> " module(s) failing across project — ghcide backend"))
+                     & \r -> r { Env.reResult = Just (object payload) })
   where
     isSev want d = KM.lookup "severity" (objOf d) == Just (Data.Aeson.String want)
     objOf (Data.Aeson.Object o) = o
