@@ -38,6 +38,8 @@ import qualified E2E.Smoke    as Smoke
 import qualified Scenarios.ExprEvaluator        as Expr
 import qualified Scenarios.FlowANSIEscape        as FlowANSI
 import qualified Scenarios.FlowArbitrary        as FlowA
+import qualified Scenarios.FlowGhcideMatrix     as FlowParity
+import qualified Scenarios.FlowTransportBurst   as FlowBurst
 import qualified Scenarios.FlowBatch            as FlowB
 import qualified Scenarios.FlowBootstrap        as FlowBoot
 import qualified Scenarios.FlowCorpusTransport  as FlowCT
@@ -126,6 +128,10 @@ scenarios =
     , True, Expr.runExprScenario )
   , ( "Flow: Exploratory (type / info / eval / complete / goto / doc)"
     , False, FlowE.runFlow )
+  , ( "Flow: ghcide parity matrix (10 verb cases under the active backend)"
+    , True, FlowParity.runFlow )
+  , ( "Flow: Transport burst-drain (6 calls + EOF mid-flight)"
+    , False, FlowBurst.runFlow )
   , ( "Flow: Eval after check_module (B-4 byte-code linker regression)"
     , False, FlowEAC.runFlow )
   , ( "Flow: Typed holes (hole → patch → clean)"
@@ -161,7 +167,7 @@ scenarios =
   , ( "Flow: Refactor out-of-scope (refuse silent no-op)"
     , False, FlowROS.runFlow )
   , ( "Flow: Type breakage (check_module must flag type mismatch)"
-    , False, FlowTB.runFlow )
+    , False, FlowBurst.runFlow )
   , ( "Flow: Injection guard (newline / sentinel / path traversal)"
     , False, FlowIG.runFlow )
   , ( "Flow: Module-name guard (ISSUE-47 · invalid module / export names refused)"

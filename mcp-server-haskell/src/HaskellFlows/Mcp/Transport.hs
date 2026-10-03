@@ -36,7 +36,7 @@ import Control.Concurrent.STM (atomically, modifyTVar', newTVarIO, readTVar, ret
 import Control.Exception (SomeException, finally, try)
 import Control.Monad (unless, void, when)
 import System.Posix.IO (dup, fdToHandle, stdOutput)
-import Data.Aeson (eitherDecodeStrict', encode)
+import Data.Aeson (Value (Null), eitherDecodeStrict', encode)
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as BL
 import System.Environment (lookupEnv)
@@ -113,8 +113,16 @@ runStdioTransport srv = do
       unless eof $ do
         line <- BS.hGetLine stdin
         case eitherDecodeStrict' line of
-          Left parseErrTxt ->
+          Left parseErrTxt -> do
             hPutStrLn stderr ("[haskell-flows] parse error: " <> parseErrTxt)
+            -- JSON-RPC 2.0: an unparseable request MUST get a -32700
+            -- response (id null) — anything else leaves the client
+            -- blocked on that id forever. Found by the burst-drain
+            -- scenario (the probe's \x escape is invalid JSON).
+            withMVar wl $ \_ -> do
+              BL.hPutStr out (encode (Response Null (Left (parseErr (T.pack parseErrTxt)))))
+              BS.hPutStr out "\n"
+              hFlush out
           Right req -> route sem wl out active req
         loop sem wl out active
 

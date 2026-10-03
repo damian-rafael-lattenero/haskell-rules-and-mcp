@@ -16,6 +16,7 @@
 --   * 'evalGhcEnv' as the runner; 'setContext' needs an explicit
 --     Prelude IIDecl.
 --   * 'getDiagnostics' is STM.
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TypeFamilies #-}
 
 module HaskellFlows.Ghc.IdeSession
@@ -30,6 +31,7 @@ module HaskellFlows.Ghc.IdeSession
     -- * F3: project-wide diagnostics + module inventory
   , EvalArgs (..)
   , ideDiagnosticsFor
+  , ideModuleNameOf
   , ideProjectDiagnostics
   , projectModuleFilesFromCabal
   , ideInteractiveEnvFor
@@ -76,7 +78,8 @@ import Data.Hashable (Hashable (hashWithSalt))
 import Development.IDE.Graph (RuleResult)
 import Development.IDE.Graph (alwaysRerun)
 import Development.IDE.Core.RuleTypes
-  ( GetLinkable (GetLinkable)
+  ( pattern GetModificationTime
+  , GetLinkable (GetLinkable)
   , GetCoreFileHash (GetCoreFileHash)
   , IsFileOfInterest (IsFileOfInterest)
   , IsFileOfInterestResult (..)
@@ -147,11 +150,16 @@ import GHC.Unit.Module.ModIface
   , set_mi_top_env
   )
 import GHC.Data.Bool (OverridingBool (Never))
+import qualified Development.IDE.GHC.Compat.Units as CUnits (unitState)
+import GHC.Data.FastString (mkFastString)
+import GHC.Unit.Types (GenUnit (RealUnit), UnitId, Definite (Definite))
+import GHC.Unit.Info (PackageName (PackageName))
+import GHC.Unit.State (lookupPackageName)
 import Language.Haskell.Syntax.Module.Name (moduleNameString)
 import qualified GHC.Data.EnumSet as EnumSet
 import GHC.Driver.DynFlags
   ( ModRenaming (ModRenaming)
-  , PackageArg (PackageArg)
+  , PackageArg (PackageArg, UnitIdArg)
   , PackageFlag (ExposePackage)
   )
 
@@ -174,15 +182,16 @@ data BackendChoice
     -- ^ Experimental F1 backend — ghcide 'IdeState' per project.
   deriving stock (Eq, Show)
 
--- | Read @HASKELL_FLOWS_BACKEND@ (@ghcide@ / @ghcapi@). Anything
--- unrecognized falls back to 'BackendGhcApi' — master must stay green
--- for every existing consumer.
+-- | Read @HASKELL_FLOWS_BACKEND@ (@ghcide@ default / @ghcapi@
+-- legacy escape hatch). The ghcide engine is the default since the
+-- F3 flip: legacy stays selectable for A/B debugging during the
+--ApiSession decommission, not for production use.
 backendFromEnv :: IO BackendChoice
 backendFromEnv = do
   mv <- lookupEnv "HASKELL_FLOWS_BACKEND"
   pure $ case trim <$> mv of
-    Just v | map toLower v == "ghcide" -> BackendGhcide
-    _ -> BackendGhcApi
+    Just v | map toLower v == "ghcapi" -> BackendGhcApi
+    _ -> BackendGhcide
   where
     trim = f . f where f = dropWhile isSpace . reverse
 
@@ -269,8 +278,34 @@ ideTypecheckFile s fp = do
 -- structured values with the GHC code split out of the message and
 -- the range flattened. Same rule run as 'ideTypecheckFile' — the
 -- severity filter is the caller's business.
+-- | The TRUE module name of a source file, from its ModSummary —
+-- path-derived guesses ("src.Expr") do not resolve in IIDecls.
+ideModuleNameOf :: IdeSession -> FilePath -> IO (Maybe String)
+ideModuleNameOf s fp =
+  withMVar (isEvalLock s) $ \_ -> do
+    absF <- makeAbsolute fp
+    runAction "mcp-ide-modname" (isState s)
+      (fmap moduleNameString
+         . fmap moduleName
+         . fmap ms_mod
+         . fmap msrModSummary
+         <$> use GetModSummary (toNormalizedFilePath' absF))
+
+-- | didSave-equivalent for headless runs: the client edits files on
+-- disk between tool calls, and without an LSP client nothing tells
+-- the engine to re-stat them. Records the mtime key as dirty and
+-- restarts the session — exactly what Notifications.hs does on
+-- TextDocumentDidSave (setFileModified). Must run under isEvalLock.
+rescanForDiskChanges :: IdeSession -> NormalizedFilePath -> IO ()
+rescanForDiskChanges s nfp =
+  setSomethingModified VFSUnmodified (isState s) "mcp-external-edit" $
+    pure [toKey GetModificationTime nfp]
+
 ideDiagnosticsFor :: IdeSession -> FilePath -> IO [Value]
-ideDiagnosticsFor s fp = withMVar (isEvalLock s) $ \_ -> ideDiagnosticsFor' s fp
+ideDiagnosticsFor s fp = withMVar (isEvalLock s) $ \_ -> do
+  absF <- makeAbsolute fp
+  rescanForDiskChanges s (toNormalizedFilePath' absF)
+  ideDiagnosticsFor' s fp
 
 ideDiagnosticsFor' :: IdeSession -> FilePath -> IO [Value]
 ideDiagnosticsFor' s fp = do
@@ -586,7 +621,10 @@ scopeAnchorForEval s nfp0 = do
   queueForEvaluation (isState s) nfp0
   setSomethingModified VFSUnmodified (isState s) "mcp-eval-scope" $ do
     ks <- addFileOfInterest (isState s) nfp0 OnDisk
-    pure (toKey IsEvaluating nfp0 : toKey NeedsCompilation nfp0 : ks)
+    pure ( toKey IsEvaluating nfp0
+         : toKey NeedsCompilation nfp0
+         : toKey GetModificationTime nfp0
+         : ks )
 
 ideInteractiveEnvFor :: IdeSession -> NormalizedFilePath -> Bool -> IO (Either Text (String, HscEnv))
 ideInteractiveEnvFor s nfp0 needsQC = do
@@ -664,12 +702,22 @@ exposePackages' pkgs = do
   -- Interactive-context flags only (multi-unit safe); the
   -- interactive ic_dflags ARE the session flags under
   -- 'modifyDynFlags' (ghcide's Util sets both).
+  hsc <- getSession
   df <- getSessionDynFlags
-  let exposed =
+  let us = CUnits.unitState hsc
+      -- Name-based -package exposure breaks with multiple installed
+      -- versions ("member of the hidden package QuickCheck-2.18/2.19")
+      -- — resolve the UnitId and expose -package-id instead.
+      exposeFor n
+        | Just uid <- lookupPackageName us (PackageName (mkFastString n)) =
+            ExposePackage ("-package-id " <> n)
+              (UnitIdArg (RealUnit (Definite uid))) (ModRenaming True [])
+        | otherwise =
+            ExposePackage ("-package " <> n) (PackageArg n) (ModRenaming True [])
+      exposed =
         foldr (\n acc ->
                 if any (isExposed n) acc then acc
-                else ExposePackage ("-package " <> T.unpack n)
-                       (PackageArg (T.unpack n)) (ModRenaming True []) : acc)
+                else exposeFor (T.unpack n) : acc)
               (packageFlags df) pkgs
   modifyDynFlags (\df -> df { packageFlags = exposed })
   where

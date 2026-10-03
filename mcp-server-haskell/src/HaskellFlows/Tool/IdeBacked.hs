@@ -20,6 +20,7 @@ import Control.Exception (SomeException, try)
 import Control.Monad (void)
 import Data.Aeson (Value, object, withObject, (.=), (.:))
 import qualified Data.Aeson
+import Data.Maybe (fromMaybe)
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Key (Key)
 import Data.Aeson.Types (parseEither)
@@ -40,6 +41,7 @@ import HaskellFlows.Ghc.IdeSession
   , bootIdeSession
   , ideDiagnosticsFor
   , ideEvalExprIn
+  , ideModuleNameOf
   , ideProjectDiagnostics
   , ideTypeOfExprIn
   , projectModuleFilesFromCabal
@@ -167,7 +169,8 @@ firstRight (io : rest) = do
     Right txt -> pure (Just (Right txt))
     Left e
       | any (`T.isInfixOf` e)
-          [ "Could not find module", "not loaded", "Variable not in scope"
+          [ "Could not find module", "Could not load module"
+          , "not loaded", "Variable not in scope"
           , "could not resolve GHC session" ]
       -> firstRight rest
     Left e -> pure (Just (Left e))
@@ -223,6 +226,23 @@ findCabalIn dir = do
 -- @warnings@ arrays of structured objects, @summary@ line. The
 -- composite 'Env.withResultAction' contract applies: the executed
 -- action is stamped into the result so 'suggestNext' discriminates.
+-- | GHCi-style raw rendering of diagnostic VALUES (file:line:col:
+-- sev: [code] message), joined by blank lines — the same shape the
+-- legacy backend's @raw@ field carries (renderGhciStyle).
+renderDiagsRaw :: [Value] -> Text
+renderDiagsRaw = T.intercalate "\n\n" . map renderOne
+  where
+    renderOne v =
+      let fld k = case KM.lookup k (objOf' v) of
+                    Just (Data.Aeson.String t) -> T.unpack t
+                    Just (Data.Aeson.Number n) -> show (round n :: Int)
+                    _ -> ""
+          objOf' j = case j of Data.Aeson.Object o -> o; _ -> mempty
+          code = let c = fld "code" in if null c then "" else "[" <> c <> "] "
+      in T.pack (fld "file" <> ":" <> fld "line" <> ":" <> fld "column"
+                 <> ": " <> fld "severity" <> ": " <> code)
+         <> T.pack (fld "message")
+
 loadShapeEnvelope :: Text -> Text -> [Value] -> ToolResponse
 loadShapeEnvelope action mp diags =
   let errs = [d | d <- diags, isSev "error" d]
@@ -239,6 +259,7 @@ loadShapeEnvelope action mp diags =
         , "backend" .= ("ghcide" :: Text)
         , "errors" .= errs
         , "warnings" .= warns
+        , "raw" .= renderDiagsRaw diags
         , "summary" .= summary
         ]
   in if null errs
@@ -392,17 +413,25 @@ handlePropertyCheck pdRef raw s = case argField "property" raw of
         moduleArgText = case KM.lookup "module" (objOf raw) of
           Just (Data.Aeson.String m) -> Just m
           _ -> Nothing
-        imports _a =
-          -- The anchor's IIModule top-env already carries its whole
-          -- import closure (mkTopLevEnv hydrates ifaceImports), so a
-          -- separate target-module IIDecl is redundant — and harmful:
-          -- path-derived names ("src.Expr") don't resolve. Only the
-          -- fully-qualified qcExpr dependencies are needed.
-          ["Test.QuickCheck", "System.IO.Unsafe"]
+
     anchors <- anchorCandidates pdRef anchorArg
     warmAnchors s anchors
+    -- When the winning anchor is NOT the target file (e.g. the
+    -- test-suite Spec provides QuickCheck while the target lives in
+    -- the lib component), the target must be imported explicitly —
+    -- by its TRUE module name (GetModSummary), never a path guess.
+    pdNow <- unProjectDir <$> readIORef pdRef
+    tmName <- case anchorArg of
+      Just rel -> ideModuleNameOf s (pdNow </> rel)
+      Nothing  -> pure Nothing
+    let importsFor a =
+          [ "Test.QuickCheck", "System.IO.Unsafe" ]
+            <> [ T.pack n
+               | n <- maybe [] pure tmName
+               , anchorArg /= Nothing
+               , a /= pdNow </> fromMaybe "" anchorArg ]
     r <- firstRight
-      [ ideEvalExprIn s (EvalArgs a (imports a) True) expr | a <- anchors ]
+      [ ideEvalExprIn s (EvalArgs a (importsFor a) True) expr | a <- anchors ]
     case r of
       Nothing ->
         pure (Env.mkUnavailable (mkErrorEnvelope Validation

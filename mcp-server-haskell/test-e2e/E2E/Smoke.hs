@@ -31,6 +31,8 @@
 module E2E.Smoke
   ( runSmoke
   , SmokeResult (..)
+  , runBurstDrain
+  , BurstResult (..)
   ) where
 
 import Data.Char (isAsciiUpper)
@@ -38,6 +40,7 @@ import Data.List (isInfixOf)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.Process (readCreateProcessWithExitCode, proc, CreateProcess (..))
+import System.Timeout (timeout)
 
 -- | Aggregate transport coverage. Each boolean pins one wire-format
 -- contract. Splitting them out (instead of one global pass/fail)
@@ -182,3 +185,69 @@ lowerNoSpaces = map toLowerAscii . filter (`notElem` (" \t\n\r" :: String))
     toLowerAscii c
       | isAsciiUpper c = toEnum (fromEnum c + 32)
       | otherwise      = c
+
+
+--------------------------------------------------------------------------------
+-- Burst-drain: the transport concurrency regression test
+--------------------------------------------------------------------------------
+
+-- | Outcome of the burst-drain probe. The contract under test:
+-- a client may write ALL of its requests and close stdin
+-- immediately; every id-bearing request MUST still receive
+-- exactly one response before the process exits. This is the
+-- exact race class that produced silent NO-RESP drops (rc=0
+-- exit at 2.3s with a worker mid-flight) during F3.
+data BurstResult = BurstResult
+  { brAllAnswered   :: !Bool     -- ^ every request id got a response line
+  , brCleanExit     :: !Bool     -- ^ process exited 0 (drain, not crash)
+  , brTotalResponse :: !Int      -- ^ id-bearing responses observed
+  , brExpected      :: !Int      -- ^ requests sent
+  , brLog           :: !String   -- ^ exit code + missing ids detail
+  } deriving stock (Show)
+
+-- | Fire a burst of tool calls at once, close stdin, and verify
+-- the drain-on-EOF logic answers everything before exiting.
+--
+-- Uses the Baseline fixture copied to a temp dir: its
+-- Placeholder module is cabal-registered (resolvable under any
+-- backend) and its QuickCheck-carrying library keeps the store
+-- warm. The tool mix (evals + type + check) forces the eval-lock
+-- serialization that previously raced the session restarts.
+runBurstDrain :: FilePath -> FilePath -> IO BurstResult
+runBurstDrain binary projectDir = do
+  currentEnv <- getEnvironment
+  let reqs = zip [1 :: Int ..]
+        [ ("ghc_eval",    "{\"expression\":\"1 + 2\"}")
+        , ("ghc_eval",    "{\"expression\":\"23 * 2\"}")
+        , ("ghc_inspect", "{\"action\":\"type\",\"expression\":\"not\"}")
+        , ("ghc_check",   "{\"action\":\"load\",\"module_path\":\"src/Placeholder.hs\"}")
+        , ("ghc_eval",    "{\"expression\":\"reverse [1,2,3]\"}")
+        , ("ghc_property", "{\"action\":\"check\",\"property\":\"\\\\x -> length (show x) >= 1\",\"module\":\"src/Placeholder.hs\"}")
+        ]
+      input = unlines $
+        [ "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"e2e-burst\",\"version\":\"0\"}}}" ]
+        <> [ "{\"jsonrpc\":\"2.0\",\"id\":" <> show i <> ",\"method\":\"tools/call\",\"params\":{\"name\":\"" <> tool <> "\",\"arguments\":" <> args <> "}}"
+           | (i, (tool, args)) <- reqs ]
+      cp = (proc binary [])
+             { env = Just (("HASKELL_PROJECT_DIR", projectDir) : currentEnv) }
+      expectedCount = length reqs
+  mres <- timeout 240_000_000
+            (readCreateProcessWithExitCode cp input)
+  case mres of
+    Nothing -> pure BurstResult
+      { brAllAnswered = False, brCleanExit = False
+      , brTotalResponse = 0, brExpected = expectedCount
+      , brLog = "TIMEOUT: transport never exited (drain wedged)" }
+    Just (ec, outStr, _errStr) ->
+      let answered i = hasResponseForId i outStr
+          missing = [ i | (i, _) <- reqs, not (answered i) ]
+          total = length [ () | (i, _) <- reqs, answered i ]
+      in pure BurstResult
+           { brAllAnswered   = null missing
+           , brCleanExit     = ec == ExitSuccess
+           , brTotalResponse = total
+           , brExpected      = expectedCount
+           , brLog = "exit=" <> show ec
+                     <> " missing ids=" <> show missing
+                     <> " stdout lines=" <> show (length (lines outStr))
+           }
