@@ -6,7 +6,6 @@ module Spec.HoleParse
   ( testHlintJson
   , testDuplicateDeps
   , testMissingSynopsis
-  , testParseModules
   , testValidFits
   , testValidFitsOperatorBoundary
   , testHoleContinuationDetector
@@ -31,7 +30,6 @@ import HaskellFlows.Parser.Hole
   , repairConstraintInSource
   , splitFitTypeSource
   )
-import HaskellFlows.Tool.CheckProject (parseExposedModules)
 import HaskellFlows.Tool.Lint (parseHlintJson)
 import qualified HaskellFlows.Tool.Lint as LintTool
 import HaskellFlows.Tool.Deps (validatePackageName)
@@ -63,20 +61,6 @@ testMissingSynopsis =
       issues    = VC.scanCabalText cabalBody
   in pure $ any (("missing-synopsis" ==) . VC.iKind) issues
          && any ((VC.CabalSevWarn ==) . VC.iSeverity) issues
-
-testParseModules :: IO Bool
-testParseModules =
-  let cabalBody = T.unlines
-        [ "library"
-        , "  exposed-modules:  Foo.Bar"
-        , "                    Foo.Baz"
-        , "  other-modules:    Foo.Internal"
-        , "  build-depends:    base"
-        ]
-      mods = parseExposedModules cabalBody
-  in pure $ "Foo.Bar"      `elem` mods
-         && "Foo.Baz"      `elem` mods
-         && "Foo.Internal" `elem` mods
 
 testValidFits :: IO Bool
 testValidFits =

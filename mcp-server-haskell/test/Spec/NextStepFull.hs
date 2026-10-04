@@ -5,9 +5,6 @@
 -- Extracted from the Spec.hs monolith (#271) via the function-export shape.
 module Spec.NextStepFull
   ( testNextStepCreateProject
-  , testSuggestOnErrorNotInScope
-  , testSuggestOnErrorNoSelfLoop
-  , testExplainErrorOptionalModule
   , testSessionLedgerEmpty
   ) where
 
@@ -24,7 +21,6 @@ import qualified HaskellFlows.Mcp.NextStep as NextStep
 import qualified Data.Map.Strict as Map
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 import qualified HaskellFlows.Mcp.WorkflowState as WS
-import qualified HaskellFlows.Tool.ExplainError as ExplainError
 
 import Spec.Helpers (withTempProject)
 
@@ -40,50 +36,7 @@ testNextStepCreateProject =
 
 -- | After ghc_deps(add), reload.
 
-testSuggestOnErrorNotInScope :: IO Bool
 
-testSuggestOnErrorNotInScope =
-  let payload = A.object
-        [ "status" .= ("failed" :: Text)
-        , "error"  .= A.object
-            [ "kind" .= ("not_in_scope" :: Text), "message" .= ("foo" :: Text) ]
-        ]
-  in pure $ case suggestNext GhcEval False payload of
-       Just ns -> nsTool ns == GhcExplainError
-       Nothing -> False
-
--- | #A5: a failing ghc_explain_error must NOT recommend itself (no loop).
-
-testSuggestOnErrorNoSelfLoop :: IO Bool
-
-testSuggestOnErrorNoSelfLoop =
-  let payload = A.object
-        [ "status" .= ("failed" :: Text)
-        , "error"  .= A.object
-            [ "kind" .= ("compile_error" :: Text), "message" .= ("e" :: Text) ]
-        ]
-  in pure $ case suggestNext GhcExplainError False payload of
-       Nothing -> True
-       Just _  -> False
-
--- | #A5: an unrouted error kind (e.g. missing_arg) still suppresses — the
--- router is conservative, only the curated compile-ish kinds route.
-
-testExplainErrorOptionalModule :: IO Bool
-
-testExplainErrorOptionalModule =
-  let withoutMod = A.eitherDecode "{\"error_text\":\"oops\"}"
-                     :: Either String ExplainError.ExplainErrorArgs
-      withMod    = A.eitherDecode "{\"module_path\":\"src/X.hs\"}"
-                     :: Either String ExplainError.ExplainErrorArgs
-  in pure $ case (withoutMod, withMod) of
-       (Right a, Right b) ->
-         isNothing (ExplainError.eaModulePath a)
-           && ExplainError.eaModulePath b == Just "src/X.hs"
-       _ -> False
-
--- | #266 cross-session: recordCallToDisk accumulates lifetime call counts
--- on disk; loadLifetime reads them back. Round-trips via a temp project.
 
 testSessionLedgerEmpty :: IO Bool
 

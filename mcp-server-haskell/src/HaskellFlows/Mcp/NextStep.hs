@@ -331,25 +331,7 @@ suggestNext toolName ok payload
 -- self-loop guard keeps a failing 'ghc_explain_error' from recommending
 -- itself.
 suggestOnError :: ToolName -> Value -> Maybe NextStep
-suggestOnError toolName payload = case errorKind payload of
-  Just k
-    | k `elem` ["compile_error", "type_error", "not_in_scope"]
-    , toolName /= GhcExplainError ->
-        Just (simple GhcExplainError
-          "The code failed to compile. 'ghc_explain_error' decodes the GHC \
-          \diagnostic and proposes a verifiable patch (missing import, \
-          \signature, or scope fix) — feed it the error text below."
-          (Just (object explainArgs)))
-  _ -> Nothing
-  where
-    -- #282: ghc_explain_error needs module_path for enclosing context, but the
-    -- example used to pass only error_text — so following the hint verbatim
-    -- failed with missing_arg. Echo the failing call's module when the payload
-    -- carries it (most tools echo 'module_path' or 'module'); otherwise omit
-    -- it and let ghc_explain_error fall back to text-only decode.
-    explainArgs =
-      ("error_text" .= errorMessage payload)
-        : maybe [] (\m -> ["module_path" .= m]) (payloadModulePath payload)
+suggestOnError _ _ = Nothing
 
 -- The exhaustive case below makes adding a new 'ToolName'
 -- constructor a compile error here until you've decided whether it
@@ -562,33 +544,6 @@ dispatch name payload = case name of
   -- Gate passed → green to push. On fail, drill in per module.
   GhcGate -> Just (gateNext payload)
 
-  -- Issue #59 Phase 2: verify_patch is live.
-  -- Error explained → record the proposed fix in the scratchpad so
-  -- the user can see the reasoning and the LLM can type-check the
-  -- hypothesis before touching source. The chain continues to
-  -- verify_patch (apply-and-recompile) once the fix is confirmed.
-  GhcExplainError -> Just (chained GhcModule
-    "Write the proposed fix to the scratchpad first — the entry \
-    \records the reasoning and action=check confirms it's well-typed \
-    \before touching source. Then feed it as verify_patch to apply, \
-    \recompile, and check error_resolved."
-    (Just (object
-        [ "action" .= ("write" :: Text)
-        , "code"   .= ("<proposed fix>" :: Text)
-        , "note"   .= ("fix hypothesis from ghc_explain_error" :: Text)
-        ]))
-    [ step GhcModule (object
-        [ "action" .= ("check" :: Text)
-        , "id"     .= ("<id from the write above>" :: Text) ])
-    , step GhcExplainError (object
-        [ "module_path"  .= sameModule payload
-        , "verify_patch" .= object
-            [ "line" .= (0 :: Int)
-            , "old"  .= ("<old text>" :: Text)
-            , "new"  .= ("<new text>" :: Text)
-            ]
-        ])
-    ])
 
   -- Issue #62: a successful move was already verified via the
   -- internal loadForTarget; the agent's next reasonable check is
@@ -969,26 +924,6 @@ payloadWarningTexts v = case envField "warnings" v of
     warnText (Object o)
       | Just (String c) <- KeyMap.lookup (Key.fromString "code") o = [c]
     warnText _                 = []
-
--- | #A5: the structured error 'kind' (e.g. "compile_error", "type_error",
--- "not_in_scope") read from the envelope's top-level @error@ object.
--- Drives 'suggestOnError'. Returns 'Nothing' for an unstructured error
--- (e.g. @error@ is a bare string), so those keep suppressing the hint.
-errorKind :: Value -> Maybe Text
-errorKind p = stringField "kind" =<< envField "error" p
-
--- | #A5: the envelope's error 'message', fed to ghc_explain_error as
--- @error_text@. Empty when absent.
-errorMessage :: Value -> Text
-errorMessage p = fromMaybe "" (stringField "message" =<< envField "error" p)
-
--- | #282: the module a failing call referenced, for the A5 ghc_explain_error
--- route. Most tools echo it as @module_path@; ghc_quickcheck echoes @module@.
--- 'Nothing' → no module available, route degrades to text-only decode.
-payloadModulePath :: Value -> Maybe Text
-payloadModulePath p = case stringField "module_path" p of
-  Just m  -> Just m
-  Nothing -> stringField "module" p
 
 -- | #270: resolve the "<same module>" placeholder family to the
 -- concrete @module_path@ the current tool's payload carries (ghc_load,

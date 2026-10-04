@@ -4,10 +4,7 @@
 --
 -- Extracted from the Spec.hs monolith (#271) via the function-export shape.
 module Spec.NextStepUnit
-  ( testClampRunsCapsHigh
-  , testClampRunsFloorsLow
-  , testClampRunsPassThrough
-  , testStalenessWired
+  ( testStalenessWired
   , testStalenessIdentityDiffers
   , testStalenessIdentityMatches
   ) where
@@ -25,7 +22,6 @@ import HaskellFlows.Mcp.NextStep
 import qualified HaskellFlows.Mcp.NextStep as NextStep
 import HaskellFlows.Mcp.Staleness (StalenessReport (..), binaryIdentityStale)
 import HaskellFlows.Mcp.ToolName (ToolName (..))
-import qualified HaskellFlows.Tool.Determinism as DeterminismTool
 
 import Spec.Helpers (withTempProject)
 
@@ -39,24 +35,8 @@ assertNext tool payload expected =
     Just ns -> nsTool ns == expected
     Nothing -> False
 
-testClampRunsCapsHigh :: IO Bool
 
-testClampRunsCapsHigh =
-  pure (DeterminismTool.clampRuns 2000 == DeterminismTool.maxRuns
-          && DeterminismTool.maxRuns <= 20)
 
-testClampRunsFloorsLow :: IO Bool
-
-testClampRunsFloorsLow =
-  pure (DeterminismTool.clampRuns 0 == 1
-          && DeterminismTool.clampRuns (-5) == 1)
-
-testClampRunsPassThrough :: IO Bool
-
-testClampRunsPassThrough =
-  pure (DeterminismTool.clampRuns 3 == 3
-          && DeterminismTool.clampRuns DeterminismTool.maxRuns
-               == DeterminismTool.maxRuns)
 
 testStalenessWired :: IO Bool
 

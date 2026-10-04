@@ -87,9 +87,8 @@ import qualified Scenarios.FlowBootstrapDocs      as FlowBD
 import qualified Scenarios.FlowFixWarningUnusedBinding as FlowFWUB
 import qualified Scenarios.FlowRemoveModulesDownstream as FlowRMD
 import qualified Scenarios.FlowMoveSymbol         as FlowMS
+import qualified Scenarios.FlowPropertyAudit     as FlowPA
 import qualified Scenarios.FlowDepsExplain        as FlowDE
-import qualified Scenarios.FlowExplainError       as FlowEE
-import qualified Scenarios.FlowPropertyAudit      as FlowPA
 import qualified Scenarios.FlowCheckModuleProperties as FlowCMP
 import qualified Scenarios.FlowGateNoCrash        as FlowGNC
 import qualified Scenarios.FlowMoveExportLists    as FlowMEL
@@ -240,8 +239,6 @@ scenarios =
     , True, FlowMS.runFlow )
   , ( "Flow: DepsExplain solver translator (#63 · root cause)"
     , False, FlowDE.runFlow )
-  , ( "Flow: ExplainError context (#59 · type-error therapist)"
-    , False, FlowEE.runFlow )
   , ( "Flow: PropertyAudit pair skeleton (#64 · empty + 1-element)"
     , False, FlowPA.runFlow )
   , ( "Flow: Scratch promote (write → check → promote round-trip, #253/#272)"

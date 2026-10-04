@@ -4,9 +4,7 @@
 --
 -- Extracted from the Spec.hs monolith (#271) via the function-export shape.
 module Spec.InfoAdvanced
-  ( testParseExposedModulesStripsComments
-  , testParseExposedModulesRejectsPunct
-  , testInfoAnIdDefinition
+  ( testInfoAnIdDefinition
   , testInfoPreferTyConInSource
   , testInfoQueryUsesPreferTyCon
   , testInfoAConLikeBranchExists
@@ -35,7 +33,6 @@ import HaskellFlows.Parser.TypeSignature
   , stripLineComments
   )
 import HaskellFlows.Suggest.Rules (applyRules, Suggestion (..))
-import HaskellFlows.Tool.CheckProject (parseExposedModules)
 import qualified HaskellFlows.Tool.Info as InfoTool
 import HaskellFlows.Types (mkProjectDir)
 
@@ -47,42 +44,6 @@ import Spec.Helpers (withTempProject)
 
 -- | #109: 'parseExposedModules' must not extract comment words like
 -- "Bench", "Phase", "A)" that follow a @--@ marker in the payload.
-testParseExposedModulesStripsComments :: IO Bool
-testParseExposedModulesStripsComments =
-  let body = T.unlines
-        [ "library"
-        , "  exposed-modules:"
-        , "    Core.Logic"
-        , "    -- Bench modules (#96 Phase A)"
-        , "    Core.Parser"
-        ]
-      mods = parseExposedModules body
-  in pure $ "Core.Logic"   `elem` mods
-         && "Core.Parser"  `elem` mods
-         && "Bench"    `notElem` mods
-         && "Phase"    `notElem` mods
-         && "A)"       `notElem` mods
-
--- | #109: tokens with non-module characters (e.g. trailing ')') must
--- be rejected by the strengthened 'isModuleName' predicate.
-testParseExposedModulesRejectsPunct :: IO Bool
-testParseExposedModulesRejectsPunct =
-  let body = T.unlines
-        [ "library"
-        , "  exposed-modules: Good.Module, Bad)"
-        ]
-      mods = parseExposedModules body
-  in pure $ "Good.Module" `elem`    mods
-         && "Bad)"        `notElem` mods
-         && "Bad"         `notElem` mods
-
---------------------------------------------------------------------------------
--- Issue #107 — ghc_info renderDefinition for functions
---------------------------------------------------------------------------------
-
--- | #107: the 'AnId' branch in 'queryInfo' must use 'idType' to produce
--- "name :: <type>" instead of "Identifier 'name'" (pprShortTyThing).
--- Checked structurally by scanning Info.hs source.
 testInfoAnIdDefinition :: IO Bool
 testInfoAnIdDefinition = do
   src <- TIO.readFile "src/HaskellFlows/Tool/Info.hs"

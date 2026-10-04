@@ -91,9 +91,6 @@ allBudgets = Map.fromList
         \bootstrap was 50/200) — all four share a 'no GHCi, light \
         \subprocess' profile so we keep the worst-case bound rather \
         \than per-action thresholds.")
-  , ( GhcExplainError
-    , ToolBudget 200  500   Nothing
-        "diagnostic evidence package + optional patch verify roundtrip")
   ]
 
 -- | Look up the budget for a specific tool.

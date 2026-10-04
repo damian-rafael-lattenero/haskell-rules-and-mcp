@@ -85,20 +85,17 @@ library
                       HaskellFlows.Tool.Batch
                       HaskellFlows.Tool.Bootstrap
                       HaskellFlows.Tool.Browse
-                      HaskellFlows.Tool.CheckModule
                       HaskellFlows.Tool.Check
+                      HaskellFlows.Tool.EvalContext
+                      HaskellFlows.Tool.EvalRoute
                       HaskellFlows.Tool.Edit
                       HaskellFlows.Tool.Inspect
                       HaskellFlows.Tool.ModuleMgmt
                       HaskellFlows.Tool.Property
                       HaskellFlows.Tool.Session
-                      HaskellFlows.Tool.CheckProject
                       HaskellFlows.Tool.Complete
                       HaskellFlows.Tool.CreateProject
                       HaskellFlows.Tool.Deps
-                      HaskellFlows.Tool.Determinism
-                      HaskellFlows.Tool.Doc
-                      HaskellFlows.Tool.Eval
                       HaskellFlows.Tool.FixWarning
                       HaskellFlows.Tool.Format
                       HaskellFlows.Tool.Gate
@@ -109,10 +106,8 @@ library
                       HaskellFlows.Tool.Imports
                       HaskellFlows.Tool.Info
                       HaskellFlows.Tool.Lint
-                      HaskellFlows.Tool.Load
                       HaskellFlows.Tool.Move
                       HaskellFlows.Tool.DepsExplain
-                      HaskellFlows.Tool.ExplainError
                       HaskellFlows.Tool.Project
                       HaskellFlows.Tool.PropertyAudit
                       HaskellFlows.Tool.PropertyStore
@@ -120,7 +115,6 @@ library
                       HaskellFlows.Tool.QuickCheck
                       HaskellFlows.Tool.QuickCheckExport
                       HaskellFlows.Tool.Refactor
-                      HaskellFlows.Tool.Regression
                       HaskellFlows.Tool.RemoveModules
                       HaskellFlows.Tool.Suggest
                       HaskellFlows.Tool.SwitchProject
@@ -209,16 +203,13 @@ test-suite haskell-flows-mcp-test
                       Spec.DepsUnit
                       Spec.Descriptors
                       Spec.Discover
-                      Spec.Doc
                       Spec.DogfoodHint
                       Spec.Envelope
                       Spec.Extract
-                      Spec.FilterArtifacts
                       Spec.FinalMisc
                       Spec.FixWarningUnit
                       Spec.Format
                       Spec.GateUnit
-                      Spec.GhcErrorUnit
                       Spec.Goto
                       Spec.Guidance
                       Spec.HaddockUnit
@@ -227,12 +218,9 @@ test-suite haskell-flows-mcp-test
                       Spec.HoleTool
                       Spec.InfoAdvanced
                       Spec.InfoHoogle
-                      Spec.InfoParse
                       Spec.Harness
                       Spec.Helpers
                       Spec.Lint
-                      Spec.Load
-                      Spec.LoadUnit
                       Spec.ModuleNameUnit
                       Spec.MoveUnit
                       Spec.NextStepCoverage
@@ -240,8 +228,6 @@ test-suite haskell-flows-mcp-test
                       Spec.NextStepLoad
                       Spec.NextStepUnit
                       Spec.ParseError
-                      Spec.ParseHeaderUnit
-                      Spec.ParseQc
                       Spec.PermissiveJSON
                       Spec.PlanUnit
                       Spec.Progress
@@ -249,7 +235,6 @@ test-suite haskell-flows-mcp-test
                       Spec.Protocol
                       Spec.QcExport
                       Spec.RefactorTool
-                      Spec.RegressionUnit
                       Spec.RemoveModulesUnit
                       Spec.Rename
                       Spec.Sanitize
@@ -260,13 +245,12 @@ test-suite haskell-flows-mcp-test
                       Spec.SuggestAdvanced
                       Spec.SuggestLaws
                       Spec.SuggestSig
-                      Spec.SummariseUnit
                       Spec.SwitchProjectUnit
                       Spec.TaxonomyUnit
                       Spec.Toolchain
                       Spec.TraversalGuards
-                      Spec.TypeEval
                       Spec.ValidateCabal
+                      Spec.SurfaceHarness
                       Spec.WorkflowState
                       Spec.WorkflowTool
                       Spec.PartialFunctions
@@ -378,7 +362,6 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowRemoveModulesDownstream
                       Scenarios.FlowMoveSymbol
                       Scenarios.FlowDepsExplain
-                      Scenarios.FlowExplainError
                       Scenarios.FlowPropertyAudit
                       Scenarios.FlowCheckModuleProperties
                       Scenarios.FlowGateNoCrash

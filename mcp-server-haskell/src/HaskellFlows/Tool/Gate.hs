@@ -58,7 +58,7 @@ import System.Process
 import System.Timeout (timeout)
 
 import HaskellFlows.Config (defaultLimits, gateOutputCapBytes)
-import HaskellFlows.Data.PropertyStore (Store, loadAll)
+import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -70,7 +70,11 @@ import HaskellFlows.Mcp.Progress
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Parser.QuickCheck as QC
-import HaskellFlows.Tool.Regression (Replay (..), runOne, replayTimeoutMicros)
+import Control.Concurrent.MVar (MVar)
+import Data.IORef (IORef)
+import HaskellFlows.Ghc.IdeSession (IdeSession)
+import HaskellFlows.Tool.IdeBacked qualified as IdeBacked
+import HaskellFlows.Types (ProjectDir, unProjectDir)
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
@@ -151,7 +155,8 @@ instance FromJSON GateArgs where
 dynamicRegressionTimeout :: Int -> Int
 dynamicRegressionTimeout nProps =
   max (2 * 60 * 1_000_000)
-      (nProps * replayTimeoutMicros + 30_000_000)
+      -- per-property replay budget (30 s inner ceiling each) + slack
+      (nProps * 30_000_000 + 30_000_000)
       -- 30 s padding for process-spawn overhead across all launches
 
 -- | #164: derive test/build timeouts from the parsed args.
@@ -168,12 +173,18 @@ cabalBuildTimeoutMicros args = gaBuildTimeoutMinutes args * 60 * 1_000_000
 handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   store   <- teStore env
-  ghcSess <- teSession env
   pd      <- teProjectDir env
-  runHandle store ghcSess pd (teSink env) rawArgs
+  runHandle store (teIdeSessionRef env) (teProjectDirRef env) pd (teSink env) rawArgs
 
-runHandle :: Store -> GhcSession -> ProjectDir -> ProgressSink -> Value -> IO ToolResponse
-runHandle store sess pd sink rawArgs = case parseEither parseJSON rawArgs of
+runHandle
+  :: Store
+  -> MVar (Maybe IdeSession)
+  -> IORef ProjectDir
+  -> ProjectDir
+  -> ProgressSink
+  -> Value
+  -> IO ToolResponse
+runHandle store ideRef pdRef pd sink rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args
     -- #138: reject vacuous all-skip calls up front so callers never
@@ -204,7 +215,7 @@ runHandle store sess pd sink rawArgs = case parseEither parseJSON rawArgs of
                    -- Issue #216: budget must scale with store size so the outer
                    -- timeout doesn't fire before all per-property replays finish.
                    nProps <- length <$> loadAll store
-                   runStep (dynamicRegressionTimeout nProps) (regressionStep store sess)
+                   runStep (dynamicRegressionTimeout nProps) (regressionStep store ideRef pdRef)
         tst <- if gaSkipCabalTest args
                  then pure Skipped
                  else do
@@ -296,44 +307,35 @@ runStep budget body = do
 -- step implementations
 --------------------------------------------------------------------------------
 
-regressionStep :: Store -> GhcSession -> IO (Bool, Value)
-regressionStep store sess = do
+-- | The properties gate replays the store through the ghcide session
+-- (the only backend): each stored property runs via the same anchor
+-- machinery as ghc_property(action=check).
+regressionStep
+  :: Store -> MVar (Maybe IdeSession) -> IORef ProjectDir -> IO (Bool, Value)
+regressionStep store ideRef pdRef = do
   props <- loadAll store
-  replays <- mapM (runOne sess) props
-  let failures =
-        [ rp | rp <- replays, case rpResult rp of
-                                QC.QcPassed {}    -> False
-                                _                 -> True ]
-      total   = length replays
-      failed  = length failures
-      passed  = total - failed
-      detail  = object
-        [ "total"      .= total
-        , "passed"     .= passed
-        , "failed"     .= failed
-        , "failures"   .= map renderFailure failures
+  results <- IdeBacked.replayStored ideRef pdRef props
+  let outcomes =
+        [ (spExpression p, case o of
+              Left st      -> st
+              Right Nothing -> "load_failed"
+              Right (Just _) -> "passed")
+        | (p, o) <- results
         ]
-  pure (failed == 0, detail)
-
-renderFailure :: Replay -> Value
-renderFailure rp = object
-  [ "property" .= qcPropertyText (rpResult rp)
-  , "state"    .= qcStateText    (rpResult rp)
-  ]
-
-qcPropertyText :: QC.QuickCheckResult -> Text
-qcPropertyText (QC.QcPassed    p _)       = p
-qcPropertyText (QC.QcFailed    p _ _ _)   = p
-qcPropertyText (QC.QcException p _)       = p
-qcPropertyText (QC.QcGaveUp    p _ _)     = p
-qcPropertyText (QC.QcUnparsed  p _)       = p
-
-qcStateText :: QC.QuickCheckResult -> Text
-qcStateText QC.QcPassed    {} = "passed"
-qcStateText QC.QcFailed    {} = "failed"
-qcStateText QC.QcGaveUp    {} = "gave_up"
-qcStateText QC.QcException {} = "exception"
-qcStateText QC.QcUnparsed  {} = "unparsed"
+      failedOutcomes =
+        [ object ["property" .= e, "state" .= st]
+        | (e, st) <- outcomes, st /= "passed"
+        ]
+      total = length outcomes
+      failed = length failedOutcomes
+      passed = total - failed
+      detail = object
+        [ "total" .= total
+        , "passed" .= passed
+        , "failed" .= failed
+        , "failures" .= failedOutcomes
+        ]
+  pure (failed == (0 :: Int), detail)
 
 -- | Generic @cabal <args>@ runner, argv-form, with combined stdout +
 -- stderr capture (capped at 256 KiB to keep the response sane).

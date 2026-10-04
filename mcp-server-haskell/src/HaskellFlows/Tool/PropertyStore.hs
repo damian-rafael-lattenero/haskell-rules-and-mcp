@@ -28,23 +28,30 @@
 -- four, is empty — 'action' is the only field).
 module HaskellFlows.Tool.PropertyStore
   ( handle
+  , renderStored
+  , listResult
   ) where
 
 import Data.Aeson
+import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KeyMap
+import Control.Concurrent.MVar (MVar)
 import Data.IORef (IORef, readIORef)
+import Data.Maybe (isNothing)
 import Data.Text (Text)
+import qualified Data.Text as T
 
-import HaskellFlows.Data.PropertyStore (Store)
+import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
+import HaskellFlows.Ghc.IdeSession (IdeSession)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Schema as Schema
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Tool.IdeBacked qualified as IdeBacked
 import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExportTool
-import qualified HaskellFlows.Tool.Regression as RegressionTool
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types (ProjectDir)
 
@@ -54,18 +61,33 @@ import HaskellFlows.Types (ProjectDir)
 -- @storeRef@ + @pdRef@ are the server's refs. @list@ / @run@ keep the @action@
 -- field (Regression parses it); @export@ / @audit@ strip it.
 handle :: ToolEnv -> Value -> IO ToolResponse
-handle env = runHandle (teSession env) (teStoreRef env) (teProjectDirRef env)
+handle env =
+  runHandle
+    (teSession env)
+    (teIdeSessionRef env)
+    (teStoreRef env)
+    (teProjectDirRef env)
 
-runHandle :: IO GhcSession -> IORef Store -> IORef ProjectDir -> Value -> IO ToolResponse
-runHandle startSession storeRef pdRef rawArgs = case actionField rawArgs of
+runHandle
+  :: IO GhcSession
+  -> MVar (Maybe IdeSession)
+  -> IORef Store
+  -> IORef ProjectDir
+  -> Value
+  -> IO ToolResponse
+runHandle startSession ideRef storeRef pdRef rawArgs = case actionField rawArgs of
   Nothing ->
     pure (Env.mkRefused
         (Env.mkErrorEnvelope Env.MissingArg
           "ghc_property_store requires an 'action' field \
           \(one of 'list', 'run', 'export', 'audit')."))
   Just action -> case action of
-    "list"   -> regression
-    "run"    -> regression
+    -- list/run previously rode the deleted subprocess Regression
+    -- handler. run now replays through the ghcide session (the only
+    -- backend); list is pure store introspection rendered locally.
+    "list"   -> listStored
+    "run"    -> IdeBacked.withIdeSession ideRef pdRef
+                  (IdeBacked.handlePropertyRun pdRef storeRef)
     "export" -> do
       pd    <- readIORef pdRef
       store <- readIORef storeRef
@@ -80,10 +102,35 @@ runHandle startSession storeRef pdRef rawArgs = case actionField rawArgs of
             ("Unknown ghc_property_store action: '" <> other
              <> "' (expected 'list', 'run', 'export', or 'audit').")))
   where
-    regression = do
-      sess  <- startSession
+    listStored = do
       store <- readIORef storeRef
-      RegressionTool.handle store sess rawArgs
+      props <- loadAll store
+      pure (Env.mkOk (listResult props))
+
+-- | Pure list-view payload (shared with the unit tests).
+listResult :: [StoredProperty] -> Value
+listResult props =
+  let nullCount = length (filter (isNothing . spModule) props)
+      base =
+        [ "action" .= ("list" :: Text)
+        , "count" .= length props
+        , "properties" .= map renderStored props
+        ]
+      extra
+            | nullCount > 0 =
+                [ "null_module_count" .= nullCount
+                , "null_module_hint" .=
+                    ( T.pack (show nullCount)
+                        <> " properties have no recorded module path; re-run "
+                        <> "them via ghc_property(action=check, module=\"src/X.hs\") "
+                        <> "to improve replay reliability." ::
+                        Text
+                    )
+                ]
+            | otherwise = []
+  in A.object (base <> extra)
+
+
 
 -- | Peek at the @action@ string without committing to a FromJSON parser.
 actionField :: Value -> Maybe Text
@@ -152,3 +199,25 @@ schema = Schema.discriminatedSchema "action"
       , Schema.sbRequired          = []
       }
   ]
+
+-- | One stored property rendered for the list view (shared with the
+-- unit tests that pin the store's JSON shape).
+renderStored :: StoredProperty -> Value
+renderStored sp =
+  let base =
+        [ "expression" .= spExpression sp
+        , "module" .= spModule sp
+        , "passed" .= spPassed sp
+        , "cases" .= spCases sp
+        , "updated" .= spUpdated sp
+        ]
+      -- #238: per-property hint when the module path is missing so
+      -- the caller knows how to fix replay reliability.
+      moduleHint = case spModule sp of
+        Nothing ->
+          [ "module_hint" .=
+              ("module path not recorded; re-run via ghc_property(action=\
+               \check, module=\"src/X.hs\") to improve replay reliability" :: Text)
+          ]
+        Just _ -> []
+  in A.object (base <> moduleHint)

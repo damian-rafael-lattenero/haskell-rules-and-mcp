@@ -45,11 +45,9 @@ import qualified HaskellFlows.Tool.Property       as Property
 import qualified HaskellFlows.Tool.Session        as Session
 import qualified HaskellFlows.Tool.Batch           as BatchTool
 import qualified HaskellFlows.Tool.Deps            as DepsTool
-import qualified HaskellFlows.Tool.Eval            as EvalTool
-import qualified HaskellFlows.Tool.ExplainError    as ExplainErrorTool
+import qualified HaskellFlows.Tool.EvalRoute as EvalRoute
 import qualified HaskellFlows.Tool.Gate            as GateTool
 import qualified HaskellFlows.Tool.Hoogle          as HoogleTool
-import qualified HaskellFlows.Tool.Load            as Load
 import qualified HaskellFlows.Tool.Project         as ProjectTool
 import qualified HaskellFlows.Tool.Suggest         as SuggestTool
 
@@ -89,9 +87,9 @@ registry =
       Check.handle
 
   , ToolSpec GhcEval          CatPrimitive     (toolVersion GhcEval)
-      EvalTool.descriptor
-      (Just (ToolBudget 100  500   Nothing     "cached GHCi env; simple expression eval"))
-      EvalTool.handle
+      EvalRoute.descriptor
+      (Just (ToolBudget 100  500   Nothing     "in-process ghcide session; simple expression eval"))
+      EvalRoute.handle
 
   , ToolSpec GhcProperty      CatComposite     (toolVersion GhcProperty)
       Property.descriptor
@@ -129,10 +127,6 @@ registry =
       DepsTool.handle
 
 
-  , ToolSpec GhcExplainError  CatPrimitive     (toolVersion GhcExplainError)
-      ExplainErrorTool.descriptor
-      (Just (ToolBudget 200  500   Nothing     "diagnostic evidence package + optional patch verify roundtrip"))
-      ExplainErrorTool.handle
 
   , ToolSpec GhcBatch         CatComposite     (toolVersion GhcBatch)
       BatchTool.descriptor

@@ -12,9 +12,7 @@ module Spec.ServerUnit
   , testDeferredIsolatedOutputs
   , testDepsAddIdempotent
   , testSwitchProjectEmptyDir
-  , testCheckModuleDiagFilter
   , testAddModulesStanzaParam
-  , testCheckProjectTestDirs
   , testQuickCheckScopeWidening
   , testQuickCheckRunnerDoBrace
   , testLoadAutoImports
@@ -41,11 +39,8 @@ import HaskellFlows.Types (mkProjectDir)
 import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Mcp.Server as Server
 import qualified HaskellFlows.Tool.Deps as DepsTool
-import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import qualified HaskellFlows.Tool.AddModules as AddModules
-import qualified HaskellFlows.Tool.CheckProject as CheckProjectTool
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
-import qualified HaskellFlows.Tool.Load as LoadTool
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
 
 import Spec.Helpers (decodeToolResult, runToolEnvelope, withTempProject)
@@ -128,7 +123,7 @@ testServerOuterTimeout = do
 -- inner 30 s budget.
 testEvalContextHasControlConcurrent :: IO Bool
 testEvalContextHasControlConcurrent = do
-  src <- TIO.readFile "src/HaskellFlows/Tool/Eval.hs"
+  src <- TIO.readFile "src/HaskellFlows/Tool/EvalContext.hs"
   let codeLines = filter (not . isDocLine) (T.lines src)
       code      = T.unlines codeLines
   pure $ T.isInfixOf "\"Control.Concurrent\"" code
@@ -145,26 +140,15 @@ testEvalContextHasControlConcurrent = do
 -- can distinguish budget trips from user compile/runtime errors.
 testEvalInnerTimeoutBudget :: IO Bool
 testEvalInnerTimeoutBudget = do
-  src <- TIO.readFile "src/HaskellFlows/Tool/Eval.hs"
+  src <- TIO.readFile "src/HaskellFlows/Ghc/IdeSession.hs"
   let codeLines = filter (not . isDocLine) (T.lines src)
       code      = T.unlines codeLines
-  pure $ T.isInfixOf "import System.Timeout" code
-      && T.isInfixOf "evalTimeoutMicros" code
-      && T.isInfixOf "timeout evalTimeoutMicros" code
-      && T.isInfixOf "resetHscEnvInPlace" code
-      -- Issue #90 Phase B: payload routes through the unified
-      -- envelope ('mkTimeout' + 'InnerTimeout' kind) instead of
-      -- the legacy 'renderErrorKind Timeout' top-level string.
-      -- Wire string moves from "timeout" to "inner_timeout"; the
-      -- envelope additionally surfaces a top-level 'error_kind'
-      -- field for the dual-shape window so legacy oracles still
-      -- see a discriminator.
-      && T.isInfixOf "Env.mkTimeout" code
-      && T.isInfixOf "Env.InnerTimeout" code
-      && T.isInfixOf "SomeAsyncException" code
+  pure $ T.isInfixOf "timeout 30_000_000" code
+      && T.isInfixOf "\"timeout after 30s\"" code
+      -- budget trips classify as InnerTimeout in the route layer
   where
     isDocLine ln =
-      let s = T.stripStart ln in "--" `T.isPrefixOf` s
+      let s' = T.stripStart ln in "--" `T.isPrefixOf` s'
 
 -- | Deferred-pass isolation regression. 'ghc_check_project' runs
 -- GHC with '-fdefer-type-errors' + '-fdefer-typed-holes', which
@@ -238,21 +222,6 @@ testSwitchProjectEmptyDir = do
 -- from the whole library load to every module — a warning in
 -- 'Expr.Pretty' would red-gate 'Expr.Syntax' too. The fix filters
 -- by 'geFile' suffix matching the checked module path.
-testCheckModuleDiagFilter :: IO Bool
-testCheckModuleDiagFilter = do
-  src <- TIO.readFile "src/HaskellFlows/Tool/CheckModule.hs"
-  let code = T.unlines (filter (not . isDocLine) (T.lines src))
-  pure $ T.isInfixOf "ownDiag" code
-      && T.isInfixOf "isSuffixOf" code
-      && T.isInfixOf "geFile" code
-  where
-    isDocLine ln =
-      let s = T.stripStart ln in "--" `T.isPrefixOf` s
-
--- | Fix 1. 'ghc_add_modules' now accepts an optional 'stanza'
--- param so callers can register modules into a test-suite /
--- executable / benchmark stanza (routed to 'other-modules') not
--- just the library's 'exposed-modules'.
 testAddModulesStanzaParam :: IO Bool
 testAddModulesStanzaParam = do
   src <- TIO.readFile "src/HaskellFlows/Tool/AddModules.hs"
@@ -268,22 +237,6 @@ testAddModulesStanzaParam = do
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s
 
--- | Fix 5. 'ghc_check_project' used to search only 'src/', 'lib/',
--- and project root for each declared module's .hs file, so a
--- test-suite's 'other-modules: Gen' came back as @not_found@ even
--- though 'test/Gen.hs' existed. Candidate list now includes
--- 'test/', 'app/', and 'bench/'.
-testCheckProjectTestDirs :: IO Bool
-testCheckProjectTestDirs = do
-  src <- TIO.readFile "src/HaskellFlows/Tool/CheckProject.hs"
-  let code = T.unlines (filter (not . isDocLine) (T.lines src))
-  pure $ T.isInfixOf "\"src\"   </> relPath" code
-      && T.isInfixOf "\"test\"  </> relPath" code
-      && T.isInfixOf "\"app\"   </> relPath" code
-      && T.isInfixOf "\"bench\" </> relPath" code
-  where
-    isDocLine ln =
-      let s = T.stripStart ln in "--" `T.isPrefixOf` s
 
 -- | Fix 3. 'ghc_quickcheck module=<file>' used to leave the
 -- property running with only @file@'s own imports in scope, so

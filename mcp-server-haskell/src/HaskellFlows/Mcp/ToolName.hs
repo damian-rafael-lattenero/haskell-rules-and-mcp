@@ -55,7 +55,6 @@ data ToolName
   | GhcDeps
   | GhcBatch
   | GhcSuggest
-  | GhcExplainError
   | GhcProject
     -- ^ #253: persistent LLM code canvas. Action-discriminated:
     -- @action="write"|"check"|"list"|"show"|"clear"|"promote"@.
@@ -102,7 +101,6 @@ toolNameText = \case
   GhcBatch             -> "ghc_batch"
   GhcSuggest           -> "ghc_suggest"
   GhcProject           -> "ghc_project"
-  GhcExplainError      -> "ghc_explain_error"
 
 -- | Parse a wire-format tool name back to its constructor. Returns
 -- 'Nothing' for any unknown string — used by the dispatcher to emit
@@ -179,7 +177,6 @@ toolCategory = \case
   GhcDeps          -> CatPrimitive
   GhcBatch         -> CatComposite
   GhcSuggest       -> CatPrimitive
-  GhcExplainError  -> CatPrimitive
   GhcProject       -> CatPrimitive
 
 ------------------------------------------------------------------------
@@ -223,7 +220,6 @@ toolVersion = \case
   -- ── Property-first testing ──────────────────────────────────────
   GhcSuggest           -> "1.0.0"
   -- ── Phase-2 advanced ────────────────────────────────────────────
-  GhcExplainError      -> "1.0.0"
   -- ── Composites ──────────────────────────────────────────────────
   GhcGate              -> "1.0.0"
   GhcBatch             -> "1.0.0"

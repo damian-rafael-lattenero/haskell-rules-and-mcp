@@ -13,6 +13,10 @@
 module HaskellFlows.Tool.IdeBacked
   ( routeIde
   , warmupIdeSession
+  , withIdeSession
+  , handlePropertyRun
+  , replayProp
+  , replayStored
   ) where
 
 import Control.Concurrent.MVar (MVar, modifyMVar)
@@ -34,6 +38,7 @@ import qualified Data.Text.IO as TIO
 import System.Directory (listDirectory)
 import System.FilePath ((</>))
 
+import HaskellFlows.Config (defaultLimits, determinismMaxRuns)
 import HaskellFlows.Data.PropertyStore (Store, loadAll, saveCases)
 import HaskellFlows.Data.PropertyStore (StoredProperty (..))
 import HaskellFlows.Ghc.IdeSession
@@ -68,13 +73,32 @@ withIdeSession
   -> IORef ProjectDir
   -> (IdeSession -> IO ToolResponse)
   -> IO ToolResponse
-withIdeSession ref pdRef k = do
+withIdeSession = withIdeSessionG
+
+-- | Generalised boot-or-reuse for continuations returning any type
+-- (the gates replay lists of results, not a single ToolResponse).
+withIdeSessionG
+  :: MVar (Maybe IdeSession)
+  -> IORef ProjectDir
+  -> (IdeSession -> IO a)
+  -> IO a
+withIdeSessionG ref pdRef k = do
   s <- modifyMVar ref $ \case
     Just s -> pure (Just s, s)
     Nothing -> do
       s <- bootIdeSession =<< readIORef pdRef
       pure (Just s, s)
   k s
+
+-- | Replay a batch of stored properties through the session.
+replayStored
+  :: MVar (Maybe IdeSession)
+  -> IORef ProjectDir
+  -> [StoredProperty]
+  -> IO [(StoredProperty, Either Text (Maybe Int))]
+replayStored ref pdRef props =
+  withIdeSessionG ref pdRef $ \s ->
+    mapM (replayProp pdRef s) props
 
 -- | Boot the ghcide session in the background (idempotent — shares the
 -- MVar singleton). Used by the transport warmup so the first tool call
@@ -519,7 +543,12 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
   Left err -> pure (mkFailed (mkErrorEnvelope MissingArg (T.pack err)))
   Right prop -> do
     let runs = case KM.lookup "runs" (objOf raw) of
-                 Just (Data.Aeson.Number n) -> max 1 (round n)
+                 Just (Data.Aeson.Number n) ->
+                   -- clampRuns invariant (was the dead Determinism
+                   -- handler's): a flaky-rerun request is capped into
+                   -- [1, determinismMaxRuns]; large values only burn
+                   -- subprocess-equivalent budget.
+                   max 1 (min (determinismMaxRuns defaultLimits) (round n))
                  _ -> 1
         anchorArg = case KM.lookup "module" (objOf raw) of
           Just (Data.Aeson.String m) -> Just (T.unpack m)

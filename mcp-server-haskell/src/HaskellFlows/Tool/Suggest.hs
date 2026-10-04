@@ -70,7 +70,7 @@ import HaskellFlows.Ghc.ApiSession
 import HaskellFlows.Ghc.Sanitize
   ( sanitizeExpression
   )
-import HaskellFlows.Tool.Eval (augmentEvalContext)
+import HaskellFlows.Tool.EvalContext (augmentEvalContext)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)

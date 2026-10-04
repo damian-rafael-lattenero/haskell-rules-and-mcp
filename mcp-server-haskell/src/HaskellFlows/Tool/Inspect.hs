@@ -23,7 +23,6 @@ import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.Browse as Browse
 import qualified HaskellFlows.Tool.Complete as Complete
 import HaskellFlows.Tool.Env (ToolEnv (..))
-import qualified HaskellFlows.Tool.Doc as Doc
 import qualified HaskellFlows.Tool.Goto as Goto
 import qualified HaskellFlows.Tool.Hole as Hole
 import qualified HaskellFlows.Tool.Info as Info
@@ -78,7 +77,6 @@ handle env rawArgs = case parseEither (Act.parsePayloadAction Act.inspectSpec) r
       Act.InspectBrowse   -> Env.withResultAction "browse" <$> Browse.handle env inner
       Act.InspectComplete -> Env.withResultAction "complete" <$> Complete.handle env inner
       Act.InspectGoto     -> Env.withResultAction "goto" <$> Goto.handle env inner
-      Act.InspectDoc      -> Env.withResultAction "doc" <$> Doc.handle env inner
   where
     refusal :: String -> Env.ToolResponse
     refusal msg =

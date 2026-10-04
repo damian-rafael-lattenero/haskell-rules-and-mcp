@@ -21,7 +21,6 @@ module Spec.CreateProject
   , testCreateAutoSwitchPresent
   , testCreatePreviewNoSwitch
   , testCreateNoPathNoSwitch
-  , testCheckGateReasonMatchesOk
   ) where
 
 import qualified Data.Aeson as A
@@ -37,7 +36,6 @@ import System.FilePath ((</>))
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Types
-import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import qualified HaskellFlows.Tool.CreateProject as CreateProject
 
 import Spec.Helpers (withTempProject)
@@ -299,18 +297,3 @@ testCreateNoPathNoSwitch = do
   where
     isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
 
-testCheckGateReasonMatchesOk :: IO Bool
-testCheckGateReasonMatchesOk =
-  let cases =
-        [ (1, 0, 1, 0)  -- one regressed
-        , (1, 0, 0, 1)  -- one skipped
-        , (3, 1, 1, 1)  -- mixed
-        ]
-      check (total, passed, regressed, skipped) =
-        let g = CheckModule.propertiesGate total passed regressed skipped
-        in case (gateField "ok" g, gateField "reason" g) of
-             (Just (A.Bool False), Just (A.String r))
-               | not ("stored properties pass" `T.isInfixOf` r)
-                 && r /= "" -> True
-             _ -> False
-  in pure (all check cases)

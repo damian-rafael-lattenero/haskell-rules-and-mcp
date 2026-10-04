@@ -30,7 +30,7 @@ import GHC.Utils.Outputable (showPprUnsafe)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
-import HaskellFlows.Tool.Eval (evalContextExtras)
+import HaskellFlows.Tool.EvalContext (evalContextExtras)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Tool.Env (ToolEnv (..))

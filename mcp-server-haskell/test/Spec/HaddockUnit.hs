@@ -4,12 +4,7 @@
 --
 -- Extracted from the Spec.hs monolith (#271) via the function-export shape.
 module Spec.HaddockUnit
-  ( testExtractHaddockFindsDoc
-  , testExtractHaddockNoHaddock
-  , testExtractHaddockNoComment
-  , testExtractHaddockAboveTypeSig
-  , testNoDocInScopePayloadShape
-  , testHasDocFalseDirectly
+  ( testMkGhcErrorCode
   , testMkGhcErrorCode
   , testStripGhcInternalQual
   , testStripGhcInternalQualMulti
@@ -42,102 +37,9 @@ import qualified HaskellFlows.Mcp.NextStep as NextStep
 import HaskellFlows.Mcp.Protocol (ToolResult (..))
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..), parseGhcErrors)
 import qualified HaskellFlows.Tool.CreateProject as CreateProject
-import qualified HaskellFlows.Tool.Doc as DocTool
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
 import HaskellFlows.Tool.Hoogle (HoogleHit (..), parseHoogleLine)
 import qualified HaskellFlows.Tool.Hoogle as HoogleTool
-
-testExtractHaddockFindsDoc :: IO Bool
-testExtractHaddockFindsDoc = do
-  tmp <- getTemporaryDirectory
-  let path = tmp </> "haskell-flows-103-haddock1.hs"
-  TIO.writeFile path "-- | Compute the identity of a value.\nidentity :: a -> a\nidentity x = x\n"
-  result <- DocTool.extractHaddockAbove path 2  -- defLine=2 is the type sig line
-  removePathForcibly path
-  pure $ case result of
-    Just txt -> T.isInfixOf "Compute the identity" txt
-    Nothing  -> False
-
--- | A plain @--@ comment (without @|@) is NOT a Haddock block.
-testExtractHaddockNoHaddock :: IO Bool
-testExtractHaddockNoHaddock = do
-  tmp <- getTemporaryDirectory
-  let path = tmp </> "haskell-flows-103-haddock2.hs"
-  TIO.writeFile path "-- Not a haddock comment\nfoo :: Int -> Int\nfoo x = x\n"
-  result <- DocTool.extractHaddockAbove path 2
-  removePathForcibly path
-  pure (isNothing result)
-
--- | No comment at all above the definition → 'Nothing'.
-testExtractHaddockNoComment :: IO Bool
-testExtractHaddockNoComment = do
-  tmp <- getTemporaryDirectory
-  let path = tmp </> "haskell-flows-103-haddock3.hs"
-  TIO.writeFile path "foo :: Int -> Int\nfoo x = x\n"
-  result <- DocTool.extractHaddockAbove path 1
-  removePathForcibly path
-  pure (isNothing result)
-
---------------------------------------------------------------------------------
--- Issue #195 — extractHaddockAbove type-sig skip + nextStep routing
---------------------------------------------------------------------------------
-
--- | #195: 'extractHaddockAbove' must find a @-- |@ comment that sits
--- above a type-signature line, which in turn sits above the binding.
--- GHC reports the binding line (not the sig line) as @defLine@, so
--- the scanner must skip the sig line before collecting the comment.
-testExtractHaddockAboveTypeSig :: IO Bool
-testExtractHaddockAboveTypeSig = do
-  tmp <- getTemporaryDirectory
-  let path = tmp </> "haskell-flows-195-typesig.hs"
-  TIO.writeFile path $ T.unlines
-    [ "-- | Greet a person."
-    , "greet :: String -> String"
-    , "greet name = \"Hello, \" <> name <> \"!\""
-    ]
-  -- defLine = 3 (the binding line)
-  result <- DocTool.extractHaddockAbove path 3
-  removePathForcibly path
-  pure $ case result of
-    Just txt -> "Greet a person" `T.isInfixOf` txt
-    Nothing  -> False
-
--- | #195: 'noDocInScopePayload' must have @hasDoc=false@,
--- @found_in_scope=true@, and a non-empty @reason@.
-testNoDocInScopePayloadShape :: IO Bool
-testNoDocInScopePayloadShape =
-  case DocTool.noDocInScopePayload "greet" of
-    A.Object o ->
-      let hasDoc      = AKM.lookup "hasDoc"         o == Just (A.Bool False)
-          foundInScope = AKM.lookup "found_in_scope" o == Just (A.Bool True)
-          hasReason   = case AKM.lookup "reason" o of
-                          Just (A.String r) -> not (T.null r)
-                          _                 -> False
-      in pure (hasDoc && foundInScope && hasReason)
-    _ -> pure False
-
--- | #195: 'hasDocFalse' must return 'True' when fed a payload whose
--- @hasDoc@ field is @false@. This is a direct probe of the helper
--- so that if 'testDocNoDocNextStepIsInfo' fails we can distinguish
--- "helper broken" from "dispatch guard ordering wrong".
-testHasDocFalseDirectly :: IO Bool
-testHasDocFalseDirectly =
-  let payloadFalse = DocTool.noDocInScopePayload "greet"
-      payloadTrue  = DocTool.hasDocPayload "greet" "some doc"
-      falsePayload = object [ "hasDoc" .= False ]
-      truePayload  = object [ "hasDoc" .= True  ]
-  in pure $  NextStep.hasDocFalse payloadFalse
-          && not (NextStep.hasDocFalse payloadTrue)
-          && NextStep.hasDocFalse falsePayload
-          && not (NextStep.hasDocFalse truePayload)
-
--- Issue #106 sub-findings
---------------------------------------------------------------------------------
-
--- | F-14: 'parseGhcErrors' should populate 'geCode' when the header line
--- contains @[GHC-XXXXX]@. This verifies the regex capture group is correct.
--- The captureHook fix populates geCode for the GHC-API path; the same
--- 'geCode' field is what categorizeWarning branches on.
 testMkGhcErrorCode :: IO Bool
 testMkGhcErrorCode =
   let raw = T.unlines

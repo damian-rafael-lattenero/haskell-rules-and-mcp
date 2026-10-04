@@ -143,8 +143,10 @@ testSwitchHandleSwaps = do
       scratchA   <- SP.openStore pdA
       scratchRef <- newIORef scratchA
       selfRef    <- newIORef False
+      -- Post-C1: switch also drops the ghcide IdeSession slot.
+      ideRef'    <- newMVar Nothing
       let args = A.object [ "path" A..= T.pack dirB ]
-      result  <- SwitchProject.handle pdRef sessRef' storeRef scratchRef selfRef args
+      result  <- SwitchProject.handle pdRef sessRef' ideRef' storeRef scratchRef selfRef args
       newPd   <- readIORef pdRef
       mSess   <- readMVar sessRef'
       removePathForcibly dirA
@@ -194,8 +196,9 @@ testSwitchHandleReopensStore = do
       scratchA   <- SP.openStore pdA
       scratchRef <- newIORef scratchA
       selfRef    <- newIORef False
+      ideRef     <- newMVar Nothing
       let args = A.object [ "path" A..= T.pack dirB ]
-      _ <- SwitchProject.handle pdRef sessRef storeRef scratchRef selfRef args
+      _ <- SwitchProject.handle pdRef sessRef ideRef storeRef scratchRef selfRef args
       storeAfter  <- readIORef storeRef
       postProps   <- loadAll storeAfter
       -- After the swap, the OLD Store handle should still point
@@ -241,6 +244,7 @@ testSwitchHandleReopensScratchpad = do
       scratchA   <- SP.openStore pdA
       scratchRef <- newIORef scratchA
       selfRef    <- newIORef False
+      ideRef     <- newMVar Nothing
       -- Save one entry into project A's scratchpad
       let entry = SP.ScratchEntry
             { SP.seId      = "f02-probe"
@@ -258,7 +262,7 @@ testSwitchHandleReopensScratchpad = do
       preEntries <- SP.loadAll scratchA
       -- Switch to project B (use pdB-derived path to suppress unused-match)
       let args = A.object [ "path" A..= T.pack (HaskellFlows.Types.unProjectDir pdB) ]
-      _ <- SwitchProject.handle pdRef sessRef storeRef scratchRef selfRef args
+      _ <- SwitchProject.handle pdRef sessRef ideRef storeRef scratchRef selfRef args
       -- Read the new scratchpad via the swapped ref
       scratchAfter  <- readIORef scratchRef
       postEntries   <- SP.loadAll scratchAfter

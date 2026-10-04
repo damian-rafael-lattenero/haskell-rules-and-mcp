@@ -41,7 +41,9 @@ import qualified Data.Text as T
 
 import qualified HaskellFlows.Data.Scratchpad as Scratchpad
 import HaskellFlows.Data.PropertyStore (Store)
+import Control.Concurrent.MVar (MVar)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
+import HaskellFlows.Ghc.IdeSession (IdeSession)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Schema as Schema
@@ -64,12 +66,13 @@ import HaskellFlows.Types (ProjectDir)
 -- bootstrap.
 handle :: ToolEnv -> Value -> IO ToolResponse
 handle env =
-  runHandle (teLimits env) (teProjectDirRef env) (teSessionRef env) (teStoreRef env) (teScratchpadRef env) (teIsSelfRef env) (teInvalidateStanza env) (teDescriptors env)
+  runHandle (teLimits env) (teProjectDirRef env) (teSessionRef env) (teIdeSessionRef env) (teStoreRef env) (teScratchpadRef env) (teIsSelfRef env) (teInvalidateStanza env) (teDescriptors env)
 
 runHandle
   :: Limits
   -> IORef ProjectDir
   -> MVar (Maybe GhcSession)
+  -> MVar (Maybe IdeSession) -- ^ dropped by the auto-switch / switch paths
   -> IORef Store
   -> IORef Scratchpad.Store
   -> IORef Bool
@@ -77,7 +80,7 @@ runHandle
   -> [ToolDescriptor]   -- ^ allToolDescriptors (for bootstrap)
   -> Value
   -> IO ToolResponse
-runHandle lim pdRef sessRef storeRef scratchRef selfRef invalidateStanza descriptors rawArgs =
+runHandle lim pdRef sessRef ideRef storeRef scratchRef selfRef invalidateStanza descriptors rawArgs =
   case actionField rawArgs of
     Nothing ->
       pure (Env.mkRefused
@@ -98,11 +101,11 @@ runHandle lim pdRef sessRef storeRef scratchRef selfRef invalidateStanza descrip
                else case createAutoSwitchPath inner of
                  Nothing      -> pure r
                  Just newPath -> do
-                   _ <- SwitchProjectTool.handle pdRef sessRef storeRef scratchRef selfRef
+                   _ <- SwitchProjectTool.handle pdRef sessRef ideRef storeRef scratchRef selfRef
                           (object ["path" .= T.pack newPath])
                    pure r
            "switch" ->
-             SwitchProjectTool.handle pdRef sessRef storeRef scratchRef selfRef inner
+             SwitchProjectTool.handle pdRef sessRef ideRef storeRef scratchRef selfRef inner
            "validate" -> do
              pd <- readIORef pdRef
              ValidateCabalTool.handle lim pd inner

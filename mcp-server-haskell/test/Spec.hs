@@ -126,16 +126,12 @@ import HaskellFlows.Mcp.PermissiveJSON
 import qualified HaskellFlows.Tool.Batch as Batch
 import HaskellFlows.Tool.Batch (BatchArgs (..), unwrapResult)
 import qualified HaskellFlows.Tool.Gate as Gate
-import qualified HaskellFlows.Tool.CheckModule as CheckModule
 import qualified HaskellFlows.Tool.CreateProject as CreateProject
 import qualified HaskellFlows.Tool.Move as MoveTool
 import qualified HaskellFlows.Tool.DepsExplain as DepsExplain
-import qualified HaskellFlows.Tool.ExplainError as ExplainError
 import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
-import qualified HaskellFlows.Tool.Determinism as DeterminismTool
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
-import qualified HaskellFlows.Tool.Regression as RegTool
 import qualified HaskellFlows.Tool.Bootstrap as Bootstrap
 import qualified HaskellFlows.Tool.RemoveModules as RM
 import qualified HaskellFlows.Tool.Modules as Modules
@@ -155,17 +151,8 @@ import HaskellFlows.Mcp.ResourceUri
   , resourceUriText
   )
 import qualified HaskellFlows.Mcp.ResourceUri as ResourceUri
-import qualified HaskellFlows.Mcp.Resources as Resources
-import HaskellFlows.Tool.CheckProject
-  ( parseExposedModules
-  , CheckProjectArgs (..)
-  , ModuleOutcome (..)
-  , renderResult
-  )
 import HaskellFlows.Tool.Lint (parseHlintJson)
 import qualified HaskellFlows.Tool.Lint as LintTool
-import HaskellFlows.Tool.Load (checkPathExists)
-import qualified HaskellFlows.Tool.Load as LoadTool
 import qualified HaskellFlows.Tool.ValidateCabal as VC
 import HaskellFlows.Parser.QuickCheck
   ( QuickCheckResult (..)
@@ -273,8 +260,6 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
 import qualified HaskellFlows.Tool.Browse as BrowseTool
 import qualified HaskellFlows.Tool.Complete as CompleteTool
-import qualified HaskellFlows.Tool.Doc as DocTool
-import qualified HaskellFlows.Tool.Eval as EvalTool
 import qualified HaskellFlows.Tool.AddImport as AddImportTool
 import qualified HaskellFlows.Tool.Hole as HoleTool
 import qualified HaskellFlows.Tool.Hoogle as HoogleTool
@@ -317,7 +302,7 @@ import GHC
   )
 import GHC.Utils.Outputable (showPprUnsafe)
 
-import Spec.Harness (test, testTimeoutMicros, quickTest)
+import Spec.Harness (quickTest, test)
 import Spec.Scratch (scratchTests)
 import Spec.AddImportUnit
 import Spec.AddModulesHandle
@@ -336,17 +321,14 @@ import Spec.DepsExplainLab
 import Spec.DepsFormat
 import Spec.DepsUnit
 import Spec.Descriptors
-import Spec.Discover hiding (testCodeToolsRegistered)
-import Spec.Doc
+import Spec.Discover
 import Spec.DogfoodHint
 import Spec.Envelope
 import Spec.Extract
-import Spec.FilterArtifacts
 import Spec.FinalMisc
 import Spec.FixWarningUnit
 import Spec.Format
 import Spec.GateUnit
-import Spec.GhcErrorUnit
 import Spec.Goto
 import Spec.Guidance
 import Spec.HaddockUnit
@@ -355,19 +337,13 @@ import Spec.HoleParse
 import Spec.HoleTool
 import Spec.InfoAdvanced
 import Spec.InfoHoogle
-import Spec.InfoParse
 import Spec.Lint
-import Spec.Load
-import Spec.LoadUnit
 import Spec.ModuleNameUnit
 import Spec.MoveUnit
-import Spec.NextStepCoverage
 import Spec.NextStepFull
 import Spec.NextStepLoad
 import Spec.NextStepUnit
 import Spec.ParseError
-import Spec.ParseHeaderUnit
-import Spec.ParseQc
 import Spec.PermissiveJSON
 import Spec.PlanUnit
 import Spec.Progress
@@ -375,7 +351,6 @@ import Spec.PropertyAuditUnit
 import Spec.Protocol
 import Spec.QcExport
 import Spec.RefactorTool
-import Spec.RegressionUnit
 import Spec.RemoveModulesUnit
 import Spec.Rename
 import Spec.Sanitize
@@ -385,7 +360,6 @@ import Spec.Store
 import Spec.SuggestAdvanced
 import Spec.SuggestLaws
 import Spec.SuggestSig
-import Spec.SummariseUnit
 import Spec.SwitchProjectUnit
 import Spec.TaxonomyUnit
 import Spec.Toolchain
@@ -397,13 +371,9 @@ import Spec.Toolchain
   )
 import Spec.PartialFunctions
 import Spec.TraversalGuards
-import Spec.TypeEval
 import Spec.ValidateCabal
 import Spec.SurfaceHarness
-import Spec.WorkflowState hiding
-  ( testArbitraryPathToModule
-  , testArbitraryModuleRender
-  )
+import Spec.WorkflowState
 import Spec.WorkflowTool
 import Spec.DispatchUnit
   ( testMkToolEnvFields
@@ -486,13 +456,11 @@ runAllTests :: IO Bool
 runAllTests = do
   results <-
     sequence $
-      [ test "mkProjectDir rejects relative"    testRejectsRelativeProject
-      , test "mkModulePath accepts in-tree"      testAcceptsInTree
-      , test "mkModulePath rejects traversal"    testRejectsTraversal
-      , test "ghc_load #79: checkPathExists Right" testCheckPathExistsAccepts
-      , test "ghc_load #79: checkPathExists Left"  testCheckPathExistsRejects
+      [ test "parseGhcErrors extracts header"    testParseHeader
+      , test "code tools: all 5 registered"        testCodeToolsRegistered
+      , test "#261: pathToModule derives module from path" testArbitraryPathToModule
+      , test "#261: renderArbitraryModule emits Wno-orphans module" testArbitraryModuleRender
       -- Issue #214 — no-args reload uses library stanza, not test-suite stanza
-      , test "parseGhcErrors extracts header"    testParseHeader
       , test "sanitizeExpression accepts normal" testSanitizeAccepts
       , test "sanitizeExpression rejects newline" testSanitizeRejectsNewline
       , test "sanitizeExpression rejects sentinel" testSanitizeRejectsSentinel
@@ -512,38 +480,8 @@ runAllTests = do
       , quickTest "prop_sanitize_clean_roundtrip"     prop_sanitize_clean_roundtrip
       , quickTest "prop_modulePath_rejects_dotdot"    prop_modulePath_rejects_dotdot
       , quickTest "prop_modulePath_accepts_inTree"    prop_modulePath_accepts_inTree
-      , quickTest "prop_parseShowModulesPaths_total"  prop_parseShowModulesPaths_total
-      , quickTest "prop_parseQuickCheckOutput_total"  prop_parseQuickCheckOutput_total
       , quickTest "prop_chooseStoreModule_nonIdent_uses_hint" prop_chooseStoreModule_nonIdent_uses_hint
       , quickTest "prop_chooseStoreModule_ident_no_info_uses_hint" prop_chooseStoreModule_ident_no_info_uses_hint
-      , test "parseQuickCheckOutput passed"        testQcPassed
-      , test "parseQuickCheckOutput failed"        testQcFailed
-      , test "parseQuickCheckOutput gave up"       testQcGaveUp
-      , test "#211: QcGaveUp renderResult kind=validation" testQcGaveUpValidationKind
-      , test "parseQuickCheckOutput exception"     testQcException
-      , test "parseQuickCheckOutput unparsed"      testQcUnparsed
-      , test "B-6: missing Arbitrary classifies as missing_instance" testClassifyMissingArbitrary
-      , test "B-6: extractArbitraryType pulls the offending type"    testExtractArbitraryType
-      , test "B-6: missing Arbitrary nextStep → ghc_property(arbitrary)"       testQcMissingArbitraryNextStep
-      , test "parseTypedHoles extracts one hole"   testHoleOne
-      , test "parseTypedHoles ignores non-holes"   testHoleIgnored
-      , test "parseConstructors inline form"       testCtorsInline
-      , test "parseConstructors multiline form"    testCtorsMultiline
-      , test "parseConstructors rejects synonym"   testCtorsSynonym
-      , test "parseConstructors: no unique-suffix in args (#170)" testCtorsNoUniqueSuffix
-      , test "renderTemplate 3 ctors"              testTemplate3
-      , test "parseHoogleLine normal hit"          testHoogleHit
-      , test "parseHoogleLine no-results line"    testHoogleEmpty
-      , test "eval ctx · empty adds all 5 extras (#86)"
-                                                   testEvalContextEmptyAddsAll
-      , test "eval ctx · existing Prelude suppresses dup (#86)"
-                                                   testEvalContextSkipsExistingPrelude
-      , test "eval ctx · second call is no-op (#86)"
-                                                   testEvalContextSecondCallNoop
-      , test "eval ctx · subset existing only fills gaps (#86)"
-                                                   testEvalContextSubsetExisting
-      , test "eval ctx · idempotent on its own output (#86)"
-                                                   testEvalContextIdempotent
       -- Issue #88: PermissiveJSON IntField + BoolField
       , test "IntField · canonical JSON number (#88)"
                                                    testIntFieldNumber
@@ -606,14 +544,6 @@ runAllTests = do
       , test "#100C: ghc_format rejects traversal path"
                                                    testFormatRejectsTraversal
       , test "#246: ghc_format missing file returns clean error" testFormatMissingFile
-      , test "#100C: ghc_check_module rejects traversal path"
-                                                   testCheckModuleRejectsTraversal
-      , test "#150: ghc_check_module non-existent file → module_path_does_not_exist"
-                                                   testCheckModuleNonExistentFile
-      , test "#100C: ghc_explain_error rejects traversal path"
-                                                   testExplainErrorRejectsTraversal
-      , test "#100C: ghc_load rejects traversal path"
-                                                   testLoadRejectsTraversal
       , test "#100C: ghc_refactor rejects traversal path"
                                                    testRefactorRejectsTraversal
       -- Issue #92 Phase A · discriminated schema helpers
@@ -842,34 +772,6 @@ runAllTests = do
                                                    testGotoUnknownNameNoMatch
       , test "Envelope #90 Phase B: ghc_goto refuses newline in name"
                                                    testGotoRefusesNewline
-      , test "Envelope #90 Phase B: ghc_doc with Haddock → status=ok"
-                                                   testDocHasDocOk
-      , test "Envelope #90 Phase B: ghc_doc on unknown name → status=no_match"
-                                                   testDocUnknownNameNoMatch
-      , test "Envelope #90 Phase B: ghc_doc refuses newline in name"
-                                                   testDocRefusesNewline
-      , test "Envelope #90 Phase B: ghc_type on valid expr → status=ok"
-                                                   testTypeValidExprOk
-      , test "Envelope #90 Phase B: ghc_type on ill-typed expr → status=failed (type_error)"
-                                                   testTypeIllTypedFailed
-      , test "Envelope #90 Phase B: ghc_type refuses newline in expression"
-                                                   testTypeRefusesNewline
-      , test "#141: ghc_type 'Not in scope' → kind=not_in_scope"
-                                                   testTypeNotInScope
-      , test "Envelope #90 Phase B: ghc_eval pure expr → status=ok"
-                                                   testEvalPureExprOk
-      , test "#143: ghc_eval import prefix → compile_error + nextStep=ghc_edit(import)"
-                                                   testEvalImportRedirect
-      , test "Envelope #90 Phase B: ghc_eval refuses newline in expression"
-                                                   testEvalRefusesNewline
-      , test "Envelope #90 Phase B: ghc_eval refuses sentinel string"
-                                                   testEvalRefusesSentinel
-      , test "#127: ghc_eval refuses 2^64 (oversized integer literal)"
-                                                   testEvalRefusesOversizedInteger
-      , test "#127: ghc_eval refuses 18446744073709551616 (20-digit literal)"
-                                                   testEvalRefusesLargeLiteral
-      , test "#134: classifyEvalException: source-text inspection"
-                                                   testClassifyEvalExceptionInSource
       , test "Envelope #90 Phase B: ghc_hole on module with hole → status=ok"
                                                    testHoleWithHoleOk
       , test "Envelope #90 Phase B: ghc_hole on hole-free module → status=no_match"
@@ -909,7 +811,6 @@ runAllTests = do
                                                    testLintResolveNoDuplication
       , test "validateCabal flags duplicate deps"  testDuplicateDeps
       , test "validateCabal flags missing synopsis" testMissingSynopsis
-      , test "parseExposedModules reads modules"   testParseModules
       , test "extractValidFits parses fits"        testValidFits
       , test "extractValidFits: operator-named fit not absorbed (#71)"
                                                                  testValidFitsOperatorBoundary
@@ -969,17 +870,12 @@ runAllTests = do
       , test "Deferred pass writes to MCP-private build dir"      testDeferredIsolatedOutputs
       , test "ghc_deps add: idempotent no-op returns unchanged"  testDepsAddIdempotent
       , test "ghc_switch_project: empty dir -> create_project"   testSwitchProjectEmptyDir
-      , test "ghc_check_module: filter diagnostics by file"     testCheckModuleDiagFilter
       , test "ghc_add_modules: accepts stanza param"            testAddModulesStanzaParam
-      , test "ghc_check_project: also scans test/app/bench"     testCheckProjectTestDirs
       , test "ghc_quickcheck: widens scope via :m +"            testQuickCheckScopeWidening
       , test "ghc_quickcheck: runner uses :{ do :} not bare <-"  testQuickCheckRunnerDoBrace
       , test "initialize emits instructions field"  testInitializeEmitsInstructions
       , test "instructions mention key tools+flows" testInstructionsMentionCore
       , test "nextStep: create_project -> deps"     testNextStepCreateProject
-      , test "#A5: not_in_scope -> explain_error"  testSuggestOnErrorNotInScope
-      , test "#A5: explain_error no self-loop"     testSuggestOnErrorNoSelfLoop
-      , test "#282: explain_error parses w/o module_path" testExplainErrorOptionalModule
       , test "#266 xsession: empty ledger reads empty" testSessionLedgerEmpty
       -- Phase 5: cross-tool nextStep arms
       , test "suggest: functor fmap two laws"      testSuggestFunctorFmap
@@ -1002,9 +898,6 @@ runAllTests = do
       , test "qcexport: sanitizeLabel strips LF"   testQcExportSanitize
       , test "warnings: categorize common classes" testWarningCategorize
       , test "warnings: bucketize orders by count" testWarningBucketize
-      , test "code tools: all 5 registered"        testCodeToolsRegistered
-      , test "add_import: qualified renderImportLine" testAddImportQualified
-      , test "B-2: idiomaticAlias (no S/S collision, override)" testIdiomaticAlias
       , test "B-1: schemaPropertyNames extracts declared keys"    testSchemaPropertyNames
       , test "B-1: unknownArgKeys detects base_dir as unknown"   testUnknownArgKeys
       , test "B-1: didYouMean suggests path for pathh"           testDidYouMeanBaseDir
@@ -1013,24 +906,6 @@ runAllTests = do
       , test "add_import: missing hoogle returns success=false (#53)" testAddImportMissingHoogle
       , test "#146: addImportToSession rejects invalid import gracefully" testAddImportToSessionInvalid
       , test "#146: addImportToSession accepts valid base import"       testAddImportToSessionValid
-      , test "info: renderConstructorsBlock empty (#54)"  testInfoCtorBlockEmpty
-      , test "info: renderConstructorsBlock Maybe (#54)"  testInfoCtorBlockMaybe
-      , test "info: successResult includes constructors (#54)" testInfoSuccessIncludesCtors
-      , test "info: successResult drops field when none (#54)" testInfoSuccessDropsCtorField
-      , test "info: renderClassMethodsBlock shape (#70)"        testInfoClassMethodsBlock
-      , test "info: successResult emits class_methods on a class (#70)"
-                                                                 testInfoSuccessClassMethods
-      , test "info: successResult drops class_methods on a data type (#70)"
-                                                                 testInfoSuccessDropsClassMethods
-      , test "#142: successResult caps instances at 30 and sets instance_count"
-                                                                 testInfoInstanceCap
-      , test "#142: successResult sets instances_truncated=false when under cap"
-                                                                 testInfoInstancesNotTruncated
-      , test "check: propertiesGate empty -> ok=true (#42)"   testCheckGateEmpty
-      , test "check: propertiesGate all pass -> ok=true (#42)" testCheckGatePass
-      , test "check: propertiesGate regressed -> ok=false (#42)" testCheckGateRegressed
-      , test "check: propertiesGate skipped -> ok=false (#42)" testCheckGateSkipped
-      , test "check: propertiesGate reason matches ok flag (#42)" testCheckGateReasonMatchesOk
       , test "create_project: validateName accepts canonical (#58)"  testCreateValidateAccept
       , test "create_project: validateName rejects empty (#58)"      testCreateValidateEmpty
       , test "create_project: validateName rejects uppercase (#58)"  testCreateValidateUpper
@@ -1190,12 +1065,6 @@ runAllTests = do
       , test "#156: importMatchesPkg aeson import Data.Aeson"   testImportMatchesPkgHit
       , test "#156: importMatchesPkg aeson import Data.Map miss" testImportMatchesPkgMiss
       , test "#156: cabalComponentsMatchingPkg finds library stanza" testCabalComponentsLibrary
-      , test "explain_error: pickDiagnostic default first (#59)" testExplainPickDefault
-      , test "explain_error: pickDiagnostic by index (#59)" testExplainPickIndex
-      , test "explain_error: pickDiagnostic out of range (#59)" testExplainPickOOR
-      , test "explain_error: index out of range gives clear hint, not 'No errors' (#203)" testExplainIndexOutOfRangeHint203
-      , test "explain_error: extractImports recognises shapes (#59)" testExplainExtractImports
-      , test "explain_error: enclosingLineRange clamps (#59)" testExplainRangeClamps
       , test "#212: audit detects ==> in expression text"       testPAImplicationDetection
       , test "property_audit: pairCombinations 0 elements (#64)" testPACombinationsEmpty
       , test "property_audit: pairCombinations 5 elements (#64)" testPACombinations5
@@ -1247,18 +1116,6 @@ runAllTests = do
                                                                  testPARenderFindingKindContradictory
       , test "#230: renderFinding kind=skipped-pair for skipped status"
                                                                  testPARenderFindingKindSkipped
-      , test "explain_error: applyLinePatch replaces old text (#59 Phase2)"
-                                                                 testEEApplyLinePatch
-      , test "explain_error: applyLinePatch returns Nothing when old not found (#59 Phase2)"
-                                                                 testEEApplyLinePatchMiss
-      , test "explain_error: applyLinePatch rejects out-of-bounds line (#59 Phase2)"
-                                                                 testEEApplyLinePatchOob
-      , test "#222: verify_patch uses loadForTarget not bare loadAndCaptureDiagnostics"
-                                                                 testExplainVerifyPatchUsesLoadForTarget
-      , test "#189: parseGhcLineCol extracts line+col from error text" testParseGhcLineColBasic
-      , test "#189: parseGhcLineCol handles col range (7-15 → 7)"      testParseGhcLineColRange
-      , test "#189: parseGhcLineCol falls back to 1:1 on no location"  testParseGhcLineColFallback
-      , test "#189: syntheticError uses parsed line+col"                testSyntheticErrorLineCol
       , test "workflow-state: initial empty"       testWorkflowStateInitial
       , test "workflow-state: renderHelp thresholds" testWorkflowStateHelp
       , test "#263: discover returns at most 5"         testDiscoverAtMostFive
@@ -1267,16 +1124,6 @@ runAllTests = do
       , test "#264: plan low-confidence lists alternatives" testPlanLowConfidenceListsAlternatives
       , test "#284: plan scaffolds all named modules"  testPlanMultiModule
       , test "#284: plan caps confidence on complex goal" testPlanComplexGoalCapped
-      , test "#258: GHC-32850 suppressed when modules registered" testLoad32850Suppressed
-      , test "#258: GHC-32850 retained when module missing" testLoad32850RetainedWhenMissing
-      , test "#258: non-GHC-32850 warning never dropped (CI regression)" testLoadNon32850Retained
-      , test "#278: test-stanza path detected as non-library"  testLoadNonLibStanzaPath
-      , test "#278: library path not flagged as non-library"   testLoadLibStanzaPath
-      , test "#278: load failure message points at ghc_gate"   testLoadFailureMessageGate
-      , test "#259: GHC-76037 surfaces submodule suggested_import" testSuggestedImportGhc76037
-      , test "#260: importsMatchingPackage detects cross-stanza dep" testDepsCrossStanzaMatch
-      , test "#261: pathToModule derives module from path" testArbitraryPathToModule
-      , test "#261: renderArbitraryModule emits Wno-orphans module" testArbitraryModuleRender
       , test "resources: rules workflow URI resolves" testResourcesRulesRead
       , test "resources: unknown URI returns Nothing" testResourcesUnknown
       , test "baja bundle: 4 tools registered"      testBajaRegistered
@@ -1318,14 +1165,6 @@ runAllTests = do
       , test "quickcheck: chooseStoreModule lambda uses hint" testChooseStoreModuleLambda
       , test "quickcheck: chooseStoreModule ignores module loc" testChooseStoreModuleModuleLoc
       , test "quickcheck: isSimpleIdent classifier"            testIsSimpleIdentClassifier
-      , test "regression: parseShowModulesPaths simple"        testParseShowModulesPathsSimple
-      , test "regression: parseShowModulesPaths multi-module"  testParseShowModulesPathsMulti
-      , test "regression: parseShowModulesPaths tolerates garbage" testParseShowModulesPathsGarbage
-      , test "regression: classifyLoadFailure detects scope (#51)" testRegressionClassifyScope
-      , test "regression: classifyLoadFailure detects missing mod (#51)" testRegressionClassifyMissing
-      , test "regression: classifyLoadFailure ignores quiet stderr (#51)" testRegressionClassifyQuiet
-      , test "regression: classifyLoadFailure passthrough on QcPassed (#51)" testRegressionClassifyPassedPassthrough
-      , test "regression: summariseLoadError caps at 600 chars (#51)" testRegressionSummariseCap
       , test "suggest: involutive Low for normalizer" testInvolutiveLowForNormalizer
       , test "suggest: involutive Medium for reverse" testInvolutiveMediumForReverse
       , test "suggest: self-inverse-on-lists Low for normalizer (#73)"
@@ -1339,9 +1178,6 @@ runAllTests = do
       , test "suggest: parseBrowseBindings skips continuations" testParseBrowseContinuation
       , test "suggest: siblings enable preservation" testSuggestSiblingsEnablePreservation
       , test "suggest: siblings enable soundness"   testSuggestSiblingsEnableSoundness
-      , test "#281: clampRuns caps at maxRuns"      testClampRunsCapsHigh
-      , test "#281: clampRuns floors at 1"          testClampRunsFloorsLow
-      , test "#281: clampRuns passes through normal" testClampRunsPassThrough
       , test "nextStep: every tool covered or whitelisted" testNextStepFullCoverage
       , test "harness: tools/list golden freeze (#268 companion)" testToolsListGolden
       , test "harness: nextStep sweep — no unregistered refs"   testNextStepSweep
@@ -1388,19 +1224,10 @@ runAllTests = do
       , test "bootstrap: pathForHost is closed enum"  testBootstrapPathEnum
       , test "#179: bootstrap write=true nextStep says rules written" testBootstrapWriteNextStep
       , test "#179: bootstrap preview nextStep says re-run with write=true" testBootstrapPreviewNextStep
-      , test "doc: main README uses haskell-flows-mcp" testDocsMainReadme
-      , test "doc: haskell README lists real tools"   testDocsHaskellReadme
       , test "release: workflow file exists + well-formed" testReleaseWorkflow
       , test "ghc-api: GhcSession boots + exprType roundtrip" testGhcSessionBoots
       , test "ghc-api: HscEnv persists across withGhcSession calls" testGhcSessionPersists
-      , test "ghc-api: evalIOString runs IO String actions in-process" testEvalIOString
-      , test "ghc-api #80: queryExprType resolves 'id' after autoLoadProject"
-                                                                 testQueryExprTypeIdAfterAutoLoad
       , test "ghc-api: bootstrapProject captures cabal flags for library" testCabalBootstrapLibrary
-      , test "ghc-api: loadForTarget compiles library module via stanza flags" testLoadForTargetLibrary
-      , test "ghc-api: deferred hole warnings are captured by logger hook" testHoleDiagnosticCapture
-      , test "ghc-api: loadForTarget after deps-add resolves -package-id"   testLoadAfterDepsAdd
-      , test "B-7: renderStored includes cases field in list projection"     testRenderStoredIncludesCases
       , test "switch_project: rejects relative path"             testSwitchRejectsRelative
       , test "switch_project: rejects missing directory"         testSwitchRejectsMissing
       , test "switch_project: rejects dir without .cabal"        testSwitchRejectsNoCabal
@@ -1439,8 +1266,6 @@ runAllTests = do
       , test "#159: Either return type gets totality suggestion"   testSuggestEitherTotality
       , test "#159: Either parser roundtrip emits Right x"        testSuggestEitherParserRoundtrip
       , test "#159: Either rule in allRules catalog"              testSuggestEitherRuleRegistered
-      , test "ghc-api: external cabal edit invalidates stanza cache"
-                                                                 testMtimeInvalidation
       , test "ghc-api: absolutizePathArg single-token shapes (#43)"
                                                                  testAbsolutizePathArgSingleToken
       , test "ghc-api: absolutizePathArg eq-form (#43)"           testAbsolutizePathArgEqForm
@@ -1449,42 +1274,7 @@ runAllTests = do
       , test "ghc-api: absolutizeStanzaFlags idempotent (#43)"    testAbsolutizeStanzaFlagsIdempotent
       , test "ghc-api: absolutizeStanzaFlags preserves order (#43)"
                                                                  testAbsolutizeStanzaFlagsPreservesOrder
-      , test "ghc-api: filterArtifacts drops GHC-58427 with peer (#57)"
-                                                                 testFilterArtifactsDropsWithPeer
-      , test "ghc-api: filterArtifacts keeps lone GHC-58427 (#57)"
-                                                                 testFilterArtifactsKeepsLone
-      , test "ghc-api: filterArtifacts noop on empty (#57)"      testFilterArtifactsEmpty
-      , test "add_modules: unwraps stringified JSON-array (BUG-PLUS-08)"
-                                                                 testAddModulesJsonArrayString
-      , test "add_modules: plain comma-split preserved for non-JSON strings"
-                                                                 testAddModulesPlainStringStillWorks
-      , test "check_module: warnings_block=false keeps warnings informational"
-                                                                 testCheckModuleWarningsBlockFalse
-      , test "check_module: warnings_block default is True"      testCheckModuleWarningsBlockDefault
-      , test "check_module: parseModuleHeader simple (#74)"      testParseHeaderSimple
-      , test "check_module: parseModuleHeader multi-segment (#74)"
-                                                                 testParseHeaderMultiSegment
-      , test "check_module: parseModuleHeader exports + multiline (#74)"
-                                                                 testParseHeaderExportsMultiline
-      , test "check_module: parseModuleHeader skips pragmas + comments + blanks (#74)"
-                                                                 testParseHeaderSkipsLeading
-      , test "check_module: parseModuleHeader returns Nothing on missing header (#74)"
-                                                                 testParseHeaderNoHeader
-      , test "check_module: parseModuleHeader rejects lowercase name (#74)"
-                                                                 testParseHeaderInvalidName
-      , test "quickcheck: summariseStderr filters cabal noise"   testQcSummariseStderrFiltersNoise
-      , test "quickcheck: summariseStderr caps at 1600 chars"    testQcSummariseStderrCaps
       -- Issue #132 — not_in_scope classification
-      , test "#132: classifyStderrKind NotInScope on Variable not in scope"  testClassifyStderrNotInScope
-      , test "#132: classifyStderrKind SubprocessError on generic error"     testClassifyStderrGeneric
-      , test "#186: classifyStderrKind CompileError on GHC error line"       testClassifyStderrCompileError
-      , test "#186: classifyStderrKind CompileError on GHC-N error code"     testClassifyStderrCompileErrorCode
-      , test "#186: isCompileErrorStderr true on ': error:' pattern"         testIsCompileErrorStderrTrue
-      , test "#186: isCompileErrorStderr false on generic message"           testIsCompileErrorStderrFalse
-      , test "#132: extractNotInScopeSymbol extracts bare name"              testExtractNisBareName
-      , test "#132: extractNotInScopeSymbol extracts name before type sig"   testExtractNisTypeSig
-      , test "#132: extractNotInScopeSymbol returns Nothing for other text"  testExtractNisAbsent
-      , test "#132: summariseStderr strips -Wmissing-home-modules lines"     testQcSummariseStripsWmhm
       -- Issue #98 Phase B · structured logging
       , test "#98B: Logging · redaction truncates strings > 40 chars"
                                                                  testLoggingRedactionPolicy
@@ -1551,13 +1341,7 @@ runAllTests = do
       , test "#104a: suggest idempotent rule emits :: Int annotation"  testSuggestIdempotentAnnotated
       , test "#104a: suggest involutive rule emits :: Int annotation"  testSuggestInvolutiveAnnotated
       -- Issue #103: extractHaddockAbove source fallback
-      , test "#103: extractHaddockAbove finds -- | comment"           testExtractHaddockFindsDoc
-      , test "#103: extractHaddockAbove returns Nothing for plain --" testExtractHaddockNoHaddock
-      , test "#103: extractHaddockAbove returns Nothing for no comment" testExtractHaddockNoComment
       -- Issue #195 — type-sig skip + nextStep routing
-      , test "#195: extractHaddockAbove finds -- | above type signature" testExtractHaddockAboveTypeSig
-      , test "#195: noDocInScopePayload has found_in_scope=true"        testNoDocInScopePayloadShape
-      , test "#195: hasDocFalse returns True for noDocInScopePayload"   testHasDocFalseDirectly
       -- Issue #106 sub-findings
       , test "#106/F-14: mkGhcError propagates code from captureHook" testMkGhcErrorCode
       , test "#180: stripGhcInternalQual removes ghc-internal prefix"  testStripGhcInternalQual
@@ -1572,22 +1356,6 @@ runAllTests = do
       , test "#139: hoogle_search no-results renderResult has isError=false" testHoogleNoMatchIsError
       -- Issue #158 — 'count' alias for 'limit' must not be silently dropped
       , test "#158: hoogle_search FromJSON accepts 'count' as alias for 'limit'" testHoogleCountAlias
-      , test "#106/F-25: ghc_explain_error drops redundant module_source" testExplainErrorNoModuleSource
-      , test "#153: ghc_explain_error error_text used directly (not ignored)"
-                                                           testExplainErrorTextUsed
-      , test "#106/F-11: ghc_doc strips LaTeX delimiters" testDocStripLatex
-      , test "#144: ghc_doc strips spurious [ ] brackets from doc string"
-                                                           testDocStripBrackets
-      , test "#106/F-08: ghc_deps list all stanzas returns stanzas map" testDepsListAllStanzas
-      , test "#106/F-34: moduleNameToPath accepts file paths without mangling" testMoveModuleNameToPath
-      , test "#106/F-12: ioUnitResult has kind=io_unit_no_output" testEvalIoUnitResult
-      , test "#167: ioUnitResult hint is not circular (no putStrLn advice)" testEvalIoUnitHintNotCircular
-      , test "#182: evalIOUnitCapture actually captures putStrLn output"    testCaptureStdoutActuallyCaptures
-      , test "#194: evalIOUnitCapture via GHC session captures putStrLn"    testEvalIOUnitCaptureViaSess
-      , test "#106/F-23: mergeDiags prefers deferred version at same position" testLoadMergeDiagsPreferDeferred
-      , test "#106/F-04: toolchain warmup includes gates in response" testWarmupIncludesGates
-      , test "#106/F-24: enclosingLineRange padding 15 doesn't return whole file" testEnclosingRangePadding
-      , test "#106/F-09: parseRejections splits comma-separated versions" testDepsExplainRejectionSplit
       , test "#205: compileFailResult dry_run=true propagates to result field"  testRefactorCompileFailDryRunTrue
       , test "#205: extractFreeVarNames picks up not-in-scope variables"        testExtractFreeVarNames
       , test "#205: extractFreeVarNames empty when no not-in-scope errors"      testExtractFreeVarNamesEmpty
@@ -1595,17 +1363,9 @@ runAllTests = do
       , test "#201: extractQcOutputAt slices indexed sentinel output"          testExtractQcOutputAt
       -- Issue #200 — regression_pct precision
       -- Issue #135 — summariseMeasurementErrors truncation
-      , test "#213: check_module holes.reason reflects count when holes present" testCheckModuleHolesReasonCount
       -- Issue #108 — typed-hole reclassification in check_module + refactor
-      , test "#108: check_module compileOk true when only hole errors"   testCheckModuleHoleOnlyCompileOk
-      , test "#108: check_module realErrors excludes GHC-88464"          testCheckModuleRealErrorsExcludesHoles
-      , test "#108: refactor commitResultWithDiff excludes holes from pre_existing_errors"
-                                                                         testRefactorPreExistingHolesExcluded
       -- Issue #188 — check_module uses loadSpecificFileForTarget
-      , test "#188: check_module uses loadSpecificFileForTarget not loadForTarget" testCheckModuleUsesSpecificLoader
       -- Issue #109 — .cabal comment-stripping in check_project
-      , test "#109: parseExposedModules strips inline -- comments"        testParseExposedModulesStripsComments
-      , test "#109: parseExposedModules rejects tokens with punctuation"  testParseExposedModulesRejectsPunct
       -- Issue #107 — ghc_info renderDefinition for functions
       , test "#107: renderDefinition AnId produces name :: type"          testInfoAnIdDefinition
       -- Issue #130 — eponymous record TyCon selection
@@ -1645,25 +1405,14 @@ runAllTests = do
       -- Issue #112 — PropertyAudit pair-probe uses Nothing module context
       , test "#112: contradiction probe is self-contained (no module ref)" testAuditPairProbeIsModuleAgnostic
       -- Issue #113 — Regression cross-stanza retry fallback
-      , test "#113: cross-stanza stderr triggers load-failure classification" testRegressionCrossStanzaRetryClassification
-      , test "#113: QcPassed with quiet stderr does not trigger retry"     testRegressionSelfContainedNoRetry
       -- Issue #114 — ghc_imports dedup via nubBy importKey
       , test "#114: nubBy dedup removes duplicate module keys"             testImportsNubByDeduplication
       -- Issue #119 — DX paper-cuts batch
       , test "#119: Env.GateFailure exists in enum + wire form"            testGateFailureKindExists
       , test "#119: removeDep unchangedResult has no verb field"           testUnchangedResultNoVerb
-      , test "#119: formatIso8601 produces ISO-8601 timestamp"             testFormatIso8601
-      , test "#119: ValidateCabal warnings-only returns ok not partial"    testValidateCabalWarningsOk
       -- Issue #110 — ghc_load outside hs-source-dirs validation
-      , test "#110: parseHsSourceDirs single stanza"                      testParseHsSourceDirsSingle
-      , test "#110: parseHsSourceDirs multiple stanzas union"             testParseHsSourceDirsMultipleStanzas
-      , test "#110: parseHsSourceDirs empty → no field found"             testParseHsSourceDirsEmpty
-      , test "#110: isUnderAnySourceDir positive and negative"            testIsUnderAnySourceDir
-      , test "#110: isUnderAnySourceDir dot matches everything"           testIsUnderAnySourceDirDot
       , test "#110: Env.OutsideSourceDirs exists in enum + wire form"     testOutsideSourceDirsKindExists
       -- Issue #166 — ghc_load must not pick up unregistered src/ files
-      , test "#166: ghc_load with module_path ignores stray unregistered files"
-                                                              testLoadSpecificFileIgnoresStray
       , test "#166: loadSpecificFileForTarget exported from ApiSession"
                                                               testLoadSpecificFileExported
       -- Issue #232 — ghc_check_module stale-cache warning gap
@@ -1678,18 +1427,7 @@ runAllTests = do
       -- Issue #194 — targetForPath prefix must match flat test/Foo.hs paths
       , test "#194: targetForPath prefix matches flat test/Foo.hs" testTargetForPathFlatFile
       , test "#194: targetForPath prefix matches nested test/foo/Bar.hs" testTargetForPathNestedFile
-      , test "#194: targetForPath falls back to library for src/Foo.hs" testTargetForPathLibFallback
       -- Issue #129 — ghc_check_project deadline-based timeout
-      , test "#191: check_project delegates to check_module (no own loadForTarget)" testCheckProjectDelegates
-      , test "#129: CheckProjectArgs defaults timeout_seconds to 120"    testCheckProjectArgsDefaultTimeout
-      , test "#129: renderResult timedOut=True adds timed_out field"     testRenderResultTimedOutFlag
-      , test "#129: renderResult timedOut=True lists timed_out_modules"  testRenderResultTimedOutModules
-      , test "#129: renderResult timedOut=False omits timed_out field"   testRenderResultNoTimedOutField
-      , test "#129: MoTimedOut renders with status=timed_out"            testRenderOutcomeTimedOut
-      , test "#129: renderResult overall=false when any module timed out" testRenderResultTimedOutOverallFalse
-      , test "#151: timeout summary does not claim 'N/N green' when only k<N checked"
-                                                              testRenderResultTimedOutSummary
-      , test "#255: check_project mixed results -> status:partial"  testCheckProjectPartialStatus
       , test "#250: renderRunLine uses module name not path"  testRenderRunLineUsesModuleName
       , test "#244: findCommonStanzaWithPkg finds stanza containing pkg" testDepsCommonStanzaPkgFound
       , test "#244: findCommonStanzaWithPkg returns Nothing when pkg absent" testDepsCommonStanzaPkgAbsent

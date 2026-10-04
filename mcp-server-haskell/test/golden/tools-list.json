@@ -45,7 +45,7 @@
         "version": "2.0.0"
     },
     {
-        "description": "PURPOSE: Evaluate a single Haskell expression in-process via the GHC API. WHEN: checking a value, a pure function result, or an IO action's output mid-session. WHEN NOT: ghc_quickcheck to test a property over many inputs; ghc_type for just the type. PREREQUISITES: a loaded session (auto-boots on first use). OUTPUT: {result} — show-wrapped for pure exprs, IO String otherwise; capped at 65536 characters. SEE ALSO: ghc_type, ghc_quickcheck.",
+        "description": "PURPOSE: Evaluate a single Haskell expression in-process via the ghcide session. WHEN: checking a value, a pure function result, or an IO action's output mid-session. WHEN NOT: ghc_property(action=check) to test a property over many inputs; ghc_inspect(action=type) for just the type. PREREQUISITES: none — the session auto-boots on first use and anchors on the project's modules. OUTPUT: {result} — show-wrapped for pure exprs, IO String otherwise, plus the anchor module that scoped it. SEE ALSO: ghc_inspect(action=type), ghc_property.",
         "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -289,8 +289,7 @@
                         "info",
                         "browse",
                         "complete",
-                        "goto",
-                        "doc"
+                        "goto"
                     ],
                     "type": "string"
                 },
@@ -390,48 +389,6 @@
             "type": "object"
         },
         "name": "ghc_deps",
-        "version": "1.0.0"
-    },
-    {
-        "description": "PURPOSE: Build a structured explanation context for a GHC type error, and optionally verify a candidate patch. WHEN: decoding a confusing type error; pass verify_patch to apply a candidate to a snapshot and recompile. WHEN NOT: ghc_fix_warning for warnings (not type errors); ghc_hole when the issue is an unfilled stub. PREREQUISITES: the failing module in the active project. OUTPUT: {diagnostic, context:{source, imports, enclosing_range}}; verify_patch adds {error_resolved}. SEE ALSO: ghc_fix_warning, ghc_hole.",
-        "inputSchema": {
-            "additionalProperties": false,
-            "properties": {
-                "diagnostic_index": {
-                    "type": "integer"
-                },
-                "error_text": {
-                    "description": "The GHC error message to explain. When supplied, the tool uses this text directly instead of recompiling module_path. Works without module_path for a text-only decode — this is the failure-path route (#282).",
-                    "type": "string"
-                },
-                "module_path": {
-                    "description": "Optional: module whose file supplies the enclosing-code context. Omit it to decode a diagnostic from error_text alone (text-only mode — no enclosing slice). At least one of module_path / error_text must be given.",
-                    "type": "string"
-                },
-                "verify_patch": {
-                    "properties": {
-                        "line": {
-                            "type": "integer"
-                        },
-                        "new": {
-                            "type": "string"
-                        },
-                        "old": {
-                            "type": "string"
-                        }
-                    },
-                    "required": [
-                        "line",
-                        "old",
-                        "new"
-                    ],
-                    "type": "object"
-                }
-            },
-            "required": [],
-            "type": "object"
-        },
-        "name": "ghc_explain_error",
         "version": "1.0.0"
     },
     {

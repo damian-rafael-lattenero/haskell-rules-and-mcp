@@ -267,7 +267,6 @@ data InspectAction
   | InspectBrowse
   | InspectComplete
   | InspectGoto
-  | InspectDoc
   deriving stock (Eq, Show, Enum, Bounded)
 
 inspectSpec :: ActionSpec InspectAction
@@ -278,7 +277,6 @@ inspectSpec = enumSpec
       InspectInfo     -> "info"
       InspectBrowse   -> "browse"
       InspectComplete -> "complete"
-      InspectGoto     -> "goto"
-      InspectDoc      -> "doc")
+      InspectGoto     -> "goto")
   InspectType
   [InspectType ..]

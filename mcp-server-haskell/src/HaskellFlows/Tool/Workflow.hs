@@ -285,7 +285,6 @@ scoreTool phase t = phaseScore + catScore
 whyNow :: ToolName -> Text
 whyNow t = case t of
   GhcSuggest      -> "Derive candidate QuickCheck laws from a function's type signature."
-  GhcExplainError -> "Decode a confusing type error and verify a candidate patch."
   GhcGate         -> "One-shot pre-push gate: regression + cabal test + cabal build."
   _               -> "Unused this session — a "
                        <> toolCategoryText (toolCategory t) <> " tool worth a look."

@@ -24,11 +24,8 @@ import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
-import qualified HaskellFlows.Tool.CheckModule as CheckModule
-import qualified HaskellFlows.Tool.CheckProject as CheckProject
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import qualified HaskellFlows.Tool.Lint as Lint
-import qualified HaskellFlows.Tool.Load as Load
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -94,11 +91,28 @@ handle env rawArgs = case parseEither (Act.parsePayloadAction Act.checkSpec) raw
   Right action -> do
     let inner = Act.stripActionField rawArgs
     case action of
-      Act.CheckLoad    -> Env.withResultAction "load" <$> Load.handle env inner
-      Act.CheckModule  -> Env.withResultAction "module" <$> CheckModule.handle env inner
-      Act.CheckProject -> Env.withResultAction "project" <$> CheckProject.handle env inner
+      -- load/module/project execute in IdeBacked.handleCheck{Load,
+      -- Module,Project} via Server routeIde (the only backend since
+      -- the F1 strangler completed). These arms are unreachable
+      -- backstops keeping the action table exhaustive.
+      Act.CheckLoad    -> dispatchRegressionBackstop "load"
+      Act.CheckModule  -> dispatchRegressionBackstop "module"
+      Act.CheckProject -> dispatchRegressionBackstop "project"
       Act.CheckLint    -> Env.withResultAction "lint" <$> Lint.handle env inner
   where
     refusal :: String -> Env.ToolResponse
     refusal msg =
       Env.mkRefused (Env.mkErrorEnvelope Env.Validation (T.pack msg))
+
+-- | Unreachable-response for the three routeIde-served actions.
+dispatchRegressionBackstop :: Text -> IO ToolResponse
+dispatchRegressionBackstop act =
+  pure
+    ( Env.mkFailed
+        ( Env.mkErrorEnvelope
+            Env.InternalError
+            ( "ghc_check(action=" <> act <> ") is served by the in-process "
+                <> "ghcide route; reaching this handler is a dispatch regression"
+            )
+        )
+    )

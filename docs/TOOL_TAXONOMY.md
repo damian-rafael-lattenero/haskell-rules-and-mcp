@@ -28,7 +28,6 @@
 | `GhcInspect` | `ghc_inspect` | action: `type`/`hole`/`info`/`browse`/`complete`/`goto`/`doc` — the seven thin read verbs |
 | `GhcDeps` | `ghc_deps` | action: `add`/`remove`/`list`/`explain` — dependency surgery on the .cabal |
 | `GhcSuggest` | `ghc_suggest` | Law candidates from the current module (property-first loop) |
-| `GhcExplainError` | `ghc_explain_error` | Structured autopsy of a GHC diagnostic |
 | `GhcProject` | `ghc_project` | action: `create`/`switch`/`list`/`validate`/`bootstrap` — project scaffolding |
 
 ## Gates (1)
@@ -55,6 +54,6 @@
 
 ---
 
-**Total: **13** tools** (6 primitives + 1 gate + 5 composites + 1 control-plane), down from
+**Total: **12** tools** (5 primitives + 1 gate + 5 composites + 1 control-plane), down from
 31 in wave 2a and 36 at the original audit. Every retired wire name was folded into a
 composite `action` — see `docs/condensation-proposal-2026-10.md` for the full mapping.

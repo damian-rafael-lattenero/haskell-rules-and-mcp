@@ -50,7 +50,7 @@ module HaskellFlows.Tool.SwitchProject
 -- 'MVar (Maybe GhcSession)') rather than the whole 'Server' value
 -- so 'handle' can be unit-tested without constructing a full
 -- transport stack.
-import Control.Concurrent.MVar (MVar, modifyMVar_)
+import Control.Concurrent.MVar (MVar, modifyMVar_, tryTakeMVar)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, atomicWriteIORef, readIORef)
@@ -62,6 +62,7 @@ import System.FilePath (takeExtension)
 import HaskellFlows.Data.PropertyStore (Store, openStore)
 import qualified HaskellFlows.Data.Scratchpad as Scratchpad
 import HaskellFlows.Ghc.ApiSession (GhcSession, killGhcSession)
+import HaskellFlows.Ghc.IdeSession (IdeSession)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
@@ -190,13 +191,16 @@ validateTargetDir pd = do
 handle
   :: IORef ProjectDir
   -> MVar (Maybe GhcSession)
+  -> MVar (Maybe IdeSession)  -- ^ post-C1: dropped on switch so the
+                              --   next tool call boots against the new
+                              --   root instead of serving a stale IdeState.
   -> IORef Store
   -> IORef Scratchpad.Store  -- ^ F-02: swapped atomically with storeRef
   -> IORef Bool              -- ^ PR-4 Phase 1: srvIsSelfProject — recomputed
                              --   against the new root after a successful switch.
   -> Value
   -> IO ToolResponse
-handle pdRef sessRef storeRef scratchRef selfRef rawArgs = case parseEither parseJSON rawArgs of
+handle pdRef sessRef ideRef storeRef scratchRef selfRef rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right (SwitchProjectArgs raw) -> do
     res <- validateSwitchTarget raw
@@ -226,6 +230,11 @@ handle pdRef sessRef storeRef scratchRef selfRef rawArgs = case parseEither pars
         newSelf <- detectSelfProject newPd
         modifyMVar_ sessRef $ \mSess -> do
           mapM_ killGhcSession mSess
+          -- Post-C1: the ghcide IdeSession is the ONLY backend, so a
+          -- switch must drop it too — otherwise every later tool call
+          -- keeps serving the OLD project from a stale IdeState (and
+          -- the leaked state's threads/watchers accumulate).
+          _ <- tryTakeMVar ideRef
           atomicWriteIORef pdRef       newPd
           atomicWriteIORef storeRef    newStore
           atomicWriteIORef scratchRef  newScratch

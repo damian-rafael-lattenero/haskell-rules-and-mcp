@@ -55,7 +55,6 @@ import Text.Read (readMaybe)
 import qualified Data.Text as T
 
 import HaskellFlows.Config (Limits (..), unMicros)
-import HaskellFlows.Ghc.IdeSession (BackendChoice (..))
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.Server (Server (..), handleRequest)
 import HaskellFlows.Tool.IdeBacked (warmupIdeSession)
@@ -167,7 +166,7 @@ runStdioTransport srv = do
       BS.hPutStr out "\n"
       hFlush out
 
-    warmupInBackground = when (srvBackend srv == BackendGhcide) $ do
+    warmupInBackground = do
       w <- lookupEnv "HASKELL_FLOWS_WARMUP"
       when (w /= Just "0") $ void $ forkIO $ do
         hPutStrLn stderr "[haskell-flows] warmup: booting ghcide session in background"

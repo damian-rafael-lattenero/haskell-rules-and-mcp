@@ -36,7 +36,6 @@ import HaskellFlows.Suggest.Rules
   , nameHintsPrinter
   , namesFormPrinterParserPair
   )
-import qualified HaskellFlows.Tool.Regression as RegTool
 import qualified HaskellFlows.Tool.Browse as BrowseTool
 
 testInvolutiveLowForNormalizer :: IO Bool

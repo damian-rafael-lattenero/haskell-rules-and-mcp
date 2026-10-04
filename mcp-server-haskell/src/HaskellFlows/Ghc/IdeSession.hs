@@ -21,9 +21,8 @@
 
 module HaskellFlows.Ghc.IdeSession
   ( IdeSession (..)
-  , BackendChoice (..)
-  , backendFromEnv
   , bootIdeSession
+  , shutdownIdeSession
   , ideTypecheckFile
   , ideEvalExprIn
   , ideTypeOfExprIn
@@ -69,7 +68,7 @@ import Development.IDE (LinkableType (BCOLinkable)
 import Development.IDE.Core.FileStore (setSomethingModified)
 import Development.IDE.Core.OfInterest (FileOfInterestStatus (OnDisk), addFileOfInterest)
 import Development.IDE.Core.Shake
-  ( IdeRule, ShakeExtras (..), VFSModified (VFSUnmodified), getShakeExtras )
+  ( IdeRule, ShakeExtras (..), VFSModified (VFSUnmodified), getShakeExtras, shakeShut )
 import qualified Data.Vector as V
 import qualified StmContainers.Map as STM
 import Development.IDE.Types.Shake (Key, ValueWithDiagnostics (..), toKey)
@@ -177,26 +176,6 @@ import Unsafe.Coerce (unsafeCoerce)
 
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 
--- | Which GHC backend serves tool calls.
-data BackendChoice
-  = BackendGhcApi
-    -- ^ Default — the existing in-process 'HaskellFlows.Ghc.ApiSession'.
-  | BackendGhcide
-    -- ^ Experimental F1 backend — ghcide 'IdeState' per project.
-  deriving stock (Eq, Show)
-
--- | Read @HASKELL_FLOWS_BACKEND@ (@ghcide@ default / @ghcapi@
--- legacy escape hatch). The ghcide engine is the default since the
--- F3 flip: legacy stays selectable for A/B debugging during the
---ApiSession decommission, not for production use.
-backendFromEnv :: IO BackendChoice
-backendFromEnv = do
-  mv <- lookupEnv "HASKELL_FLOWS_BACKEND"
-  pure $ case trim <$> mv of
-    Just v | map toLower v == "ghcapi" -> BackendGhcApi
-    _ -> BackendGhcide
-  where
-    trim = f . f where f = dropWhile isSpace . reverse
 
 -- | A live ghcide session anchored at a project directory.
 data IdeSession = IdeSession
@@ -789,3 +768,12 @@ exposePackages' pkgs = do
   where
     isExposed n (ExposePackage _ (PackageArg a) _) = a == T.unpack n
     isExposed _ _ = False
+
+-- | Tear the ghcide state down (shakeShut stops the workers and
+-- releases the session's threads/watchers). Bounded: a wedged
+-- shutdown must not hang the caller.
+shutdownIdeSession :: IdeSession -> IO ()
+shutdownIdeSession s = do
+  r <- try (timeout 10_000_000 (shakeShut (isState s))) :: IO (Either SomeException (Maybe ()))
+  case r of
+    _ -> pure ()

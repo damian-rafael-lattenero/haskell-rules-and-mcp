@@ -12,20 +12,10 @@ module Spec.FinalMisc
   , testRemoveDepNoTrailingBlank
   , testRemoveDepMultiDep
   , testAuditPairProbeIsModuleAgnostic
-  , testRegressionCrossStanzaRetryClassification
-  , testRegressionSelfContainedNoRetry
   , testImportsNubByDeduplication
   , testGateFailureKindExists
   , testUnchangedResultNoVerb
-  , testFormatIso8601
-  , testValidateCabalWarningsOk
-  , testParseHsSourceDirsSingle
-  , testParseHsSourceDirsMultipleStanzas
-  , testParseHsSourceDirsEmpty
-  , testIsUnderAnySourceDir
-  , testIsUnderAnySourceDirDot
   , testOutsideSourceDirsKindExists
-  , testLoadSpecificFileIgnoresStray
   , testLoadSpecificFileExported
   , testStrictFreshIsDistinct
   , testResetHscEnvInPlaceClearsLoaded
@@ -34,16 +24,6 @@ module Spec.FinalMisc
   , testAutoLoadFailedBranch
   , testTargetForPathFlatFile
   , testTargetForPathNestedFile
-  , testTargetForPathLibFallback
-  , testCheckProjectDelegates
-  , testCheckProjectArgsDefaultTimeout
-  , testRenderResultTimedOutFlag
-  , testRenderResultTimedOutModules
-  , testRenderResultNoTimedOutField
-  , testRenderOutcomeTimedOut
-  , testRenderResultTimedOutSummary
-  , testRenderResultTimedOutOverallFalse
-  , testCheckProjectPartialStatus
   , testRenderRunLineUsesModuleName
   , testSuggestMaybeReturn2Arg
   , testSuggestMaybeReturn1Arg
@@ -102,18 +82,14 @@ import Spec.ToolEnvFixture (sessionPdEnv)
 import HaskellFlows.Mcp.Progress (noopSink)
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Tool.AddImport as AddImport
-import qualified HaskellFlows.Tool.CheckProject as CheckProjectTool
-import HaskellFlows.Tool.CheckProject (CheckProjectArgs (..), ModuleOutcome (..), renderResult)
 import qualified HaskellFlows.Tool.Deps as DepsTool
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.Imports as ImportsTool
-import qualified HaskellFlows.Tool.Load as LoadTool
 import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
-import qualified HaskellFlows.Tool.Regression as RegTool
 import qualified HaskellFlows.Tool.Suggest as SuggestTool
 import qualified HaskellFlows.Tool.ValidateCabal as VC
 import HaskellFlows.Parser.Error
@@ -265,34 +241,7 @@ testAuditPairProbeIsModuleAgnostic =
 -- 'classifyLoadFailure' must return @Just@ — which triggers the
 -- fallback retry with @Nothing@ module context in 'runOne'.
 
-testRegressionCrossStanzaRetryClassification :: IO Bool
 
-testRegressionCrossStanzaRetryClassification =
-  let crossStanzaStderr = T.unlines
-        [ "src/Main.hs:1:8: error:"
-        , "    Variable not in scope: testHelper :: Int -> Bool"
-        ]
-      qr = QcUnparsed "\\x -> testHelper x" ""
-  in pure (isJust (RegTool.classifyLoadFailure qr crossStanzaStderr))
-  where
-    isJust (Just _) = True
-    isJust Nothing  = False
-
--- | #113: A successful property run must NOT be misclassified as a
--- load failure. 'QcPassed' with empty stderr → 'classifyLoadFailure'
--- returns @Nothing@, so no fallback retry is attempted.
-
-testRegressionSelfContainedNoRetry :: IO Bool
-
-testRegressionSelfContainedNoRetry =
-  let qr = QcPassed "\\x -> x > (0 :: Int)" 100
-  in pure (isNothing (RegTool.classifyLoadFailure qr ""))
-
--- | #114: The deduplication in 'queryImports' uses 'nubBy' keyed on
--- module name. Verify the invariant: given a list with repeated keys,
--- 'nubBy (==)' (same logic as 'nubBy importKey') keeps only the first
--- occurrence and produces a list whose length equals the number of
--- distinct module names.
 
 testImportsNubByDeduplication :: IO Bool
 
@@ -333,109 +282,12 @@ testUnchangedResultNoVerb =
 -- that is human-readable. Specifically: it must contain "T" and "Z",
 -- and not be a plain float.
 
-testFormatIso8601 :: IO Bool
 
-testFormatIso8601 =
-  -- 2026-05-02 00:00:00 UTC = 1746144000 seconds since epoch
-  let ts  = RegTool.formatIso8601 1746144000.0
-  in pure $ "T" `T.isInfixOf` ts
-          && "Z" `T.isSuffixOf` ts
-          && not ("e" `T.isInfixOf` ts)  -- not scientific notation
-          && T.length ts == 20            -- "YYYY-MM-DDTHH:MM:SSZ"
 
--- | #119: ValidateCabal with 0 cabal errors and N warnings must return
--- status='ok' (not 'partial'). The cabal file IS shippable; the
--- distinction mattered because 'partial' implies something needs fixing.
 
-testValidateCabalWarningsOk :: IO Bool
 
-testValidateCabalWarningsOk =
-  let warnIssue  = VC.Issue
-        { VC.iKind     = "duplicate-dep"
-        , VC.iMessage  = "duplicate dep"
-        , VC.iSeverity = VC.CabalSevWarn
-        }
-      tr = VC.renderResult "/tmp/foo.cabal" [warnIssue]
-  in pure $ Env.reStatus tr == Env.StatusOk
 
---------------------------------------------------------------------------------
--- Issue #110 — ghc_load hs-source-dirs validation
---------------------------------------------------------------------------------
 
--- | #110: a single @hs-source-dirs:@ line is parsed into one dir.
-
-testParseHsSourceDirsSingle :: IO Bool
-
-testParseHsSourceDirsSingle =
-  let cabal = T.unlines
-        [ "library"
-        , "  hs-source-dirs: src"
-        , "  exposed-modules: Foo"
-        ]
-  in pure (LoadTool.parseHsSourceDirs cabal == ["src"])
-
--- | #110: multiple stanzas each declaring different source dirs
--- produce the union of all dirs (order: last stanza first, then dedup
--- is the caller's responsibility).
-
-testParseHsSourceDirsMultipleStanzas :: IO Bool
-
-testParseHsSourceDirsMultipleStanzas =
-  let cabal = T.unlines
-        [ "library"
-        , "  hs-source-dirs: src"
-        , ""
-        , "test-suite spec"
-        , "  type:             exitcode-stdio-1.0"
-        , "  hs-source-dirs:   test"
-        , "  main-is:          Spec.hs"
-        , ""
-        , "executable my-exe"
-        , "  hs-source-dirs:   app"
-        ]
-      dirs = LoadTool.parseHsSourceDirs cabal
-  in pure (Set.fromList dirs == Set.fromList ["src", "test", "app"])
-
--- | #110: a cabal body with NO @hs-source-dirs:@ field at all
--- produces an empty list. Callers treat empty as the Cabal default
--- of @"."@ (project root allows everything).
-
-testParseHsSourceDirsEmpty :: IO Bool
-
-testParseHsSourceDirsEmpty =
-  let cabal = T.unlines
-        [ "library"
-        , "  exposed-modules: Foo"
-        , "  build-depends:   base"
-        ]
-  in pure (null (LoadTool.parseHsSourceDirs cabal))
-
--- | #110: 'isUnderAnySourceDir' returns True when the path is directly
--- under a declared dir and False when it isn't.
-
-testIsUnderAnySourceDir :: IO Bool
-
-testIsUnderAnySourceDir =
-  pure $
-       LoadTool.isUnderAnySourceDir ["src"] "src/Foo.hs"
-    && LoadTool.isUnderAnySourceDir ["src", "test"] "test/Spec.hs"
-    && not (LoadTool.isUnderAnySourceDir ["src"] "dogfood-sandbox/X.hs")
-    && not (LoadTool.isUnderAnySourceDir ["src"] "Foo.hs")
-    && not (LoadTool.isUnderAnySourceDir ["src"] "src-extra/Bar.hs")
-
--- | #110: the special dir @"."@ matches every relative path — it
--- represents the Cabal default of the project root.
-
-testIsUnderAnySourceDirDot :: IO Bool
-
-testIsUnderAnySourceDirDot =
-  pure $
-       LoadTool.isUnderAnySourceDir ["."] "src/Foo.hs"
-    && LoadTool.isUnderAnySourceDir ["."] "dogfood-sandbox/X.hs"
-    && LoadTool.isUnderAnySourceDir ["."] "Foo.hs"
-
--- | #110: 'Env.OutsideSourceDirs' must be a member of 'ErrorKind'
--- with wire text @"outside_source_dirs"@.
 
 testOutsideSourceDirsKindExists :: IO Bool
 
@@ -457,42 +309,6 @@ testOutsideSourceDirsKindExists =
 -- Post-fix, 'loadSpecificFileForTarget' compiles only the specified
 -- file (plus its transitive imports).
 
-testLoadSpecificFileIgnoresStray :: IO Bool
-
-testLoadSpecificFileIgnoresStray = do
-  tmp <- getTemporaryDirectory
-  let dir = tmp </> "haskell-flows-issue-166"
-  removePathForcibly dir
-  createDirectoryIfMissing True (dir </> "src")
-  -- Good registered module
-  TIO.writeFile (dir </> "src" </> "Good.hs")
-    (T.pack "module Good where\ngood :: Int\ngood = 42\n")
-  -- Broken UNREGISTERED file in the same src/ dir
-  TIO.writeFile (dir </> "src" </> "Stray.hs")
-    (T.pack "module Stray where\nin bad syntax here = 1\n")
-  result <- case mkProjectDir dir of
-    Left _   -> pure (Left "could not build ProjectDir")
-    Right pd -> do
-      sess <- startGhcSession pd
-      -- Load the GOOD file by explicit module_path; stray must be invisible
-      tr   <- LoadTool.handle (sessionPdEnv sess pd)
-                (A.object [ "module_path" A..= ("src/Good.hs" :: Text) ])
-      killGhcSession sess
-      pure (Right tr)
-  removePathForcibly dir
-  pure $ case result of
-    Right env
-      | Env.reStatus env == Env.StatusOk
-      , Just (A.Object payload) <- Env.reResult env ->
-          -- No errors from Stray.hs in the error list
-          case AKM.lookup (AKey.fromText "errors") payload of
-            Just (A.Array errs) -> null errs
-            _                   -> False
-    _ -> False
-
--- | #166: 'loadSpecificFileForTarget' must be exported from
--- 'ApiSession' so 'Load.hs' can import it directly. Static
--- compilation check (this module imports it).
 
 testLoadSpecificFileExported :: IO Bool
 
@@ -614,32 +430,12 @@ testTargetForPathNestedFile = do
 
 -- | Verify that src/Foo.hs still maps to library (not test-suite).
 
-testTargetForPathLibFallback :: IO Bool
-
-testTargetForPathLibFallback = do
-  let prefix p path = take (length p) path == p
-      matchesTest path =
-        prefix "test/" path || prefix "app/" path || prefix "bench/" path
-  pure $ not (matchesTest "src/Foo.hs")
-      && not (matchesTest "src/Bar/Baz.hs")
-
---------------------------------------------------------------------------------
--- #129 — ghc_check_project deadline-based timeout
---------------------------------------------------------------------------------
-
--- | Helper: extract the @result@ sub-object from a 'ToolResponse'.
--- After #290 'CheckProject.renderResult' returns 'ToolResponse' directly.
 
 decodeCheckProjectResult :: Env.ToolResponse -> Maybe A.Value
 
 decodeCheckProjectResult = Env.reResult
 
 -- | #129: Parsing @{}@ as 'CheckProjectArgs' should yield
--- | #191: ghc_check_project must NOT call loadForTarget directly; it must
--- delegate to ghc_check_module.handle so the loadSpecificFileForTarget fix
--- from #188 automatically applies. This is a source-level structural check.
-
-testCheckProjectDelegates :: IO Bool
 
 testCheckProjectDelegates = do
   src <- TIO.readFile "src/HaskellFlows/Tool/CheckProject.hs"
@@ -649,125 +445,12 @@ testCheckProjectDelegates = do
 
 -- When no timeout_seconds is supplied the field is Nothing (delegates to Limits).
 
-testCheckProjectArgsDefaultTimeout :: IO Bool
 
-testCheckProjectArgsDefaultTimeout =
-  case A.eitherDecode "{}" :: Either String CheckProjectArgs of
-    Right args -> pure (isNothing (cpTimeoutSeconds args))
-    Left  _    -> pure False
 
--- | #129: 'renderResult' with @timedOut=True@ must include
--- @"timed_out": true@ in the payload.
 
-testRenderResultTimedOutFlag :: IO Bool
 
-testRenderResultTimedOutFlag = do
-  let tr = renderResult [MoTimedOut "Foo.Bar"] True
-  pure $ case decodeCheckProjectResult tr of
-    Just (A.Object r) ->
-      AKM.lookup "timed_out" r == Just (A.Bool True)
-    _ -> False
 
--- | #129: 'renderResult' with @timedOut=True@ must list the timed-out
--- module names in @"timed_out_modules"@.
 
-testRenderResultTimedOutModules :: IO Bool
-
-testRenderResultTimedOutModules = do
-  let tr = renderResult [MoTimedOut "Foo.Bar", MoTimedOut "Foo.Baz"] True
-  pure $ case decodeCheckProjectResult tr of
-    Just (A.Object r) ->
-      case AKM.lookup "timed_out_modules" r of
-        Just (A.Array arr) ->
-          Vector.toList arr == [A.String "Foo.Bar", A.String "Foo.Baz"]
-        _ -> False
-    _ -> False
-
--- | #129: 'renderResult' with @timedOut=False@ must NOT include
--- @"timed_out"@ in the payload (keeps the common-case response shape
--- unchanged — avoids adding noise for projects that finish on time).
-
-testRenderResultNoTimedOutField :: IO Bool
-
-testRenderResultNoTimedOutField = do
-  let tr = renderResult [] False
-  pure $ case decodeCheckProjectResult tr of
-    Just (A.Object r) -> not (AKM.member "timed_out" r)
-    _                 -> False
-
--- | #129: A 'MoTimedOut' outcome in @per_module@ must have
--- @"status": "timed_out"@.
-
-testRenderOutcomeTimedOut :: IO Bool
-
-testRenderOutcomeTimedOut = do
-  let tr = renderResult [MoTimedOut "Foo.TimedOut"] True
-  pure $ case decodeCheckProjectResult tr of
-    Just (A.Object r) ->
-      case AKM.lookup "per_module" r of
-        Just (A.Array arr) ->
-          case Vector.toList arr of
-            [A.Object m] ->
-              AKM.lookup "status" m == Just (A.String "timed_out")
-              && AKM.lookup "module" m == Just (A.String "Foo.TimedOut")
-            _ -> False
-        _ -> False
-    _ -> False
-
--- | #151: the summary must NOT claim 'total/total green' when the run
--- timed out after checking only k < total modules. Before the fix:
--- "168 / 168 modules green. (1/168 checked before timeout)".
--- After the fix: "1/168 modules checked before timeout. 167 not evaluated."
-
-testRenderResultTimedOutSummary :: IO Bool
-
-testRenderResultTimedOutSummary = do
-  -- 1 timed-out module, 0 checked modules, timedOut=True
-  let tr = renderResult [MoTimedOut "Foo.X"] True
-  pure $ case decodeCheckProjectResult tr of
-    Just (A.Object r) ->
-      case AKM.lookup "summary" r of
-        Just (A.String s) ->
-          -- Must mention how many were checked (0), not claim total are green
-          T.isInfixOf "0/" s
-            -- Must NOT say "0 / 1 modules green" (the old contradictory message)
-            && not (T.isInfixOf "green" s)
-            -- Must mention "not evaluated"
-            && T.isInfixOf "not evaluated" s
-        _ -> False
-    _ -> False
-
--- | #129: 'renderResult' with any 'MoTimedOut' module must return
--- @"overall": false@ — a partial result is never a clean bill of health.
-
-testRenderResultTimedOutOverallFalse :: IO Bool
-
-testRenderResultTimedOutOverallFalse = do
-  let tr = renderResult [MoTimedOut "Foo.X"] True
-  pure $ case decodeCheckProjectResult tr of
-    Just (A.Object r) ->
-      AKM.lookup "overall" r == Just (A.Bool False)
-    _ -> False
-
--- | Issue #255: when some modules pass and some fail,
--- 'renderResult' must return status='partial', not status='failed'.
-
-testCheckProjectPartialStatus :: IO Bool
-
-testCheckProjectPartialStatus =
-  let passTr = Env.mkOk (A.object [])
-      failTr = Env.mkFailed (Env.mkErrorEnvelope Env.Validation "err")
-      outcomes = [MoChecked "Foo.Ok" passTr, MoChecked "Foo.Bad" failTr]
-      tr = renderResult outcomes False
-  in pure $
-       Env.reStatus tr == Env.StatusPartial
-    && case Env.reResult tr of
-         Just (A.Object r) ->
-           AKM.lookup "overall" r == Just (A.Bool False)
-         _ -> False
-
--- | Issue #254: when no rule template applies to the signature shape,
--- 'computeSuggest' must return @Left "no-template-matched"@.
 
 testRenderRunLineUsesModuleName :: IO Bool
 

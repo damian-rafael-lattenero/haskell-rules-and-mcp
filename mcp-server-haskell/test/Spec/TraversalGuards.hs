@@ -6,10 +6,6 @@
 module Spec.TraversalGuards
   ( testApplyExportsRejectsTraversal
   , testFixWarningRejectsTraversal
-  , testCheckModuleRejectsTraversal
-  , testCheckModuleNonExistentFile
-  , testExplainErrorRejectsTraversal
-  , testLoadRejectsTraversal
   , testRefactorRejectsTraversal
   , testLoggingRedactionPolicy
   , testLoggingTraceIdGeneration
@@ -25,10 +21,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Logging as Logging
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
-import qualified HaskellFlows.Tool.CheckModule as CheckModule
-import qualified HaskellFlows.Tool.ExplainError as ExplainError
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
-import qualified HaskellFlows.Tool.Load as LoadTool
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
 
 import Spec.Helpers (isTraversalRefused)
@@ -77,67 +70,7 @@ testFixWarningRejectsTraversal = do
 -- | #100C: 'ghc_check_module' must refuse traversal paths.
 -- 'mkModulePath' fires before the GhcSession or Store are touched.
 
-testCheckModuleRejectsTraversal :: IO Bool
 
-testCheckModuleRejectsTraversal = do
-  case mkProjectDir "/tmp/project" of
-    Left _ -> pure False
-    Right pd -> do
-      let args = A.object
-            [ "module_path" A..= ("../../etc/passwd" :: Text) ]
-      tr <- CheckModule.handle (pdEnv pd) args
-      pure (isTraversalRefused (Right tr))
-
--- | #150: 'ghc_check_module' on a non-existent file must return
--- status='failed' with kind='module_path_does_not_exist'. Before the
--- fix the tool returned status='ok' with all gates green — a false
--- all-green for a file that does not exist.
--- The GhcSession and Store are not reached (existence check fires first).
-
-testCheckModuleNonExistentFile :: IO Bool
-
-testCheckModuleNonExistentFile = do
-  case mkProjectDir "/tmp" of
-    Left _ -> pure False
-    Right pd -> do
-      let args = A.object
-            [ "module_path" A..= ("src/DoesNotExist.hs" :: Text) ]
-      tr <- CheckModule.handle (pdEnv pd) args
-      let env = tr
-      if  Env.reStatus env == Env.StatusFailed
-        then case Env.reError env of
-               Just err -> pure (Env.eeKind err == Env.ModulePathDoesNotExist
-                               && Env.eeField err == Just "module_path")
-               Nothing  -> pure False
-        else pure False
-
--- | #100C: 'ghc_explain_error' must refuse traversal paths.
-
-testExplainErrorRejectsTraversal :: IO Bool
-
-testExplainErrorRejectsTraversal = do
-  case mkProjectDir "/tmp/project" of
-    Left _ -> pure False
-    Right pd -> do
-      let args = A.object
-            [ "module_path" A..= ("../../etc/passwd" :: Text) ]
-      tr <- ExplainError.handle (pdEnv pd) args
-      pure (isTraversalRefused (Right tr))
-
--- | #100C: 'ghc_lab' must refuse traversal paths.
-
-testLoadRejectsTraversal :: IO Bool
-
-testLoadRejectsTraversal = do
-  case mkProjectDir "/tmp/project" of
-    Left _ -> pure False
-    Right pd -> do
-      let args = A.object
-            [ "module_path" A..= ("../../etc/passwd" :: Text) ]
-      tr <- LoadTool.handle (pdEnv pd) args
-      pure (isTraversalRefused (Right tr))
-
--- | #100C: 'ghc_refactor' must refuse traversal paths.
 
 testRefactorRejectsTraversal :: IO Bool
 

@@ -30,14 +30,6 @@ module Spec.PropertyAuditUnit
   , testAllPairsSkippedTrue
   , testAllPairsSkippedFalseCompat
   , testAllPairsSkippedFalseEmpty
-  , testEEApplyLinePatch
-  , testEEApplyLinePatchMiss
-  , testEEApplyLinePatchOob
-  , testExplainVerifyPatchUsesLoadForTarget
-  , testParseGhcLineColBasic
-  , testParseGhcLineColRange
-  , testParseGhcLineColFallback
-  , testSyntheticErrorLineCol
   , testEnhanceNotInScopeDetailHits
   , testEnhanceNotInScopeDetailNotSkipped
   ) where
@@ -54,7 +46,6 @@ import HaskellFlows.Mcp.Protocol (ToolDescriptor (..))
 import HaskellFlows.Parser.Error (GhcError (..))
 import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..))
 import HaskellFlows.Suggest.Rules (Confidence (..))
-import qualified HaskellFlows.Tool.ExplainError as ExplainError
 import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
 
 import Spec.Helpers (withTempProject)
@@ -393,93 +384,8 @@ testAllPairsSkippedFalseEmpty =
 
 -- | applyLinePatch replaces old text on the target line.
 
-testEEApplyLinePatch :: IO Bool
 
-testEEApplyLinePatch =
-  let body  = T.unlines ["line1", "foo bar baz", "line3"]
-      patch = ExplainError.PatchSpec { ExplainError.psLine = 2
-                                     , ExplainError.psOld  = "bar"
-                                     , ExplainError.psNew  = "REPLACED"
-                                     }
-  in pure $ case ExplainError.applyLinePatch body patch of
-       Just result -> "REPLACED" `T.isInfixOf` result
-                   && "foo" `T.isInfixOf` result
-       Nothing     -> False
 
--- | applyLinePatch returns Nothing when old text not on that line.
 
-testEEApplyLinePatchMiss :: IO Bool
 
-testEEApplyLinePatchMiss =
-  let body  = T.unlines ["line1", "line2"]
-      patch = ExplainError.PatchSpec { ExplainError.psLine = 1
-                                     , ExplainError.psOld  = "NOTHERE"
-                                     , ExplainError.psNew  = "X"
-                                     }
-  in pure (isNothing (ExplainError.applyLinePatch body patch))
-
--- | applyLinePatch returns Nothing for out-of-bounds line number.
-
-testEEApplyLinePatchOob :: IO Bool
-
-testEEApplyLinePatchOob =
-  let body  = T.unlines ["line1"]
-      patch = ExplainError.PatchSpec { ExplainError.psLine = 99
-                                     , ExplainError.psOld  = "line1"
-                                     , ExplainError.psNew  = "X"
-                                     }
-  in pure (isNothing (ExplainError.applyLinePatch body patch))
-
--- | Issue #222: runVerifyPatch must use the stanza-aware 'loadForTarget'
--- rather than bare 'loadAndCaptureDiagnostics'. Verified by checking
--- that the source imports and uses both 'loadForTarget' and 'targetForPath'.
-
-testExplainVerifyPatchUsesLoadForTarget :: IO Bool
-
-testExplainVerifyPatchUsesLoadForTarget = do
-  src <- TIO.readFile "src/HaskellFlows/Tool/ExplainError.hs"
-  let usesLoadForTarget  = "loadForTarget"  `T.isInfixOf` src
-  let usesTargetForPath  = "targetForPath"  `T.isInfixOf` src
-  -- Confirm the bare path is NOT the only call in runVerifyPatch section
-  -- (we don't want a regression back to loadAndCaptureDiagnostics there).
-  -- The function is still imported for the initial diagnostic phase, so
-  -- loadAndCaptureDiagnostics may appear — but loadForTarget must too.
-  pure (usesLoadForTarget && usesTargetForPath)
-
---------------------------------------------------------------------------------
--- #189 — parseGhcLineCol
---------------------------------------------------------------------------------
-
--- | #189: standard GHC error format extracts line + column.
-
-testParseGhcLineColBasic :: IO Bool
-
-testParseGhcLineColBasic =
-  let errText = "src/WithError.hs:5:10: error: [GHC-39999] No instance for IsString Int"
-  in pure (ExplainError.parseGhcLineCol errText == (5, 10))
-
--- | #189: col range @7-15@ yields just @7@ (end stripped by isDigit).
-
-testParseGhcLineColRange :: IO Bool
-
-testParseGhcLineColRange =
-  let errText = "src/Foo.hs:42:7-15: error: something"
-  in pure (ExplainError.parseGhcLineCol errText == (42, 7))
-
--- | #189: plain error text without a location prefix falls back to (1,1).
-
-testParseGhcLineColFallback :: IO Bool
-
-testParseGhcLineColFallback =
-  let errText = "No instance for IsString Int"
-  in pure (ExplainError.parseGhcLineCol errText == (1, 1))
-
--- | #189: syntheticError must use parsed line+col, not hardcoded 1:1.
-
-testSyntheticErrorLineCol :: IO Bool
-
-testSyntheticErrorLineCol =
-  let errText = "src/WithError.hs:5:10: error: No instance for IsString Int"
-      diag    = ExplainError.syntheticError "src/WithError.hs" errText
-  in pure (geLine diag == 5 && geColumn diag == 10)
 

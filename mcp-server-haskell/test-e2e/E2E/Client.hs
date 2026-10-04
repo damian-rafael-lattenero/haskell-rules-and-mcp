@@ -51,7 +51,7 @@ import HaskellFlows.Mcp.Protocol
   , Response (..)
   )
 import HaskellFlows.Mcp.RpcMethod (RpcMethod (..), rpcMethodText)
-import HaskellFlows.Mcp.Server (Server, defaultServer, serverFor, handleRequest)
+import HaskellFlows.Mcp.Server (Server, closeServer, defaultServer, serverFor, handleRequest)
 import HaskellFlows.Mcp.ToolName (ToolName, toolNameText)
 
 -- | Minimal client handle. Holds a live 'Server'. Pre-fix this
@@ -77,10 +77,11 @@ newClient _unusedBinary extraEnv = do
   srv <- maybe defaultServer serverFor (lookup "HASKELL_PROJECT_DIR" extraEnv)
   pure McpClient { mcServer = srv }
 
--- | Close the client. No-op now that the constructor doesn't
--- mutate the global env.
+-- | Close the client: shut the server's ghcide session down so the
+-- in-process harness doesn't accumulate one live IdeState (threads,
+-- hiedb, watchers) per scenario — the full-suite wedge.
 close :: McpClient -> IO ()
-close _ = pure ()
+close c = closeServer (mcServer c)
 
 -- | @tools/call@ equivalent. Logs the call + duration so the
 -- scenario's progress stream shows each tool as it fires —

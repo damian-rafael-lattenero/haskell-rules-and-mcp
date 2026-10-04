@@ -57,10 +57,10 @@ import HaskellFlows.Data.PropertyStore (StoredProperty (..))
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
 import Spec.ToolEnvFixture (pdEnv)
-import HaskellFlows.Tool.Regression (renderStored)
+import HaskellFlows.Tool.PropertyStore (renderStored)
 import qualified HaskellFlows.Tool.PropertyStore as PropertyStore
 import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
-import qualified HaskellFlows.Tool.Regression as RegTool
+import qualified HaskellFlows.Tool.PropertyStore as RegTool
 
 import Spec.Helpers (withTempProject)
 
@@ -321,8 +321,8 @@ testListResultNullModuleCount238 = do
                  , spCases     = 0
                  }
       tr     = RegTool.listResult [spNull, spOk]
-  case Env.reResult tr of
-    Just (A.Object km) ->
+  case tr of
+    A.Object km ->
       pure $ AKM.member "null_module_count" km
           && AKM.member "null_module_hint"  km
           && AKM.lookup "null_module_count" km == Just (A.Number 1)
@@ -339,8 +339,8 @@ testListResultNoNullFields238 = do
              , spCases     = 0
              }
       tr = RegTool.listResult [sp]
-  case Env.reResult tr of
-    Just (A.Object km) ->
+  case tr of
+    A.Object km ->
       pure $ not (AKM.member "null_module_count" km)
           && not (AKM.member "null_module_hint"  km)
     _ -> pure False

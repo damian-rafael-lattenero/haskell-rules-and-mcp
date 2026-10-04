@@ -27,10 +27,8 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.Arbitrary as Arbitrary
-import qualified HaskellFlows.Tool.Determinism as Determinism
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import qualified HaskellFlows.Tool.PropertyStore as PropertyStore
-import qualified HaskellFlows.Tool.QuickCheck as QuickCheck
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -119,16 +117,18 @@ handle env rawArgs = case parseEither (Act.parsePayloadAction Act.propertySpec) 
     refusal msg =
       Env.mkRefused (Env.mkErrorEnvelope Env.Validation (T.pack msg))
 
--- | #94 Phase C rule moved here from Server.dispatchByName: 'runs' >= 2
--- routes to the determinism detector rather than the single-QC path.
+-- | Unreachable since the F1 strangler completed: the Server routes
+-- every ghc_property(action=check) through 'IdeBacked.routeIde'
+-- (handlePropertyCheck), which handles runs >= 2 internally via
+-- qcExpr rendering. Kept only as the exhaustive-dispatch backstop.
 routeCheck :: ToolEnv -> Value -> IO ToolResponse
-routeCheck env args = case runsField args of
-  Just n | n >= 2 -> Determinism.handle env args
-  _               -> QuickCheck.handle env args
-  where
-    runsField :: Value -> Maybe Int
-    runsField v = case v of
-      Object o -> case KeyMap.lookup "runs" o of
-        Just (Number n) -> Just (round n)
-        _               -> Nothing
-      _ -> Nothing
+routeCheck _ _ =
+  pure
+    ( Env.mkFailed
+        ( Env.mkErrorEnvelope
+            Env.InternalError
+            ( "property check is served by the in-process ghcide route; "
+                <> "reaching this handler is a dispatch regression"
+            )
+        )
+    )

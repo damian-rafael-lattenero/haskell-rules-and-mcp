@@ -24,7 +24,7 @@ testWorkflowToolsParity :: IO Bool
 testWorkflowToolsParity = pure $
      length allToolNameTexts == length allToolDescriptors
   && not (any T.null allToolNameTexts)
-  && length allToolNameTexts == 13
+  && length allToolNameTexts == 12
 
 --------------------------------------------------------------------------------
 -- Phase 11b regressions: ghc_deps F-01 / F-02 / F-03 fixes.

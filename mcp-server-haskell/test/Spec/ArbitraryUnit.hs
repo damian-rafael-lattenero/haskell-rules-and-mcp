@@ -17,9 +17,6 @@ module Spec.ArbitraryUnit
   , testChooseStoreModuleLambda
   , testChooseStoreModuleModuleLoc
   , testIsSimpleIdentClassifier
-  , testParseShowModulesPathsSimple
-  , testParseShowModulesPathsMulti
-  , testParseShowModulesPathsGarbage
   ) where
 
 import qualified Data.Text as T
@@ -28,7 +25,6 @@ import System.FilePath ((</>))
 
 import qualified HaskellFlows.Tool.Arbitrary as Arb
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
-import qualified HaskellFlows.Tool.Regression as RegTool
 import qualified HaskellFlows.Suggest.Rules as SuggestRules
 
 import Spec.Helpers (withTempProject)
@@ -236,44 +232,5 @@ testIsSimpleIdentClassifier = pure $ and
 -- | Single-module shape: the format GHCi emits for a project with
 -- exactly one compiled module.
 
-testParseShowModulesPathsSimple :: IO Bool
 
-testParseShowModulesPathsSimple =
-  let raw = T.pack "Foo              ( src/Foo.hs, interpreted )\n"
-  in pure (RegTool.parseShowModulesPaths raw == ["src/Foo.hs"])
 
--- | Multi-module shape: library + test-suite layout. Order preserved;
--- paths extracted without picking up the module name or the 'kind'
--- trailing bit.
-
-testParseShowModulesPathsMulti :: IO Bool
-
-testParseShowModulesPathsMulti =
-  let raw = T.unlines
-        [ "Expr.Syntax     ( src/Expr/Syntax.hs, interpreted )"
-        , "Expr.Eval       ( src/Expr/Eval.hs, interpreted )"
-        , "Main            ( test/Spec.hs, interpreted )"
-        ]
-  in pure $
-       RegTool.parseShowModulesPaths raw ==
-         ["src/Expr/Syntax.hs", "src/Expr/Eval.hs", "test/Spec.hs"]
-
--- | Garbage / empty lines: skip. Parser is a best-effort tool, not a
--- strict validator; refusing to crash on unexpected input is the
--- important invariant.
-
-testParseShowModulesPathsGarbage :: IO Bool
-
-testParseShowModulesPathsGarbage = pure $ and
-  [ null (RegTool.parseShowModulesPaths "")
-  , null (RegTool.parseShowModulesPaths "random log output\n")
-  , null (RegTool.parseShowModulesPaths "Foo  ( , interpreted )")
-    -- real-looking line sandwiched between garbage: still extracted.
-  , RegTool.parseShowModulesPaths
-      ( T.unlines
-          [ "random warning line"
-          , "Bar  ( src/Bar.hs, interpreted )"
-          , ""
-          ]
-      ) == ["src/Bar.hs"]
-  ]

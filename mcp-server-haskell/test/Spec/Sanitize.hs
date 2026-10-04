@@ -24,8 +24,6 @@ module Spec.Sanitize
   , prop_sanitize_clean_roundtrip
   , prop_modulePath_rejects_dotdot
   , prop_modulePath_accepts_inTree
-  , prop_parseShowModulesPaths_total
-  , prop_parseQuickCheckOutput_total
   , prop_chooseStoreModule_nonIdent_uses_hint
   , prop_chooseStoreModule_ident_no_info_uses_hint
   , SafeSegment (..)
@@ -67,7 +65,6 @@ import HaskellFlows.Types
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.QuickCheck as QcTool
-import qualified HaskellFlows.Tool.Regression as RegTool
 
 testParseHeader :: IO Bool
 testParseHeader =
@@ -271,21 +268,10 @@ instance QC.Arbitrary SafeSegment where
 -- | @parseShowModulesPaths@ must be total on any input and never
 -- return more paths than input lines. Catches: runaway parsers,
 -- hangs on degenerate input, infinite output loops.
-prop_parseShowModulesPaths_total :: String -> Bool
-prop_parseShowModulesPaths_total input =
-  let txt    = T.pack input
-      result = RegTool.parseShowModulesPaths txt
-      maxN   = length (T.lines txt)
-  in length result <= max maxN 1
-
 -- | @parseQuickCheckOutput@ must be total on any (propName, output)
 -- pair and return a renderable 'QuickCheckResult'. Catches: bottom
 -- constructors, partial pattern matches on output regex splits, and
 -- (via 'length . show') infinite loops.
-prop_parseQuickCheckOutput_total :: String -> String -> Bool
-prop_parseQuickCheckOutput_total propName output =
-  not (null (show (parseQuickCheckOutput (T.pack propName) (T.pack output))))
-
 -- | For any property expression that is NOT a simple identifier
 -- (here: anything starting with '\\'), 'chooseStoreModule' must
 -- return the caller's hint verbatim — the @:info@ output is

@@ -29,6 +29,7 @@ import HaskellFlows.Config (Limits)
 import HaskellFlows.Data.PropertyStore (Store)
 import qualified HaskellFlows.Data.Scratchpad as Scratchpad
 import HaskellFlows.Ghc.ApiSession (GhcSession)
+import HaskellFlows.Ghc.IdeSession (IdeSession)
 import HaskellFlows.Mcp.Progress (ProgressSink)
 import HaskellFlows.Mcp.Protocol (ToolCall, ToolDescriptor, ToolResult)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
@@ -58,6 +59,12 @@ data ToolEnv = ToolEnv
   , teToolNames     :: ![Text]
     -- Raw refs for tools that mutate shared state
   , teSessionRef    :: MVar (Maybe GhcSession)
+    -- ^ Legacy GHC-API session (introspection tools pending migration).
+  , teIdeSessionRef :: MVar (Maybe IdeSession)
+    -- ^ The in-process ghcide session — the ONLY execution backend
+    -- since the F1 strangler completed. Tools that need to run
+    -- code (property replay, gates) boot/reuse it through
+    -- 'IdeBacked.withIdeSession'.
   , teProjectDirRef :: IORef ProjectDir
   , teStoreRef      :: IORef Store
   , teScratchpadRef :: IORef Scratchpad.Store

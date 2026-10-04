@@ -13,6 +13,7 @@ module HaskellFlows.Mcp.Server
   ( Server (..)
   , defaultServer
   , serverFor
+  , closeServer
   , handleRequest
     -- * Dispatch (re-exported so ghc_batch can recurse)
   , dispatchTool
@@ -29,7 +30,7 @@ module HaskellFlows.Mcp.Server
   , evictGhcSession
   ) where
 
-import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar, tryTakeMVar)
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
@@ -102,10 +103,9 @@ import HaskellFlows.Mcp.WorkflowState
   , trackTool
   )
 import HaskellFlows.Types (ProjectDir, mkProjectDir, unProjectDir)
-import HaskellFlows.Ghc.IdeSession (BackendChoice (..), IdeSession, backendFromEnv)
+import HaskellFlows.Ghc.IdeSession (IdeSession, shutdownIdeSession)
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import qualified HaskellFlows.Tool.Batch           as BatchTool
-import qualified HaskellFlows.Tool.Determinism     as DeterminismTool
 import qualified HaskellFlows.Tool.IdeBacked       as IdeBacked
 import qualified HaskellFlows.Tool.QuickCheck      as QcTool
 import qualified HaskellFlows.Mcp.PathBootstrap    as PathBootstrap
@@ -166,10 +166,6 @@ data Server = Server
     -- ^ #287: operational limits loaded once at startup via 'loadLimits'.
     -- Subprocess timeouts are env-var overridable; GHC-session budgets
     -- fall back to 'Config.defaultLimits'.
-  , srvBackend       :: !BackendChoice
-    -- ^ F1 strangler: @HASKELL_FLOWS_BACKEND=ghcide@ routes the pilot
-    -- tools (check_module / eval / type) through 'IdeSession'.
-    -- Default 'BackendGhcApi' keeps every legacy code path.
   , srvIdeSession    :: !(MVar (Maybe IdeSession))
     -- ^ Lazily-booted ghcide session — same MVar-singleton shape as
     -- 'srvGhcSession' (first caller boots, everyone else reuses).
@@ -236,8 +232,8 @@ serverForRaw raw = do
       isSelf   <- detectSelfProject pd
       isSelfR  <- newIORef isSelf
       lim      <- loadLimits
-      -- F1: backend flag + lazily-booted ghcide session slot.
-      backend  <- backendFromEnv
+      -- F1 (completed): the legacy BackendGhcApi execution engine is
+      -- gone; the in-process ghcide IdeSession is the only backend.
       ideRef   <- newMVar Nothing
       pure Server
         { srvProjectDir    = pdRef
@@ -249,9 +245,17 @@ serverForRaw raw = do
         , srvIsSelfProject = isSelfR
         , srvScratchpad    = scratchR
         , srvLimits        = lim
-        , srvBackend       = backend
         , srvIdeSession    = ideRef
         }
+
+-- | Tear the server's ghcide session down (used by the e2e harness
+-- between scenarios so IdeStates don't accumulate in-process).
+closeServer :: Server -> IO ()
+closeServer srv = do
+  m <- tryTakeMVar (srvIdeSession srv)
+  case m of
+    Just (Just s) -> shutdownIdeSession s
+    _             -> pure ()
 
 -- | Dispatch a single parsed request. 'Nothing' means the input was a
 -- notification (e.g. @initialized@) and the caller should not write a
@@ -424,6 +428,7 @@ mkToolEnv srv sink = ToolEnv
   , teDescriptors       = allToolDescriptors
   , teToolNames         = allToolNameTexts
   , teSessionRef        = srvGhcSession srv
+  , teIdeSessionRef     = srvIdeSession srv
   , teProjectDirRef     = srvProjectDir srv
   , teStoreRef          = srvStore srv
   , teScratchpadRef     = srvScratchpad srv
@@ -445,12 +450,11 @@ dispatchByName :: Server -> ProgressSink -> Value -> ToolName -> IO ToolResult
 dispatchByName srv sink args tn = do
   let env = mkToolEnv srv sink
   response <- case tn of
-    -- F1 strangler: experimental ghcide backend serves the pilot tools.
-    -- Falls through to the legacy handler for every other tool (and on
-    -- the default backend).
+    -- F1 (completed): the in-process ghcide session is the only
+    -- backend — routeIde serves every interactive-GHC tool; the
+    -- registry handler covers the rest (files, cabal, pure).
     other
-      | srvBackend srv == BackendGhcide
-      , Just routed <- IdeBacked.routeIde (srvIdeSession srv) (srvProjectDir srv) (srvStore srv) other args
+      | Just routed <- IdeBacked.routeIde (srvIdeSession srv) (srvProjectDir srv) (srvStore srv) other args
       -> routed
     other -> handlerFor other env args
   -- B-1: attach a NON-blocking warning naming any argument keys the
