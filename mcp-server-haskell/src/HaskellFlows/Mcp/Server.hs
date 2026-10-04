@@ -30,7 +30,7 @@ module HaskellFlows.Mcp.Server
   , evictGhcSession
   ) where
 
-import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar, tryTakeMVar)
+import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar, swapMVar)
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
@@ -252,10 +252,10 @@ serverForRaw raw = do
 -- between scenarios so IdeStates don't accumulate in-process).
 closeServer :: Server -> IO ()
 closeServer srv = do
-  m <- tryTakeMVar (srvIdeSession srv)
+  m <- swapMVar (srvIdeSession srv) Nothing
   case m of
-    Just (Just s) -> shutdownIdeSession s
-    _             -> pure ()
+    Just s -> shutdownIdeSession s
+    Nothing -> pure ()
 
 -- | Dispatch a single parsed request. 'Nothing' means the input was a
 -- notification (e.g. @initialized@) and the caller should not write a

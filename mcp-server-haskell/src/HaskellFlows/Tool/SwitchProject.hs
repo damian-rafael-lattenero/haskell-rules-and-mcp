@@ -50,7 +50,7 @@ module HaskellFlows.Tool.SwitchProject
 -- 'MVar (Maybe GhcSession)') rather than the whole 'Server' value
 -- so 'handle' can be unit-tested without constructing a full
 -- transport stack.
-import Control.Concurrent.MVar (MVar, modifyMVar_, tryTakeMVar)
+import Control.Concurrent.MVar (MVar, modifyMVar_, swapMVar)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, atomicWriteIORef, readIORef)
@@ -234,7 +234,10 @@ handle pdRef sessRef ideRef storeRef scratchRef selfRef rawArgs = case parseEith
           -- switch must drop it too — otherwise every later tool call
           -- keeps serving the OLD project from a stale IdeState (and
           -- the leaked state's threads/watchers accumulate).
-          _ <- tryTakeMVar ideRef
+          -- swapMVar (NOT tryTakeMVar): taking the MVar outright
+          -- leaves it EMPTY and the next withIdeSession blocks on
+          -- modifyMVar forever — the dogfood-replay step-4 wedge.
+          _ <- swapMVar ideRef Nothing
           atomicWriteIORef pdRef       newPd
           atomicWriteIORef storeRef    newStore
           atomicWriteIORef scratchRef  newScratch

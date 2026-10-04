@@ -379,7 +379,8 @@ ideProjectDiagnostics s fs =
         absF <- makeAbsolute f0
         rescanForDiskChanges s (toNormalizedFilePath' absF)
       [] -> pure ()
-    mapM (\fp -> (,) fp <$> ideDiagnosticsFor' s fp) fs
+    r <- mapM (\fp -> (,) fp <$> ideDiagnosticsFor' s fp) fs
+    pure r
 
 splitStanzas :: [Text] -> [(Stanza, [Text])]
 splitStanzas [] = []

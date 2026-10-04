@@ -19,12 +19,14 @@ module HaskellFlows.Tool.IdeBacked
   , replayStored
   ) where
 
-import Control.Concurrent.MVar (MVar, modifyMVar)
+import Control.Concurrent.MVar (MVar, isEmptyMVar, modifyMVar)
 import Control.Exception (SomeException, try)
+import Control.Applicative ((<|>))
 import Control.Monad (void, when)
 import Data.Aeson (Value, object, withObject, (.=), (.:))
 import qualified Data.Aeson
-import Data.Maybe (fromMaybe)
+import Data.List (isPrefixOf)
+import Data.Maybe (fromMaybe, listToMaybe)
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Key (Key)
 import Data.Aeson.Types (parseEither)
@@ -33,10 +35,11 @@ import Data.IORef (IORef, readIORef)
 import Data.List (isPrefixOf, isSuffixOf, sort)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
+import qualified Data.Text.IO as TIO
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import System.Directory (listDirectory)
-import System.FilePath ((</>))
+import System.Directory (doesFileExist, listDirectory)
+import System.FilePath (normalise, (</>))
 
 import HaskellFlows.Config (defaultLimits, determinismMaxRuns)
 import HaskellFlows.Data.PropertyStore (Store, loadAll, saveCases)
@@ -255,6 +258,31 @@ findCabalIn dir = do
 -- ghc_check: load / module / project
 --------------------------------------------------------------------------------
 
+-- | Resolve a caller-supplied module path against the project dir,
+-- refusing escapes and (optionally) nonexistent files BEFORE any
+-- ghcide rule runs. A bogus path fed to the session loader makes
+-- hie-bios invoke @cabal v2-repl@ with out-of-tree targets — a
+-- wedge vector, and pre-C1 'Tool.Load' guarded exactly this (its
+-- tests died with it; the e2e scenarios LoadNonexistent #79 and
+-- InjectionGuard keep the contract).
+guardModulePath
+  :: ProjectDir -> FilePath -> Bool -> IO (Either ToolResponse FilePath)
+guardModulePath pd rel requireExists = do
+  let root = unProjectDir pd
+      abs' = normalise (root </> rel)
+      underRoot = root == abs' || (root ++ "/") `isPrefixOf` abs'
+  if not underRoot
+    then pure . Left $ Env.mkRefused
+      (mkErrorEnvelope Validation
+        ("module path escapes the project root: " <> T.pack rel))
+    else do
+      exists <- doesFileExist abs'
+      if requireExists && not exists
+        then pure $ Left $ mkFailed
+          (mkErrorEnvelope Validation
+            ("module path does not exist: " <> T.pack rel))
+        else pure (Right abs')
+
 -- | Split diagnostics into the legacy load/module shape: @errors@ +
 -- @warnings@ arrays of structured objects, @summary@ line. The
 -- composite 'Env.withResultAction' contract applies: the executed
@@ -311,7 +339,16 @@ handleCheckModule pdRef raw s = case argField "module_path" raw of
   Left err -> pure (mkFailed (mkErrorEnvelope MissingArg (T.pack err)))
   Right mp -> do
     pd <- readIORef pdRef
-    diags <- ideDiagnosticsFor s (unProjectDir pd </> T.unpack mp)
+    guarded <- guardModulePath pd (T.unpack mp) True
+    case guarded of
+      Left refusal -> pure refusal
+      Right absPath -> handleCheckModuleAt pd mp absPath raw s
+
+-- | Second half of the module check — runs with the guarded,
+-- absolute path.
+handleCheckModuleAt :: ProjectDir -> Text -> FilePath -> Value -> IdeSession -> IO ToolResponse
+handleCheckModuleAt pd mp absPath raw s = do
+    diags <- ideDiagnosticsFor s absPath
     -- Product contract (CheckModule.renderResult): overall + gates,
     -- with warnings_block (default True = warnings block).
     let warnBlock = case KM.lookup "warnings_block" (diagObj raw) of
@@ -381,12 +418,37 @@ isHoleDiag d = case KM.lookup "message" (diagObj d) of
   _                          -> False
 
 handleCheckLoad :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
-handleCheckLoad pdRef raw s = case argField "module_path" raw of
-  Left err -> pure (mkFailed (mkErrorEnvelope MissingArg (T.pack err)))
-  Right mp -> do
+handleCheckLoad pdRef raw s = do
+  -- No module_path = "load the library": default to the first
+  -- module listed in the .cabal (the scaffold's main lib module),
+  -- falling back to the first .hs under src/.
+  mp <- case argField "module_path" raw of
+    Right m -> pure m
+    Left _ -> do
+      pd <- readIORef pdRef
+      mCabal <- findCabalIn (unProjectDir pd)
+      cabal <- maybe (pure "") (TIO.readFile) mCabal
+      let fromCabal = case projectModuleFilesFromCabal cabal of
+            (m : _) -> Just m
+            []      -> Nothing
+      srcHs <- listHs (unProjectDir pd </> "src")
+      pure $ case fromCabal <|> listToMaybe srcHs of
+        Just first -> T.pack (relativizeTo (unProjectDir pd) first)
+        Nothing    -> ""
+  if T.null mp
+    then pure (mkFailed (mkErrorEnvelope MissingArg
+                "no module_path given and no library module found to default to"))
+    else handleCheckLoadAt pdRef mp raw s
+
+handleCheckLoadAt :: IORef ProjectDir -> Text -> Value -> IdeSession -> IO ToolResponse
+handleCheckLoadAt pdRef mp raw s = do
     pd <- readIORef pdRef
-    diags <- ideDiagnosticsFor s (unProjectDir pd </> T.unpack mp)
-    pure (loadShapeEnvelope "load" mp diags)
+    guarded <- guardModulePath pd (T.unpack mp) True
+    case guarded of
+      Left refusal -> pure refusal
+      Right absPath -> do
+        diags <- ideDiagnosticsFor s absPath
+        pure (loadShapeEnvelope "load" mp diags)
 
 -- | F3 project gate: typecheck every module listed in the .cabal.
 -- Legacy-compatible @gates.compile@ verdict + per-module rows.
@@ -417,7 +479,7 @@ handleCheckProject pdRef raw s = do
                 let errs   = [d | d <- ds, isSevDiag "error" d]
                     warns  = [d | d <- ds, isSevDiag "warning" d]
                     cradle = [d | d <- ds, isCradleDiag d]
-                    nm     = T.pack (relativize (unProjectDir pd) fp)
+                    nm     = T.pack (relativizeTo (unProjectDir pd) fp)
                     detail = object
                       [ "errors" .= errs
                       , "warnings" .= warns
@@ -478,9 +540,6 @@ handleCheckProject pdRef raw s = do
     isSev want d = KM.lookup "severity" (objOf d) == Just (Data.Aeson.String want)
     objOf (Data.Aeson.Object o) = o
     objOf _ = KM.empty
-    relativize root fp =
-      let root' = if last root == '/' then root else root <> "/"
-      in if root' `isPrefixOf` fp then drop (length root') fp else fp
 
 --------------------------------------------------------------------------------
 -- ghc_eval / ghc_inspect(type)
@@ -489,7 +548,14 @@ handleCheckProject pdRef raw s = do
 handleEval :: Value -> IdeSession -> IO ToolResponse
 handleEval raw s = case argField "expression" raw of
   Left err -> pure (mkFailed (mkErrorEnvelope MissingArg (T.pack err)))
-  Right expr -> do
+  Right expr
+    -- Sentinel poisoning: the framing literal is a shared secret of
+    -- the eval protocol; an expression containing it must be refused
+    -- BEFORE compilation (InjectionGuard contract).
+    | "GHCi-DONE" `T.isInfixOf` expr ->
+        pure . Env.mkRefused $ mkErrorEnvelope Validation
+          "expression contains the reserved sentinel literal"
+    | otherwise -> do
     anchors <- anchorChain s
     warmAnchors s anchors
     r <- firstRight
@@ -575,9 +641,25 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
                | n <- maybe [] pure tmName
                , anchorArg /= Nothing
                , a /= pdNow </> fromMaybe "" anchorArg ]
-    r <- firstRight
-      [ ideEvalExprIn s (EvalArgs a (importsFor a) True) expr | a <- anchors ]
-    case r of
+    let runChain =
+          firstRight
+            [ ideEvalExprIn s (EvalArgs a (importsFor a) True) expr | a <- anchors ]
+    r <- runChain
+    -- Cross-component transient (the Mutation-scenario family):
+    -- when a component is discovered mid-action, the graph restart
+    -- aborts the warm pass, an interface file is read from a stale
+    -- cache-hash dir ("withBinaryFile: does not exist"), and the
+    -- eval surfaces GHC-47808. One warm-and-retry lets the restarted
+    -- graph settle (the second pass finds the .hi written under the
+    -- current hash).
+    r' <- case r of
+      Just (Left err)
+        | "Exception when reading interface file" `T.isInfixOf` err
+            || ("withBinaryFile: does not exist" `T.isInfixOf` err) -> do
+              warmAnchors s anchors
+              runChain
+      _ -> pure r
+    case r' of
       Nothing ->
         pure (Env.mkUnavailable (mkErrorEnvelope Validation
           "could not resolve a GHC session with QuickCheck for this property"))
@@ -585,16 +667,26 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
         -- Parity with the legacy QcUnparsed surface: a property that
         -- fails to compile must carry the compiler output in 'hint'
         -- — without it the agent sees raw="" and zero explanation.
-        let payload =
+        -- B-6: a missing Arbitrary instance gets its honest taxonomy
+        -- (missing_instance, not compile_error) so the nextStep
+        -- steering routes to the arbitrary-template action.
+        let missingArb = "No instance for (Arbitrary" `T.isInfixOf` err
+            kind
+              | missingArb = MissingInstance
+              | otherwise  = budgetErrorKind err
+            state
+              | missingArb = ("missing_instance" :: Text)
+              | otherwise  = "unparsed"
+            payload =
               object
                 [ "action" .= ("check" :: Text)
                 , "property" .= prop
-                , "state" .= ("unparsed" :: Text)
+                , "state" .= state
                 , "hint" .= err
                 , "backend" .= ("ghcide" :: Text)
                 ]
         in pure
-          ( (mkFailed (mkErrorEnvelope (budgetErrorKind err) err))
+          ( (mkFailed (mkErrorEnvelope kind err))
               { Env.reResult = Just payload }
           )
       Just (Right out) -> do
@@ -816,3 +908,8 @@ replayProp pdRef s p = do
            then pure (p, Right (Just (qcNOf 1 out)))
            else pure (p, Left worst)
 
+-- | Strip the project-root prefix for response-facing paths.
+relativizeTo :: FilePath -> FilePath -> FilePath
+relativizeTo root fp =
+  let root' = if last root == '/' then root else root <> "/"
+  in if root' `isPrefixOf` fp then drop (length root') fp else fp
