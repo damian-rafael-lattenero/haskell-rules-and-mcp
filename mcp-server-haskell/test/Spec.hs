@@ -257,6 +257,12 @@ import HaskellFlows.Ghc.ApiSession
   , writeLoadedRefForTest
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
+import HaskellFlows.Ghc.IdeSession
+  ( EvalError (..)
+  , EvalErrorClass (..)
+  , classifyEvalError
+  , evalErrorKind
+  )
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
 import qualified HaskellFlows.Tool.Browse as BrowseTool
 import qualified HaskellFlows.Tool.Complete as CompleteTool
@@ -866,6 +872,14 @@ runAllTests = do
       , test "server wraps runTool in timeout"      testServerOuterTimeout
       , test "ghc_eval exposes Control.Concurrent"  testEvalContextHasControlConcurrent
       , test "ghc_eval enforces inner per-call budget" testEvalInnerTimeoutBudget
+      , test "classify: mid-text `No instance for Arbitrary' (EXC-wrapped)"
+                                                   testClassifyMissingArbitraryMidText
+      , test "classify: mid-text `No instance for Show (IO ())'" 
+                                                   testClassifyShowIoMidText
+      , test "classify: EXC-wrapped scope error is ECScope"
+                                                   testClassifyScopeWrappedInExc
+      , test "classify: timeout budget is ECTimeout" testClassifyTimeoutText
+      , test "classify: evalErrorKind total mapping" testEvalErrorKindMapping
       , test "load paths derive interactive imports from source" testLoadAutoImports
       , test "Deferred pass writes to MCP-private build dir"      testDeferredIsolatedOutputs
       , test "ghc_deps add: idempotent no-op returns unchanged"  testDepsAddIdempotent
@@ -1503,6 +1517,55 @@ runAllTests = do
 -- ---------------------------------------------------------------------------
 -- F1 — ghcide backend (HaskellFlows.Ghc.IdeSession)
 -- ---------------------------------------------------------------------------
+
+-- The eval runner surfaces compile failures as exceptions whose
+-- rendered text buries the diagnostic behind the runner's "EXC:"
+-- prefix and GHC's location header (GHC User's Guide, "Error
+-- messages": every diagnostic renders as
+-- <file>:<line>:<col>: error: [GHC-xxxxx] followed by the body).
+-- 'classifyEvalError' must therefore find its markers ANYWHERE in
+-- the message. The regression these tests pin classified such texts
+-- as ECException, which stalled the anchor chain (Sandbox escape
+-- 1/3) and hid the honest missing_instance taxonomy
+-- (Missing Arbitrary 0/2).
+
+testClassifyMissingArbitraryMidText :: IO Bool
+testClassifyMissingArbitraryMidText = pure $
+  evClass (classifyEvalError excArbitrary) == ECMissingInstance "arbitrary"
+  where
+    excArbitrary = T.pack $
+      "EXC: <interactive>:1:35: error: [GHC-39999]\n\
+      \    * No instance for `Arbitrary Foo'\n\
+      \        arising from a use of `quickCheckWithResult'"
+
+testClassifyShowIoMidText :: IO Bool
+testClassifyShowIoMidText = pure $
+  evClass (classifyEvalError excShowIo) == ECIoWrapper
+  where
+    excShowIo = T.pack $
+      "EXC: <interactive>:1:41: error: [GHC-39999]\n\
+      \    * No instance for `Show (IO ())'\n\
+      \        arising from a use of `print'"
+
+testClassifyScopeWrappedInExc :: IO Bool
+testClassifyScopeWrappedInExc = pure $
+  evClass (classifyEvalError
+    "EXC: <interactive>:1:1: error: Variable not in scope: foo")
+    == ECScope
+
+testClassifyTimeoutText :: IO Bool
+testClassifyTimeoutText = pure $
+  evClass (classifyEvalError "timeout after 30s") == ECTimeout
+
+testEvalErrorKindMapping :: IO Bool
+testEvalErrorKindMapping = pure $ and
+  [ evalErrorKind (EvalError ECTimeout "") == Env.InnerTimeout
+  , evalErrorKind (EvalError (ECMissingInstance "arbitrary") "")
+      == Env.MissingInstance
+  , evalErrorKind (EvalError ECCompile "") == Env.CompileError
+  , evalErrorKind (EvalError ECException "") == Env.CompileError
+  , evalErrorKind (EvalError ECIoWrapper "") == Env.CompileError
+  ]
 
 -- ---------------------------------------------------------------------------
 -- F2 — concurrent transport (HaskellFlows.Mcp.Transport)

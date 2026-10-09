@@ -55,6 +55,9 @@ import HaskellFlows.Ghc.IdeSession
   , anchorModuleIn
   , bootIdeSession
   , ideDiagnosticsFor
+  , EvalError (..)
+  , EvalErrorClass (..)
+  , evalErrorKind
   , ideEvalExprIn
   , ideEvalActionIn
   , ideModuleNameOf
@@ -171,12 +174,11 @@ stripped val = case val of
   Data.Aeson.Object o -> Data.Aeson.Object (KM.delete "action" o)
   _ -> val
 
--- | Distinguish timeouts from compile failures in the eval/type
--- envelopes — the budget tripping is not a compile error.
-budgetErrorKind :: Text -> ErrorKind
-budgetErrorKind err
-  | "timeout" `T.isInfixOf` T.toLower err = InnerTimeout
-  | otherwise = CompileError
+-- | Envelope taxonomy for an eval failure — the total mapping in
+-- "HaskellFlows.Ghc.EvalError" (budget tripping is InnerTimeout, a
+-- missing instance keeps its honest kind).
+budgetErrorKind :: EvalError -> ErrorKind
+budgetErrorKind = evalErrorKind
 
 --------------------------------------------------------------------------------
 -- anchor machinery
@@ -207,42 +209,26 @@ sortedForProperty as =
   [ a | a <- as, "/test/" `T.isInfixOf` T.pack a ]
     <> [ a | a <- as, "/test/" `T.isInfixOf` T.pack a == False ]
 
--- | GHC renders missing-instance diagnostics as
--- @No instance for `Show (IO ())\'@ (backticks) — but some render
--- paths use smart quotes or ASCII parens. Match the class name
--- under any quoting style; GHC's own wording is not stable API.
-missingInstanceFor :: Text -> Text -> Bool
-missingInstanceFor cls err =
-  any (\q -> ("No instance for " <> q <> cls) `T.isInfixOf` err)
-      ["`", "‘", "("]
-
--- | Retry policy for the anchor chain — a pure predicate so the
--- plan is unit-testable (AnchorPlan extraction point). 'scopeRetry'
--- is the original policy: only scope/resolution errors advance.
+-- | Retry policy for the anchor chain — a pure predicate over the
+-- classified error (the AnchorPlan extraction point; classification
+-- itself lives in "HaskellFlows.Ghc.EvalError"). 'scopeRetry' is the
+-- original policy: only scope/resolution errors advance.
 -- 'evalRetry' additionally advances on the two eval-only wrapper
 -- classes: the missing-Show type error (pure wrap on an IO-typed
 -- expression — the fmap wrapper is next) and BadDependency (an
 -- anchor with a poisoned linkable graph the expression may not
 -- even need).
-scopeRetry, evalRetry :: Text -> Bool
-scopeRetry e = any (`T.isInfixOf` e)
-  [ "Could not find module", "Could not load module"
-  , "not loaded", "Variable not in scope"
-  -- GHC >= 9.4 message shape ("Variable/Data constructor/Type
-  -- not in scope" all collapse to this prefix; the anchor
-  -- chain must advance on ANY out-of-scope name — a richer
-  -- anchor (e.g. test/Spec.hs) may provide it).
-  , "Not in scope"
-  , "could not resolve GHC session" ]
-evalRetry e = scopeRetry e
-  || missingInstanceFor "Show" e
-  || "BadDependency" `T.isInfixOf` e
+scopeRetry, evalRetry :: EvalError -> Bool
+scopeRetry ev = evClass ev == ECScope
+evalRetry ev =
+  scopeRetry ev || evClass ev `elem` [ECIoWrapper, ECBadDependency]
 
 -- | Run the anchor chain until one succeeds; @advance@ decides
 -- which errors move to the next candidate. Everything else is a
 -- real error and stops the chain. Parametric in the success type
 -- so callers can pair the result with its winning anchor.
-firstRight :: (Text -> Bool) -> [IO (Either Text a)] -> IO (Maybe (Either Text a))
+firstRight
+  :: (EvalError -> Bool) -> [IO (Either EvalError a)] -> IO (Maybe (Either EvalError a))
 firstRight advance [] = pure Nothing
 firstRight advance (io : rest) = do
   v <- io
@@ -758,7 +744,7 @@ handleEval raw s = case argField "expression" raw of
       case r of
         Nothing -> pure (mkFailed (mkErrorEnvelope MissingArg
                             "no project module provides the names this expression needs"))
-        Just (Left err) -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) err))
+        Just (Left err) -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) (evText err)))
         Just (Right out) ->
           let (capped, wasTruncated) = capOutput maxEvalBytes out
           in pure
@@ -787,13 +773,13 @@ handleType raw s = case argField "expression" raw of
         [ ideTypeOfExprIn s (EvalArgs a ["System.IO"] False) safe | a <- anchors ]
       case r0 of
         Just (Right ty) -> pure (mkOk (object ["type" .= ty, "backend" .= ("ghcide" :: Text)]))
-        Just (Left err) -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) err))
+        Just (Left err) -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) (evText err)))
         Nothing -> do
           anchor <- anchorModuleIn s
           r <- ideTypeOfExprIn s (EvalArgs anchor [] False) safe
           case r of
             Right ty -> pure (mkOk (object ["type" .= ty, "backend" .= ("ghcide" :: Text)]))
-            Left err -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) err))
+            Left err -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) (evText err)))
 
 --------------------------------------------------------------------------------
 -- ghc_property(action=check) — QuickCheck via the session
@@ -856,10 +842,9 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
     -- current hash).
     r' <- case r of
       Just (Left err)
-        | "Exception when reading interface file" `T.isInfixOf` err
-            || ("withBinaryFile: does not exist" `T.isInfixOf` err) -> do
-              warmAnchors s anchors
-              runChain
+        | evClass err == ECInterfaceCache -> do
+            warmAnchors s anchors
+            runChain
       _ -> pure r
     case r' of
       Nothing -> do
@@ -868,7 +853,7 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
         -- resolve" — the chain's per-anchor errors are otherwise
         -- discarded on exhaustion and the agent is left blind.
         lastErr <- case reverse anchors of
-          (a : _) -> either id (const "")
+          (a : _) -> either evText (const "")
             <$> ideEvalExprIn s (EvalArgs a ["Test.QuickCheck", "System.IO.Unsafe"] True)
                                   (qcExpr prop runs)
           [] -> pure "no anchor modules found under src/ or test/"
@@ -882,7 +867,9 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
         -- B-6: a missing Arbitrary instance gets its honest taxonomy
         -- (missing_instance, not compile_error) so the nextStep
         -- steering routes to the arbitrary-template action.
-        let missingArb = missingInstanceFor "Arbitrary" err
+        let missingArb = case evClass err of
+              ECMissingInstance cls -> cls == "arbitrary"
+              _                     -> False
             kind
               | missingArb = MissingInstance
               | otherwise  = budgetErrorKind err
@@ -894,7 +881,7 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
                 [ "action" .= ("check" :: Text)
                 , "property" .= prop
                 , "state" .= state
-                , "hint" .= err
+                , "hint" .= evText err
                 , "backend" .= ("ghcide" :: Text)
                 ]
             steer
@@ -902,7 +889,7 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
                   " Generate an instance template via ghc_property(action=arbitrary)."
               | otherwise = ""
         in pure
-          ( (mkFailed (mkErrorEnvelope kind (err <> steer)))
+          ( (mkFailed (mkErrorEnvelope kind (evText err <> steer)))
               { Env.reResult = Just payload }
           )
       Just (Right (winner, out)) -> do
@@ -1134,7 +1121,7 @@ replayProp pdRef s p = do
     Nothing ->
       pure (p, ReplayLoadFailed
         "could not resolve a GHC session with QuickCheck for this property")
-    Just (Left err) -> pure (p, ReplayLoadFailed err)
+    Just (Left err) -> pure (p, ReplayLoadFailed (evText err))
     Just (Right out) ->
       let worst = qcWorstOf 1 out
       in if worst == "passed"

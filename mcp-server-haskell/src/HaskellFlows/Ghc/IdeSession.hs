@@ -30,6 +30,10 @@ module HaskellFlows.Ghc.IdeSession
   , anchorModuleIn
     -- * F3: project-wide diagnostics + module inventory
   , EvalArgs (..)
+  , EvalError (..)
+  , EvalErrorClass (..)
+  , classifyEvalError
+  , evalErrorKind
   , ideDiagnosticsFor
   , ideModuleNameOf
   , ideProjectDiagnostics
@@ -179,6 +183,7 @@ import System.Timeout (timeout)
 import Unsafe.Coerce (unsafeCoerce)
 
 import HaskellFlows.Types (ProjectDir, unProjectDir)
+import HaskellFlows.Mcp.Envelope (ErrorKind (..))
 
 
 -- | A live ghcide session anchored at a project directory.
@@ -497,6 +502,94 @@ listFieldOf name body =
 -- | Compile and run a String-valued expression in the context of the
 -- component owning the anchor file, with extra interactive imports
 -- (Prelude is always added — F0 finding). 30s wall budget.
+--------------------------------------------------------------------------------
+-- Typed classification of interactive-eval failures (EvalError)
+--------------------------------------------------------------------------------
+
+-- | What kind of failure an eval was, decided once at the boundary.
+data EvalErrorClass
+  = ECTimeout
+    -- ^ The eval budget tripped -- not a compile error.
+  | ECScope
+    -- ^ Name\/module resolution failed at this anchor -- the chain
+    -- advances to a richer candidate.
+  | ECIoWrapper
+    -- ^ Missing @Show@ for the pure wrap of an IO-typed expression --
+    -- the @fmap@ wrapper is the next candidate in the chain.
+  | ECBadDependency
+    -- ^ A rule the anchor depends on aborted (poisoned linkable
+    -- graph); the expression may not even need that module.
+  | ECInterfaceCache
+    -- ^ GHC-47808: an interface file was read from a stale
+    -- cache-hash dir -- one warm-and-retry lets the restarted graph
+    -- settle.
+  | ECMissingInstance !Text
+    -- ^ A missing class instance, carrying the class name
+    -- (@Arbitrary@...). @Show@ is folded into 'ECIoWrapper'.
+  | ECCompile
+    -- ^ An ordinary compile\/type error -- stops the chain.
+  | ECException
+    -- ^ Anything else that escaped as an exception.
+  deriving stock (Eq, Show)
+
+-- | The classified error. 'evText' preserves the full message
+-- verbatim: hints and error envelopes must not lose information to
+-- classification.
+data EvalError = EvalError
+  { evClass :: !EvalErrorClass
+  , evText  :: !Text
+  }
+  deriving stock (Eq, Show)
+
+-- | Classify a raw eval-failure message. Case-insensitive on the
+-- GHC wording; quote-style agnostic on the missing-instance
+-- extraction (GHC renders backticks, some paths smart quotes or
+-- ASCII parens).
+classifyEvalError :: Text -> EvalError
+classifyEvalError raw = EvalError go raw
+  where
+    e = T.toLower raw
+    isInfix p = p `T.isInfixOf` e
+    go
+      | isInfix "timeout" = ECTimeout
+      | any isInfix
+          [ "could not find module", "could not load module"
+          , "not loaded", "not in scope"
+          , "could not resolve ghc session" ] = ECScope
+      | isInfix "baddependency" = ECBadDependency
+      | isInfix "exception when reading interface file"
+          || isInfix "withbinaryfile: does not exist" = ECInterfaceCache
+      | Just cls <- missingInstance, cls == "show" = ECIoWrapper
+      | Just cls <- missingInstance = ECMissingInstance cls
+      | isInfix "exc:" = ECException
+      | otherwise = ECCompile
+    -- "no instance for `Show (IO ())'" -- extract the class name
+    -- after any of the three opening quote styles GHC has used.
+    -- The marker is NEVER at offset 0: GHC renders the diagnostic
+    -- behind a location header ("<interactive>:1:35: error:
+    -- [GHC-39999]") and the runner's own "EXC:" prefix -- locate it
+    -- anywhere in the message, then read the class token.
+    missingInstance =
+      case T.breakOn "no instance for " e of
+        (_, post) -> do
+          rest <- T.stripPrefix "no instance for " post
+          pure (T.toLower (takeCls (dropOpenQuote rest)))
+    dropOpenQuote t = case T.uncons t of
+      Just (q, r) | q `elem` ("`‘(" :: String) -> r
+      _ -> t
+    takeCls rest =
+      let (cls, _) = T.break (\c -> c `elem` ("'’ )(" :: String)) rest
+      in T.strip cls
+
+-- | Total mapping to the envelope taxonomy: the budget tripping is
+-- an InnerTimeout, a missing instance keeps its honest kind, and
+-- everything else is a compile error.
+evalErrorKind :: EvalError -> ErrorKind
+evalErrorKind ev = case evClass ev of
+  ECTimeout            -> InnerTimeout
+  ECMissingInstance _  -> MissingInstance
+  _                    -> CompileError
+
 -- | Arguments for interactive evaluation against a project module.
 data EvalArgs = EvalArgs
   { eaAnchor     :: FilePath
@@ -510,7 +603,7 @@ data EvalArgs = EvalArgs
 -- | Serialized: the underlying HscEnv carries mutable interactive
 -- state (context, EPS) — concurrent setContext/compileExpr corrupts
 -- it (F3: the concurrent first-burst regression).
-ideEvalExprIn :: IdeSession -> EvalArgs -> Text -> IO (Either Text Text)
+ideEvalExprIn :: IdeSession -> EvalArgs -> Text -> IO (Either EvalError Text)
 ideEvalExprIn s ea expr =
   withMVar (isEvalLock s) $ \_ -> ideEvalExprIn' s ea expr
 
@@ -518,24 +611,25 @@ ideEvalExprIn s ea expr =
 -- eval contract): the compiled expression must be @IO String@-typed.
 -- The thunk is an ACTION — coercing it straight to String segfaults
 -- the RTS, so it is bound and executed instead.
-ideEvalActionIn :: IdeSession -> EvalArgs -> Text -> IO (Either Text Text)
+ideEvalActionIn :: IdeSession -> EvalArgs -> Text -> IO (Either EvalError Text)
 ideEvalActionIn s ea expr =
   withMVar (isEvalLock s) $ \_ -> evalExprIn s ea expr True
 
-ideEvalExprIn' :: IdeSession -> EvalArgs -> Text -> IO (Either Text Text)
+ideEvalExprIn' :: IdeSession -> EvalArgs -> Text -> IO (Either EvalError Text)
 ideEvalExprIn' s ea expr = evalExprIn s ea expr False
 
-evalExprIn :: IdeSession -> EvalArgs -> Text -> Bool -> IO (Either Text Text)
+evalExprIn :: IdeSession -> EvalArgs -> Text -> Bool -> IO (Either EvalError Text)
 evalExprIn s ea expr asAction = do
   nfp0 <- toNormalizedFilePath' <$> makeAbsolute (eaAnchor ea)
   scopeAnchorForEval s nfp0
   menv <- ideInteractiveEnvFor s nfp0 (eaQuickCheck ea)
   case menv of
-    Left e   -> pure (Left e)
+    Left e   -> pure (Left (classifyEvalError e))
     Right (mn, hsc) -> fmap joinTimeout (timeout 30_000_000 (tryRun mn hsc))
   where
-    joinTimeout Nothing = Left "timeout after 30s"
-    joinTimeout (Just (Left e)) = Left ("EXC: " <> T.pack (show e))
+    joinTimeout Nothing = Left (EvalError ECTimeout "timeout after 30s")
+    joinTimeout (Just (Left e)) =
+      Left (classifyEvalError ("EXC: " <> T.pack (show e)))
     joinTimeout (Just (Right v)) = Right v
     tryRun mn hsc = do
       r <- try (evalGhcEnv hsc (go mn)) :: IO (Either SomeException String)
@@ -552,17 +646,18 @@ evalExprIn s ea expr asAction = do
 
 -- | Type of an expression in the interactive context of the anchor
 -- module (see 'ideInteractiveEnvFor').
-ideTypeOfExprIn :: IdeSession -> EvalArgs -> Text -> IO (Either Text Text)
+ideTypeOfExprIn :: IdeSession -> EvalArgs -> Text -> IO (Either EvalError Text)
 ideTypeOfExprIn s ea expr = do
   nfp0 <- toNormalizedFilePath' <$> makeAbsolute (eaAnchor ea)
   scopeAnchorForEval s nfp0
   menv <- ideInteractiveEnvFor s nfp0 False
   case menv of
-    Left e   -> pure (Left e)
+    Left e   -> pure (Left (classifyEvalError e))
     Right (mn, hsc) -> fmap joinTimeout (timeout 30_000_000 (tryRun mn hsc))
   where
-    joinTimeout Nothing = Left "timeout after 30s"
-    joinTimeout (Just (Left e)) = Left ("EXC: " <> T.pack (show e))
+    joinTimeout Nothing = Left (EvalError ECTimeout "timeout after 30s")
+    joinTimeout (Just (Left e)) =
+      Left (classifyEvalError ("EXC: " <> T.pack (show e)))
     joinTimeout (Just (Right v)) = Right v
     tryRun mn hsc = do
       r <- try (evalGhcEnv hsc (go mn)) :: IO (Either SomeException Text)
