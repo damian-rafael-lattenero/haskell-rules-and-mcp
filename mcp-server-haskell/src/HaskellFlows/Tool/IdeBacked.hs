@@ -18,6 +18,7 @@ module HaskellFlows.Tool.IdeBacked
   , ReplayOutcome (..)
   , replayProp
   , replayStored
+  , moduleKeyOf
   ) where
 
 import Control.Concurrent.MVar (MVar, isEmptyMVar, modifyMVar)
@@ -63,8 +64,8 @@ import HaskellFlows.Ghc.IdeSession
   , ideModuleNameOf
   , ideProjectDiagnostics
   , ideTypeOfExprIn
-  , projectModuleFilesFromCabal
   )
+import HaskellFlows.Parser.Cabal (projectModuleFilesFromCabal)
 import HaskellFlows.Mcp.Envelope qualified as Env
 import HaskellFlows.Mcp.Envelope
   ( ErrorKind (..)

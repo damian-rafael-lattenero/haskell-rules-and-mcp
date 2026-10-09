@@ -39,6 +39,7 @@ import Test.QuickCheck
   , property
   , quickCheckWithResult
   , stdArgs
+  , (.&&.)
   , (===)
   , (==>)
   )
@@ -263,6 +264,14 @@ import HaskellFlows.Ghc.IdeSession
   , classifyEvalError
   , evalErrorKind
   )
+import HaskellFlows.Parser.Cabal
+  ( fieldSplit
+  , listFieldOf
+  , projectModuleFilesFromCabal
+  , splitStanzas
+  , stanzaHeaderOf
+  )
+import HaskellFlows.Tool.IdeBacked (moduleKeyOf)
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
 import qualified HaskellFlows.Tool.Browse as BrowseTool
 import qualified HaskellFlows.Tool.Complete as CompleteTool
@@ -880,6 +889,13 @@ runAllTests = do
                                                    testClassifyScopeWrappedInExc
       , test "classify: timeout budget is ECTimeout" testClassifyTimeoutText
       , test "classify: evalErrorKind total mapping" testEvalErrorKindMapping
+      , quickTest "prop_fieldSplit_roundtrip"            prop_fieldSplit_roundtrip
+      , quickTest "prop_listFieldOf_format_invariant"    prop_listFieldOf_format_invariant
+      , quickTest "prop_projectModuleFiles_dotpaths"     prop_projectModuleFiles_dotpaths
+      , quickTest "prop_splitStanzas_header_order"       prop_splitStanzas_header_order
+      , quickTest "prop_moduleKeyOf_dot_roundtrip"       prop_moduleKeyOf_dot_roundtrip
+      , test "moduleKeyOf: absolute == relative; later marker wins"
+                                                   testModuleKeyOfAbsRel
       , test "load paths derive interactive imports from source" testLoadAutoImports
       , test "Deferred pass writes to MCP-private build dir"      testDeferredIsolatedOutputs
       , test "ghc_deps add: idempotent no-op returns unchanged"  testDepsAddIdempotent
@@ -1565,6 +1581,93 @@ testEvalErrorKindMapping = pure $ and
   , evalErrorKind (EvalError ECCompile "") == Env.CompileError
   , evalErrorKind (EvalError ECException "") == Env.CompileError
   , evalErrorKind (EvalError ECIoWrapper "") == Env.CompileError
+  ]
+
+-- W5.2 — HaskellFlows.Parser.Cabal: the pure .cabal seam extracted
+-- from IdeSession. Laws pin the two renderings cabal itself
+-- accepts (inline comma-joined vs one-per-line block) and the
+-- module->path mapping the anchor chain depends on.
+
+-- | Capitalized Haskell identifier segment ("Foo", "Bar9").
+arbIdent :: QC.Gen Text
+arbIdent = do
+  c <- QC.elements ['A'..'Z']
+  rest <- QC.listOf (QC.elements (['a'..'z'] ++ ['0'..'9'] ++ "_"))
+  pure (T.pack (c : rest))
+
+-- | Dot-joined module name ("Foo", "Expr.Sub").
+arbModule :: QC.Gen Text
+arbModule = do
+  segs <- QC.listOf1 arbIdent
+  pure (T.intercalate "." segs)
+
+instance QC.Arbitrary Text where
+  arbitrary = T.pack <$> QC.arbitrary
+
+prop_fieldSplit_roundtrip :: Text -> Text -> Property
+prop_fieldSplit_roundtrip k v =
+  not (T.any (== ':') k)
+    && k == T.strip k
+    && not (T.null (T.strip v))
+    && v == T.strip v ==>
+    fieldSplit (k <> ": " <> v) === (k, v)
+
+-- | Both list renderings the Cabal grammar accepts must yield the
+-- same items — the parser cannot prefer a style.
+prop_listFieldOf_format_invariant :: Property
+prop_listFieldOf_format_invariant =
+  QC.forAll (QC.listOf1 arbModule) $ \items ->
+    listFieldOf "exposed-modules" (inline items) === items
+      .&&. listFieldOf "exposed-modules" (block items) === items
+  where
+    inline is = ["exposed-modules: " <> T.intercalate ", " is]
+    block is = case is of
+      []       -> []
+      (i0 : rest) -> ("exposed-modules: " <> i0) : [ "          " <> i | i <- rest ]
+
+prop_projectModuleFiles_dotpaths :: Property
+prop_projectModuleFiles_dotpaths =
+  QC.forAll (QC.listOf1 arbModule) $ \mods ->
+    projectModuleFilesFromCabal (cabalOf mods)
+      === [ "src/" <> T.unpack (T.replace "." "/" m) <> ".hs" | m <- mods ]
+  where
+    cabalOf ms = T.unlines
+      [ "name: prop-cabal"
+      , "library"
+      , "    exposed-modules: " <> T.intercalate ", " ms
+      ]
+
+-- | 'splitStanzas' keeps every recognized header, in order, and
+-- nothing else decides stanza identity.
+prop_splitStanzas_header_order :: Property
+prop_splitStanzas_header_order =
+  QC.forAll (QC.listOf arbLine) $ \ls ->
+    map fst (splitStanzas ls) === [ h | Just h <- map stanzaHeaderOf ls ]
+  where
+    arbLine = QC.oneof
+      [ pure "library"
+      , ("test-suite " <>) <$> arbIdent
+      , (\i -> "    field-" <> i <> ": v") <$> arbIdent
+      , pure "    indented body line"
+      ]
+
+-- | #74 law: dots in the module name become path separators and
+-- back — the store key round-trips.
+prop_moduleKeyOf_dot_roundtrip :: Property
+prop_moduleKeyOf_dot_roundtrip =
+  QC.forAll arbModule $ \m ->
+    moduleKeyOf ("src/" <> T.replace "." "/" m <> ".hs") === m
+
+testModuleKeyOfAbsRel :: IO Bool
+testModuleKeyOfAbsRel = pure $ and
+  [ moduleKeyOf "src/Foo.hs" == "Foo"
+  , moduleKeyOf "/root/x/src/Foo.hs" == "Foo"
+  , moduleKeyOf "test/Spec.hs" == "Spec"
+  , moduleKeyOf "src/Expr/S.hs" == "Expr.S"
+    -- the LATER marker wins: src/test/ nests under test/
+  , moduleKeyOf "src/test/Foo.hs" == "Foo"
+    -- no marker at all: the whole path (minus extension) is the key
+  , moduleKeyOf "weird/Foo.hs" == "weird.Foo"
   ]
 
 -- ---------------------------------------------------------------------------

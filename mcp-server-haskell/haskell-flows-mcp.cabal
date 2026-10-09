@@ -68,6 +68,7 @@ library
                       HaskellFlows.Ghc.Sanitize
                       HaskellFlows.Data.PropertyStore
                       HaskellFlows.Data.Scratchpad
+                      HaskellFlows.Parser.Cabal
                       HaskellFlows.Parser.Error
                       HaskellFlows.Parser.Hole
                       HaskellFlows.Parser.ModuleName
