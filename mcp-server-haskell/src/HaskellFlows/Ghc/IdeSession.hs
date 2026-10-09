@@ -25,6 +25,7 @@ module HaskellFlows.Ghc.IdeSession
   , shutdownIdeSession
   , ideTypecheckFile
   , ideEvalExprIn
+  , ideEvalActionIn
   , ideTypeOfExprIn
   , anchorModuleIn
     -- * F3: project-wide diagnostics + module inventory
@@ -510,8 +511,19 @@ ideEvalExprIn :: IdeSession -> EvalArgs -> Text -> IO (Either Text Text)
 ideEvalExprIn s ea expr =
   withMVar (isEvalLock s) $ \_ -> ideEvalExprIn' s ea expr
 
+-- | Run-the-action semantics (GHCi parity for the RCE-by-design
+-- eval contract): the compiled expression must be @IO String@-typed.
+-- The thunk is an ACTION — coercing it straight to String segfaults
+-- the RTS, so it is bound and executed instead.
+ideEvalActionIn :: IdeSession -> EvalArgs -> Text -> IO (Either Text Text)
+ideEvalActionIn s ea expr =
+  withMVar (isEvalLock s) $ \_ -> evalExprIn s ea expr True
+
 ideEvalExprIn' :: IdeSession -> EvalArgs -> Text -> IO (Either Text Text)
-ideEvalExprIn' s ea expr = do
+ideEvalExprIn' s ea expr = evalExprIn s ea expr False
+
+evalExprIn :: IdeSession -> EvalArgs -> Text -> Bool -> IO (Either Text Text)
+evalExprIn s ea expr asAction = do
   nfp0 <- toNormalizedFilePath' <$> makeAbsolute (eaAnchor ea)
   scopeAnchorForEval s nfp0
   menv <- ideInteractiveEnvFor s nfp0 (eaQuickCheck ea)
@@ -529,7 +541,9 @@ ideEvalExprIn' s ea expr = do
       setContext (IIModule (mkModuleName mn) : mkContext (eaImports ea))
       hv <- compileExpr (T.unpack expr)
       -- F30: force the full render inside the budget window.
-      let str = unsafeCoerce hv :: String
+      str <- if asAction
+               then liftIO (unsafeCoerce hv :: IO String)
+               else pure (unsafeCoerce hv :: String)
       _ <- liftIO (evaluate (length str))
       pure str
 

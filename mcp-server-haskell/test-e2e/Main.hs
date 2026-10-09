@@ -125,7 +125,7 @@ scenarios :: [(T.Text, Bool, Client.McpClient -> FilePath -> IO [Assert.Check])]
 scenarios =
   [ ( "Scenario: Arithmetic Expression Evaluator (15 steps)"
     , True, Expr.runExprScenario )
-  , ( "Flow: Exploratory (type / info / eval / complete / goto / doc)"
+  , ( "Flow: Exploratory (type / info / eval / complete / goto)"
     , False, FlowE.runFlow )
   , ( "Flow: ghcide parity matrix (10 verb cases under the active backend)"
     , True, FlowParity.runFlow )

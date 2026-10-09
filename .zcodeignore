@@ -1,0 +1,89 @@
+**/dist-newstyle/
+# MCP's private cabal builddir — bootstrap writes here so the defer-
+# flag-poisoned .hi/.o never contaminate the user's dist-newstyle.
+# See 'CabalBootstrap.bootstrapOne' for the full rationale.
+**/dist-newstyle-mcp/
+.idea/
+*.hi
+*.o
+*.dyn_hi
+*.dyn_o
+
+# Stray direct-ghc artifact: running 'ghc app/Main.hs' produces an
+# unextensioned executable next to the source. The real binary is
+# built by cabal under dist-newstyle.
+mcp-server-haskell/app/Main
+
+# Claude Code session state (ephemeral; per-session lock + local
+# permission overrides).
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+
+# cabal-generated, always local-only. `cabal freeze` is used by CI as a
+# cache-key input; we don't commit the resulting plan.
+**/cabal.project.freeze
+**/cabal.project.local
+**/cabal.project.local~
+
+# Disposable playground projects. Broadly ignore any sub-project
+# under playground/ — they're ephemeral scaffolds used to dogfood
+# the MCP against a realistic Haskell project.
+playground/*/
+# Exceptions: real tracked playground projects
+!playground/arithmetic-expr/
+!playground/arithmetic-expr/**
+
+# Property store (generated at runtime by ghc_quickcheck)
+**/.haskell-flows/
+
+# Local MCP config (may contain personal paths/env). Copy from .mcp.example.json
+.mcp.json
+
+# ghc_deps writes a per-machine cabal.lock during dependency edits;
+# the file is empty/transient and not part of the project's version graph.
+*.cabal.lock
+
+# #96 Phase D bench artifact — written by haskell-flows-mcp-bench
+# next to the cabal workdir. The file is per-run + machine-specific
+# (samples vary with hardware); the nightly CI workflow uploads it
+# as an artifact, but we never commit it. NOTE: kept AFTER the
+# lambda-hm re-inclusion — last-match-wins would otherwise
+# re-include bench-results.json under lambda-hm.
+!playground/lambda-hm/
+!playground/lambda-hm/**
+**/bench-results.json
+
+# Spike run artifacts (logs captured ad-hoc)
+mcp-server-haskell/spike-ghcide/*.log
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+node_modules/
+bower_components/
+jspm_packages/
+__pycache__/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

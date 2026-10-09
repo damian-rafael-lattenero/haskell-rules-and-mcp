@@ -22,8 +22,9 @@ module HaskellFlows.Tool.IdeBacked
 import Control.Concurrent.MVar (MVar, isEmptyMVar, modifyMVar)
 import Control.Exception (SomeException, try)
 import Control.Applicative ((<|>))
-import Control.Monad (void, when)
+import Control.Monad (filterM, void, when)
 import Data.Aeson (Value, object, withObject, (.=), (.:))
+import qualified Data.ByteString as BS
 import qualified Data.Aeson
 import Data.List (isPrefixOf)
 import Data.Maybe (fromMaybe, listToMaybe)
@@ -35,6 +36,7 @@ import Data.IORef (IORef, readIORef)
 import Data.List (isPrefixOf, isSuffixOf, sort)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
+import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -51,6 +53,7 @@ import HaskellFlows.Ghc.IdeSession
   , bootIdeSession
   , ideDiagnosticsFor
   , ideEvalExprIn
+  , ideEvalActionIn
   , ideModuleNameOf
   , ideProjectDiagnostics
   , ideTypeOfExprIn
@@ -66,6 +69,7 @@ import HaskellFlows.Mcp.Envelope
   )
 import HaskellFlows.Mcp.ToolName (ToolName (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
+import HaskellFlows.Ghc.Sanitize (maxEvalBytes, sanitizeExpression)
 
 -- | Get-or-boot the ghcide session under the MVar (first caller boots,
 -- everyone else reuses — same single-writer shape as 'srvGhcSession').
@@ -188,28 +192,49 @@ sortedForProperty as =
   [ a | a <- as, "/test/" `T.isInfixOf` T.pack a ]
     <> [ a | a <- as, "/test/" `T.isInfixOf` T.pack a == False ]
 
--- | Run the anchor chain until one succeeds. Scope errors (module not
--- loaded / not found / name not in scope) advance to the next anchor —
--- the next candidate's module graph may import what this one lacks.
--- Everything else is a real error and stops the chain.
-firstRight :: [IO (Either Text Text)] -> IO (Maybe (Either Text Text))
-firstRight [] = pure Nothing
-firstRight (io : rest) = do
+-- | GHC renders missing-instance diagnostics as
+-- @No instance for `Show (IO ())\'@ (backticks) — but some render
+-- paths use smart quotes or ASCII parens. Match the class name
+-- under any quoting style; GHC's own wording is not stable API.
+missingInstanceFor :: Text -> Text -> Bool
+missingInstanceFor cls err =
+  any (\q -> ("No instance for " <> q <> cls) `T.isInfixOf` err)
+      ["`", "‘", "("]
+
+-- | Retry policy for the anchor chain — a pure predicate so the
+-- plan is unit-testable (AnchorPlan extraction point). 'scopeRetry'
+-- is the original policy: only scope/resolution errors advance.
+-- 'evalRetry' additionally advances on the two eval-only wrapper
+-- classes: the missing-Show type error (pure wrap on an IO-typed
+-- expression — the fmap wrapper is next) and BadDependency (an
+-- anchor with a poisoned linkable graph the expression may not
+-- even need).
+scopeRetry, evalRetry :: Text -> Bool
+scopeRetry e = any (`T.isInfixOf` e)
+  [ "Could not find module", "Could not load module"
+  , "not loaded", "Variable not in scope"
+  -- GHC >= 9.4 message shape ("Variable/Data constructor/Type
+  -- not in scope" all collapse to this prefix; the anchor
+  -- chain must advance on ANY out-of-scope name — a richer
+  -- anchor (e.g. test/Spec.hs) may provide it).
+  , "Not in scope"
+  , "could not resolve GHC session" ]
+evalRetry e = scopeRetry e
+  || missingInstanceFor "Show" e
+  || "BadDependency" `T.isInfixOf` e
+
+-- | Run the anchor chain until one succeeds; @advance@ decides
+-- which errors move to the next candidate. Everything else is a
+-- real error and stops the chain.
+firstRight :: (Text -> Bool) -> [IO (Either Text Text)] -> IO (Maybe (Either Text Text))
+firstRight advance [] = pure Nothing
+firstRight advance (io : rest) = do
   v <- io
   case v of
     Right txt -> pure (Just (Right txt))
     Left e
-      | any (`T.isInfixOf` e)
-          [ "Could not find module", "Could not load module"
-          , "not loaded", "Variable not in scope"
-          -- GHC >= 9.4 message shape ("Variable/Data constructor/Type
-          -- not in scope" all collapse to this prefix; the anchor
-          -- chain must advance on ANY out-of-scope name — a richer
-          -- anchor (e.g. test/Spec.hs) may provide it).
-          , "Not in scope"
-          , "could not resolve GHC session" ]
-      -> firstRight rest
-    Left e -> pure (Just (Left e))
+      | advance e -> firstRight advance rest
+      | otherwise -> pure (Just (Left e))
 
 listHs :: FilePath -> IO [FilePath]
 listHs dir = do
@@ -242,7 +267,10 @@ anchorChain s = do
   let root = isRoot s
   testHs <- listHs (root </> "test")
   srcHs <- listHs (root </> "src")
-  pure (dedup (srcHs <> testHs))
+  -- A binary (non-UTF-8) file can never provide a productive
+  -- scope: its GhcSessionDeps/GetLinkable rules abort with
+  -- 'BadDependency' and poison every eval anchored on it.
+  filterM fileValidUtf8 (dedup (srcHs <> testHs))
 
 -- | First @.cabal@ directly under the project dir.
 findCabalIn :: FilePath -> IO (Maybe FilePath)
@@ -447,11 +475,31 @@ handleCheckLoadAt pdRef mp raw s = do
     case guarded of
       Left refusal -> pure refusal
       Right absPath -> do
-        diags <- ideDiagnosticsFor s absPath
-        pure (loadShapeEnvelope "load" mp diags)
+        -- Non-UTF-8 guard: GHC's reader diagnostics for binary files
+        -- are unreliable; refuse cleanly BEFORE touching the session
+        -- (Non-UTF-8 contract: rejected cleanly, session stays alive).
+        bytes <- BS.readFile absPath
+        case TE.decodeUtf8' bytes of
+          Left _ ->
+            pure . Env.mkFailed $ mkErrorEnvelope Validation
+              ("module file is not valid UTF-8: " <> mp)
+          Right _ -> do
+            diags <- ideDiagnosticsFor s absPath
+            pure (loadShapeEnvelope "load" mp diags)
 
 -- | F3 project gate: typecheck every module listed in the .cabal.
 -- Legacy-compatible @gates.compile@ verdict + per-module rows.
+-- | 'True' when the file decodes as clean UTF-8 — the shared
+-- boundary guard of check(load|project). A file that does not
+-- exist is downstream's 'not_found' business (the .cabal may list
+-- modules not yet scaffolded); only decode-ability is ours.
+fileValidUtf8 :: FilePath -> IO Bool
+fileValidUtf8 fp = do
+  ok <- doesFileExist fp
+  if not ok
+    then pure True
+    else either (const False) (const True) . TE.decodeUtf8' <$> BS.readFile fp
+
 handleCheckProject :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
 handleCheckProject pdRef raw s = do
   pd <- readIORef pdRef
@@ -466,133 +514,171 @@ handleCheckProject pdRef raw s = do
         then pure (mkFailed (mkErrorEnvelope MissingArg
                               "no modules listed in .cabal"))
         else do
-          rows <- ideProjectDiagnostics s (map (unProjectDir pd </>) mods)
-          -- Product contract (CheckProject): overall / total /
-          -- checked / passed / failed / not_found / per_module.
-          -- not_found = modules whose only diagnostics are
-          -- cradle-resolution failures ("not listed in .cabal" /
-          -- "No cradle target") — they never reached compilation.
-          let warnBlock = case KM.lookup "warnings_block" (diagObj raw) of
-                            Just (Data.Aeson.Bool b) -> b
-                            _                         -> True
-              outcomeOf (fp, ds) =
-                let errs   = [d | d <- ds, isSevDiag "error" d]
-                    warns  = [d | d <- ds, isSevDiag "warning" d]
-                    cradle = [d | d <- ds, isCradleDiag d]
-                    nm     = T.pack (relativizeTo (unProjectDir pd) fp)
-                    detail = object
-                      [ "errors" .= errs
-                      , "warnings" .= warns
-                      ]
-                in ( nm
-                   , if not (null cradle) && null errs
-                       then "not_found" :: Text
-                       else if not (null errs) then "failed"
-                       else if not (null warns) && warnBlock then "failed"
-                       else "ok"
-                   , detail )
-              outcomes = map outcomeOf rows
-              notFound = [nm | (nm, "not_found", _) <- outcomes]
-              failing  = [nm | (nm, st, _) <- outcomes, st == "failed"]
-              total    = length outcomes
-              nChecked = total - length notFound
-              okCount  = length [() | (_, "ok", _) <- outcomes]
-              overall  = null failing && null notFound
-              perModule =
-                [ object
-                    [ "module" .= nm
-                    , "status" .= st
-                    , "module_path" .= nm
-                    , "detail" .= detail
-                    ]
-                | (nm, st, detail) <- outcomes
-                ]
-              summaryText =
-                T.pack (show okCount) <> "/" <> T.pack (show total)
-                  <> " modules green."
-                  <> (if not (null notFound)
-                        then " (" <> T.pack (show (length notFound)) <> " not found)"
-                        else "")
-              payload =
-                [ "action"   .= ("project" :: Text)
-                , "backend"  .= ("ghcide" :: Text)
-                , "overall"  .= overall
-                , "total"    .= total
-                , "checked"  .= nChecked
-                , "passed"   .= okCount
-                , "failed"   .= length failing
-                , "not_found" .= length notFound
-                , "skipped"  .= (0 :: Int)
-                , "gates"    .= object [ "compile" .= overall ]
-                , "modules"  .= perModule
-                , "per_module" .= perModule
-                , "summary"  .= summaryText
-                ]
-          if overall
-            then pure (Env.mkOk (object payload))
-            else pure
-                  (Env.mkFailed
-                     (mkErrorEnvelope GateFailure
-                        (T.pack (show (length failing + length notFound))
-                           <> " module(s) failing across project — ghcide backend"))
-                     & \r -> r { Env.reResult = Just (object payload) })
-  where
-    isSev want d = KM.lookup "severity" (objOf d) == Just (Data.Aeson.String want)
-    objOf (Data.Aeson.Object o) = o
-    objOf _ = KM.empty
+          -- Non-UTF-8 guard (same contract as action=load): binary
+          -- modules make GHC's reader diagnostics unreliable; refuse
+          -- cleanly BEFORE touching the session.
+          let absMods = map (unProjectDir pd </>) mods
+          mBad <- listToMaybe <$> filterM (fmap not . fileValidUtf8) absMods
+          case mBad of
+            Just fp -> pure . Env.mkFailed $ mkErrorEnvelope Validation
+              ("module file is not valid UTF-8: "
+                 <> T.pack (relativizeTo (unProjectDir pd) fp))
+            Nothing -> checkProjectRows pd raw s absMods
+
+-- | The project typecheck pass — reached only when every module
+-- file decodes as UTF-8.
+checkProjectRows :: ProjectDir -> Value -> IdeSession -> [FilePath] -> IO ToolResponse
+checkProjectRows pd raw s absMods = do
+  rows <- ideProjectDiagnostics s absMods
+  -- Product contract (CheckProject): overall / total /
+  -- checked / passed / failed / not_found / per_module.
+  -- not_found = modules whose only diagnostics are
+  -- cradle-resolution failures ("not listed in .cabal" /
+  -- "No cradle target") — they never reached compilation.
+  let warnBlock = case KM.lookup "warnings_block" (diagObj raw) of
+                      Just (Data.Aeson.Bool b) -> b
+                      _                        -> True
+      outcomeOf (fp, ds) =
+        let errs   = [d | d <- ds, isSevDiag "error" d]
+            warns  = [d | d <- ds, isSevDiag "warning" d]
+            cradle = [d | d <- ds, isCradleDiag d]
+            nm     = T.pack (relativizeTo (unProjectDir pd) fp)
+            detail = object
+              [ "errors" .= errs
+              , "warnings" .= warns
+              ]
+        in ( nm
+           , if not (null cradle) && null errs
+               then "not_found" :: Text
+               else if not (null errs) then "failed"
+               else if not (null warns) && warnBlock then "failed"
+               else "ok"
+           , detail )
+      outcomes = map outcomeOf rows
+      notFound = [nm | (nm, "not_found", _) <- outcomes]
+      failing  = [nm | (nm, st, _) <- outcomes, st == "failed"]
+      total    = length outcomes
+      nChecked = total - length notFound
+      okCount  = length [() | (_, "ok", _) <- outcomes]
+      overall  = null failing && null notFound
+      perModule =
+        [ object
+            [ "module" .= nm
+            , "status" .= st
+            , "module_path" .= nm
+            , "detail" .= detail
+            ]
+        | (nm, st, detail) <- outcomes
+        ]
+      summaryText =
+        T.pack (show okCount) <> "/" <> T.pack (show total)
+          <> " modules green."
+          <> (if not (null notFound)
+                then " (" <> T.pack (show (length notFound)) <> " not found)"
+                else "")
+      payload =
+        [ "action"   .= ("project" :: Text)
+        , "backend"  .= ("ghcide" :: Text)
+        , "overall"  .= overall
+        , "total"    .= total
+        , "checked"  .= nChecked
+        , "passed"   .= okCount
+        , "failed"   .= length failing
+        , "not_found" .= length notFound
+        , "skipped"  .= (0 :: Int)
+        , "gates"    .= object [ "compile" .= overall ]
+        , "modules"  .= perModule
+        , "per_module" .= perModule
+        , "summary"  .= summaryText
+        ]
+  if overall
+    then pure (Env.mkOk (object payload))
+    else pure
+          (Env.mkFailed
+             (mkErrorEnvelope GateFailure
+                (T.pack (show (length failing + length notFound))
+                   <> " module(s) failing across project — ghcide backend"))
+             & \r -> r { Env.reResult = Just (object payload) })
 
 --------------------------------------------------------------------------------
 -- ghc_eval / ghc_inspect(type)
 --------------------------------------------------------------------------------
 
+-- | Pure output cap so the invariant "'truncated' is True iff the
+-- output was actually cut" holds by construction and is unit-testable
+-- without a session.
+capOutput :: Int -> Text -> (Text, Bool)
+capOutput cap t
+  | T.length t > cap = (T.take cap t, True)
+  | otherwise        = (t, False)
+
 handleEval :: Value -> IdeSession -> IO ToolResponse
 handleEval raw s = case argField "expression" raw of
   Left err -> pure (mkFailed (mkErrorEnvelope MissingArg (T.pack err)))
-  Right expr
-    -- Sentinel poisoning: the framing literal is a shared secret of
-    -- the eval protocol; an expression containing it must be refused
-    -- BEFORE compilation (InjectionGuard contract).
-    | "GHCi-DONE" `T.isInfixOf` expr ->
-        pure . Env.mkRefused $ mkErrorEnvelope Validation
-          "expression contains the reserved sentinel literal"
-    | otherwise -> do
-    anchors <- anchorChain s
-    warmAnchors s anchors
-    r <- firstRight
-      [ ideEvalExprIn s (EvalArgs a [] False) ("show (" <> expr <> ")")
-      | a <- anchors ]
-    case r of
-      Nothing -> pure (mkFailed (mkErrorEnvelope MissingArg
-                          "no project module provides the names this expression needs"))
-      Just (Left err) -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) err))
-      Just (Right out) ->
-        pure
-          ( mkOk
-              ( object
-                  [ "output" .= out
-                  , "truncated" .= False
-                  , "backend" .= ("ghcide" :: Text)
-                  ]
+  -- Boundary safety, single-sourced: the SAME 'sanitizeExpression'
+  -- policy every retired GHCi tool routed through — newline/sentinel
+  -- injection (InjectionGuard), the 64 KiB input cap (Oversized /
+  -- CWE-400: reject BEFORE any compilation) and the two-limb GMP
+  -- literal or @N^E@ exponent that segfaults the in-process RTS
+  -- (#127) — untrappable by 'try', so it MUST die at this boundary.
+  Right expr -> case sanitizeExpression expr of
+    Left cmdErr ->
+      pure . Env.mkRefused $ Env.sanitizeRejection "expression" cmdErr
+    Right safe -> do
+      anchors <- anchorChain s
+      warmAnchors s anchors
+      -- RCE-by-design contract: ghc_eval executes arbitrary IO, like
+      -- GHCi. BOTH wrappers type as IO String so the run-the-action
+      -- runner is uniform: the pure case renders via
+      -- 'Control.Exception.evaluate', the IO case runs the user
+      -- action and shows its result (writeFile renders "()",
+      -- readFile renders the shown file contents). The pure wrap
+      -- type-errors on IO actions ('No instance for `Show (IO …)'),
+      -- which advances the chain to the fmap wrapper.
+      r <- firstRight evalRetry
+        [ ideEvalActionIn s (EvalArgs a ["System.IO", "Control.Exception"] False) wrap
+        | a <- anchors
+        , wrap <- [ "Control.Exception.evaluate (show (" <> safe <> "))"
+                  , "fmap show (" <> safe <> ")" ] ]
+      case r of
+        Nothing -> pure (mkFailed (mkErrorEnvelope MissingArg
+                            "no project module provides the names this expression needs"))
+        Just (Left err) -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) err))
+        Just (Right out) ->
+          let (capped, wasTruncated) = capOutput maxEvalBytes out
+          in pure
+              ( mkOk
+                  ( object
+                      [ "output" .= capped
+                      , "truncated" .= wasTruncated
+                      , "backend" .= ("ghcide" :: Text)
+                      ]
+                  )
               )
-          )
 
 handleType :: Value -> IdeSession -> IO ToolResponse
 handleType raw s = case argField "expression" raw of
   Left err -> pure (mkFailed (mkErrorEnvelope MissingArg (T.pack err)))
-  Right expr -> do
-    anchors <- anchorChain s
-    warmAnchors s anchors
-    r0 <- firstRight
-      [ ideTypeOfExprIn s (EvalArgs a [] False) expr | a <- anchors ]
-    case r0 of
-      Just (Right ty) -> pure (mkOk (object ["type" .= ty, "backend" .= ("ghcide" :: Text)]))
-      Just (Left err) -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) err))
-      Nothing -> do
-        anchor <- anchorModuleIn s
-        r <- ideTypeOfExprIn s (EvalArgs anchor [] False) expr
-        case r of
-          Right ty -> pure (mkOk (object ["type" .= ty, "backend" .= ("ghcide" :: Text)]))
-          Left err -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) err))
+  -- Same boundary as 'handleEval': the parser DoS the eval cap closes
+  -- is reachable through inspect(type) otherwise ('exprType' parses
+  -- the whole expression with no cap of its own).
+  Right expr -> case sanitizeExpression expr of
+    Left cmdErr ->
+      pure . Env.mkRefused $ Env.sanitizeRejection "expression" cmdErr
+    Right safe -> do
+      anchors <- anchorChain s
+      warmAnchors s anchors
+      r0 <- firstRight evalRetry
+        [ ideTypeOfExprIn s (EvalArgs a ["System.IO"] False) safe | a <- anchors ]
+      case r0 of
+        Just (Right ty) -> pure (mkOk (object ["type" .= ty, "backend" .= ("ghcide" :: Text)]))
+        Just (Left err) -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) err))
+        Nothing -> do
+          anchor <- anchorModuleIn s
+          r <- ideTypeOfExprIn s (EvalArgs anchor [] False) safe
+          case r of
+            Right ty -> pure (mkOk (object ["type" .= ty, "backend" .= ("ghcide" :: Text)]))
+            Left err -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) err))
 
 --------------------------------------------------------------------------------
 -- ghc_property(action=check) — QuickCheck via the session
@@ -642,7 +728,7 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
                , anchorArg /= Nothing
                , a /= pdNow </> fromMaybe "" anchorArg ]
     let runChain =
-          firstRight
+          firstRight scopeRetry
             [ ideEvalExprIn s (EvalArgs a (importsFor a) True) expr | a <- anchors ]
     r <- runChain
     -- Cross-component transient (the Mutation-scenario family):
@@ -670,7 +756,7 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
         -- B-6: a missing Arbitrary instance gets its honest taxonomy
         -- (missing_instance, not compile_error) so the nextStep
         -- steering routes to the arbitrary-template action.
-        let missingArb = "No instance for (Arbitrary" `T.isInfixOf` err
+        let missingArb = missingInstanceFor "Arbitrary" err
             kind
               | missingArb = MissingInstance
               | otherwise  = budgetErrorKind err
@@ -895,7 +981,7 @@ replayProp pdRef s p = do
       anchorArg = T.unpack <$> spModule p
   anchors <- anchorCandidates pdRef anchorArg
   warmAnchors s anchors
-  r <- firstRight
+  r <- firstRight scopeRetry
     [ ideEvalExprIn s (EvalArgs a ["Test.QuickCheck", "System.IO.Unsafe"] True) (qcExpr prop 1)
     | a <- anchors
     ]

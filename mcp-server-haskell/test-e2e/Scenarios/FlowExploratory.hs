@@ -156,17 +156,10 @@ runFlow c projectDir = do
   -- "no doc" graceful fallback (older 'base' is built without
   -- Haddock on some distributions).
   --------------------------------------------------------------------
-  t6 <- stepHeader 7 "ghc_doc on Prelude.map"
-  docR <- Client.callTool c GhcInspect
-            (object [ "action" .= ("doc" :: Text), "name" .= ("map" :: Text) ])
-  c7 <- liveCheck $ checkJsonFieldMatches
-          "ghc_doc(map) returns success (with text OR graceful miss)"
-          docR "success" (\v -> v == Bool True)
-          "ghc_doc should always answer 'success': true, even when the \
-          \docs are unavailable (returns a 'hint' in that case)"
-  stepFooter 7 t6
+  -- (7) ghc_inspect(action=doc) was CUT from the compact 12-tool
+  -- surface (hoogle covers docs); its step went with it.
 
-  pure [c1, c2a, c2b, c3, c4a, c4b, c5, c6, c7]
+  pure [c1, c2a, c2b, c3, c4a, c4b, c5, c6]
 
 --------------------------------------------------------------------------------
 -- small predicates used by the flow

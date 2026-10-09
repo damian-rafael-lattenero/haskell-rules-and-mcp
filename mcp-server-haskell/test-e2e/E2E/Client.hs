@@ -33,6 +33,7 @@ module E2E.Client
   ) where
 
 import Control.Exception (SomeException, throwIO, try)
+import Control.Monad (filterM)
 import qualified Data.Aeson as A
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson.KeyMap as KeyMap
@@ -41,7 +42,9 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import System.Environment (lookupEnv)
+import System.Directory (doesFileExist)
+import System.Environment (getExecutablePath, lookupEnv)
+import System.FilePath (takeDirectory, (</>))
 import System.IO (hFlush, stdout)
 import System.Process (readProcessWithExitCode)
 import qualified Data.Vector as V
@@ -175,12 +178,46 @@ _unused o = V.fromList (KeyMap.elems o)
 -- test. Preference order:
 --   1. @HASKELL_FLOWS_MCP_BIN@ env var (explicit override).
 --   2. @cabal list-bin exe:haskell-flows-mcp@.
+-- | Candidate MCP-binary paths derived (purely) from this test
+-- binary's own location in the dist-newstyle tree. Cabal's layout
+-- (cabal docs, "Developing packages" — dist-newstyle\/build\/<arch>\/
+-- <compiler>\/<pkg>-<ver>\/…):
+--
+--   executables:  x\/<exe-name>\/build\/<exe-name>\/<exe-name>
+--   test-suites:  t\/<suite-name>\/build\/<suite-name>\/<suite-name>
+--
+-- so from the e2e suite binary FIVE 'takeDirectory's reach the
+-- package dir hosting both @t\/@ and @x\/@. (Four only reach @t\/@ —
+-- where no executable ever lives; that was the dead-branch bug.) The
+-- @t\/@ candidate is kept as a defensive variant only.
+siblingCandidates :: FilePath -> [FilePath]
+siblingCandidates selfExe =
+  [ pkgDir </> "x" </> exeLayout, pkgDir </> "t" </> exeLayout ]
+  where
+    pkgDir = iterate takeDirectory selfExe !! 5
+    exeLayout =
+      "haskell-flows-mcp" </> "build" </> "haskell-flows-mcp"
+        </> "haskell-flows-mcp"
+
 findMcpBinaryPath :: IO FilePath
 findMcpBinaryPath = do
   mEnv <- lookupEnv "HASKELL_FLOWS_MCP_BIN"
   case mEnv of
     Just p  -> pure p
     Nothing -> do
+      -- CWD-INDEPENDENT resolution first: the e2e and mcp binaries
+      -- are siblings in the same dist-newstyle tree, and by the time
+      -- late scenarios run, leaked setCurrentDirectory calls from
+      -- ghcide sessions have moved the process cwd to a temp project
+      -- (where `cabal list-bin` dies).
+      selfExe <- getExecutablePath
+      candidates <- filterM doesFileExist (siblingCandidates selfExe)
+      case candidates of
+        (p : _) -> pure p
+        []      -> cabalFallback
+  where
+    trim = T.unpack . T.strip . T.pack
+    cabalFallback = do
       (_ec, out, _err) <-
         readProcessWithExitCode "cabal"
           ["list-bin", "exe:haskell-flows-mcp"] ""
@@ -191,5 +228,3 @@ findMcpBinaryPath = do
           \HASKELL_FLOWS_MCP_BIN or run under a cabal build with \
           \`build-tool-depends`. Raw `cabal list-bin` output: "
           <> out))
-  where
-    trim = T.unpack . T.strip . T.pack
