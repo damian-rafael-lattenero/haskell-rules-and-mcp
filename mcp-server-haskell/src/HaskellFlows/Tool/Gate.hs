@@ -58,6 +58,7 @@ import System.Process
 import System.Timeout (timeout)
 
 import HaskellFlows.Config (defaultLimits, gateOutputCapBytes)
+import HaskellFlows.Util.Process (capOutput)
 import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
 import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
@@ -387,8 +388,8 @@ cabalStep pd args = do
              , std_err = CreatePipe
              }
   (ec, outStr, errStr) <- readCreateProcessWithExitCode cp ""
-  let o = T.take outputCap (T.pack outStr)
-      e = T.take outputCap (T.pack errStr)
+  let (o, oTr) = capOutput outputCap (T.pack outStr)
+      (e, eTr) = capOutput outputCap (T.pack errStr)
       passed = ec == ExitSuccess
       detail = object
         [ "command"  .= ("cabal " <> T.unwords (map T.pack args))
@@ -397,13 +398,15 @@ cabalStep pd args = do
                            ExitFailure n -> n)
         , "stdout"   .= o
         , "stderr"   .= e
+        , "stdoutTruncated" .= oTr
+        , "stderrTruncated" .= eTr
         ]
   pure (passed, detail)
 
 -- | Issue #75: cap each captured stream at 256 KiB. Sourced from Config.
--- The cabal output rarely exceeds this on green builds; on red ones the
--- tail is the actionable bit and the leading repeat-cycles of
--- the build chatter add no signal.
+-- The cap goes through the shared 'capOutput' law so the truncation
+-- flags are honest — a red build's chatter gets cut, and the report
+-- says so instead of silently presenting a prefix as the whole stream.
 outputCap :: Int
 outputCap = gateOutputCapBytes defaultLimits
 

@@ -272,6 +272,7 @@ import HaskellFlows.Parser.Cabal
   , stanzaHeaderOf
   )
 import HaskellFlows.Tool.IdeBacked (moduleKeyOf)
+import HaskellFlows.Util.Process (capOutput)
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
 import qualified HaskellFlows.Tool.Browse as BrowseTool
 import qualified HaskellFlows.Tool.Complete as CompleteTool
@@ -896,6 +897,7 @@ runAllTests = do
       , quickTest "prop_moduleKeyOf_dot_roundtrip"       prop_moduleKeyOf_dot_roundtrip
       , test "moduleKeyOf: absolute == relative; later marker wins"
                                                    testModuleKeyOfAbsRel
+      , quickTest "prop_capOutput_trunc_iff_cut"         prop_capOutput_trunc_iff_cut
       , test "load paths derive interactive imports from source" testLoadAutoImports
       , test "Deferred pass writes to MCP-private build dir"      testDeferredIsolatedOutputs
       , test "ghc_deps add: idempotent no-op returns unchanged"  testDepsAddIdempotent
@@ -1669,6 +1671,15 @@ testModuleKeyOfAbsRel = pure $ and
     -- no marker at all: the whole path (minus extension) is the key
   , moduleKeyOf "weird/Foo.hs" == "weird.Foo"
   ]
+
+-- | W5.3 — the single capping law: 'truncated' is True iff the
+-- output was actually cut, and the kept prefix is the cap-long head.
+prop_capOutput_trunc_iff_cut :: Int -> Text -> Property
+prop_capOutput_trunc_iff_cut cap t =
+  cap >= 0 ==>
+    let (capped, wasTr) = capOutput cap t
+    in (wasTr === (T.length t > cap))
+         .&&. (capped === T.take cap t)
 
 -- ---------------------------------------------------------------------------
 -- F2 — concurrent transport (HaskellFlows.Mcp.Transport)

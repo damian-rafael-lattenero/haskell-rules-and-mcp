@@ -66,6 +66,7 @@ import HaskellFlows.Ghc.IdeSession
   , ideTypeOfExprIn
   )
 import HaskellFlows.Parser.Cabal (projectModuleFilesFromCabal)
+import HaskellFlows.Util.Process (capOutput)
 import HaskellFlows.Mcp.Envelope qualified as Env
 import HaskellFlows.Mcp.Envelope
   ( ErrorKind (..)
@@ -706,13 +707,8 @@ checkProjectRows pd raw s absMods = do
 -- ghc_eval / ghc_inspect(type)
 --------------------------------------------------------------------------------
 
--- | Pure output cap so the invariant "'truncated' is True iff the
--- output was actually cut" holds by construction and is unit-testable
--- without a session.
-capOutput :: Int -> Text -> (Text, Bool)
-capOutput cap t
-  | T.length t > cap = (T.take cap t, True)
-  | otherwise        = (t, False)
+-- | Output capping lives in "HaskellFlows.Util.Process" ('capOutput')
+-- — the single law eval output and every subprocess stream share.
 
 handleEval :: Value -> IdeSession -> IO ToolResponse
 handleEval raw s = case argField "expression" raw of

@@ -8,6 +8,7 @@ module HaskellFlows.Util.Process
   ( SubprocessResult (..)
   , SubprocessOutcome (..)
   , runArgv
+  , capOutput
   ) where
 
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar, threadDelay, tryReadMVar)
@@ -25,18 +26,39 @@ import System.Process
   , waitForProcess
   )
 
-import HaskellFlows.Config (Micros (..))
+import HaskellFlows.Config (Micros (..), defaultLimits, gateOutputCapBytes)
 
 data SubprocessResult = SubprocessResult
-  { srExit   :: !ExitCode
-  , srStdout :: !Text
-  , srStderr :: !Text
+  { srExit           :: !ExitCode
+  , srStdout         :: !Text
+  , srStderr         :: !Text
+    -- | Honest truncation flags: True iff the stream was actually
+    -- cut by 'capOutput' — the invariant "'truncated' is True iff
+    -- the output was really cut" must hold by construction on
+    -- every captured surface, not just eval.
+  , srOutTruncated   :: !Bool
+  , srErrTruncated   :: !Bool
   } deriving (Eq, Show)
 
 data SubprocessOutcome
   = Completed !SubprocessResult
   | TimedOut
   deriving (Eq, Show)
+
+-- | Pure output cap so the invariant "'truncated' is True iff the
+-- output was actually cut" holds by construction and is unit-testable
+-- without a session. THE single capping law — eval output and every
+-- subprocess stream go through it.
+capOutput :: Int -> Text -> (Text, Bool)
+capOutput cap t
+  | T.length t > cap = (T.take cap t, True)
+  | otherwise        = (t, False)
+
+-- | Per-stream cap for every 'runArgv' child (hlint --json, hoogle,
+-- fourmolu, …): generous for legitimate tool output, hard-bound for
+-- hostile ones. Sourced from Config alongside the gate's own cap.
+subprocessOutputCap :: Int
+subprocessOutputCap = gateOutputCapBytes defaultLimits
 
 -- | Run @cmd args@ as a subprocess in argv-form (no shell interpolation).
 -- Captures both stdout and stderr on background threads. Terminates the
@@ -76,8 +98,12 @@ runArgv budget mCwd cmd args = do
     else do
       o <- takeMVar outVar
       e <- takeMVar errVar
+      let (oCapped, oTr) = capOutput subprocessOutputCap (T.pack o)
+          (eCapped, eTr) = capOutput subprocessOutputCap (T.pack e)
       pure $ Completed SubprocessResult
-        { srExit   = ec
-        , srStdout = T.pack o
-        , srStderr = T.pack e
+        { srExit         = ec
+        , srStdout       = oCapped
+        , srStderr       = eCapped
+        , srOutTruncated = oTr
+        , srErrTruncated = eTr
         }
