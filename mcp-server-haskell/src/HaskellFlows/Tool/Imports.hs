@@ -8,6 +8,8 @@ module HaskellFlows.Tool.Imports
   , parseImportsOutput
     -- * Exposed for unit tests
   , importsPayload
+    -- * W6 — Ghc query (shared with the ghcide backend)
+  , queryImports
   ) where
 
 import Control.Exception (SomeException, try)

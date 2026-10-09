@@ -74,6 +74,7 @@ import qualified HaskellFlows.Tool.Info as InfoTool
 import qualified HaskellFlows.Tool.Complete as CompleteTool
 import qualified HaskellFlows.Tool.Goto as GotoTool
 import qualified HaskellFlows.Tool.Browse as BrowseTool
+import qualified HaskellFlows.Tool.Imports as ImportsTool
 import HaskellFlows.Util.Process (capOutput)
 import HaskellFlows.Mcp.Envelope qualified as Env
 import HaskellFlows.Mcp.Envelope
@@ -170,6 +171,9 @@ routeIde ref pdRef storeRef tn args = case tn of
   GhcProperty
     | actionIs "check" args -> Just (withIdeSession ref pdRef (handlePropertyCheck pdRef storeRef (stripped args)))
     | actionIs "run" args -> Just (withIdeSession ref pdRef (handlePropertyRun pdRef storeRef))
+    | otherwise -> Nothing
+  GhcSession
+    | actionIs "imports" args -> Just (withIdeSession ref pdRef (handleSessionImports))
     | otherwise -> Nothing
   _ -> Nothing
 
@@ -978,6 +982,23 @@ handleInspectGoto raw s = case parseEither parseJSON raw of
                   Env.mkNoMatch (GotoTool.qualifiedPreloadPayload safe unqual loc)
                 _ -> Env.mkNoMatch (GotoTool.notInScopePayload safe)
             else pure (Env.mkNoMatch (GotoTool.notInScopePayload safe))
+
+--------------------------------------------------------------------------------
+-- ghc_session(action=imports) — interactive context read (W6)
+--------------------------------------------------------------------------------
+
+-- | The imports snapshot of the CURRENT interactive context. Under
+-- ghcide the context is rebuilt per eval (ideInteractiveIn sets
+-- IIModule anchor + preloads), so the #114 accumulation bug is
+-- structurally impossible — but the split (source vs the MCP's own
+-- preloads) and the rendering stay the legacy tool's pure code.
+handleSessionImports :: IdeSession -> IO ToolResponse
+handleSessionImports s = do
+  anchor <- inspectAnchor s
+  r <- ideInteractiveIn s (EvalArgs anchor [] False) ImportsTool.queryImports
+  pure $ case r of
+    Left err -> inspectQueryFail err
+    Right pair -> mkOk (ImportsTool.importsPayload pair)
 
 --------------------------------------------------------------------------------
 -- ghc_property(action=check) — QuickCheck via the session
