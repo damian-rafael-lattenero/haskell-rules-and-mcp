@@ -36,7 +36,7 @@ import Data.Aeson.Key (Key)
 import Data.Aeson.Types (parseEither)
 import Data.Function ((&))
 import Data.IORef (IORef, readIORef)
-import Data.List (foldl', isPrefixOf, isSuffixOf, minimumBy, sort)
+import Data.List (foldl', isPrefixOf, isSuffixOf, minimumBy, nubBy, sort)
 import Data.Ord (comparing)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -1062,13 +1062,25 @@ handleSuggest raw s = case parseEither parseJSON raw of
                   pure (SuggestTool.validationErr
                           ("Could not parse signature: " <> typeText))
                 Just sig -> do
-                  rSib <- ideInteractiveIn s (eaOf winAnchor)
-                            (SuggestTool.collectSiblingsContextual safe)
-                  -- Legacy parity: sibling-collection failure means
-                  -- no siblings, not a failed suggestion.
-                  let siblings = case rSib of
-                        Right xs -> xs
-                        Left _   -> []
+                  -- Legacy parity: the old engine walked the WHOLE
+                  -- module graph for siblings (BUG-03 fires on
+                  -- cross-module pairs like simplify/eval). One
+                  -- proven single-anchor query per project module
+                  -- (its own IIModule context), unioned and deduped
+                  -- by name.
+                  mCabal <- findCabalIn (isRoot s)
+                  cabal <- maybe (pure "") TIO.readFile mCabal
+                  let projFiles = projectModuleFilesFromCabal cabal
+                  sibResults <- mapM
+                    (\f -> do
+                       r <- ideInteractiveIn s
+                              (EvalArgs (isRoot s </> f)
+                                        (map T.pack evalContextExtras) False)
+                              (SuggestTool.collectSiblingsContextual safe)
+                       pure (case r of Right xs -> xs; Left _ -> []))
+                    projFiles
+                  let siblings =
+                        nubBy (\a b -> fst a == fst b) (concat sibResults)
                       ctx = RuleContext
                         { rcName = safe, rcSig = sig, rcSiblings = siblings }
                       matches = applyRulesCtx ctx
