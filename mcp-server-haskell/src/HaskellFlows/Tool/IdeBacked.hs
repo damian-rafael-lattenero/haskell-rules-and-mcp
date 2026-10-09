@@ -15,6 +15,7 @@ module HaskellFlows.Tool.IdeBacked
   , warmupIdeSession
   , withIdeSession
   , handlePropertyRun
+  , ReplayOutcome (..)
   , replayProp
   , replayStored
   ) where
@@ -97,12 +98,24 @@ withIdeSessionG ref pdRef k = do
       pure (Just s, s)
   k s
 
+-- | Typed replay outcome. 'ReplayLoadFailed' carries the
+-- compiler/eval error so the agent sees WHY a property never ran
+-- (#51: ghost identifiers must be visible in outcome.error, not
+-- silently folded into a regression with raw="").
+data ReplayOutcome
+  = ReplayPassed !Int
+    -- ^ All runs green; payload = number of runs.
+  | ReplayRegressed !Text
+    -- ^ QuickCheck worst-of state (failed / gave_up / …).
+  | ReplayLoadFailed !Text
+    -- ^ Never compiled or no session resolved — the error text.
+
 -- | Replay a batch of stored properties through the session.
 replayStored
   :: MVar (Maybe IdeSession)
   -> IORef ProjectDir
   -> [StoredProperty]
-  -> IO [(StoredProperty, Either Text (Maybe Int))]
+  -> IO [(StoredProperty, ReplayOutcome)]
 replayStored ref pdRef props =
   withIdeSessionG ref pdRef $ \s ->
     mapM (replayProp pdRef s) props
@@ -332,10 +345,37 @@ renderDiagsRaw = T.intercalate "\n\n" . map renderOne
                  <> ": " <> fld "severity" <> ": " <> code)
          <> T.pack (fld "message")
 
+-- | Classify load diagnostics (pure, unit-testable): typed holes
+-- (GHC-88464, "Found hole") surface as WARNINGS — the deferred-pass
+-- contract a GHCi user gets; without '-fdefer-typed-holes' GHC
+-- reports them as severity=error (GHC 9.12 User's Guide) — and
+-- GHC-58427 "is not loaded" artifacts of the pass are dropped
+-- whenever any other diagnostic exists (#57 / F-23: one entry per
+-- real problem, errors clean of internal echoes).
+classifyLoadDiags :: [Value] -> ([Value], [Value])
+classifyLoadDiags diags =
+  let errs0  = [d | d <- diags, isSevDiag "error" d]
+      warns0 = [d | d <- diags, isSevDiag "warning" d]
+      holes  = filter isHoleDiag errs0
+      errs1  = filter (not . isHoleDiag) errs0
+      real   = [d | d <- errs1, not (isDeferredArtifact d)]
+      errs2  = if null (real <> warns0 <> holes)
+                 then errs1   -- the artifact is the only signal: keep it
+                 else real
+  in (errs2, warns0 <> holes)
+
+-- | GHC-58427 ("<module> is not loaded") — an internal echo of the
+-- diagnostics pass, identified by its diagnostic code.
+isDeferredArtifact :: Value -> Bool
+isDeferredArtifact d =
+  let asText (Data.Aeson.String t) = Just t
+      asText _                     = Nothing
+  in any (maybe False ("58427" `T.isInfixOf`))
+       [ KM.lookup k (diagObj d) >>= asText | k <- ["code", "message"] ]
+
 loadShapeEnvelope :: Text -> Text -> [Value] -> ToolResponse
 loadShapeEnvelope action mp diags =
-  let errs = [d | d <- diags, isSev "error" d]
-      warns = [d | d <- diags, isSev "warning" d]
+  let (errs, warns) = classifyLoadDiags diags
       summary
         | not (null errs) =
             "Compile failed. " <> T.pack (show (length errs)) <> " error(s), "
@@ -357,10 +397,6 @@ loadShapeEnvelope action mp diags =
             ((mkErrorEnvelope CompileError summary)
                { Env.eeCause = Just "ghcide_diagnostics" })
             & \r -> r { Env.reResult = Just result }
-  where
-    isSev want d = KM.lookup "severity" (objOf d) == Just (Data.Aeson.String want)
-    objOf (Data.Aeson.Object o) = o
-    objOf _ = KM.empty
 
 handleCheckModule :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
 handleCheckModule pdRef raw s = case argField "module_path" raw of
@@ -746,9 +782,19 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
               runChain
       _ -> pure r
     case r' of
-      Nothing ->
+      Nothing -> do
+        -- Honest failure: re-run the LAST anchor once (no retry) to
+        -- surface the real error instead of a generic "could not
+        -- resolve" — the chain's per-anchor errors are otherwise
+        -- discarded on exhaustion and the agent is left blind.
+        lastErr <- case reverse anchors of
+          (a : _) -> either id (const "")
+            <$> ideEvalExprIn s (EvalArgs a ["Test.QuickCheck", "System.IO.Unsafe"] True)
+                                  (qcExpr prop runs)
+          [] -> pure "no anchor modules found under src/ or test/"
         pure (Env.mkUnavailable (mkErrorEnvelope Validation
-          "could not resolve a GHC session with QuickCheck for this property"))
+          ("could not resolve a GHC session with QuickCheck for this property — "
+             <> T.take 400 lastErr)))
       Just (Left err) ->
         -- Parity with the legacy QcUnparsed surface: a property that
         -- fails to compile must carry the compiler output in 'hint'
@@ -931,15 +977,18 @@ handlePropertyRun pdRef storeRef s = do
                 , "module" .= spModule p
                 , "outcome" .= object ["state" .= st]
                 ]
-            | (p, Left st) <- results
+            | (p, ReplayRegressed st) <- results
             ]
           loadFailed =
             [ object
                 [ "expression" .= spExpression p
                 , "module" .= spModule p
-                , "outcome" .= object ["state" .= ("load_failed" :: Text)]
+                , "outcome" .= object
+                    [ "state" .= ("load_failed" :: Text)
+                    , "error" .= err
+                    ]
                 ]
-            | (p, Right Nothing) <- results
+            | (p, ReplayLoadFailed err) <- results
             ]
           total = length props
           regressed = length regressions
@@ -974,8 +1023,8 @@ handlePropertyRun pdRef storeRef s = do
 
 -- | Replay one stored property. 'Right (Just n)' = passed n cases;
 -- 'Right Nothing' = no anchor could even scope the property
--- (load_failed); 'Left state' = it ran and regressed.
-replayProp :: IORef ProjectDir -> IdeSession -> StoredProperty -> IO (StoredProperty, Either Text (Maybe Int))
+-- (load_failed); 'ReplayRegressed' = it ran and regressed.
+replayProp :: IORef ProjectDir -> IdeSession -> StoredProperty -> IO (StoredProperty, ReplayOutcome)
 replayProp pdRef s p = do
   let prop = spExpression p
       anchorArg = T.unpack <$> spModule p
@@ -986,13 +1035,15 @@ replayProp pdRef s p = do
     | a <- anchors
     ]
   case r of
-    Nothing -> pure (p, Right Nothing)
-    Just (Left _) -> pure (p, Right Nothing)
+    Nothing ->
+      pure (p, ReplayLoadFailed
+        "could not resolve a GHC session with QuickCheck for this property")
+    Just (Left err) -> pure (p, ReplayLoadFailed err)
     Just (Right out) ->
       let worst = qcWorstOf 1 out
       in if worst == "passed"
-           then pure (p, Right (Just (qcNOf 1 out)))
-           else pure (p, Left worst)
+           then pure (p, ReplayPassed (qcNOf 1 out))
+           else pure (p, ReplayRegressed worst)
 
 -- | Strip the project-root prefix for response-facing paths.
 relativizeTo :: FilePath -> FilePath -> FilePath

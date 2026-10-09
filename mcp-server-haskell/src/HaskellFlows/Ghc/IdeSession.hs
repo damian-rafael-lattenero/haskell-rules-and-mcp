@@ -45,7 +45,8 @@ import Control.Monad (forever, forM, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value, object, (.=))
 import Data.Char (isSpace, toLower)
-import Data.List (find, isSuffixOf, sort)
+import Data.List (find, isSuffixOf, sort, sortOn)
+import Data.Ord (Down (..))
 import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -107,7 +108,7 @@ import Development.IDE.Main (Arguments (..), Command (..), IdeCommand (..), Log 
 import Development.IDE.Plugin (Plugin (..))
 import Ide.Plugin.Config (Config)
 import Control.Exception (displayException)
-import System.IO (stderr)
+import System.IO (hPutStrLn, stderr)
 import Development.IDE.Types.Diagnostics (DiagnosticSeverity (..), FileDiagnostic (..), _message, _range, _severity)
 import Development.IDE.Types.HscEnvEq (HscEnvEq (hscEnv))
 import Development.IDE.Types.HscEnvEq (HscEnvEq (hscEnv))
@@ -122,6 +123,8 @@ import GHC
   , exprType
   , getSession
   , getSessionDynFlags
+  , getProgramDynFlags
+  , setProgramDynFlags
   , moduleName
   , ms_hspp_opts
   , ms_mod
@@ -156,8 +159,8 @@ import GHC.Data.Bool (OverridingBool (Never))
 import qualified Development.IDE.GHC.Compat.Units as CUnits (unitState)
 import GHC.Data.FastString (mkFastString)
 import GHC.Unit.Types (GenUnit (RealUnit), UnitId, Definite (Definite))
-import GHC.Unit.Info (PackageName (PackageName))
-import GHC.Unit.State (lookupPackageName)
+import GHC.Unit.Info (PackageName (PackageName), unitId, unitPackageName, unitPackageVersion)
+import GHC.Unit.State (listUnitInfo)
 import Language.Haskell.Syntax.Module.Name (moduleNameString)
 import qualified GHC.Data.EnumSet as EnumSet
 import GHC.Driver.DynFlags
@@ -763,15 +766,26 @@ exposePackages' pkgs = do
   -- interactive ic_dflags ARE the session flags under
   -- 'modifyDynFlags' (ghcide's Util sets both).
   hsc <- getSession
-  df <- getSessionDynFlags
+  df <- getProgramDynFlags
   let us = CUnits.unitState hsc
-      -- Name-based -package exposure breaks with multiple installed
-      -- versions ("member of the hidden package QuickCheck-2.18/2.19")
-      -- — resolve the UnitId and expose -package-id instead.
+      -- GHC.Unit.State docs: 'lookupPackageName' only maps the
+      -- PREFERRED (exposed) unit per name — on a base-only scaffold
+      -- every store version is hidden ("member of the hidden
+      -- package QuickCheck-2.18/2.19"), so it misses entirely and a
+      -- name-based -package fallback is ambiguous across versions.
+      -- Enumerate ALL installed units (hidden included —
+      -- 'listUnitInfo' lists every installed unit) and expose the
+      -- highest version by its real UnitId instead.
+      installedFor n =
+        [ u | u <- listUnitInfo us
+            , unitPackageName u == PackageName (mkFastString n) ]
+      bestFor n = case sortOn (Down . show . unitPackageVersion) (installedFor n) of
+        (u : _) -> Just u
+        []      -> Nothing
       exposeFor n
-        | Just uid <- lookupPackageName us (PackageName (mkFastString n)) =
+        | Just u <- bestFor n =
             ExposePackage ("-package-id " <> n)
-              (UnitIdArg (RealUnit (Definite uid))) (ModRenaming True [])
+              (UnitIdArg (RealUnit (Definite (unitId u)))) (ModRenaming True [])
         | otherwise =
             ExposePackage ("-package " <> n) (PackageArg n) (ModRenaming True [])
       exposed =
@@ -779,7 +793,14 @@ exposePackages' pkgs = do
                 if any (isExposed n) acc then acc
                 else exposeFor (T.unpack n) : acc)
               (packageFlags df) pkgs
-  modifyDynFlags (\df -> df { packageFlags = exposed })
+  -- Program-level flags + re-init: package visibility is resolved
+  -- from the HscEnv's UnitState, which 'modifyDynFlags' (interactive
+  -- context only) never recomputes — the import would keep failing
+  -- with "member of the hidden package". 'setProgramDynFlags'
+  -- re-initialises the package database (and is the multi-unit-safe
+  -- program-granularity setter; 'setSessionDynFlags' panics).
+  _ <- setProgramDynFlags df { packageFlags = exposed }
+  pure ()
   where
     isExposed n (ExposePackage _ (PackageArg a) _) = a == T.unpack n
     isExposed _ _ = False

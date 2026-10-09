@@ -317,9 +317,9 @@ regressionStep store ideRef pdRef = do
   results <- IdeBacked.replayStored ideRef pdRef props
   let outcomes =
         [ (spExpression p, case o of
-              Left st      -> st
-              Right Nothing -> "load_failed"
-              Right (Just _) -> "passed")
+              IdeBacked.ReplayRegressed st  -> st
+              IdeBacked.ReplayLoadFailed _  -> "load_failed"
+              IdeBacked.ReplayPassed _      -> "passed")
         | (p, o) <- results
         ]
       failedOutcomes =
