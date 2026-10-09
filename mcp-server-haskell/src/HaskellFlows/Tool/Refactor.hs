@@ -37,6 +37,11 @@ module HaskellFlows.Tool.Refactor
     -- * Exposed for ghc_scratch(action="promote")
   , withSnapshot
   , commitResultWithDiff  -- W6.4: the ghcide snapshot reuses the payload law
+  , dryRunResult           -- W6.6: ghcide dry-run verify shares the law
+    -- * W6.6 — backend-neutral queries
+  , RefactorQueries (..)
+  , legacyRefactorQueries
+  , runHandle
   ) where
 
 import Control.Exception (SomeException, try)
@@ -270,10 +275,33 @@ handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   pd      <- teProjectDir env
-  runHandle ghcSess pd rawArgs
+  runHandle (legacyRefactorQueries ghcSess) pd
+            (Move.runHandle ghcSess pd) rawArgs
 
-runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResponse
-runHandle ghcSess pd rawArgs
+-- | Backend-neutral snapshot surface (W6.6). The rewrites themselves
+-- are pure text transforms; the only session-bound pieces are the
+-- snapshot-and-compile-verify and the post-edit cache invalidation.
+data RefactorQueries = RefactorQueries
+  { rqSnapshot   :: ModulePath
+                  -> Bool  -- ^ dry_run
+                  -> (Text -> IO (Either Text (Text, Value)))
+                  -> IO ToolResponse
+  , rqInvalidate :: IO ()
+    -- ^ legacy: invalidateLoadCache after the edit; ghcide: no-op
+    -- (the mtime rescan inside the snapshot re-reads disk anyway).
+  }
+
+legacyRefactorQueries :: GhcSession -> RefactorQueries
+legacyRefactorQueries ghcSess = RefactorQueries
+  { rqSnapshot   = withSnapshot ghcSess
+  , rqInvalidate = invalidateLoadCache ghcSess
+  }
+
+runHandle :: RefactorQueries
+          -> ProjectDir
+          -> (Value -> IO ToolResponse)  -- ^ move_symbol passthrough (W6.7)
+          -> Value -> IO ToolResponse
+runHandle q pd movePass rawArgs
   -- #154: 'list_actions' is a zero-arg discovery action — intercept
   -- it before the rename/extract parser so the caller does not need to
   -- supply module_path / new_name. Returns available action names and
@@ -287,15 +315,15 @@ runHandle ghcSess pd rawArgs
   -- #94 Phase C: 'move_symbol' is a passthrough to Move.handle.
   -- Intercepted before the rename/extract parser because its payload
   -- shape (symbol/from/to) doesn't match RefactorArgs.
-  | actionTextOf rawArgs == Just "move_symbol" = Move.runHandle ghcSess pd rawArgs
+  | actionTextOf rawArgs == Just "move_symbol" = movePass rawArgs
   | otherwise = case parseEither parseJSON rawArgs of
       Left parseError ->
         pure (errorResult (T.pack ("Invalid arguments: " <> parseError)))
       Right args -> case mkModulePath pd (T.unpack (raModulePath args)) of
         Left e   -> pure (pathTraversalResult (formatPathError e))
         Right mp -> do
-          r <- handleAction ghcSess mp args
-          invalidateLoadCache ghcSess
+          r <- handleAction q mp args
+          rqInvalidate q
           pure r
   where
     -- Peek at the 'action' field without committing to RefactorArgs's
@@ -308,17 +336,17 @@ runHandle ghcSess pd rawArgs
         _               -> Nothing
       _ -> Nothing
 
-handleAction :: GhcSession -> ModulePath -> RefactorArgs -> IO ToolResponse
-handleAction sess mp args = case raAction args of
-  ActRename  -> handleRename  sess mp args
-  ActExtract -> handleExtract sess mp args
+handleAction :: RefactorQueries -> ModulePath -> RefactorArgs -> IO ToolResponse
+handleAction q mp args = case raAction args of
+  ActRename  -> handleRename  q mp args
+  ActExtract -> handleExtract q mp args
 
 --------------------------------------------------------------------------------
 -- rename_local
 --------------------------------------------------------------------------------
 
-handleRename :: GhcSession -> ModulePath -> RefactorArgs -> IO ToolResponse
-handleRename sess mp args = case raOldName args of
+handleRename :: RefactorQueries -> ModulePath -> RefactorArgs -> IO ToolResponse
+handleRename q mp args = case raOldName args of
   Nothing  -> pure (errorResult "'old_name' is required for rename_local")
   Just old -> case validateIdentifier old of
     Left err -> pure (errorResult err)
@@ -327,7 +355,7 @@ handleRename sess mp args = case raOldName args of
       Right safeNew -> case (raScopeLineStart args, raScopeLineEnd args) of
         (Nothing, _) -> pure (errorResult "'scope_line_start' is required for rename_local")
         (_, Nothing) -> pure (errorResult "'scope_line_end' is required for rename_local")
-        (Just ls, Just le) -> withSnapshot sess mp (raDryRun args) $ \orig ->
+        (Just ls, Just le) -> rqSnapshot q mp (raDryRun args) $ \orig ->
           case renameInScope safeOld safeNew ls le orig of
             Left err -> pure (Left err)
             Right rr ->
@@ -350,13 +378,13 @@ renameSuccess old new rr =
 -- extract_binding
 --------------------------------------------------------------------------------
 
-handleExtract :: GhcSession -> ModulePath -> RefactorArgs -> IO ToolResponse
-handleExtract sess mp args = case validateIdentifier (raNewName args) of
+handleExtract :: RefactorQueries -> ModulePath -> RefactorArgs -> IO ToolResponse
+handleExtract q mp args = case validateIdentifier (raNewName args) of
   Left err -> pure (errorResult err)
   Right safeNew -> case (raScopeLineStart args, raScopeLineEnd args) of
     (Nothing, _) -> pure (errorResult "'scope_line_start' is required for extract_binding")
     (_, Nothing) -> pure (errorResult "'scope_line_end' is required for extract_binding")
-    (Just ls, Just le) -> withSnapshot sess mp (raDryRun args) $ \orig ->
+    (Just ls, Just le) -> rqSnapshot q mp (raDryRun args) $ \orig ->
       case extractBinding safeNew ls le orig of
         Left err -> pure (Left err)
         Right er -> pure (Right (erNewContent er, extractSuccess safeNew er ls le))

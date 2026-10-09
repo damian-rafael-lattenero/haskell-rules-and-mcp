@@ -195,6 +195,12 @@ routeIde ref pdRef storeRef scratchRef tn args = case tn of
     | actionIs "imports" args -> Just (withIdeSession ref pdRef (handleSessionImports))
     | otherwise -> Nothing
   GhcSuggest -> Just (withIdeSession ref pdRef (handleSuggest args))
+  GhcEdit
+    -- W6.6: rename/extract share Refactor.runHandle's action peek, so
+    -- the raw args (action included) go through unstripped.
+    | actionIs "rename_local"    args -> Just (withIdeSession ref pdRef (handleRefactorEdit pdRef args))
+    | actionIs "extract_binding" args -> Just (withIdeSession ref pdRef (handleRefactorEdit pdRef args))
+    | otherwise -> Nothing
   _ -> Nothing
 
 argField :: Key -> Value -> Either String Text
@@ -1123,7 +1129,7 @@ ideScratchQueries s = Scratch.ScratchQueries
       scratchQuery s mh (Scratch.queryExprTypeWithImports imports expr)
   , sqRunDecls = \mh imports code ->
       scratchQuery s mh (Scratch.runDeclsWithImports imports code)
-  , sqPromote  = ideWithSnapshot s
+  , sqPromote  = \mp cont -> ideWithSnapshot s mp False cont
   }
 
 scratchQuery
@@ -1150,17 +1156,18 @@ scratchAnchor s mh = case mh of
   where
     fallback = listToMaybe <$> anchorChain s
 
--- | ghcide's snapshot-and-compile-verify for scratch promote — the
--- same contract as 'Refactor.withSnapshot': read the target, run the
--- continuation, write the splice, verify by diagnostics diff (#50
--- \"no NEW error signatures\"), restore the original verbatim on
--- regression. ghcide's mtime invalidation ('ideDiagnosticsFor'
--- rescans for disk changes) replaces legacy's invalidateLoadCache.
+-- | ghcide's snapshot-and-compile-verify — the same contract as
+-- 'Refactor.withSnapshot': read the target, run the continuation,
+-- write the rewrite, verify by diagnostics diff (#50 \"no NEW error
+-- signatures\"), restore the original verbatim on regression.
+-- @dryRun=True@ verifies but ALWAYS restores (F-21). ghcide's mtime
+-- invalidation ('ideDiagnosticsFor' rescans for disk changes)
+-- replaces legacy's invalidateLoadCache.
 ideWithSnapshot
-  :: IdeSession -> ModulePath
+  :: IdeSession -> ModulePath -> Bool
   -> (Text -> IO (Either Text (Text, Value)))
   -> IO ToolResponse
-ideWithSnapshot s mp cont = do
+ideWithSnapshot s mp dryRun cont = do
   readRes <- try (TIO.readFile fp) :: IO (Either SomeException Text)
   case readRes of
     Left e ->
@@ -1186,14 +1193,25 @@ ideWithSnapshot s mp cont = do
                   postErrs    = filter ((== SevError) . geSeverity) postDiags
                   newErrs     = [ e | e <- postErrs
                                 , Refactor.errorKey e `elem` newErrSigs ]
-              if not (null newErrSigs)
+              -- F-21: dry-run restores the original even on success —
+              -- it is a read-only preview that also validates.
+              if dryRun
                 then do
                   _ <- try (TIO.writeFile fp orig) :: IO (Either SomeException ())
-                  pure (Refactor.compileFailResult False newErrs
-                          (T.intercalate "\n" (map geMessage newErrs))
-                          " — snapshot restored")
+                  if not (null newErrSigs)
+                    then pure (Refactor.compileFailResult True newErrs
+                            (T.intercalate "\n" (map geMessage newErrs))
+                            " — dry_run, original preserved; patch is invalid")
+                    else pure (Refactor.dryRunResult baseSuccess newContent)
                 else
-                  pure (Refactor.commitResultWithDiff baseSuccess preDiags postDiags)
+                  if not (null newErrSigs)
+                    then do
+                      _ <- try (TIO.writeFile fp orig) :: IO (Either SomeException ())
+                      pure (Refactor.compileFailResult False newErrs
+                              (T.intercalate "\n" (map geMessage newErrs))
+                              " — snapshot restored")
+                    else
+                      pure (Refactor.commitResultWithDiff baseSuccess preDiags postDiags)
   where
     fp = unModulePath mp
 
@@ -1212,7 +1230,15 @@ ghcErrorOfValue v = GhcError
   , geSeverity = if fieldOr "severity" ("" :: Text) == "error"
                    then SevError else SevWarning
   , geCode     = let c = fieldOr "code" ("" :: Text)
-                 in if T.null c then Nothing else Just c
+                     m = fieldOr "message" ("" :: Text)
+                 in if not (T.null c)
+                      then Just c
+                      -- ghcide's diagnostic Values carry no GHC-88464
+                      -- code — "Found hole:" in the message is the
+                      -- stable marker (same truth as Parser.Hole).
+                      else if "Found hole:" `T.isInfixOf` m
+                             then Just "GHC-88464"
+                             else Nothing
   , geMessage  = fieldOr "message" ""
   }
   where
@@ -1234,6 +1260,28 @@ handleScratch scratchRef pdRef raw s = do
   store <- readIORef scratchRef
   pd    <- readIORef pdRef
   Scratch.runHandle store (ideScratchQueries s) pd raw
+
+--------------------------------------------------------------------------------
+-- ghc_edit{rename_local, extract_binding} via ghcide (W6.6)
+--------------------------------------------------------------------------------
+
+-- | Refactor verbs on the ghcide backend: the rewrites are pure; the
+-- snapshot runs through 'ideWithSnapshot' (dryRun included), and the
+-- post-edit invalidation is a no-op — the snapshot's mtime rescan
+-- already re-reads disk on the next query.
+handleRefactorEdit :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
+handleRefactorEdit pdRef raw s = do
+  pd <- readIORef pdRef
+  let q = Refactor.RefactorQueries
+        { Refactor.rqSnapshot   = ideWithSnapshot s
+        , Refactor.rqInvalidate = pure ()
+        }
+      -- routeIde only sends rename_local / extract_binding here;
+      -- move_symbol keeps its legacy passthrough until W6.7.
+      unreachableMove _ =
+        pure (mkFailed (mkErrorEnvelope Validation
+                "move_symbol is not served on the ghcide route yet"))
+  Refactor.runHandle q pd unreachableMove raw
 
 --------------------------------------------------------------------------------
 -- ghc_property(action=arbitrary) — Arbitrary template via ghcide (W6.5)
