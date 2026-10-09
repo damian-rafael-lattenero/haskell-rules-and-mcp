@@ -34,7 +34,7 @@ import Data.Aeson.Key (Key)
 import Data.Aeson.Types (parseEither)
 import Data.Function ((&))
 import Data.IORef (IORef, readIORef)
-import Data.List (isPrefixOf, isSuffixOf, minimumBy, sort)
+import Data.List (foldl', isPrefixOf, isSuffixOf, minimumBy, sort)
 import Data.Ord (comparing)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -43,6 +43,7 @@ import qualified Data.Text.IO as TIO
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import System.Directory (doesFileExist, listDirectory)
+import System.IO (hPutStrLn, stderr)
 import System.FilePath (normalise, (</>))
 
 import HaskellFlows.Config (defaultLimits, determinismMaxRuns)
@@ -257,8 +258,13 @@ listHs dir = do
     Left _   -> pure []
     Right es -> pure (sort [dir </> e | e <- es, ".hs" `isSuffixOf` e])
 
+-- | Keep-first dedup: the EARLIEST occurrence wins, so an explicit
+-- given/target anchor stays ahead of the src\/test enumeration even
+-- when the same file appears in both (a foldr-prepend dedup keeps
+-- the LAST occurrence and silently demotes the given — that
+-- reordered the property chain into an ambiguous-import eval).
 dedup :: [FilePath] -> [FilePath]
-dedup = foldr (\x acc -> if x `elem` acc then acc else x : acc) []
+dedup = foldl' (\acc x -> if x `elem` acc then acc else acc ++ [x]) []
 
 -- | Anchor strategy (F3): the interactive context resolves a HOME
 -- module only when the anchor's 'GhcSessionDeps' preloaded it as a
@@ -680,7 +686,7 @@ checkProjectRows pd raw s absMods = do
         ]
       summaryText =
         T.pack (show okCount) <> "/" <> T.pack (show total)
-          <> " modules green."
+          <> " modules compile clean."
           <> (if not (null notFound)
                 then " (" <> T.pack (show (length notFound)) <> " not found)"
                 else "")
@@ -925,7 +931,7 @@ qcExpr prop runs =
        then "System.IO.Unsafe.unsafePerformIO (" <> qc <> " >>= \\r -> return (" <> renderR <> "))"
        else "System.IO.Unsafe.unsafePerformIO (mapM (const (" <> qc <> ")) [1 :: Int .."
             <> T.pack (show runs)
-            <> "] >>= \\rs -> return (concatMap (\\r -> \"RUN;\" : [" <> renderR <> "]) rs))"
+            <> "] >>= \\rs -> return (concatMap (\\r -> concat [\"RUN;\", " <> renderR <> "]) rs))"
 
 -- | Parse the rendered QuickCheck output into the legacy payload
 -- shape (@state@ / @passed@ / @counterexample@ / @runs@ / @stable@).
@@ -948,7 +954,14 @@ qcResponse prop runs out =
         , "passed" .= n
         , "backend" .= ("ghcide" :: Text)
         ]
-      withRuns = if runs >= 2 then base <> ["runs" .= runs, "stable" .= stable] else base
+      withRuns =
+        if runs >= 2
+          then base <> [ "runs" .= runs
+                       , "stable" .= stable
+                       , "summary" .= (T.pack (show n) <> " runs passed"
+                          <> (if stable then "" else " (unstable)" :: Text))
+                       ]
+          else base
       withCex =
         if worst == "failed" && not (T.null cex)
           then withRuns <> ["counterexample" .= cex]

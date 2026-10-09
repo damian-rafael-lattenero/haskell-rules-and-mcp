@@ -112,7 +112,7 @@ import System.IO (hPutStrLn, stderr)
 import Development.IDE.Types.Diagnostics (DiagnosticSeverity (..), FileDiagnostic (..), _message, _range, _severity)
 import Development.IDE.Types.HscEnvEq (HscEnvEq (hscEnv))
 import Development.IDE.Types.HscEnvEq (HscEnvEq (hscEnv))
-import Development.IDE.Types.Location (Position (..), Range (..), toNormalizedFilePath')
+import Development.IDE.Types.Location (Position (..), Range (..), fromNormalizedFilePath, toNormalizedFilePath')
 import GHC
   ( DynFlags (..)
   , Ghc
