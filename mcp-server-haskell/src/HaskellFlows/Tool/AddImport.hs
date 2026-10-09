@@ -12,6 +12,8 @@
 -- injected, or null) so callers can see what happened.
 module HaskellFlows.Tool.AddImport
   ( handle
+  , runHandle
+  , validateImportDecl  -- W6.7 (ghcide)
   , AddImportArgs (..)
   , renderImportLine
   , idiomaticAlias         -- B-2
@@ -34,7 +36,7 @@ import qualified Data.Foldable as F
 import Data.Text (Text)
 import qualified Data.Text as T
 
-import GHC (InteractiveImport (IIDecl), getContext, parseImportDecl, setContext)
+import GHC (Ghc, InteractiveImport (IIDecl), getContext, parseImportDecl, setContext)
 import System.Directory (findExecutable)
 
 import HaskellFlows.Config (Limits)
@@ -64,10 +66,15 @@ instance FromJSON AddImportArgs where
 handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
-  runHandle (teLimits env) ghcSess rawArgs
+  runHandle (teLimits env) (addImportToSession ghcSess) rawArgs
 
-runHandle :: Limits -> GhcSession -> Value -> IO ToolResponse
-runHandle lim ghcSess rawArgs = case parseEither parseJSON rawArgs of
+-- | W6.7: the only session-bound step (#146) — inject the top import
+-- candidate so subsequent evals see the name immediately. Injected as
+-- a function: the legacy backend splices the live GHCi context; the
+-- ghcide backend appends to the session's extra-import accumulator
+-- (consulted by every eval's context build).
+runHandle :: Limits -> (Text -> IO (Bool, Text)) -> Value -> IO ToolResponse
+runHandle lim inject rawArgs = case parseEither parseJSON rawArgs of
   Left err ->
     pure (Env.mkFailed
       ((Env.mkErrorEnvelope (parseErrorKind err)
@@ -110,7 +117,7 @@ runHandle lim ghcSess rawArgs = case parseEither parseJSON rawArgs of
         -- source file.
         mSessionResult <- case imports of
           []    -> pure Nothing
-          (i:_) -> Just <$> addImportToSession ghcSess i
+          (i:_) -> Just <$> inject i
         let sessionAdded = maybe False fst mSessionResult
             addedImport  = case mSessionResult of
               Just (True, importLine) -> toJSON importLine
@@ -144,6 +151,14 @@ runHandle lim ghcSess rawArgs = case parseEither parseJSON rawArgs of
         pure $ case imports of
           [] -> Env.mkNoMatch payload
           _  -> Env.mkOk payload
+
+-- | W6.7 (ghcide): parse-validate an import line in the caller's
+-- interactive context — the validation half of the #146 inject
+-- contract, shared by both backends' inject functions.
+validateImportDecl :: Text -> Ghc ()
+validateImportDecl importLine = do
+  _ <- parseImportDecl (T.unpack importLine)
+  pure ()
 
 -- | #146: inject @importLine@ into the live GHCi interactive context
 -- by parsing it with 'parseImportDecl' and prepending the result to

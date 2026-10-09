@@ -66,6 +66,8 @@ import HaskellFlows.Ghc.IdeSession
   , ideProjectDiagnostics
   , ideTypeOfExprIn
   , ideInteractiveIn
+  , ideExtraImports
+  , ideRecordExtraImport
   )
 import HaskellFlows.Parser.Cabal (projectModuleFilesFromCabal)
 import HaskellFlows.Parser.Hole (TypedHole (..), parseTypedHoles)
@@ -79,6 +81,8 @@ import qualified HaskellFlows.Tool.Suggest as SuggestTool
 import qualified HaskellFlows.Tool.Scratch as Scratch
 import qualified HaskellFlows.Tool.Refactor as Refactor
 import qualified HaskellFlows.Tool.Arbitrary as Arbitrary
+import qualified HaskellFlows.Tool.Move as Move
+import qualified HaskellFlows.Tool.AddImport as AddImport
 import qualified HaskellFlows.Data.Scratchpad as ScratchpadStore
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
 import HaskellFlows.Suggest.Rules (RuleContext (..), Suggestion (..), applyRulesCtx)
@@ -196,10 +200,13 @@ routeIde ref pdRef storeRef scratchRef tn args = case tn of
     | otherwise -> Nothing
   GhcSuggest -> Just (withIdeSession ref pdRef (handleSuggest args))
   GhcEdit
-    -- W6.6: rename/extract share Refactor.runHandle's action peek, so
-    -- the raw args (action included) go through unstripped.
+    -- W6.6/W6.7: rename/extract/move share Refactor.runHandle's
+    -- action peek, so the raw args (action included) go through
+    -- unstripped; AddImport parses its own action-free payload.
     | actionIs "rename_local"    args -> Just (withIdeSession ref pdRef (handleRefactorEdit pdRef args))
     | actionIs "extract_binding" args -> Just (withIdeSession ref pdRef (handleRefactorEdit pdRef args))
+    | actionIs "move_symbol"     args -> Just (withIdeSession ref pdRef (handleMoveEdit pdRef args))
+    | actionIs "import"          args -> Just (withIdeSession ref pdRef (handleEditImport (stripped args)))
     | otherwise -> Nothing
   _ -> Nothing
 
@@ -795,8 +802,9 @@ handleEval raw s = case argField "expression" raw of
       -- readFile renders the shown file contents). The pure wrap
       -- type-errors on IO actions ('No instance for `Show (IO …)'),
       -- which advances the chain to the fmap wrapper.
+      accImports <- ideExtraImports s
       r <- firstRight evalRetry
-        [ ideEvalActionIn s (EvalArgs a ["System.IO", "Control.Exception"] False) wrap
+        [ ideEvalActionIn s (EvalArgs a (accImports ++ ["System.IO", "Control.Exception"]) False) wrap
         | a <- anchors
         , wrap <- [ "Control.Exception.evaluate (show (" <> safe <> "))"
                   , "fmap show (" <> safe <> ")" ] ]
@@ -1040,7 +1048,10 @@ handleInspectGoto raw s = case parseEither parseJSON raw of
 handleSessionImports :: IdeSession -> IO ToolResponse
 handleSessionImports s = do
   anchor <- inspectAnchor s
-  r <- ideInteractiveIn s (EvalArgs anchor [] False) ImportsTool.queryImports
+  acc <- ideExtraImports s
+  -- the accumulated #146 imports ride in as context preloads so the
+  -- listing dedups them against whatever the context already holds
+  r <- ideInteractiveIn s (EvalArgs anchor acc False) ImportsTool.queryImports
   pure $ case r of
     Left err -> inspectQueryFail err
     Right pair -> mkOk (ImportsTool.importsPayload pair)
@@ -1282,6 +1293,44 @@ handleRefactorEdit pdRef raw s = do
         pure (mkFailed (mkErrorEnvelope Validation
                 "move_symbol is not served on the ghcide route yet"))
   Refactor.runHandle q pd unreachableMove raw
+
+--------------------------------------------------------------------------------
+-- ghc_edit{move_symbol, import} via ghcide (W6.7)
+--------------------------------------------------------------------------------
+
+-- | move_symbol on the ghcide backend: the slicing/rewriting is pure;
+-- the post-write verify reads the AFFECTED files' diagnostics (each
+-- ideDiagnosticsFor rescans mtime, so the graph re-typechecks with
+-- every write already on disk).
+handleMoveEdit :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
+handleMoveEdit pdRef raw s = do
+  pd <- readIORef pdRef
+  let q = Move.MoveQueries
+        { Move.mqVerifyClean = \written -> do
+            diagss <- mapM (ghcDiags s) written
+            pure (Right (filter ((== SevError) . geSeverity) (concat diagss)))
+        }
+  Move.runHandle q pd raw
+
+-- | edit(action=import) on the ghcide backend: hoogle lookup + the
+-- #146 contract — the top candidate is parse-validated in the anchor
+-- context and recorded in the session's import accumulator, which
+-- every subsequent eval and ghc_session(imports) consults.
+handleEditImport :: Value -> IdeSession -> IO ToolResponse
+handleEditImport raw s = do
+  let inject line = do
+        mAnchor <- scratchAnchor s Nothing
+        case mAnchor of
+          Nothing -> pure (False, "no project module to validate against")
+          Just a -> do
+            r <- ideInteractiveIn s (EvalArgs a [] False)
+                   (AddImport.validateImportDecl line)
+            case r of
+              Right () -> do
+                ideRecordExtraImport s line
+                pure (True, line)
+              Left err -> pure (False, evText err)
+  AddImport.runHandle defaultLimits inject raw
 
 --------------------------------------------------------------------------------
 -- ghc_property(action=arbitrary) — Arbitrary template via ghcide (W6.5)

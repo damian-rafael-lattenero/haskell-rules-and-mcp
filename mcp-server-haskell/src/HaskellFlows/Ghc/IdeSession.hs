@@ -41,6 +41,9 @@ module HaskellFlows.Ghc.IdeSession
   , ideInteractiveEnvFor
   , ideInteractiveIn
   , mkContext
+    -- * #146 — session-level import accumulator (W6.7)
+  , ideExtraImports
+  , ideRecordExtraImport
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -193,6 +196,11 @@ data IdeSession = IdeSession
   , isRoot     :: !FilePath
   , isEvalLock :: !(MVar ())
     -- ^ eval/type/property run serialized against the shared HscEnvEq:
+  , isExtraImports :: !(IORef [Text])
+    -- ^ #146 on ghcide: imports injected by ghc_edit(action=import).
+    -- Every eval's context build unions these in (the interactive
+    -- context is per-call here, so the accumulator IS the session
+    -- memory legacy's setContext provided).
   }
 
 -- | Boot a ghcide IdeState for the project. Forks 'defaultMain' with a
@@ -246,7 +254,8 @@ bootIdeSession pd = do
     Just st -> do
       _ <- dupTo savedStdout stdOutput
       lock <- newMVar ()
-      pure (IdeSession st root lock)
+      extras <- newIORef []
+      pure (IdeSession st root lock extras)
   where
     hang = forever (threadDelay 3_600_000_000)
 
@@ -614,6 +623,18 @@ ideInteractiveIn s ea act = do
     go mn = do
       setContext (IIModule (mkModuleName mn) : mkContext (eaImports ea))
       act
+
+-- | The session's accumulated imports (ghc_edit action=import, #146).
+ideExtraImports :: IdeSession -> IO [Text]
+ideExtraImports s = readIORef (isExtraImports s)
+
+-- | Record one import for every subsequent eval's context build
+-- (idempotent). Parse-validation is the caller's job — it needs an
+-- anchor, and anchoring lives where the anchor chain does.
+ideRecordExtraImport :: IdeSession -> Text -> IO ()
+ideRecordExtraImport s line =
+  atomicModifyIORef' (isExtraImports s)
+    (\xs -> (xs ++ [line | line `notElem` xs], ()))
 
 --------------------------------------------------------------------------------
 -- F3: interactive evaluation with the anchor module IN SCOPE

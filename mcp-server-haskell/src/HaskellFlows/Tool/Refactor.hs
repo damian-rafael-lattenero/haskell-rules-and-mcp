@@ -276,7 +276,7 @@ handle env rawArgs = do
   ghcSess <- teSession env
   pd      <- teProjectDir env
   runHandle (legacyRefactorQueries ghcSess) pd
-            (Move.runHandle ghcSess pd) rawArgs
+            (Move.runHandle (Move.legacyMoveQueries ghcSess) pd) rawArgs
 
 -- | Backend-neutral snapshot surface (W6.6). The rewrites themselves
 -- are pure text transforms; the only session-bound pieces are the

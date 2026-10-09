@@ -34,6 +34,9 @@ module HaskellFlows.Tool.Move
   ( handle
   , runHandle
   , MoveArgs (..)
+    -- * W6.7 — backend-neutral verify
+  , MoveQueries (..)
+  , legacyMoveQueries
     -- * Pure slicing helpers (exported for unit tests)
   , SliceResult (..)
   , sliceTopLevelBinding
@@ -98,19 +101,47 @@ handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   ghcSess <- teSession env
   pd      <- teProjectDir env
-  runHandle ghcSess pd rawArgs
+  runHandle (legacyMoveQueries ghcSess) pd rawArgs
 
-runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResponse
-runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
+-- | Backend-neutral verify surface (W6.7): after the writes land,
+-- confirm the affected modules compile. 'Left' = the verify machinery
+-- itself blew up (restore + report); 'Right' errs = the concrete
+-- error diagnostics of the affected files (empty = clean).
+newtype MoveQueries = MoveQueries
+  { mqVerifyClean :: [FilePath] -> IO (Either Text [GhcError])
+  }
+
+legacyMoveQueries :: GhcSession -> MoveQueries
+legacyMoveQueries sess = MoveQueries
+  { mqVerifyClean = \_written -> do
+      invalidateLoadCache sess
+      tgt <- firstLibraryOrTestSuite sess
+      eLoad <- try (loadForTarget sess tgt Strict)
+                 :: IO (Either SomeException (Bool, [GhcError]))
+      pure $ case eLoad of
+        Left ex ->
+          Left (T.pack ("loadForTarget exception: " <> show ex))
+        Right (ok, diags) ->
+          let errs = filter ((== SevError) . geSeverity) diags
+          in Right $ if ok
+               then errs
+               -- (False, []) would read as success downstream;
+               -- keep the load-failure signal honest
+               else errs <> [ GhcError "" 0 0 SevError Nothing
+                                "load reported failure" ]
+  }
+
+runHandle :: MoveQueries -> ProjectDir -> Value -> IO ToolResponse
+runHandle q pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (errorResult (T.pack ("Invalid arguments: " <> err)))
-  Right args -> runMove ghcSess pd args
+  Right args -> runMove q pd args
 
 --------------------------------------------------------------------------------
 -- orchestration
 --------------------------------------------------------------------------------
 
-runMove :: GhcSession -> ProjectDir -> MoveArgs -> IO ToolResponse
-runMove sess pd args = do
+runMove :: MoveQueries -> ProjectDir -> MoveArgs -> IO ToolResponse
+runMove q pd args = do
   let root    = unProjectDir pd
       fromAbs = root </> moduleNameToPath (maFrom args)
       toAbs   = root </> moduleNameToPath (maTo   args)
@@ -145,17 +176,17 @@ runMove sess pd args = do
                   Left e -> pure (errorResult
                     (T.pack ("Could not read destination: " <> show e)))
                   Right toBody ->
-                    proceedMove sess pd args fromAbs toAbs
+                    proceedMove q pd args fromAbs toAbs
                       fromBody toBody sliced
 
 readBody :: FilePath -> IO (Either SomeException Text)
 readBody p = try (TIO.readFile p)
 
 proceedMove
-  :: GhcSession -> ProjectDir -> MoveArgs
+  :: MoveQueries -> ProjectDir -> MoveArgs
   -> FilePath -> FilePath -> Text -> Text -> SliceResult
   -> IO ToolResponse
-proceedMove sess pd args fromAbs toAbs fromBody toBody sliced = do
+proceedMove q pd args fromAbs toAbs fromBody toBody sliced = do
   -- Phase 1 source-export update: if the source module's
   -- @module Foo (sym, …) where@ header carries an explicit export
   -- list with our symbol, drop the symbol from it. Otherwise the
@@ -215,11 +246,11 @@ proceedMove sess pd args fromAbs toAbs fromBody toBody sliced = do
                            <> T.intercalate ", " bareFiles )
   if maDryRun args
     then pure (dryRunResult args allWrites mWarn)
-    else doApply sess args allWrites mWarn
+    else doApply q args allWrites mWarn
 
 doApply
-  :: GhcSession -> MoveArgs -> [(FilePath, Text, Text)] -> Maybe Text -> IO ToolResponse
-doApply sess args allWrites mWarn = do
+  :: MoveQueries -> MoveArgs -> [(FilePath, Text, Text)] -> Maybe Text -> IO ToolResponse
+doApply q args allWrites mWarn = do
   appliedRef <- newIORef ([] :: [FilePath])
   outcome    <- writeAll appliedRef allWrites
   case outcome of
@@ -230,24 +261,19 @@ doApply sess args allWrites mWarn = do
              ("Could not write one of the files; rolled back: "
                 <> T.pack err))
     Right () -> do
-      invalidateLoadCache sess
-      tgt <- firstLibraryOrTestSuite sess
-      eLoad <- try (loadForTarget sess tgt Strict)
-                 :: IO (Either SomeException (Bool, [GhcError]))
+      let writtenPaths = [ p | (p, _, _) <- allWrites ]
+      v <- mqVerifyClean q writtenPaths
       done <- readIORef appliedRef
-      case eLoad of
-        Left ex -> do
+      case v of
+        Left exTxt -> do
           restoreAll allWrites done
           pure (verifyFailedResult args
-                  [GhcError "" 0 0 SevError Nothing
-                      (T.pack ("loadForTarget exception: " <> show ex))])
-        Right (ok, diags) ->
-          let errs = filter ((== SevError) . geSeverity) diags
-          in if ok && null errs
-               then pure (successResult args allWrites mWarn)
-               else do
-                 restoreAll allWrites done
-                 pure (verifyFailedResult args errs)
+                  [GhcError "" 0 0 SevError Nothing exTxt])
+        Right errs
+          | null errs -> pure (successResult args allWrites mWarn)
+          | otherwise -> do
+              restoreAll allWrites done
+              pure (verifyFailedResult args errs)
 
 writeAll
   :: IORef [FilePath]
