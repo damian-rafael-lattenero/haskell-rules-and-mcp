@@ -75,6 +75,10 @@ import qualified HaskellFlows.Tool.Complete as CompleteTool
 import qualified HaskellFlows.Tool.Goto as GotoTool
 import qualified HaskellFlows.Tool.Browse as BrowseTool
 import qualified HaskellFlows.Tool.Imports as ImportsTool
+import qualified HaskellFlows.Tool.Suggest as SuggestTool
+import HaskellFlows.Suggest.Rules (RuleContext (..), Suggestion (..), applyRulesCtx)
+import HaskellFlows.Parser.TypeSignature (parseSignature)
+import HaskellFlows.Tool.EvalContext (evalContextExtras)
 import HaskellFlows.Util.Process (capOutput)
 import HaskellFlows.Mcp.Envelope qualified as Env
 import HaskellFlows.Mcp.Envelope
@@ -175,6 +179,7 @@ routeIde ref pdRef storeRef tn args = case tn of
   GhcSession
     | actionIs "imports" args -> Just (withIdeSession ref pdRef (handleSessionImports))
     | otherwise -> Nothing
+  GhcSuggest -> Just (withIdeSession ref pdRef (handleSuggest args))
   _ -> Nothing
 
 argField :: Key -> Value -> Either String Text
@@ -257,12 +262,29 @@ firstRight advance (io : rest) = do
       | advance e -> firstRight advance rest
       | otherwise -> pure (Just (Left e))
 
+-- | All @.hs@ files under @dir@, RECURSING into subdirectories —
+-- module trees like @src/Expr/Pretty.hs@ live below the source
+-- root, and a flat listing never sees them (the nested-anchor gap:
+-- ghc_suggest exhausted an empty chain). Sorted per level for a
+-- deterministic chain order; dot-directories, dist-newstyle and
+-- depths beyond 6 are skipped.
 listHs :: FilePath -> IO [FilePath]
-listHs dir = do
-  r <- try (listDirectory dir) :: IO (Either SomeException [FilePath])
-  case r of
-    Left _   -> pure []
-    Right es -> pure (sort [dir </> e | e <- es, ".hs" `isSuffixOf` e])
+listHs = walk 0
+  where
+    walk depth dir
+      | depth > 6 = pure []
+      | otherwise = do
+          r <- try (listDirectory dir) :: IO (Either SomeException [FilePath])
+          case r of
+            Left _ -> pure []
+            Right es -> do
+              let sorted = sort es
+                  files  = [ dir </> e | e <- sorted, ".hs" `isSuffixOf` e ]
+                  dirs   = [ dir </> e | e <- sorted
+                           , not ("." `isPrefixOf` e)
+                           , e /= "dist-newstyle" ]
+              sub <- concat <$> mapM (walk (depth + 1)) dirs
+              pure (files <> sub)
 
 -- | Keep-first dedup: the EARLIEST occurrence wins, so an explicit
 -- given/target anchor stays ahead of the src\/test enumeration even
@@ -999,6 +1021,61 @@ handleSessionImports s = do
   pure $ case r of
     Left err -> inspectQueryFail err
     Right pair -> mkOk (ImportsTool.importsPayload pair)
+
+--------------------------------------------------------------------------------
+-- ghc_suggest (W6)
+--------------------------------------------------------------------------------
+
+-- | Rule-engine suggestion over the anchor chain. The legacy
+-- engine loaded the whole project into one context; under ghcide
+-- each candidate anchor carries its own component context (with
+-- the 'evalContextExtras' preloads so base names resolve). The
+-- chain advances on scope errors until SOME module provides the
+-- name — the winning anchor is also the sibling universe for the
+-- rule context (home-module interfaces are ghcide-memory only, so
+-- siblings come from the context, not the graph).
+handleSuggest :: Value -> IdeSession -> IO ToolResponse
+handleSuggest raw s = case parseEither parseJSON raw of
+  Left parseError -> pure (SuggestTool.formatParseError parseError)
+  Right args -> case sanitizeExpression (SuggestTool.saFunctionName args) of
+    Left cmdErr ->
+      pure . Env.mkRefused $ Env.sanitizeRejection "function_name" cmdErr
+    Right safe -> do
+      anchors <- anchorChain s
+      warmAnchors s anchors
+      let eaOf a = EvalArgs a (map T.pack evalContextExtras) False
+      rTy <- firstRight evalRetry
+        [ fmap (fmap (a,)) (ideInteractiveIn s (eaOf a) (SuggestTool.queryType safe))
+        | a <- anchors ]
+      case rTy of
+        Nothing ->
+          pure (SuggestTool.outOfScopeResult safe
+                  "no project module provides the names this function needs")
+        Just (Left err) ->
+          pure (SuggestTool.outOfScopeResult safe (evText err))
+        Just (Right (winAnchor, typeText))
+          | SuggestTool.isOutOfScope typeText ->
+              pure (SuggestTool.outOfScopeResult safe typeText)
+          | otherwise ->
+              case parseSignature typeText of
+                Nothing ->
+                  pure (SuggestTool.validationErr
+                          ("Could not parse signature: " <> typeText))
+                Just sig -> do
+                  rSib <- ideInteractiveIn s (eaOf winAnchor)
+                            (SuggestTool.collectSiblingsContextual safe)
+                  -- Legacy parity: sibling-collection failure means
+                  -- no siblings, not a failed suggestion.
+                  let siblings = case rSib of
+                        Right xs -> xs
+                        Left _   -> []
+                      ctx = RuleContext
+                        { rcName = safe, rcSig = sig, rcSiblings = siblings }
+                      matches = applyRulesCtx ctx
+                      filtered = case SuggestTool.saCategory args of
+                        Nothing -> matches
+                        Just c  -> filter ((c ==) . sCategory) matches
+                  pure (SuggestTool.successResult safe typeText sig filtered)
 
 --------------------------------------------------------------------------------
 -- ghc_property(action=check) — QuickCheck via the session

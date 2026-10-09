@@ -26,6 +26,13 @@ module HaskellFlows.Tool.Suggest
   , outOfScopeResult
     -- * Sibling-aware helpers (BUG-03)
   , gatherSiblings
+    -- * W6 — shared with the ghcide backend (IdeBacked)
+  , collectSiblingsContextual
+  , queryType
+  , isOutOfScope
+  , formatParseError
+  , validationErr
+  , successResult
   , parseShowModules
   , parseBrowseBindings
     -- * Exported for unit tests (#197)
@@ -50,6 +57,8 @@ import GHC
   , exprType
   , getModuleGraph
   , getModuleInfo
+  , getNamesInScope
+  , lookupName
   , mgModSummaries
   , modInfoExports
   , modInfoLookupName
@@ -382,6 +391,27 @@ collectSiblings focalName = do
           let occ = T.pack (occNameString (nameOccName nm))
               ty  = T.pack (showPprUnsafe (idType i))
           in Just (occ, ty)
+        _ -> Nothing
+
+-- | W6 contextual siblings (ghcide backend): read the names of the
+-- CURRENT interactive context instead of walking the module graph —
+-- home-module interfaces live in ghcide's memory where
+-- 'getModuleInfo' cannot load an .hi. With the anchor module in
+-- scope this enumerates exactly the module's top-level bindings.
+collectSiblingsContextual :: Text -> Ghc [(Text, ParsedSig)]
+collectSiblingsContextual focalName = do
+  names <- getNamesInScope
+  pairs <- mapM tryName names
+  pure . nubByName $
+    [ (nm, sig) | Just (nm, sig) <- pairs, nm /= focalName ]
+  where
+    tryName nm = do
+      mThing <- lookupName nm
+      pure $ case mThing of
+        Just (AnId i) ->
+          let occ = T.pack (occNameString (nameOccName nm))
+              ty  = T.pack (showPprUnsafe (idType i))
+          in (,) occ <$> parseSignature ty
         _ -> Nothing
 
 -- | Dedup a list of @(Text, a)@ by the first projection,
