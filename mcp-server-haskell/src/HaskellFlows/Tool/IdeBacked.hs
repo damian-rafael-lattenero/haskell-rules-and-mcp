@@ -240,13 +240,14 @@ evalRetry e = scopeRetry e
 
 -- | Run the anchor chain until one succeeds; @advance@ decides
 -- which errors move to the next candidate. Everything else is a
--- real error and stops the chain.
-firstRight :: (Text -> Bool) -> [IO (Either Text Text)] -> IO (Maybe (Either Text Text))
+-- real error and stops the chain. Parametric in the success type
+-- so callers can pair the result with its winning anchor.
+firstRight :: (Text -> Bool) -> [IO (Either Text a)] -> IO (Maybe (Either Text a))
 firstRight advance [] = pure Nothing
 firstRight advance (io : rest) = do
   v <- io
   case v of
-    Right txt -> pure (Just (Right txt))
+    Right x   -> pure (Just (Right x))
     Left e
       | advance e -> firstRight advance rest
       | otherwise -> pure (Just (Left e))
@@ -843,7 +844,8 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
                , a /= pdNow </> fromMaybe "" anchorArg ]
     let runChain =
           firstRight scopeRetry
-            [ ideEvalExprIn s (EvalArgs a (importsFor a) True) expr | a <- anchors ]
+            [ fmap (fmap (a,)) (ideEvalExprIn s (EvalArgs a (importsFor a) True) expr)
+            | a <- anchors ]
     r <- runChain
     -- Cross-component transient (the Mutation-scenario family):
     -- when a component is discovered mid-action, the graph restart
@@ -895,11 +897,15 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
                 , "hint" .= err
                 , "backend" .= ("ghcide" :: Text)
                 ]
+            steer
+              | missingArb =
+                  " Generate an instance template via ghc_property(action=arbitrary)."
+              | otherwise = ""
         in pure
-          ( (mkFailed (mkErrorEnvelope kind err))
+          ( (mkFailed (mkErrorEnvelope kind (err <> steer)))
               { Env.reResult = Just payload }
           )
-      Just (Right out) -> do
+      Just (Right (winner, out)) -> do
         -- Product contract parity with the legacy backend: a pass
         -- persists the law into the project's property store so
         -- ghc_property(action="run") / property_store(action="run")
@@ -907,7 +913,12 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
         -- caller's module argument when present.
         when (qcWorstOf runs out == "passed") $ do
           store <- readIORef storeRef
-          saveCases store prop moduleArgText (qcNOf runs out)
+          -- The store records where the property actually RESOLVED
+          -- (the winning anchor = its definition site) — a caller's
+          -- module hint may point elsewhere and break replay (the
+          -- scope-fix contract: prop defined in test/Spec.hs).
+          let defSite = T.pack (relativizeTo pdNow winner)
+          saveCases store prop (Just defSite) (qcNOf runs out)
         pure (qcResponse prop runs out)
   where
     objOf (Data.Aeson.Object o) = o
