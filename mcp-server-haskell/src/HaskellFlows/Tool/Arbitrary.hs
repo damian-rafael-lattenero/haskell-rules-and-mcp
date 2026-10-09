@@ -15,6 +15,10 @@
 module HaskellFlows.Tool.Arbitrary
   ( handle
   , ArbitraryArgs (..)
+    -- * W6.5 — ghcide reuse
+  , renderTyThing
+  , finishArbitrary
+  , formatParseError
   , renderTemplate
   , parseConstructors
   , parseTypeParams
@@ -123,13 +127,11 @@ runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
         Left ex ->
           pure (subprocessErr
                   ("loadForTarget failed: " <> T.pack (show ex)))
-        -- Issue #210: check the Bool — False means the module has
-        -- compile errors. Proceeding to renderTyThing would then
-        -- fail with a confusing not_in_scope on a type that IS
-        -- defined but wasn't loaded. Return a clear validation
-        -- error instead.
+        -- Issue #210: the module has compile errors — a type defined
+        -- there reads as not-in-scope, so surface the honest error
+        -- count instead of a confusing lookup failure.
         Right (False, loadErrs) ->
-          pure (compileFailedErr (length loadErrs))
+          finishArbitrary pd mTarget safe Nothing (length loadErrs)
         Right (True, _) -> do
           -- loadForTarget already primed the session with the
           -- correct stanza flags + setContext. Don't wrap in
@@ -141,51 +143,67 @@ runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
             Left ex ->
               pure (notInScopeErr
                       ("'" <> safe <> "' not in scope: " <> T.pack (show ex)))
-            -- Issue #218: getInfo returned Nothing after a successful
-            -- parseName + loadForTarget. This happens for GHC wired-in
-            -- primitives (Bool lives in ghc-prim which is not explicitly
-            -- listed in the stanza's -package-id flags; after
-            -- -hide-all-packages the lookup fails silently). Report a
-            -- clear validation error instead of the misleading "not in
-            -- scope" message.
-            Right Nothing ->
-              pure (validationErr
-                      ( "ghc_arbitrary cannot introspect '" <> safe <> "'. "
-                      <> "This happens for GHC wired-in primitives (Bool, "
-                      <> "Char, Int, Word, …) and type classes or type "
-                      <> "synonyms. These types already have Arbitrary "
-                      <> "instances in Test.QuickCheck — no template is "
-                      <> "needed." ))
-            Right (Just rendered)
-              | isOutOfScope rendered -> pure (notInScopeErr rendered)
-              | otherwise -> do
-                  let params = parseTypeParams rendered
-                  case parseConstructors rendered of
-                    []    -> pure (validationErr
+            Right mRendered ->
+              finishArbitrary pd mTarget safe mRendered 0
+
+-- | The full response cascade AFTER the session lookup — everything
+-- here is pure or plain file IO, so the ghcide backend (W6.5) runs
+-- the same shape with its own rendering pass.
+--
+-- @mRendered@: @Just@ the "data T = …" text when the session resolved
+-- the name; @Nothing@ when introspection failed. @errCount@: how many
+-- compile errors the project has right now (the #210 precheck —
+-- without it a type in a broken module reads as not-in-scope).
+finishArbitrary
+  :: ProjectDir    -- ^ project root (target_module writes)
+  -> Maybe Text    -- ^ optional target_module path
+  -> Text          -- ^ sanitized type name
+  -> Maybe Text    -- ^ rendered TyThing
+  -> Int           -- ^ current compile-error count
+  -> IO ToolResponse
+finishArbitrary pd mTarget safe mRendered errCount =
+  case mRendered of
+    Nothing
+      | errCount > 0 -> pure (compileFailedErr errCount)
+      -- Issue #218: getInfo Nothing on an otherwise clean project —
+      -- GHC wired-in primitives (Bool, Char, Int, Word, …) and type
+      -- classes / synonyms. These already have Arbitrary instances.
+      | otherwise    -> pure (validationErr
+                                ( "ghc_arbitrary cannot introspect '" <> safe <> "'. "
+                                <> "This happens for GHC wired-in primitives (Bool, "
+                                <> "Char, Int, Word, …) and type classes or type "
+                                <> "synonyms. These types already have Arbitrary "
+                                <> "instances in Test.QuickCheck — no template is "
+                                <> "needed." ))
+    Just rendered
+      | isOutOfScope rendered -> pure (notInScopeErr rendered)
+      | otherwise ->
+          let params = parseTypeParams rendered
+          in case parseConstructors rendered of
+               []    -> pure (validationErr
                               ( "No constructors parsed for '" <> safe
                               <> "'. It may be a GADT, typeclass, or type synonym — "
                               <> "those need a hand-written Arbitrary." ))
-                    ctors
-                      -- Issue #219: primitive-wrapping types (Int, Char,
-                      -- Word, …) expose unboxed constructors (I#, C#, W#)
-                      -- whose args are unboxed types (Int#, Char#). There
-                      -- is no Arbitrary Int# in QuickCheck, so the
-                      -- generated template would not compile. Detect and
-                      -- report instead of emitting broken code.
-                      | any hasUnboxedConstructor ctors ->
-                          pure (validationErr
-                                  ( "'" <> safe <> "' has unboxed-primop "
-                                  <> "constructors (e.g. I#, C#, W#). "
-                                  <> "ghc_arbitrary cannot generate a valid "
-                                  <> "template for these types. Use "
-                                  <> "'arbitraryBoundedIntegral' for integral "
-                                  <> "types or 'arbitraryUnicodeChar' for Char." ))
-                      | otherwise ->
-                          let tmpl = renderTemplate safe params ctors
-                          in case mTarget of
-                               Nothing   -> pure (successResult safe ctors tmpl)
-                               Just path ->
-                                 writeArbitraryModule pd path safe ctors tmpl
+               ctors
+                 -- Issue #219: primitive-wrapping types (Int, Char,
+                 -- Word, …) expose unboxed constructors (I#, C#, W#)
+                 -- whose args are unboxed types (Int#, Char#). There
+                 -- is no Arbitrary Int# in QuickCheck, so the
+                 -- generated template would not compile.
+                 | any hasUnboxedConstructor ctors ->
+                     pure (validationErr
+                             ( "'" <> safe <> "' has unboxed-primop "
+                             <> "constructors (e.g. I#, C#, W#). "
+                             <> "ghc_arbitrary cannot generate a valid "
+                             <> "template for these types. Use "
+                             <> "'arbitraryBoundedIntegral' for integral "
+                             <> "types or 'arbitraryUnicodeChar' for Char." ))
+                 | otherwise ->
+                     let tmpl = renderTemplate safe params ctors
+                     in case mTarget of
+                          Nothing   -> pure (successResult safe ctors tmpl)
+                          Just path ->
+                            writeArbitraryModule pd path safe ctors tmpl
 
 -- | Issue #90 Phase C: caller-side parse failure → status='failed'
 -- with kind='missing_arg' or 'type_mismatch' (Aeson FromJSON

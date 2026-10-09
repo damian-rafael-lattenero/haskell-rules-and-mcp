@@ -25,6 +25,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Tool.Arbitrary
   ( Constructor (..)
   , compileFailedErr
+  , finishArbitrary
   , hasRecursiveConstructor
   , hasUnboxedConstructor
   , isRecursiveArg
@@ -155,17 +156,21 @@ testArbitraryCompileFailShape =
 
 testArbitraryWiredInMessage :: IO Bool
 
+-- W6.5: the response cascade lives in 'finishArbitrary' (exported, no
+-- session needed) — pin the BEHAVIOUR instead of grepping the source.
 testArbitraryWiredInMessage = do
-  src <- TIO.readFile "src/HaskellFlows/Tool/Arbitrary.hs"
-  -- The new message must NOT say "not in scope"
-  let noOldMsg = not ("not in scope (getInfo=Nothing)" `T.isInfixOf` src)
-  -- The new message MUST mention "wired-in" or "introspect"
-  let hasNewMsg = "cannot introspect" `T.isInfixOf` src
-                || "wired-in" `T.isInfixOf` src
-  -- The Right Nothing branch must use validationErr not notInScopeErr
-  let usesValidation = "Right Nothing ->" `T.isInfixOf` src
-                     && "validationErr" `T.isInfixOf` src
-  pure (noOldMsg && hasNewMsg && usesValidation)
+  r <- finishArbitrary undefined Nothing "Bool" Nothing 0
+  let okWiredIn = Env.reStatus r == Env.StatusFailed
+               && renderContains r "cannot introspect"
+      -- a broken project (errCount > 0) routes to the #210 honest
+      -- compile error, never the misleading not-in-scope
+  r' <- finishArbitrary undefined Nothing "Bool" Nothing 3
+  let okBroken = Env.reStatus r' == Env.StatusFailed
+              && renderContains r' "compile error"
+  pure (okWiredIn && okBroken)
+  where
+    renderContains resp needle =
+      needle `T.isInfixOf` T.pack (show (Env.reError resp))
 
 -- | Issue #219: 'hasUnboxedConstructor' detects constructors whose
 -- name ends with '#' (I#, C#, W#, …). A constructor that does NOT

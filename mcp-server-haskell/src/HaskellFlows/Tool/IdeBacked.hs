@@ -78,6 +78,7 @@ import qualified HaskellFlows.Tool.Imports as ImportsTool
 import qualified HaskellFlows.Tool.Suggest as SuggestTool
 import qualified HaskellFlows.Tool.Scratch as Scratch
 import qualified HaskellFlows.Tool.Refactor as Refactor
+import qualified HaskellFlows.Tool.Arbitrary as Arbitrary
 import qualified HaskellFlows.Data.Scratchpad as ScratchpadStore
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
 import HaskellFlows.Suggest.Rules (RuleContext (..), Suggestion (..), applyRulesCtx)
@@ -187,6 +188,7 @@ routeIde ref pdRef storeRef scratchRef tn args = case tn of
     | otherwise -> Nothing
   GhcProperty
     | actionIs "check" args -> Just (withIdeSession ref pdRef (handlePropertyCheck pdRef storeRef (stripped args)))
+    | actionIs "arbitrary" args -> Just (withIdeSession ref pdRef (handlePropertyArbitrary pdRef (stripped args)))
     | actionIs "run" args -> Just (withIdeSession ref pdRef (handlePropertyRun pdRef storeRef))
     | otherwise -> Nothing
   GhcSession
@@ -1232,6 +1234,50 @@ handleScratch scratchRef pdRef raw s = do
   store <- readIORef scratchRef
   pd    <- readIORef pdRef
   Scratch.runHandle store (ideScratchQueries s) pd raw
+
+--------------------------------------------------------------------------------
+-- ghc_property(action=arbitrary) — Arbitrary template via ghcide (W6.5)
+--------------------------------------------------------------------------------
+
+-- | One 'Arbitrary.renderTyThing' query per anchor, each in that
+-- module's own IIModule context (the defining module resolves
+-- parseName); the first Just rendering wins. When nothing resolves,
+-- the #210 precheck distinguishes a broken project (compile errors →
+-- compileFailedErr) from an absent / wired-in type via the shared
+-- 'Arbitrary.finishArbitrary' cascade.
+handlePropertyArbitrary :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
+handlePropertyArbitrary pdRef raw s =
+  case parseEither parseJSON raw of
+    Left parseError ->
+      pure (Arbitrary.formatParseError parseError)
+    Right (Arbitrary.ArbitraryArgs tname mTarget) ->
+      case sanitizeExpression tname of
+        Left cmdErr ->
+          pure (Env.mkRefused (Env.sanitizeRejection "type_name" cmdErr))
+        Right safe -> do
+          pd <- readIORef pdRef
+          anchors <- anchorChain s
+          warmAnchors s anchors
+          results <- mapM
+            (\a -> ideInteractiveIn s (EvalArgs a [] False)
+                     (Arbitrary.renderTyThing safe))
+            anchors
+          case firstRendered results of
+            Just rendered ->
+              Arbitrary.finishArbitrary pd mTarget safe (Just rendered) 0
+            Nothing -> do
+              mCabal <- findCabalIn (unProjectDir pd)
+              cabal <- maybe (pure "") TIO.readFile mCabal
+              let projFiles = projectModuleFilesFromCabal cabal
+              rows <- ideProjectDiagnostics s (map (unProjectDir pd </>) projFiles)
+              let errCount = sum [ length (filter (isSevDiag "error") ds)
+                                 | (_, ds) <- rows ]
+              Arbitrary.finishArbitrary pd mTarget safe Nothing errCount
+  where
+    firstRendered []               = Nothing
+    firstRendered (r : rs) = case r of
+      Right (Just rendered) -> Just rendered
+      _                     -> firstRendered rs
 
 --------------------------------------------------------------------------------
 -- ghc_property(action=check) — QuickCheck via the session
