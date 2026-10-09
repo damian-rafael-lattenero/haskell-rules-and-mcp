@@ -7,22 +7,33 @@
 module HaskellFlows.Tool.Browse
   ( handle
   , parseBrowseOutput
+    -- * W6 — Ghc queries + payload shaping (shared with IdeBacked)
+  , BrowseArgs (..)
+  , queryBrowseGraph
+  , queryBrowseContextual
+  , queryBrowseFallback
+  , browsePayload
+  , moduleNotInGraphPayload
+  , moduleNotInGraphNextStep
+  , parseErrorKind
   ) where
 
 import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import Data.List (isPrefixOf)
+import Data.List (isPrefixOf, nub, sort)
 import Data.Text (Text)
 import qualified Data.Text as T
 
 import GHC
   ( Ghc
+  , InteractiveImport (IIDecl)
   , Module
   , Name
   , TyThing (AnId)
   , getModuleGraph
   , getModuleInfo
+  , getNamesInScope
   , lookupModule
   , lookupName
   , mgModSummaries
@@ -31,8 +42,10 @@ import GHC
   , moduleName
   , ms_hspp_file
   , ms_mod
+  , setContext
+  , simpleImportDecl
   )
-import GHC.Types.Name (nameOccName)
+import GHC.Types.Name (nameModule, nameOccName)
 import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.Var (varType)
 import GHC.Utils.Outputable (showPprUnsafe)
@@ -123,6 +136,22 @@ queryBrowseGraph projectRoot nm = do
   case matches of
     []      -> pure Nothing
     (m : _) -> browseModuleInfo m
+
+-- | W6 contextual browse (ghcide backend): put the target module's
+-- import in the interactive context and read the exports from the
+-- names in scope — the GHCi @:browse@ shape. 'getModuleInfo' returns
+-- Nothing for home modules whose interfaces ghcide holds only in
+-- memory (no .hi was ever written), so the graph path alone would
+-- render @Just []@ for them.
+queryBrowseContextual :: Text -> Ghc (Maybe [Text])
+queryBrowseContextual m = do
+  let wanted = mkModuleName (T.unpack m)
+  setContext [IIDecl (simpleImportDecl wanted)]
+  names <- getNamesInScope
+  let fromMod = [ n | n <- names, moduleName (nameModule n) == wanted ]
+  if null fromMod
+    then pure Nothing
+    else Just . sort . nub <$> traverse renderExport fromMod
 
 -- | #168 fallback: try the session's loaded package environment via
 -- 'lookupModule'.  Called only when 'queryBrowseGraph' returns

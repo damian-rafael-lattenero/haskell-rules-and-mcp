@@ -26,6 +26,7 @@ import Control.Exception (SomeException, try)
 import Control.Applicative ((<|>))
 import Control.Monad (filterM, void, when)
 import Data.Aeson (Value, object, withObject, (.=), (.:))
+import Data.Aeson (FromJSON (parseJSON))
 import qualified Data.ByteString as BS
 import qualified Data.Aeson
 import Data.List (isPrefixOf)
@@ -43,7 +44,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import System.Directory (doesFileExist, listDirectory)
+import System.Directory (canonicalizePath, doesFileExist, listDirectory)
 import System.IO (hPutStrLn, stderr)
 import System.FilePath (normalise, (</>))
 
@@ -64,8 +65,15 @@ import HaskellFlows.Ghc.IdeSession
   , ideModuleNameOf
   , ideProjectDiagnostics
   , ideTypeOfExprIn
+  , ideInteractiveIn
   )
 import HaskellFlows.Parser.Cabal (projectModuleFilesFromCabal)
+import HaskellFlows.Parser.Hole (TypedHole (..), parseTypedHoles)
+import HaskellFlows.Tool.Hole (HoleArgs (..), holesPayload, parseErrorKind)
+import qualified HaskellFlows.Tool.Info as InfoTool
+import qualified HaskellFlows.Tool.Complete as CompleteTool
+import qualified HaskellFlows.Tool.Goto as GotoTool
+import qualified HaskellFlows.Tool.Browse as BrowseTool
 import HaskellFlows.Util.Process (capOutput)
 import HaskellFlows.Mcp.Envelope qualified as Env
 import HaskellFlows.Mcp.Envelope
@@ -153,6 +161,11 @@ routeIde ref pdRef storeRef tn args = case tn of
   GhcEval -> Just (withIdeSession ref pdRef (handleEval args))
   GhcInspect
     | actionIs "type" args -> Just (withIdeSession ref pdRef (handleType (stripped args)))
+    | actionIs "hole" args -> Just (withIdeSession ref pdRef (handleInspectHole pdRef (stripped args)))
+    | actionIs "info" args -> Just (withIdeSession ref pdRef (handleInspectInfo (stripped args)))
+    | actionIs "browse" args -> Just (withIdeSession ref pdRef (handleInspectBrowse pdRef (stripped args)))
+    | actionIs "complete" args -> Just (withIdeSession ref pdRef (handleInspectComplete (stripped args)))
+    | actionIs "goto" args -> Just (withIdeSession ref pdRef (handleInspectGoto (stripped args)))
     | otherwise -> Nothing
   GhcProperty
     | actionIs "check" args -> Just (withIdeSession ref pdRef (handlePropertyCheck pdRef storeRef (stripped args)))
@@ -777,6 +790,194 @@ handleType raw s = case argField "expression" raw of
           case r of
             Right ty -> pure (mkOk (object ["type" .= ty, "backend" .= ("ghcide" :: Text)]))
             Left err -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) (evText err)))
+
+--------------------------------------------------------------------------------
+-- ghc_inspect(action=hole) — typed holes from ghcide diagnostics
+--------------------------------------------------------------------------------
+
+-- | W6 migration: the legacy engine loaded the module under
+-- @-fdefer-typed-holes@ and parsed the GHCi-style rendering of the
+-- captured diagnostics. ghcide's TypeCheck rule surfaces the SAME
+-- GHC-88464 \"Found hole\" diagnostics (the load path's
+-- 'classifyLoadDiags' already filters them), so the parse and the
+-- payload shaping are the legacy module's pure functions — only the
+-- session plumbing is gone.
+handleInspectHole :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
+handleInspectHole pdRef raw s = case parseEither parseJSON raw of
+  Left parseError ->
+    pure (mkFailed
+      ((mkErrorEnvelope (parseErrorKind parseError)
+          (T.pack ("Invalid arguments: " <> parseError)))
+            { Env.eeCause = Just (T.pack parseError) }))
+  Right (HoleArgs rawPath filt) -> do
+    pd <- readIORef pdRef
+    guarded <- guardModulePath pd (T.unpack rawPath) True
+    case guarded of
+      Left early -> pure early
+      Right absPath -> do
+        diags <- ideDiagnosticsFor s absPath
+        let rendered = renderDiagsRaw diags
+            allHoles = parseTypedHoles rendered
+            holes    = case filt of
+              Nothing -> allHoles
+              Just nm -> filter ((== nm) . thHole) allHoles
+            payload  = holesPayload rawPath holes
+        -- Issue #90 §3 + §6: zero holes maps to 'no_match' — the
+        -- question was well-formed, the answer is the empty set.
+        pure $ case holes of
+          [] -> Env.mkNoMatch payload
+          _  -> mkOk payload
+
+--------------------------------------------------------------------------------
+-- ghc_inspect(info|browse|complete|goto) — interactive GHC queries
+-- on the component of the anchor (W6)
+--------------------------------------------------------------------------------
+
+-- | The anchor every interactive inspect query runs against: the
+-- first source module under src/ (the scaffold's lib root).
+inspectAnchor :: IdeSession -> IO FilePath
+inspectAnchor = anchorModuleIn
+
+-- | Shared parse-failure shape of the migrated inspect verbs.
+inspectParseFail :: String -> ToolResponse
+inspectParseFail parseError =
+  mkFailed
+    ((mkErrorEnvelope (parseErrorKind parseError)
+        (T.pack ("Invalid arguments: " <> parseError)))
+          { Env.eeCause = Just (T.pack parseError) })
+
+-- | Shared GHC-API-failure shape (legacy parity: InternalError,
+-- exception text in message + cause).
+inspectQueryFail :: EvalError -> ToolResponse
+inspectQueryFail err =
+  mkFailed
+    ((mkErrorEnvelope InternalError ("GHC API error: " <> evText err))
+      { Env.eeCause = Just (evText err) })
+
+handleInspectInfo :: Value -> IdeSession -> IO ToolResponse
+handleInspectInfo raw s = case parseEither parseJSON raw of
+  Left parseError -> pure (inspectParseFail parseError)
+  Right (InfoTool.InfoArgs nm) -> case sanitizeExpression nm of
+    Left cmdErr ->
+      pure . Env.mkRefused $ Env.sanitizeRejection "name" cmdErr
+    Right safe -> do
+      anchor <- inspectAnchor s
+      r <- ideInteractiveIn s (EvalArgs anchor [] False)
+             (InfoTool.queryInfo safe)
+      pure $ case r of
+        -- Issue #87 + #90 parity: the resolution attempt happened
+        -- and didn't surface a binding — no_match, cause rides along.
+        Left err -> Env.mkNoMatch
+          (InfoTool.notInScopePayload safe (Just (evText err)))
+        Right Nothing -> Env.mkNoMatch (InfoTool.notInScopePayload safe Nothing)
+        Right (Just (pinfo, ctorPairs, methodPairs)) ->
+          Env.mkOk (InfoTool.successPayload pinfo ctorPairs methodPairs)
+
+handleInspectBrowse :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
+handleInspectBrowse pdRef raw s = case parseEither parseJSON raw of
+  Left parseError -> pure (inspectParseFail parseError)
+  Right (BrowseTool.BrowseArgs m) -> do
+    pd <- readIORef pdRef
+    -- Anchor at the browsed module's own file when the project
+    -- declares it: scoping the anchor bytecode-compiles THAT
+    -- module, which is what makes its interface visible to the
+    -- interactive queries (the single-anchor probe contract).
+    -- Foreign modules keep the generic src anchor and resolve
+    -- through the package-environment fallback. ghcide
+    -- canonicalizes module paths (/var → /private/var on macOS);
+    -- the graph-prefix filter in queryBrowseGraph only matches
+    -- when the root carries the same canonical shape.
+    root <- canonicalizePath (unProjectDir pd)
+    mCabal <- findCabalIn (unProjectDir pd)
+    cabal <- maybe (pure "") TIO.readFile mCabal
+    let own = listToMaybe
+          [ f | f <- projectModuleFilesFromCabal cabal
+              , moduleKeyOf (T.pack f) == m ]
+    anchor <- case own of
+      Just f  -> pure (unProjectDir pd </> f)
+      Nothing -> inspectAnchor s
+    r <- ideInteractiveIn s (EvalArgs anchor [] False)
+           (BrowseTool.queryBrowseGraph root m)
+    case r of
+      Left err -> pure (inspectQueryFail err)
+      -- An empty graph answer is NOT a real browse: the module was
+      -- in the graph but its interface isn't loadable in this HscEnv
+      -- (ghcide keeps home-module interfaces in memory). Fall
+      -- through to the contextual read like the Nothing case.
+      Right (Just entries) | not (null entries) ->
+        pure (mkOk (BrowseTool.browsePayload m entries))
+      Right _ -> do
+        -- W6: home modules whose interfaces live only in ghcide's
+        -- memory — read the exports from the interactive context.
+        r1' <- ideInteractiveIn s (EvalArgs anchor [] False)
+                 (BrowseTool.queryBrowseContextual m)
+        case r1' of
+          Right (Just entries) -> pure (mkOk (BrowseTool.browsePayload m entries))
+          _ -> do
+            -- #168 fallback: try the package environment.
+            r2 <- ideInteractiveIn s (EvalArgs anchor [] False)
+                    (BrowseTool.queryBrowseFallback m)
+            pure $ case r2 of
+              Right (Just entries) -> mkOk (BrowseTool.browsePayload m entries)
+              _ -> Env.withNextStep BrowseTool.moduleNotInGraphNextStep
+                     (Env.mkNoMatch (BrowseTool.moduleNotInGraphPayload m))
+
+handleInspectComplete :: Value -> IdeSession -> IO ToolResponse
+handleInspectComplete raw s = case parseEither parseJSON raw of
+  Left parseError -> pure (inspectParseFail parseError)
+  Right (CompleteTool.CompleteArgs prefix limit) ->
+    case sanitizeExpression prefix of
+      Left cmdErr ->
+        pure . Env.mkRefused $ Env.sanitizeRejection "prefix" cmdErr
+      Right safe -> do
+        anchor <- inspectAnchor s
+        r <- ideInteractiveIn s (EvalArgs anchor [] False)
+               (CompleteTool.queryCompletions safe)
+        case r of
+          Left err -> pure (inspectQueryFail err)
+          Right cands
+            -- #252: no in-scope matches + qualified prefix → the
+            -- module isn't imported; answer from the graph/env.
+            | null cands
+            , Just (qual, npfx) <- CompleteTool.splitQualifiedPrefix safe -> do
+                r2 <- ideInteractiveIn s (EvalArgs anchor [] False)
+                        (CompleteTool.queryQualifiedFallback qual npfx)
+                pure $ CompleteTool.renderCompletions prefix limit
+                  (case r2 of Right xs -> xs; Left _ -> [])
+            | otherwise ->
+                pure (CompleteTool.renderCompletions prefix limit cands)
+
+handleInspectGoto :: Value -> IdeSession -> IO ToolResponse
+handleInspectGoto raw s = case parseEither parseJSON raw of
+  Left parseError -> pure (inspectParseFail parseError)
+  Right (GotoTool.GotoArgs nm) -> case sanitizeExpression nm of
+    Left cmdErr ->
+      pure . Env.mkRefused $ Env.sanitizeRejection "name" cmdErr
+    Right safe -> do
+      anchor <- inspectAnchor s
+      r <- ideInteractiveIn s (EvalArgs anchor [] False)
+             (GotoTool.queryLocation safe)
+      case r of
+        Left err -> pure (inspectQueryFail err)
+        Right (Just loc) -> pure $
+          -- Issue #117: file locations → ok; library locations →
+          -- no_match with the reason in the payload.
+          case loc of
+            GotoTool.InFile {}   -> mkOk (GotoTool.locationPayload safe loc)
+            GotoTool.InModule {} -> Env.mkNoMatch (GotoTool.locationPayload safe loc)
+        Right Nothing -> do
+          -- #224: qualified name? retry the unqualified suffix
+          -- against the session before the generic remediation.
+          let unqual = T.takeWhileEnd (/= '.') safe
+          if T.length unqual < T.length safe && not (T.null unqual)
+            then do
+              r2 <- ideInteractiveIn s (EvalArgs anchor [] False)
+                      (GotoTool.queryLocation unqual)
+              pure $ case r2 of
+                Right (Just loc) ->
+                  Env.mkNoMatch (GotoTool.qualifiedPreloadPayload safe unqual loc)
+                _ -> Env.mkNoMatch (GotoTool.notInScopePayload safe)
+            else pure (Env.mkNoMatch (GotoTool.notInScopePayload safe))
 
 --------------------------------------------------------------------------------
 -- ghc_property(action=check) — QuickCheck via the session

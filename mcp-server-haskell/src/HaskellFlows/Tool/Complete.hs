@@ -11,6 +11,10 @@ module HaskellFlows.Tool.Complete
   ( handle
   , CompleteArgs (..)
   , renderCompletions
+    -- * W6 — Ghc queries (shared with IdeBacked)
+  , queryCompletions
+  , queryQualifiedFallback
+  , parseErrorKind
     -- * #252 (exported for unit tests)
   , splitQualifiedPrefix
   ) where

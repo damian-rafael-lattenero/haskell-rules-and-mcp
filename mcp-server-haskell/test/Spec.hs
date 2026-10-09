@@ -844,6 +844,8 @@ runAllTests = do
                                                                  testRepairConstraintInSource
       , test "extractValidFits: HasCallStack wrap across continuation lines (#196)"
                                                                  testExtractValidFitsGhc912
+      , test "parseTypedHoles: bare-name fits (GHC 9.12, ghcide render)"
+                                                                 testBareNameFitsGhc912
       , test "parseSignature simple a -> a"         testSigSimple
       , test "parseSignature with constraint"       testSigConstraint
       , test "parseSignature list"                  testSigList

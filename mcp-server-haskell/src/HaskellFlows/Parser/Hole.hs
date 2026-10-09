@@ -116,8 +116,17 @@ looksLikeHeader ln =
           hasN1    = not (T.null n1) && not (T.null r1) && T.head r1 == ':'
       in hasN1 && let (n2, _) = T.span isDigit (T.drop 1 r1) in not (T.null n2)
 
+-- | A block is a typed-hole block when it carries the canonical
+-- \"Found hole:\" wording (stable across GHC versions — the marker
+-- the rendered diagnostic ALWAYS carries) or one of the
+-- machine-readable codes. The code alone is not enough: renderers
+-- that strip the code (ghcide's diagnostic Values) still carry the
+-- wording.
 isHoleBlock :: Text -> Bool
-isHoleBlock b = "GHC-88464" `T.isInfixOf` b || "Wtyped-holes" `T.isInfixOf` b
+isHoleBlock b =
+  "Found hole:" `T.isInfixOf` b
+    || "GHC-88464" `T.isInfixOf` b
+    || "Wtyped-holes" `T.isInfixOf` b
 
 parseHoleBlock :: Text -> Maybe TypedHole
 parseHoleBlock block = do
@@ -291,7 +300,16 @@ parseFitLine :: Text -> Maybe HoleFit
 parseFitLine l =
   let stripped = T.strip l
   in case T.breakOn "::" stripped of
-       (_, rest) | T.null rest -> Nothing
+       (_, rest) | T.null rest ->
+         -- GHC 9.12 renders a hole fit whose type is exactly the
+         -- hole's expected type as a BARE name — no signature. A
+         -- space-free identifier/operator line is such a fit; the
+         -- "(Some hole fits suppressed; …)" note and the refinement
+         -- candidates all contain spaces and stay out.
+         if not (T.null stripped) && not (T.any (== ' ') stripped)
+           then Just HoleFit
+                  { hfName = stripped, hfType = "", hfSource = Nothing }
+           else Nothing
        (nm, rest) ->
          let tyFull = T.strip (T.drop 2 rest)
              -- #169: use splitFitTypeSource instead of T.breakOn "("

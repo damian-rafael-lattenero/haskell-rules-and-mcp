@@ -7,6 +7,12 @@
 module HaskellFlows.Tool.Hole
   ( handle
   , HoleArgs (..)
+    -- * Pure payload shaping — shared with the ghcide backend
+    -- ('HaskellFlows.Tool.IdeBacked' serves action=hole since W6)
+  , holesPayload
+  , renderHole
+  , formatPathError
+  , parseErrorKind
   ) where
 
 import Control.Exception (SomeException, try)

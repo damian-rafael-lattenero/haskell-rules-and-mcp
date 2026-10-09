@@ -17,6 +17,7 @@
 --     Prelude IIDecl.
 --   * 'getDiagnostics' is STM.
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 
 module HaskellFlows.Ghc.IdeSession
@@ -38,6 +39,8 @@ module HaskellFlows.Ghc.IdeSession
   , ideModuleNameOf
   , ideProjectDiagnostics
   , ideInteractiveEnvFor
+  , ideInteractiveIn
+  , mkContext
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -585,6 +588,32 @@ mkContext extraImports =
   [ IIDecl (simpleImportDecl (mkModuleName (T.unpack e)))
   | e <- extraImports ++ ["Prelude"]
   ]
+
+-- | W6 general entry: run an arbitrary 'Ghc' interactive query in
+-- the component owning the anchor file — the same recipe as the
+-- eval entry points (scope the anchor so its module gets
+-- bytecode, resolve the component HscEnv, 30s budget, exception
+-- classification) so every migrated inspect verb shares one
+-- lifecycle. The anchor module is IN SCOPE ('IIModule') plus the
+-- args' extra imports — the callback is a plain query.
+ideInteractiveIn :: forall a. IdeSession -> EvalArgs -> Ghc a -> IO (Either EvalError a)
+ideInteractiveIn s ea act = do
+  nfp0 <- toNormalizedFilePath' <$> makeAbsolute (eaAnchor ea)
+  scopeAnchorForEval s nfp0
+  menv <- ideInteractiveEnvFor s nfp0 (eaQuickCheck ea)
+  case menv of
+    Left e -> pure (Left (classifyEvalError e))
+    Right (mn, hsc) -> do
+      attempted <- try (evalGhcEnv hsc (go mn)) :: IO (Either SomeException a)
+      fmap joinTimeout (timeout 30_000_000 (pure attempted))
+  where
+    joinTimeout Nothing = Left (EvalError ECTimeout "timeout after 30s")
+    joinTimeout (Just (Left e)) =
+      Left (classifyEvalError ("EXC: " <> T.pack (show e)))
+    joinTimeout (Just (Right v)) = Right v
+    go mn = do
+      setContext (IIModule (mkModuleName mn) : mkContext (eaImports ea))
+      act
 
 --------------------------------------------------------------------------------
 -- F3: interactive evaluation with the anchor module IN SCOPE

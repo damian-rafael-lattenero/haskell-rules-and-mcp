@@ -11,6 +11,11 @@
 module HaskellFlows.Tool.Info
   ( handle
   , InfoArgs (..)
+    -- * W6 — Ghc query + payload shaping (shared with IdeBacked)
+  , queryInfo
+  , notInScopePayload
+  , successPayload
+  , parseErrorKind
     -- * Issue #54 — constructor extraction helpers
   , successResult
   , renderConstructorsBlock

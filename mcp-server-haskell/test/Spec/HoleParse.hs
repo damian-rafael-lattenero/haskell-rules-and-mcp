@@ -15,6 +15,7 @@ module Spec.HoleParse
   , testSplitFitTypeNoAnnotation
   , testRepairConstraintInSource
   , testExtractValidFitsGhc912
+  , testBareNameFitsGhc912
   ) where
 
 import qualified Data.Text as T
@@ -255,3 +256,23 @@ testExtractValidFitsGhc912 =
            && not ("HasCallStack" `T.isInfixOf` fromMaybe "" (hfSource cycleFit))
            && not ("HasCallStack" `T.isInfixOf` fromMaybe "" (hfSource tailFit))
        _ -> pure False
+
+-- | W6: ghcide's diagnostic Values render GHC 9.12's hole fits as
+-- BARE names when the fit's type equals the hole's expected type
+-- (no "::" on the line). Those must parse as fits; the suppression
+-- note and refinement candidates (which contain spaces) must not.
+testBareNameFitsGhc912 :: IO Bool
+testBareNameFitsGhc912 =
+  let block = T.lines $ T.unlines
+        [ "  Valid hole fits include"
+        , "    addPair"
+        , "    mod"
+        , "    (-)"
+        , "    asTypeOf"
+        , "    (Some hole fits suppressed; use -fmax-valid-hole-fits=N)"
+        , "  Valid refinement hole fits include"
+        , "    const _"
+        ]
+      fits = extractValidFits block
+      names = map hfName fits
+  in pure $ names == ["addPair", "mod", "(-)", "asTypeOf"]

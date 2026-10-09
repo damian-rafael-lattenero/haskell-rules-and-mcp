@@ -12,6 +12,10 @@ module HaskellFlows.Tool.Goto
   , GotoArgs (..)
   , parseDefinedAt
   , Location (..)
+    -- * W6 — Ghc query + payload shaping (shared with IdeBacked)
+  , queryLocation
+  , notInScopePayload
+  , parseErrorKind
     -- * Issue #117 — exposed for unit tests
   , locationPayload
     -- * Issue #224 — exposed for unit tests
