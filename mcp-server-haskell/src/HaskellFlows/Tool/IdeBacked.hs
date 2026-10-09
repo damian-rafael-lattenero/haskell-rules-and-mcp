@@ -34,7 +34,8 @@ import Data.Aeson.Key (Key)
 import Data.Aeson.Types (parseEither)
 import Data.Function ((&))
 import Data.IORef (IORef, readIORef)
-import Data.List (isPrefixOf, isSuffixOf, sort)
+import Data.List (isPrefixOf, isSuffixOf, minimumBy, sort)
+import Data.Ord (comparing)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text.Encoding as TE
@@ -139,7 +140,7 @@ routeIde
   -> Maybe (IO ToolResponse)
 routeIde ref pdRef storeRef tn args = case tn of
   GhcCheck
-    | actionIs "module"  args -> Just (withIdeSession ref pdRef (handleCheckModule pdRef (stripped args)))
+    | actionIs "module"  args -> Just (withIdeSession ref pdRef (handleCheckModule pdRef storeRef (stripped args)))
     | actionIs "load"    args -> Just (withIdeSession ref pdRef (handleCheckLoad pdRef (stripped args)))
     | actionIs "project" args -> Just (withIdeSession ref pdRef (handleCheckProject pdRef (stripped args)))
     | otherwise -> Nothing
@@ -269,9 +270,14 @@ anchorCandidates :: IORef ProjectDir -> Maybe FilePath -> IO [FilePath]
 anchorCandidates pdRef mGiven = do
   pd <- unProjectDir <$> readIORef pdRef
   let given = map (pd </>) (maybe [] pure mGiven)
+  -- A stored NAME-shaped module key produces a path GUESS that may
+  -- not exist ("<root>/CheckPropDemo"); a nonexistent anchor's
+  -- rules abort with BadDependency and stop the whole chain. The
+  -- real src/test files follow anyway — keep only existing givens.
+  givenOk <- filterM doesFileExist given
   testHs <- listHs (pd </> "test")
   srcHs <- listHs (pd </> "src")
-  pure (dedup (given <> testHs <> srcHs))
+  pure (dedup (givenOk <> testHs <> srcHs))
 
 -- | Anchor chain for eval/type: src/ first (library names live
 -- there), then test/ (imports the library).
@@ -398,32 +404,98 @@ loadShapeEnvelope action mp diags =
                { Env.eeCause = Just "ghcide_diagnostics" })
             & \r -> r { Env.reResult = Just result }
 
-handleCheckModule :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
-handleCheckModule pdRef raw s = case argField "module_path" raw of
+handleCheckModule :: IORef ProjectDir -> IORef Store -> Value -> IdeSession -> IO ToolResponse
+handleCheckModule pdRef storeRef raw s = case argField "module_path" raw of
   Left err -> pure (mkFailed (mkErrorEnvelope MissingArg (T.pack err)))
   Right mp -> do
     pd <- readIORef pdRef
     guarded <- guardModulePath pd (T.unpack mp) True
     case guarded of
       Left refusal -> pure refusal
-      Right absPath -> handleCheckModuleAt pd mp absPath raw s
+      Right absPath -> handleCheckModuleAt pdRef storeRef mp absPath raw s
+
+-- | Canonical store key of a module (#74): the module NAME derived
+-- identically for absolute and relative inputs — "src/Foo.hs",
+-- "/root/src/Foo.hs", "test/Spec.hs", "src/Expr/S.hs" → Foo, Foo,
+-- Spec, Expr.S. The LATER of src\//test\// wins so nested trees keep
+-- their hierarchy. Pure — the single law writers and readers share.
+moduleKeyOf :: Text -> Text
+moduleKeyOf p0 =
+  let noExt = T.dropEnd 3 p0
+      after m = case T.breakOnEnd m noExt of
+        (pre, _) | not (T.null pre) -> Just (T.drop (T.length pre) noExt)
+        _ -> Nothing
+      -- the marker occurring LAST in the path leaves the SHORTEST
+      -- remainder
+      cands = [ r | Just r <- [after "src/", after "test/"] ]
+      base = case cands of
+        [] -> noExt
+        _  -> minimumBy (comparing T.length) cands
+  in T.replace "/" "." base
+
+-- | Normalised store-key identity (#74): a stored property's
+-- 'module' hint arrives as either a project-relative PATH
+-- ("src/GateDemo.hs") or a module NAME ("GateDemo"). Both writers
+-- and readers go through this one law, so the two shapes are
+-- interchangeable. Pure — unit-testable.
+propertyKeyMatches :: Text -> Maybe Text -> Bool
+propertyKeyMatches _ Nothing = False
+propertyKeyMatches targetName (Just k)
+  | ".hs" `T.isSuffixOf` k || "/" `T.isInfixOf` k =
+      moduleKeyOf k == targetName
+  | otherwise = k == targetName
 
 -- | Second half of the module check — runs with the guarded,
 -- absolute path.
-handleCheckModuleAt :: ProjectDir -> Text -> FilePath -> Value -> IdeSession -> IO ToolResponse
-handleCheckModuleAt pd mp absPath raw s = do
+handleCheckModuleAt :: IORef ProjectDir -> IORef Store -> Text -> FilePath -> Value -> IdeSession -> IO ToolResponse
+handleCheckModuleAt pdRef storeRef mp absPath raw s = do
+    pd <- readIORef pdRef
     diags <- ideDiagnosticsFor s absPath
+    -- #74/#42: the properties gate replays the stored properties
+    -- that belong to THIS module under the normalised key —
+    -- module-name-shaped and path-shaped entries both match.
+    let targetName = moduleKeyOf mp
+    store <- readIORef storeRef
+    allProps <- loadAll store
+    let mine = [ p | p <- allProps, propertyKeyMatches targetName (spModule p) ]
+    replayed <- mapM (replayProp pdRef s) mine
+    let propTotal   = length replayed
+        propPassed  = length [ () | (_, ReplayPassed _)    <- replayed ]
+        propFailed  = length [ () | (_, ReplayRegressed _) <- replayed ]
+        propUnload  = length [ () | (_, ReplayLoadFailed _) <- replayed ]
+        propOk      = propFailed == 0 && propUnload == 0
+        propGate
+          | propTotal == 0 =
+              moduleGate True "no stored properties for this module"
+          | propFailed > 0 =
+              moduleGate False (T.pack (show propFailed) <> " stored propert"
+                <> (if propFailed == 1 then "y regressed" else "ies regressed"))
+          | propUnload > 0 =
+              moduleGate False (T.pack (show propUnload) <> " stored propert"
+                <> (if propUnload == 1 then "y failed" else "ies failed")
+                <> " to load — replay via ghc_property(action=run) for the error")
+          | otherwise =
+              moduleGate True "stored properties pass"
+        moduleGate ok why = object
+          [ "ok" .= ok
+          , "reason" .= (why :: Text)
+          , "status" .= (if ok then "pass" else
+                           if propUnload > 0 then "skipped" :: Text
+                           else "failed" :: Text)
+          , "total" .= propTotal
+          , "passed" .= propPassed
+          ]
     -- Product contract (CheckModule.renderResult): overall + gates,
     -- with warnings_block (default True = warnings block).
     let warnBlock = case KM.lookup "warnings_block" (diagObj raw) of
                       Just (Data.Aeson.Bool b) -> b
-                      _                         -> True
+                      _                        -> True
         errs  = [d | d <- diags, isSevDiag "error" d]
         warns = [d | d <- diags, isSevDiag "warning" d]
         holes = [d | d <- diags, isHoleDiag d]
         compileOk = null errs
         overall = compileOk && (null warns || not warnBlock) && null holes
-        moduleGate ok why = object ["ok" .= ok, "reason" .= (why :: Text)]
+                  && propOk
         payload =
           [ "action"  .= ("module" :: Text)
           , "module_path" .= mp
@@ -445,7 +517,7 @@ handleCheckModuleAt pd mp absPath raw s = do
               , "holes"    .= moduleGate (null holes)
                   (if null holes then "no deferred typed holes"
                                  else T.pack (show (length holes)) <> " typed hole(s) found")
-              , "properties" .= moduleGate True "no stored properties replayed by check_module"
+              , "properties" .= propGate
               ]
           , "summary" .= (if overall then "Compiled OK." else "Module check failed." :: Text)
           ]
