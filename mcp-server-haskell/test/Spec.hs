@@ -1672,6 +1672,10 @@ testModuleKeyOfAbsRel = pure $ and
   , moduleKeyOf "src/test/Foo.hs" == "Foo"
     -- no marker at all: the whole path (minus extension) is the key
   , moduleKeyOf "weird/Foo.hs" == "weird.Foo"
+    -- markers are DIRECTORY names: a segment ending in "src"/"test"
+    -- is not one (substring matching here broke the dot round-trip)
+  , moduleKeyOf "src/Foo_src/Bar.hs" == "Foo_src.Bar"
+  , moduleKeyOf "Qc_test/Foo.hs" == "Qc_test.Foo"
   ]
 
 -- | W5.3 — the single capping law: 'truncated' is True iff the

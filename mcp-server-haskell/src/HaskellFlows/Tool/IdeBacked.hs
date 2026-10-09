@@ -36,8 +36,7 @@ import Data.Aeson.Key (Key)
 import Data.Aeson.Types (parseEither)
 import Data.Function ((&))
 import Data.IORef (IORef, readIORef)
-import Data.List (foldl', isPrefixOf, isSuffixOf, minimumBy, nubBy, sort)
-import Data.Ord (comparing)
+import Data.List (foldl', isPrefixOf, isSuffixOf, nubBy, sort)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text.Encoding as TE
@@ -453,19 +452,21 @@ handleCheckModule pdRef storeRef raw s = case argField "module_path" raw of
 -- "/root/src/Foo.hs", "test/Spec.hs", "src/Expr/S.hs" → Foo, Foo,
 -- Spec, Expr.S. The LATER of src\//test\// wins so nested trees keep
 -- their hierarchy. Pure — the single law writers and readers share.
+--
+-- Markers are DIRECTORY names: they match whole path segments only.
+-- A substring search would also trim inside a segment boundary —
+-- "src/Foo_src/Bar.hs" contains "src/" at the end of "Foo_src" —
+-- breaking the dot round-trip (prop_moduleKeyOf_dot_roundtrip).
 moduleKeyOf :: Text -> Text
 moduleKeyOf p0 =
   let noExt = T.dropEnd 3 p0
-      after m = case T.breakOnEnd m noExt of
-        (pre, _) | not (T.null pre) -> Just (T.drop (T.length pre) noExt)
-        _ -> Nothing
-      -- the marker occurring LAST in the path leaves the SHORTEST
-      -- remainder
-      cands = [ r | Just r <- [after "src/", after "test/"] ]
-      base = case cands of
-        [] -> noExt
-        _  -> minimumBy (comparing T.length) cands
-  in T.replace "/" "." base
+      segs  = T.splitOn "/" noExt
+      isMarker s = s == "src" || s == "test"
+      markerIdxs = [ i | (i, s) <- zip [0 :: Int ..] segs, isMarker s ]
+      base = case markerIdxs of
+        [] -> segs
+        _  -> drop (last markerIdxs + 1) segs
+  in T.intercalate "." base
 
 -- | Normalised store-key identity (#74): a stored property's
 -- 'module' hint arrives as either a project-relative PATH
