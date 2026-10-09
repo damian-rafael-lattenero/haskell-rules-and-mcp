@@ -55,8 +55,8 @@ import System.Environment (getExecutablePath)
 import System.FilePath (takeDirectory, (</>))
 
 -- | Absolute, CWD-independent root for fixture trees, resolved
--- from this binary's own location in dist-newstyle (8 levels up
--- lands on the package root). The e2e process does NOT keep the
+-- from this binary's own location in dist-newstyle (10 levels up
+-- lands on the package root: bin/…/t/…/pkg/ghc/arch/build/dist-newstyle). The e2e process does NOT keep the
 -- package dir as CWD: ghcide sessions leak 'setCurrentDirectory'
 -- into it, so the old relative root stopped resolving for late
 -- scenarios (framework error: fixture not found). Falls back to
@@ -65,7 +65,7 @@ import System.FilePath (takeDirectory, (</>))
 fixtureRoot :: IO FilePath
 fixtureRoot = do
   selfExe <- getExecutablePath
-  let pkgRoot = iterate takeDirectory selfExe !! 8
+  let pkgRoot = iterate takeDirectory selfExe !! 10
       fromBin = pkgRoot </> "test-e2e" </> "Fixtures"
   ok <- Dir.doesDirectoryExist fromBin
   pure (if ok then fromBin else "test-e2e" </> "Fixtures")
