@@ -25,7 +25,7 @@ import Control.Concurrent.MVar (MVar, isEmptyMVar, modifyMVar)
 import Control.Exception (SomeException, try)
 import Control.Applicative ((<|>))
 import Control.Monad (filterM, void, when)
-import Data.Aeson (Value, object, withObject, (.=), (.:))
+import Data.Aeson (Value, fromJSON, object, withObject, (.=), (.:))
 import Data.Aeson (FromJSON (parseJSON))
 import qualified Data.ByteString as BS
 import qualified Data.Aeson
@@ -46,6 +46,7 @@ import qualified Data.Text.IO as TIO
 import System.Directory (canonicalizePath, doesFileExist, listDirectory)
 import System.IO (hPutStrLn, stderr)
 import System.FilePath (normalise, (</>))
+import GHC (Ghc)
 
 import HaskellFlows.Config (defaultLimits, determinismMaxRuns)
 import HaskellFlows.Data.PropertyStore (Store, loadAll, saveCases)
@@ -75,6 +76,10 @@ import qualified HaskellFlows.Tool.Goto as GotoTool
 import qualified HaskellFlows.Tool.Browse as BrowseTool
 import qualified HaskellFlows.Tool.Imports as ImportsTool
 import qualified HaskellFlows.Tool.Suggest as SuggestTool
+import qualified HaskellFlows.Tool.Scratch as Scratch
+import qualified HaskellFlows.Tool.Refactor as Refactor
+import qualified HaskellFlows.Data.Scratchpad as ScratchpadStore
+import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
 import HaskellFlows.Suggest.Rules (RuleContext (..), Suggestion (..), applyRulesCtx)
 import HaskellFlows.Parser.TypeSignature (parseSignature)
 import HaskellFlows.Tool.EvalContext (evalContextExtras)
@@ -88,7 +93,7 @@ import HaskellFlows.Mcp.Envelope
   , mkOk
   )
 import HaskellFlows.Mcp.ToolName (ToolName (..))
-import HaskellFlows.Types (ProjectDir, unProjectDir)
+import HaskellFlows.Types (ModulePath, ProjectDir, unModulePath, unProjectDir)
 import HaskellFlows.Ghc.Sanitize (maxEvalBytes, sanitizeExpression)
 
 -- | Get-or-boot the ghcide session under the MVar (first caller boots,
@@ -153,10 +158,11 @@ routeIde
   :: MVar (Maybe IdeSession)
   -> IORef ProjectDir
   -> IORef Store
+  -> IORef ScratchpadStore.Store
   -> ToolName
   -> Value
   -> Maybe (IO ToolResponse)
-routeIde ref pdRef storeRef tn args = case tn of
+routeIde ref pdRef storeRef scratchRef tn args = case tn of
   GhcCheck
     | actionIs "module"  args -> Just (withIdeSession ref pdRef (handleCheckModule pdRef storeRef (stripped args)))
     | actionIs "load"    args -> Just (withIdeSession ref pdRef (handleCheckLoad pdRef (stripped args)))
@@ -170,6 +176,14 @@ routeIde ref pdRef storeRef tn args = case tn of
     | actionIs "browse" args -> Just (withIdeSession ref pdRef (handleInspectBrowse pdRef (stripped args)))
     | actionIs "complete" args -> Just (withIdeSession ref pdRef (handleInspectComplete (stripped args)))
     | actionIs "goto" args -> Just (withIdeSession ref pdRef (handleInspectGoto (stripped args)))
+    | otherwise -> Nothing
+  GhcModule
+    -- W6.4: the session-bound scratch verbs. write/list/show/clear are
+    -- data-only and fall through to the registry handler.
+    -- Scratch.runHandle dispatches on the action field itself — the
+    -- raw args (action included) must go through, not 'stripped'.
+    | actionIs "check"   args -> Just (withIdeSession ref pdRef (handleScratch scratchRef pdRef args))
+    | actionIs "promote" args -> Just (withIdeSession ref pdRef (handleScratch scratchRef pdRef args))
     | otherwise -> Nothing
   GhcProperty
     | actionIs "check" args -> Just (withIdeSession ref pdRef (handlePropertyCheck pdRef storeRef (stripped args)))
@@ -1089,6 +1103,135 @@ handleSuggest raw s = case parseEither parseJSON raw of
                         Nothing -> matches
                         Just c  -> filter ((c ==) . sCategory) matches
                   pure (SuggestTool.successResult safe typeText sig filtered)
+
+--------------------------------------------------------------------------------
+-- ghc_module scratch {check, promote} (W6.4)
+--------------------------------------------------------------------------------
+
+-- | Backend-neutral scratch queries over the ghcide session. Both
+-- check paths anchor at the entry's own module file when it exists —
+-- anchoring there bytecode-compiles that module and its home-dep
+-- closure, which is what makes the entry's @import@s of project
+-- modules resolvable (the GHC-58427 \"not loaded\" trap). Without a
+-- hint the src-first anchor chain provides the fallback context.
+-- Import splicing stays in the shared 'Ghc' callbacks.
+ideScratchQueries :: IdeSession -> Scratch.ScratchQueries
+ideScratchQueries s = Scratch.ScratchQueries
+  { sqExprType = \mh imports expr ->
+      scratchQuery s mh (Scratch.queryExprTypeWithImports imports expr)
+  , sqRunDecls = \mh imports code ->
+      scratchQuery s mh (Scratch.runDeclsWithImports imports code)
+  , sqPromote  = ideWithSnapshot s
+  }
+
+scratchQuery
+  :: IdeSession -> Maybe Text -> Ghc Text -> IO (Either Text Text)
+scratchQuery s mh act = do
+  mAnchor <- scratchAnchor s mh
+  case mAnchor of
+    Nothing ->
+      pure (Left "no Haskell module is available to anchor the scratch check")
+    Just a -> do
+      r <- ideInteractiveIn s (EvalArgs a (map T.pack evalContextExtras) False) act
+      pure (either (Left . evText) Right r)
+
+-- | The entry's module hint is a project-relative path
+-- (\"src/Foo.hs\", the same shape promote records) — anchor there
+-- when it exists; else the first src-side anchor of the chain.
+scratchAnchor :: IdeSession -> Maybe Text -> IO (Maybe FilePath)
+scratchAnchor s mh = case mh of
+  Just m | not (T.null m) -> do
+    let f = isRoot s </> T.unpack m
+    ok <- doesFileExist f
+    if ok then pure (Just f) else fallback
+  _ -> fallback
+  where
+    fallback = listToMaybe <$> anchorChain s
+
+-- | ghcide's snapshot-and-compile-verify for scratch promote — the
+-- same contract as 'Refactor.withSnapshot': read the target, run the
+-- continuation, write the splice, verify by diagnostics diff (#50
+-- \"no NEW error signatures\"), restore the original verbatim on
+-- regression. ghcide's mtime invalidation ('ideDiagnosticsFor'
+-- rescans for disk changes) replaces legacy's invalidateLoadCache.
+ideWithSnapshot
+  :: IdeSession -> ModulePath
+  -> (Text -> IO (Either Text (Text, Value)))
+  -> IO ToolResponse
+ideWithSnapshot s mp cont = do
+  readRes <- try (TIO.readFile fp) :: IO (Either SomeException Text)
+  case readRes of
+    Left e ->
+      pure (mkFailed (mkErrorEnvelope Validation
+              (T.pack ("Could not read module: " <> show e))))
+    Right orig -> do
+      outcome <- cont orig
+      case outcome of
+        Left reason ->
+          pure (mkFailed (mkErrorEnvelope Validation reason))
+        Right (newContent, baseSuccess) -> do
+          preDiags <- ghcDiags s fp
+          writeRes <- try (TIO.writeFile fp newContent) :: IO (Either SomeException ())
+          case writeRes of
+            Left e ->
+              pure (mkFailed (mkErrorEnvelope Validation
+                      (T.pack ("Could not write module: " <> show e))))
+            Right _ -> do
+              postDiags <- ghcDiags s fp
+              let preErrSigs  = Refactor.errorSignatures preDiags
+                  postErrSigs = Refactor.errorSignatures postDiags
+                  newErrSigs  = filter (`notElem` preErrSigs) postErrSigs
+                  postErrs    = filter ((== SevError) . geSeverity) postDiags
+                  newErrs     = [ e | e <- postErrs
+                                , Refactor.errorKey e `elem` newErrSigs ]
+              if not (null newErrSigs)
+                then do
+                  _ <- try (TIO.writeFile fp orig) :: IO (Either SomeException ())
+                  pure (Refactor.compileFailResult False newErrs
+                          (T.intercalate "\n" (map geMessage newErrs))
+                          " — snapshot restored")
+                else
+                  pure (Refactor.commitResultWithDiff baseSuccess preDiags postDiags)
+  where
+    fp = unModulePath mp
+
+-- | Diagnostics of one file as legacy 'GhcError's — the common
+-- currency of 'Refactor.errorSignatures' and the payload builders.
+ghcDiags :: IdeSession -> FilePath -> IO [GhcError]
+ghcDiags s fp = map ghcErrorOfValue <$> ideDiagnosticsFor s fp
+
+-- | Pure mapping of one 'ideDiagnosticsFor' Value (severity / code /
+-- message / file / line / column) onto the legacy diagnostic ADT.
+ghcErrorOfValue :: Value -> GhcError
+ghcErrorOfValue v = GhcError
+  { geFile     = fieldOr "file" ""
+  , geLine     = fieldOr "line" (0 :: Int)
+  , geColumn   = fieldOr "column" 0
+  , geSeverity = if fieldOr "severity" ("" :: Text) == "error"
+                   then SevError else SevWarning
+  , geCode     = let c = fieldOr "code" ("" :: Text)
+                 in if T.null c then Nothing else Just c
+  , geMessage  = fieldOr "message" ""
+  }
+  where
+    fieldOr :: FromJSON a => Key -> a -> a
+    fieldOr k d = case v of
+      Data.Aeson.Object o -> case KM.lookup k o of
+        Just x -> case fromJSON x of
+          Data.Aeson.Success y -> y
+          _ -> d
+        Nothing -> d
+      _ -> d
+
+-- | Scratch entry point on the ghcide backend: the store + the
+-- project dir come from the server refs; every action runs through
+-- 'Scratch.runHandle' with 'ideScratchQueries' (write/list/show/clear
+-- never touch the session — runHandle keeps them lazy).
+handleScratch :: IORef ScratchpadStore.Store -> IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
+handleScratch scratchRef pdRef raw s = do
+  store <- readIORef scratchRef
+  pd    <- readIORef pdRef
+  Scratch.runHandle store (ideScratchQueries s) pd raw
 
 --------------------------------------------------------------------------------
 -- ghc_property(action=check) — QuickCheck via the session

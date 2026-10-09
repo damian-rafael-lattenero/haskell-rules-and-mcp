@@ -36,6 +36,7 @@ module HaskellFlows.Tool.Refactor
   , extractFreeVarNames  -- #205
     -- * Exposed for ghc_scratch(action="promote")
   , withSnapshot
+  , commitResultWithDiff  -- W6.4: the ghcide snapshot reuses the payload law
   ) where
 
 import Control.Exception (SomeException, try)

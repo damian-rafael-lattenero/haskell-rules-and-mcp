@@ -323,7 +323,7 @@ testScratchCheckSanitizeReject = withTempProject $ \pd -> do
         [ "action" A..= ("check" :: Text)
         , "id"     A..= ("bad" :: Text)
         ]
-  result <- ScratchTool.runHandle store undefined undefined checkArgs
+  result <- ScratchTool.runHandle store (ScratchTool.legacyQueries undefined) undefined checkArgs
   pure (Env.reStatus result == Env.StatusRefused)
 
 -- | 'ScratchResult' ToJSON / FromJSON round-trip.
@@ -359,7 +359,7 @@ testScratchCheckKindAtTopLevel = withTempProject $ \pd -> do
         [ "action" A..= ("check" :: Text)
         , "id"     A..= ("probe" :: Text)
         ]
-  result <- ScratchTool.runHandle store undefined undefined checkArgs
+  result <- ScratchTool.runHandle store (ScratchTool.legacyQueries undefined) undefined checkArgs
   pure $ case Env.reStatus result of
     Env.StatusOk ->
       -- status=ok means the try-block ran; result must have 'kind'
@@ -465,7 +465,7 @@ testScratchShowAfterCheckHasResult = withTempProject $ \pd -> do
         [ "action" A..= ("check" :: Text)
         , "id"     A..= ("chk-then-show" :: Text)
         ]
-  _ <- ScratchTool.runHandle store undefined undefined checkArgs
+  _ <- ScratchTool.runHandle store (ScratchTool.legacyQueries undefined) undefined checkArgs
   -- show — must return the persisted result
   let showArgs = A.object
         [ "action" A..= ("show" :: Text)

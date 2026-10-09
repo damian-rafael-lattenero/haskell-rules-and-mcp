@@ -454,7 +454,7 @@ dispatchByName srv sink args tn = do
     -- backend — routeIde serves every interactive-GHC tool; the
     -- registry handler covers the rest (files, cabal, pure).
     other
-      | Just routed <- IdeBacked.routeIde (srvIdeSession srv) (srvProjectDir srv) (srvStore srv) other args
+      | Just routed <- IdeBacked.routeIde (srvIdeSession srv) (srvProjectDir srv) (srvStore srv) (srvScratchpad srv) other args
       -> routed
     other -> handlerFor other env args
   -- B-1: attach a NON-blocking warning naming any argument keys the

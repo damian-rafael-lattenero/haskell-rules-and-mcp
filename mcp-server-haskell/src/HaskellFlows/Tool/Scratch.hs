@@ -21,6 +21,11 @@ module HaskellFlows.Tool.Scratch
   , runHandle
   , ScratchArgs (..)
   , ScratchAction (..)
+    -- * Backend queries (W6.4)
+  , ScratchQueries (..)
+  , legacyQueries
+  , queryExprTypeWithImports
+  , runDeclsWithImports
     -- * Internals (exported for unit tests)
   , parseAction
   , renderEntrySummary
@@ -61,7 +66,8 @@ import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import qualified HaskellFlows.Tool.Refactor as Refactor
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types
-  ( PathError (..)
+  ( ModulePath
+  , PathError (..)
   , ProjectDir
   , mkModulePath
   )
@@ -147,31 +153,74 @@ instance FromJSON ScratchArgs where
 -- Handler
 --------------------------------------------------------------------------------
 
--- | Phase 1 threaded only the 'SP.Store'. Phase 2 adds 'GhcSession'
+-- | Phase 1 threaded only the 'SP.Store'. Phase 2 added 'GhcSession'
 -- so 'action=check' can call @exprType@ against the live GHC API
--- session. Phase 4 adds 'ProjectDir' so 'action=promote' can build
+-- session. Phase 4 added 'ProjectDir' so 'action=promote' can build
 -- a 'ModulePath' for the splice target.
 --
--- The session and pd are lazy in all non-check / non-promote branches
--- so callers may safely pass 'undefined' when they know neither
--- 'check' nor 'promote' will run (unit tests for write/list/show/clear).
+-- W6.4 replaces the live 'GhcSession' with 'ScratchQueries' — the
+-- backend-neutral check/promote surface. The legacy handler builds it
+-- closing over 'withGhcSession'; the ghcide backend builds it closing
+-- over 'IdeSession.ideInteractiveIn' and a diagnostics-diff snapshot.
+-- The session is lazy in all non-check / non-promote branches so
+-- callers may safely pass 'undefined' when they know neither 'check'
+-- nor 'promote' will run (unit tests for write/list/show/clear).
 handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   scratch <- teScratchpad env
   ghcSess <- teSession env
   pd      <- teProjectDir env
-  runHandle scratch ghcSess pd rawArgs
+  runHandle scratch (legacyQueries ghcSess) pd rawArgs
 
-runHandle :: SP.Store -> GhcSession -> ProjectDir -> Value -> IO ToolResponse
-runHandle store ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
+-- | Backend-neutral GHC queries the check/promote actions need.
+--
+-- * @sqExprType hint imports expr@ — type-check an expression (or a
+--   @let … in ()@-wrapped declaration block) with @imports@ spliced
+--   into the interactive context. @hint@ is the entry's module hint
+--   (a project-relative path): backends that anchor per-module use it
+--   to pick the evaluation context; the legacy session ignores it.
+--
+-- * @sqRunDecls hint imports code@ — compile a top-level declaration
+--   block (the 'runDecls' path GHCi uses for prompt input).
+--
+-- * @sqPromote mp cont@ — snapshot-and-compile-verify splice:
+--   @cont orig@ returns the new content + success payload; a compile
+--   regression rolls the file back and returns the error envelope.
+data ScratchQueries = ScratchQueries
+  { sqExprType :: Maybe Text -> [Text] -> Text -> IO (Either Text Text)
+  , sqRunDecls :: Maybe Text -> [Text] -> Text -> IO (Either Text Text)
+  , sqPromote  :: ModulePath
+               -> (Text -> IO (Either Text (Text, Value)))
+               -> IO ToolResponse
+  }
+
+-- | The legacy 'ApiSession' wiring: every query runs against the one
+-- global session (the module hint is irrelevant — the session holds
+-- the whole loaded graph).
+legacyQueries :: GhcSession -> ScratchQueries
+legacyQueries ghcSess = ScratchQueries
+  { sqExprType = \_hint imports expr ->
+      renderExc (withGhcSession ghcSess (queryExprTypeWithImports imports expr))
+  , sqRunDecls = \_hint imports code ->
+      renderExc (withGhcSession ghcSess (runDeclsWithImports imports code))
+  , sqPromote  = \mp cont -> Refactor.withSnapshot ghcSess mp False cont
+  }
+  where
+    renderExc :: IO Text -> IO (Either Text Text)
+    renderExc act =
+      either (Left . T.pack . show) Right
+        <$> (try act :: IO (Either SomeException Text))
+
+runHandle :: SP.Store -> ScratchQueries -> ProjectDir -> Value -> IO ToolResponse
+runHandle store q pd rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> case saAction args of
     ActWrite   -> handleWrite store args
     ActList    -> handleList store
     ActShow    -> handleShow store args
     ActClear   -> handleClear store args
-    ActCheck   -> handleCheck store ghcSess args
-    ActPromote -> handlePromote store ghcSess pd args
+    ActCheck   -> handleCheck store q args
+    ActPromote -> handlePromote store q pd args
 
 --------------------------------------------------------------------------------
 -- check (#253 Phase 2, F-03 multi-line fix)
@@ -197,8 +246,8 @@ runHandle store ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
 -- so @nextStep@ can route: @type_ok@ → promote, @type_error@ →
 -- write + re-check.  The full 'SP.ScratchResult' is persisted and
 -- visible via @action=show@.
-handleCheck :: SP.Store -> GhcSession -> ScratchArgs -> IO ToolResponse
-handleCheck store ghcSess args = case saId args of
+handleCheck :: SP.Store -> ScratchQueries -> ScratchArgs -> IO ToolResponse
+handleCheck store q args = case saId args of
   Nothing ->
     pure (Env.mkFailed
       (Env.mkErrorEnvelope Env.MissingArg
@@ -224,7 +273,7 @@ handleCheck store ghcSess args = case saId args of
             imports                = SP.seImports entry ++ inlineImports
             decl                   = T.strip body
         if T.null decl
-          then checkImportsOnly store ghcSess entry i imports now
+          then checkImportsOnly store q entry i imports now
           -- #294: type/data/newtype/class/instance declarations cannot
           -- live inside the `let … in ()` wrapper (GHC: "parse error on
           -- input 'type'"). Route them — and any block that opens with a
@@ -232,22 +281,22 @@ handleCheck store ghcSess args = case saId args of
           -- exact mechanism GHCi uses for top-level prompt input. This also
           -- lifts the where-clause limitation the let-wrapper had.
           else if hasTopLevelDecl body
-            then checkDecls store ghcSess entry i imports body now
+            then checkDecls store q entry i imports body now
             else if T.any (== '\n') body
-              then checkMultiLine store ghcSess entry i imports body now
-              else checkSingleLine store ghcSess entry i imports body now
+              then checkMultiLine store q entry i imports body now
+              else checkSingleLine store q entry i imports body now
 
 -- | Single-line path: uses 'sanitizeExpression' + 'exprType' directly.
 -- Returns the inferred type as @\"type\"@ in the response.
-checkSingleLine :: SP.Store -> GhcSession -> SP.ScratchEntry
+checkSingleLine :: SP.Store -> ScratchQueries -> SP.ScratchEntry
                 -> Text -> [Text] -> Text -> Double -> IO ToolResponse
-checkSingleLine store ghcSess entry i imports code now =
+checkSingleLine store q entry i imports code now =
   case sanitizeExpression code of
     Left cmdErr ->
       pure (Env.mkRefused
         (Env.sanitizeRejection "code" cmdErr))
     Right safe -> do
-      eRes <- try (withGhcSession ghcSess (queryExprTypeWithImports imports safe))
+      eRes <- sqExprType q (SP.seModule entry) imports safe
       saveAndRespond store entry now eRes
         (\typeText -> object
           [ "id"     .= i
@@ -274,16 +323,15 @@ checkSingleLine store ghcSess entry i imports code now =
 -- in @let ... in ()@ so GHC's layout rule handles guards and
 -- multi-equation definitions.  Returns @\"type\": \"declarations
 -- type-checked OK\"@ on success.
-checkMultiLine :: SP.Store -> GhcSession -> SP.ScratchEntry
+checkMultiLine :: SP.Store -> ScratchQueries -> SP.ScratchEntry
                -> Text -> [Text] -> Text -> Double -> IO ToolResponse
-checkMultiLine store ghcSess entry i imports code now =
+checkMultiLine store q entry i imports code now =
   case sanitizeDeclarations code of
     Left cmdErr ->
       pure (Env.mkRefused
         (Env.sanitizeRejection "code" cmdErr))
     Right safe -> do
-      eRes <- try (withGhcSession ghcSess
-                     (queryExprTypeWithImports imports (wrapAsLetBlock safe)))
+      eRes <- sqExprType q (SP.seModule entry) imports (wrapAsLetBlock safe)
       saveAndRespond store entry now (fmap (const declOkMsg) eRes)
         (\_ -> object
           [ "id"     .= i
@@ -316,14 +364,14 @@ checkMultiLine store ghcSess entry i imports code now =
 -- same primitive GHCi uses for top-level prompt input. Success means the
 -- declarations compiled; a parse/type error is caught by 'try' and
 -- surfaced as @type_error@.
-checkDecls :: SP.Store -> GhcSession -> SP.ScratchEntry
+checkDecls :: SP.Store -> ScratchQueries -> SP.ScratchEntry
            -> Text -> [Text] -> Text -> Double -> IO ToolResponse
-checkDecls store ghcSess entry i imports code now =
+checkDecls store q entry i imports code now =
   case sanitizeDeclarations code of
     Left cmdErr ->
       pure (Env.mkRefused (Env.sanitizeRejection "code" cmdErr))
     Right safe -> do
-      eRes <- try (withGhcSession ghcSess (runDeclsWithImports imports safe))
+      eRes <- sqRunDecls q (SP.seModule entry) imports safe
       saveAndRespond store entry now eRes
         (\_ -> object
           [ "id"     .= i
@@ -392,10 +440,10 @@ hasTopLevelDecl = any isDeclLine . T.lines
 saveAndRespond
   :: SP.Store
   -> SP.ScratchEntry
-  -> Double     -- now (POSIX seconds)
-  -> Either SomeException Text   -- GHC result or exception
-  -> (Text -> Value)             -- success payload builder
-  -> (Text -> Value)             -- failure payload builder
+  -> Double            -- now (POSIX seconds)
+  -> Either Text Text  -- rendered backend result or error text
+  -> (Text -> Value)   -- success payload builder
+  -> (Text -> Value)   -- failure payload builder
   -> IO ToolResponse
 saveAndRespond store entry now eRes mkOkPayload mkErrPayload =
   case eRes of
@@ -412,9 +460,8 @@ saveAndRespond store entry now eRes mkOkPayload mkErrPayload =
                       }
       SP.save store updated
       pure (Env.mkOk (mkOkPayload typeText))
-    Left ex -> do
-      let errText = T.pack (show ex)
-          result  = SP.ScratchResult
+    Left errText -> do
+      let result  = SP.ScratchResult
                       { SP.srKind   = "type_error"
                       , SP.srDetail = errText
                       , SP.srAt     = now
@@ -476,11 +523,10 @@ queryExprTypeWithImports imports expr = do
 -- | Verify that a scratch entry consisting only of @import …@ lines resolves,
 -- by splicing the imports into the context and type-checking @()@ against it.
 -- Restores the context afterwards.
-checkImportsOnly :: SP.Store -> GhcSession -> SP.ScratchEntry
+checkImportsOnly :: SP.Store -> ScratchQueries -> SP.ScratchEntry
                  -> Text -> [Text] -> Double -> IO ToolResponse
-checkImportsOnly store ghcSess entry i imports now = do
-  eRes <- try (withGhcSession ghcSess
-                 (queryExprTypeWithImports imports "()"))
+checkImportsOnly store q entry i imports now = do
+  eRes <- sqExprType q (SP.seModule entry) imports "()"
   saveAndRespond store entry now (fmap (const importsOkMsg) eRes)
     (\_ -> object
       [ "id"     .= i
@@ -741,8 +787,8 @@ handleClear store args = case (saId args, saConfirm args) of
 --   * 'target_line' — optional; inserts after that line (1-based) when given,
 --     appends to end of file otherwise.
 --   * A loaded GHC session (caller must have run ghc_load first).
-handlePromote :: SP.Store -> GhcSession -> ProjectDir -> ScratchArgs -> IO ToolResponse
-handlePromote store ghcSess pd args =
+handlePromote :: SP.Store -> ScratchQueries -> ProjectDir -> ScratchArgs -> IO ToolResponse
+handlePromote store q pd args =
   case saId args of
     Nothing ->
       pure (Env.mkFailed
@@ -788,7 +834,7 @@ handlePromote store ghcSess pd args =
                             ("Code spliced and verified. \
                              \Entry status is now 'promoted'." :: Text)
                         ]
-                  result <- Refactor.withSnapshot ghcSess mp False $ \orig ->
+                  result <- sqPromote q mp $ \orig ->
                     pure (Right (spliceInto orig spliceCode targetLine, successBase))
                   -- Only promote the entry if the refactor succeeded.
                   -- trIsError=True means the snapshot was rolled back.
