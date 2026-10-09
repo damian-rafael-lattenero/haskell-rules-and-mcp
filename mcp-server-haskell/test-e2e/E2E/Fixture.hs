@@ -51,15 +51,24 @@ module E2E.Fixture
 import Control.Exception (IOException, throwIO, try)
 import qualified Data.Text as T
 import qualified System.Directory as Dir
-import System.FilePath ((</>))
+import System.Environment (getExecutablePath)
+import System.FilePath (takeDirectory, (</>))
 
--- | Repository-relative root for fixture trees. Test-e2e Main.hs
--- runs with the package directory as CWD, so relative paths under
--- @test-e2e/Fixtures/@ resolve correctly when the cabal test
--- target invokes us. CI also uses the package directory as
--- working-directory, so this same path works there.
-fixtureRoot :: FilePath
-fixtureRoot = "test-e2e" </> "Fixtures"
+-- | Absolute, CWD-independent root for fixture trees, resolved
+-- from this binary's own location in dist-newstyle (8 levels up
+-- lands on the package root). The e2e process does NOT keep the
+-- package dir as CWD: ghcide sessions leak 'setCurrentDirectory'
+-- into it, so the old relative root stopped resolving for late
+-- scenarios (framework error: fixture not found). Falls back to
+-- the CWD-relative path when the binary isn't under dist-newstyle
+-- (e.g. a copied binary).
+fixtureRoot :: IO FilePath
+fixtureRoot = do
+  selfExe <- getExecutablePath
+  let pkgRoot = iterate takeDirectory selfExe !! 8
+      fromBin = pkgRoot </> "test-e2e" </> "Fixtures"
+  ok <- Dir.doesDirectoryExist fromBin
+  pure (if ok then fromBin else "test-e2e" </> "Fixtures")
 
 -- | Recursively copy a fixture tree into the scenario's tmpdir.
 --
@@ -77,12 +86,13 @@ copyFixture
   -> FilePath  -- ^ destination directory (must already exist)
   -> IO ()
 copyFixture name dest = do
-  let src = fixtureRoot </> name
+  root <- fixtureRoot
+  let src = root </> name
   exists <- Dir.doesDirectoryExist src
   if not exists
     then throwIO . userError $
       "E2E.Fixture.copyFixture: fixture not found at " <> src
-        <> ". Available fixtures: " <> show fixtureRoot
+        <> ". Available fixtures: " <> show root
     else do
       Dir.createDirectoryIfMissing True dest
       copyDirectoryRecursive src dest

@@ -199,6 +199,10 @@ driveCorpus binary = do
 
       cp = (proc binary [])
              { env = Just (("HASKELL_PROJECT_DIR", "/tmp/mcp-e2e-corpus") : currentEnv)
+             -- Explicit cwd: late scenarios inherit a DELETED tempdir
+             -- as process cwd (the ghcide setCurrentDirectory leak) —
+             -- a child spawned there can die at startup.
+             , cwd = Just "/tmp"
              }
   (ec, outStr, errStr) <- readCreateProcessWithExitCode cp input
   let toolsInFinal = countToolEntries outStr
