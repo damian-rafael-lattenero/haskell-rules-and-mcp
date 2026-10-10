@@ -257,7 +257,11 @@ import HaskellFlows.Parser.Cabal
   , splitStanzas
   , stanzaHeaderOf
   )
-import HaskellFlows.Tool.IdeBacked (moduleKeyOf)
+import HaskellFlows.Tool.IdeBacked
+  ( aggregateEvalMessage
+  , anchorFailureNote
+  , moduleKeyOf
+  )
 import HaskellFlows.Util.Process (capOutput)
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
 import qualified HaskellFlows.Tool.Browse as BrowseTool
@@ -843,6 +847,8 @@ runAllTests = do
                                                    testClassifyScopeWrappedInExc
       , test "classify: timeout budget is ECTimeout" testClassifyTimeoutText
       , test "classify: evalErrorKind total mapping" testEvalErrorKindMapping
+      , test "anchor chain: non-scope failure surfaces (note)" testAnchorFailureNote
+      , test "anchor chain: aggregate message keeps generic line" testAggregateEvalMessage
       , quickTest "prop_fieldSplit_roundtrip"            prop_fieldSplit_roundtrip
       , quickTest "prop_listFieldOf_format_invariant"    prop_listFieldOf_format_invariant
       , quickTest "prop_projectModuleFiles_dotpaths"     prop_projectModuleFiles_dotpaths
@@ -1497,6 +1503,39 @@ testEvalErrorKindMapping = pure $ and
   , evalErrorKind (EvalError ECCompile "") == Env.CompileError
   , evalErrorKind (EvalError ECException "") == Env.CompileError
   , evalErrorKind (EvalError ECIoWrapper "") == Env.CompileError
+  ]
+
+-- W1.4 dogfood finding: a chain-wide anchor failure collapsed to the
+-- generic name-resolution line even when the collected errors carried
+-- the real cause (a BadDependency). 'anchorFailureNote' picks the
+-- first non-scope survivor; 'aggregateEvalMessage' appends it to the
+-- generic line (which callers pin as a substring) only when it exists.
+testAnchorFailureNote :: IO Bool
+testAnchorFailureNote = pure $ and
+  [ anchorFailureNote [] == Nothing
+  , anchorFailureNote [ EvalError ECScope "not in scope: foo"
+                      , EvalError ECScope "not in scope: bar" ]
+      == Nothing
+  , anchorFailureNote
+      [ EvalError ECScope "not in scope: foo"
+      , EvalError ECBadDependency "BadDependency: GetModSummary" ]
+      == Just "BadDependency: GetModSummary"
+  ]
+
+testAggregateEvalMessage :: IO Bool
+testAggregateEvalMessage = pure $ and
+  [ aggregateEvalMessage "expression" [EvalError ECScope "x"]
+      == "no project module provides the names this expression needs"
+  , aggregateEvalMessage "function" [EvalError ECScope "x"]
+      == "no project module provides the names this function needs"
+  , aggregateEvalMessage "expression" [] ==
+      "no project module provides the names this expression needs"
+  , let msg = aggregateEvalMessage "expression"
+                [ EvalError ECScope "x"
+                , EvalError ECBadDependency "BadDependency: rule aborted" ]
+    in "no project module provides the names this expression needs"
+         `T.isInfixOf` msg
+      && "anchor failure: BadDependency: rule aborted" `T.isInfixOf` msg
   ]
 
 -- W5.2 — HaskellFlows.Parser.Cabal: the pure .cabal seam extracted

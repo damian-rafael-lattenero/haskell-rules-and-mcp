@@ -25,6 +25,8 @@ module HaskellFlows.Tool.IdeBacked
   , replayProp
   , replayStored
   , moduleKeyOf
+  , aggregateEvalMessage
+  , anchorFailureNote
   ) where
 
 import Control.Concurrent.MVar (MVar, isEmptyMVar, modifyMVar)
@@ -323,6 +325,41 @@ firstRight advance (io : rest) = do
     Left e
       | advance e -> firstRight advance rest
       | otherwise -> pure (Just (Left e))
+
+-- | 'firstRight' that also keeps what the losing candidates said, so
+-- a chain-wide failure can be diagnosed from the errors themselves
+-- ('anchorFailureNote') instead of a generic line.
+firstRightTrace
+  :: (EvalError -> Bool)
+  -> [IO (Either EvalError a)]
+  -> IO (Maybe (Either EvalError a), [EvalError])
+firstRightTrace advance ios = go ios []
+  where
+    go [] errs = pure (Nothing, reverse errs)
+    go (io : rest) errs = do
+      v <- io
+      case v of
+        Right x   -> pure (Just (Right x), reverse errs)
+        Left e
+          | advance e -> go rest (e : errs)
+          | otherwise -> pure (Just (Left e), reverse (e : errs))
+
+-- | When EVERY anchor lost, the generic "no project module provides
+-- the names" line is only honest if each failure was a scope error.
+-- Any non-scope survivor (BadDependency, the missing-Show wrap) is
+-- the real cause — the first one rides along so the caller is not
+-- sent hunting names that do exist (dogfood finding: a
+-- BadDependency chain reported as a name-resolution gap).
+anchorFailureNote :: [EvalError] -> Maybe Text
+anchorFailureNote errs =
+  listToMaybe [ evText e | e <- errs, evClass e /= ECScope ]
+
+-- | The chain-wide failure message: the generic line, with the first
+-- non-scope cause appended when one exists.
+aggregateEvalMessage :: Text -> [EvalError] -> Text
+aggregateEvalMessage what errs =
+  "no project module provides the names this " <> what <> " needs"
+    <> maybe "" (\t -> " — anchor failure: " <> t) (anchorFailureNote errs)
 
 -- | All @.hs@ files under @dir@, RECURSING into subdirectories —
 -- module trees like @src/Expr/Pretty.hs@ live below the source
@@ -837,14 +874,14 @@ handleEval raw s = case argField "expression" raw of
       -- type-errors on IO actions ('No instance for `Show (IO …)'),
       -- which advances the chain to the fmap wrapper.
       accImports <- ideExtraImports s
-      r <- firstRight evalRetry
+      (r, chainErrs) <- firstRightTrace evalRetry
         [ ideEvalActionIn s (EvalArgs a (accImports ++ ["System.IO", "Control.Exception"]) False) wrap
         | a <- anchors
         , wrap <- [ "Control.Exception.evaluate (show (" <> safe <> "))"
                   , "fmap show (" <> safe <> ")" ] ]
       case r of
         Nothing -> pure (mkFailed (mkErrorEnvelope MissingArg
-                            "no project module provides the names this expression needs"))
+                            (aggregateEvalMessage "expression" chainErrs)))
         Just (Left err) -> pure (mkFailed (mkErrorEnvelope (budgetErrorKind err) (evText err)))
         Just (Right out) ->
           let (capped, wasTruncated) = capOutput maxEvalBytes out
@@ -1112,13 +1149,13 @@ handleSuggest raw s = case parseEither parseJSON raw of
       anchors <- anchorChain s
       warmAnchors s anchors
       let eaOf a = EvalArgs a (map T.pack evalContextExtras) False
-      rTy <- firstRight evalRetry
+      (rTy, chainErrs) <- firstRightTrace evalRetry
         [ fmap (fmap (a,)) (ideInteractiveIn s (eaOf a) (SuggestTool.queryType safe))
         | a <- anchors ]
       case rTy of
         Nothing ->
           pure (SuggestTool.outOfScopeResult safe
-                  "no project module provides the names this function needs")
+                  (aggregateEvalMessage "function" chainErrs))
         Just (Left err) ->
           pure (SuggestTool.outOfScopeResult safe (evText err))
         Just (Right (winAnchor, typeText))
