@@ -747,8 +747,6 @@ runAllTests = do
                                                    testBootstrapRejectsMissingHost
       , test "#165: bootstrap missing-host message lists accepted values"
                                                    testBootstrapMissingHostFriendlyMessage
-      , test "Envelope #90 Phase B: ghc_imports emits envelope with count + imports"
-                                                   testImportsEnvelopeShape
       , test "Envelope #90 Phase D: legacy 'success' field dropped"
                                                    testEnvelopeLegacySuccessDropped
       , test "Envelope #90 Phase D: legacy 'error_kind' field dropped"
@@ -1435,7 +1433,7 @@ runAllTests = do
       , test "#244: findCommonStanzaWithPkg returns Nothing when pkg absent" testDepsCommonStanzaPkgAbsent
       , test "#244: findCommonStanzaWithPkg returns Nothing when no common stanzas" testDepsCommonStanzaNoCommon
       , test "#244: unchangedResult' emits hint field when mHint=Just" testDepsUnchangedResultHintField
-      , test "#243: suggest.hs imports and calls augmentEvalContext"   testSuggestCallsAugmentContext
+      , test "#243: suggest route splices evalContextExtras into its queries"   testSuggestCallsAugmentContext
       , test "#242: add_import bypasses Hoogle for module-path names (source check)" testAddImportBypassesHoogle
       -- Issue #289 — eliminate partial functions; Util.Safe totality
       , test "#289: safeAt returns Nothing for negative index"        testSafeAtNegative

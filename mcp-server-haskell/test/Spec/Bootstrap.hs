@@ -1,30 +1,27 @@
--- | Unit tests for 'Tool.Bootstrap' (#90 Phase B) and 'Tool.Imports'
--- envelope shapes.
+-- | Unit tests for 'Tool.Bootstrap' (#90 Phase B) envelope shapes.
 --
 -- Extracted from the Spec.hs monolith (#271) via the function-export shape.
+-- The ghc_imports envelope test died with the legacy session handler
+-- (W6.8); its contract is pinned by the e2e suite against the ghcide
+-- route.
 module Spec.Bootstrap
   ( testBootstrapClaudeCodePreviewEnvelope
   , testBootstrapGenericPreviewEnvelope
   , testBootstrapRejectsUnknownHost
   , testBootstrapRejectsMissingHost
   , testBootstrapMissingHostFriendlyMessage
-  , testImportsEnvelopeShape
   ) where
 
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
 import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Types (mkProjectDir)
-import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
-import qualified HaskellFlows.Tool.Imports as ImportsTool
-import Spec.ToolEnvFixture (sessionEnv)
 
 -- | Phase B helper: build a fresh tmpdir-based ProjectDir + drive
 -- 'BootstrapTool.handle' with the given args. Returns the parsed
@@ -116,34 +113,4 @@ testBootstrapMissingHostFriendlyMessage = do
           in  "claude-code" `T.isInfixOf` msg
            && "cursor"      `T.isInfixOf` msg
            && "generic"     `T.isInfixOf` msg
-    _ -> False
-
--- | 'ghc_imports' returns the interactive context's import list.
--- Phase B: status='ok' with result carrying the legacy 'count' +
--- 'imports' fields (preserved during the dual-shape window). The
--- absolute *contents* of the imports list depend on whatever
--- autoLoadProject + augmentEvalContext settled on (Prelude + a few
--- stdlib modules); we don't pin specific names — only the contract.
-testImportsEnvelopeShape :: IO Bool
-testImportsEnvelopeShape = do
-  tmp <- getTemporaryDirectory
-  let dir = tmp </> "haskell-flows-imports-test"
-  removePathForcibly dir
-  createDirectoryIfMissing True (dir </> "src")
-  TIO.writeFile (dir </> "src" </> "Foo.hs")
-    (T.pack "module Foo where\nfoo :: Int\nfoo = 1\n")
-  result <- case mkProjectDir dir of
-    Left _   -> pure (Left "could not build ProjectDir")
-    Right pd -> do
-      sess <- startGhcSession pd
-      tr   <- ImportsTool.handle (sessionEnv sess) (A.object [])
-      killGhcSession sess
-      pure (Right tr)
-  removePathForcibly dir
-  pure $ case result of
-    Right env
-      | Env.reStatus env == Env.StatusOk
-      , Just (A.Object payload) <- Env.reResult env ->
-          AKM.member (AKey.fromText "count")   payload
-            && AKM.member (AKey.fromText "imports") payload
     _ -> False

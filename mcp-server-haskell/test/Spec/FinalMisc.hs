@@ -785,21 +785,22 @@ testDepsUnchangedResultHintField =
        _                 -> False
 
 -- ---------------------------------------------------------------------------
--- Issue #243 — ghc_suggest must call augmentEvalContext before queryType
+-- Issue #243 — ghc_suggest resolves names from session preloads
 -- ---------------------------------------------------------------------------
 
--- | #243: 'Suggest.hs' must import 'augmentEvalContext' from 'Eval.hs'
--- and call it (with >>)  before 'queryType' so that standard preloads
--- like @Data.List.sort@ resolve even when 'loadForTarget' has reset the
--- interactive context to the project-only module graph.
+-- | #243: the concern (standard preloads like @Data.List.sort@ must
+-- resolve even when the context narrows to the project graph) now
+-- lives in the ghcide route: 'IdeBacked.handleSuggest' must splice
+-- 'evalContextExtras' into the 'EvalArgs' of its per-anchor queries
+-- (the successor of the legacy augmentEvalContext reset-guard).
 
 testSuggestCallsAugmentContext :: IO Bool
 
 testSuggestCallsAugmentContext = do
-  src <- TIO.readFile "src/HaskellFlows/Tool/Suggest.hs"
+  src <- TIO.readFile "src/HaskellFlows/Tool/IdeBacked.hs"
   let code = T.unlines (filter (not . isDocLine) (T.lines src))
-  pure $ T.isInfixOf "augmentEvalContext" code
-      && T.isInfixOf "HaskellFlows.Tool.Eval" code
+  pure $ T.isInfixOf "evalContextExtras" code
+      && T.isInfixOf "handleSuggest" code
   where
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s

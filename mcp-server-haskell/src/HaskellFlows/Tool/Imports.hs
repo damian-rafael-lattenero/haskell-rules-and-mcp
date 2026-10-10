@@ -1,18 +1,17 @@
--- | @ghc_imports@ — Phase-6 tool (GHC-API migrated).
+-- | @ghc_session(action=imports)@ — pure query + payload layer.
 --
--- List the imports currently in the interactive context via
--- 'GHC.getContext'. Pre-migration wrapped @:show imports@; post
--- migration the GhcSession's interactive context is authoritative.
+-- The session-bound legacy handler died with the ApiSession backend
+-- (W6.8); 'HaskellFlows.Tool.IdeBacked' runs 'queryImports' inside
+-- its ghcide interactive context and shapes the reply with
+-- 'importsPayload'.
 module HaskellFlows.Tool.Imports
-  ( handle
-  , parseImportsOutput
+  ( parseImportsOutput
     -- * Exposed for unit tests
   , importsPayload
     -- * W6 — Ghc query (shared with the ghcide backend)
   , queryImports
   ) where
 
-import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.List (nubBy)
 import qualified Data.Set as Set
@@ -29,30 +28,7 @@ import GHC
   )
 import GHC.Utils.Outputable (showPprUnsafe)
 
-import HaskellFlows.Mcp.Envelope (ToolResponse)
-import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Tool.EvalContext (evalContextExtras)
-import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
-import HaskellFlows.Tool.Env (ToolEnv (..))
-
-
-handle :: ToolEnv -> Value -> IO ToolResponse
-handle env rawArgs = do
-  ghcSess <- teSession env
-  runHandle ghcSess rawArgs
-
-runHandle :: GhcSession -> Value -> IO ToolResponse
-runHandle ghcSess _rawArgs = do
-  eRes <- try (withGhcSession ghcSess queryImports)
-  pure $ case eRes of
-    Left (se :: SomeException) ->
-      Env.mkFailed
-        ((Env.mkErrorEnvelope Env.InternalError
-            (T.pack ("GHC API error: " <> show se)))
-              { Env.eeCause = Just (T.pack (show se)) })
-    Right pair -> Env.mkOk (importsPayload pair)
 
 -- | F-10 / #114: split interactive context into source imports and the
 -- MCP's own session preloads (Prelude, System.IO, etc. injected by

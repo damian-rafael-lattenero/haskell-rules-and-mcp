@@ -14,8 +14,7 @@ module HaskellFlows.Tool.Session
   ) where
 
 import Data.Aeson
-import qualified Data.Aeson.KeyMap as KeyMap
-import Data.Aeson.Types (Parser, parseEither)
+import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -26,7 +25,6 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Tool.Env (ToolEnv (..))
-import qualified HaskellFlows.Tool.Imports as Imports
 import qualified HaskellFlows.Tool.Toolchain as Toolchain
 import qualified HaskellFlows.Tool.Workflow as Workflow
 
@@ -71,18 +69,28 @@ handle env rawArgs = case parseEither (Act.parsePayloadAction Act.sessionSpec) r
   Right action -> case action of
     Act.SessionToolchain -> Env.withResultAction "toolchain" <$> Toolchain.handle env (Act.setActionField "status" rawArgs)
     Act.SessionWarmup    -> Env.withResultAction "warmup" <$> Toolchain.handle env (Act.setActionField "warmup" rawArgs)
-    Act.SessionImports   -> Env.withResultAction "imports" <$> Imports.handle env (Act.stripActionField rawArgs)
+    -- Unreachable since W6.2: routeIde serves action=imports via
+    -- IdeBacked.handleSessionImports. Backstop keeps dispatch
+    -- exhaustive; a live arrival means dispatch broke.
+    Act.SessionImports   -> importsRegressionBackstop
     Act.SessionWorkflow  -> Env.withResultAction (rawAction rawArgs) <$> Workflow.handle env rawArgs
   where
-    asAction :: Text -> Value
-    asAction a =
-      case rawArgs of
-        Object o -> Object (KeyMap.insert "action" (String a) o)
-        v        -> v
-
     refusal :: String -> Env.ToolResponse
     refusal msg =
       Env.mkRefused (Env.mkErrorEnvelope Env.Validation (T.pack msg))
+
+-- | Unreachable-response for the routeIde-served imports action.
+importsRegressionBackstop :: IO ToolResponse
+importsRegressionBackstop =
+  pure
+    ( Env.mkFailed
+        ( Env.mkErrorEnvelope
+            Env.InternalError
+            ( "ghc_session(action=imports) is served by the in-process "
+                <> "ghcide route; reaching this handler is a dispatch regression"
+            )
+        )
+    )
 
 -- | The raw @action@ string of the request, for valve (sub-handler
 -- verb) provenance tagging.

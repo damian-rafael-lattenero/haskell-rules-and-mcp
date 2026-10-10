@@ -1,31 +1,28 @@
 -- | @ghc_suggest@ — emit candidate QuickCheck laws for a function
 -- based on its type signature.
 --
--- Flow:
+-- Since W6.3 the live flow lives in "HaskellFlows.Tool.IdeBacked"
+-- ('handleSuggest', served via 'routeIde'): per-module anchor queries
+-- resolve the type ('queryType') and gather siblings
+-- ('collectSiblingsContextual'); this module keeps the shared Ghc
+-- queries, the response shaping, and the text parsers. The registry
+-- 'handle' is an unreachable backstop (same shape as 'Tool.EvalRoute').
 --
--- 1. Query GHCi for the function's type via @:t@.
--- 2. Parse the type structurally via 'HaskellFlows.Parser.TypeSignature'.
--- 3. Run every rule in 'HaskellFlows.Suggest.Rules.allRules' against
---    the parsed signature.
--- 4. Return the matching suggestions with @law@, @property@
---    (ready-to-run), @rationale@, @confidence@, @category@.
+-- Rule engine:
 --
--- Innovation vs TS port:
---
--- * Rule engine is composable — rules are values in a list, not
---   hard-coded @if-else@ branches. Extending is a one-line append
---   in 'Suggest.Rules.allRules'.
+-- * Rules are values in a list, not hard-coded @if-else@ branches.
+--   Extending is a one-line append in 'Suggest.Rules.allRules'.
 -- * Each suggestion carries a @rationale@ and @confidence@ — the
 --   agent can weight which to try first.
 -- * Optional @category@ filter lets the caller scope to only
 --   algebraic / list / monoid laws when that's what they need.
 module HaskellFlows.Tool.Suggest
   ( descriptor
+    -- | Unreachable registry backstop: 'IdeBacked.routeIde' serves
+    -- every GhcSuggest call (same shape as 'Tool.EvalRoute').
   , handle
   , SuggestArgs (..)
   , outOfScopeResult
-    -- * Sibling-aware helpers (BUG-03)
-  , gatherSiblings
     -- * W6 — shared with the ghcide backend (IdeBacked)
   , collectSiblingsContextual
   , queryType
@@ -41,60 +38,35 @@ module HaskellFlows.Tool.Suggest
   ) where
 
 import Data.Aeson
-import Data.Aeson.Types (parseEither)
 import Data.Char (isAsciiLower)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 
-import Control.Exception (SomeException, try)
-
 import GHC
   ( Ghc
-  , ModSummary
-  , TcRnExprMode (TM_Inst)
   , TyThing (AnId)
+  , TcRnExprMode (TM_Inst)
   , exprType
-  , getModuleGraph
-  , getModuleInfo
   , getNamesInScope
   , lookupName
-  , mgModSummaries
-  , modInfoExports
-  , modInfoLookupName
-  , ms_mod
   )
 import GHC.Types.Id (idType)
 import GHC.Types.Name (nameOccName)
 import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Utils.Outputable (showPprUnsafe)
 
-import HaskellFlows.Ghc.ApiSession
-  ( GhcSession
-  , firstLibraryOrTestSuite
-  , LoadFlavour (..)
-  , loadForTarget
-  , withGhcSession
-  )
-import HaskellFlows.Ghc.Sanitize
-  ( sanitizeExpression
-  )
-import HaskellFlows.Tool.EvalContext (augmentEvalContext)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
-import HaskellFlows.Parser.Error (GhcError)
 import HaskellFlows.Parser.Type (isOutOfScope)
 import HaskellFlows.Parser.TypeSignature (ParsedSig, argCount, parseSignature)
 import HaskellFlows.Suggest.Rules
   ( Confidence (..)
-  , RuleContext (..)
   , Suggestion (..)
-  , applyRulesCtx
   )
-import HaskellFlows.Tool.Env (ToolEnv (..))
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -147,65 +119,23 @@ instance FromJSON SuggestArgs where
     c  <- o .:? "category"
     pure SuggestArgs { saFunctionName = fn, saCategory = c }
 
-handle :: ToolEnv -> Value -> IO ToolResponse
-handle env rawArgs = do
-  ghcSess <- teSession env
-  runHandle ghcSess rawArgs
+-- | Unreachable: 'IdeBacked.routeIde' serves every GhcSuggest call
+-- (per-module sibling queries since W6.3). Kept so the registry
+-- handler table stays exhaustive — a live arrival is a dispatch
+-- regression.
+handle :: env -> Value -> IO ToolResponse
+handle _ _ =
+  pure
+    ( Env.mkFailed
+        ( Env.mkErrorEnvelope
+            Env.InternalError
+            ( "ghc_suggest is served by the in-process ghcide route; "
+                <> "reaching this handler is a dispatch regression"
+            )
+        )
+    )
 
-runHandle :: GhcSession -> Value -> IO ToolResponse
-runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
-  Left parseError ->
-    pure (formatParseError parseError)
-  Right args -> case sanitizeExpression (saFunctionName args) of
-    Left e -> pure (Env.mkRefused (Env.sanitizeRejection "function_name" e))
-    Right safe -> do
-      tgt <- firstLibraryOrTestSuite ghcSess
-      eLoad <- try (loadForTarget ghcSess tgt Strict)
-      case eLoad :: Either SomeException (Bool, [GhcError]) of
-        Left ex ->
-          pure (subprocessResult
-                  ("loadForTarget failed: " <> T.pack (show ex)))
-        Right _ -> do
-          -- Issue #243: loadForTarget resets the interactive context to
-          -- 'preludeImport : homeImports ++ projImports'. If the function
-          -- the user is querying comes from a session preload (Data.List,
-          -- Data.Map, etc.) rather than the project source, it won't be
-          -- in scope after the reset. augmentEvalContext re-adds the
-          -- standard preload modules (same list ghc_eval uses) before
-          -- calling exprType so that names like 'sort', 'nub',
-          -- 'intercalate' resolve correctly.
-          eType <- try (withGhcSession ghcSess (augmentEvalContext >> queryType safe))
-          case eType :: Either SomeException Text of
-            Left ex ->
-              pure (outOfScopeResult safe (T.pack (show ex)))
-            Right typeText
-              | isOutOfScope typeText ->
-                  pure (outOfScopeResult safe typeText)
-              | otherwise ->
-                  case parseSignature typeText of
-                    Nothing ->
-                      pure (validationErr
-                        ("Could not parse signature: " <> typeText))
-                    Just sig -> do
-                      siblings <- gatherSiblings ghcSess safe
-                      let ctx = RuleContext
-                            { rcName     = safe
-                            , rcSig      = sig
-                            , rcSiblings = siblings
-                            }
-                          matches  = applyRulesCtx ctx
-                          filtered = case saCategory args of
-                            Nothing -> matches
-                            Just c  -> filter ((c ==) . sCategory) matches
-                      pure (successResult safe typeText sig filtered)
-
-
--- | Issue #90 Phase C: GHC API exception (load threw).
-subprocessResult :: Text -> ToolResponse
-subprocessResult msg =
-  Env.mkFailed (Env.mkErrorEnvelope Env.SubprocessError msg)
-
--- | Issue #90 Phase C: type signature parsed by GHC but our
+-- | Issue #90 Phase C: type-signature parsed by GHC but our
 -- in-house parser couldn't read it.
 validationErr :: Text -> ToolResponse
 validationErr msg =
@@ -318,86 +248,15 @@ outOfScopeResult fn ghcOutput =
   in response
 
 --------------------------------------------------------------------------------
--- BUG-03: sibling discovery
+-- BUG-03: sibling discovery (ghcide backend)
 --------------------------------------------------------------------------------
 
--- | Discover the top-level bindings that live next to the focal
--- function and return them as the @rcSiblings@ input to
--- 'applyRulesCtx'.
---
--- Two sources are walked and merged:
---
---   (a) The focal function's HOME module — where the name is
---       defined. Standard sibling: @simplify@ co-defined with
---       @simpNeg@ / @simpAdd@ in @Expr.Simplify@.
---   (b) The CURRENTLY-FOCUSED module — flagged with @*@ in
---       @:show modules@. When a project has a harness module
---       that re-exports several source modules (e.g. a
---       test/Gen module re-exporting @simplify@ + @eval@ +
---       @pretty@ for QuickCheck), loading it makes those
---       re-exports visible as siblings of the focal.
---
--- Flow:
---
--- 1. @:info \<focalName\>@ → "Defined at <path>" → focal file.
--- 2. @:show modules@ → [(ModuleName, FilePath)] + the
---    @*@-focused module.
--- 3. Browse both the focal's home module and the focused one
---    (if distinct). De-duplicate names.
--- 4. @:browse \<module\>@ → @name :: type@ per binding.
--- 5. Parse each line; keep lower-case value bindings whose
---    type parses; drop the focal itself.
---
--- Any step failing produces @[]@ so the non-sibling rules
--- still fire — degradation, never crash.
-gatherSiblings :: GhcSession -> Text -> IO [(Text, ParsedSig)]
-gatherSiblings ghcSess focalName = do
-  eRes <- try (withGhcSession ghcSess (collectSiblings focalName))
-  pure $ case eRes :: Either SomeException [(Text, ParsedSig)] of
-    Left _   -> []
-    Right xs -> xs
-
--- | Walk the loaded module graph. For each module, iterate its
--- exported 'Name's, resolve each to a 'TyThing', keep only value
--- bindings ('AnId'), render the name + type as Text, parse the
--- signature, and return the (name, sig) pair. Drops the focal
--- function itself. Dedup by name (first wins).
-collectSiblings :: Text -> Ghc [(Text, ParsedSig)]
-collectSiblings focalName = do
-  mg <- getModuleGraph
-  allPairs <- concat <$> mapM collectFromModule (mgModSummaries mg)
-  pure (nubByName allPairs)
-  where
-    collectFromModule :: ModSummary -> Ghc [(Text, ParsedSig)]
-    collectFromModule ms = do
-      mInfo <- getModuleInfo (ms_mod ms)
-      case mInfo of
-        Nothing   -> pure []
-        Just info -> do
-          let names = modInfoExports info
-          allPairs <- mapM (tryId info) names
-          pure [ (nm, sig)
-               | Just (nm, ty) <- allPairs
-               , nm /= focalName
-               , Just sig <- [parseSignature ty]
-               ]
-
-    -- Look up a Name's 'TyThing'; keep only value bindings (AnId).
-    -- Returns Just (name, typeText) or Nothing when not a value.
-    tryId info nm = do
-      mThing <- modInfoLookupName info nm
-      pure $ case mThing of
-        Just (AnId i) ->
-          let occ = T.pack (occNameString (nameOccName nm))
-              ty  = T.pack (showPprUnsafe (idType i))
-          in Just (occ, ty)
-        _ -> Nothing
-
--- | W6 contextual siblings (ghcide backend): read the names of the
--- CURRENT interactive context instead of walking the module graph —
--- home-module interfaces live in ghcide's memory where
--- 'getModuleInfo' cannot load an .hi. With the anchor module in
--- scope this enumerates exactly the module's top-level bindings.
+-- | W6 contextual siblings: read the names of the CURRENT interactive
+-- context instead of walking the module graph — home-module interfaces
+-- live in ghcide's memory where 'getModuleInfo' cannot load an .hi.
+-- With the anchor module in scope this enumerates exactly the module's
+-- top-level bindings. Any step failing produces @[]@ so the
+-- non-sibling rules still fire — degradation, never crash.
 collectSiblingsContextual :: Text -> Ghc [(Text, ParsedSig)]
 collectSiblingsContextual focalName = do
   names <- getNamesInScope
@@ -424,10 +283,9 @@ nubByName = go []
       | n `elem` seen          = go seen rest
       | otherwise              = (n, s) : go (n : seen) rest
 
--- Wave-5 removed `nubText`, `catMaybesT`, `focusedModule`,
--- `moduleForFile`, `_siblingsFromBrowse` — all only made sense in
--- the text-based @:browse@ + @:show modules@ parsing era. The
--- in-process collectSiblings walks the module graph directly.
+-- W6.8 removed `gatherSiblings` + the module-graph `collectSiblings`
+-- walker (legacy ApiSession backend); `collectSiblingsContextual` is
+-- the only sibling source now.
 
 -- | Parse GHCi's @:show modules@ output into @(ModuleName, FilePath)@
 -- tuples. Typical line (stripped):
