@@ -26,7 +26,6 @@ import System.FilePath ((</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.SelfProject as SelfProject
-import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import HaskellFlows.Types (mkProjectDir, PathError (..))
 import HaskellFlows.Data.PropertyStore (openStore, loadAll, save)
 import qualified HaskellFlows.Data.Scratchpad as SP
@@ -34,7 +33,7 @@ import HaskellFlows.Tool.SwitchProject (ValidationError (..), validateSwitchTarg
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
 
 import Control.Concurrent (newMVar, readMVar)
-import Data.Maybe (isJust, isNothing)
+import Data.Maybe (isNothing)
 import Data.Text (Text)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import qualified HaskellFlows.Types
@@ -120,8 +119,8 @@ testSwitchAcceptsValid = do
 
 -- | End-to-end contract of the 'handle' function: after it returns
 -- with success, the project-dir IORef points at the new path AND
--- the session MVar is emptied (Nothing) so the next
--- getOrStartGhcSession boots fresh.
+-- the ide-session MVar is emptied (Nothing) so the next
+-- withIdeSession boots fresh.
 testSwitchHandleSwaps :: IO Bool
 testSwitchHandleSwaps = do
   dirA <- scaffoldTmpProject "from"
@@ -129,26 +128,22 @@ testSwitchHandleSwaps = do
   case (mkProjectDir dirA, mkProjectDir dirB) of
     (Right pdA, Right pdB) -> do
       pdRef    <- newIORef pdA
-      sessRef  <- newMVar Nothing
       storeA   <- openStore pdA
       storeRef <- newIORef storeA
-      -- Prime the session so we can observe the kill semantics:
-      -- handle must wipe whatever Session was there.
-      primed   <- startGhcSession pdA
-      _        <- readMVar sessRef
-      sessRef' <- newMVar (Just primed)
+      -- Prime the ide slot so we can observe the drop semantics:
+      -- handle must wipe whatever session was there (the payload is
+      -- never forced — only the Just/Nothing shape is inspected).
+      ideRef   <- newMVar (Just undefined)
       -- PR-4: SwitchProject.handle gained an IORef Bool for the
       -- self-project flag. Synthetic /tmp targets are never self.
       -- F-02: SwitchProject.handle also gained an IORef Scratchpad.Store.
       scratchA   <- SP.openStore pdA
       scratchRef <- newIORef scratchA
       selfRef    <- newIORef False
-      -- Post-C1: switch also drops the ghcide IdeSession slot.
-      ideRef'    <- newMVar Nothing
       let args = A.object [ "path" A..= T.pack dirB ]
-      result  <- SwitchProject.handle pdRef sessRef' ideRef' storeRef scratchRef selfRef args
+      result  <- SwitchProject.handle pdRef ideRef storeRef scratchRef selfRef args
       newPd   <- readIORef pdRef
-      mSess   <- readMVar sessRef'
+      mSess   <- readMVar ideRef
       removePathForcibly dirA
       removePathForcibly dirB
       pure
@@ -185,7 +180,6 @@ testSwitchHandleReopensStore = do
   case (mkProjectDir dirA, mkProjectDir dirB) of
     (Right pdA, Right pdB) -> do
       pdRef    <- newIORef pdA
-      sessRef  <- newMVar Nothing
       storeA   <- openStore pdA
       save storeA "\\x -> x == (x :: Int)" (Just "src/Foo.hs")
       preProps <- loadAll storeA
@@ -198,7 +192,7 @@ testSwitchHandleReopensStore = do
       selfRef    <- newIORef False
       ideRef     <- newMVar Nothing
       let args = A.object [ "path" A..= T.pack dirB ]
-      _ <- SwitchProject.handle pdRef sessRef ideRef storeRef scratchRef selfRef args
+      _ <- SwitchProject.handle pdRef ideRef storeRef scratchRef selfRef args
       storeAfter  <- readIORef storeRef
       postProps   <- loadAll storeAfter
       -- After the swap, the OLD Store handle should still point
@@ -238,7 +232,6 @@ testSwitchHandleReopensScratchpad = do
   case (mkProjectDir dirA, mkProjectDir dirB) of
     (Right pdA, Right pdB) -> do
       pdRef      <- newIORef pdA
-      sessRef    <- newMVar Nothing
       storeA     <- openStore pdA
       storeRef   <- newIORef storeA
       scratchA   <- SP.openStore pdA
@@ -262,7 +255,7 @@ testSwitchHandleReopensScratchpad = do
       preEntries <- SP.loadAll scratchA
       -- Switch to project B (use pdB-derived path to suppress unused-match)
       let args = A.object [ "path" A..= T.pack (HaskellFlows.Types.unProjectDir pdB) ]
-      _ <- SwitchProject.handle pdRef sessRef ideRef storeRef scratchRef selfRef args
+      _ <- SwitchProject.handle pdRef ideRef storeRef scratchRef selfRef args
       -- Read the new scratchpad via the swapped ref
       scratchAfter  <- readIORef scratchRef
       postEntries   <- SP.loadAll scratchAfter

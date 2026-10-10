@@ -21,7 +21,6 @@ import System.FilePath ((</>))
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Staleness (StalenessReport (..))
 import HaskellFlows.Types (mkProjectDir)
-import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Mcp.WorkflowState as WS
 import qualified HaskellFlows.Data.Scratchpad as SP
 import qualified HaskellFlows.Tool.Workflow as WorkflowTool

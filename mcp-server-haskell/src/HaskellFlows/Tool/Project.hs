@@ -16,7 +16,7 @@
 -- This module exports only the schema 'descriptor' — dispatch lives
 -- in 'HaskellFlows.Mcp.Server' because each underlying handler has
 -- a different signature with respect to server state ('IORef
--- ProjectDir', 'MVar (Maybe GhcSession)', the property 'Store',
+-- ProjectDir', 'MVar (Maybe IdeSession)', the property 'Store',
 -- @[ToolDescriptor]@). Bundling that into a single
 -- 'ProjectDir -> Value -> IO ToolResult' wrapper would have meant
 -- exposing all of those handles from this module, which is a
@@ -42,7 +42,6 @@ import qualified Data.Text as T
 import qualified HaskellFlows.Data.Scratchpad as Scratchpad
 import HaskellFlows.Data.PropertyStore (Store)
 import Control.Concurrent.MVar (MVar)
-import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Ghc.IdeSession (IdeSession)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -66,12 +65,11 @@ import HaskellFlows.Types (ProjectDir)
 -- bootstrap.
 handle :: ToolEnv -> Value -> IO ToolResponse
 handle env =
-  runHandle (teLimits env) (teProjectDirRef env) (teSessionRef env) (teIdeSessionRef env) (teStoreRef env) (teScratchpadRef env) (teIsSelfRef env) (teInvalidateStanza env) (teDescriptors env)
+  runHandle (teLimits env) (teProjectDirRef env) (teIdeSessionRef env) (teStoreRef env) (teScratchpadRef env) (teIsSelfRef env) (teInvalidateStanza env) (teDescriptors env)
 
 runHandle
   :: Limits
   -> IORef ProjectDir
-  -> MVar (Maybe GhcSession)
   -> MVar (Maybe IdeSession) -- ^ dropped by the auto-switch / switch paths
   -> IORef Store
   -> IORef Scratchpad.Store
@@ -80,7 +78,7 @@ runHandle
   -> [ToolDescriptor]   -- ^ allToolDescriptors (for bootstrap)
   -> Value
   -> IO ToolResponse
-runHandle lim pdRef sessRef ideRef storeRef scratchRef selfRef invalidateStanza descriptors rawArgs =
+runHandle lim pdRef ideRef storeRef scratchRef selfRef invalidateStanza descriptors rawArgs =
   case actionField rawArgs of
     Nothing ->
       pure (Env.mkRefused
@@ -101,11 +99,11 @@ runHandle lim pdRef sessRef ideRef storeRef scratchRef selfRef invalidateStanza 
                else case createAutoSwitchPath inner of
                  Nothing      -> pure r
                  Just newPath -> do
-                   _ <- SwitchProjectTool.handle pdRef sessRef ideRef storeRef scratchRef selfRef
+                   _ <- SwitchProjectTool.handle pdRef ideRef storeRef scratchRef selfRef
                           (object ["path" .= T.pack newPath])
                    pure r
            "switch" ->
-             SwitchProjectTool.handle pdRef sessRef ideRef storeRef scratchRef selfRef inner
+             SwitchProjectTool.handle pdRef ideRef storeRef scratchRef selfRef inner
            "validate" -> do
              pd <- readIORef pdRef
              ValidateCabalTool.handle lim pd inner
@@ -210,7 +208,7 @@ schema = Schema.discriminatedSchema "action"
           \exist, and must contain at least one .cabal file (or be \
           \empty — empty dir is allowed because action='create' is \
           \the canonical follow-up). Tears down the in-process \
-          \GhcSession (if any) and re-opens the property store \
+          \session (if any) and re-opens the property store \
           \against the new path."
       , Schema.sbProperties        =
           [ ("path", Schema.stringField

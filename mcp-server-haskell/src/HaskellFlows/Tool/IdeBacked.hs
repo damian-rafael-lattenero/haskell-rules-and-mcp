@@ -15,6 +15,7 @@ module HaskellFlows.Tool.IdeBacked
   , warmupIdeSession
   , withIdeSession
   , handlePropertyRun
+  , ideQcProbe
   , ReplayOutcome (..)
   , replayProp
   , replayStored
@@ -70,6 +71,7 @@ import HaskellFlows.Ghc.IdeSession
   , ideRecordExtraImport
   )
 import HaskellFlows.Parser.Cabal (projectModuleFilesFromCabal)
+import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..))
 import HaskellFlows.Parser.Hole (TypedHole (..), parseTypedHoles)
 import HaskellFlows.Tool.Hole (HoleArgs (..), holesPayload, parseErrorKind)
 import qualified HaskellFlows.Tool.Info as InfoTool
@@ -1722,6 +1724,53 @@ replayProp pdRef s p = do
       in if worst == "passed"
            then pure (p, ReplayPassed (qcNOf 1 out))
            else pure (p, ReplayRegressed worst)
+
+-- | W6.8.2: one QuickCheck verdict for a property (or a synthetic
+-- audit probe) through the ghcide session — the probe-runner
+-- 'Tool.PropertyAudit' receives by injection. Same anchor-chain
+-- evaluation as 'replayProp' (module hint → anchors → warm → first
+-- anchor that scopes @Test.QuickCheck@), but the rendered
+-- @STATE|s|N|n|OUT|o@ frame is mapped onto 'QuickCheckResult' so
+-- PropertyAudit's pure interpreters ('interpretProbeResult',
+-- 'isVacuousResult') keep their legacy contracts unchanged.
+ideQcProbe
+  :: IORef ProjectDir -> IdeSession
+  -> Maybe Text   -- ^ module hint (the property's recorded module)
+  -> Text         -- ^ property / probe expression
+  -> IO (Either Text QuickCheckResult)
+ideQcProbe pdRef s mModule prop = do
+  let anchorArg = T.unpack <$> mModule
+  anchors <- anchorCandidates pdRef anchorArg
+  warmAnchors s anchors
+  r <- firstRight scopeRetry
+    [ ideEvalExprIn s (EvalArgs a ["Test.QuickCheck", "System.IO.Unsafe"] True) (qcExpr prop 1)
+    | a <- anchors
+    ]
+  pure $ case r of
+    Nothing ->
+      Left "could not resolve a GHC session with QuickCheck for this property"
+    Just (Left err) -> Left (evText err)
+    Just (Right out) -> Right (qcResultOf prop out)
+
+-- | Map the single-run @STATE|s|N|n|OUT|o@ frame onto 'QuickCheckResult'.
+-- Unknown state strings fall through to 'QcUnparsed' with the raw
+-- frame — the audit's \"probe load/parse failure\" route.
+qcResultOf :: Text -> Text -> QuickCheckResult
+qcResultOf prop out =
+  let (st, mn, mOut) = parseRun' out
+      outTxt = fromMaybe "" mOut
+      n      = fromMaybe 0 mn
+      -- Test.QuickCheck.output starts with the verdict header line
+      -- ("*** Failed! ..."); the counterexample is everything after it.
+      cex    = case T.lines outTxt of
+                 (_ : rest) -> T.unlines rest
+                 []         -> outTxt
+  in case st of
+       "passed"    -> QcPassed prop n
+       "failed"    -> QcFailed prop n 0 (T.strip cex)
+       "gave_up"   -> QcGaveUp prop n 0
+       "exception" -> QcException prop outTxt
+       _           -> QcUnparsed prop outTxt
 
 -- | Strip the project-root prefix for response-facing paths.
 relativizeTo :: FilePath -> FilePath -> FilePath

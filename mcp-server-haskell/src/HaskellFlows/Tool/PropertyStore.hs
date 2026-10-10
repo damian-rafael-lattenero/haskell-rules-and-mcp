@@ -42,7 +42,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 
 import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
-import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Ghc.IdeSession (IdeSession)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -56,26 +55,24 @@ import HaskellFlows.Tool.Env (ToolEnv (..))
 import HaskellFlows.Types (ProjectDir)
 
 -- | #275: dispatch a @ghc_property_store@ call to the right delegate based on
--- the @action@ discriminator. Dependencies are injected: @startSession@ lazily
--- boots the GHC session (list / run / audit need it; export does not),
+-- the @action@ discriminator. Dependencies are injected: @ideRef@ lazily boots
+-- the ghcide session (run / audit need it; list / export do not),
 -- @storeRef@ + @pdRef@ are the server's refs. @list@ / @run@ keep the @action@
--- field (Regression parses it); @export@ / @audit@ strip it.
+-- field (the run renderer parses it); @export@ / @audit@ strip it.
 handle :: ToolEnv -> Value -> IO ToolResponse
 handle env =
   runHandle
-    (teSession env)
     (teIdeSessionRef env)
     (teStoreRef env)
     (teProjectDirRef env)
 
 runHandle
-  :: IO GhcSession
-  -> MVar (Maybe IdeSession)
+  :: MVar (Maybe IdeSession)
   -> IORef Store
   -> IORef ProjectDir
   -> Value
   -> IO ToolResponse
-runHandle startSession ideRef storeRef pdRef rawArgs = case actionField rawArgs of
+runHandle ideRef storeRef pdRef rawArgs = case actionField rawArgs of
   Nothing ->
     pure (Env.mkRefused
         (Env.mkErrorEnvelope Env.MissingArg
@@ -93,9 +90,16 @@ runHandle startSession ideRef storeRef pdRef rawArgs = case actionField rawArgs 
       store <- readIORef storeRef
       QcExportTool.handle store pd (stripAction rawArgs)
     "audit"  -> do
-      sess  <- startSession
+      -- W6.8.2: the probes run through the ghcide session via the
+      -- injected probe-runner (IdeBacked.ideQcProbe) — the legacy
+      -- GhcSession boot is gone.
       store <- readIORef storeRef
-      PropertyAuditTool.handle store sess (stripAction rawArgs)
+      IdeBacked.withIdeSession ideRef pdRef $ \s ->
+        PropertyAuditTool.handle
+          (PropertyAuditTool.AuditQueries
+             { PropertyAuditTool.aqProbe = IdeBacked.ideQcProbe pdRef s })
+          store
+          (stripAction rawArgs)
     other ->
       pure (Env.mkRefused
           (Env.mkErrorEnvelope Env.Validation

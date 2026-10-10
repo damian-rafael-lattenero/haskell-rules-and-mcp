@@ -47,7 +47,7 @@ import System.FilePath ((</>))
 import qualified HaskellFlows.Data.Scratchpad as SP
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Ghc.ApiSession (GhcSession)
+import HaskellFlows.Ghc.IdeSession (IdeSession)
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName
   ( ToolName (..)
@@ -114,11 +114,11 @@ handle env rawArgs = do
   ws       <- teWorkflowState env
   staleness <- teStaleness env
   isSelf   <- teIsSelf env
-  runHandle (teProjectDirRef env) (teSessionRef env) (teToolNames env) ws staleness isSelf (teScratchpadRef env) rawArgs
+  runHandle (teProjectDirRef env) (teIdeSessionRef env) (teToolNames env) ws staleness isSelf (teScratchpadRef env) rawArgs
 
 runHandle
   :: IORef ProjectDir
-  -> MVar (Maybe GhcSession)
+  -> MVar (Maybe IdeSession)
   -> [Text]
   -> WorkflowState
   -> StalenessReport
@@ -193,7 +193,7 @@ parseErrorKind err
       in any (\i -> take n (drop i haystack) == needle)
              [0 .. length haystack - n]
 
-isAlive :: MVar (Maybe GhcSession) -> IO Bool
+isAlive :: MVar (Maybe IdeSession) -> IO Bool
 isAlive sessMVar = do
   m <- readMVar sessMVar
   pure (case m of Nothing -> False; Just _ -> True)

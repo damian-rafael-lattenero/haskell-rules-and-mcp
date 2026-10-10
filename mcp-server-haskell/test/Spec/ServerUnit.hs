@@ -13,8 +13,6 @@ module Spec.ServerUnit
   , testDepsAddIdempotent
   , testSwitchProjectEmptyDir
   , testAddModulesStanzaParam
-  , testQuickCheckScopeWidening
-  , testQuickCheckRunnerDoBrace
   , testLoadAutoImports
   ) where
 
@@ -237,42 +235,6 @@ testAddModulesStanzaParam = do
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s
 
-
--- | Fix 3. 'ghc_quickcheck module=<file>' used to leave the
--- property running with only @file@'s own imports in scope, so
--- a property that referenced library functions failed with
--- 'Variable not in scope'. The fix widens the interactive context
--- via @:m +@ over every library exposed-module.
-testQuickCheckScopeWidening :: IO Bool
-testQuickCheckScopeWidening = do
-  src <- TIO.readFile "src/HaskellFlows/Tool/QuickCheck.hs"
-  let code = T.unlines (filter (not . isDocLine) (T.lines src))
-  pure $ T.isInfixOf "libraryExposedModules" code
-      && T.isInfixOf ":m + " code
-      && T.isInfixOf "scanLibraryExposedModules" code
-  where
-    isDocLine ln =
-      let s = T.stripStart ln in "--" `T.isPrefixOf` s
-
--- | #187 / F-11: GHC 9.12 batch/stdin mode no longer accepts bare
--- top-level @r <- quickCheckWithResult …@ without an explicit @do@.
--- The runner must wrap IO statements in @:{@ @do { … }@ @:}@ so
--- GHCi parses them as a single IO action regardless of whether stdin
--- is a TTY. Both runner blocks (main and stability/witness) must
--- use this pattern.
-testQuickCheckRunnerDoBrace :: IO Bool
-testQuickCheckRunnerDoBrace = do
-  src <- TIO.readFile "src/HaskellFlows/Tool/QuickCheck.hs"
-  let code = T.unlines (filter (not . isDocLine) (T.lines src))
-  -- Must have the :{ / :} delimiters in the generated input strings
-  pure $ T.isInfixOf "\":{\""  code
-      && T.isInfixOf "\":}\""  code
-      -- Must use explicit do-block syntax
-      && T.isInfixOf "\"do {" code
-      -- Must NOT have bare top-level r <- any more
-      && not (T.isInfixOf "\"r <- quickCheckWithResult" code)
-  where
-    isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
 
 -- | Cure regression: the interactive context must be derived from
 -- the project's own @import …@ declarations, not from a hardcoded

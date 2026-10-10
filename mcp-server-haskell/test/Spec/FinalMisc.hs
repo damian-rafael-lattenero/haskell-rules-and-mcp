@@ -42,7 +42,6 @@ module Spec.FinalMisc
   , testExtractFreeVarNames
   , testExtractFreeVarNamesEmpty
   , testRefactorFreeVarNote
-  , testExtractQcOutputAt
   , testSplitAtDepthZeroIssue215
   , testDepsCommonStanzaPkgFound
   , testDepsCommonStanzaPkgAbsent
@@ -87,7 +86,6 @@ import qualified HaskellFlows.Tool.FixWarning as FixWarning
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.Imports as ImportsTool
 import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
-import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
 import qualified HaskellFlows.Tool.Suggest as SuggestTool
@@ -680,26 +678,6 @@ testRefactorFreeVarNote =
                && "extract_binding" `T.isInfixOf` note
            _ -> False
        _ -> False
-
--- | #201: 'QcTool.extractQcOutputAt' slices the correct indexed
--- sentinel block from batch repl stdout.
-
-testExtractQcOutputAt :: IO Bool
-
-testExtractQcOutputAt =
-  let full = T.unlines
-        [ "__QC_START_0__"
-        , "passed (100 tests)"
-        , "__QC_END_0__"
-        , "__QC_START_1__"
-        , "Failed! Falsified (after 3 tests):"
-        , "__QC_END_1__"
-        ]
-  in pure $ QcTool.extractQcOutputAt 0 full == "passed (100 tests)"
-         && QcTool.extractQcOutputAt 1 full == "Failed! Falsified (after 3 tests):"
-
--- | #201: 'QcTool.extractQcOutputAt' returns empty text when the
--- requested index has no matching sentinel in the output.
 
 testSplitAtDepthZeroIssue215 :: IO Bool
 

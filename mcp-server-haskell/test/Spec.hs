@@ -131,7 +131,6 @@ import qualified HaskellFlows.Tool.CreateProject as CreateProject
 import qualified HaskellFlows.Tool.Move as MoveTool
 import qualified HaskellFlows.Tool.DepsExplain as DepsExplain
 import qualified HaskellFlows.Tool.PropertyAudit as PropertyAuditTool
-import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import qualified HaskellFlows.Tool.Bootstrap as Bootstrap
 import qualified HaskellFlows.Tool.RemoveModules as RM
@@ -871,8 +870,6 @@ runAllTests = do
       , test "ghc_deps add: idempotent no-op returns unchanged"  testDepsAddIdempotent
       , test "ghc_switch_project: empty dir -> create_project"   testSwitchProjectEmptyDir
       , test "ghc_add_modules: accepts stanza param"            testAddModulesStanzaParam
-      , test "ghc_quickcheck: widens scope via :m +"            testQuickCheckScopeWidening
-      , test "ghc_quickcheck: runner uses :{ do :} not bare <-"  testQuickCheckRunnerDoBrace
       , test "initialize emits instructions field"  testInitializeEmitsInstructions
       , test "instructions mention key tools+flows" testInstructionsMentionCore
       , test "nextStep: create_project -> deps"     testNextStepCreateProject
@@ -1084,8 +1081,8 @@ runAllTests = do
                                                                  testPAIsVacuousGaveUp
       , test "property_audit: isVacuousResult false for QcPassed (#64 Phase2)"
                                                                  testPAIsVacuousNotPassed
-      , test "#241: PropertyAudit.hs uses runQuickCheckWithLabelsInProcess for probe"
-                                                                 testAuditUsesInProcessProbe
+      , test "#W6.8.2: PropertyAudit.hs runs probes via the injected aqProbe"
+                                                                 testAuditUsesInjectedProbe
       , test "#241: enhanceCrossModuleDetail appends hint for cross-module pair"
                                                                  testEnhanceCrossModuleDetailHits
       , test "#241: enhanceCrossModuleDetail no-op when modules match"
@@ -1094,13 +1091,6 @@ runAllTests = do
                                                                  testEnhanceCrossModuleDetailNotSkipped
       , test "#241: enhanceCrossModuleDetail no-op when module is null"
                                                                  testEnhanceCrossModuleDetailNullModule
-      , test "#241: appendReplStderr surfaces stderr on skipped+load-failure"
-                                                                 testAppendReplStderrHits
-      , test "#241: appendReplStderr no-op when stderr is empty"
-                                                                 testAppendReplStderrEmpty
-      , test "#241: appendReplStderr no-op when not skipped"     testAppendReplStderrNotSkipped
-      , test "#241: appendReplStderr truncates long stderr to 500 chars"
-                                                                 testAppendReplStderrTruncates
       , test "#294: enhanceNotInScopeDetail gives honest skip reason"
                                                                  testEnhanceNotInScopeDetailHits
       , test "#294: enhanceNotInScopeDetail no-op when not skipped"
@@ -1358,7 +1348,6 @@ runAllTests = do
       , test "#205: extractFreeVarNames picks up not-in-scope variables"        testExtractFreeVarNames
       , test "#205: extractFreeVarNames empty when no not-in-scope errors"      testExtractFreeVarNamesEmpty
       , test "#205: compileFailResult adds note for free-variable errors"       testRefactorFreeVarNote
-      , test "#201: extractQcOutputAt slices indexed sentinel output"          testExtractQcOutputAt
       -- Issue #200 — regression_pct precision
       -- Issue #135 — summariseMeasurementErrors truncation
       -- Issue #108 — typed-hole reclassification in check_module + refactor

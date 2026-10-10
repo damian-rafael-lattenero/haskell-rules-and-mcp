@@ -19,8 +19,8 @@
 -- * Confirms the directory exists and contains at least one @.cabal@
 --   file — refuses to point at a non-project to avoid surprising
 --   downstream tools that assume a cabal layout.
--- * Tears down the in-process 'GhcSession' (if any) so the next tool
---   call boots a fresh session against the new path.
+-- * Drops the ghcide 'IdeSession' (if any) so the next tool call
+--   boots a fresh session against the new path.
 -- * Atomically swaps 'srvProjectDir'. The MVar around
 --   'srvGhcSession' serialises the swap against concurrent tool
 --   handlers: in-flight reads finish against the old session; fresh
@@ -47,10 +47,10 @@ module HaskellFlows.Tool.SwitchProject
   ) where
 
 -- We take the individual mutable refs ('IORef ProjectDir' +
--- 'MVar (Maybe GhcSession)') rather than the whole 'Server' value
+-- 'MVar (Maybe IdeSession)') rather than the whole 'Server' value
 -- so 'handle' can be unit-tested without constructing a full
 -- transport stack.
-import Control.Concurrent.MVar (MVar, modifyMVar_, swapMVar)
+import Control.Concurrent.MVar (MVar, modifyMVar_)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, atomicWriteIORef, readIORef)
@@ -61,7 +61,6 @@ import System.FilePath (takeExtension)
 
 import HaskellFlows.Data.PropertyStore (Store, openStore)
 import qualified HaskellFlows.Data.Scratchpad as Scratchpad
-import HaskellFlows.Ghc.ApiSession (GhcSession, killGhcSession)
 import HaskellFlows.Ghc.IdeSession (IdeSession)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -190,17 +189,16 @@ validateTargetDir pd = do
 -- projects and causing data-loss on the next 'list' or 'clear'.
 handle
   :: IORef ProjectDir
-  -> MVar (Maybe GhcSession)
-  -> MVar (Maybe IdeSession)  -- ^ post-C1: dropped on switch so the
-                              --   next tool call boots against the new
-                              --   root instead of serving a stale IdeState.
+  -> MVar (Maybe IdeSession)  -- ^ dropped on switch so the next tool
+                              --   call boots against the new root
+                              --   instead of serving a stale IdeState.
   -> IORef Store
   -> IORef Scratchpad.Store  -- ^ F-02: swapped atomically with storeRef
   -> IORef Bool              -- ^ PR-4 Phase 1: srvIsSelfProject — recomputed
                              --   against the new root after a successful switch.
   -> Value
   -> IO ToolResponse
-handle pdRef sessRef ideRef storeRef scratchRef selfRef rawArgs = case parseEither parseJSON rawArgs of
+handle pdRef ideRef storeRef scratchRef selfRef rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right (SwitchProjectArgs raw) -> do
     res <- validateSwitchTarget raw
@@ -219,7 +217,7 @@ handle pdRef sessRef ideRef storeRef scratchRef selfRef rawArgs = case parseEith
         -- 'openStore'/'Scratchpad.openStore' are stat + IORef new-MVar
         -- — quick and never throw — so doing them outside the critical
         -- section keeps the swap window tight. Then serialise the
-        -- (kill-session, swap-pdRef, swap-storeRef, swap-scratchRef)
+        -- (drop-ide, swap-pdRef, swap-storeRef, swap-scratchRef)
         -- quartet under the session MVar so concurrent tool handlers
         -- either see the complete old quartet or the complete new one.
         newStore   <- openStore           newPd
@@ -228,16 +226,14 @@ handle pdRef sessRef ideRef storeRef scratchRef selfRef rawArgs = case parseEith
         -- new root. 'detectSelfProject' is read-only IO that swallows
         -- exceptions — it can't fail the swap.
         newSelf <- detectSelfProject newPd
-        modifyMVar_ sessRef $ \mSess -> do
-          mapM_ killGhcSession mSess
-          -- Post-C1: the ghcide IdeSession is the ONLY backend, so a
-          -- switch must drop it too — otherwise every later tool call
-          -- keeps serving the OLD project from a stale IdeState (and
-          -- the leaked state's threads/watchers accumulate).
-          -- swapMVar (NOT tryTakeMVar): taking the MVar outright
-          -- leaves it EMPTY and the next withIdeSession blocks on
-          -- modifyMVar forever — the dogfood-replay step-4 wedge.
-          _ <- swapMVar ideRef Nothing
+        -- W6.8.2: the ghcide IdeSession is the only backend; the
+        -- legacy GhcSession kill died with ApiSession. modifyMVar_
+        -- (NOT tryTakeMVar/swapMVar-on-the-side): it empties the MVar
+        -- for the critical section and ALWAYS refills it (Nothing on
+        -- success, the original value on exception) — taking the MVar
+        -- outright and leaving it empty is the dogfood-replay step-4
+        -- wedge (next withIdeSession blocks forever).
+        modifyMVar_ ideRef $ \_ -> do
           atomicWriteIORef pdRef       newPd
           atomicWriteIORef storeRef    newStore
           atomicWriteIORef scratchRef  newScratch
@@ -261,7 +257,7 @@ successResult oldPd newPd scaffolded =
     , "current"    .= T.pack (unProjectDir newPd)
     , "scaffolded" .= scaffolded
     , "message"    .= ("Project directory switched. Next tool \
-                       \call boots a fresh GhcSession." :: Text)
+                       \call boots a fresh session." :: Text)
     ])
 
 

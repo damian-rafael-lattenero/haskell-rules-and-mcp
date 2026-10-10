@@ -1,6 +1,6 @@
 -- | Unit tests for 'Tool.PropertyAudit' (PA*), 'Tool.Witness' (Wit*),
 -- 'Tool.ExplainError' patch helpers, and GHC line-col parsing. All pure
--- except testAuditUsesInProcessProbe and testExplainVerifyPatch*.
+-- except testAuditUsesInjectedProbe and testExplainVerifyPatch*.
 --
 -- Extracted from the Spec.hs monolith (#271) via the function-export shape.
 module Spec.PropertyAuditUnit
@@ -16,17 +16,13 @@ module Spec.PropertyAuditUnit
   , testPADedupSingletons
   , testPAIsVacuousGaveUp
   , testPAIsVacuousNotPassed
-  , testAuditUsesInProcessProbe
+  , testAuditUsesInjectedProbe
   , testPARenderFindingKindContradictory
   , testPARenderFindingKindSkipped
   , testEnhanceCrossModuleDetailHits
   , testEnhanceCrossModuleDetailSameModule
   , testEnhanceCrossModuleDetailNotSkipped
   , testEnhanceCrossModuleDetailNullModule
-  , testAppendReplStderrHits
-  , testAppendReplStderrEmpty
-  , testAppendReplStderrNotSkipped
-  , testAppendReplStderrTruncates
   , testAllPairsSkippedTrue
   , testAllPairsSkippedFalseCompat
   , testAllPairsSkippedFalseEmpty
@@ -37,7 +33,6 @@ module Spec.PropertyAuditUnit
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
-import Data.Maybe (isNothing)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
@@ -207,20 +202,21 @@ testPAIsVacuousNotPassed =
   let qcr = QcPassed "\\x -> True" 100
   in pure (not (PropertyAuditTool.isVacuousResult qcr))
 
--- | #241: PropertyAudit.hs uses runQuickCheckWithLabelsInProcess for both
--- the contradiction probe and the vacuous check — not the cabal-repl
--- subprocess (which was producing "no GHCi output" for every probe).
+-- | W6.8.2: PropertyAudit.hs runs both the contradiction probe and
+-- the vacuous check through the injected probe-runner ('aqProbe') —
+-- no direct session/backend wiring inside the module (the runner is
+-- IdeBacked.ideQcProbe, injected by the property-store dispatcher).
 
-testAuditUsesInProcessProbe :: IO Bool
+testAuditUsesInjectedProbe :: IO Bool
 
-testAuditUsesInProcessProbe = do
+testAuditUsesInjectedProbe = do
   src <- TIO.readFile "src/HaskellFlows/Tool/PropertyAudit.hs"
-  -- Must use the in-process path; the old subprocess call must not appear
-  -- as a live call (only possibly in comments, which we check by verifying
-  -- the number of in-process calls exceeds the number of cabal-repl calls).
-  let inProcessCount = T.count "runQuickCheckWithLabelsInProcess" src
-      cabalReplCount = T.count "Qc.runQuickCheckViaCabalRepl" src
-  pure (inProcessCount >= 2 && cabalReplCount == 0)
+  -- Both probe call-sites go through the injected record; the module
+  -- must not reference a session backend of its own.
+  let probeCount   = T.count "aqProbe aq" src
+      sessionWired = T.isInfixOf "ApiSession" src
+                      || T.isInfixOf "runQuickCheck" src
+  pure (probeCount >= 2 && not sessionWired)
 
 -- | #230: kindFor contradictory → "contradictory-pair".
 
@@ -283,50 +279,6 @@ testEnhanceCrossModuleDetailNullModule =
                   Nothing (Just "src/B.hs")
                   "skipped" detail0
   in pure (result == detail0)
-
--- | #241: appendReplStderr surfaces non-empty stderr on a skipped pair
--- with a load-failure detail.
-
-testAppendReplStderrHits :: IO Bool
-
-testAppendReplStderrHits =
-  let detail0 = "probe load/parse failure: (no GHCi output)"
-      err     = "Variable not in scope: pretty :: Expr -> String"
-      result  = PropertyAuditTool.appendReplStderr err "skipped" detail0
-  in pure (T.isInfixOf "REPL stderr" result
-        && T.isInfixOf "Variable not in scope" result)
-
--- | #241: appendReplStderr is a no-op when stderr is empty.
-
-testAppendReplStderrEmpty :: IO Bool
-
-testAppendReplStderrEmpty =
-  let detail0 = "probe load/parse failure: (no GHCi output)"
-      result  = PropertyAuditTool.appendReplStderr "" "skipped" detail0
-      result2 = PropertyAuditTool.appendReplStderr "   \n  " "skipped" detail0
-  in pure (result == detail0 && result2 == detail0)
-
--- | #241: appendReplStderr is a no-op when status is not skipped.
-
-testAppendReplStderrNotSkipped :: IO Bool
-
-testAppendReplStderrNotSkipped =
-  let detail0 = "Probe falsified at: 42"
-      err     = "anything"
-      result  = PropertyAuditTool.appendReplStderr err "compatible" detail0
-  in pure (result == detail0)
-
--- | #241: appendReplStderr truncates stderr to 500 chars.
-
-testAppendReplStderrTruncates :: IO Bool
-
-testAppendReplStderrTruncates =
-  let detail0 = "probe load/parse failure: (no GHCi output)"
-      err     = T.replicate 1000 "x"   -- 1000 chars of 'x'
-      result  = PropertyAuditTool.appendReplStderr err "skipped" detail0
-      -- The result should contain exactly 500 'x' chars (no more).
-      stderrSection = T.dropWhile (/= 'x') result
-  in pure (T.length (T.takeWhile (== 'x') stderrSection) == 500)
 
 -- | #294: a skipped pair whose stderr names an out-of-scope symbol gets an
 -- HONEST explanation (audit limitation, not a compile error) appended,

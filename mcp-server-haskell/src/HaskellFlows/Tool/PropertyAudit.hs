@@ -15,6 +15,12 @@
 -- test actually runs. Vacuous properties are not wrong, but they
 -- give false confidence.
 --
+-- W6.8.2: the probe vehicle is injected ('AuditQueries') — the
+-- legacy session + cabal-repl harness died with the old backend.
+-- The production runner is 'IdeBacked.ideQcProbe' (ghcide session,
+-- anchor chain), injected by the property-store dispatcher under
+-- 'withIdeSession'.
+--
 -- Remaining deferrals:
 --   * Same-arity / same-quantified-type heuristic — Phase 1
 --     pairs every property with every other property in the
@@ -24,6 +30,7 @@
 --     counterexample to the agent for narration.
 module HaskellFlows.Tool.PropertyAudit
   ( handle
+  , AuditQueries (..)
   , PropertyAuditArgs (..)
     -- * Pure helpers (exported for unit tests)
   , pairCombinations
@@ -38,7 +45,6 @@ module HaskellFlows.Tool.PropertyAudit
   , enhanceNullModuleDetail
     -- * #241 (exported for unit tests)
   , enhanceCrossModuleDetail
-  , appendReplStderr
   , allPairsSkipped
     -- * #294 (exported for unit tests)
   , enhanceNotInScopeDetail
@@ -57,16 +63,11 @@ import HaskellFlows.Data.PropertyStore
   , StoredProperty (..)
   , loadAll
   )
-import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol ()
-import HaskellFlows.Parser.QuickCheck
-  ( QuickCheckResult (..)
-  , parseQuickCheckOutput
-  )
-import qualified HaskellFlows.Tool.QuickCheck as Qc
+import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..))
 
 -- | #94 Phase C step 6: this module's @descriptor@ was retired
 -- when the four legacy property-store tools were merged into
@@ -99,8 +100,15 @@ instance FromJSON PropertyAuditArgs where
       , paCheckVacuous = cv
       }
 
-handle :: Store -> GhcSession -> Value -> IO ToolResponse
-handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
+-- | W6.8.2: the injected probe-runner — one QuickCheck verdict for
+-- a property (or synthetic probe). Production wires
+-- 'IdeBacked.ideQcProbe'; unit tests inject pure stubs.
+newtype AuditQueries = AuditQueries
+  { aqProbe :: Maybe Text -> Text -> IO (Either Text QuickCheckResult)
+  }
+
+handle :: AuditQueries -> Store -> Value -> IO ToolResponse
+handle aq store rawArgs = case parseEither parseJSON rawArgs of
   Left err -> pure (formatParseError err)
   Right args -> do
     t0 <- realToFrac <$> getPOSIXTime :: IO Double
@@ -117,10 +125,10 @@ handle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
           Nothing -> deduped
           Just m  -> [ p | p <- deduped, spModule p == Just m ]
         propPairs = pairCombinations filtered
-    findings       <- mapM (runPairProbe ghcSess args) propPairs
+    findings       <- mapM (runPairProbe aq args) propPairs
     -- Phase 2: optional vacuous-property check.
     vacuousFindings <- if paCheckVacuous args
-                         then mapM (runVacuousCheck ghcSess) filtered
+                         then mapM (runVacuousCheck aq) filtered
                          else pure []
     t1 <- realToFrac <$> getPOSIXTime :: IO Double
     pure (renderReport args (length filtered) (length propPairs)
@@ -165,9 +173,9 @@ data PairFinding = PairFinding
   deriving stock (Show)
 
 runPairProbe
-  :: GhcSession -> PropertyAuditArgs
+  :: AuditQueries -> PropertyAuditArgs
   -> (StoredProperty, StoredProperty) -> IO PairFinding
-runPairProbe ghcSess _args (p1, p2) = do
+runPairProbe aq _args (p1, p2) = do
   -- Issue #212: statically detect ==> before touching the REPL.
   -- P ==> Q has type `Int -> Property`, not `Int -> Bool`, so
   -- `not (P args)` fails to type-check. Emit a clear reason
@@ -190,43 +198,57 @@ runPairProbe ghcSess _args (p1, p2) = do
       -- named property. Loading P1's source module often fails when the
       -- probe body doesn't reference project symbols at all, and using a
       -- single module context is wrong when P1 and P2 come from different
-      -- stanzas. Pass Nothing → the in-process GHC API session (augmented
-      -- with Test.QuickCheck/Data.Map/Data.List) covers self-contained
-      -- lambdas and standard-library terms.
+      -- stanzas. Pass Nothing → the anchor chain covers self-contained
+      -- lambdas and standard-library terms from any component.
       --
-      -- #241: switched from runQuickCheckViaCabalRepl (subprocess) to
-      -- runQuickCheckWithLabelsInProcess (live GHC API session), mirroring
-      -- what action="run" uses via Regression.handle. The subprocess path
-      -- was producing "(no GHCi output)" for every probe because the cabal
-      -- repl had no stable QuickCheck context for synthetic lambdas.
-      res <- try @SomeException $
-        Qc.runQuickCheckWithLabelsInProcess ghcSess Nothing probe
+      -- W6.8.2: the probe runs through the injected runner
+      -- ('IdeBacked.ideQcProbe' in production — the same anchor-chain
+      -- evaluation the check route uses). 'Left' carries the eval error
+      -- text (scope failure / compile error); it keeps the legacy
+      -- "probe load/parse failure" prefix so the #238/#241/#294 detail
+      -- enhancers below still fire on it.
+      res <- try @SomeException (aqProbe aq Nothing probe)
       pure $ case res of
         Left e ->
           PairFinding
             { pfP1     = p1
             , pfP2     = p2
             , pfStatus = "skipped"
-            , pfDetail = T.pack ("subprocess error: " <> show e)
+            , pfDetail = T.pack ("probe crashed: " <> show e)
             }
-        Right (out, _labelsBlock, err) ->
-          -- #241: chain three enhancers so the agent sees the REAL reason
-          -- a probe was skipped instead of the generic "no GHCi output"
-          -- placeholder. The pipeline is additive — each enhancer only
-          -- augments the detail when its precondition holds.
-          let (status, detail) = interpretProbeResult (parseQuickCheckOutput probe out)
+        Right (Left evalErr) ->
+          let (status, detail) =
+                ( "skipped"
+                , "probe load/parse failure: " <> T.take 200 evalErr )
               d1 = enhanceNullModuleDetail
                      (isNothing (spModule p1)) (isNothing (spModule p2))
                      status detail
               d2 = enhanceCrossModuleDetail
                      (spModule p1) (spModule p2) status d1
-              d3 = appendReplStderr err status d2
-              d4 = enhanceNotInScopeDetail status d3
+              d3 = enhanceNotInScopeDetail status d2
           in PairFinding
                { pfP1     = p1
                , pfP2     = p2
                , pfStatus = status
-               , pfDetail = d4
+               , pfDetail = d3
+               }
+        Right (Right qcr) ->
+          -- #241: chain enhancers so the agent sees the REAL reason
+          -- a probe was skipped instead of the generic "no GHCi output"
+          -- placeholder. The pipeline is additive — each enhancer only
+          -- augments the detail when its precondition holds.
+          let (status, detail) = interpretProbeResult qcr
+              d1 = enhanceNullModuleDetail
+                     (isNothing (spModule p1)) (isNothing (spModule p2))
+                     status detail
+              d2 = enhanceCrossModuleDetail
+                     (spModule p1) (spModule p2) status d1
+              d3 = enhanceNotInScopeDetail status d2
+          in PairFinding
+               { pfP1     = p1
+               , pfP2     = p2
+               , pfStatus = status
+               , pfDetail = d3
                }
 
 --------------------------------------------------------------------------------
@@ -236,18 +258,14 @@ runPairProbe ghcSess _args (p1, p2) = do
 -- | Phase 2: run a single property via QuickCheck; if QC gives up
 -- (too many discards), the property is potentially vacuous.
 -- Returns @Just expression@ when vacuous, @Nothing@ otherwise.
-runVacuousCheck :: GhcSession -> StoredProperty -> IO (Maybe StoredProperty)
-runVacuousCheck ghcSess sp = do
-  -- #241: use in-process GHC API (same as runPairProbe) instead of
-  -- cabal repl subprocess for consistency and reliability.
-  res <- try @SomeException $
-    Qc.runQuickCheckWithLabelsInProcess ghcSess
-      (spModule sp) (spExpression sp)
+runVacuousCheck :: AuditQueries -> StoredProperty -> IO (Maybe StoredProperty)
+runVacuousCheck aq sp = do
+  res <- try @SomeException (aqProbe aq (spModule sp) (spExpression sp))
   pure $ case res of
-    Left  _ -> Nothing  -- session failure: can't classify
-    Right (out, _labelsBlock, _err) ->
-      let qcr = parseQuickCheckOutput (spExpression sp) out
-      in if isVacuousResult qcr then Just sp else Nothing
+    Left  _         -> Nothing  -- probe crashed: can't classify
+    Right (Left _)  -> Nothing  -- eval failure: can't classify
+    Right (Right qcr) ->
+      if isVacuousResult qcr then Just sp else Nothing
 
 -- | Pure predicate: a QuickCheck result is "vacuous" when
 -- QuickCheck gave up — indicating the implicit precondition
@@ -461,30 +479,6 @@ enhanceCrossModuleDetail (Just m1) (Just m2) status detail
          \ghc_quickcheck on each individually and compare \
          \counterexamples by hand."
 enhanceCrossModuleDetail _ _ _ detail = detail
-
--- | #241: when a probe is skipped because the REPL produced no output,
--- the subprocess fallback may still have captured useful stderr (a
--- compile error, a missing-import diagnostic, …). Surface the first
--- 500 characters so the agent has something actionable to feed back
--- into 'ghc_explain_error' or 'ghc_check_project' instead of a bare
--- "(no GHCi output)" placeholder.
---
--- No-op when status is not "skipped", when the detail does not look
--- like a load failure, or when the stderr is empty. Pure — exported
--- for unit tests.
-appendReplStderr
-  :: Text   -- ^ stderr captured from the runner
-  -> Text   -- ^ status from interpretProbeResult
-  -> Text   -- ^ detail (possibly already enhanced)
-  -> Text
-appendReplStderr err status detail
-  | status == "skipped"
-  , "probe load/parse failure" `T.isPrefixOf` detail
-  , not (T.null (T.strip err))
-  = detail
-      <> " — REPL stderr (first 500 chars): "
-      <> T.take 500 (T.strip err)
-  | otherwise = detail
 
 -- | #294: a skipped pair whose stderr says a name is "not in scope" is the
 -- single most common — and most misleading — audit outcome. The default
