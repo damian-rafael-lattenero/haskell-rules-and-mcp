@@ -26,7 +26,6 @@ import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
-import qualified HaskellFlows.Tool.Arbitrary as Arbitrary
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import qualified HaskellFlows.Tool.PropertyStore as PropertyStore
 
@@ -101,7 +100,10 @@ handle env rawArgs = case parseEither (Act.parsePayloadAction Act.propertySpec) 
         store = PropertyStore.handle env . (`Act.setActionField` rawArgs)
     case action of
       Act.PropertyCheck     -> Env.withResultAction "check" <$> routeCheck env inner
-      Act.PropertyArbitrary -> Env.withResultAction "arbitrary" <$> Arbitrary.handle env inner
+      -- Unreachable since W6.5: routeIde serves arbitrary via
+      -- IdeBacked.handlePropertyArbitrary. Same backstop shape as
+      -- routeCheck below.
+      Act.PropertyArbitrary -> routeArbitraryBackstop
       Act.PropertyList      -> Env.withResultAction "list" <$> store "list"
       Act.PropertyRun       -> Env.withResultAction "run" <$> store "run"
       Act.PropertyExport    -> Env.withResultAction "export" <$> store "export"
@@ -116,6 +118,19 @@ handle env rawArgs = case parseEither (Act.parsePayloadAction Act.propertySpec) 
     refusal :: String -> Env.ToolResponse
     refusal msg =
       Env.mkRefused (Env.mkErrorEnvelope Env.Validation (T.pack msg))
+
+-- | Unreachable-response for the routeIde-served arbitrary action.
+routeArbitraryBackstop :: IO ToolResponse
+routeArbitraryBackstop =
+  pure
+    ( Env.mkFailed
+        ( Env.mkErrorEnvelope
+            Env.InternalError
+            ( "ghc_property(action=arbitrary) is served by the in-process "
+                <> "ghcide route; reaching this handler is a dispatch regression"
+            )
+        )
+    )
 
 -- | Unreachable since the F1 strangler completed: the Server routes
 -- every ghc_property(action=check) through 'IdeBacked.routeIde'

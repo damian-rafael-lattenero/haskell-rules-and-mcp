@@ -25,7 +25,7 @@
 -- This is textual, not AST-aware. The compile step is the correctness
 -- oracle — we never have to reason about Haskell syntax ourselves.
 module HaskellFlows.Tool.Refactor
-  ( handle
+  ( handleListActions
   , RefactorArgs (..)
   , Action (..)
     -- * Diagnostic-diff helpers (#50)
@@ -34,32 +34,22 @@ module HaskellFlows.Tool.Refactor
     -- * Exposed for unit tests
   , compileFailResult
   , extractFreeVarNames  -- #205
-    -- * Exposed for ghc_scratch(action="promote")
-  , withSnapshot
-  , commitResultWithDiff  -- W6.4: the ghcide snapshot reuses the payload law
-  , dryRunResult           -- W6.6: ghcide dry-run verify shares the law
+    -- * W6.6 — backend-neutral result shaping (reused by the
+    -- ghcide snapshot in IdeBacked.ideWithSnapshot)
+  , commitResultWithDiff
+  , dryRunResult
     -- * W6.6 — backend-neutral queries
   , RefactorQueries (..)
-  , legacyRefactorQueries
   , runHandle
   ) where
 
-import Control.Exception (SomeException, try)
 import Data.Aeson
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
 
-import HaskellFlows.Ghc.ApiSession
-  ( GhcSession
-  , LoadFlavour (..)
-  , invalidateLoadCache
-  , loadForTarget
-  , targetForPath
-  )
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Schema as Schema
@@ -69,7 +59,6 @@ import HaskellFlows.Mcp.PermissiveJSON
   )
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
-import qualified HaskellFlows.Tool.Move as Move
 import HaskellFlows.Parser.Error
   ( GhcError (..)
   , Severity (..)
@@ -88,9 +77,7 @@ import HaskellFlows.Types
   , PathError (..)
   , ProjectDir
   , mkModulePath
-  , unModulePath
   )
-import HaskellFlows.Tool.Env (ToolEnv (..))
 
 
 -- | Issue #92 Phase B: per-action discriminated schema. Each
@@ -271,16 +258,25 @@ instance FromJSON RefactorArgs where
           , raDryRun         = dr
           }
 
-handle :: ToolEnv -> Value -> IO ToolResponse
-handle env rawArgs = do
-  ghcSess <- teSession env
-  pd      <- teProjectDir env
-  runHandle (legacyRefactorQueries ghcSess) pd
-            (Move.runHandle (Move.legacyMoveQueries ghcSess) pd) rawArgs
+-- | Session-free discovery entry: the list_actions payload is a
+-- static table, so no backend queries are needed. 'runHandle'
+-- intercepts the action before touching the queries. The
+-- session-bound legacy 'handle' died with the ApiSession backend
+-- (W6.8) — routeIde serves rename/extract/move via
+-- 'IdeBacked.handleRefactorEdit' / 'handleMoveEdit'.
+handleListActions :: Value -> IO ToolResponse
+handleListActions =
+  runHandle unreachableQueries undefined unreachableMove
+  where
+    unreachableQueries =
+      error "Refactor.handleListActions: queries unreachable for list_actions"
+    unreachableMove =
+      error "Refactor.handleListActions: move passthrough unreachable"
 
 -- | Backend-neutral snapshot surface (W6.6). The rewrites themselves
 -- are pure text transforms; the only session-bound pieces are the
 -- snapshot-and-compile-verify and the post-edit cache invalidation.
+-- 'IdeBacked' closes over the ghcide snapshot (ideWithSnapshot).
 data RefactorQueries = RefactorQueries
   { rqSnapshot   :: ModulePath
                   -> Bool  -- ^ dry_run
@@ -289,12 +285,6 @@ data RefactorQueries = RefactorQueries
   , rqInvalidate :: IO ()
     -- ^ legacy: invalidateLoadCache after the edit; ghcide: no-op
     -- (the mtime rescan inside the snapshot re-reads disk anyway).
-  }
-
-legacyRefactorQueries :: GhcSession -> RefactorQueries
-legacyRefactorQueries ghcSess = RefactorQueries
-  { rqSnapshot   = withSnapshot ghcSess
-  , rqInvalidate = invalidateLoadCache ghcSess
   }
 
 runHandle :: RefactorQueries
@@ -405,124 +395,14 @@ extractSuccess newName er ls le =
     ]
 
 --------------------------------------------------------------------------------
--- snapshot / compile / restore
+-- diagnostic-diff shaping (the #50 law — shared by the ghcide snapshot)
 --------------------------------------------------------------------------------
 
--- | Read the target file, call @rewrite@, and if it returns a new
--- content: stage it, compile, commit on success, restore on error.
--- The callback returns @Left errTxt@ to abort cleanly or
--- @Right (newContent, successPayload)@ to attempt the rewrite.
-withSnapshot
-  :: GhcSession
-  -> ModulePath
-  -> Bool                                    -- ^ dry_run
-  -> (Text -> IO (Either Text (Text, Value)))
-  -> IO ToolResponse
-withSnapshot sess mp dryRun cont = do
-  readRes <- try (TIO.readFile (unModulePath mp))
-             :: IO (Either SomeException Text)
-  case readRes of
-    Left e -> pure (errorResult (T.pack ("Could not read module: " <> show e)))
-    Right orig -> do
-      outcome <- cont orig
-      case outcome of
-        Left reason -> pure (errorResult reason)
-        Right (newContent, baseSuccess) ->
-          if dryRun
-            then dryRunWithVerify sess mp orig newContent baseSuccess
-            else commitWithVerify sess mp orig newContent baseSuccess
-
-commitWithVerify
-  :: GhcSession
-  -> ModulePath
-  -> Text           -- original file content (snapshot)
-  -> Text           -- rewritten content
-  -> Value          -- base success payload (augmented with compile info)
-  -> IO ToolResponse
-commitWithVerify ghcSess mp orig newContent baseSuccess = do
-  -- Issue #50: diagnostic-diff verify. Before we write the new
-  -- content, load the file as-is and snapshot the *pre-existing*
-  -- error set. The accept criterion then becomes \"the rewrite
-  -- introduced no NEW errors\" rather than \"there are no errors
-  -- at all\". A clean rename in a module that already has an
-  -- unrelated typed hole used to be rolled back because the hole
-  -- showed up post-edit too — that's exactly the symptom the bug
-  -- describes.
-  invalidateLoadCache ghcSess
-  preDiags <- loadAndDiagnose ghcSess mp
-  let preErrSigs = errorSignatures preDiags
-
-  writeRes <- try (TIO.writeFile (unModulePath mp) newContent)
-              :: IO (Either SomeException ())
-  case writeRes of
-    Left e -> pure (errorResult (T.pack ("Could not write module: " <> show e)))
-    Right _ -> do
-      -- Drop the auto-load cache so loadForTarget re-scans the
-      -- freshly-written file instead of reusing a stale HscEnv.
-      invalidateLoadCache ghcSess
-      postDiags <- loadAndDiagnose ghcSess mp
-      let postErrs    = filter ((== SevError) . geSeverity) postDiags
-          postErrSigs = errorSignatures postDiags
-          newErrSigs  = filter (`notElem` preErrSigs) postErrSigs
-          -- An error is \"new\" iff its (file, line, column, message)
-          -- key wasn't in preDiags. The rewrite is rejected only
-          -- when at least one such entry exists.
-          regressed   = not (null newErrSigs)
-      if regressed
-        then do
-          restored <- try (TIO.writeFile (unModulePath mp) orig)
-                      :: IO (Either SomeException ())
-          let restoreMsg = case restored of
-                Left _  -> " — AND snapshot restore ALSO failed, file is dirty"
-                Right _ -> " — snapshot restored"
-              -- Re-render the post-edit error set so the agent
-              -- sees what tripped the rollback. We attach the new-
-              -- only subset as 'new_errors' for clarity.
-              newErrs = filter (\e -> errorKey e `elem` newErrSigs) postErrs
-          pure (compileFailResult False newErrs (renderDiags postDiags) restoreMsg)
-        else
-          pure (commitResultWithDiff baseSuccess preDiags postDiags)
-
--- | F-21: compile-verify even on @dry_run=True@.  Before this fix,
--- dry-run skipped compile-verify, so 'extractBinding' could produce
--- syntactically invalid Haskell (e.g. a @let@-clause fragment) and
--- still return @status: ok@.
---
--- 'dryRunWithVerify' writes the new content, runs the compile check,
--- then ALWAYS restores the original — it is a read-only preview that
--- also validates.  If compile fails, returns 'compileFailResult' so
--- the agent knows the patch is invalid.  If compile passes, returns
--- the usual 'dryRunResult' (no disk change visible to the user).
-dryRunWithVerify
-  :: GhcSession
-  -> ModulePath
-  -> Text           -- original file content (snapshot)
-  -> Text           -- rewritten content
-  -> Value          -- base success payload
-  -> IO ToolResponse
-dryRunWithVerify ghcSess mp orig newContent baseSuccess = do
-  invalidateLoadCache ghcSess
-  preDiags <- loadAndDiagnose ghcSess mp
-  let preErrSigs = errorSignatures preDiags
-  writeRes <- try (TIO.writeFile (unModulePath mp) newContent)
-              :: IO (Either SomeException ())
-  case writeRes of
-    Left e -> pure (errorResult (T.pack ("Could not write for dry-run verify: " <> show e)))
-    Right _ -> do
-      invalidateLoadCache ghcSess
-      postDiags <- loadAndDiagnose ghcSess mp
-      -- Always restore — this is a read-only preview.
-      _ <- try (TIO.writeFile (unModulePath mp) orig) :: IO (Either SomeException ())
-      invalidateLoadCache ghcSess
-      let postErrs   = filter ((== SevError) . geSeverity) postDiags
-          newErrSigs = filter (`notElem` preErrSigs) (errorSignatures postDiags)
-          regressed  = not (null newErrSigs)
-      if regressed
-        then do
-          let newErrs = filter (\e -> errorKey e `elem` newErrSigs) postErrs
-          pure (compileFailResult True newErrs (renderDiags postDiags)
-                  " — dry_run, original preserved; patch is invalid")
-        else pure (dryRunResult baseSuccess newContent)
+-- | W6.8 removed the legacy snapshot machinery ('withSnapshot',
+-- 'commitWithVerify', 'dryRunWithVerify', 'loadAndDiagnose' — all
+-- GhcSession-bound). The compile-verify law lives on in
+-- 'IdeBacked.ideWithSnapshot'; what remains here is the pure
+-- result-shaping both backends share.
 
 -- | Issue #50: structural key for an error diagnostic. Two
 -- diagnostics are \"the same\" if they refer to the same
@@ -537,23 +417,6 @@ errorKey e = (geFile e, geLine e, geColumn e, geMessage e)
 errorSignatures :: [GhcError] -> [(Text, Int, Int, Text)]
 errorSignatures = map errorKey . filter ((== SevError) . geSeverity)
 
--- | Run @loadForTarget@ for the file's owning stanza and capture
--- whatever diagnostics come back. Exception during load → synthetic
--- error diagnostic (so the diff still works against a baseline).
-loadAndDiagnose :: GhcSession -> ModulePath -> IO [GhcError]
-loadAndDiagnose ghcSess mp = do
-  tgt <- targetForPath ghcSess (unModulePath mp)
-  eLoad <- try (loadForTarget ghcSess tgt Strict)
-           :: IO (Either SomeException (Bool, [GhcError]))
-  pure $ case eLoad of
-    Left ex ->
-      [ GhcError { geFile = T.pack (unModulePath mp)
-                 , geLine = 0, geColumn = 0
-                 , geSeverity = SevError
-                 , geCode = Nothing
-                 , geMessage = T.pack (show ex)
-                 } ]
-    Right (_ok, diags) -> diags
 
 -- | Issue #50: extended success result. When the rewrite is
 -- accepted, surface the pre-existing error set (if any) so the

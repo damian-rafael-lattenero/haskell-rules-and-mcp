@@ -904,8 +904,6 @@ runAllTests = do
       , test "B-1: unknownArgsWarning fires on bogus param"      testUnknownArgsWarningFires
       , test "B-1: unknownArgsWarning silent on clean call"      testUnknownArgsWarningSilentWhenClean
       , test "add_import: missing hoogle returns success=false (#53)" testAddImportMissingHoogle
-      , test "#146: addImportToSession rejects invalid import gracefully" testAddImportToSessionInvalid
-      , test "#146: addImportToSession accepts valid base import"       testAddImportToSessionValid
       , test "create_project: validateName accepts canonical (#58)"  testCreateValidateAccept
       , test "create_project: validateName rejects empty (#58)"      testCreateValidateEmpty
       , test "create_project: validateName rejects uppercase (#58)"  testCreateValidateUpper

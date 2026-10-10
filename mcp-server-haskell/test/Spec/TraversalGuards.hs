@@ -86,7 +86,7 @@ testRefactorRejectsTraversal = do
             , "scope_line_start" A..= (1 :: Int)
             , "scope_line_end"   A..= (10 :: Int)
             ]
-      tr <- RefactorTool.handle (pdEnv pd) args
+      tr <- RefactorTool.runHandle undefined pd undefined args
       pure (isTraversalRefused (Right tr))
 
 -- ---------------------------------------------------------------------------

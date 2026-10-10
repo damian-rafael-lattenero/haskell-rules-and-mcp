@@ -11,17 +11,13 @@
 -- On success the property expression + module are persisted to the
 -- property store so @ghc_regression@ can replay it later.
 module HaskellFlows.Tool.QuickCheck
-  ( handle
-  , QuickCheckArgs (..)
+  ( QuickCheckArgs (..)
     -- * Shared runtime-execution helper (Regression, Determinism)
   , runQuickCheckViaCabalRepl
   , runQuickCheckWithLabelsViaCabalRepl
   , runBatchPropertiesViaCabalRepl
   , extractLabelsBlock
   , extractQcOutputAt
-    -- * Module resolution (re-used by Determinism so runs>=2 persists
-    --   under the same module the single-run path would) — #294
-  , resolvePropertyModule
     -- * Issue #220 — in-process witness harness (replaces cabal-repl subprocess)
   , runQuickCheckWithLabelsInProcess
   , witnessEvalExpr
@@ -149,108 +145,15 @@ qcArgsLine =
   "do { let qcArgs = stdArgs { chatty = False, maxSuccess = "
     <> show qcMaxSuccess <> " }"
 
-handle :: ToolEnv -> Value -> IO ToolResponse
-handle env rawArgs = do
-  store   <- teStore env
-  ghcSess <- teSession env
-  runHandle store ghcSess rawArgs
+-- W6.8: the ToolEnv 'handle' + its GhcSession 'runHandle' died with
+-- the ApiSession backend — routeIde serves ghc_property(action=check)
+-- via IdeBacked.handlePropertyCheck (QuickCheck rendered into the
+-- evaluated expression itself). What remains here: the in-process
+-- witness harness (audit, until its W6.8 rewire), the pure output
+-- parsers, and cabal introspection.
 
-runHandle :: Store -> GhcSession -> Value -> IO ToolResponse
-runHandle store ghcSess rawArgs = case parseEither parseJSON rawArgs of
-  Left parseError ->
-    pure (formatParseError parseError)
-  Right (QuickCheckArgs prop md) -> case sanitizeExpression prop of
-    Left cmdErr ->
-      pure (Env.mkRefused (Env.sanitizeRejection "property" cmdErr))
-    Right safe -> do
-      -- Resolve the property's defining module via the GHC API.
-      -- If the property is a bare identifier we can look up
-      -- 'parseName + nameSrcSpan' and the resulting file path
-      -- becomes authoritative; the caller hint ('md') is treated
-      -- as a fallback for lambda/expression properties where
-      -- parseName would legitimately fail.
-      --
-      -- This restores the pre-Wave-5 behaviour where
-      -- 'ghc_quickcheck prop_x module="src/Foo.hs"' — a common
-      -- caller mistake when the property actually lives in the
-      -- test suite — still persisted test/Spec.hs in the
-      -- regression store, so replay loaded the right scope.
-      resolved <- resolvePropertyModule ghcSess safe
-      let loadHint = resolved <|> md
-      mRes <- timeout quickCheckTimeoutMicros $
-        try $ runQuickCheckViaCabalRepl (gsProject ghcSess) loadHint safe
-      case mRes of
-        Nothing ->
-          pure (renderResult
-            (QcException prop "timeout: property exceeded 30s budget") Nothing)
-        Just (Left (ex :: SomeException)) ->
-          pure (renderResult (QcException prop (T.pack (show ex))) Nothing)
-        Just (Right (out, stderrText)) -> do
-          let qr = parseQuickCheckOutput prop out
-          case qr of
-            QcPassed _ _ -> saveCases store prop loadHint qcMaxSuccess
-            _            -> pure ()
-          -- Surface stderr on parse-failure so the caller sees
-          -- 'Variable not in scope: …' instead of a silent
-          -- "raw: \"\", state: unparsed".
-          let hintForAgent = case qr of
-                QcUnparsed {} -> Just (summariseStderr stderrText)
-                _             -> Nothing
-          pure (renderResult qr hintForAgent)
-
--- | Resolve a property name to the source file it was defined in
--- by asking the GHC API. Returns 'Nothing' when the input isn't a
--- simple identifier, when parseName can't resolve it in the
--- current interactive scope, or when the resulting Name has no
--- RealSrcSpan (e.g. a name from a pre-built package). Callers then
--- fall back to the user-provided hint.
-resolvePropertyModule :: GhcSession -> Text -> IO (Maybe Text)
-resolvePropertyModule ghcSess nm
-  | not (isSimpleIdent nm) = pure Nothing
-  | otherwise = do
-      -- Prime the session against the test-suite stanza first.
-      -- The cached env a prior 'ghc_load' left behind may reflect
-      -- a DIFFERENT target (e.g. library), in which case the test-
-      -- suite's Main module is not in the graph and its
-      -- 'prop_trivial' is invisible. 'firstTestSuiteOrLibrary'
-      -- picks the test-suite when one exists (where named
-      -- properties typically live); 'loadForTarget' then loads
-      -- test/ + src/ sources under the test-suite's stanza flags,
-      -- producing a module graph that contains Main alongside the
-      -- library modules.
-      tgt <- firstTestSuiteOrLibrary ghcSess
-      _   <- try @SomeException (loadForTarget ghcSess tgt Strict)
-      -- Walk the module graph: for each loaded module, scan its
-      -- exports for a Name whose OccName matches the property.
-      -- Beats 'parseName' here because (a) 'IIDecl (import Main)'
-      -- doesn't expose Main's top-level names and (b) 'IIModule'
-      -- requires interpreted mode while cabal compiles to objects.
-      eRes <- try @SomeException $ withGhcSession ghcSess $ do
-        mg <- getModuleGraph
-        matches <- sequence
-          [ do
-              mi <- getModuleInfo (ms_mod ms)
-              pure $ case mi of
-                Nothing   -> Nothing
-                Just info ->
-                  case filter matchesName (modInfoExports info) of
-                    (n:_) -> fileFromSpan (nameSrcSpan n)
-                    []    -> Nothing
-          | ms <- mgModSummaries mg
-          ]
-        pure (firstJust matches)
-      pure $ case eRes of
-        Left _           -> Nothing
-        Right (Just fp)  -> Just (T.pack fp)
-        Right Nothing    -> Nothing
-  where
-    matchesName n =
-      occNameString (nameOccName n) == T.unpack nm
-    firstJust = foldr (\x acc -> case x of Just _ -> x; Nothing -> acc) Nothing
-    fileFromSpan :: SrcSpan -> Maybe FilePath
-    fileFromSpan = \case
-      RealSrcSpan s _ -> Just (unpackFS (srcSpanFile (s :: RealSrcSpan)))
-      UnhelpfulSpan _ -> Nothing
+-- W6.8 removed 'resolvePropertyModule' (GhcSession-bound, dead since
+-- the Determinism handler was folded into the ghcide route).
 
 -- | Run a QuickCheck property via @cabal v2-repl@ on the project's
 -- test-suite target. Returns @(qcOutput, compileStderr)@:
@@ -345,6 +248,10 @@ extractQcOutput full =
       body            = T.drop (T.length "__QC_OUTPUT_START__") afterStart
       (captured, _)   = T.breakOn "__QC_OUTPUT_END__" body
   in T.strip captured
+
+--------------------------------------------------------------------------------
+-- Issue #78 — labels-aware repl harness
+--------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
 -- Issue #78 — labels-aware repl harness

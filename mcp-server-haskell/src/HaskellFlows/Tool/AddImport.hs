@@ -11,8 +11,7 @@
 -- @session_updated@ (bool) and @added_import@ (the line that was
 -- injected, or null) so callers can see what happened.
 module HaskellFlows.Tool.AddImport
-  ( handle
-  , runHandle
+  ( runHandle
   , validateImportDecl  -- W6.7 (ghcide)
   , AddImportArgs (..)
   , renderImportLine
@@ -22,8 +21,6 @@ module HaskellFlows.Tool.AddImport
   , filterInternal         -- #204
   , prioritizeModuleMatch  -- #204
   , looksLikeModule        -- #242
-    -- * Session helper (exported for unit tests)
-  , addImportToSession
   ) where
 
 import Control.Exception (SomeException, try)
@@ -36,11 +33,10 @@ import qualified Data.Foldable as F
 import Data.Text (Text)
 import qualified Data.Text as T
 
-import GHC (Ghc, InteractiveImport (IIDecl), getContext, parseImportDecl, setContext)
+import GHC (Ghc, parseImportDecl)
 import System.Directory (findExecutable)
 
 import HaskellFlows.Config (Limits)
-import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
@@ -62,11 +58,6 @@ instance FromJSON AddImportArgs where
       <$> o .:  "name"
       <*> o .:? "qualified" .!= False
       <*> o .:? "alias"
-
-handle :: ToolEnv -> Value -> IO ToolResponse
-handle env rawArgs = do
-  ghcSess <- teSession env
-  runHandle (teLimits env) (addImportToSession ghcSess) rawArgs
 
 -- | W6.7: the only session-bound step (#146) — inject the top import
 -- candidate so subsequent evals see the name immediately. Injected as
@@ -160,24 +151,10 @@ validateImportDecl importLine = do
   _ <- parseImportDecl (T.unpack importLine)
   pure ()
 
--- | #146: inject @importLine@ into the live GHCi interactive context
--- by parsing it with 'parseImportDecl' and prepending the result to
--- 'getContext'. Returns @(True, importLine)@ on success,
--- @(False, errorMsg)@ when GHC rejects the line.
---
--- The change is in-memory only — source files are not touched. The
--- import persists until the next 'invalidateLoadCache' triggers a
--- fresh 'setContext' in 'withGhcSession'.
-addImportToSession :: GhcSession -> Text -> IO (Bool, Text)
-addImportToSession ghcSess importLine = do
-  eRes <- try (withGhcSession ghcSess $ do
-    ctx   <- getContext
-    idecl <- parseImportDecl (T.unpack importLine)
-    setContext (IIDecl idecl : ctx)
-    ) :: IO (Either SomeException ())
-  pure $ case eRes of
-    Left  e -> (False, T.pack (show e))
-    Right _ -> (True,  importLine)
+-- | W6.8: the legacy 'addImportToSession' (parseImportDecl +
+-- setContext on the ApiSession) died with the backend. The ghcide
+-- route validates via 'validateImportDecl' and records into the
+-- session's import accumulator (IdeBacked.handleEditImport).
 
 -- | Discriminate the FromJSON failure shape — same heuristic as
 -- the other Phase-B migrations.

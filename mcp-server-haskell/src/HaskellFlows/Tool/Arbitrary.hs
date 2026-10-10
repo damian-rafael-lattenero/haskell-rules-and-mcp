@@ -13,8 +13,7 @@
 -- Deliberately does NOT write to disk — letting the agent review +
 -- paste preserves the auditing loop.
 module HaskellFlows.Tool.Arbitrary
-  ( handle
-  , ArbitraryArgs (..)
+  ( ArbitraryArgs (..)
     -- * W6.5 — ghcide reuse
   , renderTyThing
   , finishArbitrary
@@ -78,13 +77,6 @@ import GHC.Utils.Outputable
   , sdocSuppressUniques
   )
 
-import HaskellFlows.Ghc.ApiSession
-  ( GhcSession
-  , LoadFlavour (..)
-  , firstLibraryOrTestSuite
-  , loadForTarget
-  , withGhcSession
-  )
 import HaskellFlows.Ghc.Sanitize
   ( sanitizeExpression
   )
@@ -107,44 +99,11 @@ instance FromJSON ArbitraryArgs where
   parseJSON = withObject "ArbitraryArgs" $ \o ->
     ArbitraryArgs <$> o .: "type_name" <*> o .:? "target_module"
 
-handle :: ToolEnv -> Value -> IO ToolResponse
-handle env rawArgs = do
-  ghcSess <- teSession env
-  pd      <- teProjectDir env
-  runHandle ghcSess pd rawArgs
-
-runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResponse
-runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
-  Left parseError ->
-    pure (formatParseError parseError)
-  Right (ArbitraryArgs tname mTarget) -> case sanitizeExpression tname of
-    Left cmdErr ->
-      pure (Env.mkRefused (Env.sanitizeRejection "type_name" cmdErr))
-    Right safe -> do
-      tgt <- firstLibraryOrTestSuite ghcSess
-      eLoad <- try (loadForTarget ghcSess tgt Strict)
-      case eLoad :: Either SomeException (Bool, [GhcError]) of
-        Left ex ->
-          pure (subprocessErr
-                  ("loadForTarget failed: " <> T.pack (show ex)))
-        -- Issue #210: the module has compile errors — a type defined
-        -- there reads as not-in-scope, so surface the honest error
-        -- count instead of a confusing lookup failure.
-        Right (False, loadErrs) ->
-          finishArbitrary pd mTarget safe Nothing (length loadErrs)
-        Right (True, _) -> do
-          -- loadForTarget already primed the session with the
-          -- correct stanza flags + setContext. Don't wrap in
-          -- withStanzaFlags here — re-applying setSessionDynFlags
-          -- would reset the interactive context established above,
-          -- leaving parseName unable to resolve user types.
-          eRes <- try (withGhcSession ghcSess (renderTyThing safe))
-          case eRes :: Either SomeException (Maybe Text) of
-            Left ex ->
-              pure (notInScopeErr
-                      ("'" <> safe <> "' not in scope: " <> T.pack (show ex)))
-            Right mRendered ->
-              finishArbitrary pd mTarget safe mRendered 0
+-- W6.8: the session-bound ToolEnv 'handle' died with the ApiSession
+-- backend — routeIde serves ghc_property(action=arbitrary) via
+-- 'IdeBacked.handlePropertyArbitrary' (per-anchor renderTyThing +
+-- project-diagnostics precheck). 'finishArbitrary' below is the
+-- backend-neutral cascade both routes share.
 
 -- | The full response cascade AFTER the session lookup — everything
 -- here is pure or plain file IO, so the ghcide backend (W6.5) runs

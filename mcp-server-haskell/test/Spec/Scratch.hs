@@ -323,7 +323,7 @@ testScratchCheckSanitizeReject = withTempProject $ \pd -> do
         [ "action" A..= ("check" :: Text)
         , "id"     A..= ("bad" :: Text)
         ]
-  result <- ScratchTool.runHandle store (ScratchTool.legacyQueries undefined) undefined checkArgs
+  result <- ScratchTool.runHandle store ScratchTool.unreachableQueries undefined checkArgs
   pure (Env.reStatus result == Env.StatusRefused)
 
 -- | 'ScratchResult' ToJSON / FromJSON round-trip.
@@ -343,9 +343,10 @@ testScratchResultRoundTrip =
 
 -- | F-01 regression: action=check response carries 'kind' at the top
 -- level of the mkOk result object, NOT nested under result.result.kind.
--- With 'undefined' for the session, withGhcSession throws and the
--- try-block stores a type_error; we just need 'kind' to be directly
--- inside the result object so scratchNext's envField routing works.
+-- The query stub returns a controlled Left (the legacy equivalent was
+-- an undefined-session crash caught by the try-block) so the check
+-- path stores a type_error; we just need 'kind' to be directly inside
+-- the result object so scratchNext's envField routing works.
 testScratchCheckKindAtTopLevel :: IO Bool
 testScratchCheckKindAtTopLevel = withTempProject $ \pd -> do
   store <- SP.openStore pd
@@ -355,11 +356,19 @@ testScratchCheckKindAtTopLevel = withTempProject $ \pd -> do
         , "code"   A..= ("bogusF" :: Text)  -- passes sanitize, GHC call throws
         ]
   _ <- ScratchTool.runHandle store undefined undefined writeArgs
-  let checkArgs = A.object
+  -- W6.8: check/promote are served by the ghcide route; the unit
+  -- contract here is the payload shape, so the query stub answers
+  -- Left instead of touching a session.
+  let leftQueries = ScratchTool.ScratchQueries
+        { ScratchTool.sqExprType = \_ _ _ -> pure (Left "stub: no session")
+        , ScratchTool.sqRunDecls = \_ _ _ -> pure (Left "stub: no session")
+        , ScratchTool.sqPromote  = \_ _   -> error "promote served by routeIde"
+        }
+      checkArgs = A.object
         [ "action" A..= ("check" :: Text)
         , "id"     A..= ("probe" :: Text)
         ]
-  result <- ScratchTool.runHandle store (ScratchTool.legacyQueries undefined) undefined checkArgs
+  result <- ScratchTool.runHandle store leftQueries undefined checkArgs
   pure $ case Env.reStatus result of
     Env.StatusOk ->
       -- status=ok means the try-block ran; result must have 'kind'
@@ -460,12 +469,19 @@ testScratchShowAfterCheckHasResult = withTempProject $ \pd -> do
         , "code"   A..= ("badIdent" :: Text)
         ]
   _ <- ScratchTool.runHandle store undefined undefined writeArgs
-  -- check — undefined session throws, type_error is persisted
-  let checkArgs = A.object
+  -- check — W6.8: the query stub answers Left (no live session in unit
+  -- tests), type_error is persisted — same shape the legacy undefined-
+  -- session crash produced via its try-block.
+  let leftQueries = ScratchTool.ScratchQueries
+        { ScratchTool.sqExprType = \_ _ _ -> pure (Left "stub: no session")
+        , ScratchTool.sqRunDecls = \_ _ _ -> pure (Left "stub: no session")
+        , ScratchTool.sqPromote  = \_ _   -> error "promote served by routeIde"
+        }
+      checkArgs = A.object
         [ "action" A..= ("check" :: Text)
         , "id"     A..= ("chk-then-show" :: Text)
         ]
-  _ <- ScratchTool.runHandle store (ScratchTool.legacyQueries undefined) undefined checkArgs
+  _ <- ScratchTool.runHandle store leftQueries undefined checkArgs
   -- show — must return the persisted result
   let showArgs = A.object
         [ "action" A..= ("show" :: Text)

@@ -31,12 +31,10 @@
 -- module's 'handle' is the implementation 'Refactor.handle'
 -- forwards to when @action="move_symbol"@.
 module HaskellFlows.Tool.Move
-  ( handle
-  , runHandle
+  ( runHandle
   , MoveArgs (..)
     -- * W6.7 — backend-neutral verify
   , MoveQueries (..)
-  , legacyMoveQueries
     -- * Pure slicing helpers (exported for unit tests)
   , SliceResult (..)
   , sliceTopLevelBinding
@@ -66,19 +64,11 @@ import qualified Data.Text.IO as TIO
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeExtension, (</>))
 
-import HaskellFlows.Ghc.ApiSession
-  ( GhcSession
-  , LoadFlavour (..)
-  , firstLibraryOrTestSuite
-  , invalidateLoadCache
-  , loadForTarget
-  )
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol ()
 import HaskellFlows.Parser.Error (GhcError (..), Severity (..))
 import HaskellFlows.Types (ProjectDir, unProjectDir)
-import HaskellFlows.Tool.Env (ToolEnv (..))
 
 
 data MoveArgs = MoveArgs
@@ -97,11 +87,10 @@ instance FromJSON MoveArgs where
       <*> o .:  "to"
       <*> o .:? "dry_run" .!= False
 
-handle :: ToolEnv -> Value -> IO ToolResponse
-handle env rawArgs = do
-  ghcSess <- teSession env
-  pd      <- teProjectDir env
-  runHandle (legacyMoveQueries ghcSess) pd rawArgs
+-- W6.8: the ToolEnv 'handle' died with the ApiSession backend —
+-- routeIde serves ghc_edit(action=move_symbol) via
+-- 'IdeBacked.handleMoveEdit'. 'runHandle' below is the
+-- backend-neutral engine both routes share.
 
 -- | Backend-neutral verify surface (W6.7): after the writes land,
 -- confirm the affected modules compile. 'Left' = the verify machinery
@@ -111,25 +100,8 @@ newtype MoveQueries = MoveQueries
   { mqVerifyClean :: [FilePath] -> IO (Either Text [GhcError])
   }
 
-legacyMoveQueries :: GhcSession -> MoveQueries
-legacyMoveQueries sess = MoveQueries
-  { mqVerifyClean = \_written -> do
-      invalidateLoadCache sess
-      tgt <- firstLibraryOrTestSuite sess
-      eLoad <- try (loadForTarget sess tgt Strict)
-                 :: IO (Either SomeException (Bool, [GhcError]))
-      pure $ case eLoad of
-        Left ex ->
-          Left (T.pack ("loadForTarget exception: " <> show ex))
-        Right (ok, diags) ->
-          let errs = filter ((== SevError) . geSeverity) diags
-          in Right $ if ok
-               then errs
-               -- (False, []) would read as success downstream;
-               -- keep the load-failure signal honest
-               else errs <> [ GhcError "" 0 0 SevError Nothing
-                                "load reported failure" ]
-  }
+-- W6.8 removed the legacy 'ApiSession' wiring (legacyMoveQueries) —
+-- IdeBacked.handleMoveEdit supplies the ghcide verify (ideDiagnosticsFor).
 
 runHandle :: MoveQueries -> ProjectDir -> Value -> IO ToolResponse
 runHandle q pd rawArgs = case parseEither parseJSON rawArgs of

@@ -29,11 +29,9 @@ import HaskellFlows.Mcp.Protocol (ToolDescriptor (..))
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
 import qualified HaskellFlows.Tool.Refactor as RefactorTool
 import qualified HaskellFlows.Tool.RemoveModules as RM
-import HaskellFlows.Ghc.ApiSession (killGhcSession, startGhcSession)
 import HaskellFlows.Types (mkProjectDir)
 
 import Spec.Helpers (runToolEnvelope)
-import Spec.ToolEnvFixture (sessionPdEnv)
 
 -- | Refactor.scope_line_start / scope_line_end accept stringified
 -- numbers (the most user-visible win — rename_local was completely
@@ -211,17 +209,10 @@ testRefactorExtractBindingMissingScope = do
 testRefactorListActions :: IO Bool
 
 testRefactorListActions = do
-  tmp <- getTemporaryDirectory
-  let dir = tmp </> "haskell-flows-refactor-list-actions"
-  createDirectoryIfMissing True dir
-  case mkProjectDir dir of
-    Left _   -> pure False
-    Right pd -> do
-      sess <- startGhcSession pd
-      let rawArgs = A.object [ "action" A..= ("list_actions" :: T.Text) ]
-      tr <- RefactorTool.handle (sessionPdEnv sess pd) rawArgs
-      killGhcSession sess
-      pure (Env.reStatus tr == Env.StatusOk)
+  -- W6.8: list_actions is session-free (static discovery table).
+  let rawArgs = A.object [ "action" A..= ("list_actions" :: T.Text) ]
+  tr <- RefactorTool.handleListActions rawArgs
+  pure (Env.reStatus tr == Env.StatusOk)
 
 -- | #154: list_actions response carries 'actions' array with an entry
 -- for 'move_symbol' that lists the correct field names ('symbol','from','to').
@@ -229,17 +220,9 @@ testRefactorListActions = do
 testRefactorListActionsHasRequired :: IO Bool
 
 testRefactorListActionsHasRequired = do
-  tmp <- getTemporaryDirectory
-  let dir = tmp </> "haskell-flows-refactor-list-actions-req"
-  createDirectoryIfMissing True dir
-  case mkProjectDir dir of
-    Left _   -> pure False
-    Right pd -> do
-      sess <- startGhcSession pd
-      let rawArgs = A.object [ "action" A..= ("list_actions" :: T.Text) ]
-      tr <- RefactorTool.handle (sessionPdEnv sess pd) rawArgs
-      killGhcSession sess
-      pure $ case Env.reResult tr of
+  let rawArgs = A.object [ "action" A..= ("list_actions" :: T.Text) ]
+  tr <- RefactorTool.handleListActions rawArgs
+  pure $ case Env.reResult tr of
         Just (A.Object res) ->
           case AKM.lookup (AKey.fromText "actions") res of
             Just (A.Array arr) ->

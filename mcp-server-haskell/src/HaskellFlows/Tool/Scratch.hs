@@ -23,7 +23,7 @@ module HaskellFlows.Tool.Scratch
   , ScratchAction (..)
     -- * Backend queries (W6.4)
   , ScratchQueries (..)
-  , legacyQueries
+  , unreachableQueries  -- W6.8: error-thunk record for session-free callers
   , queryExprTypeWithImports
   , runDeclsWithImports
     -- * Internals (exported for unit tests)
@@ -58,7 +58,6 @@ import GHC.Utils.Outputable (showPprUnsafe)
 import qualified HaskellFlows.Data.Scratchpad as SP
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
 import HaskellFlows.Ghc.Sanitize (sanitizeDeclarations, sanitizeExpression)
 import HaskellFlows.Mcp.ParseError (formatParseError)
 import HaskellFlows.Mcp.Protocol
@@ -165,12 +164,23 @@ instance FromJSON ScratchArgs where
 -- The session is lazy in all non-check / non-promote branches so
 -- callers may safely pass 'undefined' when they know neither 'check'
 -- nor 'promote' will run (unit tests for write/list/show/clear).
+-- | W6.8: only write/list/show/clear reach this handler — routeIde
+-- serves check/promote (IdeBacked.handleScratch). The queries are
+-- unreachable backstops; unit tests pass 'undefined' for the same
+-- reason (no data-only action touches them).
 handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   scratch <- teScratchpad env
-  ghcSess <- teSession env
   pd      <- teProjectDir env
-  runHandle scratch (legacyQueries ghcSess) pd rawArgs
+  runHandle scratch unreachableQueries pd rawArgs
+
+unreachableQueries :: ScratchQueries
+unreachableQueries =
+  ScratchQueries
+    { sqExprType = \_ _ _ -> error "Scratch: check is served by routeIde"
+    , sqRunDecls = \_ _ _ -> error "Scratch: check is served by routeIde"
+    , sqPromote  = \_ _   -> error "Scratch: promote is served by routeIde"
+    }
 
 -- | Backend-neutral GHC queries the check/promote actions need.
 --
@@ -194,22 +204,8 @@ data ScratchQueries = ScratchQueries
                -> IO ToolResponse
   }
 
--- | The legacy 'ApiSession' wiring: every query runs against the one
--- global session (the module hint is irrelevant — the session holds
--- the whole loaded graph).
-legacyQueries :: GhcSession -> ScratchQueries
-legacyQueries ghcSess = ScratchQueries
-  { sqExprType = \_hint imports expr ->
-      renderExc (withGhcSession ghcSess (queryExprTypeWithImports imports expr))
-  , sqRunDecls = \_hint imports code ->
-      renderExc (withGhcSession ghcSess (runDeclsWithImports imports code))
-  , sqPromote  = \mp cont -> Refactor.withSnapshot ghcSess mp False cont
-  }
-  where
-    renderExc :: IO Text -> IO (Either Text Text)
-    renderExc act =
-      either (Left . T.pack . show) Right
-        <$> (try act :: IO (Either SomeException Text))
+-- W6.8 removed the legacy 'ApiSession' wiring (legacyQueries) —
+-- IdeBacked.ideScratchQueries is the only ScratchQueries builder now.
 
 runHandle :: SP.Store -> ScratchQueries -> ProjectDir -> Value -> IO ToolResponse
 runHandle store q pd rawArgs = case parseEither parseJSON rawArgs of

@@ -27,7 +27,6 @@ import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
-import qualified HaskellFlows.Tool.AddImport as AddImport
 import qualified HaskellFlows.Tool.ApplyExports as ApplyExports
 import HaskellFlows.Tool.Env (ToolEnv (..))
 import qualified HaskellFlows.Tool.FixWarning as FixWarning
@@ -87,11 +86,14 @@ handle env rawArgs = case parseEither (Act.parsePayloadAction Act.editSpec) rawA
   Right action -> do
     let inner = Act.stripActionField rawArgs
     case action of
-      Act.EditRenameLocal    -> Env.withResultAction "rename_local" <$> Refactor.handle env rawArgs
-      Act.EditExtractBinding -> Env.withResultAction "extract_binding" <$> Refactor.handle env rawArgs
-      Act.EditMoveSymbol       -> Env.withResultAction "move_symbol" <$> Refactor.handle env rawArgs
-      Act.EditListActions    -> Env.withResultAction "list_actions" <$> Refactor.handle env rawArgs
-      Act.EditImport         -> Env.withResultAction "import" <$> AddImport.handle env inner
+      -- rename/extract/move/import execute in IdeBacked (W6.6/W6.7)
+      -- via Server routeIde. These arms are unreachable backstops
+      -- keeping the action table exhaustive.
+      Act.EditRenameLocal    -> dispatchRegressionBackstop "rename_local"
+      Act.EditExtractBinding -> dispatchRegressionBackstop "extract_binding"
+      Act.EditMoveSymbol     -> dispatchRegressionBackstop "move_symbol"
+      Act.EditImport         -> dispatchRegressionBackstop "import"
+      Act.EditListActions    -> Env.withResultAction "list_actions" <$> Refactor.handleListActions rawArgs
       Act.EditExports        -> Env.withResultAction "exports" <$> ApplyExports.handle env inner
       Act.EditFixWarning     -> Env.withResultAction "fix_warning" <$> FixWarning.handle env inner
       Act.EditFormat         -> Env.withResultAction "format" <$> Format.handle env inner
@@ -99,3 +101,16 @@ handle env rawArgs = case parseEither (Act.parsePayloadAction Act.editSpec) rawA
     refusal :: String -> Env.ToolResponse
     refusal msg =
       Env.mkRefused (Env.mkErrorEnvelope Env.Validation (T.pack msg))
+
+-- | Unreachable-response for the four routeIde-served actions.
+dispatchRegressionBackstop :: Text -> IO ToolResponse
+dispatchRegressionBackstop act =
+  pure
+    ( Env.mkFailed
+        ( Env.mkErrorEnvelope
+            Env.InternalError
+            ( "ghc_edit(action=" <> act <> ") is served by the in-process "
+                <> "ghcide route; reaching this handler is a dispatch regression"
+            )
+        )
+    )
