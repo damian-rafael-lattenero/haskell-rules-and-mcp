@@ -11,6 +11,9 @@
 --   * an UNREGISTERED path never lands: the cradle resolves by the
 --     .cabal's module list, so the write is UNVERIFIABLE — it fails
 --     with the component-honesty error and nothing is left on disk
+--   * a DOTTED module name ("Extra.Math") derives its src/<name>.hs
+--     path and lands verified (W3.3 real-agent finding: models pass
+--     the name even when the schema says path)
 --   * the project gate counts the written module green
 module Scenarios.FlowWriteModule
   ( runFlow
@@ -62,6 +65,15 @@ calcBroken = T.unlines
   , ""
   , "double :: Int -> Int"
   , "double = \"not an Int\""
+  ]
+
+-- | Body for the dotted-name check.
+extraMath :: Text
+extraMath = T.unlines
+  [ "module Extra.Math where"
+  , ""
+  , "quad :: Int -> Int"
+  , "quad n = n * 4"
   ]
 
 runFlow :: Client.McpClient -> FilePath -> IO [Check]
@@ -153,16 +165,39 @@ runFlow c projectDir = do
     ("w4: " <> render w4 <> " || left on disk: " <> T.pack (show unregLeft))
   stepFooter 4 t4
 
-  -- 5 · the project gate counts the authored module green.
-  t5 <- stepHeader 5 "check(project) · authored module counted green"
-  cp <- Client.callTool c GhcCheck (object [ "action" .= ("project" :: Text) ])
+  -- 5 · dotted module name: derives src/Extra/Math.hs, lands verified.
+  t5 <- stepHeader 5 "write_module · dotted name derives src/<name>.hs"
+  _ <- Client.callTool c GhcModule
+         (object [ "action" .= ("add" :: Text)
+                 , "modules" .= (["Extra.Math"] :: [Text])
+                 ])
+  w5 <- Client.callTool c GhcModule
+          (object [ "action"  .= ("write_module" :: Text)
+                  , "module"  .= ("Extra.Math" :: Text)
+                  , "code"    .= extraMath
+                  ])
+  extraOnDisk <- doesFileExist (projectDir </> "src" </> "Extra" </> "Math.hs")
+  ev5 <- Client.callTool c GhcEval
+           (object [ "expression" .= ("Extra.Math.quad 10" :: Text) ])
   c5 <- liveCheck $ checkPure
+    "dotted name → ok, landed at src/Extra/Math.hs, eval quad 10 = 40"
+    (statusOk w5 == Just True
+      && extraOnDisk
+      && "src/Extra/Math.hs" `T.isInfixOf` render w5
+      && statusOk ev5 == Just True && outHas "40" ev5)
+    ("w5: " <> render w5 <> " || ev5: " <> render ev5)
+  stepFooter 5 t5
+
+  -- 6 · the project gate counts the authored modules green.
+  t6 <- stepHeader 6 "check(project) · authored module counted green"
+  cp <- Client.callTool c GhcCheck (object [ "action" .= ("project" :: Text) ])
+  c6 <- liveCheck $ checkPure
     "check(project) after write_module → green"
     (statusOk cp == Just True)
     ("cp: " <> render cp)
-  stepFooter 5 t5
+  stepFooter 6 t6
 
-  pure [c1, c2, c3, c4, c5]
+  pure [c1, c2, c3, c4, c5, c6]
 
 --------------------------------------------------------------------------------
 -- helpers
@@ -174,8 +209,11 @@ boolField want key v = case lookupField key v of
   _             -> False
 
 out42 :: Value -> Bool
-out42 v = case lookupField "output" v of
-  Just (String s) -> "42" `T.isInfixOf` s
+out42 v = outHas "42" v
+
+outHas :: Text -> Value -> Bool
+outHas needle v = case lookupField "output" v of
+  Just (String s) -> needle `T.isInfixOf` s
   _               -> False
 
 render :: Value -> Text

@@ -43,7 +43,9 @@ descriptor =
         \'check' type-checks it in project context; 'promote' splices a \
         \verified entry into a real module (snapshot + compile-verify); \
         \'write_module' writes a COMPLETE module body (new or overwrite) \
-        \with the same snapshot + compile-verify + rollback discipline. \
+        \with the same snapshot + compile-verify + rollback discipline; \
+        \'module' accepts a .hs path OR a dotted module name (derived \
+        \to src/<name>.hs). \
         \WHEN NOT: edits to code that already compiles — ghc_edit. \
         \PREREQUISITES: a .cabal in the active project; write_module \
         \needs the module REGISTERED (action='add') — the cradle \
@@ -68,7 +70,13 @@ descriptor =
               , "note" .= object [ "type" .= ("string" :: Text) ]
               , "binding_name" .= object [ "type" .= ("string" :: Text) ]
               , "imports" .= object [ "type" .= ("string" :: Text) ]
-              , "module" .= object [ "type" .= ("string" :: Text) ]
+              , "module" .= object
+                  [ "type" .= ("string" :: Text)
+                  , "description" .=
+                      ("write_module target: a project-relative .hs path \
+                       \(\"src/Hm/Parser.hs\") or a dotted module name \
+                       \(\"Hm.Parser\" -> src/Hm/Parser.hs)" :: Text)
+                  ]
               , "target_module" .= object [ "type" .= ("string" :: Text) ]
               , "target_line" .= object [ "type" .= ("integer" :: Text) ]
               , "delete_files" .= object [ "type" .= ("boolean" :: Text) ]

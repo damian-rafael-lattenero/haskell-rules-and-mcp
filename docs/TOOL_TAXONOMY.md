@@ -42,7 +42,7 @@
 |---|---|---|
 | `GhcProperty` | `ghc_property` | action: `check`/`store verbs`/`arbitrary` — QuickCheck run, store/replay, determinism (`runs>=2`), `Arbitrary` derivation; successor of `ghc_quickcheck`/`ghc_property_store` |
 | `GhcEdit` | `ghc_edit` | action: refactor verbs + `import`/`exports`/`fix_warning`/`format`; successor of `ghc_refactor`/`ghc_add_import`/`ghc_apply_exports`/`ghc_fix_warning`/`ghc_format` |
-| `GhcModule` | `ghc_module` | action: module add/remove + scratchpad `write`/`check`/`list`/`show`/`clear`/`promote` + whole-module authorship `write_module` (snapshot + compile-verify + rollback; needs the module registered via `add`); successor of `ghc_modules`/`ghc_scratch` |
+| `GhcModule` | `ghc_module` | action: module add/remove + scratchpad `write`/`check`/`list`/`show`/`clear`/`promote` + whole-module authorship `write_module` (snapshot + compile-verify + rollback; `module` takes a `.hs` path or a dotted module name; needs the module registered via `add`); successor of `ghc_modules`/`ghc_scratch` |
 | `GhcGate` | `ghc_gate` | Full pre-push gate: build + tests + lints + property replay |
 | `GhcBatch` | `ghc_batch` | Multi-tool macro: regression replay from the property store |
 

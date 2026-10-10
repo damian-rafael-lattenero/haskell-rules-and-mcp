@@ -29,6 +29,7 @@ module HaskellFlows.Tool.IdeBacked
   , anchorFailureNote
   , writeModuleShouldRollback
   , writeModuleOkPayload
+  , resolveWriteModulePath
   ) where
 
 import Control.Concurrent.MVar (MVar, isEmptyMVar, modifyMVar)
@@ -44,6 +45,7 @@ import Data.Maybe (fromMaybe, listToMaybe)
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Key (Key)
 import Data.Aeson.Types (parseEither)
+import Data.Char (isAlphaNum, isUpper)
 import Data.Function ((&))
 import Data.IORef (IORef, readIORef)
 import Data.List (foldl', isPrefixOf, isSuffixOf, nubBy, sort)
@@ -1359,7 +1361,10 @@ handleScratch scratchRef pdRef raw s = do
 --------------------------------------------------------------------------------
 
 -- | Args of @action=\"write_module\"@: @module@ is the project-relative
--- path of the target (@\"src/Expr/Syntax.hs\"@), @code@ the COMPLETE
+-- path of the target (@\"src/Expr/Syntax.hs\"@) or a dotted module
+-- name (@\"Expr.Syntax\"@ — derived to its scaffold-conventional path;
+-- W3.3 real-agent finding: models keep passing the name even when the
+-- schema says path, so both spellings load). @code@ is the COMPLETE
 -- module text — headers included, exactly what lands on disk.
 data WriteModuleArgs = WriteModuleArgs
   { wmaPath :: !Text
@@ -1390,12 +1395,14 @@ handleWriteModule ref pdRef raw s =
       pure (mkFailed (mkErrorEnvelope MissingArg (T.pack parseError)))
     Right (WriteModuleArgs mpath code) -> do
       pd <- readIORef pdRef
-      if not (".hs" `T.isSuffixOf` mpath)
-        then pure (mkFailed (mkErrorEnvelope Validation
-                "write_module targets Haskell sources: the 'module' \
-                \path must end in .hs"))
-        else do
-          guarded <- guardModulePath pd (T.unpack mpath) False
+      case resolveWriteModulePath mpath of
+        Nothing ->
+          pure (mkFailed (mkErrorEnvelope Validation
+                  "write_module targets Haskell sources: 'module' must be \
+                  \a project-relative .hs path (\"src/Expr/Syntax.hs\") or \
+                  \a dotted module name (\"Expr.Syntax\")"))
+        Just rel -> do
+          guarded <- guardModulePath pd rel False
           case guarded of
             Left refusal -> pure refusal
             Right fp -> do
@@ -1435,7 +1442,7 @@ handleWriteModule ref pdRef raw s =
                             mCabal <- findCabalIn (unProjectDir pdNow)
                             cabal  <- maybe (pure "") TIO.readFile mCabal
                             let registered =
-                                  any (sameModulePath (T.unpack mpath))
+                                  any (sameModulePath rel)
                                       (projectModuleFilesFromCabal cabal)
                             if registered
                               then do
@@ -1454,12 +1461,32 @@ handleWriteModule ref pdRef raw s =
                                      (filter ((== SevError) . geSeverity) postDiags)))
                                   " — snapshot restored")
                         else pure
-                          (mkOk (writeModuleOkPayload mpath existed postDiags))
+                          (mkOk (writeModuleOkPayload (T.pack rel)
+                                   existed postDiags))
 
 -- | A whole-module write is disqualified by ANY error diagnostic —
 -- there is no pre-existing baseline to diff against.
 writeModuleShouldRollback :: [GhcError] -> Bool
 writeModuleShouldRollback = any ((== SevError) . geSeverity)
+
+-- | Both spellings agents reach for: a @.hs@-suffixed value is the
+-- project-relative path, used as-is; a dotted module name (uppercase
+-- segment heads — @Hm.Parser@, @Lib@) derives the scaffold-conventional
+-- path (@src/Hm/Parser.hs@). Anything else is refused.
+resolveWriteModulePath :: Text -> Maybe FilePath
+resolveWriteModulePath v
+  | ".hs" `T.isSuffixOf` v = Just (T.unpack v)
+  | isModuleName v = Just ("src/" ++ T.unpack (T.intercalate "/"
+                               (T.splitOn "." v)) ++ ".hs")
+  | otherwise = Nothing
+  where
+    isModuleName s =
+      not (T.null s)
+        && all okSeg (T.splitOn "." s)
+    okSeg seg = case T.uncons seg of
+      Just (c0, rest) ->
+        isUpper c0 && T.all (\c -> isAlphaNum c || c == '_') rest
+      Nothing -> False
 
 -- | The synthesised component-honesty message (see
 -- "Ghc.IdeSession" 'ideDiagnosticsFor').

@@ -261,6 +261,7 @@ import HaskellFlows.Tool.IdeBacked
   ( aggregateEvalMessage
   , anchorFailureNote
   , moduleKeyOf
+  , resolveWriteModulePath
   , writeModuleOkPayload
   , writeModuleShouldRollback
   )
@@ -853,6 +854,7 @@ runAllTests = do
       , test "anchor chain: aggregate message keeps generic line" testAggregateEvalMessage
       , test "write_module: ANY error rolls back, warnings commit" testWriteModuleVerdict
       , test "write_module: ok payload shape"                   testWriteModuleOkPayload
+      , test "write_module: dotted module name derives its path (W3.3)" testResolveWriteModulePath
       , quickTest "prop_fieldSplit_roundtrip"            prop_fieldSplit_roundtrip
       , quickTest "prop_listFieldOf_format_invariant"    prop_listFieldOf_format_invariant
       , quickTest "prop_projectModuleFiles_dotpaths"     prop_projectModuleFiles_dotpaths
@@ -1583,6 +1585,22 @@ testWriteModuleOkPayload =
        , "\"warnings\":1"                     `T.isInfixOf` json
        , "ghc_check(action=\\\"project\\\")"  `T.isInfixOf` json
        ]
+
+-- W3.3 real-agent finding: models pass the dotted module NAME to
+-- write_module even when the schema says path (six failed calls in
+-- the opencode session before recovering via ghc_batch) — both
+-- spellings load now; anything that is neither is refused.
+testResolveWriteModulePath :: IO Bool
+testResolveWriteModulePath = pure $ and
+  [ resolveWriteModulePath "src/Expr/Syntax.hs" == Just "src/Expr/Syntax.hs"
+  , resolveWriteModulePath "test/Spec.hs"       == Just "test/Spec.hs"
+  , resolveWriteModulePath "Expr.Syntax"        == Just "src/Expr/Syntax.hs"
+  , resolveWriteModulePath "Lib"                == Just "src/Lib.hs"
+  , resolveWriteModulePath "src/foo"            == Nothing
+  , resolveWriteModulePath "expr.syntax"        == Nothing
+  , resolveWriteModulePath "Expr..Syntax"       == Nothing
+  , resolveWriteModulePath ""                   == Nothing
+  ]
 
 -- W5.2 — HaskellFlows.Parser.Cabal: the pure .cabal seam extracted
 -- from IdeSession. Laws pin the two renderings cabal itself
