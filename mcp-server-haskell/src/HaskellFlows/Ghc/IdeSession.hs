@@ -50,7 +50,7 @@ import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, newMVar, putMVar, takeMVar, withMVar)
 import Control.Concurrent.STM (atomically)
 import Control.Exception (SomeException, evaluate, try)
-import Control.Monad (forever, forM, void, when)
+import Control.Monad (forever, forM, void, when, unless)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value, object, (.=))
 import Data.List (find, isSuffixOf, sort, sortOn)
@@ -97,6 +97,7 @@ import Development.IDE.Core.RuleTypes
   , IsFileOfInterestResult (..)
   , GetModSummary (GetModSummary)
   , GetModuleGraph (GetModuleGraph)
+  , GetParsedModule (GetParsedModule)
   , GhcSessionDeps (GhcSessionDeps)
   , LinkableResult (linkableHomeMod)
   , ModSummaryResult (msrModSummary)
@@ -338,8 +339,12 @@ ideDiagnosticsFor' s fp = do
   -- store (getDiagnostics) is flushed asynchronously, so a check
   -- right after a fix could serve stale cross-run errors. Cradle
   -- errors ("not listed in .cabal") surface via GetModSummary /
-  -- GhcSessionDeps, compile errors+warnings via TypeCheck.
+  -- GhcSessionDeps, parse errors via GetParsedModule (the parser
+  -- publishes its rule diagnostics there; TypeCheck only sees them
+  -- as a BadDependency, which carries NO diags of its own), and
+  -- compile errors+warnings via TypeCheck.
   diags <- runAction "mcp-ide-check" (isState s) $ do
+    _ <- use GetParsedModule nfp
     _ <- use TypeCheck nfp
     _ <- use GetModSummary nfp
     extras <- getShakeExtras
@@ -347,9 +352,10 @@ ideDiagnosticsFor' s fp = do
         readRuleDiags k = liftIO . atomically $ do
           mv <- STM.lookup (toKey k nfp) (state extras)
           pure (maybe [] (V.toList . ruleDiagsOf) mv)
+    parsed <- readRuleDiags GetParsedModule
     tc <- readRuleDiags TypeCheck
     ms <- readRuleDiags GetModSummary
-    pure (tc <> ms)
+    pure (parsed <> tc <> ms)
   pure
     [ object
         [ "severity" .= (if _severity d == Just DiagnosticSeverity_Error
@@ -392,12 +398,15 @@ ideProjectDiagnostics s fs =
   withMVar (isEvalLock s) $ \_ -> do
     -- Same didSave-equivalent as single-file checks: new modules
     -- land in the component targets only after the cabal mtime is
-    -- invalidated (GhcSessionIO depends on the cradle deps).
-    case fs of
-      (f0 : _) -> do
-        absF <- makeAbsolute f0
-        rescanForDiskChanges s (toNormalizedFilePath' absF)
-      [] -> pure ()
+    -- invalidated (GhcSessionIO depends on the cradle deps). EVERY
+    -- gated file must be dirtied — dirtying only the first left the
+    -- rest serving cached (possibly stale-red) rule values from the
+    -- previous build, so a host-side fix on file #2 never showed up.
+    unless (null fs) $ do
+      nfps <- mapM (fmap toNormalizedFilePath' . makeAbsolute) fs
+      cabalKeys <- cabalMTimeKeys (isRoot s)
+      setSomethingModified VFSUnmodified (isState s) "mcp-external-edit" $
+        pure (map (toKey GetModificationTime) nfps <> cabalKeys)
     r <- mapM (\fp -> (,) fp <$> ideDiagnosticsFor' s fp) fs
     pure r
 

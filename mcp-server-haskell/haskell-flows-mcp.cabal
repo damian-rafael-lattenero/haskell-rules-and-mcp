@@ -334,6 +334,7 @@ test-suite haskell-flows-mcp-e2e
                       Scenarios.FlowModuleNameGuard
                       Scenarios.FlowMutation
                       Scenarios.FlowNestedModuleEval
+                      Scenarios.FlowParseHonesty
                       Scenarios.FlowMultiUnitLifecycle
                       Scenarios.FlowPoisonRecovery
                       Scenarios.FlowPropertyLifecycle
