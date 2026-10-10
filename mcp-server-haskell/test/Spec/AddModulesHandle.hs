@@ -11,6 +11,7 @@ module Spec.AddModulesHandle
   , testRMScanImportPlain
   , testRMScanRespectsHierarchy
   , testRMScanQuietOnNoMatch
+  , testAddModulesTestSuiteStanzaTargeting
   ) where
 
 import qualified Data.Aeson as A
@@ -28,6 +29,7 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Types
 import qualified HaskellFlows.Tool.AddModules as AddModules
+import qualified HaskellFlows.Tool.CreateProject as CreateProject
 import qualified HaskellFlows.Tool.RemoveModules as RM
 
 import Spec.Helpers (getTestTimestamp)
@@ -226,3 +228,24 @@ testRMScanQuietOnNoMatch = pure $
      null (RM.scanImportersInBody "f.hs" ["Foo"] "")
   && null (RM.scanImportersInBody "f.hs" []      "import Foo\n")
   && null (RM.scanImportersInBody "f.hs" ["Foo"] "module Other where\n")
+
+-- | W2 canary regression (FlowDogfoodUxFixes 39/40): adding a module
+-- with stanza="test-suite" over the CURRENT scaffold (whose
+-- test-suite build-depends spans continuation lines) must land the
+-- other-modules INSIDE the test-suite stanza — the bug wrote it at
+-- the tail of the LIBRARY stanza, so cabal's repl failed with
+-- Cabal-7554 ("can't find source for Gen in src") the moment the
+-- component-honesty change stopped serving the stale session.
+testAddModulesTestSuiteStanzaTargeting :: IO Bool
+testAddModulesTestSuiteStanzaTargeting =
+  let Right tgt  = AddModules.resolveStanzaTarget (Just "test-suite")
+      scaffold   = CreateProject.cabalFile "ux-demo" "UxDemo"
+  in case AddModules.addModulesToBody tgt scaffold ["Gen"] of
+       Left _err -> pure (False)
+       Right (newBody, added) ->
+         let stripped = map T.strip (T.lines newBody)
+             (beforeTS, fromTS) =
+               break ("test-suite ux-demo-test" `T.isPrefixOf`) stripped
+             genInLib = "Gen" `elem` beforeTS
+             genInTS  = "Gen" `elem` fromTS
+         in pure (["Gen"] == added && genInTS && not genInLib)

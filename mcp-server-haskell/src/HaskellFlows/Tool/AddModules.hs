@@ -18,6 +18,7 @@ module HaskellFlows.Tool.AddModules
   , parseModuleList
   , StanzaTarget (..)
   , resolveStanzaTarget
+  , addModulesToBody
   ) where
 
 import Control.Exception (SomeException, try)
@@ -318,16 +319,22 @@ addWithinBody fieldName body mods =
       (pre, headerAndRest) = break (isFieldHeader fieldName) lns
   in case headerAndRest of
        [] ->
-         -- Field absent: synthesise at the start of the stanza
-         -- body. Skips any leading blank lines so the field lands
-         -- just under the stanza header.
-         let (blanks, rest) = span (T.null . T.strip) lns
+         -- Field absent: synthesise at the start of the stanza BODY —
+         -- after the stanza header line (a slice's first line IS the
+         -- header) and any blank lines under it. Inserting at the
+         -- slice head wrote the field into the PREVIOUS stanza's tail
+         -- (W2 canary: other-modules landed in the library, cabal's
+         -- repl then died with Cabal-7554).
+         let (hdr, rest0) = case lns of
+               (h : t) | not (T.null (T.strip h)) -> ([h], t)
+               _                                  -> ([], lns)
+             (blanks, rest) = span (T.null . T.strip) rest0
              indent         = "    "
              newField       = (indent <> fieldName <> ":") :
                               [ indent <> "    " <> m | m <- mods ]
          in if null mods
               then (body, [])
-              else (T.unlines (blanks <> newField <> rest), mods)
+              else (T.unlines (hdr <> blanks <> newField <> rest), mods)
        (h : rest) ->
          let (cont, tailLns) = break isNewField rest
              existing = existingModules fieldName (h : cont)

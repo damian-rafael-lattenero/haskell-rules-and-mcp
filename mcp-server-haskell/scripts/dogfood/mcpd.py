@@ -83,6 +83,8 @@ def daemon(binary, project_dir, spool):
     seq = 0
     # O_RDWR so the daemon holds its own write end: the FIFO never
     # hits EOF when a caller closes its side (EOF killed daemon v1).
+    if not os.path.exists(f"{spool}/cmd.fifo"):
+        os.mkfifo(f"{spool}/cmd.fifo")
     fifo_fd = os.open(f"{spool}/cmd.fifo", os.O_RDWR)
     pending = b""
     while True:

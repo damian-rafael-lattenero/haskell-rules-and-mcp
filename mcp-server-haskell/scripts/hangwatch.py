@@ -15,6 +15,7 @@ On HANG the whole process group is SIGKILLed and the last log lines (the "last
 step") are printed. Exit code 0 iff DONE.
 """
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -32,27 +33,42 @@ def tail_of(path, lines=60):
         return "(no output)"
 
 
+ENVVAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
 def main():
     if len(sys.argv) < 3:
         print(__doc__)
         sys.exit(2)
-    label, cmd = sys.argv[1], sys.argv[2]
+    label = sys.argv[1]
+    # argv vs env: KEY=VAL args with an identifier-shaped key export
+    # into the child env (STALL_S/TOTAL_S are consumed by the
+    # watchdog); everything else is part of the COMMAND VECTOR. The
+    # old behavior passed a single argv element — `sh -c "cmd"` ran a
+    # bare interactive `sh` that exited instantly, silently skipping
+    # the watched work.
+    argv = []
     env = dict(os.environ)
     stall_s, total_s = 180.0, 2400.0
-    for kv in sys.argv[3:]:
-        key, _, val = kv.partition("=")
-        if key == "STALL_S":
+    for arg in sys.argv[2:]:
+        key, sep, val = arg.partition("=")
+        if sep and key == "STALL_S":
             stall_s = float(val)
-        elif key == "TOTAL_S":
+        elif sep and key == "TOTAL_S":
             total_s = float(val)
-        else:
+        elif sep and ENVVAR_RE.match(key):
             env[key] = val
+        else:
+            argv.append(arg)
+    if not argv:
+        print(__doc__)
+        sys.exit(2)
 
     log_path = "/tmp/hangwatch-%s.log" % label
     log = open(log_path, "wb")
     start = time.time()
     proc = subprocess.Popen(
-        [cmd], env=env, stdout=log, stderr=subprocess.STDOUT,
+        argv, env=env, stdout=log, stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL, start_new_session=True,
     )
     print("hangwatch[%s] pid=%d log=%s (STALL_S=%g TOTAL_S=%g)"
