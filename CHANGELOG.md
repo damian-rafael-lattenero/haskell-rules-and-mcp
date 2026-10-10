@@ -30,6 +30,10 @@ loop proven by three dogfood runs with mechanical E4 scores
   parser diagnostics are visible to `ghc_check` (they were silently
   dropped before), and eval/scope state cannot disagree with the
   typechecker.
+- **Bench harness removed** (`benchmarks/`, the nightly gate, and
+  `scripts/bench-mcp.sh`). It targeted the deleted legacy engine and
+  no longer compiled; the budget table itself stays in
+  `src/HaskellFlows/Bench/Budget.hs`.
 - **36 → 12 tools.** The retired verbs live on as `action` fields on
   the consolidated tools; the full successor mapping is in
   `docs/TOOL_TAXONOMY.md` (CI-enforced against the live registry).

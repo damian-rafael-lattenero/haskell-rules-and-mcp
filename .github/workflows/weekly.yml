@@ -8,9 +8,6 @@ name: Weekly deep checks
 #              and newest supported), catching base-compat drift.
 #    coverage — HPC ratchet vs mcp-server-haskell/coverage-baseline.txt
 #              (floor only ever moves up; scripts/coverage-gate.sh).
-#    bench   — latency budget gate (HFLOWS_BENCH_GATE=1) from
-#              src/HaskellFlows/Bench/Budget.hs; uploads the measured
-#              per-tool table as bench-results.json.
 #    flakiness — unit x5 + e2e(skip-slow) x3 on one warm build, so an
 #              intermittent failure surfaces on a schedule with logs.
 #    package-quality — haddock --haddock-all + cabal check + sdist
@@ -64,7 +61,7 @@ jobs:
       - name: Configure + freeze
         run: |
           cabal update   # image index can be up to a week stale
-          cabal configure --enable-tests --enable-benchmarks --disable-documentation
+          cabal configure --enable-tests --disable-documentation
           cabal freeze
 
       - name: Build (deps + project)
@@ -120,38 +117,6 @@ jobs:
           name: coverage-html
           path: mcp-server-haskell/dist-newstyle/build/**/t/haskell-flows-mcp-test/hpc/vanilla/html
           retention-days: 14
-          if-no-files-found: warn
-
-  bench:
-    name: Bench gate
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: haskell-actions/setup@v2
-        with:
-          ghc-version: "9.12.2"
-          cabal-version: "3.12.1.0"
-          cabal-update: true
-
-      # Reads (p50, p95) budgets from src/HaskellFlows/Bench/Budget.hs
-      # and exits non-zero on a sustained p95 breach. Unlike an advisory
-      # per-step run, this badge IS the signal.
-      - name: Run bench gate
-        env:
-          HFLOWS_BENCH_GATE: "1"
-        run: cabal run haskell-flows-mcp-bench --offline -- --gate
-
-      # The measurement table is most worth inspecting exactly when the
-      # gate is red.
-      - name: Upload bench-results.json
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: bench-results
-          path: mcp-server-haskell/bench-results.json
-          retention-days: 30
           if-no-files-found: warn
 
   flakiness:
@@ -225,7 +190,7 @@ jobs:
 
       - name: Configure + freeze
         run: |
-          cabal configure --enable-tests --enable-benchmarks --disable-documentation
+          cabal configure --enable-tests --disable-documentation
           cabal freeze
 
       - name: Restore cabal store cache

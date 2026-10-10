@@ -101,7 +101,7 @@ jobs:
           # build; refresh it or the solver can't see packages
           # published since (e.g. hls-plugin-api 2.15).
           cabal update
-          cabal configure --enable-tests --enable-benchmarks --disable-documentation
+          cabal configure --enable-tests --disable-documentation
           cabal freeze
 
       - name: Build (deps + project)

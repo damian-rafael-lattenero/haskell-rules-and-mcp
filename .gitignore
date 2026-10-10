@@ -19,6 +19,10 @@ mcp-server-haskell/app/Main
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
 
+# ZCode harness file-watcher ignore list — auto-synced from this
+# file by the tool; machine-local, never commit its state.
+.zcodeignore
+
 # cabal-generated, always local-only. `cabal freeze` is used by CI as a
 # cache-key input; we don't commit the resulting plan.
 **/cabal.project.freeze
