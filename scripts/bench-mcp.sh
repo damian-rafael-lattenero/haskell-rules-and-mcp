@@ -12,7 +12,7 @@
 # Phase C: --gate flag turns the run into a hard gate (exit 1 on
 #          sustained p95 breach).  CI uses the env-var form
 #          (HFLOWS_BENCH_GATE=1) to keep the workflow YAML
-#          declarative — see .github/workflows/haskell-ci.yml.
+#          declarative — see .github/workflows/weekly.yml.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

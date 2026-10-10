@@ -1,0 +1,119 @@
+name: CI
+
+# ---------------------------------------------------------------------------
+#  Sober per-push gate (v1.0.0): ONE job, ubuntu, GHC 9.12.2, no shards.
+#
+#  Runs, in order (fail fast, ~10-15 min warm):
+#    1. meta-invariants (bash greps — retired tool names, scenario
+#       registration, no --keep-going on test steps)
+#    2. hlint (warning+ severity blocks; parsed from JSON because the
+#       hlint binary has no --fail-on flag)
+#    3. cabal build (deps + project)
+#    4. unit + e2e suites (full, sequential — exit codes tracked
+#       per-suite so neither can swallow the other's red)
+#    5. cabal check + sdist round-trip (package metadata + tarball
+#       completeness)
+#
+#  Deep checks (2-GHC matrix, coverage ratchet, bench gate, flakiness
+#  hunt) moved to weekly.yml. Release binaries live in release.yml.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      # Plan/session scratch is the only tree churn that can never
+      # affect the built surface. Docs and rules .md files stay IN:
+      # check-rules-freshness.sh greps them.
+      - ".zcode/**"
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: mcp-server-haskell
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    # Pre-baked CI image (.docker/Dockerfile.ci, published weekly by
+    # build-ci-image.yml): GHC + cabal + hlint on PATH, ~/.cabal/store
+    # pre-populated with the freeze closure, Baseline e2e fixture
+    # pre-built. Cold-start is an image pull, not toolchain setup.
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/haskell-flows-ci:9.12.2-latest
+
+    # GitHub Actions sets HOME=/github/home for container jobs, but
+    # the image's cabal config + store + Hackage index live under
+    # /root. Point cabal there or Configure fails with "The package
+    # list for 'hackage.haskell.org' does not exist."
+    env:
+      CABAL_DIR: /root/.cabal
+      XDG_CONFIG_HOME: /root/.config
+      # POSIX locale would crash commitBuffer on the suite's Unicode.
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # Bash greps over the tree — no GHC needed. Same scripts ci-local
+      # runs, so local and CI cannot drift apart.
+      - name: Invariants (rules freshness + CI honesty + scenario registration)
+        working-directory: .
+        run: |
+          bash scripts/check-rules-freshness.sh
+          bash scripts/check-ci-invariants.sh
+          bash scripts/check-scenario-registration.sh
+
+      # Before the build so hlint recurses explicit source dirs only
+      # (no dist-newstyle to skip). Plain hlint exits 1 on ANY hint;
+      # the project's threshold is warning+ (suggestions from hlint
+      # version drift don't block), so severity is filtered here —
+      # same semantics the old haskell-actions/hlint-run job had.
+      - name: HLint (blocks on warning and above)
+        run: |
+          hlint src app test test-e2e --json > /tmp/hlint.json || true
+          python3 - <<'PY'
+          import json
+          hints = json.load(open("/tmp/hlint.json"))
+          blocking = [h for h in hints if h.get("severity") in ("warning", "error")]
+          for h in blocking:
+              print(f"{h['severity'].upper()}: {h['outputFile']}:{h['startLine']} {h['hint']}")
+          print(f"hlint: {len(hints)} hints total, {len(blocking)} blocking (warning+)")
+          raise SystemExit(1 if blocking else 0)
+          PY
+
+      - name: Configure + freeze
+        run: |
+          cabal configure --enable-tests --enable-benchmarks --disable-documentation
+          cabal freeze
+
+      - name: Build (deps + project)
+        run: cabal build all --keep-going
+
+      # NO --keep-going here: cabal returns exit 0 with --keep-going
+      # even when a test-suite is red. Per-suite exit codes, fail if
+      # either failed. Guarded by scripts/check-ci-invariants.sh.
+      - name: Run tests (unit + e2e)
+        run: |
+          rc=0
+          cabal test haskell-flows-mcp-test --test-show-details=direct || rc=1
+          cabal test haskell-flows-mcp-e2e  --test-show-details=direct || rc=1
+          exit $rc
+
+      - name: Package checks (cabal check + sdist round-trip)
+        run: |
+          cabal check
+          cabal sdist --output-dir /tmp/sdist-roundtrip
+          ls -la /tmp/sdist-roundtrip

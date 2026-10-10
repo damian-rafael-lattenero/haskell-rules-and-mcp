@@ -18,8 +18,8 @@ name: Build CI image
 #   * weekly schedule (re-warm against current Hackage index)
 #   * manual workflow_dispatch
 #
-# Consuming the image (future commit, gated on first successful build):
-#   `haskell-ci.yml`'s build-and-test job will set
+# Consuming the image (wired since the sober CI rework):
+#   `ci.yml`'s job sets
 #   `container: ghcr.io/<owner>/haskell-flows-ci:9.12.2-<hash>` and
 #   skip ghcup install + cabal-store cache restore on its critical
 #   path. That replaces ~3 min of cold-start with ~10 s of pull.

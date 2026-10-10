@@ -282,7 +282,7 @@ timed "rules-freshness" bash scripts/check-rules-freshness.sh
 # CI-invariants gate: cheap grep guard that the GitHub workflow never
 # reintroduces `cabal test … --keep-going` (which masks test failures).
 # Same fast-fail-before-build-cost rationale as rules-freshness.
-step "0/N" "ci-invariants check (.github/workflows/haskell-ci.yml)"
+step "0/N" "ci-invariants check (.github/workflows/ci.yml + weekly.yml)"
 timed "ci-invariants" bash scripts/check-ci-invariants.sh
 
 # Scenario-registration gate: every test-e2e Flow*.hs must be wired into

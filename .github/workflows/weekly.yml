@@ -1,0 +1,251 @@
+name: Weekly deep checks
+
+# ---------------------------------------------------------------------------
+#  Sunday deep pass (v1.0.0). Everything here is advisory for merges —
+#  the per-push gate is ci.yml — but a red badge is a real signal:
+#
+#    matrix  — build + full suites on TWO GHC versions (the oldest
+#              and newest supported), catching base-compat drift.
+#    coverage — HPC ratchet vs mcp-server-haskell/coverage-baseline.txt
+#              (floor only ever moves up; scripts/coverage-gate.sh).
+#    bench   — latency budget gate (HFLOWS_BENCH_GATE=1) from
+#              src/HaskellFlows/Bench/Budget.hs; uploads the measured
+#              per-tool table as bench-results.json.
+#    flakiness — unit x5 + e2e(skip-slow) x3 on one warm build, so an
+#              intermittent failure surfaces on a schedule with logs.
+#    package-quality — haddock --haddock-all + cabal check + sdist
+#              round-trip (the deep version of ci.yml's quick check).
+#
+#  Replaces the daily bench-nightly.yml + flakiness-nightly.yml (same
+#  payloads, weekly cadence — nightly bought no extra signal for the
+#  maintenance-only phase). Image refresh stays in build-ci-image.yml
+#  (Sun 03:00 UTC); this runs 04:00 UTC so they don't contend.
+# ---------------------------------------------------------------------------
+
+on:
+  schedule:
+    - cron: "0 4 * * 0"
+  workflow_dispatch: {}
+
+concurrency:
+  group: weekly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: mcp-server-haskell
+
+jobs:
+  matrix-build:
+    name: Build + test — GHC ${{ matrix.ghc }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ghc: "9.10.1"
+            cabal: "3.12.1.0"
+          - ghc: "9.12.2"
+            cabal: "3.12.1.0"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/haskell-flows-ci:${{ matrix.ghc }}-latest
+    env:
+      CABAL_DIR: /root/.cabal
+      XDG_CONFIG_HOME: /root/.config
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure + freeze
+        run: |
+          cabal configure --enable-tests --enable-benchmarks --disable-documentation
+          cabal freeze
+
+      - name: Build (deps + project)
+        run: cabal build all --keep-going
+
+      - name: Run tests (unit + e2e)
+        run: |
+          rc=0
+          cabal test haskell-flows-mcp-test --test-show-details=direct || rc=1
+          cabal test haskell-flows-mcp-e2e  --test-show-details=direct || rc=1
+          exit $rc
+
+  coverage:
+    name: Coverage ratchet
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: setup
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.12.2"
+          cabal-version: "3.12.1.0"
+          cabal-update: true
+
+      - name: Configure + freeze
+        run: |
+          cabal configure --enable-tests --disable-documentation
+          cabal freeze
+
+      # Coverage uses a separate -fhpc build — keep its cache key apart
+      # from the plain-build caches so it doesn't thrash them.
+      - name: Restore cabal store cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ steps.setup.outputs.cabal-store }}
+            dist-newstyle
+          key: ${{ runner.os }}-ghc-9.12.2-cabal-3.12.1.0-cov-${{ hashFiles('mcp-server-haskell/cabal.project.freeze') }}
+          restore-keys: |
+            ${{ runner.os }}-ghc-9.12.2-cabal-3.12.1.0-cov-
+
+      # Script resolves the repo root itself; run it from the repo root.
+      - name: Coverage ratchet gate
+        working-directory: .
+        run: bash scripts/coverage-gate.sh
+
+      - name: Upload HPC HTML report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-html
+          path: mcp-server-haskell/dist-newstyle/build/**/t/haskell-flows-mcp-test/hpc/vanilla/html
+          retention-days: 14
+          if-no-files-found: warn
+
+  bench:
+    name: Bench gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.12.2"
+          cabal-version: "3.12.1.0"
+          cabal-update: true
+
+      # Reads (p50, p95) budgets from src/HaskellFlows/Bench/Budget.hs
+      # and exits non-zero on a sustained p95 breach. Unlike an advisory
+      # per-step run, this badge IS the signal.
+      - name: Run bench gate
+        env:
+          HFLOWS_BENCH_GATE: "1"
+        run: cabal run haskell-flows-mcp-bench --offline -- --gate
+
+      # The measurement table is most worth inspecting exactly when the
+      # gate is red.
+      - name: Upload bench-results.json
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-results
+          path: mcp-server-haskell/bench-results.json
+          retention-days: 30
+          if-no-files-found: warn
+
+  flakiness:
+    name: Flakiness hunt (unit x5, e2e x3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.12.2"
+          cabal-version: "3.12.1.0"
+          cabal-update: true
+
+      - name: Configure + freeze
+        run: |
+          cabal configure --enable-tests --disable-documentation
+          cabal freeze
+
+      - name: Build (deps + project)
+        run: cabal build all --keep-going
+
+      - name: Pre-warm E2E fixture deps
+        working-directory: mcp-server-haskell/test-e2e/Fixtures/Baseline
+        run: cabal build
+
+      # Repeats via the in-process repeat-runner; any failing pass reds
+      # the step.
+      - name: Unit suite — 5 repeats
+        env:
+          HASKELL_FLOWS_TEST_REPEAT: "5"
+        run: cabal test haskell-flows-mcp-test --test-show-details=direct
+
+      # x3 with slow scenarios skipped. `if: always()` so a unit flake
+      # doesn't hide an e2e flake in the same run's logs.
+      - name: E2E suite (skip-slow) — 3 repeats
+        if: always()
+        env:
+          HASKELL_FLOWS_E2E_SKIP_SLOW: "1"
+        run: |
+          rc=0
+          for i in 1 2 3; do
+            echo "=== e2e flakiness pass $i/3 ==="
+            cabal test haskell-flows-mcp-e2e --test-show-details=direct || rc=1
+          done
+          exit $rc
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flakiness-logs
+          path: mcp-server-haskell/dist-newstyle/build/**/test/*.log
+          retention-days: 14
+          if-no-files-found: warn
+
+  package-quality:
+    name: Package quality (haddock + check + sdist)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: setup
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.12.2"
+          cabal-version: "3.12.1.0"
+          cabal-update: true
+
+      - name: Configure + freeze
+        run: |
+          cabal configure --enable-tests --enable-benchmarks --disable-documentation
+          cabal freeze
+
+      - name: Restore cabal store cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ steps.setup.outputs.cabal-store }}
+            dist-newstyle
+          key: ${{ runner.os }}-ghc-9.12.2-cabal-3.12.1.0-${{ hashFiles('mcp-server-haskell/cabal.project.freeze') }}
+          restore-keys: |
+            ${{ runner.os }}-ghc-9.12.2-cabal-3.12.1.0-
+
+      # --haddock-all spots broken links, dangling @-refs, and modules
+      # missing from the package description.
+      - name: Build haddocks
+        run: cabal haddock all --haddock-all
+
+      - name: Cabal check (package metadata sanity)
+        run: cabal check
+
+      - name: SDist round-trip
+        run: |
+          cabal sdist all --output-dir /tmp/haskell-flows-mcp-sdist
+          ls -la /tmp/haskell-flows-mcp-sdist

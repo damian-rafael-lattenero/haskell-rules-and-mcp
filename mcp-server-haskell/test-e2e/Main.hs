@@ -173,7 +173,7 @@ scenarios =
   , ( "Flow: Refactor out-of-scope (refuse silent no-op)"
     , False, FlowROS.runFlow )
   , ( "Flow: Type breakage (check_module must flag type mismatch)"
-    , False, FlowBurst.runFlow )
+    , False, FlowTB.runFlow )
   , ( "Flow: Injection guard (newline / sentinel / path traversal)"
     , False, FlowIG.runFlow )
   , ( "Flow: Module-name guard (ISSUE-47 · invalid module / export names refused)"

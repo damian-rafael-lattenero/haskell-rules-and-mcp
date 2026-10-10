@@ -7,7 +7,7 @@ haskell-rules-and-mcp is an MCP server that turns "LLMs that write plausible Has
 
 *An MCP server that turns "LLMs that write plausible Haskell" into "LLMs that write correct Haskell" — through QuickCheck laws, in-process GHC, and snapshot-verified refactors.*
 
-[![Haskell CI](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/haskell-ci.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/haskell-ci.yml)
+[![CI](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/ci.yml)
 [![Nix flake](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/nix-flake.yml/badge.svg)](https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/actions/workflows/nix-flake.yml)
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
 

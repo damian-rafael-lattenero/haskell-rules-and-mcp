@@ -3,8 +3,8 @@ updates:
   # GitHub Actions themselves — pinning by major-version tag is what the
   # existing Haskell CI uses; Dependabot handles the refresh cadence so
   # a compromised action upstream doesn't linger. No Hackage ecosystem
-  # (Dependabot doesn't support it yet); the `outdated` advisory job in
-  # haskell-ci.yml covers drift on the Haskell side.
+  # (Dependabot doesn't support it yet); dependency drift on the Haskell
+  # side surfaces via the weekly deep checks (weekly.yml).
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

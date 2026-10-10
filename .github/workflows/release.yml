@@ -8,10 +8,10 @@ name: Release
 #  releases. Users were stuck building from source, which required
 #  ghcup + a 5-minute cabal compile on cold cache.
 #
-#  Fix: on a `v*.*.*` tag, build the binary on three platforms
-#  (macos-14 arm64, macos-13 x64, ubuntu-22.04 x64), strip it,
-#  compute a SHA256 checksum, and attach both to the corresponding
-#  GitHub Release.
+#  Fix: on a `v*.*.*` tag, build the binary per platform
+#  (macos-14 arm64, ubuntu-22.04 x64), strip it, compute a SHA256
+#  checksum, build the sdist, and attach all of them to the
+#  corresponding GitHub Release.
 #
 #  SLSA provenance is deliberately deferred to a follow-up — keeping
 #  this first pass small so the happy path is observable before
@@ -116,11 +116,50 @@ jobs:
           if-no-files-found: error
 
   # -------------------------------------------------------------------------
+  #  Source distribution — one asset for build-from-source users on
+  #  platforms without a binary (and the Hackage-shaped artifact).
+  # -------------------------------------------------------------------------
+  sdist:
+    name: Build — sdist
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up GHC / cabal
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.12.2"
+          cabal-version: "3.12.1.0"
+          cabal-update: true
+
+      # cabal sdist refuses to package a tree whose metadata fails its
+      # own checks — this doubles as the release-time cabal check.
+      - name: Build sdist + checksum
+        working-directory: ${{ github.workspace }}
+        run: |
+          (cd mcp-server-haskell && cabal sdist --output-dir "$GITHUB_WORKSPACE/dist-sdist")
+          cd dist-sdist
+          for f in *.tar.gz; do
+            sha256sum "$f" > "$f.sha256"
+          done
+          ls -la
+
+      - name: Upload sdist artefact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sdist
+          path: |
+            dist-sdist/*.tar.gz
+            dist-sdist/*.tar.gz.sha256
+          retention-days: 14
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
   #  Gather every platform's artefact and publish to the Release.
   # -------------------------------------------------------------------------
   publish:
     name: Publish Release
-    needs: [build]
+    needs: [build, sdist]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v6
@@ -155,12 +194,15 @@ jobs:
           body: |
             ## haskell-flows-mcp ${{ steps.tag.outputs.name }}
 
-            Pre-built `haskell-flows-mcp` binaries for three platforms.
+            Pre-built `haskell-flows-mcp` binaries for darwin-arm64 and
+            linux-x64, plus the source distribution (sdist). Run
+            `haskell-flows-mcp --version` after extracting to confirm
+            what you got.
 
             Install (macOS + Linux):
 
             ```bash
-            PLATFORM=darwin-arm64   # or darwin-x64 / linux-x64
+            PLATFORM=darwin-arm64   # or linux-x64
             VERSION=${{ steps.tag.outputs.name }}
             curl -L -o haskell-flows-mcp.tar.gz \
               "https://github.com/${{ github.repository }}/releases/download/$VERSION/haskell-flows-mcp-$PLATFORM.tar.gz"
