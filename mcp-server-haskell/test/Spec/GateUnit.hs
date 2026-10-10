@@ -38,7 +38,7 @@ import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNameTexts)
 import qualified HaskellFlows.Tool.Gate as Gate
 import qualified HaskellFlows.Tool.QuickCheckExport as QcExport
 import HaskellFlows.Mcp.Progress (noopSink)
-import Spec.ToolEnvFixture (storeSessionPdSinkEnv)
+import Spec.ToolEnvFixture (storePdSinkEnv)
 import qualified HaskellFlows.Suggest.Rules as SuggestTool
 import HaskellFlows.Parser.TypeSignature (parseSignature)
 import HaskellFlows.Suggest.Rules (Confidence (..), Suggestion (..), RuleContext (..), applyRules, applyRulesCtx, mkRuleContext)
@@ -213,7 +213,7 @@ testGateAllSkipRefused = withTempProject $ \pd -> do
         , "skip_cabal_test"  .= True
         , "skip_cabal_build" .= True
         ]
-  tr <- Gate.handle (storeSessionPdSinkEnv store (error "GhcSession not needed for all-skip path") pd noopSink) raw
+  tr <- Gate.handle (storePdSinkEnv store pd noopSink) raw
   pure $ Env.reStatus tr == Env.StatusRefused
       && fmap Env.eeKind (Env.reError tr) == Just Env.Validation
 

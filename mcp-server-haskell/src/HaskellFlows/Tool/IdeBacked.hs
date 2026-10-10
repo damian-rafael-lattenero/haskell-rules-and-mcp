@@ -14,6 +14,7 @@ module HaskellFlows.Tool.IdeBacked
   ( routeIde
   , warmupIdeSession
   , withIdeSession
+  , dropIdeSession
   , handlePropertyRun
   , ideQcProbe
   , ReplayOutcome (..)
@@ -69,6 +70,7 @@ import HaskellFlows.Ghc.IdeSession
   , ideInteractiveIn
   , ideExtraImports
   , ideRecordExtraImport
+  , shutdownIdeSession
   )
 import HaskellFlows.Parser.Cabal (projectModuleFilesFromCabal)
 import HaskellFlows.Parser.QuickCheck (QuickCheckResult (..))
@@ -128,6 +130,16 @@ withIdeSessionG ref pdRef k = do
       s <- bootIdeSession =<< readIORef pdRef
       pure (Just s, s)
   k s
+
+-- | Drop a live session (stanza edit, poison recovery, server close):
+-- swap the slot to Nothing under the MVar, then shut the old session
+-- down OUTSIDE the critical section. The slot is refilled BEFORE the
+-- shutdown runs, so even a hanging or throwing shutdown can never
+-- leave the MVar empty (the infinite-block class fixed in 2b78e6e).
+dropIdeSession :: MVar (Maybe IdeSession) -> IO ()
+dropIdeSession ref = do
+  mOld <- modifyMVar ref (\m -> pure (Nothing, m))
+  mapM_ shutdownIdeSession mOld
 
 -- | Typed replay outcome. 'ReplayLoadFailed' carries the
 -- compiler/eval error so the agent sees WHY a property never ran

@@ -25,9 +25,6 @@ module HaskellFlows.Mcp.Server
   , allToolNameTexts
     -- * Per-tool timeout envelope (F-12 defence)
   , toolTimeoutMicros
-    -- * GHC-API session (Phase-1 scaffolding, docs/GHC-API-rewrite-plan.md)
-  , getOrStartGhcSession
-  , evictGhcSession
   ) where
 
 import Control.Concurrent.MVar (MVar, modifyMVar, modifyMVar_, newMVar, readMVar, swapMVar)
@@ -61,13 +58,6 @@ import HaskellFlows.Mcp.Logging
   , logToolStart
   , newLogContext
   , redactArgs
-  )
-import HaskellFlows.Ghc.ApiSession
-  ( GhcSession
-  , invalidateLoadCache
-  , invalidateStanzaFlags
-  , killGhcSession
-  , startGhcSession
   )
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Guidance (sessionInstructionsText, workflowRulesMarkdown)
@@ -121,8 +111,8 @@ import qualified HaskellFlows.Mcp.ArgCheck as ArgCheck
 -- thread — there is no concurrent writer to coordinate against, so a
 -- TVar would buy nothing over the IORef.
 --
--- 'srvGhcSession' is held behind an 'MVar' so concurrent handlers
--- cannot race on startup: the first caller wins, everyone else waits
+-- 'srvIdeSession' is held behind an 'MVar' so concurrent handlers
+-- cannot race on boot: the first caller wins, everyone else waits
 -- on the mutex.
 --
 -- 'srvBootPosix' + 'srvBinaryPath' wire BUG-07's staleness check:
@@ -131,12 +121,6 @@ import qualified HaskellFlows.Mcp.ArgCheck as ArgCheck
 -- but forgot to relaunch the host.
 data Server = Server
   { srvProjectDir    :: !(IORef ProjectDir)
-  , srvGhcSession    :: !(MVar (Maybe GhcSession))
-    -- ^ In-process GHC-API session — the single source of compile
-    -- and execute state after Wave 5 landed. Every GHC-touching tool
-    -- routes through this; the legacy subprocess ghci module is gone.
-    -- Live inventory is in 'docs/TOOL_TAXONOMY.md', enforced by
-    -- 'testCategoryCountsMatchTaxonomy' in 'test/Spec.hs'.
   , srvStore         :: !(IORef Store)
     -- ^ Issue #39: 'IORef Store' (not bare 'Store') because
     -- 'ghc_project(action="switch")' must be able to reopen the
@@ -216,7 +200,6 @@ serverForRaw raw = do
     Left err -> error ("Could not build ProjectDir: " <> show err)
     Right pd -> do
       pdRef    <- newIORef pd
-      ghcSess  <- newMVar Nothing
       store    <- openStore pd
       storeRef <- newIORef store
       -- #253: scratchpad store, same shape as the property store.
@@ -237,7 +220,6 @@ serverForRaw raw = do
       ideRef   <- newMVar Nothing
       pure Server
         { srvProjectDir    = pdRef
-        , srvGhcSession    = ghcSess
         , srvStore         = storeRef
         , srvWorkflowState = ws
         , srvBootPosix     = bootPos
@@ -416,8 +398,7 @@ dispatchTool srv call = case parseToolName (tcName call) of
 -- tools that mutate shared state (Project, PropertyStore, Workflow).
 mkToolEnv :: Server -> ProgressSink -> ToolEnv
 mkToolEnv srv sink = ToolEnv
-  { teSession           = getOrStartGhcSession srv
-  , teProjectDir        = readIORef (srvProjectDir srv)
+  { teProjectDir        = readIORef (srvProjectDir srv)
   , teStore             = readIORef (srvStore srv)
   , teScratchpad        = readIORef (srvScratchpad srv)
   , teWorkflowState     = readState (srvWorkflowState srv)
@@ -427,15 +408,12 @@ mkToolEnv srv sink = ToolEnv
   , teSink              = sink
   , teDescriptors       = allToolDescriptors
   , teToolNames         = allToolNameTexts
-  , teSessionRef        = srvGhcSession srv
   , teIdeSessionRef     = srvIdeSession srv
   , teProjectDirRef     = srvProjectDir srv
   , teStoreRef          = srvStore srv
   , teScratchpadRef     = srvScratchpad srv
   , teIsSelfRef         = srvIsSelfProject srv
   , teDispatch          = dispatchTool srv
-  , teInvalidateSession = invalidateGhcSessionIfPresent srv
-  , teInvalidateStanza  = invalidateStanzaFlagsIfPresent srv
   }
 
 -- | Exhaustive dispatch from 'ToolName' to the corresponding handler.
@@ -639,13 +617,12 @@ runTool srv toolName rid action = do
            :: IO (Either SomeException (Maybe ToolResult))
   case out of
     Left ex -> do
-      -- Any exception that escapes the handler: reset the GhcSession
-      -- so the next call starts with a fresh HscEnv, then surface as
-      -- a structured error.
-      evictGhcSession srv
+      -- Any exception that escapes the handler: drop the ghcide session
+      -- so the next call boots fresh, then surface as a structured error.
+      IdeBacked.dropIdeSession (srvIdeSession srv)
       pure (ok rid (toJSON (toolException Env.InternalError (T.pack (show ex)))))
     Right Nothing -> do
-      evictGhcSession srv
+      IdeBacked.dropIdeSession (srvIdeSession srv)
       pure (ok rid (toJSON (toolException Env.OuterTimeout (timeoutMsg toolName))))
     Right (Just tr) -> do
       let payload = firstJsonContent tr
@@ -697,70 +674,6 @@ timeoutMsg tool =
   \normal timeout surface — most tools have tighter internal \
   \budgets. If this fires, there is probably a deadlock below this \
   \layer."
-
--- | Reset the in-process GhcSession. Idempotent; catches any
--- failure so an evict from a watchdog path cannot raise.
---
--- Issue #98 Phase C: emits @ghc_session_evict@ at DEBUG level so
--- operators can observe session churn (evictions triggered by
--- exception handlers or hard timeout trips).
-evictGhcSession :: Server -> IO ()
-evictGhcSession srv = modifyMVar_ (srvGhcSession srv) $ \case
-  Nothing -> pure Nothing
-  Just s  -> do
-    _ <- try (killGhcSession s) :: IO (Either SomeException ())
-    ctx <- newLogContext ""
-    logInternalEvent ctx "ghc_session_evict" (object [])
-    pure Nothing
-
--- | Phase-1 analogue of 'getOrStartSession' for the in-process GHC
--- API session. Unused by any tool yet — Phase 2 starts calling this
--- when the first read-only tools (type, info) migrate.
---
--- Issue #98 Phase C: emits @ghc_session_hit@ (cache hit, DEBUG) or
--- @ghc_session_start@ (new session, DEBUG + project_dir).
-getOrStartGhcSession :: Server -> IO GhcSession
-getOrStartGhcSession srv = modifyMVar (srvGhcSession srv) $ \case
-  Just s  -> do
-    ctx <- newLogContext ""
-    logInternalEvent ctx "ghc_session_hit" (object [])
-    pure (Just s, s)
-  Nothing -> do
-    pd  <- readIORef (srvProjectDir srv)
-    ctx <- newLogContext ""
-    logInternalEvent ctx "ghc_session_start"
-      (object ["project_dir" .= unProjectDir pd])
-    s   <- startGhcSession pd
-    pure (Just s, s)
-
--- | Drop the GhcSession auto-load cache iff a session has already
--- been booted. Used by file-mutation tools (add_import, add_modules,
--- remove_modules, apply_exports, create_project, deps, fix_warning,
--- format) so the next Phase-2 read re-scans disk and sees their
--- edits. Intentionally DOES NOT boot a session if one doesn't exist —
--- that would burn an HscEnv for a cache-invalidation side-effect.
---
--- Issue #98 Phase C: emits @ghc_cache_invalidate@ at DEBUG level.
-invalidateGhcSessionIfPresent :: Server -> IO ()
-invalidateGhcSessionIfPresent srv = do
-  m <- readMVar (srvGhcSession srv)
-  for_ m $ \s -> do
-    ctx <- newLogContext ""
-    logInternalEvent ctx "ghc_cache_invalidate" (object ["kind" .= ("load_cache" :: Text)])
-    invalidateLoadCache s
-
--- | Heavier-hammer cousin for tools that change the .cabal dep
--- graph or stanza layout. Forces a re-bootstrap of stanza flags
--- and a fresh HscEnv on the next session use.
---
--- Issue #98 Phase C: emits @ghc_cache_invalidate@ (stanza_flags) at DEBUG.
-invalidateStanzaFlagsIfPresent :: Server -> IO ()
-invalidateStanzaFlagsIfPresent srv = do
-  m <- readMVar (srvGhcSession srv)
-  for_ m $ \s -> do
-    ctx <- newLogContext ""
-    logInternalEvent ctx "ghc_cache_invalidate" (object ["kind" .= ("stanza_flags" :: Text)])
-    invalidateStanzaFlags s
 
 --------------------------------------------------------------------------------
 -- small response helpers

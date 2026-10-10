@@ -243,19 +243,6 @@ import HaskellFlows.Types
   , mkModulePath
   , mkProjectDir
   )
-import HaskellFlows.Ghc.ApiSession
-  ( GhcSession
-  , LoadFlavour (..)
-  , captureStdout
-  , evalIOString
-  , evalIOUnitCapture
-  , killGhcSession
-  , readLoadedRefForTest
-  , resetHscEnvInPlace
-  , startGhcSession
-  , withGhcSession
-  , writeLoadedRefForTest
-  )
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Ghc.IdeSession
   ( EvalError (..)
@@ -304,7 +291,6 @@ import HaskellFlows.Ghc.CabalBootstrap
   , bootstrapProject
   )
 import HaskellFlows.Mcp.Transport (deliverOnce)
-import qualified HaskellFlows.Ghc.ApiSession as ApiSession
 import qualified Data.Map.Strict as Map
 import GHC
   ( InteractiveImport (IIDecl)
@@ -865,7 +851,6 @@ runAllTests = do
       , test "moduleKeyOf: absolute == relative; later marker wins"
                                                    testModuleKeyOfAbsRel
       , quickTest "prop_capOutput_trunc_iff_cut"         prop_capOutput_trunc_iff_cut
-      , test "load paths derive interactive imports from source" testLoadAutoImports
       , test "Deferred pass writes to MCP-private build dir"      testDeferredIsolatedOutputs
       , test "ghc_deps add: idempotent no-op returns unchanged"  testDepsAddIdempotent
       , test "ghc_switch_project: empty dir -> create_project"   testSwitchProjectEmptyDir
@@ -1213,8 +1198,6 @@ runAllTests = do
       , test "#179: bootstrap write=true nextStep says rules written" testBootstrapWriteNextStep
       , test "#179: bootstrap preview nextStep says re-run with write=true" testBootstrapPreviewNextStep
       , test "release: workflow file exists + well-formed" testReleaseWorkflow
-      , test "ghc-api: GhcSession boots + exprType roundtrip" testGhcSessionBoots
-      , test "ghc-api: HscEnv persists across withGhcSession calls" testGhcSessionPersists
       , test "ghc-api: bootstrapProject captures cabal flags for library" testCabalBootstrapLibrary
       , test "switch_project: rejects relative path"             testSwitchRejectsRelative
       , test "switch_project: rejects missing directory"         testSwitchRejectsMissing
@@ -1254,14 +1237,6 @@ runAllTests = do
       , test "#159: Either return type gets totality suggestion"   testSuggestEitherTotality
       , test "#159: Either parser roundtrip emits Right x"        testSuggestEitherParserRoundtrip
       , test "#159: Either rule in allRules catalog"              testSuggestEitherRuleRegistered
-      , test "ghc-api: absolutizePathArg single-token shapes (#43)"
-                                                                 testAbsolutizePathArgSingleToken
-      , test "ghc-api: absolutizePathArg eq-form (#43)"           testAbsolutizePathArgEqForm
-      , test "ghc-api: absolutizeStanzaFlags two-token pairs (#43)"
-                                                                 testAbsolutizeStanzaFlagsTwoToken
-      , test "ghc-api: absolutizeStanzaFlags idempotent (#43)"    testAbsolutizeStanzaFlagsIdempotent
-      , test "ghc-api: absolutizeStanzaFlags preserves order (#43)"
-                                                                 testAbsolutizeStanzaFlagsPreservesOrder
       -- Issue #132 — not_in_scope classification
       -- Issue #98 Phase B · structured logging
       , test "#98B: Logging · redaction truncates strings > 40 chars"
@@ -1332,9 +1307,6 @@ runAllTests = do
       -- Issue #195 — type-sig skip + nextStep routing
       -- Issue #106 sub-findings
       , test "#106/F-14: mkGhcError propagates code from captureHook" testMkGhcErrorCode
-      , test "#180: stripGhcInternalQual removes ghc-internal prefix"  testStripGhcInternalQual
-      , test "#180: stripGhcInternalQual multiple occurrences"          testStripGhcInternalQualMulti
-      , test "#180: stripGhcInternalQual leaves normal text untouched"  testStripGhcInternalQualNoop
       , test "#106/F-17: previewResult omits patch key when dropLine" testFixWarnNoPatchKey
       , test "#106/F-07: error remediation uses ghc_project(action=create)" testRemediationToolName
       , test "#106/F-20: parseHoogleLine populates hhName field" testHoogleHitName
@@ -1399,20 +1371,7 @@ runAllTests = do
       , test "#119: removeDep unchangedResult has no verb field"           testUnchangedResultNoVerb
       -- Issue #110 — ghc_load outside hs-source-dirs validation
       , test "#110: Env.OutsideSourceDirs exists in enum + wire form"     testOutsideSourceDirsKindExists
-      -- Issue #166 — ghc_load must not pick up unregistered src/ files
-      , test "#166: loadSpecificFileForTarget exported from ApiSession"
-                                                              testLoadSpecificFileExported
-      -- Issue #232 — ghc_check_module stale-cache warning gap
-      , test "#232: StrictFresh is distinct from Strict and Deferred"
-                                                              testStrictFreshIsDistinct
-      -- Issue #181 — session left broken after ghc_load with compile errors
-      , test "#181: resetHscEnvInPlace clears loaded flag"    testResetHscEnvInPlaceClearsLoaded
-      , test "#181: resetHscEnvInPlace is no-op on fresh session" testResetHscEnvInPlaceFreshSession
-      , test "#181: all 4 load paths have reset-on-failure guard" testLoadPathsHaveResetGuard
-      -- Issue #193 — autoLoadProject must not include broken modules in context
-      , test "#193: autoLoadProject sets Prelude-only context on failed load (source check)" testAutoLoadFailedBranch
       -- Issue #194 — targetForPath prefix must match flat test/Foo.hs paths
-      , test "#194: targetForPath prefix matches flat test/Foo.hs" testTargetForPathFlatFile
       , test "#194: targetForPath prefix matches nested test/foo/Bar.hs" testTargetForPathNestedFile
       -- Issue #129 — ghc_check_project deadline-based timeout
       , test "#250: renderRunLine uses module name not path"  testRenderRunLineUsesModuleName

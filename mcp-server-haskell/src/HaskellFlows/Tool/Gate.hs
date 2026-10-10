@@ -60,7 +60,6 @@ import System.Timeout (timeout)
 import HaskellFlows.Config (defaultLimits, gateOutputCapBytes)
 import HaskellFlows.Util.Process (capOutput)
 import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll)
-import HaskellFlows.Ghc.ApiSession (GhcSession)
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.ParseError (formatParseError)

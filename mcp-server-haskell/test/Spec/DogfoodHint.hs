@@ -31,7 +31,6 @@ import HaskellFlows.Mcp.Protocol (ToolDescriptor (..))
 import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNameTexts)
 import HaskellFlows.Mcp.SelfProject (detectSelfProject)
 import HaskellFlows.Types (mkProjectDir)
-import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Tool.AddModules as AddModules
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
 

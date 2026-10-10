@@ -62,7 +62,6 @@ library
                       HaskellFlows.Mcp.WorkflowState
                       HaskellFlows.Mcp.Transport
                       HaskellFlows.Mcp.Server
-                      HaskellFlows.Ghc.ApiSession
                       HaskellFlows.Ghc.CabalBootstrap
                       HaskellFlows.Ghc.IdeSession
                       HaskellFlows.Ghc.Sanitize

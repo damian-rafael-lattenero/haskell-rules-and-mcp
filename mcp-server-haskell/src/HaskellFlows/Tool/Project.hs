@@ -43,6 +43,7 @@ import qualified HaskellFlows.Data.Scratchpad as Scratchpad
 import HaskellFlows.Data.PropertyStore (Store)
 import Control.Concurrent.MVar (MVar)
 import HaskellFlows.Ghc.IdeSession (IdeSession)
+import qualified HaskellFlows.Tool.IdeBacked as IdeBacked
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Schema as Schema
@@ -60,12 +61,11 @@ import HaskellFlows.Types (ProjectDir)
 -- @action@ discriminator (moved here from @Server.dispatchProject@ so the
 -- action-discrimination lives next to the tool — consistent with the other
 -- action-tools). Server state is injected as parameters: the project-dir /
--- session / store / scratchpad / self-project refs, an @invalidate-stanza@
--- callback to run after a create, and the tool-descriptor catalog for
--- bootstrap.
+-- session / store / scratchpad / self-project refs, and the tool-descriptor
+-- catalog for bootstrap.
 handle :: ToolEnv -> Value -> IO ToolResponse
 handle env =
-  runHandle (teLimits env) (teProjectDirRef env) (teIdeSessionRef env) (teStoreRef env) (teScratchpadRef env) (teIsSelfRef env) (teInvalidateStanza env) (teDescriptors env)
+  runHandle (teLimits env) (teProjectDirRef env) (teIdeSessionRef env) (teStoreRef env) (teScratchpadRef env) (teIsSelfRef env) (teDescriptors env)
 
 runHandle
   :: Limits
@@ -74,11 +74,10 @@ runHandle
   -> IORef Store
   -> IORef Scratchpad.Store
   -> IORef Bool
-  -> IO ()              -- ^ invalidate cached stanza flags (post-create)
   -> [ToolDescriptor]   -- ^ allToolDescriptors (for bootstrap)
   -> Value
   -> IO ToolResponse
-runHandle lim pdRef ideRef storeRef scratchRef selfRef invalidateStanza descriptors rawArgs =
+runHandle lim pdRef ideRef storeRef scratchRef selfRef descriptors rawArgs =
   case actionField rawArgs of
     Nothing ->
       pure (Env.mkRefused
@@ -91,7 +90,7 @@ runHandle lim pdRef ideRef storeRef scratchRef selfRef invalidateStanza descript
            "create" -> do
              pd <- readIORef pdRef
              r  <- CreateProjectTool.handle pd inner
-             invalidateStanza
+             IdeBacked.dropIdeSession ideRef
              -- #256: auto-switch to the freshly created project (only when
              -- create succeeded, write=True, and an explicit path was given).
              if Env.isFailingStatus (Env.reStatus r)

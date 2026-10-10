@@ -1,6 +1,6 @@
 -- | Unit tests for server initialization, timeout budgets, eval/deferred
 -- output isolation, and integration tests for Deps/Switch/CheckModule/
--- AddModules/CheckProject/QuickCheck/Load that require a real GhcSession.
+-- AddModules/CheckProject/QuickCheck/Load.
 --
 -- Extracted from the Spec.hs monolith (#271) via the function-export shape.
 module Spec.ServerUnit
@@ -13,7 +13,6 @@ module Spec.ServerUnit
   , testDepsAddIdempotent
   , testSwitchProjectEmptyDir
   , testAddModulesStanzaParam
-  , testLoadAutoImports
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -34,11 +33,9 @@ import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Mcp.Guidance as Guidance
 import HaskellFlows.Mcp.Server (allToolDescriptors, allToolNameTexts)
 import HaskellFlows.Types (mkProjectDir)
-import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import qualified HaskellFlows.Mcp.Server as Server
 import qualified HaskellFlows.Tool.Deps as DepsTool
 import qualified HaskellFlows.Tool.AddModules as AddModules
-import qualified HaskellFlows.Tool.QuickCheck as QcTool
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
 
 import Spec.Helpers (decodeToolResult, runToolEnvelope, withTempProject)
@@ -231,31 +228,6 @@ testAddModulesStanzaParam = do
       && T.isInfixOf "\"test\"" code
       && T.isInfixOf "\"app\"" code
       && T.isInfixOf "\"bench\"" code
-  where
-    isDocLine ln =
-      let s = T.stripStart ln in "--" `T.isPrefixOf` s
-
-
--- | Cure regression: the interactive context must be derived from
--- the project's own @import …@ declarations, not from a hardcoded
--- allowlist. Each of the three in-process load paths ('autoLoad',
--- 'loadProjectWithFlavour', 'loadForTarget') must call
--- 'projectInteractiveImports' so qualified + aliased imports in
--- source files ('import qualified Data.Map.Strict as Map') reach
--- 'ghc_eval' verbatim. Without this, every new stdlib module
--- a scenario reaches for would require editing 'augmentEvalContext'.
-testLoadAutoImports :: IO Bool
-testLoadAutoImports = do
-  src <- TIO.readFile "src/HaskellFlows/Ghc/ApiSession.hs"
-  let codeLines = filter (not . isDocLine) (T.lines src)
-      code      = T.unlines codeLines
-      -- Three setContext call sites, each must splice in projImports
-      callSites = T.count "projImports" code
-  pure $ T.isInfixOf "parseImportDecl" code
-      && T.isInfixOf "projectInteractiveImports" code
-      && T.isInfixOf "projectExternalImports" code
-      && T.isInfixOf "handleSourceError" code
-      && callSites >= 3
   where
     isDocLine ln =
       let s = T.stripStart ln in "--" `T.isPrefixOf` s

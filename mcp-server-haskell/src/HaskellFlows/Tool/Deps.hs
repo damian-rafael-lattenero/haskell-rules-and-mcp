@@ -47,6 +47,7 @@ module HaskellFlows.Tool.Deps
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Exception (SomeException, bracket, try)
+import qualified HaskellFlows.Tool.IdeBacked as IdeBacked
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.Char (isAlphaNum)
@@ -283,7 +284,7 @@ handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   pd <- teProjectDir env
   r  <- runHandle pd rawArgs
-  teInvalidateStanza env
+  IdeBacked.dropIdeSession (teIdeSessionRef env)
   pure r
 
 runHandle :: ProjectDir -> Value -> IO ToolResponse

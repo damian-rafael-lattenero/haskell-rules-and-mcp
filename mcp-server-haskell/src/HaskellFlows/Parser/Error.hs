@@ -127,8 +127,8 @@ categorizeWarning e =
 -- > <file>:<line>:<col>: <severity>:
 -- >     <body lines indented 4 spaces>
 --
--- The body is already rendered by the capture hook (see
--- 'HaskellFlows.Ghc.ApiSession.captureHook') and may contain bullets,
+-- The body is already rendered by the diagnostics capture layer and
+-- may contain bullets,
 -- @[GHC-NNNN]@ codes, and "Relevant bindings include" / "Valid hole
 -- fits include" sub-headers exactly as GHCi would print them.
 renderGhciStyle :: [GhcError] -> Text

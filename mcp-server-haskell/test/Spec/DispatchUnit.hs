@@ -26,7 +26,7 @@ testMkToolEnvFields :: IO Bool
 testMkToolEnvFields = do
   -- Build a minimal server-like structure with real refs to verify
   -- mkToolEnv plumbs them through correctly.
-  sessRef   <- newMVar Nothing
+  ideRef     <- newMVar Nothing
   pdRef     <- newIORef (error "testMkToolEnvFields: no pd needed")
   storeRef  <- newIORef (error "testMkToolEnvFields: no store needed")
   scrRef    <- newIORef (error "testMkToolEnvFields: no scratch needed")
@@ -40,8 +40,7 @@ testMkToolEnvFields = do
   -- using the stubEnv as a proxy (mkToolEnv is tested end-to-end by
   -- the gate / integration tests).
   let env = ToolEnv
-              { teSession         = pure (error "not needed")
-              , teProjectDir      = pure (error "not needed")
+              { teProjectDir      = pure (error "not needed")
               , teStore           = pure (error "not needed")
               , teScratchpad      = pure (error "not needed")
               , teWorkflowState   = pure (error "not needed")
@@ -51,14 +50,12 @@ testMkToolEnvFields = do
               , teSink            = noopSink
               , teDescriptors     = []
               , teToolNames       = []
-              , teSessionRef      = sessRef
+              , teIdeSessionRef   = ideRef
               , teProjectDirRef   = pdRef
               , teStoreRef        = storeRef
               , teScratchpadRef   = scrRef
               , teIsSelfRef       = selfRef
               , teDispatch        = \_ -> error "not needed"
-              , teInvalidateSession = pure ()
-              , teInvalidateStanza  = pure ()
               }
   -- Verify the env is constructable and fields are accessible
   isSelf <- teIsSelf env

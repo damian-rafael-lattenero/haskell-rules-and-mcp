@@ -16,13 +16,6 @@ module Spec.FinalMisc
   , testGateFailureKindExists
   , testUnchangedResultNoVerb
   , testOutsideSourceDirsKindExists
-  , testLoadSpecificFileExported
-  , testStrictFreshIsDistinct
-  , testResetHscEnvInPlaceClearsLoaded
-  , testResetHscEnvInPlaceFreshSession
-  , testLoadPathsHaveResetGuard
-  , testAutoLoadFailedBranch
-  , testTargetForPathFlatFile
   , testTargetForPathNestedFile
   , testRenderRunLineUsesModuleName
   , testSuggestMaybeReturn2Arg
@@ -67,17 +60,7 @@ import qualified Data.Set as Set
 import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
-import HaskellFlows.Ghc.ApiSession
-  ( GhcSession
-  , LoadFlavour (..)
-  , killGhcSession
-  , readLoadedRefForTest
-  , resetHscEnvInPlace
-  , startGhcSession
-  , writeLoadedRefForTest
-  )
 import qualified HaskellFlows.Mcp.Envelope as Env
-import Spec.ToolEnvFixture (sessionPdEnv)
 import HaskellFlows.Mcp.Progress (noopSink)
 import HaskellFlows.Types (mkProjectDir)
 import qualified HaskellFlows.Tool.AddImport as AddImport
@@ -296,123 +279,8 @@ testOutsideSourceDirsKindExists =
     && Env.OutsideSourceDirs `elem` ([minBound .. maxBound] :: [Env.ErrorKind])
 
 --------------------------------------------------------------------------------
--- #166 — ghc_load must not pick up unregistered src/ files
---------------------------------------------------------------------------------
-
--- | #166: when @module_path@ is given, loading a clean module must not
--- fail because of a broken UNREGISTERED file sitting in the same @src/@
--- directory. Pre-fix, 'loadForTarget' enumerated ALL @.hs@ files in
--- @src/@ and added them all as GHC targets — a broken stray file
--- blocked loading of unrelated registered modules.
--- Post-fix, 'loadSpecificFileForTarget' compiles only the specified
--- file (plus its transitive imports).
-
-
-testLoadSpecificFileExported :: IO Bool
-
-testLoadSpecificFileExported = do
-  src <- TIO.readFile "src/HaskellFlows/Ghc/ApiSession.hs"
-  pure $ "loadSpecificFileForTarget" `T.isInfixOf` src
-
--- | #232: 'StrictFresh' must be a third distinct variant so
--- 'applyFlavour' applies 'Opt_ForceRecomp' only for check_module.
-
-testStrictFreshIsDistinct :: IO Bool
-
-testStrictFreshIsDistinct =
-  pure (StrictFresh /= Strict && StrictFresh /= Deferred && Strict /= Deferred)
-
---------------------------------------------------------------------------------
--- #181 — session left broken after ghc_load with compile errors
---------------------------------------------------------------------------------
-
--- | #181: 'resetHscEnvInPlace' must clear the loaded flag so the next
--- 'withGhcSession' call re-runs 'autoLoadProject' instead of operating
--- on the broken partial HscEnv a failed compile leaves behind.
---
--- Simulates the sequence: loadForTarget pre-flips gsLoadedRef=True before
--- a compile, compile fails, resetHscEnvInPlace is called → flag goes False.
-
-testResetHscEnvInPlaceClearsLoaded :: IO Bool
-
-testResetHscEnvInPlaceClearsLoaded =
-  case mkProjectDir "/tmp" of
-    Left  _  -> pure False
-    Right pd -> do
-      sess <- startGhcSession pd
-      -- Simulate the pre-flip loadForTarget / loadAndCaptureDiagnostics
-      -- do before starting a compile.
-      writeLoadedRefForTest sess True
-      before <- readLoadedRefForTest sess
-      -- After the (simulated) failed compile, resetHscEnvInPlace is called.
-      resetHscEnvInPlace sess
-      after <- readLoadedRefForTest sess
-      pure (before && not after)  -- True → False
-
--- | #181: 'resetHscEnvInPlace' is idempotent — calling it on a fresh
--- session (loaded=False) keeps the flag False; calling it twice is safe.
-
-testResetHscEnvInPlaceFreshSession :: IO Bool
-
-testResetHscEnvInPlaceFreshSession =
-  case mkProjectDir "/tmp" of
-    Left  _  -> pure False
-    Right pd -> do
-      sess <- startGhcSession pd
-      -- Idempotent: double reset on a fresh session must not error.
-      resetHscEnvInPlace sess
-      resetHscEnvInPlace sess
-      loaded <- readLoadedRefForTest sess
-      pure (not loaded)  -- still False after double reset
-
--- | #181: all four load paths (loadAndCaptureDiagnostics, loadForTarget
--- stanza branch, loadSpecificFileForTarget both branches) must contain
--- the reset guard that calls resetHscEnvInPlace on failure.
-
-testLoadPathsHaveResetGuard :: IO Bool
-
-testLoadPathsHaveResetGuard = do
-  src <- TIO.readFile "src/HaskellFlows/Ghc/ApiSession.hs"
-  let guard   = "unless ok (resetHscEnvInPlace sess)"
-      count   = length (T.splitOn guard src) - 1
-  pure (count == 4)  -- 4 call sites: loadAndCaptureDiagnostics +
-                     -- loadForTarget + 2x loadSpecificFileForTarget
-
---------------------------------------------------------------------------------
--- #193 — autoLoadProject must fall back to Prelude-only on failed load
---------------------------------------------------------------------------------
-
--- | #193: Structural check that 'autoLoadProject' handles the 'Failed' case
--- from 'load LoadAllTargets' by calling 'setContext [preludeImport]' rather
--- than including potentially-unloaded home modules. The pattern 'Failed ->'
--- must be present in ApiSession.hs with 'setContext [preludeImport]' nearby.
-
-testAutoLoadFailedBranch :: IO Bool
-
-testAutoLoadFailedBranch = do
-  src <- TIO.readFile "src/HaskellFlows/Ghc/ApiSession.hs"
-  let hasFailed     = "Failed -> setContext [preludeImport]" `T.isInfixOf` src
-      hasSucceeded  = "Succeeded -> do" `T.isInfixOf` src
-  pure (hasFailed && hasSucceeded)
-
---------------------------------------------------------------------------------
 -- #194 — targetForPath prefix must match flat test/Foo.hs
 --------------------------------------------------------------------------------
-
--- | #194: Verify the prefix check used by 'targetForPath' matches a
--- file directly under test/ (no nested directory). The old guard
--- required a '/' in the remainder, so "test/Gen.hs" silently fell
--- through to TargetLibrary and failed to load QuickCheck.
-
-testTargetForPathFlatFile :: IO Bool
-
-testTargetForPathFlatFile = do
-  src <- TIO.readFile "src/HaskellFlows/Ghc/ApiSession.hs"
-  -- The correct prefix predicate is a simple 'take' prefix check,
-  -- without the 'any isPathSep' guard on the remainder.
-  let newDef = "prefix p = take (length p) path == p" `T.isInfixOf` src
-      oldBug = "any (\\c -> c == '/' || c == '\\\\')" `T.isInfixOf` src
-  pure (newDef && not oldBug)
 
 -- | Verify the updated predicate matches nested paths too (regression guard).
 

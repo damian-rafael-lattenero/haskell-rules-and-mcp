@@ -288,7 +288,6 @@ handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   pd <- teProjectDir env
   r  <- runHandle pd rawArgs
-  teInvalidateSession env
   pure r
 
 runHandle :: ProjectDir -> Value -> IO ToolResponse

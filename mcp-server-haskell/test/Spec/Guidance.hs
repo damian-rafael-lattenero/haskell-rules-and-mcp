@@ -34,7 +34,6 @@ import qualified HaskellFlows.Mcp.Guidance as Guidance
 import qualified HaskellFlows.Mcp.Resources as Resources
 import HaskellFlows.Tool.Deps (parseStanzaSelector)
 import HaskellFlows.Types (mkProjectDir)
-import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import HaskellFlows.Mcp.ResourceUri
   ( ResourceUri (..)
   , resourceUriText

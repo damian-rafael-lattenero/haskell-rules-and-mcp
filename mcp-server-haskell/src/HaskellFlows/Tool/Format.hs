@@ -56,7 +56,6 @@ handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   pd <- teProjectDir env
   r  <- runHandle (teLimits env) pd rawArgs
-  teInvalidateSession env
   pure r
 
 runHandle :: Limits -> ProjectDir -> Value -> IO ToolResponse

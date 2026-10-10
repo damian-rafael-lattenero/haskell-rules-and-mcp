@@ -5,10 +5,6 @@
 -- Extracted from the Spec.hs monolith (#271) via the function-export shape.
 module Spec.HaddockUnit
   ( testMkGhcErrorCode
-  , testMkGhcErrorCode
-  , testStripGhcInternalQual
-  , testStripGhcInternalQualMulti
-  , testStripGhcInternalQualNoop
   , testFixWarnNoPatchKey
   , testRemediationToolName
   , testHoogleHitName
@@ -30,7 +26,6 @@ import qualified Data.Text.IO as TIO
 import System.Directory (getTemporaryDirectory, removePathForcibly)
 import System.FilePath ((</>))
 
-import qualified HaskellFlows.Ghc.ApiSession as ApiSession
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.NextStep
 import qualified HaskellFlows.Mcp.NextStep as NextStep
@@ -50,32 +45,6 @@ testMkGhcErrorCode =
        [e] -> geCode e == Just "GHC-66111"
            && geSeverity e == SevWarning
        _   -> False
-
---------------------------------------------------------------------------------
--- #180 — stripGhcInternalQual
---------------------------------------------------------------------------------
-
--- | #180: GHC 9.12 leaks 'ghc-internal-VERSION:GHC.Internal.*' prefixes into
--- diagnostics. 'stripGhcInternalQual' must remove them, leaving the public
--- module path.
-testStripGhcInternalQual :: IO Bool
-testStripGhcInternalQual =
-  let raw = "No instance for 'ghc-internal-9.1202.0:GHC.Internal.Data.String.IsString Int'"
-      want = "No instance for 'Data.String.IsString Int'"
-  in pure (ApiSession.stripGhcInternalQual raw == want)
-
--- | #180: multiple occurrences in one message must all be stripped.
-testStripGhcInternalQualMulti :: IO Bool
-testStripGhcInternalQualMulti =
-  let raw  = "ghc-internal-9.1202.0:GHC.Internal.Enum and ghc-internal-9.1202.0:GHC.Internal.Show"
-      want = "Enum and Show"
-  in pure (ApiSession.stripGhcInternalQual raw == want)
-
--- | #180: text without internal package qualifications is left unchanged.
-testStripGhcInternalQualNoop :: IO Bool
-testStripGhcInternalQualNoop =
-  let raw = "No instance for 'Data.String.IsString Int'"
-  in pure (ApiSession.stripGhcInternalQual raw == raw)
 
 -- | F-17: 'previewResult' for a dropLine plan must omit the @patch@ key
 -- entirely rather than emitting @\"patch\": null@. Agents that branch on

@@ -33,6 +33,7 @@ import qualified Data.Aeson.Types
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified HaskellFlows.Tool.IdeBacked as IdeBacked
 
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -56,7 +57,7 @@ handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   pd <- teProjectDir env
   r  <- runHandle pd rawArgs
-  teInvalidateStanza env
+  IdeBacked.dropIdeSession (teIdeSessionRef env)
   pure r
 
 runHandle :: ProjectDir -> Value -> IO ToolResponse
