@@ -53,9 +53,15 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import System.Directory (canonicalizePath, doesFileExist, listDirectory, removeFile)
+import System.Directory
+  ( canonicalizePath
+  , createDirectoryIfMissing
+  , doesFileExist
+  , listDirectory
+  , removeFile
+  )
 import System.IO (hPutStrLn, stderr)
-import System.FilePath (normalise, (</>))
+import System.FilePath (normalise, takeDirectory, (</>))
 import GHC (Ghc)
 
 import HaskellFlows.Config (defaultLimits, determinismMaxRuns)
@@ -217,7 +223,7 @@ routeIde ref pdRef storeRef scratchRef tn args = case tn of
     | actionIs "promote" args -> Just (withIdeSession ref pdRef (handleScratch scratchRef pdRef args))
     -- W2: whole-module authorship — the promote discipline (snapshot +
     -- compile-verify + rollback) applied to full module bodies.
-    | actionIs "write_module" args -> Just (withIdeSession ref pdRef (handleWriteModule pdRef (stripped args)))
+    | actionIs "write_module" args -> Just (withIdeSession ref pdRef (handleWriteModule ref pdRef (stripped args)))
     | otherwise -> Nothing
   GhcProperty
     | actionIs "check" args -> Just (withIdeSession ref pdRef (handlePropertyCheck pdRef storeRef (stripped args)))
@@ -1375,8 +1381,10 @@ instance FromJSON WriteModuleArgs where
 -- honesty error in "Ghc.IdeSession" makes that an explicit failure
 -- instead of a silent pass, and the write rolls back. Rollback of a
 -- previously-absent file DELETES it.
-handleWriteModule :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
-handleWriteModule pdRef raw s =
+handleWriteModule
+  :: MVar (Maybe IdeSession) -> IORef ProjectDir -> Value -> IdeSession
+  -> IO ToolResponse
+handleWriteModule ref pdRef raw s =
   case parseEither parseJSON raw of
     Left parseError ->
       pure (mkFailed (mkErrorEnvelope MissingArg (T.pack parseError)))
@@ -1400,13 +1408,42 @@ handleWriteModule pdRef raw s =
                   pure (mkFailed (mkErrorEnvelope Validation
                           (T.pack ("Could not read module: " <> show e))))
                 Right orig -> do
+                  -- Dogfood W3.1: a NEW nested module (src/Hm/Syntax.hs)
+                  -- may land in a directory nothing created yet — the
+                  -- rollback discipline is unchanged, only the parent
+                  -- dir is materialised first.
+                  createDirectoryIfMissing True (takeDirectory fp)
                   writeRes <- try (TIO.writeFile fp code) :: IO (Either SomeException ())
                   case writeRes of
                     Left e ->
                       pure (mkFailed (mkErrorEnvelope Validation
                               (T.pack ("Could not write module: " <> show e))))
                     Right () -> do
-                      postDiags <- ghcDiags s fp
+                      postDiags0 <- ghcDiags s fp
+                      -- Stale-graph recovery (W3.1 finding #2): a
+                      -- module REGISTERED in the .cabal can still be
+                      -- unresolvable by the live session — mid-session
+                      -- component discovery poisons GhcSessionDeps for
+                      -- modules that join after the boot. A fresh
+                      -- session resolves them (probe-verified), so
+                      -- recycle ONCE and re-verify; an unregistered
+                      -- path keeps the honest refusal.
+                      postDiags <-
+                        if any (isComponentHonesty . geMessage) postDiags0
+                          then do
+                            pdNow  <- readIORef pdRef
+                            mCabal <- findCabalIn (unProjectDir pdNow)
+                            cabal  <- maybe (pure "") TIO.readFile mCabal
+                            let registered =
+                                  any (sameModulePath (T.unpack mpath))
+                                      (projectModuleFilesFromCabal cabal)
+                            if registered
+                              then do
+                                dropIdeSession ref
+                                withIdeSessionG ref pdRef $ \s2 ->
+                                  ghcDiags s2 fp
+                              else pure postDiags0
+                          else pure postDiags0
                       if writeModuleShouldRollback postDiags
                         then do
                           _ <- if existed
@@ -1423,6 +1460,16 @@ handleWriteModule pdRef raw s =
 -- there is no pre-existing baseline to diff against.
 writeModuleShouldRollback :: [GhcError] -> Bool
 writeModuleShouldRollback = any ((== SevError) . geSeverity)
+
+-- | The synthesised component-honesty message (see
+-- "Ghc.IdeSession" 'ideDiagnosticsFor').
+isComponentHonesty :: Text -> Bool
+isComponentHonesty = T.isInfixOf "component session could not load"
+
+-- | Project-relative path equality (agent input vs the .cabal's
+-- hs-source-dirs-joined module paths), normalised.
+sameModulePath :: FilePath -> FilePath -> Bool
+sameModulePath a b = normalise a == normalise b
 
 -- | The success payload: what landed, that it verified, and the
 -- project-gate follow-up. Warnings are counted, not inlined — the

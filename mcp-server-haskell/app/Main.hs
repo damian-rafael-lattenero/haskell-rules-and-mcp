@@ -25,6 +25,7 @@ import System.Environment (getArgs)
 import System.Exit (exitSuccess)
 import System.IO (hPutStrLn, stderr)
 
+import qualified HaskellFlows.Mcp.ServerStartup as ServerStartup
 import HaskellFlows.Mcp.Server    (defaultServer)
 import HaskellFlows.Mcp.Transport (runStdioTransport)
 
@@ -42,6 +43,10 @@ mcpProtocolVersion = "2025-06-18"
 
 main :: IO ()
 main = do
+  -- BEFORE anything can boot a ghcide session (which chdirs into the
+  -- project root): record the launch cwd so client-supplied relative
+  -- paths keep resolving against it (see "Mcp.ServerStartup").
+  ServerStartup.captureStartupDir
   args <- getArgs
   when (any isVersionFlag args) $ do
     putStrLn ("haskell-flows-mcp " <> binaryVersion)

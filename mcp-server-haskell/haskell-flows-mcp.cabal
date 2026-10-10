@@ -55,6 +55,7 @@ library
                       HaskellFlows.Mcp.Protocol
                       HaskellFlows.Mcp.ResourceUri
                       HaskellFlows.Mcp.Resources
+                      HaskellFlows.Mcp.ServerStartup
                       HaskellFlows.Mcp.RpcMethod
                       HaskellFlows.Mcp.Schema
                       HaskellFlows.Mcp.SelfProject

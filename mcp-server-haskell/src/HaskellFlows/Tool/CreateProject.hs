@@ -50,8 +50,9 @@ import System.Directory
   , listDirectory
   , removeFile
   )
-import System.FilePath ((</>), takeDirectory)
+import System.FilePath ((</>), isAbsolute, takeDirectory)
 
+import qualified HaskellFlows.Mcp.ServerStartup as ServerStartup
 import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol ()
@@ -114,14 +115,21 @@ handle pd rawArgs = case parseEither parseJSON rawArgs of
           pure (Env.mkFailed
             ((Env.mkErrorEnvelope Env.Validation err)
                 { Env.eeField = Just "module" }))
-        Right m  ->
+        Right m  -> do
           -- #126 Bug A: use the caller's path when provided.
-          -- Absolute paths are used as-is; relative paths and Nothing
-          -- fall back to the active ProjectDir.
-          let root = case caPath args of
-                Just p | not (T.null (T.strip p)) -> T.unpack p
-                _                                 -> unProjectDir pd
-          in scaffold root pkg m (caOverwrite args) (caWrite args)
+          -- Absolute paths are used as-is; relative paths resolve
+          -- against the STARTUP cwd (not the live process cwd — a
+          -- booted ghcide session chdirs into the project root, and
+          -- resolving from there wrote scaffolds into a phantom
+          -- nested dir; W3.1 dogfood finding #1). Nothing falls back
+          -- to the active ProjectDir.
+          root <- case caPath args of
+            Just p | not (T.null (T.strip p)) -> do
+              let given = T.unpack p
+              base <- ServerStartup.startupDir
+              pure (if isAbsolute given then given else base </> given)
+            _ -> pure (unProjectDir pd)
+          scaffold root pkg m (caOverwrite args) (caWrite args)
 
 parseErrorKind :: String -> Env.ErrorKind
 parseErrorKind err

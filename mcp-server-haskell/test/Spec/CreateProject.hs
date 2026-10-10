@@ -22,6 +22,7 @@ module Spec.CreateProject
   , testCreateAutoSwitchPresent
   , testCreatePreviewNoSwitch
   , testCreateNoPathNoSwitch
+  , testCreateRelativePathAnchorsToStartupDir
   ) where
 
 import qualified Data.Aeson as A
@@ -31,7 +32,16 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.List as List
 import Data.Maybe (fromMaybe)
-import System.Directory (doesFileExist, getTemporaryDirectory, removePathForcibly, createDirectoryIfMissing, listDirectory)
+import System.Directory
+  ( createDirectoryIfMissing
+  , doesFileExist
+  , getCurrentDirectory
+  , getTemporaryDirectory
+  , listDirectory
+  , removePathForcibly
+  , setCurrentDirectory
+  )
+import qualified HaskellFlows.Mcp.ServerStartup as ServerStartup
 import System.FilePath ((</>))
 
 import qualified HaskellFlows.Mcp.Envelope as Env
@@ -310,3 +320,42 @@ testCreateNoPathNoSwitch = do
   where
     isDocLine ln = "--" `T.isPrefixOf` T.stripStart ln
 
+
+-- | W3.1 dogfood finding #1: after a ghcide session boots (chdir into
+-- the project root), a RELATIVE create path= resolved from the live
+-- cwd and wrote scaffolds into a phantom nested dir. Client-supplied
+-- relative paths must anchor to the STARTUP cwd, so: capture a temp
+-- dir as startup cwd, chdir elsewhere, scaffold with a relative path,
+-- assert the files landed under the captured dir (and nowhere else).
+testCreateRelativePathAnchorsToStartupDir :: IO Bool
+testCreateRelativePathAnchorsToStartupDir = do
+  outer     <- getTemporaryDirectory
+  let startup   = outer </> "hf-startup-anchor-test"
+      elsewhere = outer </> "hf-startup-anchor-elsewhere"
+      rel       = "proj-inside"
+  createDirectoryIfMissing True startup
+  createDirectoryIfMissing True elsewhere
+  removePathForcibly (startup </> rel)
+  removePathForcibly (elsewhere </> rel)
+  before <- getCurrentDirectory
+  ServerStartup.setStartupDir startup
+  setCurrentDirectory elsewhere
+  -- The anchoring lives in 'handle' (path resolution), not in
+  -- 'scaffold' (it receives an already-resolved root). The pd is
+  -- irrelevant here: an explicit path= takes over.
+  r <- case mkProjectDir elsewhere of
+    Left _ -> pure Nothing
+    Right pd -> Just <$>
+      CreateProject.handle pd
+        (A.object [ "name" A..= ("rel-demo" :: T.Text)
+                  , "path" A..= (T.pack rel)
+                  , "write" A..= True ])
+  setCurrentDirectory before
+  ServerStartup.setStartupDir before
+  let want    = startup </> rel </> "rel-demo.cabal"
+      phantom = elsewhere </> rel </> "rel-demo.cabal"
+  landed    <- doesFileExist want
+  phantomHit <- doesFileExist phantom
+  removePathForcibly (startup </> rel)
+  removePathForcibly (elsewhere </> rel)
+  pure (maybe False (not . isError) r && landed && not phantomHit)

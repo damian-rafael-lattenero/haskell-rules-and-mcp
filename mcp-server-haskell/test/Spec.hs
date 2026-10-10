@@ -907,6 +907,8 @@ runAllTests = do
                                                                  testCreateProjectScaffoldGreenCabal
       , test "create_project: scaffold test-suite ships QuickCheck (W1.5)"
                                                                  testCreateProjectScaffoldQuickCheck
+      , test "create_project: relative path anchors to startup cwd (W3.1)"
+                                                                 testCreateRelativePathAnchorsToStartupDir
       , test "create_project: validateName error names violation (#58)" testCreateValidateErrorMsg
       -- Issue #233 — all-digit component validation
       , test "#233: validateName rejects date-like all-digit components" testCreateValidateAllDigitComponent

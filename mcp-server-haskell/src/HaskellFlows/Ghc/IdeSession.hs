@@ -343,10 +343,15 @@ ideDiagnosticsFor' s fp = do
   -- publishes its rule diagnostics there; TypeCheck only sees them
   -- as a BadDependency, which carries NO diags of its own), and
   -- compile errors+warnings via TypeCheck.
-  diags <- runAction "mcp-ide-check" (isState s) $ do
+  (diags, inComponent) <- runAction "mcp-ide-check" (isState s) $ do
     _ <- use GetParsedModule nfp
     _ <- use TypeCheck nfp
     _ <- use GetModSummary nfp
+    -- Component honesty probe IN THE SAME action as the forcing: a
+    -- separate runAction left a window where an asynchronous graph
+    -- restart (our own mtime dirtying) flipped the state between the
+    -- two, and the probe read Nothing for a registered module.
+    mc <- use GhcSessionDeps nfp
     extras <- getShakeExtras
     let readRuleDiags :: IdeRule k v => k -> Action [FileDiagnostic]
         readRuleDiags k = liftIO . atomically $ do
@@ -355,16 +360,7 @@ ideDiagnosticsFor' s fp = do
     parsed <- readRuleDiags GetParsedModule
     tc <- readRuleDiags TypeCheck
     ms <- readRuleDiags GetModSummary
-    pure (parsed <> tc <> ms)
-  -- Component honesty (W2 finding): a file the cradle cannot resolve
-  -- (not registered in the .cabal) produces NO rule diags at all —
-  -- indistinguishable from a clean module by diagnostics alone, which
-  -- made every gate bless unverified files ("silent green"). Asking
-  -- GhcSessionDeps directly turns that silence into an explicit
-  -- error, so no gate — and no write_module verify — can mistake
-  -- "cannot check" for "checked clean".
-  inComponent <- runAction "mcp-ide-component" (isState s) $
-    isJust <$> use GhcSessionDeps nfp
+    pure (parsed <> tc <> ms, isJust mc)
   let ruleVals =
         [ object
             [ "severity" .= (if _severity d == Just DiagnosticSeverity_Error
@@ -384,9 +380,13 @@ ideDiagnosticsFor' s fp = do
       then [ object
                [ "severity" .= ("error" :: Text)
                , "code"     .= ("" :: Text)
-               , "message"  .= ("file is not part of any cabal component — \
-                                \register it (ghc_module action=\"add\") \
-                                \before gating or writing it" :: String)
+               , "message"  .= ("component session could not load this \
+                                \file: either it is not registered in the \
+                                \.cabal (register via ghc_module \
+                                \action=\"add\") or its component fails to \
+                                \resolve an import — a package missing from \
+                                \that stanza's build-depends surfaces here \
+                                \(add it via ghc_deps action=\"add\")" :: String)
                , "file"     .= fp
                , "line"     .= (0 :: Int)
                , "column"   .= (0 :: Int)
