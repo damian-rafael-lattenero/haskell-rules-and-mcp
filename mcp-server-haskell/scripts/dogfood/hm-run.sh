@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # hm-run — the HM dogfood (W3.1) end to end, guaranteed-fresh.
 #
-#   1. hm-local-check.sh    — dogfood sources compile warning-free and
+#   1. dogfood-local-check — sources compile warning-free and
 #                             the 3 properties pass, 300 tests each
 #   2. probe.sh (filtered)  — server binary rebuilt + freshness-law
 #                             checked + one e2e scenario on the wire
@@ -22,7 +22,7 @@ FIXTURE="$REPO/playground/hm-dogfood"
 SPOOL="$REPO/playground/hm-spool"
 
 echo "══ 1/3 · local source check (compile + properties) ══"
-"$HERE/hm-local-check.sh"
+"$HERE/dogfood-local-check.sh"
 
 echo "══ 2/3 · fresh server binary (probe, filtered ≈ '$FILTER') ══"
 "$SERVER/scripts/probe.sh" "$FILTER"

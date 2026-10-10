@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
-# hm-local-check — fast local loop for the HM dogfood sources, no MCP.
+# dogfood-local-check — fast local loop for a dogfood's sources, no MCP.
 #
-# Extracts the inline module sources from hm-loop.py (the single source
-# of truth: write_module ships exactly these bytes), compiles them with
+# Extracts the inline module sources from a *-loop.py driver (the
+# single source of truth: write_module ships exactly these bytes),
+# compiles them with
 # the EXACT flags of the scaffold's `common shared` stanza (see
 # CreateProject.hs), and runs the Spec properties (300 tests each via
-# withMaxSuccess). Warnings fail the check — the MCP project gate fails
+# withNumTests). Warnings fail the check — the MCP project gate fails
 # on warnings, so this loop must too, or we "pass" locally and fail the
 # dogfood.
 #
-# Usage: scripts/dogfood/hm-local-check.sh [outdir]   (default /tmp/hm-local-check)
+# Usage: scripts/dogfood/dogfood-local-check.sh [loop.py] [outdir]
+#   defaults: hm-loop.py  /tmp/hm-local-check
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OUT="${1:-/tmp/hm-local-check}"
+LOOP="${1:-hm-loop.py}"
+[ -f "$LOOP" ] || LOOP="$HERE/$LOOP"
+OUT="${2:-/tmp/${LOOP##*/}-local-check}"   # hm-loop.py -> /tmp/hm-loop.py-local-check
 
 # mirror of the scaffold's `common shared` stanza
 SCAFFOLD_FLAGS=(
@@ -23,9 +27,9 @@ SCAFFOLD_FLAGS=(
   -Wunused-packages
 )
 
-echo "── extract sources from hm-loop.py"
+echo "── extract sources from ${LOOP##*/}"
 rm -rf "$OUT"; mkdir -p "$OUT"
-python3 - "$HERE/hm-loop.py" "$OUT" <<'PYEOF'
+python3 - "$LOOP" "$OUT" <<'PYEOF'
 import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location("hmloop", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
@@ -56,7 +60,7 @@ if grep -qi "warning" "$OUT/compile.log"; then
 fi
 echo "   0 warnings"
 
-echo "── run properties (3 × 300 tests)"
+echo "── run properties (withNumTests 300 each)"
 "$OUT/spec-run"
 
-echo "hm-local-check: GREEN"
+echo "dogfood-local-check: GREEN (${LOOP##*/})"
