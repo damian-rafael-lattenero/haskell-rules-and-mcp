@@ -882,6 +882,7 @@ runAllTests = do
       , test "ghc_switch_project: empty dir -> create_project"   testSwitchProjectEmptyDir
       , test "ghc_add_modules: accepts stanza param"            testAddModulesStanzaParam
       , test "initialize emits instructions field"  testInitializeEmitsInstructions
+      , test "initialize serverInfo tracks package version" testInitializeServerInfoTracksPackageVersion
       , test "instructions mention key tools+flows" testInstructionsMentionCore
       , test "nextStep: create_project -> deps"     testNextStepCreateProject
       , test "#266 xsession: empty ledger reads empty" testSessionLedgerEmpty
