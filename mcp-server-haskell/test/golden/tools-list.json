@@ -212,7 +212,7 @@
         "version": "2.0.0"
     },
     {
-        "description": "PURPOSE: Module authorship — register modules in the .cabal and grow them from the persistent scratchpad. WHEN: action='add' scaffolds stubs + registers; 'remove' de-registers; 'write' records a hypothesis on the canvas; 'check' type-checks it in project context; 'promote' splices a verified entry into a real module (snapshot + compile-verify). WHEN NOT: edits to code that already compiles — ghc_edit. PREREQUISITES: a .cabal in the active project. OUTPUT: per-action envelope of the merged verbs. SEE ALSO: ghc_edit for changes to code that already compiles. Wave 2b successor to ghc_modules + ghc_scratch.",
+        "description": "PURPOSE: Module authorship — register modules in the .cabal and grow them from the persistent scratchpad. WHEN: action='add' scaffolds stubs + registers; 'remove' de-registers; 'write' records a hypothesis on the canvas; 'check' type-checks it in project context; 'promote' splices a verified entry into a real module (snapshot + compile-verify); 'write_module' writes a COMPLETE module body (new or overwrite) with the same snapshot + compile-verify + rollback discipline. WHEN NOT: edits to code that already compiles — ghc_edit. PREREQUISITES: a .cabal in the active project; write_module needs the module REGISTERED (action='add') — the cradle resolves by the .cabal's module list, so unregistered writes are unverifiable and roll back. OUTPUT: per-action envelope of the merged verbs. SEE ALSO: ghc_edit for changes to code that already compiles. Wave 2b successor to ghc_modules + ghc_scratch.",
         "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -225,7 +225,8 @@
                         "check",
                         "show",
                         "clear",
-                        "promote"
+                        "promote",
+                        "write_module"
                     ],
                     "type": "string"
                 },

@@ -256,7 +256,7 @@ moduleSpec = (enumSpec
   ModuleScratch
   [ModuleAdd ..])
   { asOther = Just (const (Just ModuleScratch))
-  , asExtraVerbs = ["write", "check", "show", "clear", "promote"] }
+  , asExtraVerbs = ["write", "check", "show", "clear", "promote", "write_module"] }
 
 --------------------------------------------------------------------------------
 -- ghc_inspect

@@ -17,7 +17,9 @@ import qualified Control.Concurrent
 import Control.Concurrent.Async (forConcurrently)
 import Control.Concurrent.QSem (newQSem, signalQSem, waitQSem)
 import Control.Exception (bracket, bracket_, try, SomeException)
-import Control.Monad (when)
+import Control.Monad (unless, when)
+import Data.Maybe (isJust)
+import System.Environment (lookupEnv)
 import qualified Data.List as List
 import qualified Data.Text as T
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
@@ -76,6 +78,7 @@ import qualified Scenarios.FlowSwitchProject    as FlowSwP
 import qualified Scenarios.FlowSwitchProjectStore as FlowSwPS
 import qualified Scenarios.FlowPoisonRecovery   as FlowPR
 import qualified Scenarios.FlowParseHonesty    as FlowPH
+import qualified Scenarios.FlowWriteModule     as FlowWM
 import qualified Scenarios.FlowNestedModuleEval as FlowNME
 import qualified Scenarios.FlowMultiUnitLifecycle as FlowMUL
 import qualified Scenarios.FlowCabalRecovery     as FlowCR
@@ -279,6 +282,8 @@ scenarios =
     , False, FlowNME.runFlow )
   , ( "Flow: Parse honesty (parser errors visible to module/project gates)"
     , False, FlowPH.runFlow )
+  , ( "Flow: Whole-module authorship (write_module · verify + rollback)"
+    , False, FlowWM.runFlow )
   , ( "Flow: Multi-unit lifecycle (W7 · lib+test grows exe mid-session)"
     , False, FlowMUL.runFlow )
   ]
@@ -528,9 +533,15 @@ withTempProjectDir k = do
                       (show tid)   -- e.g. "ThreadId42"
       dir = base </> ("haskell-flows-e2e-" <> show (floor (ts * 1000000) :: Int)
                        <> "-" <> tidTag <> "-" <> show n)
+  -- Debug affordance: keep the per-scenario dir (path printed at the
+  -- start of each scenario) when HASKELL_FLOWS_E2E_KEEP_DIR is set —
+  -- post-mortem inspection of the exact project state.
+  keep <- lookupEnv "HASKELL_FLOWS_E2E_KEEP_DIR"
   bracket
-    (createDirectoryIfMissing True dir >> pure dir)
-    removePathForcibly
+    (do createDirectoryIfMissing True dir
+        putStrLn ("[e2e] project dir: " <> dir)
+        pure dir)
+    (\d -> unless (isJust keep) (removePathForcibly d))
     k
 
 -- | Process-global counter used to break tempdir-name ties. Each

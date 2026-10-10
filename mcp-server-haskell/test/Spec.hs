@@ -261,6 +261,8 @@ import HaskellFlows.Tool.IdeBacked
   ( aggregateEvalMessage
   , anchorFailureNote
   , moduleKeyOf
+  , writeModuleOkPayload
+  , writeModuleShouldRollback
   )
 import HaskellFlows.Util.Process (capOutput)
 import qualified HaskellFlows.Tool.Bootstrap as BootstrapTool
@@ -849,6 +851,8 @@ runAllTests = do
       , test "classify: evalErrorKind total mapping" testEvalErrorKindMapping
       , test "anchor chain: non-scope failure surfaces (note)" testAnchorFailureNote
       , test "anchor chain: aggregate message keeps generic line" testAggregateEvalMessage
+      , test "write_module: ANY error rolls back, warnings commit" testWriteModuleVerdict
+      , test "write_module: ok payload shape"                   testWriteModuleOkPayload
       , quickTest "prop_fieldSplit_roundtrip"            prop_fieldSplit_roundtrip
       , quickTest "prop_listFieldOf_format_invariant"    prop_listFieldOf_format_invariant
       , quickTest "prop_projectModuleFiles_dotpaths"     prop_projectModuleFiles_dotpaths
@@ -1017,6 +1021,8 @@ runAllTests = do
       , test "remove_modules: scanImportersInBody plain (#41)" testRMScanImportPlain
       , test "remove_modules: scanImportersInBody respects hierarchy (#41)" testRMScanRespectsHierarchy
       , test "remove_modules: scanImportersInBody quiet on no match (#41)" testRMScanQuietOnNoMatch
+      , test "add_modules: stanza=test-suite lands INSIDE the test-suite (W2 canary)"
+                                                          testAddModulesTestSuiteStanzaTargeting
       , test "move: sliceTopLevelBinding finds signature+body (#62)" testMoveSliceFindsBinding
       , test "move: sliceTopLevelBinding absorbs Haddock (#62)" testMoveSliceAbsorbsHaddock
       , test "move: sliceTopLevelBinding misses unknown (#62)" testMoveSliceMisses
@@ -1539,6 +1545,42 @@ testAggregateEvalMessage = pure $ and
          `T.isInfixOf` msg
       && "anchor failure: BadDependency: rule aborted" `T.isInfixOf` msg
   ]
+
+-- W2: write_module's verify is ABSOLUTE — a whole-module write has no
+-- pre-existing error baseline to diff against (unlike promote), so ANY
+-- error severity rolls back; warnings alone commit with a count.
+testWriteModuleVerdict :: IO Bool
+testWriteModuleVerdict = pure $ and
+  [ not (writeModuleShouldRollback [])
+  , not (writeModuleShouldRollback
+      [ mkDiag SevWarning "redundant import" ])
+  , writeModuleShouldRollback
+      [ mkDiag SevWarning "redundant import"
+      , mkDiag SevError "parse error (line 3, column 9)" ]
+  , writeModuleShouldRollback
+      [ mkDiag SevError "Module not listed in .cabal" ]
+  ]
+  where
+    mkDiag sev msg = GhcError
+      { geFile = "src/A.hs", geLine = 1, geColumn = 1
+      , geSeverity = sev, geCode = Nothing, geMessage = msg }
+
+-- W2: the ok payload names the action, the module, whether it
+-- overwrote, that it verified, and the warning count.
+testWriteModuleOkPayload :: IO Bool
+testWriteModuleOkPayload =
+  let v = A.encode (writeModuleOkPayload "src/Expr/Syntax.hs" True
+                      [ GhcError "src/Expr/Syntax.hs" 3 1 SevWarning
+                          (Just "GHC-1101") "redundant import" ])
+      json = TL.toStrict (TLE.decodeUtf8 v)
+  in pure $ and
+       [ "\"action\":\"write_module\""        `T.isInfixOf` json
+       , "\"module_path\":\"src/Expr/Syntax.hs\"" `T.isInfixOf` json
+       , "\"overwritten\":true"               `T.isInfixOf` json
+       , "\"compile\":\"ok\""                 `T.isInfixOf` json
+       , "\"warnings\":1"                     `T.isInfixOf` json
+       , "ghc_check(action=\\\"project\\\")"  `T.isInfixOf` json
+       ]
 
 -- W5.2 — HaskellFlows.Parser.Cabal: the pure .cabal seam extracted
 -- from IdeSession. Laws pin the two renderings cabal itself

@@ -27,6 +27,8 @@ module HaskellFlows.Tool.IdeBacked
   , moduleKeyOf
   , aggregateEvalMessage
   , anchorFailureNote
+  , writeModuleShouldRollback
+  , writeModuleOkPayload
   ) where
 
 import Control.Concurrent.MVar (MVar, isEmptyMVar, modifyMVar)
@@ -51,7 +53,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import System.Directory (canonicalizePath, doesFileExist, listDirectory)
+import System.Directory (canonicalizePath, doesFileExist, listDirectory, removeFile)
 import System.IO (hPutStrLn, stderr)
 import System.FilePath (normalise, (</>))
 import GHC (Ghc)
@@ -213,6 +215,9 @@ routeIde ref pdRef storeRef scratchRef tn args = case tn of
     -- raw args (action included) must go through, not 'stripped'.
     | actionIs "check"   args -> Just (withIdeSession ref pdRef (handleScratch scratchRef pdRef args))
     | actionIs "promote" args -> Just (withIdeSession ref pdRef (handleScratch scratchRef pdRef args))
+    -- W2: whole-module authorship — the promote discipline (snapshot +
+    -- compile-verify + rollback) applied to full module bodies.
+    | actionIs "write_module" args -> Just (withIdeSession ref pdRef (handleWriteModule pdRef (stripped args)))
     | otherwise -> Nothing
   GhcProperty
     | actionIs "check" args -> Just (withIdeSession ref pdRef (handlePropertyCheck pdRef storeRef (stripped args)))
@@ -1342,6 +1347,99 @@ handleScratch scratchRef pdRef raw s = do
   store <- readIORef scratchRef
   pd    <- readIORef pdRef
   Scratch.runHandle store (ideScratchQueries s) pd raw
+
+--------------------------------------------------------------------------------
+-- ghc_module(action=write_module) — whole-module authorship (W2)
+--------------------------------------------------------------------------------
+
+-- | Args of @action=\"write_module\"@: @module@ is the project-relative
+-- path of the target (@\"src/Expr/Syntax.hs\"@), @code@ the COMPLETE
+-- module text — headers included, exactly what lands on disk.
+data WriteModuleArgs = WriteModuleArgs
+  { wmaPath :: !Text
+  , wmaCode :: !Text
+  } deriving stock (Eq, Show)
+
+instance FromJSON WriteModuleArgs where
+  parseJSON = withObject "write_module" $ \o -> WriteModuleArgs
+    <$> o .: "module"
+    <*> o .: "code"
+
+-- | The promote discipline generalized to whole modules: snapshot the
+-- pre-state (existing content, or absence), write, compile-verify via
+-- the parse-honest diagnostics, roll back on ANY error. Unlike
+-- promote's signature-diff, verification is absolute — a full-module
+-- write has no pre-existing error set to subtract from. The cradle
+-- resolves modules by the .cabal's module LIST (not by bare source
+-- dir), so an unregistered path is unverifiable: the component-
+-- honesty error in "Ghc.IdeSession" makes that an explicit failure
+-- instead of a silent pass, and the write rolls back. Rollback of a
+-- previously-absent file DELETES it.
+handleWriteModule :: IORef ProjectDir -> Value -> IdeSession -> IO ToolResponse
+handleWriteModule pdRef raw s =
+  case parseEither parseJSON raw of
+    Left parseError ->
+      pure (mkFailed (mkErrorEnvelope MissingArg (T.pack parseError)))
+    Right (WriteModuleArgs mpath code) -> do
+      pd <- readIORef pdRef
+      if not (".hs" `T.isSuffixOf` mpath)
+        then pure (mkFailed (mkErrorEnvelope Validation
+                "write_module targets Haskell sources: the 'module' \
+                \path must end in .hs"))
+        else do
+          guarded <- guardModulePath pd (T.unpack mpath) False
+          case guarded of
+            Left refusal -> pure refusal
+            Right fp -> do
+              existed  <- doesFileExist fp
+              readRes  <- if existed
+                            then try (TIO.readFile fp) :: IO (Either SomeException Text)
+                            else pure (Right "")
+              case readRes of
+                Left e ->
+                  pure (mkFailed (mkErrorEnvelope Validation
+                          (T.pack ("Could not read module: " <> show e))))
+                Right orig -> do
+                  writeRes <- try (TIO.writeFile fp code) :: IO (Either SomeException ())
+                  case writeRes of
+                    Left e ->
+                      pure (mkFailed (mkErrorEnvelope Validation
+                              (T.pack ("Could not write module: " <> show e))))
+                    Right () -> do
+                      postDiags <- ghcDiags s fp
+                      if writeModuleShouldRollback postDiags
+                        then do
+                          _ <- if existed
+                                 then try (TIO.writeFile fp orig) :: IO (Either SomeException ())
+                                 else try (removeFile fp) :: IO (Either SomeException ())
+                          pure (Refactor.compileFailResult False postDiags
+                                  (T.intercalate "\n" (map geMessage
+                                     (filter ((== SevError) . geSeverity) postDiags)))
+                                  " — snapshot restored")
+                        else pure
+                          (mkOk (writeModuleOkPayload mpath existed postDiags))
+
+-- | A whole-module write is disqualified by ANY error diagnostic —
+-- there is no pre-existing baseline to diff against.
+writeModuleShouldRollback :: [GhcError] -> Bool
+writeModuleShouldRollback = any ((== SevError) . geSeverity)
+
+-- | The success payload: what landed, that it verified, and the
+-- project-gate follow-up. Warnings are counted, not inlined — the
+-- module's own check(action=\"module\") renders them.
+writeModuleOkPayload :: Text -> Bool -> [GhcError] -> Value
+writeModuleOkPayload mpath existed diags =
+  object
+    [ "action"      .= ("write_module" :: Text)
+    , "module_path" .= mpath
+    , "overwritten" .= existed
+    , "compile"     .= ("ok" :: Text)
+    , "warnings"    .= length (filter ((== SevWarning) . geSeverity) diags)
+    , "hint"        .=
+        ("Module written and compile-verified. Run \
+         \ghc_check(action=\"project\") to confirm the whole project \
+         \stays green." :: Text)
+    ]
 
 --------------------------------------------------------------------------------
 -- ghc_edit{rename_local, extract_binding} via ghcide (W6.6)

@@ -109,6 +109,7 @@ displacement.
 | Lost / unsure | `ghc_session(action="help")` | State-aware nudge based on current phase + history; pairs with `nextStep` (§4). |
 | Verify a snippet before touching real source | `ghc_module(action="write", code="…")` then `(action="check", id="…")` | Persistent + visible to the user; `ghc_eval` drops the state and offers no rollback path. |
 | Promote a verified hypothesis into a real module | `ghc_module(action="promote", id="…", target_module="src/Foo.hs", target_line=N)` | Atomic snapshot-and-compile-verify; rolls back on compile fail. |
+| Write a COMPLETE module body (new or overwrite) | `ghc_module(action="write_module", module="src/Foo.hs", code="module Foo where …")` | Same discipline as promote but whole-file. Register the module first (`action="add"`) — the cradle resolves by the .cabal's module list, so unregistered writes are unverifiable and roll back. |
 | Inspect the reasoning trail | `ghc_module(action="list")` then `(action="show", id="…")` | Shows every hypothesis carried this session — readable mid-session by the user. |
 
 ---

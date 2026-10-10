@@ -7,6 +7,9 @@
 --     (verbatim ghc_modules vocabulary, forwarded with the action)
 --   * @write@ / @check@ / @list@ / @show@ / @clear@ / @promote@ — the
 --     persistent scratchpad canvas (verbatim vocabulary)
+--   * @write_module@ — write a COMPLETE module body (new file or
+--     overwrite) under the promote discipline: snapshot +
+--     compile-verify + rollback (W2)
 module HaskellFlows.Tool.ModuleMgmt
   ( descriptor
   , handle
@@ -38,9 +41,14 @@ descriptor =
         \WHEN: action='add' scaffolds stubs + registers; 'remove' \
         \de-registers; 'write' records a hypothesis on the canvas; \
         \'check' type-checks it in project context; 'promote' splices a \
-        \verified entry into a real module (snapshot + compile-verify). \
+        \verified entry into a real module (snapshot + compile-verify); \
+        \'write_module' writes a COMPLETE module body (new or overwrite) \
+        \with the same snapshot + compile-verify + rollback discipline. \
         \WHEN NOT: edits to code that already compiles — ghc_edit. \
-        \PREREQUISITES: a .cabal in the active project. \
+        \PREREQUISITES: a .cabal in the active project; write_module \
+        \needs the module REGISTERED (action='add') — the cradle \
+        \resolves by the .cabal's module list, so unregistered writes \
+        \are unverifiable and roll back. \
         \OUTPUT: per-action envelope of the merged verbs. \
         \SEE ALSO: ghc_edit for changes to code that already compiles. \
         \Wave 2b successor to ghc_modules + ghc_scratch."
