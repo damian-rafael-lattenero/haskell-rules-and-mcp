@@ -1,6 +1,6 @@
 # haskell-flows MCP — Tool Taxonomy
 
-> Wave 2b (2026-10).  The canonical classification of all 13 registered tools.
+> Wave 2b (2026-10, updated post-W6).  The canonical classification of all 12 registered tools.
 > The four-category breakdown is **CI-enforced** by `testCategoryCountsMatchTaxonomy`,
 > and `testTaxonomyDocListsAllTools` (#268) fails CI if this file omits any
 > registered wire name or states the wrong total — both in `test/Spec.hs`.

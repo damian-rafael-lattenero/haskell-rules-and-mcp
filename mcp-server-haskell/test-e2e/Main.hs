@@ -74,6 +74,8 @@ import qualified Scenarios.FlowRegressionScopeFix as FlowRSF
 import qualified Scenarios.FlowSessionRobustness as FlowSR
 import qualified Scenarios.FlowSwitchProject    as FlowSwP
 import qualified Scenarios.FlowSwitchProjectStore as FlowSwPS
+import qualified Scenarios.FlowPoisonRecovery   as FlowPR
+import qualified Scenarios.FlowMultiUnitLifecycle as FlowMUL
 import qualified Scenarios.FlowCabalRecovery     as FlowCR
 import qualified Scenarios.FlowRefactorPreExistingError as FlowRPE
 import qualified Scenarios.FlowSuggestAssocOuter  as FlowSAO
@@ -269,6 +271,10 @@ scenarios =
     , False, FlowECD.runFlow )
   , ( "Flow: cross_client_stringification · permissive Int/Bool wires (#91 PhA / #88)"
     , False, FlowXCS.runFlow )
+  , ( "Flow: Poison recovery (W7 · every session drop → fresh boot answers)"
+    , True, FlowPR.runFlow )
+  , ( "Flow: Multi-unit lifecycle (W7 · lib+test grows exe mid-session)"
+    , False, FlowMUL.runFlow )
   ]
 
 main :: IO ()

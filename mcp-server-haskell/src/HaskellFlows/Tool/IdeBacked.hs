@@ -1,15 +1,19 @@
--- | ghcide-backend routing (F1 pilot → F3 expansion).
+-- | ghcide-backend routing — the ONLY execution engine (post-W6.8).
 --
--- 'routeIde' is the strangler seam: when
--- @HASKELL_FLOWS_BACKEND=ghcide@ is set, these verbs are served by
--- 'IdeSession' instead of 'ApiSession'. Every other tool keeps its
--- legacy handler untouched — the flag is additive and defaults to
--- the legacy backend.
+-- 'routeIde' is the dispatch front door: the verbs listed below are
+-- served straight through the in-process 'IdeSession'
+-- (boot/reuse via 'withIdeSession', recycle via 'dropIdeSession').
+-- The legacy GHC-API session died with W6.8.3+4 — there is no flag
+-- and no fallback backend; verbs not intercepted here fall through
+-- to their registry handler (file edits, subprocess gates).
 --
--- F3 serves: @ghc_check@ (load / module / project),
--- @ghc_eval@, @ghc_inspect(action=type)@ and
--- @ghc_property(action=check)@ — single-run QuickCheck AND the
--- @runs >= 2@ determinism replay.
+-- Served here: @ghc_check@ (load / module / project),
+-- @ghc_eval@, @ghc_inspect@ (info / complete / goto / browse / hole /
+-- type), @ghc_session(imports)@, @ghc_suggest@, @ghc_module@
+-- scratch {check,show,promote}, @ghc_property@ (check / arbitrary /
+-- audit via 'ideQcProbe'), @ghc_edit@ (rename_local /
+-- extract_binding / move_symbol / import) — single-run QuickCheck AND
+-- the @runs >= 2@ determinism replay.
 module HaskellFlows.Tool.IdeBacked
   ( routeIde
   , warmupIdeSession

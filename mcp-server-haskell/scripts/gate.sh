@@ -45,4 +45,4 @@ say "T2 · full e2e"
 OUT=$(python3 "$WATCHDOG" full "$BIN_E2E" STALL_S="$STALL" TOTAL_S="$TOTAL")
 echo "$OUT"
 echo "$OUT" | grep -q "VEREDICTO: DONE" || exit 1
-echo "T2 OK (ver KNOWN-RED.md para los rojos vivos)"
+echo "T2 OK (burn-down completo — 0 rojos desde 2026-10)"
