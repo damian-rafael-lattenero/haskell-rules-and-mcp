@@ -14,7 +14,7 @@
   subprocess-over-stdio transport.
 * Phase B (this doc) ships a real measurement harness in
   `mcp-server-haskell/benchmarks/Main.hs` that exercises a
-  representative subset (currently 13 tools) against
+  representative subset (currently 12 tools) against
   `benchmarks/Reference/`.
 * Phase B is **informational**.  No CI gate fires today — the bench
   emits `OK` / `WARN` rows; only Phase C will turn the WARN into a

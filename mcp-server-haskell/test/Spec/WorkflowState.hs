@@ -199,7 +199,8 @@ testDocsMainReadme = do
       && not ("cd mcp-server\n"                   `T.isInfixOf` readme)
 
 -- | The mcp-server-haskell/README.md must reflect the live tool
--- registry: mention every registered tool at least once.
+-- registry: mention every registered tool family at least once
+-- (v1.0.0 surface: the 12 consolidated tools).
 
 testDocsHaskellReadme :: IO Bool
 
@@ -212,7 +213,11 @@ testDocsHaskellReadme = do
       -- consolidated tool name.
       && T.isInfixOf "`ghc_gate`"       readme
       && T.isInfixOf "`ghc_suggest`"    readme
-      && T.isInfixOf "`ghc_modules`" readme
+      && T.isInfixOf "`ghc_module`"  readme
+      && T.isInfixOf "`ghc_property`" readme
+      && T.isInfixOf "`ghc_session`" readme
+      && T.isInfixOf "`ghc_edit`"    readme
+      && T.isInfixOf "`ghc_check`"   readme
       && not ("Phase 1" `T.isInfixOf` readme)
 
 -- | BUG-14 — the release workflow must exist and wire up the

@@ -1,6 +1,6 @@
 # MCP Flow Diagrams
 
-Visual map of the five most important flows across the 36 tools shipped
+Visual map of the five most important flows across the 12 tools shipped
 to date. GitHub renders the Mermaid blocks inline — no tooling
 needed to read this file.
 
@@ -24,7 +24,7 @@ are all green.
 
 ```mermaid
 flowchart TD
-    start([Agent starts]) --> load[ghc_load<br/>diagnostics=true]
+    start([Agent starts]) --> load[ghc_check<br/>action=load<br/>diagnostics=true]
     load -->|errors| fix[Agent edits code]
     load -->|holes detected| hole[ghc_hole]
     load -->|clean| qc
@@ -33,7 +33,7 @@ flowchart TD
     explore --> impl[Agent implements hole]
     impl --> load
 
-    qc[ghc_quickcheck<br/>property=...] -->|QcPassed| persist[(PropertyStore<br/>auto-persist<br/>.haskell-flows/<br/>properties.json)]
+    qc[ghc_property<br/>action=check<br/>property=...] -->|QcPassed| persist[(PropertyStore<br/>auto-persist<br/>.haskell-flows/<br/>properties.json)]
     qc -->|QcFailed / Exception| fix
     qc -->|QcGaveUp| relax[Agent relaxes<br/>precondition]
     relax --> qc
@@ -62,14 +62,14 @@ flowchart LR
     create --> files[/.cabal<br/>cabal.project<br/>src/Mypkg.hs<br/>test/Spec.hs/]
 
     files --> deps[ghc_deps<br/>action=add<br/>package=text]
-    deps --> first[ghc_load<br/>src/Mypkg.hs]
+    deps --> first[ghc_check<br/>action=load<br/>src/Mypkg.hs]
 
     first --> types[Agent defines<br/>data types]
     types --> arb[ghc_arbitrary<br/>type_name=...]
     arb --> paste[Agent pastes<br/>Arbitrary instance]
     paste --> devloop((property-first<br/>dev loop))
 
-    devloop --> allgreen[ghc_property_store<br/>action=run]
+    devloop --> allgreen[ghc_property<br/>action=run]
     allgreen --> coverage[ghc_coverage]
     coverage --> ship([Shippable])
 
@@ -171,20 +171,20 @@ stateDiagram-v2
 
 ## 5. Session intelligence loop
 
-`ghc_workflow` has three orientation sub-commands that together prevent agents from
+`ghc_session` (workflow verbs) has three orientation sub-commands that together prevent agents from
 getting stuck in their 10 favourite tools:
 
 ```mermaid
 flowchart TD
-    start([Agent begins session]) --> status[ghc_workflow\naction=status]
-    status --> help[ghc_workflow\naction=help]
+    start([Agent begins session]) --> status[ghc_session\naction=status]
+    status --> help[ghc_session\naction=help]
     help --> work((dev loop\nflows 1–4))
 
-    work --> discover[ghc_workflow\naction=discover]
+    work --> discover[ghc_session\naction=discover]
     discover --> ranked[Top-5 unused tools\nranked by phase relevance]
     ranked --> branch{agent uses\na new tool?}
     branch -->|yes| work
-    branch -->|no, done| postmortem[ghc_workflow\naction=post-mortem]
+    branch -->|no, done| postmortem[ghc_session\naction=post-mortem]
 
     postmortem --> retro[Stats + missed opportunities\n+ persisted properties]
     retro --> done([Session complete])
@@ -204,22 +204,22 @@ it can inspect and execute in one round-trip.
 
 | Tool                   | Appears in |
 |------------------------|------------|
-| `ghc_load`            | 1, 2       |
+| `ghc_check`           | 1, 2       |
 | `ghc_hole`            | 1          |
 | `ghc_type`            | 1          |
 | `ghc_info`            | 1          |
 | `hoogle_search`        | 1          |
 | `ghc_doc`             | 1          |
-| `ghc_quickcheck`      | 1          |
+| `ghc_property`        | 1          |
 | `ghc_check_module`    | 1          |
 | `ghc_project`         | 2          |
 | `ghc_deps`            | 2          |
 | `ghc_arbitrary`       | 2          |
-| `ghc_property_store`  | 2          |
+| `ghc_property`        | 2 (replay) |
 | `ghc_coverage`        | 2          |
-| `ghc_refactor`        | 3          |
-| `ghc_workflow`        | 5          |
-| `ghc_scratch`         | 5 (design-first canvas, promote into flow 2) |
+| `ghc_edit`            | 3          |
+| `ghc_session`         | 5          |
+| `ghc_module`          | 5 (scratchpad verbs; promote into flow 2) |
 
 Not shown because they're auxiliary / meta tools that don't anchor a
 distinct flow: `ghc_eval`, `ghc_complete`, `ghc_goto`, `ghc_format`,

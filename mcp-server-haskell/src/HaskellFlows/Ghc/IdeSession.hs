@@ -11,7 +11,7 @@
 -- finding: generated CabalMulti cradles break multi-component
 -- targets ("No cradle target found") — never synthesize one.
 --
--- Verified API recipes (docs/ghcide-spike-F0.md):
+-- Verified API recipes (docs/history/ghcide-spike-F0.md):
 --   * 'GhcSessionDeps' (not 'GhcSession') for interactive eval/type.
 --   * 'evalGhcEnv' as the runner; 'setContext' needs an explicit
 --     Prelude IIDecl.

@@ -53,3 +53,4 @@ playground/*/
 
 # Spike run artifacts (logs captured ad-hoc)
 mcp-server-haskell/spike-ghcide/*.log
+playground/lambda-hm/test/Spec

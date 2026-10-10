@@ -16,16 +16,21 @@ Download the pre-built binary matching your OS from
 
 | Asset                                   | Platform          |
 |-----------------------------------------|-------------------|
-| `haskell-flows-mcp-linux-x86_64`        | Linux             |
-| `haskell-flows-mcp-darwin-arm64`        | macOS Apple Silicon |
-
+| `haskell-flows-mcp-linux-x64.tar.gz`    | Linux               |
+| `haskell-flows-mcp-darwin-arm64.tar.gz` | macOS Apple Silicon |
+| `haskell-flows-mcp-<version>.tar.gz`    | sdist (source)      |
 ```bash
-# Linux example
-curl -LO https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/latest/download/haskell-flows-mcp-linux-x86_64
-chmod +x haskell-flows-mcp-linux-x86_64
-sudo mv haskell-flows-mcp-linux-x86_64 /usr/local/bin/haskell-flows-mcp
-haskell-flows-mcp --help   # sanity check
+# Linux example — verify the checksum, then extract
+VERSION=v1.0.0
+BASE="https://github.com/damian-rafael-lattenero/haskell-rules-and-mcp/releases/download/$VERSION"
+curl -LO "$BASE/haskell-flows-mcp-linux-x64.tar.gz"
+curl -LO "$BASE/haskell-flows-mcp-linux-x64.tar.gz.sha256"
+shasum -a 256 -c haskell-flows-mcp-linux-x64.tar.gz.sha256   # Linux: sha256sum -c
+tar -xzf haskell-flows-mcp-linux-x64.tar.gz -C "$HOME/.local/bin/"
+haskell-flows-mcp --version && haskell-flows-mcp --doctor
 ```
+Prerequisites (GHC + cabal, optional binaries) are tabulated in
+[requirements.md](requirements.md) — `haskell-flows-mcp --doctor` verifies them.
 
 Binaries are dynamically linked. If you see a libgmp / libffi error on
 Linux, either install the system package or fall back to method 2.
@@ -84,7 +89,7 @@ and edit paths:
 
 **Claude Code (CLI).** Save the config as `.mcp.json` at your repo
 root; Claude Code auto-discovers it. Verify with `/mcp` in the REPL
-and run `ghc_workflow(action="status")` to confirm the server is
+and run `ghc_session(action="status")` to confirm the server is
 alive.
 
 **Cursor / VS Code MCP extensions.** Config path depends on the
@@ -108,19 +113,19 @@ Code.
 Once the client is wired, ask the agent to run the three-step session handshake:
 
 ```
-ghc_workflow(action="status")     -- confirms MCP alive + 36 tools + projectDir
-ghc_toolchain(action="status")    -- inventories ghc / cabal / hlint / fourmolu / hoogle
-ghc_workflow(action="help")       -- state-aware nudges for the current session phase
+ghc_session(action="status")      -- confirms MCP alive + 12 tools + projectDir
+ghc_session(action="toolchain")   -- inventories ghc / cabal / hlint / fourmolu / hoogle
+ghc_session(action="help")        -- state-aware nudges for the current session phase
 ```
 
-`ghc_toolchain(action="status")` returns a structured inventory of every external binary
+`ghc_session(action="toolchain")` returns a structured inventory
 the server can delegate to. Missing tools are reported as `available: false`; install them
 with `cabal install <tool>` (or via `ghcup` for `ghc` / `cabal` themselves).
 
 For a quick first load:
 
 ```
-ghc_load(module_path="src/Main.hs")    # replace with a real module
+ghc_check(action="load", module_path="src/Main.hs")  # replace with a real module
 ```
 
 If both succeed, the install is working end-to-end.

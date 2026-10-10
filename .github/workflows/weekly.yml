@@ -63,6 +63,7 @@ jobs:
 
       - name: Configure + freeze
         run: |
+          cabal update   # image index can be up to a week stale
           cabal configure --enable-tests --enable-benchmarks --disable-documentation
           cabal freeze
 
