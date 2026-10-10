@@ -54,7 +54,8 @@ descriptor =
                   , "description" .=
                       ("'load' boots the session on one module; 'module' \
                        \is the strict per-module gate; 'project' gates \
-                       \every module; 'lint' runs hlint (matches CI)." :: Text)
+                       \every module; 'lint' runs hlint (matches CI). \
+                       \Omitting action defaults to 'project'." :: Text)
                   ]
               , "module_path" .= object
                   [ "type" .= ("string" :: Text)

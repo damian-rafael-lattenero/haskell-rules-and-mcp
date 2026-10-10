@@ -190,6 +190,10 @@ routeIde ref pdRef storeRef scratchRef tn args = case tn of
     | actionIs "module"  args -> Just (withIdeSession ref pdRef (handleCheckModule pdRef storeRef (stripped args)))
     | actionIs "load"    args -> Just (withIdeSession ref pdRef (handleCheckLoad pdRef (stripped args)))
     | actionIs "project" args -> Just (withIdeSession ref pdRef (handleCheckProject pdRef (stripped args)))
+    -- Zero-arg ghc_check is the project gate (the instructions'
+    -- `ghc_check((no args))`). A PRESENT but different action (lint,
+    -- unknowns) keeps falling to the registry handler.
+    | actionAbsent args -> Just (withIdeSession ref pdRef (handleCheckProject pdRef (stripped args)))
     | otherwise -> Nothing
   GhcEval -> Just (withIdeSession ref pdRef (handleEval args))
   GhcInspect
@@ -232,10 +236,22 @@ argField :: Key -> Value -> Either String Text
 argField field = parseEither (withObject "args" (.: field))
 
 -- | True when the composite @action@ field equals the given verb.
+-- | The composite @action@ field, when present and well-typed.
+actionField :: Value -> Either String Text
+actionField = parseEither (withObject "args" (.: "action"))
+
 actionIs :: Text -> Value -> Bool
-actionIs want v = case parseEither (withObject "args" (.: "action")) v of
+actionIs want v = case actionField v of
   Right got -> got == want
   Left _    -> False
+
+-- | True only when the @action@ field is ABSENT (or non-string). A
+-- present-but-different action is deliberately False so composite
+-- verbs with registry handlers (e.g. check/lint) still fall through.
+actionAbsent :: Value -> Bool
+actionAbsent v = case actionField v of
+  Left _  -> True
+  Right _ -> False
 
 -- | Drop the composite @action@ before forwarding to the legacy-shaped
 -- handler args.

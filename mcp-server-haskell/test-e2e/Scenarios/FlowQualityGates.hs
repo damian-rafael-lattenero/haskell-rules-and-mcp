@@ -169,7 +169,19 @@ runFlow c projectDir = do
           \green on a module it did not actually type-check."
   stepFooter 5 t4
 
-  pure [c2, c3, c4, c5, c6]
+  --------------------------------------------------------------------
+  -- Zero-arg ghc_check IS the project gate — the session instructions
+  -- prescribe `ghc_check((no args))` as the project-wide gate, so with
+  -- Broken planted the no-action call must flag the same failure.
+  --------------------------------------------------------------------
+  t5 <- stepHeader 6 "ghc_check (no action) · zero-arg project gate"
+  zr <- Client.callTool c GhcCheck (object [])
+  c7 <- liveCheck $ checkJsonField
+          "zero-arg check overall=false (defaults to project)"
+          zr "overall" (Bool False)
+  stepFooter 6 t5
+
+  pure [c2, c3, c4, c5, c6, c7]
 
 --------------------------------------------------------------------------------
 -- helpers

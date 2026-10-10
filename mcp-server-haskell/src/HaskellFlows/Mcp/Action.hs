@@ -150,7 +150,9 @@ checkSpec = enumSpec
       CheckModule  -> "module"
       CheckProject -> "project"
       CheckLint    -> "lint")
-  CheckModule
+  -- Zero-arg ghc_check IS the project gate — the session instructions
+  -- prescribe `ghc_check((no args))` as the project-wide verification.
+  CheckProject
   [CheckLoad ..]
 
 --------------------------------------------------------------------------------
