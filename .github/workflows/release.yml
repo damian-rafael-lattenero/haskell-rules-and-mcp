@@ -169,7 +169,11 @@ jobs:
         with:
           path: release-artefacts
 
+      # download-artifact resolves its `path:` against GITHUB_WORKSPACE
+      # regardless of defaults.run — without this override the find
+      # looks under mcp-server-haskell/ and matches nothing.
       - name: Flatten artefacts
+        working-directory: ${{ github.workspace }}
         run: |
           mkdir -p release-flat
           find release-artefacts -type f \
