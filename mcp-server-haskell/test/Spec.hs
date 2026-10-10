@@ -293,7 +293,6 @@ import HaskellFlows.Mcp.Progress
   , progressNotification
   , progressTokenFrom
   )
-import qualified HaskellFlows.Tool.Type as TypeTool
 import qualified HaskellFlows.Tool.SwitchProject as SwitchProject
 import HaskellFlows.Tool.SwitchProject
   ( ValidationError (..)
@@ -327,7 +326,6 @@ import Spec.Arbitrary
 import Spec.ArbitraryUnit
 import Spec.Batch
 import Spec.Bootstrap
-import Spec.Browse
 import Spec.BudgetGate
 import Spec.Config
 import Spec.Complete
@@ -350,7 +348,6 @@ import Spec.Guidance
 import Spec.HaddockUnit
 import Spec.HandleApplyRemove
 import Spec.HoleParse
-import Spec.HoleTool
 import Spec.InfoAdvanced
 import Spec.InfoHoogle
 import Spec.Lint
@@ -756,16 +753,9 @@ runAllTests = do
                                                    testEnvelopeLegacySuccessDropped
       , test "Envelope #90 Phase D: legacy 'error_kind' field dropped"
                                                    testEnvelopeLegacyErrorKindDropped
-      , test "Envelope #90 Phase B: ghc_browse on project module → status=ok"
-                                                   testBrowseProjectModuleOk
-      , test "Envelope #90 Phase B: ghc_browse on external module → status=no_match"
-                                                   testBrowseExternalModuleNoMatch
-      , test "Envelope #90 Phase B: ghc_browse rejects missing module arg"
-                                                   testBrowseRejectsMissingArg
-      , test "Envelope #90 Phase B: ghc_complete with hits → status=ok"
-                                                   testCompleteHitsOk
-      , test "Envelope #90 Phase B: ghc_complete with zero hits → status=no_match"
-                                                   testCompleteNoMatch
+      -- W6.8: the ghcide route (routeIde) serves browse/complete/goto/
+      -- hole/info; their resolution contracts moved to the e2e suite.
+      -- The unit surface keeps the pure payload layers they share.
       , test "#145: ghc_complete zero hits + qualified prefix → remediation hint"
                                                    testCompleteQualifiedRemediation
       , test "#225: ghc_complete qualified remediation names module and suggests bare prefix"
@@ -780,28 +770,6 @@ runAllTests = do
                                                    testSplitQualifiedPrefixDeep
       , test "#252: Complete.hs imports lookupModule for fallback"
                                                    testCompleteImportsLookupModule
-      , test "Envelope #90 Phase B: ghc_complete refuses newline in prefix"
-                                                   testCompleteRefusesNewline
-      , test "Envelope #90 Phase B: ghc_goto on local name → status=ok"
-                                                   testGotoLocalNameOk
-      , test "Envelope #90 Phase B: ghc_goto on unknown name → status=no_match"
-                                                   testGotoUnknownNameNoMatch
-      , test "Envelope #90 Phase B: ghc_goto refuses newline in name"
-                                                   testGotoRefusesNewline
-      , test "Envelope #90 Phase B: ghc_hole on module with hole → status=ok"
-                                                   testHoleWithHoleOk
-      , test "Envelope #90 Phase B: ghc_hole on hole-free module → status=no_match"
-                                                   testHoleNoHoleMatch
-      , test "Envelope #90 Phase B: ghc_hole rejects path traversal"
-                                                   testHoleRejectsTraversal
-      , test "#148: ghc_hole non-existent file → module_path_does_not_exist"
-                                                   testHoleNonExistentFile
-      , test "Envelope #90 Phase B: ghc_info on real symbol → status=ok (#87)"
-                                                   testInfoRealSymbolOk
-      , test "Envelope #90 Phase B: ghc_info on unknown name → status=no_match (closes #87)"
-                                                   testInfoUnknownNameNoMatch
-      , test "Envelope #90 Phase B: ghc_info refuses newline in name"
-                                                   testInfoRefusesNewline
       , test "Envelope #90 Phase B: hoogle_search rejects empty query"
                                                    testHoogleRejectsEmpty
       , test "Envelope #90 Phase B: hoogle_search reports unavailable when binary missing"

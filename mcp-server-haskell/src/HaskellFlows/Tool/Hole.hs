@@ -1,12 +1,12 @@
--- | @ghc_hole@ — full GhcSession (Wave 2).
+-- | @ghc_inspect(action=hole)@ — pure payload layer.
 --
--- Loads the project via 'loadForTarget' with 'Deferred' flavour, then
--- renders the captured diagnostics in GHCi-style output so the
--- existing 'parseTypedHoles' parser (tuned for terminal output) works
--- unchanged.
+-- The session-bound legacy handler died with the ApiSession backend
+-- (W6.8): 'HaskellFlows.Tool.IdeBacked' serves action=hole by reading
+-- ghcide diagnostics for the file and feeding the parsed holes into
+-- 'holesPayload'. What remains here is the wire-shaping shared by
+-- that route.
 module HaskellFlows.Tool.Hole
-  ( handle
-  , HoleArgs (..)
+  ( HoleArgs (..)
     -- * Pure payload shaping — shared with the ghcide backend
     -- ('HaskellFlows.Tool.IdeBacked' serves action=hole since W6)
   , holesPayload
@@ -15,32 +15,16 @@ module HaskellFlows.Tool.Hole
   , parseErrorKind
   ) where
 
-import Control.Exception (SomeException, try)
 import Data.Aeson
-import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
-import qualified Data.Text as T
-import System.Directory (doesFileExist)
 
-import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Ghc.ApiSession
-  ( GhcSession
-  , LoadFlavour (..)
-  , loadForTarget
-  , targetForPath
-  )
-import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
-import HaskellFlows.Parser.Error (GhcError, renderGhciStyle)
 import HaskellFlows.Parser.Hole
   ( HoleFit (..)
   , TypedHole (..)
-  , parseTypedHoles
   , RelevantBinding (..)
   )
-import HaskellFlows.Types
-import HaskellFlows.Tool.Env (ToolEnv (..))
+import HaskellFlows.Types (PathError (..))
 
 
 data HoleArgs = HoleArgs
@@ -54,60 +38,6 @@ instance FromJSON HoleArgs where
     mp <- o .:  "module_path"
     hn <- o .:? "hole_name"
     pure HoleArgs { haModulePath = mp, haHoleName = hn }
-
-handle :: ToolEnv -> Value -> IO ToolResponse
-handle env rawArgs = do
-  ghcSess <- teSession env
-  pd      <- teProjectDir env
-  runHandle ghcSess pd rawArgs
-
-runHandle :: GhcSession -> ProjectDir -> Value -> IO ToolResponse
-runHandle ghcSess pd rawArgs = case parseEither parseJSON rawArgs of
-  Left parseError ->
-    pure (Env.mkFailed
-      ((Env.mkErrorEnvelope (parseErrorKind parseError)
-          (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) }))
-  Right (HoleArgs rawPath filt) ->
-    case mkModulePath pd (T.unpack rawPath) of
-      Left err ->
-        pure (Env.mkRefused
-          ((Env.mkErrorEnvelope Env.PathTraversal (formatPathError err))
-              { Env.eeField = Just "module_path" }))
-      Right mp -> do
-        -- #148: check file existence before attempting to load.
-        -- Without this, a missing file silently returns hole_count=0
-        -- which is indistinguishable from a hole-free file.
-        let absPath = unModulePath mp
-        exists <- doesFileExist absPath
-        if not exists
-          then pure (Env.mkFailed
-            ((Env.mkErrorEnvelope Env.ModulePathDoesNotExist
-                ("module_path '" <> rawPath <> "' does not exist"))
-                  { Env.eeField = Just "module_path" }))
-          else do
-            tgt <- targetForPath ghcSess (T.unpack rawPath)
-            eRes <- try (loadForTarget ghcSess tgt Deferred)
-            case eRes :: Either SomeException (Bool, [GhcError]) of
-              Left ex ->
-                pure (Env.mkFailed
-                  ((Env.mkErrorEnvelope Env.InternalError
-                      ("loadForTarget failed: " <> T.pack (show ex)))
-                        { Env.eeCause = Just (T.pack (show ex)) }))
-              Right (_ok, diags) -> do
-                let rendered = renderGhciStyle diags
-                    allHoles = parseTypedHoles rendered
-                    holes    = case filt of
-                      Nothing  -> allHoles
-                      Just nm  -> filter ((== nm) . thHole) allHoles
-                    payload  = holesPayload rawPath holes
-                -- Issue #90 §3 + §6: zero-holes case maps to
-                -- 'no_match' (the question — "where are the typed
-                -- holes?" — was well-formed; the answer is the empty
-                -- set). Non-empty → 'ok'.
-                pure $ case holes of
-                  [] -> Env.mkNoMatch payload
-                  _  -> Env.mkOk payload
 
 -- | Discriminate the FromJSON failure shape — same heuristic as
 -- the other Phase-B migrations.

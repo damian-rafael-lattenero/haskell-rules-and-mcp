@@ -1,16 +1,13 @@
--- | @ghc_info@ — Phase-2 tool (GHC-API migrated).
+-- | @ghc_inspect(action=info)@ — pure query + payload layer.
 --
 -- Given a name, returns a structured @:info@ view: kind classification
 -- (class/data/newtype/function/…), rendered definition, and list of
--- class instances. Pre-migration parsed @:i@ stdout via regex;
--- post-migration queries 'GHC.getInfo' directly and builds the same
--- 'ParsedInfo' shape from the returned 'TyThing' + @[ClsInst]@.
---
--- Boundary safety: still routes through 'sanitizeExpression' so the
--- newline/sentinel/empty/too-large rejection contract is unchanged.
+-- class instances. The session-bound legacy handler died with the
+-- ApiSession backend (W6.8); 'HaskellFlows.Tool.IdeBacked' parses
+-- 'InfoArgs', applies 'sanitizeExpression' and runs 'queryInfo'
+-- inside its ghcide interactive context.
 module HaskellFlows.Tool.Info
-  ( handle
-  , InfoArgs (..)
+  ( InfoArgs (..)
     -- * W6 — Ghc query + payload shaping (shared with IdeBacked)
   , queryInfo
   , notInScopePayload
@@ -27,9 +24,7 @@ module HaskellFlows.Tool.Info
   , preferTyCon
   ) where
 
-import Control.Exception (SomeException, try)
 import Data.Aeson
-import Data.Aeson.Types (parseEither)
 import Data.Char (isAsciiLower, isAsciiUpper)
 import Data.List.NonEmpty (toList)
 import Data.Maybe (catMaybes)
@@ -70,15 +65,10 @@ import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.Var (varName)
 import GHC.Utils.Outputable (showPprUnsafe)
 
-import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
-import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
-import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
 import HaskellFlows.Parser.Type
   ( InfoKind (..)
   , ParsedInfo (..)
   )
-import HaskellFlows.Tool.Env (ToolEnv (..))
 
 
 newtype InfoArgs = InfoArgs
@@ -89,47 +79,6 @@ newtype InfoArgs = InfoArgs
 instance FromJSON InfoArgs where
   parseJSON = withObject "InfoArgs" $ \o ->
     InfoArgs <$> o .: "name"
-
-handle :: ToolEnv -> Value -> IO ToolResponse
-handle env rawArgs = do
-  ghcSess <- teSession env
-  runHandle ghcSess rawArgs
-
-runHandle :: GhcSession -> Value -> IO ToolResponse
-runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
-  Left parseError ->
-    pure (Env.mkFailed
-      ((Env.mkErrorEnvelope (parseErrorKind parseError)
-          (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) }))
-  Right (InfoArgs nm) -> case sanitizeExpression nm of
-    Left cmdErr ->
-      pure (Env.mkRefused
-        (Env.sanitizeRejection "name" cmdErr))
-    Right safe -> do
-      eRes <- try (withGhcSession ghcSess (queryInfo safe))
-      pure $ case eRes of
-        Left (se :: SomeException) ->
-          -- Issue #87 + #90: instead of fabricating a 'data X'
-          -- definition via the old 'bestEffortResult' (which lied
-          -- to consumers — there is no real definition for an
-          -- unresolved name), the migration emits status='no_match'
-          -- with a structured 'searched_in' field. The agent gets a
-          -- clean discriminator: 'no_match' = name not in scope,
-          -- 'failed' = the request itself was malformed.
-          --
-          -- An exception during parseName/getInfo doesn't
-          -- semantically mean 'not in scope' — it can also be a
-          -- transient interactive-context race. We still classify
-          -- it as no_match because the resolution attempt
-          -- happened and didn't surface a real binding; the
-          -- exception text rides in error.cause for debugging.
-          Env.mkNoMatch (notInScopePayload safe (Just (T.pack (show se))))
-        Right Nothing ->
-          -- Pure 'name not found' case, no exception involved.
-          Env.mkNoMatch (notInScopePayload safe Nothing)
-        Right (Just (pinfo, ctorPairs, methodPairs)) ->
-          Env.mkOk (successPayload pinfo ctorPairs methodPairs)
 
 -- | Discriminate the FromJSON failure shape — same heuristic as
 -- the other Phase-B migrations.

@@ -1,15 +1,13 @@
--- | @ghc_complete@ — Phase-2 tool (GHC-API migrated).
+-- | @ghc_inspect(action=complete)@ — pure query + payload layer.
 --
 -- Returns in-scope identifiers that start with the given prefix.
--- Pre-migration this wrapped @:complete repl "prefix"@ and parsed
--- its framed count+list output; post-migration it queries
--- 'getNamesInScope' directly and filters in-process.
---
--- Boundary safety: prefix still routes through 'sanitizeExpression'
--- so the newline/sentinel/empty/too-large contract is identical.
+-- The session-bound legacy handler died with the ApiSession backend
+-- (W6.8); 'HaskellFlows.Tool.IdeBacked' applies 'sanitizeExpression'
+-- and runs 'queryCompletions' / 'queryQualifiedFallback' inside its
+-- ghcide interactive context, shaping the reply with
+-- 'renderCompletions'.
 module HaskellFlows.Tool.Complete
-  ( handle
-  , CompleteArgs (..)
+  ( CompleteArgs (..)
   , renderCompletions
     -- * W6 — Ghc queries (shared with IdeBacked)
   , queryCompletions
@@ -19,9 +17,7 @@ module HaskellFlows.Tool.Complete
   , splitQualifiedPrefix
   ) where
 
-import Control.Exception (SomeException, try)
 import Data.Aeson
-import Data.Aeson.Types (parseEither)
 import Data.List (isPrefixOf, nub, sort)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -38,14 +34,8 @@ import GHC
 import GHC.Types.Name (nameModule_maybe, nameOccName)
 import GHC.Types.Name.Occurrence (occNameString)
 
-import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.PermissiveJSON (IntField (unIntField))
-import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
-import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
-import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
-import HaskellFlows.Tool.Env (ToolEnv (..))
 
 
 data CompleteArgs = CompleteArgs
@@ -68,49 +58,6 @@ clampLimit n
   | n <= 0    = 1
   | n > 200   = 200
   | otherwise = n
-
-handle :: ToolEnv -> Value -> IO ToolResponse
-handle env rawArgs = do
-  ghcSess <- teSession env
-  runHandle ghcSess rawArgs
-
-runHandle :: GhcSession -> Value -> IO ToolResponse
-runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
-  Left parseError ->
-    pure (Env.mkFailed
-      ((Env.mkErrorEnvelope (parseErrorKind parseError)
-          (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) }))
-  Right (CompleteArgs prefix limit) ->
-    case sanitizeExpression prefix of
-      Left e ->
-        pure (Env.mkRefused (Env.sanitizeRejection "prefix" e))
-      Right safe -> do
-        eRes <- try (withGhcSession ghcSess (queryCompletions safe))
-        case eRes of
-          Left (se :: SomeException) ->
-            pure $ Env.mkFailed
-                ((Env.mkErrorEnvelope Env.InternalError
-                    (T.pack ("GHC API error: " <> show se)))
-                      { Env.eeCause = Just (T.pack (show se)) })
-          Right cands
-            -- #252: if the in-scope path produced no matches AND the
-            -- prefix is qualified (e.g. "Data.Map.lookup"), the module
-            -- almost certainly isn't currently imported. Fall back to
-            -- 'lookupModule' + 'modInfoExports' so we can answer from
-            -- the loaded module graph / package environment without
-            -- forcing the caller to `import` the module first.
-            | null cands
-            , Just (qual, npfx) <- splitQualifiedPrefix safe -> do
-                eFbk <- try (withGhcSession ghcSess
-                               (queryQualifiedFallback qual npfx))
-                          :: IO (Either SomeException [Text])
-                let fallbackCands = case eFbk of
-                      Right xs -> xs
-                      Left _   -> []   -- module unknown → empty list
-                pure $ renderCompletions prefix limit fallbackCands
-            | otherwise ->
-                pure $ renderCompletions prefix limit cands
 
 -- | Discriminate the FromJSON failure shape — a missing required
 -- field maps to 'MissingArg'; everything else falls back to

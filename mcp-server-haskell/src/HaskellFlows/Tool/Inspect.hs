@@ -10,8 +10,7 @@ module HaskellFlows.Tool.Inspect
   ) where
 
 import Data.Aeson
-import qualified Data.Aeson.KeyMap as KeyMap
-import Data.Aeson.Types (Parser, parseEither)
+import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -20,13 +19,7 @@ import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
 import HaskellFlows.Mcp.Protocol
 import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
-import qualified HaskellFlows.Tool.Browse as Browse
-import qualified HaskellFlows.Tool.Complete as Complete
-import HaskellFlows.Tool.Env (ToolEnv (..))
-import qualified HaskellFlows.Tool.Goto as Goto
-import qualified HaskellFlows.Tool.Hole as Hole
-import qualified HaskellFlows.Tool.Info as Info
-import qualified HaskellFlows.Tool.Type as Type
+import HaskellFlows.Tool.Env (ToolEnv)
 
 descriptor :: ToolDescriptor
 descriptor =
@@ -66,18 +59,35 @@ descriptor =
     }
 
 handle :: ToolEnv -> Value -> IO ToolResponse
-handle env rawArgs = case parseEither (Act.parsePayloadAction Act.inspectSpec) rawArgs of
-  Left err     -> pure (refusal err)
-  Right action -> do
-    let inner = Act.stripActionField rawArgs
-    case action of
-      Act.InspectType     -> Env.withResultAction "type" <$> Type.handle env inner
-      Act.InspectHole     -> Env.withResultAction "hole" <$> Hole.handle env inner
-      Act.InspectInfo     -> Env.withResultAction "info" <$> Info.handle env inner
-      Act.InspectBrowse   -> Env.withResultAction "browse" <$> Browse.handle env inner
-      Act.InspectComplete -> Env.withResultAction "complete" <$> Complete.handle env inner
-      Act.InspectGoto     -> Env.withResultAction "goto" <$> Goto.handle env inner
+handle _ rawArgs = case parseEither (Act.parsePayloadAction Act.inspectSpec) rawArgs of
+  Left err -> pure (refusal err)
+  -- Every inspect action executes in IdeBacked.handleInspect* via
+  -- Server routeIde (the only backend since the F1 strangler
+  -- completed). The arms are unreachable backstops keeping the
+  -- action table exhaustive — a live arrival means dispatch broke.
+  Right action -> dispatchRegressionBackstop (actionName action)
   where
+    actionName = \case
+      Act.InspectType     -> "type"
+      Act.InspectHole     -> "hole"
+      Act.InspectInfo     -> "info"
+      Act.InspectBrowse   -> "browse"
+      Act.InspectComplete -> "complete"
+      Act.InspectGoto     -> "goto"
+
     refusal :: String -> Env.ToolResponse
     refusal msg =
       Env.mkRefused (Env.mkErrorEnvelope Env.Validation (T.pack msg))
+
+-- | Unreachable-response for the six routeIde-served actions.
+dispatchRegressionBackstop :: Text -> IO ToolResponse
+dispatchRegressionBackstop act =
+  pure
+    ( Env.mkFailed
+        ( Env.mkErrorEnvelope
+            Env.InternalError
+            ( "ghc_inspect(action=" <> act <> ") is served by the in-process "
+                <> "ghcide route; reaching this handler is a dispatch regression"
+            )
+        )
+    )

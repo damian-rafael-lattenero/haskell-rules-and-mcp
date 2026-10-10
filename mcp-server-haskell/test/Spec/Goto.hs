@@ -1,14 +1,13 @@
--- | Unit tests for the @ghc_goto@ tool — location resolution (#87/#117),
--- InFile/InModule payload shapes, compiled-module remediation (#214),
--- qualifiedPreloadPayload (#224), and the newline injection guard.
+-- | Unit tests for @ghc_inspect(action=goto)@ payload shaping —
+-- InFile/InModule payload shapes (#117), compiled-module remediation
+-- (#214), qualifiedPreloadPayload (#224).
 --
--- Extracted from the Spec.hs monolith (#271) via the function-export shape:
--- the driver keeps the registrations and imports these functions.
+-- The session-bound handler died with the ApiSession backend (W6.8);
+-- the resolution behavior it used to pin is now covered end-to-end by
+-- the e2e suite against the ghcide route. What remains here pins the
+-- pure payload layer shared with 'HaskellFlows.Tool.IdeBacked'.
 module Spec.Goto
-  ( testGotoLocalNameOk
-  , testGotoUnknownNameNoMatch
-  , testGotoRefusesNewline
-  , testGotoLibraryNameNoMatch
+  ( testGotoLibraryNameNoMatch
   , testGotoFileHasLocation
   , testGotoCompiledModuleRemediation
   , testGotoQualifiedPreloadPayload
@@ -17,87 +16,9 @@ module Spec.Goto
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as AKey
 import qualified Data.Aeson.KeyMap as AKM
-import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
-import System.FilePath ((</>))
 
-import HaskellFlows.Ghc.ApiSession (killGhcSession, startGhcSession)
-import qualified HaskellFlows.Mcp.Envelope as Env
 import qualified HaskellFlows.Tool.Goto as GotoTool
-import HaskellFlows.Types (mkProjectDir)
-import Spec.ToolEnvFixture (sessionEnv)
-
--- ---------------------------------------------------------------------------
--- Phase B helper
--- ---------------------------------------------------------------------------
-
--- | Stage a tmpdir project with a 'Foo' module exporting 'foo' and drive
--- 'GotoTool.handle' with the given args.
-runGoto :: A.Value -> IO (Either String Env.ToolResponse)
-runGoto args = do
-  tmp <- getTemporaryDirectory
-  let dir = tmp </> "haskell-flows-goto-test"
-  removePathForcibly dir
-  createDirectoryIfMissing True (dir </> "src")
-  TIO.writeFile (dir </> "src" </> "Foo.hs")
-    (T.pack "module Foo where\nfoo :: Int\nfoo = 1\n")
-  result <- case mkProjectDir dir of
-    Left _   -> pure (Left "could not build ProjectDir")
-    Right pd -> do
-      sess <- startGhcSession pd
-      tr   <- GotoTool.handle (sessionEnv sess) args
-      killGhcSession sess
-      pure (Right tr)
-  removePathForcibly dir
-  pure result
-
--- ---------------------------------------------------------------------------
--- GHC-session goto tests
--- ---------------------------------------------------------------------------
-
--- | 'ghc_goto' on a project-defined name resolves to a file
--- location → status='ok' with result.kind='file' + result.file +
--- result.line + result.column.
-testGotoLocalNameOk :: IO Bool
-testGotoLocalNameOk = do
-  decoded <- runGoto (A.object [ "name" A..= ("foo" :: Text) ])
-  pure $ case decoded of
-    Right env
-      | Env.reStatus env == Env.StatusOk
-      , Just (A.Object payload) <- Env.reResult env ->
-          AKM.lookup (AKey.fromText "name") payload == Just (A.String "foo")
-            && (AKM.lookup (AKey.fromText "kind") payload == Just (A.String "file")
-                  || AKM.lookup (AKey.fromText "kind") payload == Just (A.String "module"))
-    _ -> False
-
--- | 'ghc_goto' on a name that's not in scope → status='no_match'
--- with the searched name echoed inside result.
-testGotoUnknownNameNoMatch :: IO Bool
-testGotoUnknownNameNoMatch = do
-  decoded <- runGoto
-    (A.object [ "name" A..= ("definitelyNotARealName123" :: Text) ])
-  pure $ case decoded of
-    Right env
-      | Env.reStatus env == Env.StatusNoMatch
-      , Just (A.Object payload) <- Env.reResult env ->
-          AKM.lookup (AKey.fromText "name") payload
-            == Just (A.String "definitelyNotARealName123")
-            && AKM.member (AKey.fromText "remediation") payload
-    _ -> False
-
--- | A newline-laden name → status='refused' with kind='newline_injection'.
-testGotoRefusesNewline :: IO Bool
-testGotoRefusesNewline = do
-  decoded <- runGoto (A.object [ "name" A..= ("foo\n:quit" :: Text) ])
-  pure $ case decoded of
-    Right env
-      | Env.reStatus env == Env.StatusRefused
-      , Just err <- Env.reError env ->
-          Env.eeKind err == Env.NewlineInjection
-            && Env.eeField err == Just "name"
-    _ -> False
 
 -- ---------------------------------------------------------------------------
 -- Pure locationPayload tests (#117 / #214 / #224)

@@ -1,15 +1,17 @@
--- | @ghc_goto@ — Phase-2 tool (GHC-API migrated).
+-- | @ghc_inspect(action=goto)@ — pure query + payload layer.
 --
--- Returns the source location where a name is defined. Pre-migration
--- parsed "Defined at" / "Defined in" markers from @:info@ output;
--- post-migration queries the 'Name''s 'SrcSpan' directly.
+-- Returns the source location where a name is defined. The
+-- session-bound legacy handler died with the ApiSession backend
+-- (W6.8); 'HaskellFlows.Tool.IdeBacked' applies 'sanitizeExpression',
+-- runs 'queryLocation' (with the #224 unqualified-suffix retry)
+-- inside its ghcide interactive context and shapes the reply with
+-- 'locationPayload' / 'notInScopePayload'.
 --
 -- Richer jump-to-definition (cross-module re-exports, macro-generated
 -- names) still belongs to HLS — a future phase will wrap an
 -- @ghc_hls@ tool once that lands.
 module HaskellFlows.Tool.Goto
-  ( handle
-  , GotoArgs (..)
+  ( GotoArgs (..)
   , parseDefinedAt
   , Location (..)
     -- * W6 — Ghc query + payload shaping (shared with IdeBacked)
@@ -22,9 +24,7 @@ module HaskellFlows.Tool.Goto
   , qualifiedPreloadPayload
   ) where
 
-import Control.Exception (SomeException, try)
 import Data.Aeson
-import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Text.Read (readMaybe)
@@ -47,13 +47,7 @@ import GHC.Types.SrcLoc
   )
 import GHC.Utils.Outputable (showPprUnsafe)
 
-import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Ghc.ApiSession (GhcSession, withGhcSession)
-import HaskellFlows.Ghc.Sanitize (sanitizeExpression)
-import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
-import HaskellFlows.Tool.Env (ToolEnv (..))
 
 
 newtype GotoArgs = GotoArgs
@@ -72,54 +66,6 @@ data Location
   = InFile !Text !Int !Int
   | InModule !Text
   deriving stock (Eq, Show)
-
-handle :: ToolEnv -> Value -> IO ToolResponse
-handle env rawArgs = do
-  ghcSess <- teSession env
-  runHandle ghcSess rawArgs
-
-runHandle :: GhcSession -> Value -> IO ToolResponse
-runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
-  Left parseError ->
-    pure (Env.mkFailed
-      ((Env.mkErrorEnvelope (parseErrorKind parseError)
-          (T.pack ("Invalid arguments: " <> parseError)))
-            { Env.eeCause = Just (T.pack parseError) }))
-  Right (GotoArgs nm) -> case sanitizeExpression nm of
-    Left e ->
-      pure (Env.mkRefused (Env.sanitizeRejection "name" e))
-    Right safe -> do
-      eRes <- try (withGhcSession ghcSess (queryLocation safe))
-      case eRes of
-        Left (se :: SomeException) ->
-          pure $ Env.mkFailed
-            ((Env.mkErrorEnvelope Env.InternalError
-                (T.pack ("GHC API error: " <> show se)))
-                  { Env.eeCause = Just (T.pack (show se)) })
-        Right Nothing -> do
-          -- #224: before emitting the generic remediation, check if the
-          -- name is qualified (contains '.') and try the unqualified
-          -- suffix. If that matches a session preload, give a targeted hint
-          -- rather than "run ghc_load".
-          let unqual = T.takeWhileEnd (/= '.') safe
-          unqualRes <-
-            if T.length unqual < T.length safe && not (T.null unqual)
-              then try (withGhcSession ghcSess (queryLocation unqual))
-                     :: IO (Either SomeException (Maybe Location))
-              else pure (Right Nothing)
-          pure $ case unqualRes of
-            Right (Just loc) ->
-              Env.mkNoMatch (qualifiedPreloadPayload safe unqual loc)
-            _ ->
-              Env.mkNoMatch (notInScopePayload safe)
-        -- Issue #117: file locations → ok (can jump); library/unknown
-        -- module locations → no_match (name found but no source to
-        -- jump to). The payload still carries module + has_location so
-        -- the agent knows *why* there is no file path.
-        Right (Just loc) ->
-          pure $ case loc of
-            InFile {} -> Env.mkOk (locationPayload safe loc)
-            InModule {} -> Env.mkNoMatch (locationPayload safe loc)
 
 -- | Discriminate the FromJSON failure shape — same heuristic as
 -- the other Phase-B migrations.

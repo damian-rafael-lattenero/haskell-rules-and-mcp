@@ -122,7 +122,6 @@ library
                       HaskellFlows.Tool.Toolchain
                       HaskellFlows.Tool.ToolchainStatus
                       HaskellFlows.Tool.ToolchainWarmup
-                      HaskellFlows.Tool.Type
                       HaskellFlows.Tool.ValidateCabal
                       HaskellFlows.Tool.Workflow
                       -- Bench modules (#96 Phase A)
@@ -194,7 +193,6 @@ test-suite haskell-flows-mcp-test
                       Spec.ArbitraryUnit
                       Spec.Batch
                       Spec.Bootstrap
-                      Spec.Browse
                       Spec.BudgetGate
                       Spec.Complete
                       Spec.CreateProject
@@ -216,7 +214,6 @@ test-suite haskell-flows-mcp-test
                       Spec.HaddockUnit
                       Spec.HandleApplyRemove
                       Spec.HoleParse
-                      Spec.HoleTool
                       Spec.InfoAdvanced
                       Spec.InfoHoogle
                       Spec.Harness

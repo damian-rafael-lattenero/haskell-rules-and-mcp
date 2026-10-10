@@ -23,7 +23,6 @@ module Spec.InfoAdvanced
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
-import HaskellFlows.Ghc.ApiSession (startGhcSession, killGhcSession)
 import HaskellFlows.Parser.TypeSignature
   ( ParsedSig (..)
   , SigType (..)
@@ -33,10 +32,6 @@ import HaskellFlows.Parser.TypeSignature
   , stripLineComments
   )
 import HaskellFlows.Suggest.Rules (applyRules, Suggestion (..))
-import qualified HaskellFlows.Tool.Info as InfoTool
-import HaskellFlows.Types (mkProjectDir)
-
-import Spec.Helpers (withTempProject)
 
 --------------------------------------------------------------------------------
 -- Issue #109 — .cabal comment stripping in check_project

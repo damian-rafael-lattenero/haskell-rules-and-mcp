@@ -1,12 +1,12 @@
--- | @ghc_browse@ — Phase-2 tool (GHC-API migrated).
+-- | @ghc_inspect(action=browse)@ — pure query + payload layer.
 --
--- Lists names exported by a loaded module and their types. Pre-migration
--- parsed the raw line-per-entry output of @:browse Module@; post-migration
--- queries 'getModuleInfo' + 'modInfoExports' and renders each export's
--- type via 'TyThing'.
+-- Lists names exported by a loaded module and their types. The
+-- session-bound legacy handler died with the ApiSession backend
+-- (W6.8); 'HaskellFlows.Tool.IdeBacked' runs the graph/contextual/
+-- fallback queries inside its ghcide interactive context and shapes
+-- the payload with 'browsePayload'.
 module HaskellFlows.Tool.Browse
-  ( handle
-  , parseBrowseOutput
+  ( parseBrowseOutput
     -- * W6 — Ghc queries + payload shaping (shared with IdeBacked)
   , BrowseArgs (..)
   , queryBrowseGraph
@@ -18,9 +18,7 @@ module HaskellFlows.Tool.Browse
   , parseErrorKind
   ) where
 
-import Control.Exception (SomeException, try)
 import Data.Aeson
-import Data.Aeson.Types (parseEither)
 import Data.List (isPrefixOf, nub, sort)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -50,59 +48,15 @@ import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.Var (varType)
 import GHC.Utils.Outputable (showPprUnsafe)
 
-import HaskellFlows.Mcp.Envelope (ToolResponse)
 import qualified HaskellFlows.Mcp.Envelope as Env
-import HaskellFlows.Ghc.ApiSession (GhcSession, gsProject, withGhcSession)
-import HaskellFlows.Mcp.Protocol
-import HaskellFlows.Mcp.ToolName (ToolName (..), toolNameText)
+import HaskellFlows.Mcp.ToolName (ToolName (GhcInspect))
 import qualified HaskellFlows.Mcp.NextStep as NS
-import HaskellFlows.Tool.Env (ToolEnv (..))
-import HaskellFlows.Types (unProjectDir)
 
 
 newtype BrowseArgs = BrowseArgs Text
 
 instance FromJSON BrowseArgs where
   parseJSON = withObject "BrowseArgs" $ \o -> BrowseArgs <$> o .: "module"
-
-handle :: ToolEnv -> Value -> IO ToolResponse
-handle env rawArgs = do
-  ghcSess <- teSession env
-  runHandle ghcSess rawArgs
-
-runHandle :: GhcSession -> Value -> IO ToolResponse
-runHandle ghcSess rawArgs = case parseEither parseJSON rawArgs of
-  Left err ->
-    pure (Env.mkFailed
-      ((Env.mkErrorEnvelope (parseErrorKind err)
-          (T.pack ("Invalid arguments: " <> err)))
-            { Env.eeCause = Just (T.pack err) }))
-  Right (BrowseArgs m) -> do
-    let root = unProjectDir (gsProject ghcSess)
-    -- Primary: look in the compile graph (project-own modules).
-    eRes <- try (withGhcSession ghcSess (queryBrowseGraph root m))
-    case eRes of
-      Left (se :: SomeException) ->
-        pure $ Env.mkFailed
-            ((Env.mkErrorEnvelope Env.InternalError
-                (T.pack ("GHC API error: " <> show se)))
-                  { Env.eeCause = Just (T.pack (show se)) })
-      Right (Just entries) ->
-        pure $ Env.mkOk (browsePayload m entries)
-      Right Nothing -> do
-        -- #168 fallback: try the session's package environment.
-        -- lookupModule throws when the module is completely unknown,
-        -- which we catch at the IO level via try.  If it succeeds,
-        -- getModuleInfo gives us the exports just like the graph path.
-        eFallback <- try (withGhcSession ghcSess (queryBrowseFallback m))
-                       :: IO (Either SomeException (Maybe [Text]))
-        pure $ case eFallback of
-          Right (Just entries) ->
-            Env.mkOk (browsePayload m entries)
-          _ ->
-            -- Issue #72 + #90: module not found anywhere — status='no_match'.
-            Env.withNextStep moduleNotInGraphNextStep
-              (Env.mkNoMatch (moduleNotInGraphPayload m))
 
 -- | Discriminate the FromJSON failure shape — same heuristic as
 -- 'HaskellFlows.Tool.Workflow.parseErrorKind'. A missing required
