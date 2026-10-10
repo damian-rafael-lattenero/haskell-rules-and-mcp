@@ -241,7 +241,7 @@ testAddModulesTestSuiteStanzaTargeting =
   let Right tgt  = AddModules.resolveStanzaTarget (Just "test-suite")
       scaffold   = CreateProject.cabalFile "ux-demo" "UxDemo"
   in case AddModules.addModulesToBody tgt scaffold ["Gen"] of
-       Left _err -> pure (False)
+       Left _err -> pure False
        Right (newBody, added) ->
          let stripped = map T.strip (T.lines newBody)
              (beforeTS, fromTS) =

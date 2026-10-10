@@ -25,6 +25,11 @@ module HaskellFlows.Tool.ToolchainStatus
     -- by 'HaskellFlows.Tool.Workflow' to surface a session-start nudge
     -- without re-doing the per-binary version probe.
   , optionalBinaryNames
+    -- * Probe surface, re-used by the @--doctor@ CLI flag
+    -- ('HaskellFlows.Mcp.Doctor') so the binary's health check can
+    -- never drift from what the live tool reports.
+  , probeTargets
+  , probeOne
     -- * Exposed for unit tests — pure inventory / response shaping
   , Entry (..)
   , renderResult
@@ -190,11 +195,15 @@ missingOptionalWarning e = Env.Warning
       ])
   }
 
--- | Closed mapping: optional-binary name → copy-pasteable install
--- command.  Hardcoded by design — the canonical install path for each
--- binary is well-known and stable, and a closed lookup means agents
--- never see a wrong-package or curl|sh suggestion injected from the
+-- | Closed mapping: binary name → copy-pasteable install command.
+-- Hardcoded by design — the canonical install path for each binary
+-- is well-known and stable, and a closed lookup means agents never
+-- see a wrong-package or curl|sh suggestion injected from the
 -- environment.
+--
+-- Gate binaries (ghc/cabal/hlint) are included since @--doctor@
+-- ('HaskellFlows.Mcp.Doctor') renders one-line remediation for
+-- missing hard requirements too.
 --
 -- Both 'hls' and 'haskell-language-server' route to the same
 -- @ghcup install hls --set@ because that is the only supported HLS
@@ -203,6 +212,9 @@ missingOptionalWarning e = Env.Warning
 -- not recommended.
 installHintFor :: Text -> Text
 installHintFor name = case name of
+  "ghc"                     -> "ghcup install ghc --set"
+  "cabal"                   -> "ghcup install cabal --set"
+  "hlint"                   -> "cabal install hlint"
   "fourmolu"                -> "cabal install fourmolu"
   "ormolu"                  -> "cabal install ormolu"
   "hoogle"                  -> "cabal install hoogle && hoogle generate"

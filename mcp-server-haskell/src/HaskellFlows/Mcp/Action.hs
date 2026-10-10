@@ -82,7 +82,7 @@ parseActionText :: ActionSpec a -> Text -> Maybe a
 parseActionText spec t =
   case [ a | a <- asEnum spec, asText spec a == t ] of
     (a : _) -> Just a
-    []      -> maybe Nothing ($ t) (asOther spec)
+    []      -> ($ t) =<< asOther spec
 
 -- | Parse the @action@ field of a tool-argument object. Missing
 -- field resolves to the tool default; a non-string field or an

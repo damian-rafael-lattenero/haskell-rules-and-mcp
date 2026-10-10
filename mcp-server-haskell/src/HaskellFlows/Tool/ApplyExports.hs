@@ -51,8 +51,7 @@ instance FromJSON ApplyExportsArgs where
 handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   pd <- teProjectDir env
-  r  <- runHandle pd rawArgs
-  pure r
+  runHandle pd rawArgs
 
 runHandle :: ProjectDir -> Value -> IO ToolResponse
 runHandle pd rawArgs = case parseEither parseJSON rawArgs of

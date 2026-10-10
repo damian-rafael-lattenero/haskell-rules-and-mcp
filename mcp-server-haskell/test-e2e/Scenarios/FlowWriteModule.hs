@@ -142,7 +142,7 @@ runFlow c projectDir = do
     (statusOk w3 == Just False
       && "snapshot restored" `T.isInfixOf` render w3
       && "triple" `T.isInfixOf` diskAfter
-      && "not an Int" `T.isInfixOf` diskAfter == False
+      && not ("not an Int" `T.isInfixOf` diskAfter)
       && statusOk ev3 == Just True && out42 ev3)
     ("w3: " <> render w3 <> " || disk: " <> T.take 120 diskAfter)
   stepFooter 3 t3
@@ -209,7 +209,7 @@ boolField want key v = case lookupField key v of
   _             -> False
 
 out42 :: Value -> Bool
-out42 v = outHas "42" v
+out42 = outHas "42"
 
 outHas :: Text -> Value -> Bool
 outHas needle v = case lookupField "output" v of

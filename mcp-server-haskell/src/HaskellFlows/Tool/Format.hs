@@ -55,8 +55,7 @@ instance FromJSON FormatArgs where
 handle :: ToolEnv -> Value -> IO ToolResponse
 handle env rawArgs = do
   pd <- teProjectDir env
-  r  <- runHandle (teLimits env) pd rawArgs
-  pure r
+  runHandle (teLimits env) pd rawArgs
 
 runHandle :: Limits -> ProjectDir -> Value -> IO ToolResponse
 runHandle lim pd rawArgs = case parseEither parseJSON rawArgs of

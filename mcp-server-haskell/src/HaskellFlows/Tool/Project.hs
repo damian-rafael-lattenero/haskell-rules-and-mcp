@@ -41,7 +41,6 @@ import qualified Data.Text as T
 
 import qualified HaskellFlows.Data.Scratchpad as Scratchpad
 import HaskellFlows.Data.PropertyStore (Store)
-import Control.Concurrent.MVar (MVar)
 import HaskellFlows.Ghc.IdeSession (IdeSession)
 import qualified HaskellFlows.Tool.IdeBacked as IdeBacked
 import HaskellFlows.Mcp.Envelope (ToolResponse)

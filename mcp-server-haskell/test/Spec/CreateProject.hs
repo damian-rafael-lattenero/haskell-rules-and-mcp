@@ -348,7 +348,7 @@ testCreateRelativePathAnchorsToStartupDir = do
     Right pd -> Just <$>
       CreateProject.handle pd
         (A.object [ "name" A..= ("rel-demo" :: T.Text)
-                  , "path" A..= (T.pack rel)
+                  , "path" A..= T.pack rel
                   , "write" A..= True ])
   setCurrentDirectory before
   ServerStartup.setStartupDir before

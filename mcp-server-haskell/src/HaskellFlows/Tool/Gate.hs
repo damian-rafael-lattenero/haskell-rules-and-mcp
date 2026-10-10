@@ -76,7 +76,6 @@ import HaskellFlows.Ghc.IdeSession (IdeSession)
 import HaskellFlows.Tool.IdeBacked qualified as IdeBacked
 import HaskellFlows.Types (ProjectDir, unProjectDir)
 import HaskellFlows.Tool.Env (ToolEnv (..))
-import HaskellFlows.Types (ProjectDir, unProjectDir)
 
 descriptor :: ToolDescriptor
 descriptor =

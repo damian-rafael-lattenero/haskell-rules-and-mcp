@@ -9,7 +9,12 @@
 --   @--version@ | @-v@   — print the binary version + MCP
 --                            protocol version + a one-line
 --                            build summary, then exit 0.
---   @--help@    | @-h@   — print usage + the recognised flags,
+--   @--doctor@          — probe the toolchain (same probes as
+--                            @ghc_session(action="toolchain")@),
+--                            print a ✓/✗ table with install hints,
+--                            exit 0 if every hard requirement is
+--                            present, 1 otherwise.
+--   @--help@    | @-h@  — print usage + the recognised flags,
 --                            then exit 0.
 --
 -- The flag-parsing layer is deliberately tiny — no
@@ -23,10 +28,11 @@ import Control.Monad (unless, when)
 import Data.List (isPrefixOf)
 import Data.Version (showVersion)
 import System.Environment (getArgs)
-import System.Exit (exitSuccess)
+import System.Exit (ExitCode (..), exitSuccess, exitWith)
 import System.IO (hPutStrLn, stderr)
 
 import Paths_haskell_flows_mcp (version)
+import qualified HaskellFlows.Mcp.Doctor as Doctor
 import qualified HaskellFlows.Mcp.ServerStartup as ServerStartup
 import HaskellFlows.Mcp.Server    (defaultServer)
 import HaskellFlows.Mcp.Transport (runStdioTransport)
@@ -60,11 +66,14 @@ main = do
   when (any isHelpFlag args) $ do
     printUsage
     exitSuccess
+  when (any isDoctorFlag args) $ do
+    code <- Doctor.runDoctor
+    exitWith (if code == 0 then ExitSuccess else ExitFailure 1)
   -- Unknown flags route to stderr but DO NOT abort — keeping the
   -- server resilient to a host that injects a stray --debug-foo
   -- it doesn't recognise. Stdio JSON-RPC starts as long as the
   -- recognised flags didn't fire above.
-  let unknown = filter (\a -> isFlag a && not (isVersionFlag a || isHelpFlag a)) args
+  let unknown = filter (\a -> isFlag a && not (isVersionFlag a || isHelpFlag a || isDoctorFlag a)) args
   unless (null unknown) $
     hPutStrLn stderr ("warning: unrecognised flags ignored: " <> show unknown)
   server <- defaultServer
@@ -79,6 +88,9 @@ isVersionFlag s = s == "--version" || s == "-v"
 isHelpFlag :: String -> Bool
 isHelpFlag s = s == "--help" || s == "-h"
 
+isDoctorFlag :: String -> Bool
+isDoctorFlag s = s == "--doctor"
+
 printUsage :: IO ()
 printUsage = do
   putStrLn "haskell-flows-mcp — MCP server for property-first Haskell development"
@@ -87,6 +99,8 @@ printUsage = do
   putStrLn ""
   putStrLn "Flags:"
   putStrLn "  --version, -v   Print binary + MCP protocol version, exit"
+  putStrLn "  --doctor        Verify the toolchain (hard + optional binaries),"
+  putStrLn "                  print a table with install hints, exit 0/1"
   putStrLn "  --help, -h      Print this usage, exit"
   putStrLn ""
   putStrLn "Default: read JSON-RPC requests from stdin, write responses to stdout."

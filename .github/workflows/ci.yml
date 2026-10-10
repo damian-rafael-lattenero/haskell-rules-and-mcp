@@ -81,18 +81,19 @@ jobs:
       # the project's threshold is warning+ (suggestions from hlint
       # version drift don't block), so severity is filtered here —
       # same semantics the old haskell-actions/hlint-run job had.
+      # Counted with grep -o over the raw JSON (the container has no
+      # python/jq): JSON string escaping guarantees a hint's TEXT can
+      # never contain a literal "severity":"warning" match.
       - name: HLint (blocks on warning and above)
         run: |
           hlint src app test test-e2e --json > /tmp/hlint.json || true
-          python3 - <<'PY'
-          import json
-          hints = json.load(open("/tmp/hlint.json"))
-          blocking = [h for h in hints if h.get("severity") in ("warning", "error")]
-          for h in blocking:
-              print(f"{h['severity'].upper()}: {h['outputFile']}:{h['startLine']} {h['hint']}")
-          print(f"hlint: {len(hints)} hints total, {len(blocking)} blocking (warning+)")
-          raise SystemExit(1 if blocking else 0)
-          PY
+          blocking=$(grep -o '"severity":"\(Warning\|Error\)"' /tmp/hlint.json | wc -l | tr -d ' ')
+          echo "hlint: ${blocking} blocking hints (warning and above)"
+          if [ "${blocking}" != "0" ]; then
+            echo "── human-readable hints ──"
+            hlint src app test test-e2e || true
+            exit 1
+          fi
 
       - name: Configure + freeze
         run: |

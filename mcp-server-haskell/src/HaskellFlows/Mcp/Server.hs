@@ -235,9 +235,7 @@ serverForRaw raw = do
 closeServer :: Server -> IO ()
 closeServer srv = do
   m <- swapMVar (srvIdeSession srv) Nothing
-  case m of
-    Just s -> shutdownIdeSession s
-    Nothing -> pure ()
+  for_ m shutdownIdeSession
 
 -- | Dispatch a single parsed request. 'Nothing' means the input was a
 -- notification (e.g. @initialized@) and the caller should not write a

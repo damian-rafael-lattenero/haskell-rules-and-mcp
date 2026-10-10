@@ -59,6 +59,7 @@ library
                       HaskellFlows.Mcp.Schema
                       HaskellFlows.Mcp.SelfProject
                       HaskellFlows.Mcp.Staleness
+                      HaskellFlows.Mcp.Doctor
                       HaskellFlows.Mcp.WorkflowState
                       HaskellFlows.Mcp.Transport
                       HaskellFlows.Mcp.Server
@@ -248,6 +249,7 @@ test-suite haskell-flows-mcp-test
                       Spec.SuggestSig
                       Spec.SwitchProjectUnit
                       Spec.TaxonomyUnit
+                      Spec.Doctor
                       Spec.Toolchain
                       Spec.TraversalGuards
                       Spec.ValidateCabal

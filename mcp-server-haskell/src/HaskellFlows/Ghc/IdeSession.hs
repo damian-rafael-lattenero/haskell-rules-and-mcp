@@ -49,13 +49,13 @@ module HaskellFlows.Ghc.IdeSession
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, newMVar, putMVar, takeMVar, withMVar)
 import Control.Concurrent.STM (atomically)
-import Control.Exception (SomeException, evaluate, try)
+import Control.Exception (SomeException, displayException, evaluate, try)
 import Control.Monad (forever, forM, void, when, unless)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value, object, (.=))
 import Data.List (find, isSuffixOf, sort, sortOn)
 import Data.Ord (Down (..))
-import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -78,17 +78,16 @@ import Development.IDE (LinkableType (BCOLinkable)
 import Development.IDE.Core.FileStore (setSomethingModified)
 import Development.IDE.Core.OfInterest (FileOfInterestStatus (OnDisk), addFileOfInterest)
 import Development.IDE.Core.Shake
-  ( IdeRule, ShakeExtras (..), VFSModified (VFSUnmodified), getShakeExtras, shakeShut )
+  ( IdeRule, ShakeExtras (..), VFSModified (VFSUnmodified), getShakeExtras, shakeShut
+  , IsIdeGlobal, addIdeGlobal, getIdeGlobalAction, getIdeGlobalState
+  , IdeState, getDiagnostics )
 import qualified Data.Vector as V
 import qualified StmContainers.Map as STM
 import Development.IDE.Types.Shake (Key, ValueWithDiagnostics (..), toKey)
 
-import Development.IDE.Core.Shake
-  ( IsIdeGlobal, addIdeGlobal, getIdeGlobalAction, getIdeGlobalState )
 import qualified Development.IDE.Core.Rules as NS (needsCompilationRule)
 import Data.Hashable (Hashable (hashWithSalt))
-import Development.IDE.Graph (Action, RuleResult)
-import Development.IDE.Graph (alwaysRerun)
+import Development.IDE.Graph (Action, RuleResult, alwaysRerun)
 import Development.IDE.Core.RuleTypes
   ( pattern GetModificationTime
   , GetLinkable (GetLinkable)
@@ -101,13 +100,12 @@ import Development.IDE.Core.RuleTypes
   , GhcSessionDeps (GhcSessionDeps)
   , LinkableResult (linkableHomeMod)
   , ModSummaryResult (msrModSummary)
-  , TypeCheck (TypeCheck)
+  , GhcSessionDeps (..)
+  , TypeCheck (..)
   , tmrTypechecked
   )
 import Development.IDE.Import.DependencyInformation
   ( transitiveDeps, transitiveModuleDeps )
-import Development.IDE.Core.RuleTypes (GhcSessionDeps (..), TypeCheck (..))
-import Development.IDE.Core.Shake (IdeState, getDiagnostics)
 import Development.IDE.GHC.Util (evalGhcEnv, modifyDynFlags, printOutputable)
 
 
@@ -116,10 +114,8 @@ import Data.Default (Default (def))
 import Development.IDE.Main (Arguments (..), Command (..), IdeCommand (..), Log (LogShake), defaultArguments, defaultMain)
 import Development.IDE.Plugin (Plugin (..))
 import Ide.Plugin.Config (Config)
-import Control.Exception (displayException)
 import System.IO (hPutStrLn, stderr)
 import Development.IDE.Types.Diagnostics (DiagnosticSeverity (..), FileDiagnostic (..), _message, _range, _severity)
-import Development.IDE.Types.HscEnvEq (HscEnvEq (hscEnv))
 import Development.IDE.Types.HscEnvEq (HscEnvEq (hscEnv))
 import Development.IDE.Types.Location (Position (..), Range (..), fromNormalizedFilePath, toNormalizedFilePath')
 import GHC
@@ -287,10 +283,7 @@ ideModuleNameOf s fp =
   withMVar (isEvalLock s) $ \_ -> do
     absF <- makeAbsolute fp
     runAction "mcp-ide-modname" (isState s)
-      (fmap moduleNameString
-         . fmap moduleName
-         . fmap ms_mod
-         . fmap msrModSummary
+      (fmap (moduleNameString . moduleName . ms_mod . msrModSummary)
          <$> use GetModSummary (toNormalizedFilePath' absF))
 
 -- | didSave-equivalent for headless runs: the client edits files on
@@ -429,8 +422,7 @@ ideProjectDiagnostics s fs =
       cabalKeys <- cabalMTimeKeys (isRoot s)
       setSomethingModified VFSUnmodified (isState s) "mcp-external-edit" $
         pure (map (toKey GetModificationTime) nfps <> cabalKeys)
-    r <- mapM (\fp -> (,) fp <$> ideDiagnosticsFor' s fp) fs
-    pure r
+    mapM (\fp -> (,) fp <$> ideDiagnosticsFor' s fp) fs
 
 --------------------------------------------------------------------------------
 -- Typed classification of interactive-eval failures (EvalError)
@@ -590,8 +582,7 @@ ideTypeOfExprIn s ea expr = do
       Left (classifyEvalError ("EXC: " <> T.pack (show e)))
     joinTimeout (Just (Right v)) = Right v
     tryRun mn hsc = do
-      r <- try (evalGhcEnv hsc (go mn)) :: IO (Either SomeException Text)
-      pure r
+      try (evalGhcEnv hsc (go mn)) :: IO (Either SomeException Text)
     go mn = do
       setContext (IIModule (mkModuleName mn) : mkContext (eaImports ea))
       ty <- exprType TM_Inst (T.unpack expr)
@@ -610,7 +601,7 @@ sessionDepsFor s fp = do
 anchorModuleIn :: IdeSession -> IO FilePath
 anchorModuleIn s = do
   found <- forM [root </> "src", root </> "test"] firstHsUnder
-  pure (fromMaybe root (listToMaybe (mapMaybe id found)))
+  pure (fromMaybe root (listToMaybe (catMaybes found)))
   where
     root = isRoot s
     firstHsUnder dir = do
@@ -870,5 +861,4 @@ exposePackages' pkgs = do
 shutdownIdeSession :: IdeSession -> IO ()
 shutdownIdeSession s = do
   r <- try (timeout 10_000_000 (shakeShut (isState s))) :: IO (Either SomeException (Maybe ()))
-  case r of
-    _ -> pure ()
+  pure ()

@@ -36,12 +36,10 @@ import Control.Concurrent.MVar (MVar, isEmptyMVar, modifyMVar)
 import Control.Exception (SomeException, try)
 import Control.Applicative ((<|>))
 import Control.Monad (filterM, void, when)
-import Data.Aeson (Value, fromJSON, object, withObject, (.=), (.:))
-import Data.Aeson (FromJSON (parseJSON))
+import Data.Aeson (FromJSON (parseJSON), Value, fromJSON, object, withObject, (.:), (.=))
 import qualified Data.ByteString as BS
 import qualified Data.Aeson
-import Data.List (isPrefixOf)
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Key (Key)
 import Data.Aeson.Types (parseEither)
@@ -49,12 +47,10 @@ import Data.Char (isAlphaNum, isUpper)
 import Data.Function ((&))
 import Data.IORef (IORef, readIORef)
 import Data.List (foldl', isPrefixOf, isSuffixOf, nubBy, sort)
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
 import System.Directory
   ( canonicalizePath
   , createDirectoryIfMissing
@@ -67,8 +63,7 @@ import System.FilePath (normalise, takeDirectory, (</>))
 import GHC (Ghc)
 
 import HaskellFlows.Config (defaultLimits, determinismMaxRuns)
-import HaskellFlows.Data.PropertyStore (Store, loadAll, saveCases)
-import HaskellFlows.Data.PropertyStore (StoredProperty (..))
+import HaskellFlows.Data.PropertyStore (Store, StoredProperty (..), loadAll, saveCases)
 import HaskellFlows.Ghc.IdeSession
   ( EvalArgs (..)
   , IdeSession (..)
@@ -233,7 +228,7 @@ routeIde ref pdRef storeRef scratchRef tn args = case tn of
     | actionIs "run" args -> Just (withIdeSession ref pdRef (handlePropertyRun pdRef storeRef))
     | otherwise -> Nothing
   GhcSession
-    | actionIs "imports" args -> Just (withIdeSession ref pdRef (handleSessionImports))
+    | actionIs "imports" args -> Just (withIdeSession ref pdRef handleSessionImports)
     | otherwise -> Nothing
   GhcSuggest -> Just (withIdeSession ref pdRef (handleSuggest args))
   GhcEdit
@@ -302,13 +297,13 @@ moduleOfPath fp =
 -- a cold GhcSessionDeps rule can return Nothing until the component
 -- has been built at least once by any rule (F3 finding).
 warmAnchors :: IdeSession -> [FilePath] -> IO ()
-warmAnchors s = mapM_ (\a -> void (ideDiagnosticsFor s a))
+warmAnchors s = mapM_ (ideDiagnosticsFor s)
 
 -- | test/ files first — their sessions carry the test-suite deps.
 sortedForProperty :: [FilePath] -> [FilePath]
 sortedForProperty as =
   [ a | a <- as, "/test/" `T.isInfixOf` T.pack a ]
-    <> [ a | a <- as, "/test/" `T.isInfixOf` T.pack a == False ]
+    <> [ a | a <- as, not ("/test/" `T.isInfixOf` T.pack a) ]
 
 -- | Retry policy for the anchor chain — a pure predicate over the
 -- classified error (the AnchorPlan extraction point; classification
@@ -372,7 +367,7 @@ anchorFailureNote errs =
 aggregateEvalMessage :: Text -> [EvalError] -> Text
 aggregateEvalMessage what errs =
   "no project module provides the names this " <> what <> " needs"
-    <> maybe "" (\t -> " — anchor failure: " <> t) (anchorFailureNote errs)
+    <> maybe "" (" — anchor failure: " <>) (anchorFailureNote errs)
 
 -- | All @.hs@ files under @dir@, RECURSING into subdirectories —
 -- module trees like @src/Expr/Pretty.hs@ live below the source
@@ -711,7 +706,7 @@ handleCheckLoad pdRef raw s = do
     Left _ -> do
       pd <- readIORef pdRef
       mCabal <- findCabalIn (unProjectDir pd)
-      cabal <- maybe (pure "") (TIO.readFile) mCabal
+      cabal <- maybe (pure "") TIO.readFile mCabal
       let fromCabal = case projectModuleFilesFromCabal cabal of
             (m : _) -> Just m
             []      -> Nothing
@@ -806,9 +801,7 @@ checkProjectRows pd raw s absMods = do
         in ( nm
            , if not (null cradle) && null errs
                then "not_found" :: Text
-               else if not (null errs) then "failed"
-               else if not (null warns) && warnBlock then "failed"
-               else "ok"
+               else (if not (null errs) || (not (null warns) && warnBlock) then "failed" else "ok")
            , detail )
       outcomes = map outcomeOf rows
       notFound = [nm | (nm, "not_found", _) <- outcomes]
@@ -1551,7 +1544,7 @@ handleMoveEdit pdRef raw s = do
   let q = Move.MoveQueries
         { Move.mqVerifyClean = \written -> do
             diagss <- mapM (ghcDiags s) written
-            pure (Right (filter ((== SevError) . geSeverity) (concat diagss)))
+            pure (Right (concatMap (filter ((== SevError) . geSeverity)) diagss))
         }
   Move.runHandle q pd raw
 
@@ -1662,10 +1655,10 @@ handlePropertyCheck pdRef storeRef raw s = case argField "property" raw of
       Nothing  -> pure Nothing
     let importsFor a =
           [ "Test.QuickCheck", "System.IO.Unsafe" ]
-            <> [ T.pack n
-               | n <- maybe [] pure tmName
-               , anchorArg /= Nothing
-               , a /= pdNow </> fromMaybe "" anchorArg ]
+            <> [T.pack n |
+                  Data.Maybe.isJust anchorArg,
+                  a /= pdNow </> fromMaybe "" anchorArg,
+                  n <- maybe [] pure tmName]
     let runChain =
           firstRight scopeRetry
             [ fmap (fmap (a,)) (ideEvalExprIn s (EvalArgs a (importsFor a) True) expr)

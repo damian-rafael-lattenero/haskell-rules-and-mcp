@@ -915,7 +915,7 @@ payloadHasErrors v = case envField "errors" v of
 -- @warnings@ array (non-string entries are ignored).
 payloadWarningTexts :: Value -> [Text]
 payloadWarningTexts v = case envField "warnings" v of
-  Just (Array a) -> concatMap warnText (toList a)
+  Just (Array a) -> concatMap warnText a
   _              -> []
   where
     warnText (String s)        = [s]

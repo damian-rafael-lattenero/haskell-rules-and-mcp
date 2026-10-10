@@ -35,6 +35,7 @@ import Control.Concurrent.QSem (newQSem, signalQSem, waitQSem)
 import Control.Concurrent.STM (atomically, modifyTVar', newTVarIO, readTVar, retry)
 import Control.Exception (SomeException, finally, try)
 import Control.Monad (unless, void, when)
+import qualified Data.Foldable
 import System.Posix.IO (dup, fdToHandle, stdOutput)
 import Data.Aeson (Value (Null), eitherDecodeStrict', encode)
 import qualified Data.ByteString.Char8 as BS
@@ -144,22 +145,18 @@ runStdioTransport srv = do
             Left ex ->
               Just (Response rid (Left (internalErr ("handler threw: " <> T.pack (show ex)))))
             Right r -> r
-      won <- deliverOnce gate $ case mresp of
-        Nothing -> pure ()
-        Just resp -> writeResponse out wl resp
+      won <- deliverOnce gate $ Data.Foldable.for_ mresp (writeResponse out wl)
       unless won $
         hPutStrLn stderr "[haskell-flows] late response dropped (watchdog answered first)"
 
     watchdog wl out gate rid = do
       threadDelay budgetMicros
-      won <-
-        deliverOnce gate $ do
+      deliverOnce gate $ do
           hPutStrLn stderr
             ("[haskell-flows] watchdog: no response for this request after "
                <> show (budgetMicros `div` 1_000_000)
                <> "s — delivering timeout; worker may be wedged uninterruptibly")
           writeResponse out wl (Response rid (Left (internalErr "tool call exceeded the outer ceiling (watchdog)")))
-      pure won
 
     writeResponse out wl resp = withMVar wl $ \_ -> do
       BL.hPutStr out (encode resp)

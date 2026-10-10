@@ -23,7 +23,7 @@ import qualified Data.List as List
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Time.Clock.POSIX (getPOSIXTime, posixSecondsToUTCTime)
 import Data.Word (Word64)
 import System.Exit (exitFailure, exitSuccess)
@@ -367,6 +367,12 @@ import Spec.SuggestLaws
 import Spec.SuggestSig
 import Spec.SwitchProjectUnit
 import Spec.TaxonomyUnit
+import Spec.Doctor
+  ( testDoctorInstallHintsClosedMap
+  , testDoctorRenderGroupsHardFirst
+  , testDoctorRenderMarksAndHints
+  , testDoctorVerdictGatesOnly
+  )
 import Spec.Toolchain
   ( testToolchainStatusBackcompatFields
   , testToolchainStatusEnvelopeShape
@@ -703,6 +709,14 @@ runAllTests = do
       , quickTest "prop_envelope_status_total"     prop_envelopeStatusTotal
       , quickTest "prop_envelope_errorkind_total"  prop_envelopeErrorKindTotal
       , quickTest "prop_envelope_warningkind_total" prop_envelopeWarningKindTotal
+      , test "doctor: render marks + inline install hints (W5)"
+                                                   testDoctorRenderMarksAndHints
+      , test "doctor: verdict keys on gates only, not optionals (W5)"
+                                                   testDoctorVerdictGatesOnly
+      , test "doctor: hard requirements render before optional (W5)"
+                                                   testDoctorRenderGroupsHardFirst
+      , test "doctor: install hints cover every probed binary (W5)"
+                                                   testDoctorInstallHintsClosedMap
       , test "Envelope #90 Phase B: ghc_toolchain_status emits envelope shape"
                                                    testToolchainStatusEnvelopeShape
       , test "Envelope #90 Phase B: ghc_toolchain_status preserves tools/blocking_gates"
@@ -844,7 +858,7 @@ runAllTests = do
       , test "ghc_eval enforces inner per-call budget" testEvalInnerTimeoutBudget
       , test "classify: mid-text `No instance for Arbitrary' (EXC-wrapped)"
                                                    testClassifyMissingArbitraryMidText
-      , test "classify: mid-text `No instance for Show (IO ())'" 
+      , test "classify: mid-text `No instance for Show (IO ())'"
                                                    testClassifyShowIoMidText
       , test "classify: EXC-wrapped scope error is ECScope"
                                                    testClassifyScopeWrappedInExc
@@ -1483,8 +1497,7 @@ testClassifyMissingArbitraryMidText :: IO Bool
 testClassifyMissingArbitraryMidText = pure $
   evClass (classifyEvalError excArbitrary) == ECMissingInstance "arbitrary"
   where
-    excArbitrary = T.pack $
-      "EXC: <interactive>:1:35: error: [GHC-39999]\n\
+    excArbitrary = T.pack "EXC: <interactive>:1:35: error: [GHC-39999]\n\
       \    * No instance for `Arbitrary Foo'\n\
       \        arising from a use of `quickCheckWithResult'"
 
@@ -1492,8 +1505,7 @@ testClassifyShowIoMidText :: IO Bool
 testClassifyShowIoMidText = pure $
   evClass (classifyEvalError excShowIo) == ECIoWrapper
   where
-    excShowIo = T.pack $
-      "EXC: <interactive>:1:41: error: [GHC-39999]\n\
+    excShowIo = T.pack "EXC: <interactive>:1:41: error: [GHC-39999]\n\
       \    * No instance for `Show (IO ())'\n\
       \        arising from a use of `print'"
 
@@ -1523,16 +1535,16 @@ testEvalErrorKindMapping = pure $ and
 -- first non-scope survivor; 'aggregateEvalMessage' appends it to the
 -- generic line (which callers pin as a substring) only when it exists.
 testAnchorFailureNote :: IO Bool
-testAnchorFailureNote = pure $ and
-  [ anchorFailureNote [] == Nothing
-  , anchorFailureNote [ EvalError ECScope "not in scope: foo"
-                      , EvalError ECScope "not in scope: bar" ]
-      == Nothing
-  , anchorFailureNote
-      [ EvalError ECScope "not in scope: foo"
-      , EvalError ECBadDependency "BadDependency: GetModSummary" ]
-      == Just "BadDependency: GetModSummary"
-  ]
+testAnchorFailureNote = pure $
+     isNothing (anchorFailureNote [])
+  && isNothing
+       (anchorFailureNote
+          [ EvalError ECScope "not in scope: foo"
+          , EvalError ECScope "not in scope: bar" ])
+  && anchorFailureNote
+       [ EvalError ECScope "not in scope: foo"
+       , EvalError ECBadDependency "BadDependency: GetModSummary" ]
+       == Just "BadDependency: GetModSummary"
 
 testAggregateEvalMessage :: IO Bool
 testAggregateEvalMessage = pure $ and
@@ -1596,10 +1608,10 @@ testResolveWriteModulePath = pure $ and
   , resolveWriteModulePath "test/Spec.hs"       == Just "test/Spec.hs"
   , resolveWriteModulePath "Expr.Syntax"        == Just "src/Expr/Syntax.hs"
   , resolveWriteModulePath "Lib"                == Just "src/Lib.hs"
-  , resolveWriteModulePath "src/foo"            == Nothing
-  , resolveWriteModulePath "expr.syntax"        == Nothing
-  , resolveWriteModulePath "Expr..Syntax"       == Nothing
-  , resolveWriteModulePath ""                   == Nothing
+  , isNothing (resolveWriteModulePath "src/foo")
+  , isNothing (resolveWriteModulePath "expr.syntax")
+  , isNothing (resolveWriteModulePath "Expr..Syntax")
+  , isNothing (resolveWriteModulePath "")
   ]
 
 -- W5.2 — HaskellFlows.Parser.Cabal: the pure .cabal seam extracted
@@ -1661,7 +1673,7 @@ prop_projectModuleFiles_dotpaths =
 prop_splitStanzas_header_order :: Property
 prop_splitStanzas_header_order =
   QC.forAll (QC.listOf arbLine) $ \ls ->
-    map fst (splitStanzas ls) === [ h | Just h <- map stanzaHeaderOf ls ]
+    map fst (splitStanzas ls) === mapMaybe stanzaHeaderOf ls
   where
     arbLine = QC.oneof
       [ pure "library"

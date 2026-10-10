@@ -135,7 +135,7 @@ runFlow c projectDir = do
           "state should be failed"
   c9b <- Assert.liveCheck $ Assert.checkJsonFieldMatches
           "matrix · property fail carries counterexample" rPropFail "counterexample"
-          (\v -> not (T.null (T.strip (render v))))
+          (not . T.null . T.strip . render)
           "counterexample should be non-empty"
 
   rPropDet <- Client.callTool c GhcProperty (object

@@ -541,7 +541,7 @@ withTempProjectDir k = do
     (do createDirectoryIfMissing True dir
         putStrLn ("[e2e] project dir: " <> dir)
         pure dir)
-    (\d -> unless (isJust keep) (removePathForcibly d))
+    (unless (isJust keep) . removePathForcibly)
     k
 
 -- | Process-global counter used to break tempdir-name ties. Each
