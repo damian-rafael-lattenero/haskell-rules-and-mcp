@@ -29,6 +29,7 @@ module HaskellFlows.Tool.CreateProject
     -- * Issue #69 — exported for unit tests
   , cabalFile
   , sourceFile
+  , testFile
     -- * Issue #126 — exported for unit tests
   , FilePlan (..)
   , scaffold
@@ -362,6 +363,11 @@ cabalFile pkg modName = T.unlines
   , "    main-is:          Spec.hs"
   , "    build-depends:    base >= 4.20 && < 5"
   , "                    , " <> pkg
+  -- W1.5: the property-first loop must work with NO extra step on a
+  -- fresh scaffold — ghc_property(action="check") needs QuickCheck in
+  -- the component the anchor belongs to. The scaffold's test suite
+  -- imports it, so -Wunused-packages stays clean too.
+  , "                    , QuickCheck       >= 2.14"
   ]
 
 cabalProject :: Text
@@ -379,18 +385,23 @@ sourceFile modName = T.unlines
 
 testFile :: Text -> Text
 testFile modName = T.unlines
-  [ "-- | Scaffolded test suite. Prints PASS/FAIL per case, exits 1 on"
-  , "-- any failure. Add tests here and extend with QuickCheck / hspec"
-  , "-- as the project grows."
+  [ "-- | Scaffolded test suite: one example check + one QuickCheck"
+  , "-- property (QuickCheck ships in the test-suite stanza, so"
+  , "-- ghc_property works with no extra step). Replace with your own."
   , "module Main where"
   , ""
   , "import " <> modName <> " (greet)"
   , "import System.Exit (exitFailure, exitSuccess)"
+  , "import Test.QuickCheck (quickCheck)"
+  , ""
+  , "prop_greet :: String -> Bool"
+  , "prop_greet s = greet s == \"Hello, \" ++ s ++ \"!\""
   , ""
   , "main :: IO ()"
   , "main = do"
   , "  let ok = greet \"world\" == \"Hello, world!\""
   , "  putStrLn (if ok then \"PASS  greet world\" else \"FAIL  greet world\")"
+  , "  quickCheck prop_greet"
   , "  if ok then exitSuccess else exitFailure"
   ]
 

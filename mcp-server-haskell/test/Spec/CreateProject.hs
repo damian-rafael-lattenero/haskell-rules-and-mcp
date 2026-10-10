@@ -11,6 +11,7 @@ module Spec.CreateProject
   , testCreateValidateLeadingDigit
   , testCreateValidateSymbols
   , testCreateProjectScaffoldGreenCabal
+  , testCreateProjectScaffoldQuickCheck
   , testCreateValidateErrorMsg
   , testCreateValidateAllDigitComponent
   , testCreateValidateVPrefixedOk
@@ -140,6 +141,18 @@ testCreateProjectScaffoldGreenCabal =
           -- The TODO sentinel keeps it obvious to the agent
           -- that the description is placeholder text.
           && T.isInfixOf "TODO:" cabal
+
+-- | W1.5: the property-first loop must work with NO extra step on a
+-- fresh scaffold — ghc_property needs QuickCheck in the component the
+-- anchor belongs to, so the test-suite stanza ships it AND the
+-- scaffolded Spec.hs imports it (keeping -Wunused-packages clean).
+testCreateProjectScaffoldQuickCheck :: IO Bool
+testCreateProjectScaffoldQuickCheck =
+  let cabal = CreateProject.cabalFile "demo" "Demo"
+      spec  = CreateProject.testFile "Demo"
+  in pure $  T.isInfixOf "QuickCheck       >= 2.14" cabal
+          && T.isInfixOf "import Test.QuickCheck (quickCheck)" spec
+          && T.isInfixOf "prop_greet" spec
 
 -- | Issue #58: error messages must NAME the violation so the agent
 -- can rename appropriately instead of guessing what \"invalid name\"

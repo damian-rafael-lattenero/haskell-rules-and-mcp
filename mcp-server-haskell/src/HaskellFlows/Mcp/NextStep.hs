@@ -21,9 +21,9 @@
 -- >   "files_written": [ … ],
 -- >   "success": true,
 -- >   "nextStep": {
--- >     "tool": "ghc_deps",
--- >     "why":  "scaffold only has `base`; add the deps you need before wiring up modules.",
--- >     "example": { "action": "add", "package": "QuickCheck", "stanza": "test-suite" }
+-- >     "tool": "ghc_module",
+-- >     "why":  "QuickCheck ships in the scaffold's test-suite; add runtime deps and wire up your first module.",
+-- >     "example": { "action": "add", "modules": ["<Module.Name>"] }
 -- >   }
 -- > }
 --
@@ -671,24 +671,22 @@ projectNext payload
   | Just _ <- envField "errors" payload = Nothing
   -- create — everything else
   | otherwise = Just (chained
-      GhcDeps
-      "Your scaffold has only `base`. Add the deps you need (QuickCheck \
-      \for tests, runtime libraries for the library stanza) before \
-      \wiring up modules. The attached chain is the canonical \
-      \project-bootstrap plan — you can batch it via ghc_batch."
+      GhcModule
+      "QuickCheck already ships in the scaffold's test-suite (W1.5), so \
+      \ghc_property works with no extra step. Add runtime deps to the \
+      \library stanza as you need them, then wire up your first module. \
+      \The attached chain is the canonical project-bootstrap plan — you \
+      \can batch it via ghc_batch."
       (Just (object
           [ "action"  .= ("add" :: Text)
-          , "package" .= ("QuickCheck" :: Text)
-          , "version" .= (">= 2.14" :: Text)
-          , "stanza"  .= ("test-suite" :: Text)
+          , "modules" .= (["<Module.Name>"] :: [Text])
           ]))
       [ step GhcDeps (object
           [ "action"  .= ("add" :: Text)
-          , "package" .= ("QuickCheck" :: Text)
-          , "version" .= (">= 2.14" :: Text)
-          , "stanza"  .= ("test-suite" :: Text) ])
+          , "package" .= ("<runtime-lib>" :: Text)
+          , "stanza"  .= ("library" :: Text) ])
       , step GhcModule (object
-          [ "action"  .= ("add" :: Text)
+          [ "action" .= ("add" :: Text)
           , "modules" .= (["<Module.Name>"] :: [Text]) ])
       , step GhcCheck (object
           [ "module_path" .= ("<path to your entry module>" :: Text) ])

@@ -901,6 +901,8 @@ runAllTests = do
       , test "create_project: validateName rejects symbols (#58)"    testCreateValidateSymbols
       , test "create_project: scaffold cabal file is shippable green-by-default (#69)"
                                                                  testCreateProjectScaffoldGreenCabal
+      , test "create_project: scaffold test-suite ships QuickCheck (W1.5)"
+                                                                 testCreateProjectScaffoldQuickCheck
       , test "create_project: validateName error names violation (#58)" testCreateValidateErrorMsg
       -- Issue #233 — all-digit component validation
       , test "#233: validateName rejects date-like all-digit components" testCreateValidateAllDigitComponent

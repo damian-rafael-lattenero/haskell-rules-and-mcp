@@ -24,14 +24,16 @@ import qualified HaskellFlows.Mcp.WorkflowState as WS
 
 import Spec.Helpers (withTempProject)
 
--- | The core happy-path chain: new scaffold → add deps.
+-- | The core happy-path chain: new scaffold → first module (W1.5).
 
 testNextStepCreateProject :: IO Bool
 
 testNextStepCreateProject =
   let payload = A.object [ "success" .= True, "files_written" .= ([] :: [Text]) ]
   in pure $ case suggestNext GhcProject True payload of
-       Just ns -> nsTool ns == GhcDeps
+       -- W1.5: QuickCheck ships in the scaffold's test-suite, so the
+       -- first nudge is wiring up the first module, not adding deps.
+       Just ns -> nsTool ns == GhcModule
        Nothing -> False
 
 -- | After ghc_deps(add), reload.
