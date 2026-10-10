@@ -75,6 +75,7 @@ import qualified Scenarios.FlowSessionRobustness as FlowSR
 import qualified Scenarios.FlowSwitchProject    as FlowSwP
 import qualified Scenarios.FlowSwitchProjectStore as FlowSwPS
 import qualified Scenarios.FlowPoisonRecovery   as FlowPR
+import qualified Scenarios.FlowNestedModuleEval as FlowNME
 import qualified Scenarios.FlowMultiUnitLifecycle as FlowMUL
 import qualified Scenarios.FlowCabalRecovery     as FlowCR
 import qualified Scenarios.FlowRefactorPreExistingError as FlowRPE
@@ -273,6 +274,8 @@ scenarios =
     , False, FlowXCS.runFlow )
   , ( "Flow: Poison recovery (W7 · every session drop → fresh boot answers)"
     , True, FlowPR.runFlow )
+  , ( "Flow: Nested module eval (src/Sub/X.hs anchors · deps-recycle repro 2026-10-10)"
+    , False, FlowNME.runFlow )
   , ( "Flow: Multi-unit lifecycle (W7 · lib+test grows exe mid-session)"
     , False, FlowMUL.runFlow )
   ]
