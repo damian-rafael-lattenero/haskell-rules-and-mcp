@@ -55,7 +55,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value, object, (.=))
 import Data.List (find, isSuffixOf, sort, sortOn)
 import Data.Ord (Down (..))
-import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -356,20 +356,42 @@ ideDiagnosticsFor' s fp = do
     tc <- readRuleDiags TypeCheck
     ms <- readRuleDiags GetModSummary
     pure (parsed <> tc <> ms)
-  pure
-    [ object
-        [ "severity" .= (if _severity d == Just DiagnosticSeverity_Error
-                           then ("error" :: Text) else ("warning" :: Text))
-        , "code"     .= diagCode (_message d)
-        , "message"  .= T.unpack (_message d)
-        , "file"     .= fp
-        , "line"     .= maybe 0 fst (rangeToLineCol (_range d))
-        , "column"   .= maybe 0 snd (rangeToLineCol (_range d))
+  -- Component honesty (W2 finding): a file the cradle cannot resolve
+  -- (not registered in the .cabal) produces NO rule diags at all —
+  -- indistinguishable from a clean module by diagnostics alone, which
+  -- made every gate bless unverified files ("silent green"). Asking
+  -- GhcSessionDeps directly turns that silence into an explicit
+  -- error, so no gate — and no write_module verify — can mistake
+  -- "cannot check" for "checked clean".
+  inComponent <- runAction "mcp-ide-component" (isState s) $
+    isJust <$> use GhcSessionDeps nfp
+  let ruleVals =
+        [ object
+            [ "severity" .= (if _severity d == Just DiagnosticSeverity_Error
+                               then ("error" :: Text) else ("warning" :: Text))
+            , "code"     .= diagCode (_message d)
+            , "message"  .= T.unpack (_message d)
+            , "file"     .= fp
+            , "line"     .= maybe 0 fst (rangeToLineCol (_range d))
+            , "column"   .= maybe 0 snd (rangeToLineCol (_range d))
+            ]
+        | fd <- diags
+        , fdFilePath fd == nfp
+        , let d = fdLspDiagnostic fd
         ]
-    | fd <- diags
-    , fdFilePath fd == nfp
-    , let d = fdLspDiagnostic fd
-    ]
+  pure $
+    if not inComponent && null ruleVals
+      then [ object
+               [ "severity" .= ("error" :: Text)
+               , "code"     .= ("" :: Text)
+               , "message"  .= ("file is not part of any cabal component — \
+                                \register it (ghc_module action=\"add\") \
+                                \before gating or writing it" :: String)
+               , "file"     .= fp
+               , "line"     .= (0 :: Int)
+               , "column"   .= (0 :: Int)
+               ] ]
+      else ruleVals
 
 -- | The diagnostics a rule run produced for its file (the second
 -- component of the stored 'ValueWithDiagnostics').
