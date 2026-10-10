@@ -14,7 +14,7 @@ The server cannot do useful work without these. `--doctor` fails
 
 | Binary | Why it is hard | Install |
 |---|---|---|
-| `ghc` (9.10 – 9.12) | The embedded ghcide engine compiles and loads your project in-process. | `ghcup install ghc --set` |
+| `ghc` (9.12.x) | The embedded ghcide engine (built against GHC 9.12) compiles and loads your project in-process. | `ghcup install ghc --set` |
 | `cabal` (≥ 3.12) | ghcide resolves your project through cabal (hie-bios cradle); scaffolding and the project gate shell out to it. | `ghcup install cabal --set` |
 | `hlint` | The project gate (`ghc_gate`) runs the lint step; without it the gate reports red. | `cabal install hlint` |
 

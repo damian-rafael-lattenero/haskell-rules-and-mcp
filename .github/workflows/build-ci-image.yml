@@ -63,8 +63,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # GHC 9.10 dropped at v1.0.0 — the server imports
+        # GHC-9.12-only API (see weekly.yml matrix note).
         include:
-          - { ghc: "9.10.1", cabal: "3.12.1.0" }
           - { ghc: "9.12.2", cabal: "3.12.1.0" }
     runs-on: ubuntu-latest
     steps:

@@ -35,7 +35,7 @@ Retired names map to successors in
 
 ## Quickstart
 
-1. Prerequisites — GHC 9.10–9.12 + cabal via
+1. Prerequisites — GHC 9.12.x + cabal via
    [ghcup](https://www.haskell.org/ghcup/) (see
    [docs/requirements.md](docs/requirements.md) for the full table).
 2. Get the binary (darwin-arm64 / linux-x64), or build from source:

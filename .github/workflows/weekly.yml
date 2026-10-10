@@ -4,8 +4,11 @@ name: Weekly deep checks
 #  Sunday deep pass (v1.0.0). Everything here is advisory for merges —
 #  the per-push gate is ci.yml — but a red badge is a real signal:
 #
-#    matrix  — build + full suites on TWO GHC versions (the oldest
-#              and newest supported), catching base-compat drift.
+  #    matrix  — build + full suites on the supported GHC (9.12).
+  #              GHC 9.10 was dropped at v1.0.0: the eval-scope
+  #              machinery in Ghc.IdeSession imports GHC-9.12-only
+  #              API (ImportUserSpec, ImpIfaceList, tcg_import_decls)
+  #              and does not build on 9.10.
 #    coverage — HPC ratchet vs mcp-server-haskell/coverage-baseline.txt
 #              (floor only ever moves up; scripts/coverage-gate.sh).
 #    flakiness — unit x5 + e2e(skip-slow) x3 on one warm build, so an
@@ -42,8 +45,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - ghc: "9.10.1"
-            cabal: "3.12.1.0"
           - ghc: "9.12.2"
             cabal: "3.12.1.0"
     runs-on: ubuntu-latest
@@ -123,17 +124,23 @@ jobs:
     name: Flakiness hunt (unit x5, e2e x3)
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # Same image as ci.yml: hlint must be on PATH or the e2e
+    # toolchain-status and lint scenarios (2 checks) fail
+    # deterministically — a plain haskell-actions/setup runner has
+    # no hlint. The baked store also makes x5/x3 affordable.
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/haskell-flows-ci:9.12.2-latest
+    env:
+      CABAL_DIR: /root/.cabal
+      XDG_CONFIG_HOME: /root/.config
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
     steps:
       - uses: actions/checkout@v6
 
-      - uses: haskell-actions/setup@v2
-        with:
-          ghc-version: "9.12.2"
-          cabal-version: "3.12.1.0"
-          cabal-update: true
-
       - name: Configure + freeze
         run: |
+          cabal update   # image index can be up to a week stale
           cabal configure --enable-tests --disable-documentation
           cabal freeze
 

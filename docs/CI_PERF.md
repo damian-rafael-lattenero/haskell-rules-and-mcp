@@ -54,7 +54,7 @@ Aggregator now requires `[build-and-test, hlint, package-quality]`.
 
 `.docker/Dockerfile.ci` is a multi-stage image that bakes:
 
-* GHC + cabal at matrix versions (9.10.1, 9.12.2)
+* GHC + cabal at matrix versions (9.12.2)
 * hlint binary on PATH
 * `~/.cabal/store/` pre-populated with the freeze closure
 * The E2E Baseline fixture pre-built

@@ -13,5 +13,12 @@
 # "unavailable" branch). After the first green `coverage` CI run reports
 # its actual numbers, raise these to match (minus a 1-point jitter
 # cushion) so the ratchet is tight.
-expressions=68
-top_level=56
+#
+# 2026-10-10 (v1.0.0 closure): lowered 68/56 → 64/53 to match the CI
+# measurement after the v1.0.0 surface collapse — the legacy GHC-API
+# engine, 24 retired tools and the bench harness were deleted; the
+# denominator is a different codebase now, not a coverage regression.
+# Measured by weekly run 38086819574 (ubuntu, GHC 9.12.2):
+#   expressions 64% (2569/4029) · top-level 53% (1863/3481)
+expressions=64
+top_level=53

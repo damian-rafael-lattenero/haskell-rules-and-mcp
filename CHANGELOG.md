@@ -87,6 +87,8 @@ loop proven by three dogfood runs with mechanical E4 scores
 
 - Verified end-to-end on darwin-arm64; linux-x64 ships as
   CI-built release binaries. **Windows: not supported.**
+- GHC 9.12 is the supported toolchain: the eval-scope machinery
+  imports GHC-9.12-only API and does not build on 9.10.
 - Single maintainer.
 - Type-string parsing remains regex-based; exotic shapes
   (higher-rank polymorphism, type families, GADTs) produce no
