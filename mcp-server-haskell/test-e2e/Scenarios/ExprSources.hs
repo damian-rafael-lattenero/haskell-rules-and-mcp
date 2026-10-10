@@ -263,10 +263,14 @@ genSrc =
 -- 'ghc_load(test/Gen.hs)' fails to compile.
 --
 -- This file is overwritten by 'ghc_property_store(action="export")'
--- in step 14 with the proper QuickCheck Spec.
+-- in step 14 with the proper QuickCheck Spec. The first line mirrors
+-- 'CreateProject.testFile's header: the export guard derives its
+-- scaffold-header from there (a file that looks like the scaffold's
+-- own stub is MCP-generated → safe to replace), so this stub must
+-- track that header to exercise the DEFAULT (no-force) export path.
 specSrc :: Text
 specSrc =
-  "-- | Scaffolded test suite.\n\
+  "-- | Scaffolded test suite: one example check + one QuickCheck\n\
   \module Main where\n\
   \\n\
   \main :: IO ()\n\

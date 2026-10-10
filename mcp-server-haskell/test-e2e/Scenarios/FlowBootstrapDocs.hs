@@ -14,9 +14,10 @@
 -- New contract
 -- ------------
 -- The emitted markdown drops the retired vocabulary and names
--- the actual model: in-process 'HscEnv' guarded by 'MVar',
--- exception-evicted sessions, 'resetHscEnvInPlace', and
--- 'Server.runTool' as the 10-min outer ceiling.
+-- the actual model. (Updated for the ghcide-only backend, 1d32c88:
+-- one 'IdeSession' behind an 'MVar' — the legacy in-process
+-- 'HscEnv'/'resetHscEnvInPlace' engine was deleted, and the rules
+-- markdown followed.)
 module Scenarios.FlowBootstrapDocs
   ( runFlow
   ) where
@@ -62,17 +63,16 @@ runFlow c _projectDir = do
   stepFooter 1 t0
 
   -- Step 2 — same body must affirmatively name the new model.
-  t1 <- stepHeader 2 "ghc_bootstrap(generic) names in-process GHC API (#56)"
+  t1 <- stepHeader 2 "ghc_bootstrap(generic) names the ghcide session model (#56)"
   let bodyLower = T.toLower body
       required  = map T.toLower
-        [ "in-process"
-        , "HscEnv"
+        [ "ghcide"
+        , "IdeSession"
         , "MVar"
-        , "resetHscEnvInPlace"
         ]
       missing = filter (\w -> not (w `T.isInfixOf` bodyLower)) required
   cNew <- liveCheck $ checkPure
-    "rules markdown names the in-process model (HscEnv/MVar/resetHscEnvInPlace)"
+    "rules markdown names the ghcide model (IdeSession/MVar)"
     (null missing)
     ( "Expected all new terms; missing: " <> T.pack (show missing) )
   stepFooter 2 t1

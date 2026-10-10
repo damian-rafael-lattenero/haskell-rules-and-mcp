@@ -172,9 +172,11 @@ step2_scaffold c = do
   pure
     [ mkCheck "step 2 · create_project success"
         ok "expected success=true"
-    , mkCheck "step 2 · nextStep points at ghc_deps"
-        (fetchNextStepTool r == Just "ghc_deps")
-        "nextStep.tool should be ghc_deps (BUG-06)"
+    , mkCheck "step 2 · nextStep points at ghc_module"
+        (fetchNextStepTool r == Just "ghc_module")
+        "nextStep.tool should be ghc_module — the scaffold ships \
+        \QuickCheck since W1.5, so the first gap after create is \
+        \modules, not deps (BUG-06; W1.5 update)"
     , mkCheck "step 2 · nextStep chain carries bootstrap plan (BUG-22)"
         (  "ghc_deps"    `elem` chainTools
         && "ghc_module" `elem` chainTools

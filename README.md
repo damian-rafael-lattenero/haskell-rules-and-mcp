@@ -218,6 +218,7 @@ Point your MCP host at `~/.local/bin/haskell-flows-mcp`. **No rules file needed*
 | 🛡 **Security** | [SECURITY.md](SECURITY.md) |
 | 🗒 **Dogfood — first session** | [`docs/dogfood-2026-04-19.md`](docs/dogfood-2026-04-19.md) |
 | 🗒 **Dogfood — full audit** | [`docs/dogfood-2026-05-25-full-audit.md`](docs/dogfood-2026-05-25-full-audit.md) |
+| 🗒 **Dogfood — triple run, E4 green (v1.0.0 evidence)** | [`docs/dogfood-2026-10-10.md`](docs/dogfood-2026-10-10.md) |
 
 ---
 
