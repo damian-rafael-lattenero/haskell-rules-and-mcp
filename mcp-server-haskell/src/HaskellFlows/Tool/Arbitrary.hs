@@ -128,7 +128,7 @@ finishArbitrary pd mTarget safe mRendered errCount =
       -- GHC wired-in primitives (Bool, Char, Int, Word, …) and type
       -- classes / synonyms. These already have Arbitrary instances.
       | otherwise    -> pure (validationErr
-                                ( "ghc_arbitrary cannot introspect '" <> safe <> "'. "
+                                ( "ghc_property(action=\"arbitrary\") cannot introspect '" <> safe <> "'. "
                                 <> "This happens for GHC wired-in primitives (Bool, "
                                 <> "Char, Int, Word, …) and type classes or type "
                                 <> "synonyms. These types already have Arbitrary "
@@ -153,7 +153,8 @@ finishArbitrary pd mTarget safe mRendered errCount =
                      pure (validationErr
                              ( "'" <> safe <> "' has unboxed-primop "
                              <> "constructors (e.g. I#, C#, W#). "
-                             <> "ghc_arbitrary cannot generate a valid "
+                             <> "ghc_property(action=\"arbitrary\") cannot "
+                             <> "generate a valid "
                              <> "template for these types. Use "
                              <> "'arbitraryBoundedIntegral' for integral "
                              <> "types or 'arbitraryUnicodeChar' for Char." ))
@@ -199,8 +200,8 @@ compileFailedErr :: Int -> ToolResponse
 compileFailedErr n =
   Env.mkFailed (Env.mkErrorEnvelope Env.Validation
       ( "Module has " <> T.pack (show n) <> " compile error(s); "
-      <> "fix them first (use ghc_check_module or ghc_explain_error), "
-      <> "then retry ghc_arbitrary." ))
+      <> "fix them first (use ghc_check(action=\"module\")), "
+      <> "then retry ghc_property(action=\"arbitrary\")." ))
 
 -- | Resolve the name and render the resulting 'TyThing' in the
 -- exact @data T = A | B Int | ...@ shape @:info@ would print.
@@ -592,7 +593,7 @@ writtenResult typeName ctors tmpl relPath modName already =
     , "module"              .= modName
     , "already_present"     .= already
     , "next_steps"          .=
-        ( "Register the module with ghc_modules(action=\"add\", modules=[\""
+        ( "Register the module with ghc_module(action=\"add\", modules=[\""
           <> modName <> "\"]) and add QuickCheck to the relevant stanza via "
           <> "ghc_deps(action=\"add\", package=\"QuickCheck\", stanza=\"...\"). "
           <> "The -Wno-orphans pragma suppresses the orphan-instance warning."

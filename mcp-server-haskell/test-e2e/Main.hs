@@ -177,7 +177,7 @@ scenarios =
     , False, FlowMNG.runFlow )
   , ( "Flow: Graceful miss (deps remove / hole-free / non-predicate QC)"
     , False, FlowGM.runFlow )
-  , ( "Flow: LoadNonexistent (#79 · ghc_load short-circuits on missing path)"
+  , ( "Flow: LoadNonexistent (#79 · check load short-circuits on missing path)"
     , False, FlowLN.runFlow )
   , ( "Flow: Session robustness (user throws don't kill GHCi)"
     , False, FlowSR.runFlow )
@@ -267,7 +267,7 @@ scenarios =
     , True, FlowDFR.runFlow )
   , ( "Flow: Dogfood UX fixes (6 polish items from the expr-evaluator session)"
     , False, FlowDUX.runFlow )
-  , ( "Flow: type_after_load · ghc_type after ghc_load with non-base deps (#80)"
+  , ( "Flow: type_after_load · inspect type after check load with non-base deps (#80)"
     , False, FlowTAL.runFlow )
   , ( "Flow: eval_context_dedup · ghc_eval doesn't grow imports across calls (#86)"
     , False, FlowECD.runFlow )

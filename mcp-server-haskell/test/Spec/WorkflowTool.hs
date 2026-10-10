@@ -41,7 +41,7 @@ runWorkflow args = do
         , srBinaryOlderBySec = Nothing
         , srMessage          = Nothing
         }
-      toolNames = ["ghc_load", "ghc_type", "ghc_workflow"]
+      toolNames = ["ghc_eval", "ghc_inspect", "ghc_session"]
   -- PR-4: workflow handler gained an isSelfProject arg. Tests run
   -- against /tmp, never the MCP source tree, so the flag is False.
   -- #253 Phase 5: workflow handler gained scratchRef for status section.
@@ -50,9 +50,9 @@ runWorkflow args = do
   result <- WorkflowTool.runHandle pdRef sessRef toolNames ws staleness False scratchRef args
   pure (Right result)
 
--- | 'ghc_workflow {action: status}' returns an envelope-shaped
+-- | 'ghc_session {action: status}' returns an envelope-shaped
 -- response with status='ok' and a result carrying the documented
--- status fields ('view', 'projectDir', 'ghciAlive', 'toolsActive',
+-- status fields ('view', 'projectDir', 'sessionAlive', 'toolsActive',
 -- 'phase', 'staleness').
 testWorkflowStatusEnvelope :: IO Bool
 testWorkflowStatusEnvelope = do
@@ -63,7 +63,7 @@ testWorkflowStatusEnvelope = do
       , Just (A.Object payload) <- Env.reResult env ->
           AKM.lookup (AKey.fromText "view") payload == Just (A.String "status")
             && AKM.member (AKey.fromText "projectDir") payload
-            && AKM.member (AKey.fromText "ghciAlive") payload
+            && AKM.member (AKey.fromText "sessionAlive") payload
             && AKM.member (AKey.fromText "toolsActive") payload
             && AKM.member (AKey.fromText "phase") payload
             && AKM.member (AKey.fromText "staleness") payload

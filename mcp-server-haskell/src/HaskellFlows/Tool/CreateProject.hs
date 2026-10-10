@@ -404,9 +404,12 @@ createdResult pkg modName plans =
         [ "package"       .= pkg
         , "module"        .= modName
         , "files_written" .= map (T.pack . fpRelPath) plans
-        , "hint"          .= ( "Run ghc_load(module_path=\"src/"
+        , "hint"          .= ( "Run ghc_check(action=\"load\", \
+                              \module_path=\"src/"
                             <> T.replace "." "/" modName
-                            <> ".hs\") to verify the scaffold compiles."
+                            <> ".hs\") to verify the scaffold compiles. \
+                            \Pass path=\"<dir>\" to scaffold into a \
+                            \fresh directory (auto-switches to it)."
                             :: Text )
         ]
   in Env.mkOk payload

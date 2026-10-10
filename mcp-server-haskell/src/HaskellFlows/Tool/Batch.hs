@@ -70,7 +70,7 @@ descriptor =
           <> "inside itself is refused. "
           <> "OUTPUT: {results:[...]} in input order; partial results when "
           <> "fail_fast=false. "
-          <> "SEE ALSO: ghc_workflow."
+          <> "SEE ALSO: ghc_session(action=\"help\") for flow nudges."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

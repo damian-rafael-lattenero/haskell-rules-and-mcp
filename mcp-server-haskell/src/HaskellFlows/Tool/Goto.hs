@@ -231,7 +231,9 @@ notInScopePayload nm = object
   [ "name"        .= nm
   , "searched_in" .= ("interactive scope" :: Text)
   , "remediation" .= ("Name not currently in scope. If it's defined in a \
-                      \loaded module, run ghc_load on that module first. \
-                      \For external/base names, ghc_info often resolves \
-                      \what ghc_goto cannot." :: Text)
+                      \loaded module, run ghc_check(action=\"load\", \
+                      \module_path=\"...\") on that module first. \
+                      \For external/base names, ghc_inspect(action=\"info\") \
+                      \often resolves what ghc_inspect(action=\"goto\") \
+                      \cannot." :: Text)
   ]

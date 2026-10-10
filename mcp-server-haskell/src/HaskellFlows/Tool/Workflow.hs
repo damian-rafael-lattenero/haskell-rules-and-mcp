@@ -538,7 +538,7 @@ statusPayload pd alive toolNames staleness phase missingOpt isSelfProject mScrat
   object $
     [ "view"        .= ("status" :: Text)
     , "projectDir"  .= T.pack (unProjectDir pd)
-    , "ghciAlive"   .= alive
+    , "sessionAlive" .= alive
     , "toolsActive" .= toolNames
     , "phase"       .= T.pack (show phase)
       -- BUG-07: full 'StalenessReport' body. Agents that care
@@ -574,11 +574,11 @@ scratchpadSection entries =
       hint :: Text
       hint
         | total == 0 =
-            "Use ghc_scratch(action='write') to record a Haskell hypothesis \
+            "Use ghc_module(action='write') to record a Haskell hypothesis \
             \you want to type-check before touching source."
         | open > 0  =
             T.pack (show open) <> " open entr" <> (if open == 1 then "y" else "ies")
-            <> " — run ghc_scratch(action='check', id='<id>') to type-check."
+            <> " — run ghc_module(action='check', id='<id>') to type-check."
         | otherwise =
             "All entries verified or promoted. Use action='clear' with \
             \confirm=true to reset the scratchpad."
@@ -598,8 +598,8 @@ scratchpadSection entries =
 --   { "missing":       ["fourmolu", "ormolu", ...]
 --   , "install_hints": { "fourmolu": "cabal install fourmolu", ... }
 --   , "summary":       "4 optional binaries missing — your MCP works
---                       but ghc_format / hoogle_search will return
---                       status='unavailable'."
+--                       but ghc_edit(action='format') and friends will
+--                       return status='unavailable'."
 --   }
 -- @
 optionalBinariesPayload :: [Text] -> Value
@@ -621,7 +621,7 @@ helpPayload
 helpPayload _pd alive stateHints staleness phase mEntry =
   object $
     [ "view"       .= ("help" :: Text)
-    , "ghciAlive"  .= alive
+    , "sessionAlive" .= alive
     , "phase"      .= T.pack (show phase)
     , "phaseHint"  .= renderPhaseHint phase
     , "steps"      .= steps
@@ -635,36 +635,37 @@ helpPayload _pd alive stateHints staleness phase mEntry =
     -- find it in the cabal file, so the agent has an actionable hint
     -- rather than a generic "your entry module" placeholder.
     loadStep = case mEntry of
-      Nothing -> "1. Call ghc_load with your entry module to boot GHCi."
-      Just m  -> "1. Call ghc_load(module_path=\"" <> m
-                   <> "\") to boot GHCi."
+      Nothing -> "1. Call ghc_check(action=\"load\") with your entry \
+                 \module to boot the session."
+      Just m  -> "1. Call ghc_check(action=\"load\", module_path=\"" <> m
+                   <> "\") to boot the session."
 
     steps :: [Text]
     steps
       | not alive =
           [ loadStep
-          , "2. For data types you'll test: ghc_arbitrary (type_name=...)."
-          , "3. For stubs with _ holes: ghc_hole (module_path=...)."
-          , "4. For properties: ghc_quickcheck (property=...)."
+          , "2. For data types you'll test: ghc_property(action=\"arbitrary\", type_name=...)."
+          , "3. For stubs with _ holes: ghc_inspect(action=\"hole\", module_path=...)."
+          , "4. For properties: ghc_property(action=\"check\", property=...)."
           ]
       | otherwise =
-          [ "1. ghc_load (diagnostics=true) to catch holes + errors."
-          , "2. ghc_hole if holes surfaced."
-          , "3. ghc_type to confirm subexpressions compose."
-          , "4. ghc_quickcheck once a law is testable."
-          , "5. hoogle_search when stuck on which library function fits."
+          [ "1. ghc_check(action=\"load\", diagnostics=true) to catch holes + errors."
+          , "2. ghc_inspect(action=\"hole\") if holes surfaced."
+          , "3. ghc_inspect(action=\"type\") to confirm subexpressions compose."
+          , "4. ghc_property(action=\"check\") once a law is testable."
+          , "5. ghc_edit(action=\"import\") when stuck on which library function fits."
           ]
 
     reasoning :: Text
     reasoning =
       if alive
-        then "GHCi is alive, so the property-first loop is open: keep \
-             \the compile/type/quickcheck triangle tight before touching \
+        then "The session is alive, so the property-first loop is open: \
+             \keep the compile/type/property triangle tight before touching \
              \external tools."
-        else "No active GHCi session. Start by loading the module you \
+        else "No active session. Start by loading the module you \
              \want to work on — every other tool will auto-boot on first \
-             \use anyway, but ghc_load gives you the cleanest error \
-             \surface."
+             \use anyway, but ghc_check(action=\"load\") gives you the \
+             \cleanest error surface."
 
 --------------------------------------------------------------------------------
 -- F-02: entry-module suggestion

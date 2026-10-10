@@ -201,7 +201,7 @@ renderCompletions prefix limit candidates =
                    <> "Session preloads use unqualified imports — try the bare "
                    <> "name prefix instead (e.g. drop the \""
                    <> qualModule <> ".\" prefix), or add a qualified import "
-                   <> "via ghc_add_import(name=\"" <> qualModule
+                   <> "via ghc_edit(action=\"import\", name=\"" <> qualModule
                    <> "\") then retry." :: Text)
               ]
         | otherwise = basePayload

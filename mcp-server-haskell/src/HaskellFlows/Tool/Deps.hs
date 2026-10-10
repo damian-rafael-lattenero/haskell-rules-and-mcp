@@ -143,13 +143,15 @@ descriptor =
           <> "WHEN: action='add'/'remove' a dependency; action='list' the "
           <> "current set; action='explain' which stanzas + source imports "
           <> "use package=X. "
-          <> "WHEN NOT: ghc_modules for exposed-modules / other-modules; "
-          <> "ghc_add_import to add a source import line. "
+          <> "WHEN NOT: ghc_module(action=\"add\") for exposed-modules / "
+          <> "other-modules; ghc_edit(action=\"import\") to add a "
+          <> "source import line. "
           <> "PREREQUISITES: a .cabal in the active project; never hand-edit "
           <> "build-depends — the post-edit invariant guards this tool. "
           <> "OUTPUT: per-action {action, stanzas|added|removed|explanation}; "
-          <> "the next ghc_load picks up the new package graph. "
-          <> "SEE ALSO: ghc_modules, ghc_add_import."
+          <> "the next check reloads the session with the new package "
+          <> "graph. "
+          <> "SEE ALSO: ghc_module, ghc_edit."
     , tdInputSchema = schema
     }
 
@@ -543,8 +545,8 @@ editResult mHint file pkg verb =
         [ "action"     .= verb
         , "cabal_file" .= T.pack file
         , "package"    .= pkg
-        , "hint"       .= ( "Dependency set changed. The next \
-                            \ghc_load reloads GHCi with the new \
+        , "hint"       .= ( "Dependency set changed. The next check \
+                            \reloads the session with the new \
                             \package graph — no explicit session \
                             \restart tool is needed."
                           :: Text )

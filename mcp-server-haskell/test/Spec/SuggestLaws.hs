@@ -125,7 +125,7 @@ testSuggestScopeStructuredHint =
   in pure $ Env.reStatus tr `elem` [Env.StatusFailed, Env.StatusRefused]
          && T.isInfixOf "\"reason\":\"function_not_in_scope\"" body
          && T.isInfixOf "\"function\":\"simplify\""            body
-         && T.isInfixOf "ghc_load"                             body
+         && T.isInfixOf "ghc_check(action="                    body
          && T.isInfixOf "not in scope" body
 
 --------------------------------------------------------------------------------

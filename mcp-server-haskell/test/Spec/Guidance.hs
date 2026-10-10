@@ -172,10 +172,9 @@ testGuidanceMentionsApi :: IO Bool
 testGuidanceMentionsApi = do
   let txt = T.toLower (Guidance.sessionInstructionsText allToolDescriptors)
       newTerms = map T.toLower
-        [ "in-process"
-        , "HscEnv"
+        [ "ghcide"
+        , "IdeSession"
         , "MVar"
-        , "resetHscEnvInPlace"
         ]
   pure (all (`T.isInfixOf` txt) newTerms)
 
@@ -183,10 +182,9 @@ testGuidanceMdMentionsApi :: IO Bool
 testGuidanceMdMentionsApi = do
   let md = T.toLower (Guidance.workflowRulesMarkdown allToolDescriptors)
       newTerms = map T.toLower
-        [ "in-process"
-        , "HscEnv"
+        [ "ghcide"
+        , "IdeSession"
         , "MVar"
-        , "resetHscEnvInPlace"
         ]
   pure (all (`T.isInfixOf` md) newTerms)
 

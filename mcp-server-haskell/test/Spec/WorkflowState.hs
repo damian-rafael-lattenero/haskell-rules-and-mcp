@@ -82,7 +82,7 @@ testBootstrapPreview = withTempProject $ \pd -> do
       && T.isInfixOf "\"mode\":\"preview\""     body
       && T.isInfixOf "\"host\":\"claude-code\"" body
       && T.isInfixOf "haskell-flows"            body
-      && T.isInfixOf "ghc_workflow"            body
+      && T.isInfixOf "ghc_session"             body
       && not wrote          -- preview must NOT write
 
 -- | #193: 'ghc_bootstrap(host="claude-code")' with NO write arg must
@@ -310,7 +310,7 @@ testWorkflowStateHelp =
       nudgeLow  = WS.renderHelp lowEdits
       nudgeHigh = WS.renderHelp highEdits
   in pure $ null nudgeLow
-         && any (T.isInfixOf "edits since the last ghc_load") nudgeHigh
+         && any (T.isInfixOf "edits since the last check") nudgeHigh
 
 -- | #257: trackTool accumulates the ever-called set — it never forgets
 -- (unlike the capped wsToolHistory), so it is the basis for the

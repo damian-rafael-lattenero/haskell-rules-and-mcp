@@ -87,12 +87,12 @@ descriptor =
           <> "build in one call. "
           <> "WHEN: just before git commit / push; green here means CI is "
           <> "very likely green too. "
-          <> "WHEN NOT: ghc_check_module / ghc_check_project for the faster "
-          <> "compile-only gates during iteration. "
+          <> "WHEN NOT: ghc_check(action=\"module\"/\"project\") for the "
+          <> "faster compile-only gates during iteration. "
           <> "PREREQUISITES: cabal on PATH and a test-suite (steps are "
           <> "skippable via skip_* flags). "
           <> "OUTPUT: {steps:[{name, status, duration}], summary, overall}. "
-          <> "SEE ALSO: ghc_check_project, ghc_coverage."
+          <> "SEE ALSO: ghc_check(action=\"project\"), ghc_property(action=\"run\")."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)

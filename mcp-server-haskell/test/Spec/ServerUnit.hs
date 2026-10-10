@@ -73,15 +73,16 @@ testInstructionsMentionCore = do
   -- (b) the core workflow / invariant markers. Any drift between
   -- the registry and the text fails here.
   --
-  -- Issue #56: the post-Wave-5 model uses HscEnv + MVar, NOT the
+  -- Issue #56: the post-Wave-5 model used HscEnv + MVar, NOT the
   -- retired SessionStatus / executeNoLock / registerDelay
-  -- subprocess GHCi vocabulary. Drop the latter from the
-  -- expected-markers set; rely on 'testGuidanceNoRetiredVocab'
-  -- + 'testGuidanceMentionsApi' to pin both halves.
+  -- subprocess GHCi vocabulary. Wave F: the engine is ghcide —
+  -- one IdeSession behind an MVar. Rely on
+  -- 'testGuidanceNoRetiredVocab' + 'testGuidanceMentionsApi'
+  -- to pin both halves.
   let instructions = Guidance.sessionInstructionsText allToolDescriptors
       staticMarkers =
-        [ "ci-local.sh"
-        , "HscEnv"          , "MVar"
+        [ "gate.sh"
+        , "ghcide"          , "IdeSession", "MVar"
         , "10-min"
         , "dogfood"
         , "handshake"

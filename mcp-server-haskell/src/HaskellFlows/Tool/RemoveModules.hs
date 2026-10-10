@@ -427,7 +427,7 @@ successResult removedFromCabal deletedFiles importers notFound =
     mkHint :: [Importer] -> [Text] -> Text
     mkHint [] [] =
       "Modules were de-registered from exposed-modules. The next \
-      \ghc_load picks up the new surface."
+      \ghc_check(action=\"load\") picks up the new surface."
     mkHint [] nf =
       "No modules were de-registered — " <> tshow (length nf) <> " name"
       <> (if length nf == 1 then " was" else "s were")
@@ -436,7 +436,7 @@ successResult removedFromCabal deletedFiles importers notFound =
       "Forced removal completed but downstream files still import \
       \the removed module(s). See warnings.downstream_imports for \
       \(file, line, module) tuples — fix each before the next \
-      \ghc_load."
+      \ghc_check(action=\"project\")."
     mkHint _ _ =
       "Forced removal completed with some modules not found in cabal. \
       \See not_found and warnings.downstream_imports for details."

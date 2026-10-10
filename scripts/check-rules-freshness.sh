@@ -81,6 +81,32 @@ RETIRED_NAMES=(
   ghc_determinism
   ghc_move
   ghc_deps_explain
+  ghc_workflow
+  ghc_toolchain
+  ghc_load
+  ghc_refactor
+  ghc_scratch
+  ghc_modules
+  ghc_imports
+  ghc_quickcheck
+  ghc_property_store
+  ghc_check_module
+  ghc_check_project
+  ghc_add_import
+  ghc_add_modules
+  ghc_lint
+  ghc_format
+  ghc_fix_warning
+  ghc_browse
+  ghc_hole
+  ghc_type
+  ghc_info
+  ghc_doc
+  ghc_arbitrary
+  ghc_coverage
+  ghc_explain_error
+  ghc_lab
+  hoogle_search
 )
 
 for name in "${RETIRED_NAMES[@]}"; do

@@ -120,15 +120,17 @@ runHandle lim inject rawArgs = case parseEither parseJSON rawArgs of
                   <> "'. Check spelling, try a fully-qualified search \
                      \(e.g. 'Map.lookup'), or look it up by type."
               | sessionAdded =
-                  "Top candidate injected into the GHCi session — "
+                  "Top candidate injected into the interactive session — "
                   <> "ghc_eval can use it now. To persist it to a "
-                  <> "source file, paste the import line at the top of "
-                  <> "your .hs file and call ghc_load."
+                  <> "source file, add it via ghc_edit(action=\"import\") "
+                  <> "or paste the line at the top of your .hs file and "
+                  <> "run ghc_check(action=\"load\")."
               | otherwise =
                   "None of these are guaranteed correct — pick the \
                   \module whose context best fits your use case. \
-                  \Paste the line at the top of your .hs file and \
-                  \reload with ghc_load."
+                  \Persist it via ghc_edit(action=\"import\") or paste \
+                  \the line yourself and verify with \
+                  \ghc_check(action=\"load\")."
             payload = object
               [ "name"            .= aiName args
               , "count"           .= length imports
@@ -178,7 +180,7 @@ unavailableHoogle =
     ((Env.mkErrorEnvelope Env.BinaryUnavailable
         "hoogle binary not found on PATH")
           { Env.eeRemediation =
-              Just "Install hoogle (cabal install hoogle) and generate the index (hoogle generate), then retry. ghc_add_import cannot suggest imports without an indexed hoogle."
+              Just "Install hoogle (cabal install hoogle) and generate the index (hoogle generate), then retry. ghc_edit(action=\"import\") cannot suggest imports without an indexed hoogle."
           })
 
 -- | Build one @import@ line. Qualified form gets a single-letter

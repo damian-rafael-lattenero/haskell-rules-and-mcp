@@ -1,9 +1,9 @@
 # Use the haskell-flows MCP for ALL Haskell development
 
 This project ships an MCP server (`haskell-flows`) that owns the Haskell
-dev loop end-to-end: a persistent GHC-API session, compiler-driven
-refactors, property-first testing, cabal-safe edits, and HPC coverage.
-The MCP is the authoritative Haskell toolchain wrapper for this repo.
+dev loop end-to-end: an embedded ghcide session, compiler-driven edits,
+property-first testing, and cabal-safe project management. The MCP is
+the authoritative Haskell toolchain wrapper for this repo.
 
 **You MUST use it for all Haskell work.** Do not shell out to `cabal`,
 `ghc`, `ghci`, `hlint`, `fourmolu`, `ormolu`, or `hoogle` via Bash —
@@ -13,8 +13,8 @@ invariant checks the ad-hoc commands miss.
 **Bash exceptions** (allowed because they replicate CI gates or the MCP
 itself cannot run them):
 
-- `scripts/ci-local.sh --fast` or `scripts/ci-local.sh` — **on-demand
-  only**, when the user explicitly asks. See §6.
+- `scripts/gate.sh t0|t1|t2` — the tiered quality gate. T1 before every
+  commit; T2 before every push.
 - `cabal install exe:haskell-flows-mcp ...` and `scripts/install-mcp.sh`
   — to rebuild the MCP binary.
 
@@ -24,16 +24,16 @@ itself cannot run them):
 
 Before writing any Haskell code, always run these three:
 
-1. `ghc_workflow(action="status")` — confirms the MCP process is alive,
+1. `ghc_session(action="status")` — confirms the MCP process is alive,
    reports `projectDir`, `staleness`, and the current `toolsActive` set.
    Compare the returned tool count against `docs/TOOL_TAXONOMY.md` —
-   that file is the canonical inventory. If they disagree, the on-disk
-   binary is newer than the running one; reinstall + relaunch before
-   trusting tool behaviour.
-2. `ghc_toolchain(action="status")` — probes `cabal`, `ghc`, `hlint`
+   that file is the canonical inventory (12 tools). If they disagree,
+   the on-disk binary is newer than the running one; reinstall +
+   relaunch before trusting tool behaviour.
+2. `ghc_session(action="toolchain")` — probes `cabal`, `ghc`, `hlint`
    (blocking gates) plus `fourmolu`/`ormolu`/`hoogle`/`hls` (degrade
    gracefully). Any blocking gate down → stop and report.
-3. `ghc_workflow(action="help")` — state-aware nudges based on phase
+3. `ghc_session(action="help")` — state-aware nudges based on phase
    (the `phase` field is one of PhasePreScaffold / PhaseBootstrap /
    PhaseDeveloping / PhaseTestingLaws / PhaseReadyToPush). Replaces
    guessing "what do I do next?" with a runtime-grounded suggestion.
@@ -49,7 +49,7 @@ The rules file does not duplicate per-tool documentation. The sources
 of truth, in order:
 
 - **`docs/TOOL_TAXONOMY.md`** — the canonical inventory of every
-  registered tool, classified as Primitive / Composite / Gate /
+  registered tool (12), classified as Primitive / Composite / Gate /
   Control-plane. CI-enforced via `testCategoryCountsMatchTaxonomy` in
   `test/Spec.hs`; any added/removed/renamed tool must update this file.
 - **`docs/TOOL_DESCRIPTION_TEMPLATE.md`** — the 6-field shape
@@ -75,46 +75,41 @@ displacement.
 
 | Situation | Use this | Why this, not that |
 |---|---|---|
-| New `data T = ...` declared | `ghc_arbitrary(type_name="T")` | Generates the `Arbitrary` template; manual write skips the polymorphic-context heuristic. |
-| Function has a `_` hole or empty stub | `ghc_hole(module_path="src/X.hs")` | Single call returns every hole + type + in-scope fits + bindings; reading errors by hand misses the fits. |
+| New `data T = ...` declared | `ghc_property(action="arbitrary", type_name="T")` | Generates the `Arbitrary` template; manual write skips the polymorphic-context heuristic. |
+| Function has a `_` hole or empty stub | `ghc_inspect(action="hole", module_path="src/X.hs")` | Single call returns every hole + type + in-scope fits + bindings; reading errors by hand misses the fits. |
 | Want properties from a function's signature | `ghc_suggest(function_name="f")` | Confidence-scored law candidates from the signature; eyeballing a sig misses non-obvious laws. |
-| Checking a law holds | `ghc_quickcheck(property="…", module="src/X.hs")` | Auto-persists on pass to `.haskell-flows/properties.json`; raw QC in the REPL drops the regression. |
-| Replay all persisted properties | `ghc_property_store(action="run")` | Loads the store + reloads the right module per property; replaying by hand drifts. |
-| Inspect / export / audit the store | `ghc_property_store(action="list" \| "export" \| "audit")` | One tool, four actions; legacy split (`ghc_regression`, `ghc_quickcheck_export`, etc.) was retired in #94 Phase C. |
-| Renaming a local identifier | `ghc_refactor(action="rename_local", scope_line_start=…)` | Snapshot-and-compile-verify; `sed` cannot roll back on type-error. |
-| Moving a top-level definition between modules | `ghc_refactor(action="move_symbol", …)` | Replaces the retired `ghc_move`; same snapshot guarantee. |
+| Checking a law holds | `ghc_property(property="…", module="src/X.hs")` | Auto-persists on pass to `.haskell-flows/properties.json`; raw QC in the REPL drops the regression. |
+| Replay all persisted properties | `ghc_property(action="run")` | Loads the store + reloads the right module per property; replaying by hand drifts. |
+| Inspect / export / audit the store | `ghc_property(action="list" \| "export" \| "audit")` | One tool, four verbs; the legacy split was retired in #94 Phase C. |
+| Renaming a local identifier | `ghc_edit(action="rename_local", scope_line_start=…)` | Snapshot-and-compile-verify; `sed` cannot roll back on type-error. |
+| Moving a top-level definition between modules | `ghc_edit(action="move_symbol", …)` | Same snapshot guarantee as rename. |
+| Extracting a binding | `ghc_edit(action="extract_binding", …)` | Compiler-verified; hand-cut risks scope capture. |
 | Adding a dependency | `ghc_deps(action="add", package="X", stanza="library" \| "test-suite[:NAME]" \| …)` | Post-edit invariant rejects writes whose re-parsed dep list disagrees; hand-edit risks malformed cabal. |
-| Explaining where a dep is used | `ghc_deps(action="explain", package="X")` | Replaces the retired `ghc_deps_explain`. |
-| Adding / removing exposed-modules | `ghc_modules(action="add" \| "remove", modules=[…])` | Scaffolds source + registers in cabal in one call; manual edit splits the two and drifts. |
-| Adding a missing import | `ghc_add_import(name="X")` | Hoogle-resolves the module; hand-importing means guessing the package. |
-| Rewriting a module's export list | `ghc_apply_exports(module_path="…", exports=[…])` | Idempotent header rewrite + reserved-keyword validation. |
-| Auto-fixing a GHC warning | `ghc_fix_warning(module_path="…", line=N, code="GHC-NNNNN")` | Patches the common GHC codes (66111, 40910, missing-sigs); needs the line+code from a prior ghc_load/ghc_check_module diagnostic (module_path-only is rejected with a MissingArg hint). Not a substitute for `ghc_explain_error` on type errors. |
-| Decoding a confusing GHC error | `ghc_explain_error(error_text="…")` | Structured error analysis + verifiable patch suggestion; `ghc_fix_warning` is for warnings only. |
-| Listing imports currently in scope | `ghc_imports()` | Reads the live GHC session; checking source files misses MCP-injected preloads. |
-| Listing names exported by a module | `ghc_browse(module="Foo.Bar")` | Resolves against the loaded module graph; off-graph modules → `hoogle_search`. |
-| Searching upstream Hackage | `hoogle_search(query="…")` | Off-graph; for in-project lookups use `ghc_browse` or `ghc_info`. |
-| Quick `:t expr` / `:i name` / `:doc name` / `:complete prefix` | `ghc_type(expression="…")` / `ghc_info` / `ghc_doc` / `ghc_complete` | Same as the GHCi commands; cheaper than reloading. |
-| Jumping to a name's definition | `ghc_goto(name="…")` | Returns file + line from "Defined at"; faster than grep when you have a session. |
+| Explaining where a dep is used | `ghc_deps(action="explain", package="X")` | Grounded in the parsed cabal + source imports. |
+| Adding / removing exposed-modules | `ghc_module(action="add" \| "remove", modules=[…])` | Scaffolds source + registers in cabal in one call; manual edit splits the two and drifts. |
+| Adding a missing import | `ghc_edit(action="import", name="X")` | Hoogle-resolves the module; hand-importing means guessing the package. |
+| Rewriting a module's export list | `ghc_edit(action="exports", module_path="…", exports=[…])` | Idempotent header rewrite + reserved-keyword validation. |
+| Auto-fixing a GHC warning | `ghc_edit(action="fix_warning", module_path="…", line=N, code="GHC-NNNNN")` | Patches the common GHC codes (66111, 40910, missing-sigs); needs the line+code from a prior `ghc_check(action="module")` diagnostic. |
+| Listing imports currently in scope | `ghc_session(action="imports")` | Reads the live session; checking source files misses MCP-injected preloads. |
+| Listing names exported by a module | `ghc_inspect(action="browse", module="Foo.Bar")` | Resolves against the loaded module graph. |
+| Quick type / info / completion | `ghc_inspect(action="type" \| "info" \| "complete", …)` | Same answers as the GHCi commands, cheaper than reloading. |
+| Jumping to a name's definition | `ghc_inspect(action="goto", name="…")` | Returns file + line from "Defined at"; faster than grep when you have a session. |
 | Eval a single Haskell expression | `ghc_eval(expression="…")` | 64 KiB output cap; not for mutating state. Parameter is `expression`, not `expr`. |
-| Checking a single module is clean | `ghc_check_module(module_path="…")` | Aggregates compile + warnings + holes + property replay. |
-| Checking the whole project | `ghc_check_project()` | Same gates over every exposed-module + other-module. |
-| HLint over the project | `ghc_lint(path="mcp-server-haskell")` | Recursive, matches CI; prefer over module-only `ghc_lint(module_path=…)` for the pre-push gate. |
-| Coverage report | `ghc_coverage()` | `cabal test --enable-coverage` + 8 HPC metrics parsed. |
+| Checking a single module is clean | `ghc_check(action="module", module_path="…")` | Aggregates compile + warnings + holes + property replay. |
+| Checking the whole project | `ghc_check(action="project")` or `ghc_check()` | Same gates over every exposed-module + other-modules; parse errors included. |
+| HLint over the project | `ghc_check(action="lint", path="mcp-server-haskell")` | Recursive, matches CI. |
 | Pre-push finalizer | `ghc_gate()` | One-shot composite: regression + tests + build. Use just before commit/push. |
-| Module-wide property discovery | `ghc_lab(module_path="…")` | Browses the module + suggests laws + runs them + persists. |
-| Performance regression | `ghc_perf(expr="…")` | Wall-clock harness with baseline save/compare; not a Criterion replacement (yet). |
-| Distribution sanity for a property | `ghc_witness(property="…")` | Reports input-shape distribution; reveals trivial-input bias QC alone misses. |
-| New project from scratch | `ghc_project(action="create", …)` | Replaces retired `ghc_create_project`. Pair with `ghc_modules(action="add")` next. |
+| New project from scratch | `ghc_project(action="create", …)` | Replaces retired `ghc_create_project`. Pass `path=` to scaffold into a fresh directory (auto-switches). |
 | Switching the active project | `ghc_project(action="switch", …)` | Replaces retired `ghc_switch_project`. Reopens the property store against the new root. |
 | Cabal sanity check | `ghc_project(action="validate")` | Replaces retired `ghc_validate_cabal`. |
 | Bootstrap host rules | `ghc_project(action="bootstrap")` | Replaces retired `ghc_bootstrap`. |
-| Toolchain probe / warmup | `ghc_toolchain(action="status" \| "warmup")` | Replaces retired `ghc_toolchain_status` + `ghc_toolchain_warmup`. |
-| Format check / write | `ghc_format(write=true \| false)` | fourmolu (preferred) or ormolu; reports `unavailable` if neither is on PATH. |
+| Toolchain probe / warmup | `ghc_session(action="toolchain" \| "warmup")` | Replaces retired `ghc_toolchain_status` + `ghc_toolchain_warmup`. |
+| Format check / write | `ghc_edit(action="format", module_path=…, write=true \| false)` | fourmolu (preferred) or ormolu; reports `unavailable` if neither is on PATH. |
 | Sequence multiple tools in one round-trip | `ghc_batch(actions=[…])` | Accepts both `{tool, args}` and `{name, arguments}`; `fail_fast=true` is default. |
-| Lost / unsure | `ghc_workflow(action="help")` | State-aware nudge based on current phase + history; pairs with `nextStep` (§4). |
-| Want to verify a snippet before touching real source | `ghc_scratch(action="write", code="…")` then `(action="check", id="…")` | Persistent + visible to the user; `ghc_eval` drops the state and offers no rollback path. The pizarra del LLM (#253). |
-| Promote a verified hypothesis into a real module | `ghc_scratch(action="promote", id="…", target_module="src/Foo.hs", target_line=N)` | Atomic snapshot-and-compile-verify via `ghc_refactor`; falls back to Open on compile fail. (Lands fully in #253 Phase 4.) |
-| Inspect the LLM's reasoning trail | `ghc_scratch(action="list")` then `(action="show", id="…")` | Shows every hypothesis the LLM has been carrying — readable mid-session by the user. |
+| Lost / unsure | `ghc_session(action="help")` | State-aware nudge based on current phase + history; pairs with `nextStep` (§4). |
+| Verify a snippet before touching real source | `ghc_module(action="write", code="…")` then `(action="check", id="…")` | Persistent + visible to the user; `ghc_eval` drops the state and offers no rollback path. |
+| Promote a verified hypothesis into a real module | `ghc_module(action="promote", id="…", target_module="src/Foo.hs", target_line=N)` | Atomic snapshot-and-compile-verify; rolls back on compile fail. |
+| Inspect the reasoning trail | `ghc_module(action="list")` then `(action="show", id="…")` | Shows every hypothesis carried this session — readable mid-session by the user. |
 
 ---
 
@@ -149,15 +144,9 @@ payload:
   when you have stronger context.
 - It supersedes the retired `ghc_workflow(action="next")` (removed in
   #269): the per-response hint fires automatically after every tool, and
-  `ghc_workflow(action="discover")` covers on-demand "what should I reach
-  for next" by ranking unused tools.
-- Errors now route too (plan A5 / failure-path routing): when a tool
-  fails with a *curated* structured error kind (`compile_error`,
-  `type_error`, `not_in_scope`), `nextStep` points you at
-  `ghc_explain_error` with the diagnostic pre-filled as `error_text`.
-  For unstructured / security / arg errors there's still no hint —
-  read the message and decide.
-- A few tools deliberately suppress `nextStep`: `ghc_workflow` (would
+  `ghc_session(action="discover")` covers on-demand "what should I
+  reach for next" by ranking unused tools.
+- A few tools deliberately suppress `nextStep`: `ghc_session` (would
   loop on itself) and `ghc_batch` (the sub-actions carry their own
   hints).
 
@@ -169,17 +158,17 @@ These are non-negotiable. Violating them risks correctness regressions
 the MCP's invariants would otherwise catch.
 
 - **Never** `sed` / `awk` / `perl -i` over Haskell sources. Use
-  `ghc_refactor`. The snapshot-and-compile-verify invariant rolls the
+  `ghc_edit`. The snapshot-and-compile-verify invariant rolls the
   file back atomically on any type-check failure.
 - **Never** edit `.cabal` build-depends by hand. Use `ghc_deps`. The
   post-edit invariant rejects writes whose re-parsed dep list
   disagrees with the verb (added / removed).
 - **Never** edit `exposed-modules` / `other-modules` by hand. Use
-  `ghc_modules`. Scaffolding the file and registering it in cabal go
+  `ghc_module`. Scaffolding the file and registering it in cabal go
   together; doing them separately drifts.
 - **Never** rewrite a module's export list by hand. Use
-  `ghc_apply_exports`. It validates against reserved keywords and
-  re-checks the module after.
+  `ghc_edit(action="exports")`. It validates against reserved
+  keywords and re-checks the module after.
 - **Never** shell out to `cabal` / `ghc` / `ghci` / `hlint` /
   `fourmolu` / `ormolu` / `hoogle` directly. Every one of those is
   wrapped by an MCP tool with structured output. The Bash exceptions
@@ -198,7 +187,7 @@ memory.
 `hlint`, `fourmolu`, `ormolu`, `hoogle` install under
 `~/.cabal/bin`; `cabal`, `ghc`, `ghc-pkg`, `hls` live in
 `~/.ghcup/bin`. macOS non-login shells (Dock / Finder launches) skip
-`.zprofile` and inherit a minimal PATH. `serverForRaw` augments PATH
+`.zprofile` and inherit a minimal PATH. The server augments PATH
 internally so MCP tools work, but Bash one-liners need it explicitly:
 
 ```sh
@@ -229,12 +218,9 @@ the config launches the *symlink*, not a copy.
 **The drift that bit us (2026-05-31):** the global `~/.claude.json`
 entry pointed at a frozen **copy** in `~/.local/bin/haskell-flows-mcp`
 (an old install step `cp`'d it there). `cabal install` refreshed the
-symlink, but Claude kept launching the stale copy — so new tools /
-`ghc_workflow` actions (`discover`, `post-mortem`, `plan`) showed up as
-`"unknown action"` right after a green install. `getExecutablePath`
-inside `ghc_eval` is the smoking-gun probe: it printed
-`~/.local/bin/...` while the project `.mcp.json` said `~/.cabal/bin/...`,
-proving the global config was the one in force.
+symlink, but Claude kept launching the stale copy — so new actions
+showed up as `"unknown action"` right after a green install.
+`getExecutablePath` inside `ghc_eval` is the smoking-gun probe.
 
 **The fix is automated in `scripts/install-mcp.sh`:**
 
@@ -244,39 +230,31 @@ proving the global config was the one in force.
   rebuild — run it with Claude fully quit if a restart still launches a
   stale binary (a live session can rewrite `~/.claude.json` on quit);
 - `scripts/install-mcp.sh --check` exits non-zero if the binary is
-  stale **or** either config's command ≠ the symlink. This is the
-  script's regression guard — run it after any install to confirm
-  pickup will work.
+  stale **or** either config's command ≠ the symlink.
 
-Staleness caveat: `ghc_workflow(status)` reports `stale=false` by
-comparing on-disk mtimes — it does **not** know the *running process*
-is an old binary (tracked as #280). The authoritative check is
-`ghc_workflow(action="discover")`: if it succeeds, the new binary is
-live; `"unknown action"` means Claude is still on the old subprocess →
+Staleness caveat: `ghc_session(action="status")` reports `stale=false`
+by comparing on-disk mtimes — it does **not** know the *running
+process* is an old binary (tracked as #280). The authoritative check
+is `ghc_session(action="discover")`: if it succeeds, the new binary is
+live; `"unknown action"` means the client is still on the old one →
 restart (and `--reconcile` if needed).
 
 ### Run hlint full-repo before every push
 
-GitHub's `Haskell CI` job runs `hlint mcp-server-haskell/` recursively
-and treats any hint as a hard fail. `scripts/ci-local.sh --fast`
-replicates this in step `[9/9]`, but the step has silently no-op'd in
-the past when `~/.cabal/bin` wasn't on PATH. The cheap belt-and-
-suspenders: as the very last pre-push gate, run the explicit command
-above. On a clean tree it prints `No hints` in <2 s; any output is a
-blocker. Common slips: `Redundant bracket` around `(["X" :: Text])`,
-`Use isJust` for `expr /= Nothing`, `Use ++` vs `<>` confusion.
+GitHub's CI runs `hlint mcp-server-haskell/` recursively
+and treats any hint as a hard fail. As the very last pre-push gate,
+run the explicit command above. On a clean tree it prints
+`No hints` in <2 s; any output is a blocker. Common slips:
+`Redundant bracket` around `(["X" :: Text])`, `Use isJust` for
+`expr /= Nothing`, `Use ++` vs `<>` confusion.
 
-### `scripts/ci-local.sh` is on-demand only
+### `scripts/gate.sh` is the commit discipline
 
-**Never** run `scripts/ci-local.sh` (with or without `--fast`)
-proactively. Not before push, not after a batch of edits, not as a
-"safety check." The user runs it themselves on their own cadence.
-This supersedes any older guidance to "always run before push."
-
-The per-file `ghc_lint(module_path=…)` and per-module
-`ghc_check_module` are still fine to run when they fit the work
-naturally — the rule is specifically about `scripts/ci-local.sh`
-orchestration.
+No commit without `scripts/gate.sh t1` green (build + unit + dogfood
+canary). `t2` (full e2e under hangwatch) before every push. Small
+commits per item; every e2e/probe run wrapped in a watchdog
+(`scripts/hangwatch.py`) so a hang is a verdict, not a blocked
+terminal.
 
 ### Push direct to master, no PRs
 
@@ -291,8 +269,7 @@ work branch can stay on remote as a historical pointer. Do not call
 ### Targeted E2E iteration
 
 Never iterate on the full E2E suite when multiple scenarios fail. The
-full serial suite is ~200 s; a single scenario like `Arbitrary` is
-~18 s. Filter:
+full serial suite is minutes; a single scenario is seconds. Filter:
 
 ```sh
 HASKELL_FLOWS_E2E_ONLY="<substring>" \
@@ -318,19 +295,20 @@ or a clear bug:
 1. **Log the finding** inline (`F-##` marker).
 2. **Fix the MCP code** at `mcp-server-haskell/src/HaskellFlows/` via
    `Edit`/`Write`.
-3. **Add a regression test** at `mcp-server-haskell/test/Spec.hs`.
-4. **Commit + push directly to master** with a descriptive message.
+3. **Add a regression test** at `mcp-server-haskell/test/` (unit) or
+   `test-e2e/Scenarios/` (e2e).
+4. **Commit + push directly to master** with a descriptive message
+   (T1 green first).
 5. **Keep working** with the stale running binary. Do NOT pause for
-   `cabal install`, do NOT relaunch Claude. CI + unit tests are
+   `cabal install`, do NOT relaunch the client. CI + unit tests are
    sufficient validation; in-vivo verification happens organically the
-   next time the user restarts Claude Desktop.
+   next time the user restarts.
 
-Per-commit quality signal is the targeted regression test, not
-`scripts/ci-local.sh`. The user runs ci-local on their own cadence
-(see above).
+Per-commit quality signal is the targeted regression test, not the
+full gate. The user runs deeper gates on their own cadence.
 
 **Exception**: if a bug blocks ALL further dogfooding, fall back to
-the reinstall + relaunch cycle (`scripts/install-mcp.sh` + Cmd+Q +
+the reinstall + relaunch cycle (`scripts/install-mcp.sh` + quit +
 relaunch). Default is "keep going."
 
 When working on the MCP itself (`projectDir` is `mcp-server-haskell/`

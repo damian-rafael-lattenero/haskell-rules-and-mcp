@@ -236,21 +236,22 @@ renderHelp :: WorkflowState -> [Text]
 renderHelp s = concat
   [ -- Counter-based nudges (pre-BUG-08 behaviour).
     [ "You have " <> tshow (wsEditsSinceLastLoad s)
-      <> " edits since the last ghc_load — recompile to see fresh \
+      <> " edits since the last check — recompile to see fresh \
       \diagnostics."
     | wsEditsSinceLastLoad s >= 3
     ]
-  , [ "Last ghc_load reported " <> tshow (wsLastLoadWarnings s)
-      <> " warnings — fix or ghc_fix_warning before moving on."
+  , [ "Last check reported " <> tshow (wsLastLoadWarnings s)
+      <> " warnings — fix or ghc_edit(action=\"fix_warning\") before \
+      \moving on."
     | wsLastLoadWarnings s > 0
     ]
-  , [ "Last ghc_load failed — inspect errors before doing anything else."
+  , [ "Last check failed — inspect errors before doing anything else."
     | wsLastLoadSuccess s == Just False
     ]
   , [ "You've persisted " <> tshow (wsPassedProperties s) <> " \
       \passing properties in this session. Consider \
-      \ghc_property_store(action=\"run\") to confirm none regressed, \
-      \then ghc_property_store(action=\"export\") to materialise \
+      \ghc_property(action=\"run\") to confirm none regressed, \
+      \then ghc_property(action=\"export\") to materialise \
       \them as a test/Spec.hs."
     | wsPassedProperties s >= 3
     ]
@@ -269,25 +270,28 @@ renderHelp s = concat
 -- never the nudge logic.
 historyNudges :: [ToolName] -> [Text]
 historyNudges hist = concat
-  [ -- 5 consecutive ghc_load calls → the agent is polling
+  [ -- 5 consecutive check calls → the agent is polling
     -- rather than editing. Suggest a flakiness / stability
     -- check instead of another reload.
-    [ "The last 5 tool calls were all ghc_load — you're polling \
-      \rather than progressing. Try ghc_quickcheck(runs=3) on a \
-      \recent property for flakiness, or ghc_check_project to \
-      \surface module-level gates you can knock out in parallel."
+    [ "The last 5 tool calls were all ghc_check — you're polling \
+      \rather than progressing. Try ghc_property(action=\"check\", \
+      \runs=3) on a recent property for flakiness, or \
+      \ghc_check(action=\"project\") to surface module-level gates \
+      \you can knock out in parallel."
     | length recent5 >= 5, all (== GhcCheck) recent5
     ]
-    -- ghc_suggest recent, no ghc_quickcheck since.
+    -- ghc_suggest recent, no ghc_property since.
   , [ "You ran ghc_suggest but haven't tried any of the proposals \
-      \with ghc_quickcheck yet. Pick the highest-confidence law \
-      \and feed it in — passes auto-persist to the regression store."
+      \with ghc_property(action=\"check\") yet. Pick the \
+      \highest-confidence law and feed it in — passes auto-persist \
+      \to the regression store."
     | GhcSuggest `elem` recent3, GhcProperty `notElem` recent3
     ]
-    -- Last tool was ghc_refactor and there's been no load since.
-  , [ "Last tool was ghc_refactor. The refactor was snapshot-and-\
-      \compile-verified, but a fresh ghc_load(diagnostics=true) \
-      \catches any new holes or warnings the rename surfaced."
+    -- Last tool was ghc_edit and there's been no check since.
+  , [ "Last tool was ghc_edit. The edit was snapshot-and-\
+      \compile-verified, but a fresh ghc_check(action=\"load\", \
+      \diagnostics=true) catches any new holes or warnings the \
+      \rename surfaced."
     | case hist of
         (GhcEdit : rest) -> GhcCheck `notElem` take 2 rest
         _                    -> False
@@ -338,12 +342,13 @@ renderPhaseHint p = case p of
   PhasePreScaffold ->
     "Phase: pre-scaffold. If this is a new project, start with \
     \ghc_project(action=create, name=...); if you already have \
-    \one, ghc_load(module_path=\"src/<Entry>.hs\") boots GHCi \
-    \and gives you the cleanest error surface."
+    \one, ghc_check(action=\"load\", module_path=\"src/<Entry>.hs\") \
+    \boots the session and gives you the cleanest error surface."
   PhaseBootstrap ->
     "Phase: bootstrap. The last load failed — likely a missing \
     \dependency or an unregistered module. Chain ghc_deps(add,...) \
-    \+ ghc_add_modules(modules=[...]) + ghc_load; ghc_batch can \
+    \+ ghc_module(action=\"add\", modules=[...]) + \
+    \ghc_check(action=\"load\"); ghc_batch can \
     \run the three as one round-trip."
   PhaseDeveloping ->
     "Phase: developing. Modules load clean. ghc_suggest on a \
@@ -353,13 +358,13 @@ renderPhaseHint p = case p of
     \confidence if a paired interpreter is a sibling."
   PhaseTestingLaws ->
     "Phase: testing laws. Feed the highest-confidence proposal from \
-    \ghc_suggest into ghc_quickcheck; every pass auto-persists \
-    \to .haskell-flows/properties.json. Pass runs>=3 to \
-    \ghc_quickcheck for flakiness check before adding to the \
+    \ghc_suggest into ghc_property(action=\"check\"); every pass \
+    \auto-persists to .haskell-flows/properties.json. Pass runs>=3 \
+    \to ghc_property for a flakiness check before adding to the \
     \regression suite."
   PhaseReadyToPush ->
-    "Phase: ready to push. ghc_property_store(action=\"run\") \
-    \replays the full set; ghc_property_store(action=\"export\") \
+    "Phase: ready to push. ghc_property(action=\"run\") \
+    \replays the full set; ghc_property(action=\"export\") \
     \materialises them as test/Spec.hs; ghc_gate runs regression + \
     \cabal test + cabal build in one call — if green, push is safe."
 
@@ -375,13 +380,15 @@ sessionMissedOpportunities :: WorkflowState -> [Text]
 sessionMissedOpportunities s = take 5 $ concat
   [ historyNudges (wsToolHistory s)
   , [ "You hit " <> tshow (wsErrorStreak s) <> " failures in a row — try \
-      \ghc_explain_error on the failure, or ghc_scratch to test a fix \
-      \reversibly before touching source."
+      \ghc_check(action=\"module\") on the failing file, or \
+      \ghc_module(action=\"write\") to test a fix reversibly \
+      \before touching source."
     | wsErrorStreak s >= 3
     ]
   , [ "You've made " <> tshow (wsToolCalls s) <> " tool calls but never \
-      \reached for ghc_scratch — type-checking a hypothesis there is \
-      \faster and reversible than edit/reload."
+      \reached for ghc_module(action=\"write\") — type-checking a \
+      \hypothesis in the scratchpad is faster and reversible than \
+      \edit/reload."
     | wsToolCalls s >= 8, GhcModule `Set.notMember` wsEverCalled s
     ]
   ]

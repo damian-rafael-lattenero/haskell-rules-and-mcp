@@ -368,9 +368,10 @@ notInScopePayload nm _ = object
   [ "name"        .= nm
   , "searched_in" .= ("interactive scope" :: Text)
   , "remediation" .= ("Name not currently in scope. If it's defined in a \
-                      \loaded module, run ghc_load on that module first. \
-                      \For external/base names, hoogle_search may surface \
-                      \candidates ghc_info cannot reach." :: Text)
+                      \loaded module, run ghc_check(action=\"load\", \
+                      \module_path=\"...\") on that module first. \
+                      \For external/base names, ghc_edit(action=\"import\") \
+                      \can suggest the import that brings the name in." :: Text)
   ]
 
 -- | Hard cap on the number of instances included in 'successPayload'.

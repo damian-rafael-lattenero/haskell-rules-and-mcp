@@ -77,13 +77,15 @@ descriptor =
           <> "signature implies, each with a confidence score. "
           <> "WHEN: you have a function and want candidate laws to test; "
           <> "feed the highest-confidence property straight into "
-          <> "ghc_quickcheck. "
-          <> "WHEN NOT: ghc_lab to audit a whole module at once; "
-          <> "ghc_quickcheck when you already have the property. "
+          <> "ghc_property(action=\"check\"). "
+          <> "WHEN NOT: ghc_property(action=\"audit\") to hunt "
+          <> "contradictions across the whole store; "
+          <> "ghc_property(action=\"check\") when you already have the "
+          <> "property. "
           <> "PREREQUISITES: the function's module loaded so its signature "
           <> "resolves. "
           <> "OUTPUT: {suggestions:[{property, rationale, confidence}]}. "
-          <> "SEE ALSO: ghc_quickcheck, ghc_lab."
+          <> "SEE ALSO: ghc_property."
     , tdInputSchema =
         object
           [ "type"       .= ("object" :: Text)
@@ -197,7 +199,8 @@ hintFor fnArity [] =
         else "")
   <> ", or return type is polymorphic in a way rules don't pattern-match on yet."
 hintFor _ xs =
-  "Try the highest-confidence suggestion first via ghc_quickcheck. "
+  "Try the highest-confidence suggestion first via \
+  \ghc_property(action=\"check\"). "
   <> "Total: " <> T.pack (show (length xs))
   <> " candidate law(s). High-confidence: "
   <> T.pack (show (length (filter ((High ==) . sConfidence) xs)))
@@ -216,8 +219,8 @@ maxRuleArity = 2
 -- drill-in, but the top-level keys speak the agent's language:
 -- 'reason' names the class of failure and 'hint' tells the agent
 -- exactly which tool to call next. The Server.runTool nextStep
--- push still runs — steering the agent straight at @ghc_load@
--- instead of letting it guess.
+-- push still runs — steering the agent straight at
+-- @ghc_check(action="load")@ instead of letting it guess.
 --
 -- Issue #90 Phase C: status='no_match' kind='not_in_scope'. The
 -- pre-envelope pre-existing fields ('reason', 'function', 'hint',
@@ -229,9 +232,10 @@ outOfScopeResult fn ghcOutput =
         [ "reason"   .= ("function_not_in_scope" :: Text)
         , "function" .= fn
         , "hint"     .=
-            ( "`" <> fn <> "` is not in scope in the current GHCi \
-              \session. Load the module that defines it first via \
-              \ghc_load(module_path=\"<path>\"), or pass a fully \
+            ( "`" <> fn <> "` is not in scope in the current \
+              \interactive session. Load the module that defines it \
+              \first via ghc_check(action=\"load\", \
+              \module_path=\"<path>\"), or pass a fully \
               \qualified name (e.g. \"Data.List.sort\") if the \
               \definition lives in an already-loaded module under \
               \a qualified import."

@@ -170,8 +170,8 @@ planFor38856 Nothing _ = FixPlan
   , fpDrop    = False
   , fpHint    = "GHC-38856 names specific redundant imports inside an \
                 \import list. Pass the warning 'message' (from the \
-                \ghc_load / ghc_check_module diagnostic) so the tool can \
-                \rewrite the list, dropping just those names."
+                \ghc_check(action=\"module\") diagnostic) so the tool \
+                \can rewrite the list, dropping just those names."
   , fpFixable = False
   }
 planFor38856 (Just msg) srcLine =
@@ -316,9 +316,10 @@ missingCoords _ = True
 missingCoordsResult :: ToolResponse
 missingCoordsResult =
   Env.mkFailed (Env.mkErrorEnvelope Env.MissingArg
-    "ghc_fix_warning targets ONE specific diagnostic, so it needs both \
-    \'line' and 'code' from a prior ghc_load / ghc_check_module result \
-    \(read them off the warning's file:line + GHC-NNNNN code). The \
+    "ghc_edit(action=\"fix_warning\") targets ONE specific diagnostic, so \
+    \it needs both 'line' and 'code' from a prior \
+    \ghc_check(action=\"module\") result (read them off the warning's \
+    \file:line + GHC-NNNNN code). The \
     \module_path-only form is not supported. Example: \
     \{\"module_path\": \"src/Foo.hs\", \"line\": 12, \"code\": \"GHC-66111\"}.")
 

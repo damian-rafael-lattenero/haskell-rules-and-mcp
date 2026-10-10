@@ -155,13 +155,14 @@ descriptor =
         \action='validate' run cabal check + heuristics on .cabal; \
         \action='bootstrap' install or refresh host rules. \
         \WHEN NOT: register/de-register exposed-modules — that is \
-        \ghc_modules; add/remove dependencies — that is ghc_deps. \
+        \ghc_module(action=\"add\"/\"remove\"); add/remove \
+        \dependencies — that is ghc_deps. \
         \PREREQUISITES: action='switch' requires the target dir to \
         \exist; action='validate' requires a .cabal in the active \
         \project. \
         \OUTPUT: per-action shapes detailed in the per-branch JSON \
         \schema (oneOf-discriminated). \
-        \SEE ALSO: ghc_modules, ghc_deps, ghc_toolchain. \
+        \SEE ALSO: ghc_module, ghc_deps, ghc_session(action=\"toolchain\"). \
         \#94 Phase C step 5 successor to ghc_create_project + \
         \ghc_switch_project + ghc_validate_cabal + ghc_bootstrap; \
         \the four legacy tools were retired in the same commit."

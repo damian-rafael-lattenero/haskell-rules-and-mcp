@@ -601,13 +601,14 @@ modulesNext payload = case createdFilesField payload of
   [] ->
     chained GhcCheck
       "Modules registry changed in the .cabal (remove, or an idempotent \
-      \add). Run ghc_check_project to surface any compile errors the \
-      \change introduced; the chained ghc_load keeps the entry module \
-      \live in the GHCi session afterwards."
+      \add). Run the project gate to surface any compile errors the \
+      \change introduced; the chained load keeps the entry module \
+      \live in the session afterwards."
       Nothing
-      [ step GhcCheck (object [])
+      [ step GhcCheck (object [ "action" .= ("project" :: Text) ])
       , step GhcCheck (object
-          [ "module_path" .= ("<your entry module>" :: Text) ])
+          [ "action" .= ("load" :: Text)
+          , "module_path" .= ("<your entry module>" :: Text) ])
       ]
 
 -- | Read the @created_files@ array of path strings from a
@@ -641,7 +642,7 @@ projectNext payload
             ])))
   | Just _ <- envField "scaffolded" payload =
       Just (simple GhcSession
-        "Project root swapped. Ask 'ghc_workflow(status)' to \
+        "Project root swapped. Ask 'ghc_session(action=\"status\")' to \
         \orient yourself in the new project: phase classifier, \
         \tools active, and staleness check against the new .cabal."
         (Just (object [ "action" .= ("status" :: Text) ])))
@@ -649,15 +650,15 @@ projectNext payload
   | Just (String "written") <- envField "mode" payload
   , Just _ <- envField "host" payload =
       Just (simple GhcSession
-        "Rules written to disk. Run 'ghc_workflow(action=\"help\")' to \
+        "Rules written to disk. Run 'ghc_session(action=\"help\")' to \
         \get the next project-level step."
         (Just (object [ "action" .= ("help" :: Text) ])))
   -- bootstrap: preview path — file not yet written
   | Just _ <- envField "host" payload =
       Just (simple GhcSession
         "Host rules preview emitted. Re-run with write=true to persist \
-        \them under .claude/ or .cursor/, then 'ghc_workflow(help)' for \
-        \the next project-level step."
+        \them under .claude/ or .cursor/, then 'ghc_session(action=\"help\")' \
+        \for the next project-level step."
         (Just (object [ "action" .= ("help" :: Text) ])))
   -- validate (errors > 0)
   | Just n <- cabalErrors payload, n > 0 =
@@ -702,8 +703,9 @@ gateNext payload
       Nothing
   | otherwise = simple GhcCheck
       "At least one gate step failed. Drop one level down into \
-      \ghc_check_project to isolate the red module, then drill in \
-      \with ghc_check_module + ghc_load(diagnostics=true)."
+      \ghc_check(action=\"project\") to isolate the red module, then \
+      \drill in with ghc_check(action=\"module\") + \
+      \ghc_check(action=\"load\", diagnostics=true)."
       Nothing
 
 -- | Issue #208: derive the success text from the payload's 'summary'
@@ -713,12 +715,10 @@ gateNext payload
 -- skip_cabal_test / skip_cabal_build.
 gateGreenText :: Value -> Text
 gateGreenText payload = case envField "summary" payload of
-  Just (String s) ->
-    s <> " Optional: run ghc_coverage for the HPC summary."
+  Just (String s) -> s <> " Otherwise you're clear to git commit + push."
   _ ->
     "ghc_gate is green — all gates passed. \
-    \Optional: run ghc_coverage for the HPC summary. \
-    \Otherwise you're clear to git commit + push."
+    \You're clear to git commit + push."
 
 -- | #94 Phase C: discriminate ghc_quickcheck single-run vs multi-run
 -- (determinism) responses. The Determinism handler emits a payload

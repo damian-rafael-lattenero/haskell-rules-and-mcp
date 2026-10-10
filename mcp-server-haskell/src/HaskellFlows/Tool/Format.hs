@@ -84,7 +84,7 @@ runHandle lim pd rawArgs = case parseEither parseJSON rawArgs of
                           ("Module file does not exist: "
                             <> T.pack (unModulePath mp)))
                         { Env.eeRemediation =
-                            Just "Verify the path is correct. Use ghc_modules(action=\"list\") to see registered modules." }))
+                            Just "Verify the path is correct. Run ghc_check(action=\"project\") to see the registered modules it gates." }))
             else do
               mFormatter <- resolveFormatter
               case mFormatter of
