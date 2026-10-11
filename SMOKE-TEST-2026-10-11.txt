@@ -1,2 +1,0 @@
-Smoke test 2026-10-11: git round-trip probe (create -> push -> delete -> push).
-This file is intentionally disposable; the removal commit follows immediately.
