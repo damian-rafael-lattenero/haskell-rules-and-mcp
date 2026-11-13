@@ -1,0 +1,52 @@
+cabal-version:      3.0
+name:               hindley-milner
+version:            0.1.0.0
+synopsis:           (describe here)
+category:           Development
+maintainer:         you@example.com
+description:        TODO: describe hindley-milner in one line.
+license:            BSD-3-Clause
+build-type:         Simple
+
+common shared
+    default-language:   GHC2024
+    ghc-options:        -Wall -Wcompat -Widentities
+                        -Wincomplete-record-updates
+                        -Wincomplete-uni-patterns
+                        -Wpartial-fields
+                        -Wredundant-constraints
+                        -Wunused-packages
+    default-extensions: OverloadedStrings
+                        DerivingStrategies
+                        LambdaCase
+
+library
+    import:           shared
+    hs-source-dirs:   src
+    exposed-modules:  Language.HM
+                      Language.HM.Types
+                      Language.HM.Env
+                      Language.HM.Unify
+                      Language.HM.Infer
+                      Language.HM.Error
+                      Language.HM.Parser
+                      Language.HM.Pretty
+    build-depends:    base >= 4.20 && < 5
+                    , megaparsec >= 9.0
+                    , prettyprinter
+                    , mtl
+                    , text
+                    , containers
+                    , parser-combinators
+
+test-suite hindley-milner-test
+    import:           shared
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Spec.hs
+    build-depends:    base >= 4.20 && < 5
+                    , hindley-milner
+                    , QuickCheck >= 2.14
+                    , tasty
+                    , tasty-hunit
+                    , tasty-quickcheck
